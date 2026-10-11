@@ -52,9 +52,15 @@ function inputs(root, market, date1 = "2026-09-18", date2 = "2026-09-20",
     chunkUtcDays: 31, ...additional,
   };
 }
+function exchangeDay(ms, zone) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(ms)).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 function calendar(market, sessions) {
   return { market, sessions: sessions.map(s => ({
-    dayUtc: new Date(s.session.startMs).toISOString().slice(0, 10),
+    tradingDateLocal: exchangeDay(s.session.startMs, s.session.timeZone),
     startMs: s.session.startMs, endMs: s.session.endMs,
     kind: s.session.kind, timeZone: s.session.timeZone,
   })) };
@@ -155,6 +161,9 @@ test("stock calendar and archived end-time must match; DST is caller dated", asy
       assert.equal(r.sourceLimitedSessionCount, 1);
       assert.equal(r.sourceUnverifiedOneMinuteSlots, 20);
       assert.equal(r.stockCalendarStatus, "CALLER_PROVIDED_STOCK_SESSIONS_UNAUTHENTICATED");
+      assert.equal(r.researchDateBasis, "EXCHANGE_LOCAL_TRADING_DATE");
+      assert.equal(r.inspectedStartDate, "2026-09-18");
+      assert.equal(r.inspectedStartUtc, null);
       assert.equal(r.stockCalendarIndependentlyVerified, false);
       const wrong = structuredClone(cal);
       wrong.sessions[0].endMs += 60 * MIN;
@@ -163,6 +172,63 @@ test("stock calendar and archived end-time must match; DST is caller dated", asy
       assert.equal(mismatch.unreadableSessionCount, 1);
       assert.equal(mismatch.archivedSessionCount, 0);
       assert.equal(mismatch.warningsPreview[0].reason, "ARCHIVE_SESSION_PROVENANCE_MISMATCH");
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("KR premarket 08:30 KST belongs to next UTC day's local trading date", async () => {
+  const root = tmp();
+  try {
+    const preStart = Date.parse("2026-09-17T23:30:00Z"); // Sep 18 08:30 KST
+    const regularStart = D0; // Sep 18 09:00 KST
+    const pre = sample("KR_STOCK", preStart);
+    pre.session.kind = "PREMARKET";
+    const regular = sample("KR_STOCK", regularStart);
+    await store({ root, source: pre });
+    await store({ root, source: regular });
+    const r = await audit(inputs(root, "KR_STOCK", "2026-09-18", "2026-09-18", {
+      stockCalendar: calendar("KR_STOCK", [pre, regular]),
+    }));
+    assert.equal(r.inspectedStartDate, "2026-09-18");
+    assert.equal(r.researchDateBasis, "EXCHANGE_LOCAL_TRADING_DATE");
+    assert.equal(r.requestedSessionCount, 2);
+    assert.equal(r.archivedSessionCount, 2);
+    assert.equal(r.missingSessionCount, 0);
+    assert.equal(r.monthlyCoverage["2026-09"].requestedSessions, 2);
+    assert.equal(r.stockCalendarIndependentlyVerified, false);
+    const missingRoot = tmp();
+    try {
+      const notSaved = await audit(inputs(missingRoot, "KR_STOCK",
+        "2026-09-18", "2026-09-18", {
+          stockCalendar: calendar("KR_STOCK", [pre, regular]),
+        }));
+      assert.equal(notSaved.missingSessionCount, 2);
+      assert.deepEqual(notSaved.missingCollectionPlan.map(x => x.tradingDateLocal),
+        ["2026-09-18", "2026-09-18"]);
+      assert.equal(notSaved.missingCollectionPlan[0].sessionStartMs, preStart);
+      assert.equal(notSaved.missingCollectionPlan[1].sessionStartMs, regularStart);
+    } finally { rmSync(missingRoot, { recursive: true, force: true }); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("US winter EST and summer EDT are different UTC starts for same local open", async () => {
+  const root = tmp();
+  try {
+    const dates = [
+      ["2026-01-12", Date.parse("2026-01-12T14:30:00Z")],
+      ["2026-09-18", Date.parse("2026-09-18T13:30:00Z")],
+    ];
+    for (const [localDate, startMs] of dates) {
+      const original = sample("US_STOCK", startMs);
+      await store({ root, source: original });
+      const report = await audit(inputs(root, "US_STOCK", localDate, localDate, {
+        stockCalendar: calendar("US_STOCK", [original]),
+      }));
+      assert.equal(report.archivedSessionCount, 1);
+      assert.equal(report.missingSessionCount, 0);
+      assert.equal(report.researchDateBasis, "EXCHANGE_LOCAL_TRADING_DATE");
+      assert.equal(report.selectedResearchStartDate, localDate);
+      assert.equal(report.trueMarketWideRecall, null);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -214,7 +280,8 @@ test("invalid provider calendar, dates and oversized chunks fail before lookup",
     await assert.rejects(() => audit(inputs(root, "KR_STOCK",
       "2026-09-18", "2026-09-19", {
         stockCalendar: { market: "KR_STOCK", sessions: [{
-          dayUtc: "2026-09-17", startMs: D0, endMs: D0 + 30 * MIN,
+          tradingDateLocal: "2026-09-17", startMs: D0,
+          endMs: D0 + 30 * MIN,
           kind: "REGULAR", timeZone: "Asia/Seoul",
         }] },
       })), /MINUTE_WINDOW_STOCK_CALENDAR_INVALID/);
