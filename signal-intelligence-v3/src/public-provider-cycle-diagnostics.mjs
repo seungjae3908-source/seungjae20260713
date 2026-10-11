@@ -127,6 +127,27 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
         completedCount:count(row.completedCount)?row.completedCount:null,
         insufficientDataCount:count(row.insufficientDataCount)?row.insufficientDataCount:null,
         invalidDataFailureCount:count(row.invalidDataFailureCount)?row.invalidDataFailureCount:null,
+        publicCryptoCandleQuality:
+          row.publicCryptoCandleQuality?.schemaVersion==='public-v3-crypto-candle-quality-v1'
+          &&row.publicCryptoCandleQuality.sourceOnly===true
+          &&row.publicCryptoCandleQuality.fullMarketVerified===false
+          &&row.publicCryptoCandleQuality.tradeAuthority==='NONE'
+          ?Object.freeze({
+            schemaVersion:'public-v3-crypto-candle-quality-v1',
+            observedSeries:count(row.publicCryptoCandleQuality.observedSeries)
+              ?row.publicCryptoCandleQuality.observedSeries:null,
+            rejectedSourceSeries:count(row.publicCryptoCandleQuality.rejectedSourceSeries)
+              ?row.publicCryptoCandleQuality.rejectedSourceSeries:null,
+            invalidOhlcBars:count(row.publicCryptoCandleQuality.invalidOhlcBars)
+              ?row.publicCryptoCandleQuality.invalidOhlcBars:null,
+            malformedSourceBars:count(row.publicCryptoCandleQuality.malformedSourceBars)
+              ?row.publicCryptoCandleQuality.malformedSourceBars:null,
+            conflictingDuplicateBars:count(row.publicCryptoCandleQuality.conflictingDuplicateBars)
+              ?row.publicCryptoCandleQuality.conflictingDuplicateBars:null,
+            incompleteCurrentBarsExcluded:count(row.publicCryptoCandleQuality.incompleteCurrentBarsExcluded)
+              ?row.publicCryptoCandleQuality.incompleteCurrentBarsExcluded:null,
+            sourceOnly:true,fullMarketVerified:false,tradeAuthority:'NONE',
+          }):null,
         publicStockSourceAudit:row.publicStockSourceAudit?.version==='public-stock-source-audit-v1'
           && row.publicStockSourceAudit.symbolsRedacted===true
           ?Object.freeze({

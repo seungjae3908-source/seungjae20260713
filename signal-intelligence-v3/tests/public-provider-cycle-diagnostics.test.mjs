@@ -198,3 +198,24 @@ test('same-cycle public stock candle depth evidence cannot be mistaken for sourc
  assert.equal(audit.fullMarketVerified,false);
  assert.equal(JSON.stringify(audit).includes('accountIdentifier'),false);
 });
+
+test('same-cycle Spot candle source quality is sanitized separately from profitable/24h claims',()=>{
+ const s=snapshot();
+ const spot=s.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='SCALPING');
+ spot.publicCryptoCandleQuality={
+  schemaVersion:'public-v3-crypto-candle-quality-v1',
+  observedSeries:3,rejectedSourceSeries:1,invalidOhlcBars:2,
+  malformedSourceBars:0,conflictingDuplicateBars:0,
+  incompleteCurrentBarsExcluded:1,sourceOnly:true,fullMarketVerified:false,
+  tradeAuthority:'NONE',symbol:'SECRET_SYMBOL',apiKey:'HIDDEN',
+ };
+ const d=inspectExactPublicProviderCycle(s,SHA,NOW);
+ const q=d.rows.find(x=>x.market==='CRYPTO_SPOT').lanes[0].publicCryptoCandleQuality;
+ assert.equal(q.invalidOhlcBars,2);
+ assert.equal(q.incompleteCurrentBarsExcluded,1);
+ assert.equal(q.fullMarketVerified,false);
+ assert.equal(q.tradeAuthority,'NONE');
+ assert.equal(JSON.stringify(q).includes('SECRET_SYMBOL'),false);
+ assert.equal(JSON.stringify(q).includes('HIDDEN'),false);
+ assert.equal(d.releaseReadiness.ready,false);
+});
