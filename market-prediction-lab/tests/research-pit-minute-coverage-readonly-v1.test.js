@@ -158,14 +158,16 @@ test("next cursor scans 31-day max without materializing many raw symbol pages",
   const root=makeRoot();
   try{
     install(root,market,"2026-09-18",compact(market));
-    const first=await read({...validArgs(root,{
-      endDate:"2026-10-30",chunkDays:31}});
+    const first=await read(validArgs(root,{
+      endDate:"2026-10-30",chunkDays:31,
+    }));
     assert.equal(first.available,true);
     assert.equal(first.report.expectedHistoricalTradingDays,31);
     assert.equal(first.report.missingSourceDays,30);
     assert.equal(first.report.nextCursorDate,"2026-10-19");
-    const following=await read({...validArgs(root,{
-      endDate:"2026-10-30",chunkDays:31,cursorDate:first.report.nextCursorDate}});
+    const following=await read(validArgs(root,{
+      endDate:"2026-10-30",chunkDays:31,cursorDate:first.report.nextCursorDate,
+    }));
     assert.equal(following.report.inspectedStartDate,"2026-10-19");
     assert.equal(following.report.nextCursorDate,null);
     assert.equal(following.report.sourceReadinessOnly,true);
