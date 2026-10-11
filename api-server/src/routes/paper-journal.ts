@@ -37,6 +37,7 @@ import {
   isAutomaticPaperAccountId,
 } from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
+import { reconcileCanonicalPaperJournalMirrors } from '../services/automatic-paper-journal-mirror.service';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,
@@ -1136,16 +1137,21 @@ export function createPaperJournalRouter(
         }),
         automationJournalReader(request, ownerId),
       ]);
+      // The durable execution mirror historically used internal order.id,
+      // while the canonical read model used exchangeOrderId. Never sum them
+      // as two trades, infer a fuzzy timestamp match, or rewrite stored rows.
+      const paperMirrors = reconcileCanonicalPaperJournalMirrors(
+        storedPayloads, automationPayloads,
+      );
       const knownBrokerOrderIds = new Set(
-        [...storedPayloads, ...automationPayloads]
-          .map((payload) => String(payload.brokerOrderId ?? ''))
+        paperMirrors.payloads.map((payload) => String(payload.brokerOrderId ?? ''))
           .filter(Boolean),
       );
       const externalHistoryPayloads = liveHistory.payloads.filter(
         (payload) => !knownBrokerOrderIds.has(String(payload.brokerOrderId ?? '')),
       );
       const journal = buildUnifiedTradeJournal(
-        [...storedPayloads, ...automationPayloads, ...externalHistoryPayloads],
+        [...paperMirrors.payloads, ...externalHistoryPayloads],
         filters,
         observedAt,
       );
@@ -1158,6 +1164,7 @@ export function createPaperJournalRouter(
         ok: true,
         result: {
           ...bound,
+          paperJournalMirrorAudit: paperMirrors.audit,
           liveAccountHistory: historySummary(liveHistory),
           safety: {
             ...bound.safety,
