@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPublicV3CryptoProviders,normalizePublicV3Candles,upbitPublicCandleUtcStart} from '../src/public-v3-crypto-providers.mjs';
 
+const NOW=Date.parse('2026-10-11T12:34:00Z');
 const response=data=>new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}});
 function mock(){
  let swap=false;
