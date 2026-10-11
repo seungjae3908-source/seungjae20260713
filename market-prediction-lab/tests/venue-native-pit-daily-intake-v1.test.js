@@ -226,7 +226,7 @@ test("offline CLI produces honest BLOCKED with private 0600 output, never source
  assert.equal(saved.result.status,"BLOCKED_DATA");
  assert.equal(saved.result.reason,"PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED");
  assert.equal(saved.dataUsage,"RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED");
- await assert.rejects(()=>runNativePITBatchCliV1(c),/EEXIST/);
+ await assert.rejects(()=>runNativePITBatchCliV1(c),/PIT_CLI_OUTPUT_ALREADY_EXISTS/);
 });
 
 test("CLI complete offline-mocked plan → fetch envelope → assemble is executable",async()=>{
