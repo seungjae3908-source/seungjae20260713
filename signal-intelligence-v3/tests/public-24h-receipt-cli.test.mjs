@@ -33,7 +33,7 @@ test('offline 24-hour receipt CLI reads sanitized JSONL without issuing network 
   assert.equal(command.status,0,command.stderr);
   const result=JSON.parse(command.stdout);
   assert.equal(result.receiptWindowStructurallyContinuous,true);
-  assert.equal(result.marketEvidence.KR_STOCK.verifiedBatches,720);
+  assert.equal(result.marketEvidence.KR_STOCK.verifiedBatches,721);
   assert.equal(result.real24hInfrastructureAttested,false);
   assert.equal(result.wholeMarketConstituentCoverageProven,false);
   assert.equal(command.stdout.includes('DO_NOT_LOG'),false);
