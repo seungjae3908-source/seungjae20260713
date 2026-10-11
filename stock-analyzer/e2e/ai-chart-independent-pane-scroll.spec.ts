@@ -74,7 +74,7 @@ async function visibleRange(page: Page) {
   return String(value);
 }
 
-test('AI Chart route scrolling keeps the below-chart dashboard accessible', () => {
+test('AI Chart route scrolling keeps the existing read-only position panel accessible', () => {
   expect(indexSource).toContain('<link rel="stylesheet" href="/ai-chart-pane-scroll.css" />');
   expect(cssSource).toContain('@media (min-width: 1024px)');
   expect(cssSource).toContain('overflow-y: auto !important');
@@ -82,7 +82,7 @@ test('AI Chart route scrolling keeps the below-chart dashboard accessible', () =
   expect(cssSource).not.toContain('overflow: hidden !important');
 });
 
-test('desktop chart owns zoom gestures; route scrolling reaches dashboard while navigation stays fixed', async ({ page, context }) => {
+test('desktop chart owns zoom gestures; route scrolling reaches read-only positions while navigation stays fixed', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 620 });
   await installMocks(context);
   await page.goto(chartUrl);
@@ -123,10 +123,11 @@ test('desktop chart owns zoom gestures; route scrolling reaches dashboard while 
   const chartScrollBeforeAnalysis = await scrollTop(shell);
   await page.mouse.wheel(0, 700);
   await expect.poll(() => scrollTop(shell)).toBeGreaterThan(chartScrollBeforeAnalysis);
-  const preview = page.getByTestId('chart-manual-preview');
-  await preview.scrollIntoViewIfNeeded();
-  const previewBox = await preview.boundingBox();
-  expect(previewBox!.y + previewBox!.height).toBeLessThanOrEqual(620);
+  const positions = page.getByTestId('ai-chart-position-panel');
+  await positions.scrollIntoViewIfNeeded();
+  const positionsBox = await positions.boundingBox();
+  expect(positionsBox!.y + positionsBox!.height).toBeLessThanOrEqual(620);
+  await expect(page.getByTestId('chart-manual-order')).toHaveCount(0);
 
   const navAfter = await nav.boundingBox();
   expect(navAfter).not.toBeNull();
