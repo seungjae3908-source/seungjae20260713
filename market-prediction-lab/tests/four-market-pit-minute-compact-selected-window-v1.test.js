@@ -341,3 +341,32 @@ test("source day summary seal rejects forged profitability or wrong manifest SHA
       /PIT_COMPACT_ORIGINAL_DAY_NOT_ACCEPTABLE/);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test("multi-decade stock calendar selects only its requested local-session chunk, never spurious out-of-range rejection",()=>{
+  // Synthetically enumerate weekday trading-date KEYS for a 14-year private
+  // calendar. These keys are not verified exchange sessions or PIT evidence.
+  const calendar=[];
+  const first=Date.parse("2015-01-01T00:00:00Z");
+  const last=Date.parse("2028-12-31T00:00:00Z");
+  for(let day=first;day<=last;day+=86_400_000){
+    const week=new Date(day).getUTCDay();
+    if(week!==0&&week!==6)calendar.push(new Date(day).toISOString().slice(0,10));
+  }
+  const w={startDate:"2016-01-01",endDate:"2026-10-30"};
+  for(const market of ["KR_STOCK","US_STOCK"]){
+    const report=range({market,researchWindow:w,
+      cursorDate:"2026-10-05",chunkCalendarDays:7,
+      stockTradingDates:calendar,dayReceipts:[]});
+    assert.equal(report.inspectedStartDate,"2026-10-05");
+    assert.equal(report.inspectedEndDate,"2026-10-11");
+    assert.equal(report.nextCursorDate,"2026-10-12");
+    assert.equal(report.expectedHistoricalTradingDays,5);
+    assert.equal(report.missingSourceDays,5);
+    assert.deepEqual(report.dailyReadiness.map(x=>x.date),
+      ["2026-10-05","2026-10-06","2026-10-07","2026-10-08","2026-10-09"]);
+    assert.equal(report.officialStockSessionsIndependentlyVerified,false);
+    assert.equal(report.actualMarketWideOpportunityCount,null);
+    assert.equal(report.profitabilityProven,false);
+    assert.equal(report.executionAuthority,"NONE");
+  }
+});
