@@ -14,8 +14,10 @@
  *   --input /private/native-assembled-day.json
  *   --output /private/compact-day.json
  * 2. node ... --mode ledger --market CRYPTO_SPOT
+ *    --start 2020-01-01 --end 2026-09-30
  *    --input /private/compact-file-index.json
  *    --output /private/historical-coverage-ledger.json
+ * Without --start/--end, the old 3-year test window remains the default.
  *
  * compact-file-index.json holds private absolute paths:
  * {"dayReceiptFiles":["/private/day1-compact.json",...]}
@@ -35,6 +37,9 @@ import {
 } from "../src/four-market-pit-daily-ledger-v1.js";
 import {FOUR_MARKET_WHOLE_SCOPE_V1}
  from "../src/four-market-whole-pit-price-coverage-v1.js";
+import {resolveSelectedResearchWindowV1,
+ RESEARCH_WINDOW_MAX_UTC_DAYS_V1}
+ from "../src/research-selected-window-v1.js";
 
 const DAY=86_400_000;
 function isDay(s){
@@ -43,9 +48,10 @@ function isDay(s){
  return Number.isSafeInteger(x)&&new Date(x).toISOString().slice(0,10)===s;
 }
 export function parsePITLedgerCliArgsV1(args=[]){
- if(!Array.isArray(args)||args.length<6||args.length>12)
+ if(!Array.isArray(args)||args.length<6||args.length>16)
    throw new TypeError("PIT_LEDGER_CLI_ARGS_INVALID");
- const allowed=new Set(["--mode","--market","--day","--input","--output","--manifest"]);
+ const allowed=new Set(["--mode","--market","--day","--input","--output",
+   "--manifest","--start","--end"]);
  const v={};
  for(let i=0;i<args.length;i++){
   const flag=args[i],value=args[++i];
@@ -62,11 +68,16 @@ export function parsePITLedgerCliArgsV1(args=[]){
       !isAbsolute(v["--manifest"])
       ||resolve(v["--manifest"])===resolve(v["--input"])
       ||resolve(v["--manifest"])===resolve(v["--output"])))
-   ||(v["--mode"]==="day"&&!isDay(v["--day"]))
-   ||(v["--mode"]==="ledger"&&(v["--day"]!=null||v["--manifest"]!=null)))
+   ||(v["--mode"]==="day"&&(!isDay(v["--day"])
+       ||v["--start"]!=null||v["--end"]!=null))
+   ||(v["--mode"]==="ledger"&&(v["--day"]!=null||v["--manifest"]!=null))
+   ||((v["--start"]!=null)!==(v["--end"]!=null)))
    throw new TypeError("PIT_LEDGER_CLI_INPUT_OR_SCOPE_INVALID");
+ const researchWindow=v["--start"]!=null
+   ?{startDate:v["--start"],endDate:v["--end"]}:null;
+ resolveSelectedResearchWindowV1(researchWindow);
  return Object.freeze({
-  mode:v["--mode"],market:v["--market"],
+  mode:v["--mode"],market:v["--market"],researchWindow,
   dayStartMs:v["--day"]?Date.parse(v["--day"]+"T00:00:00.000Z"):null,
   inputPath:resolve(v["--input"]),outputPath:resolve(v["--output"]),
   manifestPath:v["--manifest"]?resolve(v["--manifest"]):null,
@@ -89,7 +100,8 @@ export function runPITLedgerCliV1(config){
      !isAbsolute(config.manifestPath)
      ||config.manifestPath===config.inputPath
      ||config.manifestPath===config.outputPath))
-   ||(config.mode==="ledger"&&config.manifestPath!=null))
+   ||(config.mode==="ledger"&&config.manifestPath!=null)
+   ||(config.mode==="day"&&config.researchWindow!=null))
    throw new TypeError("PIT_LEDGER_CLI_CONFIG_INVALID");
  // Fail before parsing multi-megabyte licensed data if the destination exists.
  try{
@@ -134,8 +146,9 @@ export function runPITLedgerCliV1(config){
    manifest,dailySource,
   });
  }else{
-  const list=readPrivateJSON(config.inputPath,1024*1024);
-  if(!Array.isArray(list?.dayReceiptFiles)||list.dayReceiptFiles.length>1100
+  const list=readPrivateJSON(config.inputPath,8*1024*1024);
+  if(!Array.isArray(list?.dayReceiptFiles)
+     ||list.dayReceiptFiles.length>RESEARCH_WINDOW_MAX_UTC_DAYS_V1
      ||list.dayReceiptFiles.some(f=>typeof f!=="string"||!isAbsolute(f))
      ||new Set(list.dayReceiptFiles).size!==list.dayReceiptFiles.length)
    throw new TypeError("PIT_LEDGER_DAY_RECEIPT_FILE_LIST_INVALID");
@@ -143,6 +156,7 @@ export function runPITLedgerCliV1(config){
   result=auditCompactPITReceiptLedgerV1({
    market:config.market,dayReceipts:receipts,
    expectedStockDays:list.expectedStockDays??null,
+   researchWindow:config.researchWindow??null,
   });
  }
  const data=JSON.stringify(result,null,2)+"\n";
@@ -152,6 +166,8 @@ export function runPITLedgerCliV1(config){
   status:result.status,reason:result.reason??null,market:config.market,
   sourceAttestedPriceJoinedDays:result.sourceAttestedPriceJoinedDays??null,
   requestedTradingDays:result.requestedTradingDays??null,
+  selectedResearchStartUtc:result.selectedResearchStartUtc??null,
+  selectedResearchEndInclusiveUtc:result.selectedResearchEndInclusiveUtc??null,
   fullMarketOpportunityDenominatorVerified:false,
   actualMarketWideOpportunityCount:null,trueMarketWideRecall:null,
   profitabilityProven:false,executionAuthority:"NONE",
