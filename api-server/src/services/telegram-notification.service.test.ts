@@ -314,7 +314,7 @@ test('Telegram transport failure is unconfirmed and cannot retry an ambiguously 
   assert.deepEqual(result, {
     ok: false,
     attempts: 1,
-    skipped: 'DELIVERY_FAILED',
+    skipped: 'OUTCOME_UNCONFIRMED',
     errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
   });
   assert.equal(calls, 1);
@@ -345,10 +345,14 @@ test('Telegram 429 rejection may be retried once but 500 and invalid acknowledgm
   };
   const uncertain = await sendTelegramAlert({ type: 'system_critical', details: 'ambiguous server response' });
   assert.deepEqual(uncertain, {
-    ok: false, attempts: 1, skipped: 'DELIVERY_FAILED',
+    ok: false, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED',
     errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
   });
   assert.equal(calls, 1, 'never retry 5xx when Telegram might already have the message');
+  const repeated = await sendTelegramAlert({ type: 'system_critical', details: 'ambiguous server response' });
+  assert.deepEqual(repeated, { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' });
+  assert.equal(calls, 1, 'unknown delivery must not be retried in a later tick');
 
   clearTelegramAlertState();
   calls = 0;
