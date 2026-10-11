@@ -83,7 +83,7 @@ export async function runV3OutOfCursorResearch(
     }
     // The caller owns HTTP routing/counter instrumentation. A failure to
     // measure resource use cannot silently become a clean Stage-2 audit.
-    if(!safe(receipt?.httpRequests)
+    if(!safe(receipt?.httpRequests)||receipt.httpRequests===0
       ||receipt.httpRequests>V3_OFFPAGE_RESEARCH_MAX.maxObservedPublicHttpCallsPerSymbol
       ||receipt.requestCountMeasured!==true){
       errors+=1;continue;
