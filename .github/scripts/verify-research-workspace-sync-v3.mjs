@@ -377,6 +377,25 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+ // Exact, independently reviewed automatic-vs-manual Paper-only boundary.
+ // LIVE role policy checks and Production/Paper forward contract gates remain
+ // mandatory whenever these paths change. No wildcard scope expansion.
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+ // Generated from the exact changed Paper source graph. Both must move
+ // together and the authoritative runtime factory still verifies byte equality.
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+ 'api-server/src/services/paper-futures-mode-policy.service.test.ts',
+ 'api-server/src/services/paper-futures-mode-policy.service.ts',
+ 'api-server/src/services/paper-trading-candle.service.ts',
+ 'api-server/src/services/paper-trading-core.service.ts',
+ 'api-server/src/services/paper-trading-engine.service.test.ts',
+ 'api-server/src/services/paper-trading-position.service.ts',
+ 'api-server/src/services/paper-trading.types.ts',
+ 'api-server/src/services/trading-risk-engine.service.ts',
+ 'stock-analyzer/src/components/paper-trading-panel.tsx',
+ 'stock-analyzer/src/lib/paper-trading.ts',
  'ops/deploy-production.sh',
 ];
 // Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
@@ -473,6 +492,18 @@ function isPersonalTelegramMembershipOnlyChange(p) {
  }
  return false;
 }
+const reviewedGeneratedPaperRuntimeFiles=[
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+];
+if (reviewedGeneratedPaperRuntimeFiles.some(p=>changed.includes(p))) {
+ if (!reviewedGeneratedPaperRuntimeFiles.every(p=>changed.includes(p))
+   || !changed.includes('api-server/src/services/trading-risk-engine.service.ts')
+   || !changed.includes('api-server/src/services/paper-trading-core.service.ts')
+   || !changed.includes('.github/workflows/paper-forward-schedule-validation.yml')) {
+  throw new Error('AUTHORITATIVE_PAPER_RUNTIME_GENERATED_REVIEW_PAIR_REQUIRED');
+ }
+}
 const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)&&!isPersonalTelegramMembershipOnlyChange(p));
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
@@ -500,7 +531,9 @@ if(automaticTradingChanged.length>0){
    throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_ACTIVATION_FORBIDDEN');
  }
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
- for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
+ for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix))
+   && !reviewedGeneratedPaperRuntimeFiles.includes(p))
+  throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
 const canonicalMemberFixtureOnlyPaths=new Set([
  'api-server/src/services/research-workspace-authorization-v5.test.ts',
@@ -624,6 +657,9 @@ const protectedPathExceptions=new Map([
   'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
   'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
   'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+  // Do not exempt any Research source: ONLY byte-for-byte generated runtime
+  // bundle and its digest manifest, cross-checked by Paper Factory CI.
+  ...reviewedGeneratedPaperRuntimeFiles,
  ])],
  ['research-production',new Set([
   'research-production/bin/research-approved-job-intake.mjs',

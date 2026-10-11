@@ -20,6 +20,16 @@ on:
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/trade-automation-policy-guard.service.ts
       - api-server/src/services/trade-automation-policy-guard.service.test.ts
+      # Paper-only leverage changes must re-run the immutable LIVE authority gate.
+      - api-server/src/services/paper-futures-mode-policy.service.ts
+      - api-server/src/services/paper-futures-mode-policy.service.test.ts
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-pre-submission-risk.service.ts
+      - api-server/src/services/paper-trading-core.service.ts
+      - api-server/src/services/paper-trading-candle.service.ts
+      - api-server/src/services/paper-trading-position.service.ts
+      - api-server/src/services/paper-trading.types.ts
+      - stock-analyzer/src/components/paper-trading-panel.tsx
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
       - api-server/src/services/member-auto-trading-readiness.service.ts
