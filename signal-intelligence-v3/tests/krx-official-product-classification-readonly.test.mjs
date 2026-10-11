@@ -72,4 +72,17 @@ test('conflicting and invalid dates, content or source data stay blocked',async(
   assert.equal(count,3);
   assert.equal(conflict.classify('Q12345'),'CONFLICT');
   assert.equal(conflict.counts.CONFLICT,2);
+  assert.equal(conflict.status,'DATE_EVIDENCE_PARTIAL');
+});
+
+test('KRX holiday or empty official response never proves a full daily ETP list',async()=>{
+  const result=await readApprovedKrxEtpSubtypes({
+    enabled:true,date:DAY,authKey:TOKEN,
+    fetchImpl:async()=>({ok:true,headers:{get:()=>null},
+      text:async()=>JSON.stringify({OutBlock_1:[]})}),
+  });
+  assert.equal(result.status,'PROVIDER_DATA_INCOMPLETE');
+  assert.equal(result.classify('Q12345'),'UNKNOWN');
+  assert.equal(result.fullKrxRosterVerified,false);
+  assert.equal(result.economicAuthority,'NONE');
 });

@@ -63,7 +63,7 @@ export async function readApprovedKrxEtpSubtypes({
       if(!Number.isFinite(declared)||declared>maxResponseBytes)
         return safeResult('PROVIDER_DATA_INVALID',date,emptyCounts());
       const data=await response.text();
-      if(typeof data!=='string'||data.length>maxResponseBytes)
+      if(typeof data!=='string'||Buffer.byteLength(data,'utf8')>maxResponseBytes)
         return safeResult('PROVIDER_DATA_INVALID',date,emptyCounts());
       let envelope;
       try{envelope=JSON.parse(data);}catch{
@@ -85,11 +85,19 @@ export async function readApprovedKrxEtpSubtypes({
           counts[category]+=1;classifications.set(code,category);
         }
       }
+      // A holiday/unauthorized/partial daily source can be HTTP 200 with
+      // empty OutBlock_1: never interpret that as verified zero ETFs/ETNs.
+      if(pageCodes.size===0)
+        return safeResult('PROVIDER_DATA_INCOMPLETE',date,emptyCounts());
     }catch{
       return safeResult('PROVIDER_REQUEST_FAILED',date,emptyCounts());
     }finally{clearTimeout(timeout);}
   }
-  return safeResult('DATE_EVIDENCE_READY',date,counts,classifications);
+  // Contradictory or noncanonical official codes may explain some rows,
+  // but cannot certify all three trading-date subtype lists.
+  return safeResult(counts.CONFLICT>0||counts.UNSUPPORTED_CODE>0
+    ?'DATE_EVIDENCE_PARTIAL':'DATE_EVIDENCE_READY',
+    date,counts,classifications);
 }
 /** Reconcile publicly listed but scanner-excluded products with ONE dated
  * official snapshot. Nonmatches are not delisted, supported or tradable.
