@@ -25,6 +25,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';
+import { ResearchOriginalMinuteDiagnosticsPanel } from '@/components/research-original-minute-diagnostics';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -816,6 +817,7 @@ export default function ResearchCenterPage() {
         ) : null}
 
         {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}
+        {tab === 'evidence' ? <ResearchOriginalMinuteDiagnosticsPanel /> : null}
 
         {overview && cards.length ? (
           <>

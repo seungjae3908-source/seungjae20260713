@@ -116,6 +116,16 @@ test("full PIT page -> immutable source -> modeled replay -> T-minus prices in f
      assert.equal(done.blockedSourceTasks,0,market);
      assert.equal(done.sourceOnlyEventLabels,6,market);
      assert.equal(done.taskRows.length,2,market);
+     for(const row of done.taskRows){
+       assert.equal(row.modeledStageOnlyNotIndependentOOS,true);
+       assert.deepEqual(Object.keys(row.modeledTrainValidationTestDiagnostics),
+         ["train","validation","test"]);
+       assert.equal(
+         row.modeledTrainValidationTestDiagnostics.test.paperCandidatePASS,false);
+       assert.equal(
+         row.modeledTrainValidationTestDiagnostics.validation.independentOOSProven,false);
+       assert.equal(row.paperAdmissionAllowed,false);
+     }
      assert.equal(done.sourceTaskPageDigestSha256.length,64,market);
      assert.ok(done.taskRows.every(row=>row.sourceLineageSha256?.length===64),market);
      assert.equal(done.historicalAsOfScannerSignalVerified,false,market);

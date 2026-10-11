@@ -115,6 +115,31 @@ test("all four venues replay source-only EMA with next-bar execution and zero ec
       assert.equal(result.officialStockCalendarIndependentlyVerified,false);
       assert.equal(result.originalHistoricalScannerAvailabilityVerified,false);
       assert.equal(result.OOSPassCount,0);
+      assert.deepEqual(result.modeledSplitContract.ratio,[60,20,20]);
+      assert.equal(result.modeledSplitContract.stageMembershipBy,"SIGNAL_CLOSE_TIME");
+      assert.equal(result.modeledSplitContract.independentlyProvenOOS,false);
+      assert.equal(result.modeledSplitContract.paperAdmissionAllowed,false);
+      let allocatedTrades=0,allocatedNet=0,allocatedCost=0;
+      for(const part of ["train","validation","test"]){
+        const stage=result.modeledTrainValidationTestDiagnostics[part];
+        assert.equal(stage.modeledTradeCount,
+          result.modeledTrainValidationTestTradeCounts[part]);
+        allocatedTrades+=stage.modeledTradeCount;
+        allocatedNet+=stage.modeledNetPnlKRW;
+        allocatedCost+=stage.modeledTotalCostKRW;
+        assert.equal(stage.independentOOSProven,false);
+        assert.equal(stage.paperCandidatePASS,false);
+        assert.equal(stage.independentlyFrozenHoldoutParametersVerified,false);
+        assert.equal(stage.timeStampedFullCostAndFillEvidenceVerified,false);
+        assert.equal(stage.executionAuthority,"NONE");
+        assert.ok(stage.modeledTradeCount>=0);
+        assert.ok(Number.isFinite(stage.modeledReturnPercent));
+        if(stage.modeledTradeCount===0)
+          assert.equal(stage.modeledWinRatePercent,null);
+      }
+      assert.equal(allocatedTrades,result.modeledTradeCount);
+      assert.ok(Math.abs(allocatedNet-result.modeledNetPnlKRW)<1e-7);
+      assert.ok(Math.abs(allocatedCost-result.modeledCostKRW)<1e-7);
       assert.equal(result.actualFillCount,null);
       assert.equal(result.netProfitPct,null);
       assert.equal(result.trueMarketWideRecall,null);

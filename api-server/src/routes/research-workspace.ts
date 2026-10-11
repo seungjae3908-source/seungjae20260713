@@ -12,6 +12,10 @@ import {
   readResearchPITMinuteCoverageV1,
   type ResearchPITMarket,
 } from '../../../market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js';
+import {
+  readResearchOriginalMinuteDiagnosticV1,
+  type ResearchOriginalMinuteMarket,
+} from '../../../market-prediction-lab/src/research-original-minute-diagnostic-readonly-v1.js';
 
 /** Research results are admin-shared, not member/account records. No data root is accepted from HTTP. */
 export function createResearchWorkspaceRouter(): IRouter {
@@ -151,6 +155,56 @@ export function createResearchWorkspaceRouter(): IRouter {
         providerGETCount: 0, financialMutationCount: 0,
         trueMarketWideRecall: null, actualFillCount: null,
         profitabilityProven: false, executionAuthority: 'NONE',
+      });
+    }
+  });
+  // READ-ONLY admin observation of a completed OFFLINE native 1m replay.
+  // This DOES NOT run the backtester, collect provider data, return strategy
+  // parameters or admit simulated/real orders. The server alone chooses root.
+  router.all('/original-minute-diagnostics', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Vary', 'Authorization, Cookie');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return res.status(405).json({
+        error: 'READ_ONLY', executionAuthority: 'NONE',
+      });
+    }
+    const query = req.query as Record<string, unknown>;
+    const market = query.market;
+    const markets = new Set<ResearchOriginalMinuteMarket>([
+      'KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES',
+    ]);
+    if (Object.keys(query).length !== 1
+      || typeof market !== 'string'
+      || !markets.has(market as ResearchOriginalMinuteMarket)) {
+      return res.status(400).json({
+        schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+        available: false, status: 'BLOCKED_DATA',
+        reason: 'INVALID_MARKET_SELECTION',
+        executionAuthority: 'NONE', profitabilityProven: false,
+        actualFillCount: null,
+      });
+    }
+    const root =
+      process.env.RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT?.trim() ?? '';
+    try {
+      const safeReport = await readResearchOriginalMinuteDiagnosticV1({
+        root, market: market as ResearchOriginalMinuteMarket,
+      });
+      return res.status(200).json(safeReport);
+    } catch {
+      // Deliberately suppress private paths, SHA inputs, raw strategy
+      // parameters, permissions and filesystem validation errors.
+      return res.status(503).json({
+        schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+        market, available: false, status: 'BLOCKED_DATA',
+        reason: 'PRIVATE_NATIVE_MODEL_READ_OR_VALIDATION_FAILED',
+        report: null,executionAuthority:'NONE',profitabilityProven:false,
+        paperAdmissionAllowed:false,actualFillCount:null,
+        trueMarketWideRecall:null,providerGETCount:0,
+        financialMutationCount:0,realOrders:false,
       });
     }
   });
