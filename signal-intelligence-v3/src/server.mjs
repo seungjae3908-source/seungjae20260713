@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
+import { currentPublicV3CycleReady } from './public-v3-current-page-gate.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
@@ -124,6 +125,8 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/health') {
     const state = await loadSnapshot();
     const ageMs = state.snapshot ? snapshotAgeMs(state.snapshot) : null;
+    const sourceComplete = state.snapshot?.profile?.fullStrategyCoverage === true
+      ? currentPublicV3CycleReady(state.snapshot.coverage) : null;
     return json(res, 200, {
       ok: true,
       service: 'signal-intelligence-v3',
@@ -133,7 +136,10 @@ const server = createServer(async (req, res) => {
       port: PORT,
       snapshotReady: Boolean(state.snapshot),
       snapshotAgeMs: ageMs,
-      snapshotFresh: ageMs != null ? ageMs <= MAX_STATE_AGE_MS : false,
+      snapshotFresh: ageMs != null && ageMs <= MAX_STATE_AGE_MS
+        && sourceComplete !== false,
+      // Current-page health is separate from full-roster historical coverage.
+      snapshotCurrentPageSourceReady: sourceComplete,
       snapshotError: state.error,
       rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode },
       executionAuthority: 'NONE',
