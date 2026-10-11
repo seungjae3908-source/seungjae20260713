@@ -171,3 +171,25 @@ Telegram-Only Staging and Strict Predeploy QA workflows. Existing
 protected checks remain required and unchanged. No additional
 Paper/Research/Live test, private service, Telegram send or deployment
 was invoked or authorized.
+
+## 2026-10-11 Telegram-only subscriber corrections: canonical IDs + honest queue receipts
+
+A forged V3 envelope could carry a same-row/same-event noncanonical
+`id` or a US SWING 60m event attached to a different US 1D lane
+while retaining all other current-page fields. The Telegram subscriber
+now requires exact `market|symbol|strategy|timeframe|direction`
+canonical candidate ID plus a source lane identity derived from the
+current market/timeframe (`SCALPING_15M`, `SWING_60M`,
+`MID_LONG_1D`) and matching lane strategy. Both adversarial cases
+are regression-tested in the isolated Telegram mock QA.
+
+Separately, member watchlist alerts accepted into the durable outbox
+were counted as `attempted` but not visible as `queued` in the
+subscriber's log. A healthy queue admission is NOT a Telegram send,
+nor proof of human receipt. The subscriber now reports
+`personalQueued`, `personalDelivered`, `publicDelivered`
+and `queued` as separate safe aggregate counters, preserving
+the existing total `delivered` meaning. No chat IDs, symbols,
+tokens or member details appear in telemetry. Existing personal
+delivery/retry/dedupe code and the authoritative Paper/live runtime
+are unmodified. All tests use local mock senders; no Bot API calls.

@@ -57,8 +57,10 @@ export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
   | 'HTTP_ERROR' | 'INVALID_RESPONSE' | 'UNREACHABLE' | 'TIMEOUT'
   | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED' | 'OVERLAP';
 export type SignalTelegramRunResult = {
-  attempted: number; delivered: number; deduped: number;
-  skipped: number; failed: number; sourceStatus: SignalTelegramSourceStatus;
+  attempted: number; delivered: number; queued: number;
+  publicDelivered: number; personalDelivered: number; personalQueued: number;
+  deduped: number; skipped: number; failed: number;
+  sourceStatus: SignalTelegramSourceStatus;
 };
 
 function boundedInterval(value: unknown): number {
@@ -347,11 +349,16 @@ export class SignalIntelligenceTelegramDeliveryState {
 }
 
 function mergePersonalResult(
-  result: { attempted: number; delivered: number; deduped: number; skipped: number; failed: number },
+  result: SignalTelegramRunResult,
   personal: MemberWatchlistTelegramProducerResult,
 ): void {
   result.attempted += personal.attempted;
+  // Durable outbox admission is NOT an accepted Telegram Bot API message.
+  // Keep queued, accepted market sends and personal direct sends distinct.
+  result.queued += personal.queued;
+  result.personalQueued += personal.queued;
   result.delivered += personal.delivered;
+  result.personalDelivered += personal.delivered;
   result.skipped += personal.skipped;
   result.failed += personal.failed;
 }
@@ -367,7 +374,9 @@ export class SignalIntelligenceTelegramSubscriber {
 
   async runOnce(now = new Date()): Promise<SignalTelegramRunResult> {
     const result: SignalTelegramRunResult = {
-      attempted: 0, delivered: 0, deduped: 0, skipped: 0, failed: 0,
+      attempted: 0, delivered: 0, queued: 0,
+      publicDelivered: 0, personalDelivered: 0, personalQueued: 0,
+      deduped: 0, skipped: 0, failed: 0,
       sourceStatus: 'NOT_CHECKED',
     };
     if (this.running) { result.sourceStatus = 'OVERLAP'; return result; }
@@ -433,7 +442,10 @@ export class SignalIntelligenceTelegramSubscriber {
         const sent = await this.deliver(alert);
         if (sent.ok || sent.skipped === 'DUPLICATE') {
           await this.store.mark(alert.dedupeKey, now);
-          if (sent.ok) result.delivered += 1; else result.deduped += 1;
+          if (sent.ok) {
+            result.delivered += 1;
+            result.publicDelivered += 1;
+          } else result.deduped += 1;
         } else if (sent.skipped === 'NOT_CONFIGURED') result.skipped += 1;
         else result.failed += 1;
       }
@@ -463,11 +475,15 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
   const tick = async () => {
     const result = await subscriber.runOnce(new Date());
     if (result.sourceStatus !== 'OVERLAP'
-      && (result.sourceStatus !== previousStatus || result.delivered > 0 || result.failed > 0)) {
+      && (result.sourceStatus !== previousStatus || result.delivered > 0
+        || result.queued > 0 || result.failed > 0)) {
       logger.info({
         status: result.sourceStatus, attempted: result.attempted,
-        delivered: result.delivered, deduped: result.deduped,
-        skipped: result.skipped, failed: result.failed,
+        delivered: result.delivered, publicDelivered: result.publicDelivered,
+        personalDelivered: result.personalDelivered,
+        queued: result.queued, personalQueued: result.personalQueued,
+        deduped: result.deduped, skipped: result.skipped,
+        failed: result.failed,
       }, 'signal intelligence Telegram subscriber tick');
     }
     if (result.sourceStatus !== 'OVERLAP') previousStatus = result.sourceStatus;
