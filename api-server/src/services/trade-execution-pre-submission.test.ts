@@ -4,6 +4,7 @@ import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import {
   paperSimulatedCostAmount, serverPaperFillCostEvidence,
+  protectedAutomaticPaperCostPolicyV1,
   TradeExecutionService,
 } from './trade-execution.service';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
@@ -713,4 +714,64 @@ test('untrusted Paper tax or mismatched FX denomination is never certified on tr
   const stored=await repo.getOrder(USER_ID,order.id);
   assert.equal(stored?.taxAmount??null,null,'missing trusted issuer is never a zero tax receipt');
   assert.equal(stored?.settlementFxEvidence??null,null,'wrong market FX source cannot be signed');
+});
+
+
+test('protected 4-market automatic Paper cost rules are exact, expiring, and never inherited by Live/manual', async () => {
+  const nowMs = Date.parse('2026-10-11T03:00:00.000Z');
+  const paper: TradingPlan = {
+    ...planInput(new Date(nowMs)), accountMode: 'paper',
+    executionMode: 'automatic', id: 'cost-server-issuer',
+    userId: USER_ID, idempotencyKey: 'cost-server-issuer',
+    state: 'SUBMITTED', version: 1, approvalExpiresAt: null,
+    approvedAt: new Date(nowMs).toISOString(),
+    createdAt: new Date(nowMs).toISOString(),
+    updatedAt: new Date(nowMs).toISOString(),
+  };
+  const rule = (market: string, exchange: string, fee = 0.05, tax = 0) => ({
+    market, exchange, policyId: 'server-paper-cost-v1:validated-' + market,
+    feeRatePercent: fee, taxRatePercent: tax,
+    effectiveAt: '2026-10-10T00:00:00.000Z',
+    expiresAt: '2026-10-12T00:00:00.000Z',
+  });
+  const rules = [
+    rule('KR_STOCK', 'toss'), rule('KR_STOCK', 'kiwoom'),
+    rule('US_STOCK', 'kiwoom'), rule('CRYPTO_SPOT', 'upbit'),
+    rule('CRYPTO_FUTURES', 'bitget'),
+  ];
+  const encode = (rows: unknown[]) => JSON.stringify({
+    contract: 'member-auto-paper-cost-rules/v1', rules: rows,
+  });
+  const valid = encode(rules);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, ''), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, 'not-json'), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1({...paper, accountMode:'live'}, nowMs, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1({...paper, executionMode:'manual'}, nowMs, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs + 172_800_000, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([...rules, rules[3]])),
+    null, 'duplicate market/exchange must fail closed');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), rule('CRYPTO_SPOT', 'upbit', 0.05, NaN), rules[4],
+  ])), null, 'missing tax cannot become zero');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), rule('CRYPTO_SPOT', 'bitget'), rules[4],
+  ])), null, 'wrong exchange cannot issue spot tax');
+  const issuer = protectedAutomaticPaperCostPolicyV1(paper, nowMs, valid);
+  assert.ok(issuer);
+  assert.equal(issuer.market, 'CRYPTO_SPOT');
+  assert.equal(issuer.exchange, 'upbit');
+  assert.equal(issuer.taxRatePercent, 0, 'explicit zero is allowed, never a default');
+  const result = await serverPaperFillCostEvidence(paper, 100, 2, null, {
+    costPolicy: async (plan, at) => protectedAutomaticPaperCostPolicyV1(plan, at, valid),
+  }, nowMs);
+  assert.equal(result.feeAmount, 0.1);
+  assert.equal(result.taxAmount, 0);
+  assert.equal(result.trustedPaperCostPolicyId, issuer.policyId);
+  assert.equal(result.settlementFxEvidence?.source, 'NATIVE_KRW');
+  const missing = await serverPaperFillCostEvidence(paper, 100, 2, null, {
+    costPolicy: async (plan, at) => protectedAutomaticPaperCostPolicyV1(plan, at, ''),
+  }, nowMs);
+  assert.equal(missing.feeAmount, null);
+  assert.equal(missing.taxAmount, null);
+  assert.equal(missing.trustedPaperCostPolicyId, null);
 });
