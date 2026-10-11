@@ -24,7 +24,7 @@ const ZONES=Object.freeze({
  KR_STOCK:"Asia/Seoul",US_STOCK:"America/New_York",
  CRYPTO_SPOT:"UTC",CRYPTO_FUTURES:"UTC",
 });
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
+const SYMBOL=/^[A-Z0-9\p{Script=Han}][A-Z0-9\p{Script=Han}._:-]{0,39}$/u;
 const SHA=/^[0-9a-f]{64}$/;
 const sha=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const time=x=>Number.isSafeInteger(x)&&x>0;

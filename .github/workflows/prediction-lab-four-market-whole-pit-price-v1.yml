@@ -5,6 +5,16 @@ on:
     branches:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
+      - market-prediction-lab/src/public-history-source-errors-v1.js
+      - market-prediction-lab/src/public-native-crypto-roster-v1.js
+      - market-prediction-lab/src/public-native-crypto-source-page-v1.js
+      - market-prediction-lab/src/us-alpaca-historical-bars-v1.js
+      - market-prediction-lab/scripts/collect-public-native-source-page-v1.mjs
+      - market-prediction-lab/tests/public-native-crypto-roster-v1.test.js
+      - market-prediction-lab/tests/public-native-crypto-source-page-v1.test.js
+      - market-prediction-lab/tests/us-alpaca-historical-bars-v1.test.js
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/tests/bitget-collector.test.js
       - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
       - market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js
       - market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
@@ -133,6 +143,7 @@ jobs:
           test "$LIVE_TRADING" = "false"
           test "$AUTO_TRADING" = "false"
           test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/public-native-crypto-roster-v1.test.js market-prediction-lab/tests/public-native-crypto-source-page-v1.test.js market-prediction-lab/tests/us-alpaca-historical-bars-v1.test.js market-prediction-lab/tests/bitget-collector.test.js
           node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-daily-ledger-v1.test.js

@@ -124,6 +124,40 @@ test("Bitget two future contracts are processed without current ticker lookup",a
  assert.equal(r.fullMarketPITUniverseVerified,false);
  assert.equal(r.executionAuthority,"NONE");
 });
+
+test("PIT daily batches retain valid symbols and block known corrupt provider rows without hiding implementation defects", async () => {
+  const roster = manifest("CRYPTO_SPOT", ["KRW-ABC", "KRW-DEF"]);
+  const options = {
+    market: "CRYPTO_SPOT", dayStartMs: T, manifest: roster, limit: 2,
+    allowPublicReadOnlyFetch: true, nowMs: T + 3 * D, sleepImpl: async () => {},
+  };
+  const result = await chunk({
+    ...options,
+    upbitFetch: async (url) => {
+      if (new URL(url).searchParams.get("market") !== "KRW-ABC") return upbit(url);
+      return { ok: true, status: 200, json: async () => [
+        bar("KRW-ABC", T - D, 100), { ...bar("KRW-ABC", T, 105), candle_acc_trade_volume: null },
+      ] };
+    },
+  });
+  assert.equal(result.status, "PIT_NATIVE_DAY_CHUNK_PARTIAL");
+  assert.equal(result.chunkComplete, false);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].symbol, "KRW-DEF");
+  assert.equal(result.failed[0].symbol, "KRW-ABC");
+  assert.equal(result.failed[0].sourceErrorCode, "UPBIT_HISTORY_INVALID_OHLCV");
+  assert.equal(result.actualMarketWideOpportunityCount, null);
+  const futures = await chunk({
+    market: "CRYPTO_FUTURES", dayStartMs: T, manifest: manifest("CRYPTO_FUTURES", ["ABCUSDT"]),
+    allowPublicReadOnlyFetch: true, nowMs: T + 3 * D,
+    bitgetClient: { get: async () => ({ code: "00000", data: [[String(T), "105", "115", "103", "110", null]] }) },
+  });
+  assert.equal(futures.status, "PIT_NATIVE_DAY_CHUNK_PARTIAL");
+  assert.equal(futures.rows.length, 0);
+  assert.equal(futures.failed[0].reason, "NATIVE_PUBLIC_PRICE_SOURCE_UNAVAILABLE");
+  const defect = Object.assign(new TypeError("unexpected implementation bug"), { code: "UPBIT_HISTORY_UNRECOGNIZED" });
+  await assert.rejects(() => chunk({ ...options, upbitFetch: async () => { throw defect; } }), (error) => error === defect);
+});
 test("stock venues stay blocked until licensed historical stock bars exist",async()=>{
  for(const [market,symbol] of [["KR_STOCK","005930"],["US_STOCK","ACME"]]){
   const r=await chunk({market,dayStartMs:T,

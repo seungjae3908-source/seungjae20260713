@@ -3,6 +3,7 @@ import { auditHistoricalPITVenueUniverseV1 } from "./historical-pit-venue-univer
 import { collectUpbitSpotHistory } from "./upbit-spot-history.js";
 import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { BitgetPublicClient, BitgetPublicApiError } from "./bitget-public-client.js";
+import { isPublicHistorySourceDataErrorV1 } from "./public-history-source-errors-v1.js";
 import {
   persistResearchMinuteSessionV1,
   deriveArchivedResearchTimeframesV1,
@@ -75,39 +76,58 @@ function eligibleLife(manifest, symbol, start, end) {
 }
 function expectedProviderFailure(error) {
   const code = String(error?.message ?? "");
-  return error instanceof BitgetPublicApiError
+  return isPublicHistorySourceDataErrorV1(error)
+    || error instanceof BitgetPublicApiError
     || /^UPBIT_HISTORY_HTTP_\d{3}$/u.test(code)
     || /^UPBIT_HISTORY_(RANGE_INCOMPLETE|INSUFFICIENT_\d+)$/u.test(code)
     || /^BITGET_HISTORY_RANGE_INCOMPLETE$/u.test(code)
     || /^not enough candles collected: \d+$/u.test(code)
     || /^(?:fetch failed|network error|request timeout|The operation was aborted)$/iu.test(code);
 }
-function normalizeCollected({
-  market, symbol, dayStartMs, receivedAtMs, collected,
-}) {
+export function normalizeRetrospectiveCryptoMinuteSourceV1({
+  market, symbol, dayStartMs, receivedAtMs, collected, allowPartialSource = false,
+} = {}) {
+  if (typeof allowPartialSource !== "boolean")
+    return { error: "NATIVE_1M_PARTIAL_SOURCE_OPTION_INVALID" };
+  if (!Object.hasOwn(MARKET, market) || typeof symbol !== "string"
+    || !(market === "CRYPTO_SPOT"
+      ? /^KRW-[A-Z0-9]{1,20}$/u.test(symbol)
+      : /^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u.test(symbol)))
+    return { error: "NATIVE_1M_SOURCE_IDENTITY_INVALID" };
+  if (!Number.isSafeInteger(dayStartMs) || dayStartMs <= 0
+    || dayStartMs % DAY !== 0 || dayStartMs + DAY > 8_640_000_000_000_000
+    || !Number.isSafeInteger(receivedAtMs) || receivedAtMs < dayStartMs + DAY
+    || receivedAtMs > 8_640_000_000_000_000)
+    return { error: "NATIVE_1M_CAPTURE_CLOCK_OR_DAY_INVALID" };
   const policy = MARKET[market], end = dayStartMs + DAY;
   const correctSource = market === "CRYPTO_SPOT"
     ? collected?.market === market && collected?.providerMarket === symbol
-      && collected?.source === "upbit-public-candles"
+      && collected?.source === "upbit-public-candles" && collected?.exchange === "UPBIT"
     : collected?.market === market && collected?.symbol === symbol
       && collected?.provider === "bitget-public-v2"
       && collected?.productType === "usdt-futures";
+  const providerRequestWindowVerified = collected?.rawPageWindowTraversed === true
+    && collected?.reachedRequestedStart === true;
   if (!correctSource || collected?.timeframe !== "1m"
+    || collected?.intervalMs !== MIN
     || collected?.requestedStartTime !== dayStartMs
     || collected?.requestedEndTime !== end
-    || collected?.rawPageWindowTraversed !== true
-    || collected?.reachedRequestedStart !== true
+    || typeof collected?.rawPageWindowTraversed !== "boolean"
+    || typeof collected?.reachedRequestedStart !== "boolean"
+    || (collected.rawPageWindowTraversed === true && collected.reachedRequestedStart === false)
+    || (!allowPartialSource && !providerRequestWindowVerified)
     || collected?.historicalSignalAvailabilityProven !== false
     || collected?.actualFillProven !== false
     || !Array.isArray(collected.candles)
-    || collected.candles.length < 2 || collected.candles.length > 1440) {
+    || collected.candles.length < (allowPartialSource ? 1 : 2) || collected.candles.length > 1440) {
     return { error: "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED" };
   }
   let previous = 0;
   const bars = [];
   for (const row of collected.candles) {
     const ts = row?.timestamp;
-    if (!Number.isSafeInteger(ts) || ts < dayStartMs || ts >= end
+    if (!Number.isSafeInteger(ts) || ts < dayStartMs || ts + MIN > end
+      || ts + MIN > receivedAtMs
       || ts % MIN !== 0 || ts <= previous
       || typeof row.open !== "number" || !Number.isFinite(row.open)
       || typeof row.high !== "number" || !Number.isFinite(row.high)
@@ -129,7 +149,17 @@ function normalizeCollected({
       open:row.open,high:row.high,low:row.low,close:row.close,volume:row.volume,
     });
   }
+  const missingUnverifiedMinuteSlots = 1440 - bars.length;
   return {
+    // These flags describe the actual provider pagination result, not an
+    // independently attested universe or proof that missing minutes had no trades.
+    providerRequestWindowVerified,
+    providerRawPageWindowTraversed: collected.rawPageWindowTraversed,
+    providerReachedRequestedStart: collected.reachedRequestedStart,
+    sourcePartialReason: !providerRequestWindowVerified
+      ? "PROVIDER_REQUEST_WINDOW_NOT_FULLY_TRAVERSED"
+      : missingUnverifiedMinuteSlots > 0 ? "MISSING_MINUTE_SLOTS_NOT_PROVEN_NO_TRADES" : null,
+    missingUnverifiedMinuteSlots,
     source:{
       market,venue:policy.venue,symbol,sourceId:policy.sourceId,
       session:{startMs:dayStartMs,endMs:end,kind:"UTC_24H",timeZone:"UTC",
@@ -225,7 +255,7 @@ export async function collectPITNativeCryptoMinuteSourceV1({
     || collectedAtMs < end) {
     throw new TypeError("PIT_NATIVE_MINUTE_PROVIDER_CLOCK_INVALID");
   }
-  const parsed=normalizeCollected({
+  const parsed=normalizeRetrospectiveCryptoMinuteSourceV1({
     market,symbol,dayStartMs,receivedAtMs:collectedAtMs,collected,
   });
   if (!parsed.source)
