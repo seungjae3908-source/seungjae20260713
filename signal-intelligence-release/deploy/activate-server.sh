@@ -44,6 +44,7 @@ preflight() {
   command -v node >/dev/null || fail "NODE_REQUIRED"
   command -v corepack >/dev/null || fail "COREPACK_REQUIRED"
   command -v systemctl >/dev/null || fail "SYSTEMD_REQUIRED"
+  test -x /usr/bin/flock || fail "FLOCK_REQUIRED"
   command -v curl >/dev/null || fail "CURL_REQUIRED"
   printf '%s\n' \
     "preflight_ok=true" \
@@ -185,7 +186,7 @@ Environment=SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
 Environment=SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=false
 Environment=SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=false
 Environment=SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=
-ExecStart=/usr/bin/env node $CURRENT_LINK/api-server/.signal-intelligence/public-cycle.mjs
+ExecStart=/usr/bin/flock -n -E 75 $STATE_DIR/public-cycle.lock /usr/bin/env node $CURRENT_LINK/api-server/.signal-intelligence/public-cycle.mjs
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
