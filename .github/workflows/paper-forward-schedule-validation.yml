@@ -224,6 +224,8 @@ on:
       - .github/workflows/research-production-validation.yml
       - market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
       - market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+      - market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
       - market-prediction-lab/src/formula-paper-registry-readback-v1.js
       - market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
       - market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
@@ -349,6 +351,8 @@ jobs:
             .github/workflows/research-production-validation.yml
             market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
             market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+            market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+            market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
             market-prediction-lab/src/formula-paper-registry-readback-v1.js
             market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
             market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
@@ -605,6 +609,8 @@ jobs:
           node --check market-prediction-lab/src/formula-auto-backtest-queue-v1.js
           node --check market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
           node --test market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+          node --check market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+          node --test market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
           node --test market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
           grep -Fq "executionAuthority: 'NONE'" market-prediction-lab/src/formula-auto-backtest-queue-v1.js
           grep -Fq 'FORMULA_QUEUE_UNATTESTED_STAGE_EVIDENCE_FORBIDDEN' market-prediction-lab/src/formula-auto-backtest-queue-v1.js
