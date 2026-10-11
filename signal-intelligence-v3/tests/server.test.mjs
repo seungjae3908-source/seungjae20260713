@@ -61,6 +61,9 @@ test('server exposes read-only fresh snapshot and safety health', async () => {
     assert.equal(health.privateTradingApiAllowed, false);
     assert.equal(health.realOrderAllowed, false);
     assert.equal(health.snapshotReady, true);
+    assert.equal(health.snapshotClockReady, true);
+    assert.equal(health.snapshotPublicationReady,false);
+    assert.equal(health.snapshotBlockedReason,'FULL_STRATEGY_SOURCE_NOT_VERIFIED');
 
     const kr = await (await fetch(`http://127.0.0.1:${port}/v1/signals/kr`)).json();
     assert.equal(kr.ok, true);
@@ -85,6 +88,9 @@ test('server fails signal reads closed when snapshot is missing', async () => {
     const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
     assert.equal(health.ok, true);
     assert.equal(health.snapshotReady, false);
+    assert.equal(health.snapshotClockReady,false);
+    assert.equal(health.snapshotPublicationReady,false);
+    assert.equal(health.snapshotBlockedReason,'ENOENT');
     const response = await fetch(`http://127.0.0.1:${port}/v1/signals/kr`);
     assert.equal(response.status, 503);
     const body = await response.json();
@@ -153,6 +159,9 @@ test('full-profile blocked source data cannot masquerade as fresh server health'
     const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();
     assert.equal(health.snapshotReady,true);
     assert.equal(health.snapshotCurrentPageSourceReady,false);
+    assert.equal(health.snapshotClockReady,true);
+    assert.equal(health.snapshotPublicationReady,false);
+    assert.equal(health.snapshotBlockedReason,'CURRENT_SOURCE_PAGES_BLOCKED');
     assert.equal(health.snapshotFresh,false);
     assert.equal(health.executionAuthority,'NONE');
   }finally{
@@ -212,6 +221,7 @@ test('future-dated snapshot and invalid max-age cannot produce a fresh signal',a
     const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();
     assert.equal(health.snapshotReady,true);
     assert.equal(health.snapshotFresh,false);
+    assert.equal(health.snapshotBlockedReason,'SNAPSHOT_AGE_EXPIRED');
     const s=await fetch(`http://127.0.0.1:${port}/v1/signals`);
     assert.equal(s.status,503);
     assert.equal((await s.json()).executionAuthority,'NONE');
