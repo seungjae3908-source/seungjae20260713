@@ -780,7 +780,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   ) : null;
 
   const details = hasSelection ? (
-    <div className="space-y-4">
+    <div className="flex h-full min-h-0 flex-col gap-4" data-testid="ai-chart-detail-card-stack">
       {deferNonCriticalEvidence ? (
         <p
           role="status"
@@ -801,12 +801,12 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       <DecisionCard analysis={analysis} />
       <SafetyNote />
     </div>
-  ) : <div className="space-y-4"><SafetyNote /></div>;
+  ) : <div className="flex h-full min-h-0 flex-col gap-4" data-testid="ai-chart-detail-card-stack"><SafetyNote /></div>;
 
   const mobile = !desktop && !externalMode && !embedded;
 
   return (
-    <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
+    <div data-testid="ai-chart-page" className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
@@ -898,9 +898,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           </main>
         </>
       ) : (
-        <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-          <section className="min-w-0">{chart}</section>
-          <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">{details}</aside>
+        <main className="mx-auto grid max-w-7xl items-stretch gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]" data-testid="ai-chart-responsive-board">
+          <section className="min-w-0 lg:flex lg:h-full lg:flex-col lg:[&>*]:h-full">{chart}</section>
+          <aside className="min-w-0 lg:flex lg:h-full lg:flex-col">{details}</aside>
         </main>
       )}
 

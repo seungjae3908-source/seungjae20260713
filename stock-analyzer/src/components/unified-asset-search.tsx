@@ -31,6 +31,7 @@ import {
 
 const RECENT_KEY = 'unified-asset-search:recent:v1';
 const DEFAULT_SEARCH_DEBOUNCE_MS = 200;
+const SCOPED_MARKET_SEARCH_DEBOUNCE_MS = 50;
 
 function exactIdentitySearchDelayMs(
   market: UnifiedMarketFilter | null,
@@ -42,7 +43,7 @@ function exactIdentitySearchDelayMs(
   if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;
   if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;
   if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;
-  return DEFAULT_SEARCH_DEBOUNCE_MS;
+  return SCOPED_MARKET_SEARCH_DEBOUNCE_MS;
 }
 const GROUP_ORDER: UnifiedMarketFilter[] = ['KR', 'US', 'spot', 'futures'];
 const GROUP_LABEL: Record<UnifiedMarketFilter, string> = {
@@ -91,6 +92,14 @@ function displayCode(item: UnifiedAssetSuggestion) {
 
 function providerNames(providers: UnifiedAssetSuggestResponse['providers']) {
   return providers.map((provider) => PROVIDER_LABEL[provider.provider] ?? provider.provider).join(', ');
+}
+
+function searchErrorMessage(cause: unknown) {
+  const message = cause instanceof Error ? cause.message.trim() : '';
+  if (!message || /^(?:HTTP_|UNIFIED_SEARCH_|NETWORK_)/i.test(message)) {
+    return '검색 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  }
+  return message;
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -158,22 +167,24 @@ export function UnifiedAssetSearch({
       && (asset === 'all' || item.assetType === asset)
       && (!market || item.market === market),
   ), [allowedMarketSet, asset, market, recent]);
+  const responseMatchesQuery = response?.q.trim().toLocaleLowerCase('ko-KR') === trimmed.toLocaleLowerCase('ko-KR');
+  const activeResponse = responseMatchesQuery ? response : null;
   const prioritizedResults = useMemo(() => prioritizeUnifiedAssetSuggestions(
-    response?.results ?? [],
+    activeResponse?.results ?? [],
     {
       recentIds: recent.map((item) => item.id),
       watchlist,
     },
-  ), [recent, response?.results, watchlist]);
+  ), [activeResponse?.results, recent, watchlist]);
   const items = trimmed ? prioritizedResults : filteredRecent;
   const open = focused && (trimmed.length > 0 || filteredRecent.length > 0);
   const hasLastGoodResults = trimmed.length > 0 && items.length > 0;
-  const staleProviders = response?.providers.filter((provider) => provider.status === 'stale') ?? [];
-  const errorProviders = response?.providers.filter((provider) => provider.status === 'error') ?? [];
+  const staleProviders = activeResponse?.providers.filter((provider) => provider.status === 'stale') ?? [];
+  const errorProviders = activeResponse?.providers.filter((provider) => provider.status === 'error') ?? [];
   const outcome = error
     ? 'DATA_UNAVAILABLE'
-    : response
-      ? deriveUnifiedSearchOutcome(response)
+    : activeResponse
+      ? deriveUnifiedSearchOutcome(activeResponse)
       : null;
 
   useEffect(() => {
@@ -254,7 +265,7 @@ export function UnifiedAssetSearch({
       setActiveIndex(next.results.length ? 0 : -1);
     } catch (cause) {
       if (signal?.aborted || sequence !== requestSequence.current) return;
-      setError(cause instanceof Error ? cause.message : '검색 요청에 실패했습니다.');
+      setError(searchErrorMessage(cause));
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
@@ -365,11 +376,11 @@ export function UnifiedAssetSearch({
           {!trimmed && filteredRecent.length > 0 && <div className="flex items-center gap-2 border-b border-card-border px-4 py-3 text-xs font-extrabold text-muted-foreground"><Clock3 className="h-4 w-4" /> 최근 검색</div>}
           {loading && !hasLastGoodResults && <div className="space-y-3 px-4 py-5" aria-live="polite" data-testid="unified-search-skeleton"><div className="flex items-center gap-2 text-sm font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> 검색 인덱스에서 찾는 중입니다.</div><div className="h-12 animate-pulse rounded-xl bg-muted" /><div className="h-12 animate-pulse rounded-xl bg-muted" /></div>}
           {loading && hasLastGoodResults && <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-2 text-xs font-bold text-muted-foreground" aria-live="polite" data-testid="unified-search-refreshing"><Loader2 className="h-4 w-4 animate-spin" /> 이전 결과를 유지하며 새 검색을 확인 중입니다.</div>}
-          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-xs font-black text-warning">DATA_UNAVAILABLE · 검색 데이터 사용 불가</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={retrySearch} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">재시도</button></div>}
-          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>새 검색에 실패해 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={retrySearch} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">재시도</button></div>}
+          {error && !hasLastGoodResults && <div className="space-y-3 px-4 py-5 text-center" data-testid="unified-search-outcome"><AlertTriangle className="mx-auto h-6 w-6 text-warning" /><p className="text-sm font-black text-warning">검색 결과를 불러오지 못했습니다</p><p className="break-keep text-sm font-bold">{error}</p><button type="button" onClick={retrySearch} className="h-11 rounded-xl border border-card-border px-4 text-sm font-extrabold">다시 검색</button></div>}
+          {error && hasLastGoodResults && <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning" data-testid="unified-search-last-good"><span>업데이트에 실패해 같은 검색어의 마지막 정상 결과를 표시합니다.</span><button type="button" onClick={retrySearch} className="h-9 rounded-lg border border-warning/40 px-3 font-extrabold">다시 검색</button></div>}
           {!error && trimmed && errorProviders.length > 0 && <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs font-bold text-destructive">공급자 연결 실패: {providerNames(errorProviders)}. 해당 시장 결과가 누락될 수 있습니다.</div>}
           {!error && trimmed && staleProviders.length > 0 && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">마지막 정상 인덱스 사용: {providerNames(staleProviders)}.</div>}
-          {!error && trimmed && response?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {response.dataAsOf ? new Date(response.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
+          {!error && trimmed && activeResponse?.stale && <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs font-bold text-warning">가장 오래된 데이터 기준시각: {activeResponse.dataAsOf ? new Date(activeResponse.dataAsOf).toLocaleString('ko-KR') : '확인 필요'}</div>}
           {(hasLastGoodResults || (!loading && !error)) && grouped.map((group) => (
             <Fragment key={group.market}>
               <div className="sticky top-0 z-10 border-y border-card-border bg-secondary/90 px-4 py-2 text-xs font-black backdrop-blur">{GROUP_LABEL[group.market]}</div>
@@ -385,14 +396,14 @@ export function UnifiedAssetSearch({
               ))}
             </Fragment>
           ))}
-          {!loading && !error && trimmed && response && response.results.length === 0 && (
+          {!loading && !error && trimmed && activeResponse && activeResponse.results.length === 0 && (
             <div className="space-y-2 px-4 py-6 text-center" data-testid="unified-search-outcome">
               <p className={`text-sm font-black ${outcome === 'PROVIDER_UNAVAILABLE' ? 'text-warning' : ''}`}>
                 {outcome === 'PROVIDER_UNAVAILABLE'
-                  ? 'PROVIDER_UNAVAILABLE · 공급자 결과 확인 불가'
-                  : 'NO_MATCH · 일치하는 자산 없음'}
+                  ? '일부 시장의 검색 결과를 확인할 수 없습니다'
+                  : '일치하는 종목이나 코인이 없습니다'}
               </p>
-              {response.hiddenMatches.length > 0 ? <p className="text-xs font-bold text-muted-foreground">다른 시장에서 찾음: {response.hiddenMatches.map((item) => `${GROUP_LABEL[item.market]} ${item.count}개`).join(', ')}</p> : outcome === 'PROVIDER_UNAVAILABLE' ? <p className="text-xs font-bold text-warning">일부 공급자 결과가 누락되었거나 마지막 정상 인덱스를 사용 중입니다. 이것은 정상적인 검색 결과 0건이 아닙니다.</p> : <p className="text-xs font-bold text-muted-foreground">이름·티커·종목코드·심볼을 다시 확인해 주세요.</p>}
+              {activeResponse.hiddenMatches.length > 0 ? <p className="text-xs font-bold text-muted-foreground">다른 시장에서 찾음: {activeResponse.hiddenMatches.map((item) => `${GROUP_LABEL[item.market]} ${item.count}개`).join(', ')}</p> : outcome === 'PROVIDER_UNAVAILABLE' ? <p className="text-xs font-bold text-warning">일부 제공기관이 응답하지 않아 결과가 완전하지 않습니다. 잠시 후 다시 검색해 주세요.</p> : <p className="text-xs font-bold text-muted-foreground">이름·티커·종목코드·심볼을 다시 확인해 주세요.</p>}
             </div>
           )}
         </div>

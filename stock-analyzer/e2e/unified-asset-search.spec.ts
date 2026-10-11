@@ -105,7 +105,7 @@ test('latest request wins, keyboard selection opens clean stock detail, and spot
 test('market tabs narrow the single search without creating another search input', async ({ page }) => {
   await mockSearch(page);
   await page.goto('/__phase11-unified-search-e2e');
-  await page.getByRole('button', { name: '코인 현물', exact: true }).click();
+  await page.getByRole('tab', { name: '코인 현물', exact: true }).click();
   await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
   await page.getByRole('combobox', { name: '통합 자산 검색' }).fill('BTC');
   await expect(page.getByRole('option', { name: /UPBIT.*BTC\/KRW/ })).toBeVisible();

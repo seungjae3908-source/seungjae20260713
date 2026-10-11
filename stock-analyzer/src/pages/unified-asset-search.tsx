@@ -94,12 +94,13 @@ export default function UnifiedAssetSearchPage() {
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
         <div className="mx-auto w-full max-w-4xl">
-          <nav className="mb-3 grid grid-cols-3 gap-2 sm:mb-4 sm:grid-cols-5" aria-label="종목 시장 필터" data-testid="unified-market-tabs">
+          <nav className="mb-3 grid grid-cols-3 gap-2 sm:mb-4 sm:grid-cols-5" role="tablist" aria-label="종목 시장 필터" data-testid="unified-market-tabs">
             {visibleMarketFilters.map((item) => (
               <button
                 key={item.label}
                 type="button"
-                aria-pressed={market === item.key}
+                role="tab"
+                aria-selected={market === item.key}
                 onClick={() => selectMarket(item.key)}
                 className={cn(
                   'min-h-11 min-w-0 rounded-xl border px-2 text-xs font-black transition sm:px-3 sm:text-sm',
@@ -113,7 +114,11 @@ export default function UnifiedAssetSearchPage() {
             ))}
           </nav>
 
-          <section data-testid="unified-search-single-input" className="rounded-2xl border border-card-border bg-card p-3 sm:p-4">
+          <section data-testid="unified-search-single-input" className="rounded-2xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
+            <div className="mb-3">
+              <h2 className="text-base font-black">종목·코인 찾기</h2>
+              <p className="mt-1 text-xs font-semibold text-muted-foreground">이름이나 종목코드·심볼을 입력하면 바로 이동합니다.</p>
+            </div>
             <UnifiedAssetSearch
               asset={asset}
               market={market}

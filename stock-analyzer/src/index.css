@@ -54,7 +54,7 @@
   --radius-xl: 1.25rem;
 }
 
-/* Light theme (opt-in via settings) */
+/* Light theme (default) */
 :root {
   --background: 210 24% 96%;
   --foreground: 222 20% 12%;
@@ -96,7 +96,7 @@
   --disclosure-foreground: 0 0% 100%;
 }
 
-/* Dark theme (default) */
+/* Dark theme (optional) */
 .dark {
   --background: 225 18% 7%;
   --foreground: 210 20% 98%;
