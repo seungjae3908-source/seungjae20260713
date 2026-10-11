@@ -46,6 +46,7 @@ const safe = values => Object.freeze({
   venuePITUniverseIndependentlyVerified: false,
   wholeHistoricMarketPopulationVerified: false,
   historicalFullMarketOpportunityDenominatorVerified: false,
+  fullMarketOpportunityDenominatorVerified: false,
   actualMarketWideOpportunityCount: null,
   trueMarketWideRecall: null, actualFillCount: null, netProfitPct: null,
   profitabilityProven: false, executionAuthority: "NONE",
