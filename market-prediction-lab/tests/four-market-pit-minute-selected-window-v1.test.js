@@ -319,3 +319,20 @@ test("offline file CLI reuses one full-window PIT manifest for two day indexes",
       /PIT_MINUTE_WINDOW_CLI_PRIVATE_FILE_REQUIRED/);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("historical date-level stock source accepts full 2015-2028 calendar for a short 2026 selection",()=>{
+  const dates=["2015-01-05","2026-09-18","2026-09-21","2028-01-03"];
+  for(const market of ["KR_STOCK","US_STOCK"]){
+    const x=period({market,researchWindow:{startDate:"2026-09-18",
+      endDate:"2026-09-21"},stockTradingDates:dates,dateSources:[]});
+    assert.equal(x.requestedTradingDays,2);
+    assert.equal(x.missingDaySourceCount,2);
+    assert.equal(x.actualMarketWideOpportunityCount,null);
+    assert.equal(x.fullMarketOpportunityDenominatorVerified,false);
+    assert.equal(x.executionAuthority,"NONE");
+    assert.throws(()=>period({market,researchWindow:{startDate:"2026-09-18",
+      endDate:"2026-09-21"},stockTradingDates:["2028-01-03","2015-01-05"]}),
+      /PIT_MINUTE_WINDOW_STOCK_CALENDAR_INVALID/);
+  }
+});
