@@ -26,6 +26,9 @@ export default function PaperTradingPage() {
     data-testid="paper-four-market-integrated-workspace">
     <FourMarketPaperStatusPanel />
     <ManualFourMarketWalletPanel />
-    <div className="min-h-0 flex-1"><AutoTradingPage initialMode="paper" /></div>
+    <div className="min-h-0 flex-1">
+      <AutoTradingPage key={search} initialMode="paper"
+        paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'} />
+    </div>
   </div>;
 }

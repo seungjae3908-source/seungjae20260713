@@ -427,12 +427,10 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
   test.beforeAll(async () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
-    const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
     isolatedVite = spawn(
-      pnpm,
+      process.execPath,
       [
-        'exec',
-        'vite',
+        path.join(analyzerDirectory(), 'node_modules/vite/bin/vite.js'),
         '--config',
         'vite.config.ts',
         '--host',
@@ -542,7 +540,10 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toContainText('주문별 승인');
     await expect(safety).toContainText('불필요');
-    await expect(safety).toContainText('4시장 개별 ON/OFF');
+    await expect(safety).toContainText('4시장');
+    await expect(safety).toContainText('매 주문 재검증');
+    await expect(page.getByTestId('technical-trading-modes')).toBeVisible();
+    await expect(page.getByTestId('trading-market-select').locator('option')).toHaveCount(4);
     await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
     await page.waitForTimeout(750);

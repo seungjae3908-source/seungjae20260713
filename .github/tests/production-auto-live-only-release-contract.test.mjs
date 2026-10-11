@@ -81,7 +81,11 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
     assert.ok(policySpec.includes(`${counter}: 0`));
   }
   assert.equal(evidenceBuilder.includes("qaScope === 'trading_core' ? tradingCore.memberAutoLivePilotReady === true : true"), false);
-  assert.ok(autoPage.includes("if (mode !== 'paper')"));
+  assert.ok(autoPage.includes("if (mode !== 'paper' || paperOrigin !== 'automatic')"));
+  assert.ok(autoPage.includes("if (mode !== 'paper' || paperOrigin !== 'automatic' || fixture"));
+  assert.ok(autoPage.includes("if (mode === 'auto' && section === 'settings') return;"));
+  assert.ok(read('api-server/src/routes/trade-automation.ts')
+    .includes("accountMode === 'paper' && origin === 'automatic'"));
   assert.ok(autoPage.includes('showLegacyPaperReadinessInsideAutoDashboard'));
 });
 

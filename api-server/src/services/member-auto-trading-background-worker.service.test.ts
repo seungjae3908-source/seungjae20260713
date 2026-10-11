@@ -14,6 +14,11 @@ import {
   type TradingPolicy,
 } from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  automaticLiveIsolationReceipt,
+} from './automatic-live-position-isolation.service';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
@@ -26,6 +31,7 @@ import {
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
+  automaticTradingStoredEntryReasons,
   assertCanonicalLiveProviderPositions,
   liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
@@ -51,6 +57,21 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
+  const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
+    direction: 'BUY', timeframe: '5m', regime: 'TREND' },
+    signal: { learningSnapshot: { reasons: ['실제 저장된 진입 조건', null, ''] } },
+    riskEvidence: { actualRiskPercent: 0.2, riskReward1: 2 } } as any;
+  const reasons = automaticTradingStoredEntryReasons(entry);
+  assert.equal(reasons[0], '실제 저장된 진입 조건');
+  assert.ok(reasons.includes('진입 전략: trend-breakout-v1 · 버전 v1'));
+  assert.ok(reasons.includes('진입 당시 검증 위험비율: 0.2%'));
+  assert.ok(reasons.includes('진입 당시 목표 1 손익비: 2'));
+  const withoutDescription = automaticTradingStoredEntryReasons({ ...entry, signal: { learningSnapshot: null },
+    riskEvidence: { actualRiskPercent: null, riskReward1: null } });
+  assert.doesNotMatch(withoutDescription.join('|'), /거래량|캔들|AI 승인|위험비율/);
+});
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({
@@ -2049,37 +2070,40 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
 });
 
 
-test('read-only Live pre-entry exposure blocks untracked securities but excludes Upbit KRW settlement cash', () => {
-  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+test('manual holdings remain protected without becoming canonical AUTO assets; unknown or mixed ownership blocks', () => {
+  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 2 } as TradingPlan;
   const position = (symbol: string, quantity: number | null, side: string | null = 'long') =>
-    ({ symbol, quantity, side }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
+    ({ market: 'USDT', symbol, quantity, availableQuantity: quantity, side, leverage: 2 }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
   const bitget = (positions: CanonicalAccountSnapshot['positions']) =>
-    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [tracked]);
+    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [{ plan: tracked, remainingQuantity: 1 }]);
   assert.doesNotThrow(() => bitget([position('BTCUSDT', 1)]));
   const crossProviderPlan = { symbol: '005930', side: 'buy', exchange: 'kiwoom' } as TradingPlan;
-  assert.throws(() => assertCanonicalLiveProviderPositions({
+  const protectedToss = assertCanonicalLiveProviderPositions({
     provider: 'toss', positions: [position('005930', 1, null)],
-  }, [crossProviderPlan]), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/,
-  'same symbol on a different broker must not reconcile external exposure');
-  assert.throws(() => bitget([position('ETHUSDT', 1)]),
-    /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  }, [{ plan: crossProviderPlan, remainingQuantity: 1 }]);
+  assert.equal(protectedToss.manualProtected.length, 1, 'another broker cannot adopt manual assets');
+  assert.equal(protectedToss.automaticOwned.length, 0);
+  assert.throws(() => bitget([position('ETHUSDT', 1)]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
   assert.throws(() => bitget([position('BTCUSDT', 1, 'short')]),
     /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
   assert.throws(() => bitget(null), /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
   assert.throws(() => bitget([position('BTCUSDT', null)]),
     /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
-  assert.doesNotThrow(() => bitget([]));
+  assert.throws(() => bitget([]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
+  assert.throws(() => bitget([position('BTCUSDT', 1.2)]), /BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT/);
 
   // Upbit includes its KRW cash wallet in positions; that is NOT an open
-  // market exposure, but a separately held ETH coin must still block entry.
+  // market exposure. A separately held ETH coin is protected, not adopted.
   assert.doesNotThrow(() => assertCanonicalLiveProviderPositions({
     provider: 'upbit', positions: [position('KRW', 500_000, null)],
   }, []));
-  assert.throws(() => assertCanonicalLiveProviderPositions({
+  const protectedUpbit = assertCanonicalLiveProviderPositions({
     provider: 'upbit', positions: [
       position('KRW', 500_000, null), position('ETH', 0.4, null),
     ],
-  }, []), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  }, []);
+  assert.equal(protectedUpbit.manualProtected.length, 1);
+  assert.equal(protectedUpbit.automaticOwned.length, 0);
 });
 
 
@@ -2109,26 +2133,73 @@ test('live warmup rechecks current provider exposure, open orders, and Bitget on
     ...(provider === 'bitget' ? { positionMode: 'one_way_mode' as const } : {}),
     ...overrides,
   });
-  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 7 } as TradingPlan;
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss'), []), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
     openOrders: [{ id: 'manual-open', market: 'KR', symbol: '005930', side: 'buy', price: 1, quantity: 1, remainingQuantity: 1, status: 'OPEN' }],
   }), []), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
     positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
-  }), []), false);
+  }), []), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positionMode: 'hedge_mode',
   }), []), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 7, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
-  }), [bitgetPlan]), true);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 8, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
-  }), [bitgetPlan]), false);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 3, liquidationPrice: null, marginMode: 'cross', side: 'long' }],
-  }), [bitgetPlan]), false);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
+});
+
+test('same-account manual assets cannot be entered or exited by AUTO, while a separate symbol remains eligible', () => {
+  const snapshot = {
+    provider: 'upbit', connected: true, status: 'CONNECTED', stale: false, errorCode: null,
+    readOnly: true, accounts: [], balances: [], checkedAt: new Date().toISOString(), lastGoodAt: new Date().toISOString(),
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false,
+    openOrders: [], positions: [
+      { market: 'UPBIT', symbol: 'KRW', quantity: 1_000_000, availableQuantity: 1_000_000 },
+      { market: 'UPBIT', symbol: 'BTC', quantity: 0.2, availableQuantity: 0.2 },
+      { market: 'UPBIT', symbol: 'ETH', quantity: 2, availableQuantity: 2 },
+    ],
+  } as unknown as CanonicalAccountSnapshot;
+  const plan = { userId: 'owner', id: 'auto', exchange: 'upbit', market: 'KRW', symbol: 'KRW-SOL',
+    accountMode: 'live', executionMode: 'automatic', side: 'buy', quantity: 1, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlan;
+  const proof = automaticLiveIsolationReceipt(snapshot, [], 3);
+  assert.equal(proof.manualProtectedPositionCount, 2);
+  assert.equal(proof.automaticOwnedPositionCount, 0);
+  assert.equal(proof.ready, true);
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(snapshot, [], plan));
+  for (const symbol of ['BTC', 'KRW-BTC']) {
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol }), /MANUAL_ASSET_PROTECTED/);
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol, side: 'sell', reduceOnly: true }), /MANUAL_ASSET_PROTECTED/);
+  }
+  const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
+    ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
+  assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
+  const order = { planId: plan.id, userId: plan.userId, exchange: plan.exchange,
+    state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
+  assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
+  const filled = { ...order, state: 'FILLED' as const, filledQuantity: 1 };
+  const owned = canonicalAutomaticLivePositions([plan], [filled]);
+  const withAuto = { ...snapshot, positions: [...snapshot.positions!,
+    { market: 'UPBIT', symbol: 'SOL', quantity: 1, availableQuantity: 1 } as NonNullable<CanonicalAccountSnapshot['positions']>[number]] };
+  const exit = { ...plan, id: 'exit', symbol: 'KRW-SOL', side: 'sell' as const, reduceOnly: true,
+    signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(withAuto, owned, exit));
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, plan), /AUTOMATIC_POSITION_ALREADY_OPEN/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, signalReasons: [] }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => canonicalAutomaticLivePositions([plan], [filled, { ...filled, id: 'duplicate' }]), /OWNERSHIP_AMBIGUOUS/);
+  const closedOrder = { ...filled, planId: exit.id };
+  assert.deepEqual(canonicalAutomaticLivePositions([plan, exit], [filled, closedOrder]), []);
+  assert.equal(automaticLiveIsolationReceipt(withAuto, [], 3).manualProtectedPositionCount, 3,
+    'assets without a proven remaining fill stay manual/protected, including a later manual reacquisition');
 });
 
 test('member Telegram live admission requires a SENT receipt after this chat binding, never from a former chat', () => {
