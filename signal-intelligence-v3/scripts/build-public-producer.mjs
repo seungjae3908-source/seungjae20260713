@@ -19,7 +19,7 @@ await esbuild.build({
   outfile:out,
   banner:{js:'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'},
   plugins:[{name:'v3-public-crypto-cursor-only',setup(build){
-    build.onLoad({filter:/crypto-signal-scanner\.service\.ts$/u},async({path})=>{
+    build.onLoad({filter:/crypto-signal-scanner\.service\.ts$/},async({path})=>{
       matches+=1;
       return {contents:patchV3CryptoScannerSource(await readFile(path,'utf8')),
         loader:'ts',resolveDir:dirname(path)};
