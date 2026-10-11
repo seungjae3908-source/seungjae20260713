@@ -433,10 +433,42 @@ jobs:
             rootKeys:s.rootKeys??[],firstDailyRowKeys:s.firstDailyRowKeys??[],distinctTradingDates:s.distinctTradingDates??null,dailyTimestampFormat:s.dailyTimestampFormat??null,dailyValueTypes:s.dailyValueTypes??null
           })).join('\n'));
           NODE
+      # One bounded public-only observation of ALL three Upbit quote markets
+      # and three Bitget futures product types. A green code/test result never
+      # certifies 24h, licensed whole-market feed or member trade signals.
+      - name: Verify all-quote venue coverage without member/trading authority
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-public-crypto-all-venues.mjs > "$RUNNER_TEMP/public-crypto-all-venues.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-crypto-all-venues.json"
+          const fs=require('node:fs');
+          const p=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(p.executionAuthority!=='NONE'||p.publicReadOnly!==true
+            ||p.publicRedistributionLicensed!==false
+            ||p.wholeVenueTradingSignalReady!==false
+            ||p.allExchangeVenuesCertified!==false
+            ||p.historicalOneMinuteVerified!==false
+            ||p.memberSignalPromotionAllowed!==false
+            ||JSON.stringify(Object.keys(p.upbit.quoteGroups))!==JSON.stringify(['KRW','BTC','USDT'])
+            ||JSON.stringify(Object.keys(p.bitget.productTypes))!==JSON.stringify(
+              ['USDT-FUTURES','COIN-FUTURES','USDC-FUTURES']))
+            process.exit(1);
+          const summary=Object.entries(p.upbit.quoteGroups).map(([name,x])=>
+            'Upbit '+name+': '+x.status+' roster='+x.rosterCount
+            +' quoted='+x.matchedTickerCount+' missing='+x.missingTickerCount)
+            .concat(Object.entries(p.bitget.productTypes).map(([name,x])=>
+              'Bitget '+name+': '+x.status+' roster='+x.rosterCount
+              +' quoted='+x.matchedTickerCount+' missing='+x.missingTickerCount));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### All quote-currency futures/spot read-only breadth (NO license/trading authority)\n\n'
+            +summary.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('PUBLIC_VENUE_SCOPE_ONLY '+JSON.stringify(summary));
+          NODE
       - name: Upload bounded diagnostic metadata only
         uses: actions/upload-artifact@v4
         with:
           name: public-stock-source-capabilities-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/public-stock-sources.json
+          path: |
+            ${{ runner.temp }}/public-stock-sources.json
+            ${{ runner.temp }}/public-crypto-all-venues.json
           retention-days: 7
           if-no-files-found: error
