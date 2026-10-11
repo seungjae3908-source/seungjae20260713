@@ -372,6 +372,7 @@ export class KiwoomReadonlyProvider {
       return {
         market: 'KR',
         symbol: normalizeDomesticSymbol(row.stk_cd),
+        displayName: typeof row.stk_nm === 'string' ? row.stk_nm.trim().slice(0, 120) : null,
         quantity,
         availableQuantity,
         averageEntryPrice: absoluteNumberOrNull(row.pur_pric),
@@ -411,6 +412,7 @@ export class KiwoomReadonlyProvider {
     const usPositions = usHoldings.rows.map((row) => ({
       market: 'US',
       symbol: normalizeUsSymbol(row.stk_cd),
+      displayName: typeof row.stk_nm === 'string' ? row.stk_nm.trim().slice(0, 120) : null,
       quantity: nonNegative(row.poss_qty, 'KIWOOM_US_POSITION_QUANTITY_INVALID'),
       availableQuantity: nonNegativeOrNull(row.sell_alowq, 'KIWOOM_US_POSITION_AVAILABLE_QUANTITY_INVALID'),
       averageEntryPrice: absoluteNumberOrNull(row.frgn_stk_book_uv),

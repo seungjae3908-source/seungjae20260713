@@ -23,6 +23,9 @@ import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { automaticPaperWalletBootstrapReadiness } from '../services/member-auto-trading-background-worker.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
+import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
+import { emptySnapshot } from '../features/account-readonly/account-readonly.contract';
+import { buildMemberFourMarketPaperBootstrap } from '../services/admin-four-market-paper-capital.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
@@ -349,6 +352,134 @@ test.beforeEach(async () => {
   setTradingPlanMarketIntelligenceRunnerForTests(unavailableMarketIntelligence);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
+});
+
+test('manual/AUTO isolation endpoint is owner-scoped, zero-mutation and exposes counts only', async () => {
+  const local = new InMemoryTradingRepository();
+  await local.saveConnection({ userId: USER, exchange: 'upbit', accountMode: 'live', configured: true,
+    encryptedCredentials: encryptTradingCredentials({ accessKey: 'isolation-test-key', secretKey: 'isolation-test-secret' }),
+    lastVerifiedAt: new Date().toISOString(), lastErrorCode: null, updatedAt: new Date().toISOString() });
+  setTradeAutomationRepositoryFactoryForTests((owner) => {
+    assert.equal(owner, USER);
+    return local;
+  });
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.origin, 'https://api.upbit.com');
+    assert.equal(String(init?.method ?? 'GET'), 'GET');
+    providerCalls += 1;
+    return Response.json(url.pathname === '/v1/accounts' ? [
+      { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      { currency: 'BTC', balance: '0.2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+      { currency: 'ETH', balance: '2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+    ] : []);
+  }) as typeof fetch;
+  const { server, baseUrl } = await startServer(true, 'admin');
+  try {
+    const response = await originalFetch(baseUrl + '/api/trade-automation/live-position-isolation/upbit');
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control')!, /no-store/);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.ready, true);
+    assert.equal(body.manualProtectedPositionCount, 2);
+    assert.equal(body.automaticOwnedPositionCount, 0);
+    assert.equal(body.manualEntryBlocked, true);
+    assert.equal(body.canonicalExitOnly, true);
+    assert.equal(body.liveTradingAuthorityGranted, false);
+    assert.equal(body.autoTradingAuthorityGranted, false);
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) assert.equal(body[key], 0);
+    for (const key of ['positions', 'balances', 'orders', 'userId', 'accountRef', 'encryptedCredentials']) assert.equal(key in body, false);
+    assert.doesNotMatch(JSON.stringify(body), /isolation-test|BTC|ETH/);
+    assert.ok(providerCalls > 0);
+    setTradePaperRuntimeRecordsReaderForTests(async () => { throw new Error('PAPER_MUST_NOT_BLOCK_LIVE'); });
+    const holdingsResponse = await originalFetch(baseUrl + '/api/trade-automation/holdings?accountMode=live&provider=upbit&userId=other-member');
+    assert.equal(holdingsResponse.status, 200);
+    assert.match(holdingsResponse.headers.get('cache-control')!, /no-store/);
+    const holdings = await holdingsResponse.json() as any;
+    assert.equal(holdings.readOnly, true);
+    assert.equal(holdings.items.length, 2);
+    assert.ok(holdings.items.every((row: any) => row.ownership === 'MANUAL' && row.entryEvidence === null));
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) assert.equal(holdings[key], 0);
+    assert.equal(holdings.liveTradingAuthorityGranted, false);
+    assert.equal(holdings.autoTradingAuthorityGranted, false);
+    assert.doesNotMatch(JSON.stringify(holdings), /isolation-test|encryptedCredentials|accountRef|accessKey|secretKey/);
+    assert.equal((await local.listOrders(USER)).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setTradePaperRuntimeRecordsReaderForTests(null);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('holdings connect only actual canonical AUTO fills to stored entry evidence and never invent manual reasons', () => {
+  const at = new Date().toISOString();
+  const plan = { id: 'entry', userId: USER, executionMode: 'automatic', accountMode: 'live', exchange: 'kiwoom',
+    market: 'KR', symbol: '000660', side: 'buy', reduceOnly: false, strategyId: 'breakout-v1', signalId: 'stored-signal',
+    stopPrice: 196000, targetPrices: [210000], signalReasons: ['거래량 증가', '돌파 조건 충족', 'CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: at }, createdAt: at, updatedAt: at } as any;
+  const order = { id: 'fill', planId: 'entry', userId: USER, exchange: 'kiwoom', state: 'FILLED',
+    filledQuantity: 1, averageFillPrice: 200000, updatedAt: at, protectionStatus: 'UNKNOWN' } as any;
+  const position = { market: 'KR', symbol: '000660', displayName: 'SK하이닉스', quantity: 1, availableQuantity: 1,
+    averageEntryPrice: 200000, currentPrice: 202000, marketValue: 202000, unrealizedPnl: 2000, unrealizedPnlPercent: 1,
+    leverage: null, liquidationPrice: null, marginMode: null, side: null };
+  const snapshot = { ...emptySnapshot('kiwoom', 'CONNECTED', at), connected: true, positions: [position,
+    { ...position, symbol: '005930', displayName: '삼성전자', quantity: 2, availableQuantity: 2 }], openOrders: [] };
+  const result = liveTradingHoldings(snapshot, [plan], [order]);
+  assert.equal(result.ownershipVerified, true);
+  assert.equal(result.items[0]!.ownership, 'AUTO');
+  assert.equal(result.items[0]!.displayName, 'SK하이닉스');
+  assert.equal(result.items[0]!.entryEvidence!.entryPrice, 200000);
+  assert.deepEqual(result.items[0]!.entryEvidence!.reasons, ['거래량 증가', '돌파 조건 충족']);
+  assert.equal(result.items[0]!.entryEvidence!.signalId, 'stored-signal');
+  assert.equal(result.items[0]!.entryEvidence!.protectionStatus, 'UNKNOWN');
+  assert.equal(liveTradingHoldings(snapshot, [plan], [{ ...order, averageFillPrice: null }])
+    .items[0]!.entryEvidence!.entryPrice, null, 'unknown canonical fill price is not the broker average');
+  assert.equal(result.items[1]!.ownership, 'MANUAL');
+  assert.equal(result.items[1]!.entryEvidence, null);
+  const mixed = liveTradingHoldings({ ...snapshot, positions: [{ ...position, quantity: 2 }] }, [plan], [order]);
+  assert.equal(mixed.ownershipVerified, false);
+  assert.equal(mixed.items[0]!.ownership, 'UNRESOLVED');
+  assert.equal(mixed.items[0]!.entryEvidence, null);
+  const stale = liveTradingHoldings({ ...snapshot, stale: true }, [plan], [order]);
+  assert.equal(stale.ownershipVerified, false);
+  assert.ok(stale.items.every(row => row.ownership === 'UNRESOLVED'));
+  assert.equal(stale.orderRequests, 0);
+  const paperAuto = { ...plan, accountMode: 'paper' };
+  const paperManual = { ...plan, id: 'manual-entry', symbol: '005930', accountMode: 'paper',
+    executionMode: 'manual', signalReasons: ['수동모의 입력'] };
+  const paperOrders = [order, { ...order, id: 'manual-fill', planId: 'manual-entry' }];
+  assert.deepEqual(paperTradingHoldings([paperAuto, paperManual, plan], paperOrders, 'automatic').items.map(row => row.symbol), ['000660']);
+  assert.deepEqual(paperTradingHoldings([paperAuto, paperManual], paperOrders, 'manual').items.map(row => row.symbol), ['005930']);
+  const nowMs = Date.now();
+  const records = buildMemberFourMarketPaperBootstrap(new Date(nowMs - 10_000)).map(row => ({
+    ...row, userId: USER, createdAt: new Date(nowMs - 10_000).toISOString(), serverUpdatedAt: new Date(nowMs - 10_000).toISOString(),
+  })) as any;
+  const oldPlan = { ...paperAuto, id: 'old-epoch', symbol: '123456', createdAt: new Date(nowMs - 20_000).toISOString() };
+  const oldOrder = { ...order, id: 'old-fill', planId: oldPlan.id, createdAt: oldPlan.createdAt };
+  const currentOrder = { ...order, createdAt: at };
+  assert.deepEqual(paperTradingHoldings([paperAuto, oldPlan], [currentOrder, oldOrder], 'automatic',
+    { records, role: 'member', nowMs }).items.map(row => row.symbol), ['000660']);
+  assert.throws(() => paperTradingHoldings([paperAuto], [currentOrder], 'automatic',
+    { records: [], role: 'member', nowMs }), /HOLDINGS_PAPER_WALLET_EPOCH_UNVERIFIED/);
+});
+
+test('holdings API rejects unauthorized users and invalid scopes before provider access', async () => {
+  const unauthenticated = await startServer(false);
+  const associate = await startServer(true, 'associate');
+  const admin = await startServer(true, 'admin');
+  try {
+    for (const server of [unauthenticated, associate]) {
+      const response = await fetch(server.baseUrl + '/api/trade-automation/holdings?provider=upbit');
+      assert.equal(response.status, 403);
+    }
+    assert.equal((await fetch(admin.baseUrl + '/api/trade-automation/holdings?accountMode=arbitrary')).status, 400);
+    assert.equal((await fetch(admin.baseUrl + '/api/trade-automation/holdings?provider=arbitrary')).status, 403);
+  } finally {
+    await Promise.all([unauthenticated, associate, admin].map(server => close(server.server)));
+  }
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);

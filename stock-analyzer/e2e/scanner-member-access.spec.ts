@@ -41,7 +41,7 @@ function technicalItem(id: string) {
 }
 
 test('associate scanner access uses the unified workspace while advanced capabilities stay fail closed', () => {
-  const associateBlock = memberAccessSource.match(/const ASSOCIATE = Object\.freeze\(\{([\s\S]*?)\}\);\nconst REGULAR/)?.[1] ?? '';
+  const associateBlock = memberAccessSource.match(/const ASSOCIATE = Object\.freeze\(\{([\s\S]*?)\}\);\r?\nconst REGULAR/)?.[1] ?? '';
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
   expect(associateBlock).not.toContain('canAccessFutures: true');
