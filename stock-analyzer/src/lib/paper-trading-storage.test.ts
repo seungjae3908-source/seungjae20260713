@@ -149,7 +149,7 @@ test('manual local Paper starts a new round only after confirmation and preserve
   assert.equal(summary.totalIssued,10_000);
   assert.equal(summary.issuedCapitalReturnPercent,-100);
 });
-test('manual second profitable round does not hide prior bankruptcy', () => {
+test('manual second profitable ongoing round cannot hide prior bankruptcy in combined ROI', () => {
   const storage=new MemoryStorage();
   const first=createLocalPaperState(10_000,NOW);
   first.account.cashBalance=0;first.account.equity=0;first.account.availableMargin=0;
@@ -160,15 +160,17 @@ test('manual second profitable round does not hide prior bankruptcy', () => {
   second.account.equity=12_000;
   second.account.availableMargin=12_000;
   savePaperState(storage,second);
-  startNextLocalManualPaperRound(storage,second,
-    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+2_000));
-  const report=getManualPaperRoundSummary(storage);
-  assert.equal(report.completedRounds,2);
+  assert.throws(()=>startNextLocalManualPaperRound(storage,second,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+2_000)),/자본이 남아/);
+  const report=getManualPaperRoundSummary(storage, second);
+  assert.equal(report.completedRounds,1);
   assert.equal(report.bankruptcies,1);
-  assert.equal(report.totalIssued,20_000);
-  assert.equal(report.totalNet,-8_000);
-  assert.equal(report.issuedCapitalReturnPercent,-40);
+  assert.equal(report.cumulativeIncludingActive.rounds,2);
+  assert.equal(report.cumulativeIncludingActive.totalIssued,20_000);
+  assert.equal(report.cumulativeIncludingActive.totalNet,-8_000);
+  assert.equal(report.cumulativeIncludingActive.totalReturnPercent,-40);
 });
+
 test('manual round refuses open exposure, pending order and forged current account identity', () => {
   const storage=new MemoryStorage();
   const old=createLocalPaperState(10_000,NOW);
