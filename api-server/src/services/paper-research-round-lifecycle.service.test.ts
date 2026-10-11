@@ -79,6 +79,20 @@ test('unknown settlement, missing minimum and existing exposure all fail-closed'
     minimumEntryObservedAtMs:T-90_000,
   })).status,'BLOCKED_EVIDENCE');
 });
+test('nonzero equity cannot be falsely declared bankrupt because available margin is locked', () => {
+  const full=assessPaperResearchRound(fixture({
+    operatingCapitalKrw:100_000,availableToTradeKrw:0,
+  }));
+  assert.equal(full.status,'BLOCKED_EVIDENCE');
+  assert.ok(full.blockers.includes('PAPER_ROUND_POSITIVE_EQUITY_WITH_NO_AVAILABLE_CASH'));
+  const partial=assessPaperResearchRound(fixture({
+    operatingCapitalKrw:100_000,availableToTradeKrw:1_000,
+    verifiedMinimumEntryKrw:10_000,
+  }));
+  assert.equal(partial.status,'BLOCKED_EVIDENCE');
+  assert.ok(partial.blockers.includes('PAPER_ROUND_LOCKED_CAPITAL_NOT_BANKRUPTCY'));
+});
+
 test('idempotent new-round proposals cannot double-inject or merge different markets', () => {
   const prior=assessPaperResearchRound(fixture({operatingCapitalKrw:0,availableToTradeKrw:0}));
   const next=assessPaperResearchRound(fixture({
