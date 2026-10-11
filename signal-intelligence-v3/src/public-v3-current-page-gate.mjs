@@ -13,10 +13,12 @@ const LANES = Object.freeze([
   'FUTURES_SCALPING_15M','FUTURES_SWING_60M','FUTURES_MID_LONG_1D',
 ]);
 const isCount=x=>Number.isSafeInteger(x)&&x>=0;
+const CYCLE_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 
 function verifiedCurrentLane(lane){
   const page=lane?.publicExecutionDiagnostic;
-  if(!lane||lane.status!=='CANDIDATES_AVAILABLE'
+  if(!lane||!CYCLE_ID.test(lane.sourceCycleId??'')
+    ||lane.status!=='CANDIDATES_AVAILABLE'
     ||lane.lastGoodPreserved!==false
     ||lane.cursorRotatedBlockedOnly===true
     ||lane.responseDataState!=='complete'
@@ -39,9 +41,11 @@ function verifiedCurrentLane(lane){
 function verifiedLanes(coverage){
   if(!Array.isArray(coverage)||coverage.length!==LANES.length)return null;
   const unique=new Map();
+  const sourceCycleId=coverage[0]?.sourceCycleId;
+  if(!CYCLE_ID.test(sourceCycleId??''))return null;
   for(const lane of coverage){
-    if(!lane||!LANES.includes(lane.laneId)||unique.has(lane.laneId))
-      return null;
+    if(!lane||!LANES.includes(lane.laneId)||unique.has(lane.laneId)
+      ||lane.sourceCycleId!==sourceCycleId)return null;
     unique.set(lane.laneId,lane);
   }
   return unique.size===LANES.length?unique:null;
@@ -95,7 +99,9 @@ export function currentPagePublication(snapshot,coverage){
   for(const row of snapshot.rows){
     const origin=row?.provenance;
     const lane=lanes.get(origin?.laneId);
-    if(!validSource(lane)||!verifiedCurrentLane(lane)||origin.cursor!==lane.cursorBefore
+    if(!validSource(lane)||!verifiedCurrentLane(lane)
+      ||origin?.sourceCycleId!==lane.sourceCycleId
+      ||origin.cursor!==lane.cursorBefore
       ||!row?.id||row.state!=='CANDIDATE'||row.dataStatus!=='READY')
       continue;
     permitted.add(row.id);
