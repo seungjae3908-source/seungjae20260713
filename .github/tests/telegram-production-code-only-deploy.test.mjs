@@ -154,6 +154,8 @@ test('strict predeploy reads vetted Signal V3 module before any Production mutat
   assert.ok(mod.includes("'/v1/signals'"));
   assert.ok(mod.includes("'investment-signal-intelligence-v3-cycle.timer'"));
   assert.ok(mod.includes('SIGNAL_V3_FRESH_PASS'));
+  assert.ok(wf.includes("'ops/telegram-predeploy-signal-health.mjs':'832b8883cacf39617f3a08cfd7dd765aaa2ff2cf'"));
+  assert.ok(wf.includes("['ops/deploy-production.sh',"));
 });
 
 test('Staging network gate needs two bounded independent green receipts, not latest green only',()=>{

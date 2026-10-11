@@ -55,3 +55,12 @@ an operator-only, previous-release-lineage-specific workflow; it does not
 constitute a reusable authorized deployment path or finish the signed full
 GO/NO-GO manifest provenance collector. User production approval is still
 required after all blockers are resolved.
+
+
+### Predeploy helper immutable source integrity
+The read-only Signal V3 preflight helper is referenced by its reviewed Git
+blob SHA from the immutable operator checkout; it does not come from the
+old Telegram application artifact. Dedicated no-network mocked tests cover
+all 12 market/strategy lanes, stale/partial/provider error blocking, old cycle
+status, safety envelope and fixed-loopback HTTP GET. A workflow-only code
+snippet cannot replace these executable contract tests.
