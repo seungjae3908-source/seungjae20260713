@@ -5,6 +5,7 @@ import {
   FutureProvider,
   ScannerAiProviderError,
   ScannerAiProviderScheduler,
+  ScannerAiSingleFlightAdapter,
   parseRetryAfterMs,
   type ScannerAiValidationInput,
 } from './scanner-ai-provider.service';
@@ -105,4 +106,45 @@ test('circuit breaker opens after configured consecutive failures', async () => 
   await assert.rejects(scheduler.validate(request), /DOWN/);
   await assert.rejects(scheduler.validate(request), /SCANNER_AI_CIRCUIT_OPEN/);
   assert.equal(attempts, 1);
+});
+
+test('queued cancellation is immediate and does not start a provider request', async () => {
+  let calls = 0;
+  const scheduler = new ScannerAiProviderScheduler(new FutureProvider('test', async () => {
+    calls += 1;
+    return new Promise(() => {});
+  }), { concurrency: 1, requestTimeoutMs: 60 });
+  const blocked = scheduler.validate(request);
+  const blockedFailure = assert.rejects(blocked, /SCANNER_AI_DEADLINE/);
+  const controller = new AbortController();
+  const queued = scheduler.validate(request, controller.signal);
+  const queuedFailure = assert.rejects(queued, /cancel-queued/);
+  controller.abort(new Error('cancel-queued'));
+  await queuedFailure;
+  assert.equal(scheduler.pendingCount, 0);
+  await blockedFailure;
+  await wait(0);
+  assert.equal(calls, 1);
+  assert.equal(scheduler.activeCount, 0);
+});
+
+test('AI queue is bounded and malformed results never become PASS', async () => {
+  const scheduler = new ScannerAiProviderScheduler(new FutureProvider('test', async () => new Promise(() => {})),
+    { concurrency: 1, maxQueueLength: 1, requestTimeoutMs: 30 });
+  const first = assert.rejects(scheduler.validate(request), /SCANNER_AI_DEADLINE/);
+  const second = assert.rejects(scheduler.validate(request), /SCANNER_AI_DEADLINE/);
+  await assert.rejects(scheduler.validate(request), /SCANNER_AI_QUEUE_FULL/);
+  await Promise.all([first, second]);
+  const malformed = new ScannerAiProviderScheduler(new FutureProvider('test', async () => ({ status: 'PASS' } as typeof pass)));
+  await assert.rejects(malformed.validate(request), /SCANNER_AI_RESPONSE_INVALID/);
+  assert.throws(() => new ScannerAiProviderScheduler(new FutureProvider('test', async () => pass), { concurrency: NaN }), /OPTION_INVALID/);
+});
+
+test('shared AI requests release capacity when a delegate ignores cancellation', async () => {
+  let calls = 0;
+  const shared = new ScannerAiSingleFlightAdapter(new FutureProvider('hung', async () => { calls++; return new Promise(() => {}); }), undefined, 20);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(shared.validate(request, controller.signal)); assert.equal(calls, 0);
+  await assert.rejects(shared.validate(request, new AbortController().signal), /SCANNER_AI_DEADLINE/);
+  assert.equal(shared.stats.inFlight, 0);
 });

@@ -134,7 +134,10 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     sessionAware: input.sessionAware,
     sessionTimeZone: input.card.market === 'US' ? 'America/New_York' : 'Asia/Seoul',
   });
-  const contextCandles = input.contextCandles?.length ? input.contextCandles : input.candles;
+  const contextMissing = input.contextCandles !== undefined && input.contextCandles.length === 0;
+  // undefined means the caller did not request separate context. An explicit
+  // empty response means the higher-timeframe request failed or lacked bars.
+  const contextCandles = input.contextCandles ?? input.candles;
   const quant = runScannerQuantStrategy({
     sessionTimeZone: input.card.assetClass === 'stock'
       ? input.card.market === 'US' ? 'America/New_York' : 'Asia/Seoul' : 'UTC',
@@ -151,7 +154,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
   });
   const dataCompleteness = completenessFromMarketData(input.card, qualityCandles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
-  const dataTrustedForPlan = quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed;
+  const dataTrustedForPlan = !contextMissing && quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed;
   const pricePlan = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
   const planEligible = dataTrustedForPlan
     && !directionChanged
@@ -164,7 +167,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     && dataCompleteness >= 75;
   const dataState = quality.state === 'DATA_UNTRUSTED'
     ? 'untrusted' as const
-    : quality.state === 'DEGRADED'
+    : quality.state === 'DEGRADED' || contextMissing
       ? input.card.dataState === 'complete' ? 'partial' as const : input.card.dataState
       : input.card.dataState;
   const confidence = Math.round(Math.min(
@@ -176,6 +179,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
   const warnings = [
     ...input.card.warnings,
     ...quant.warnings,
+    ...(contextMissing ? ['CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'] : []),
     ...(directionChanged
       ? ['Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다.']
       : []),
@@ -203,6 +207,9 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
         ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`)
         : [`최근 ${qualityCandles.length}개 전략 관련 캔들의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`],
     },
+    ...(contextMissing ? [{ key: 'context-timeframe', label: '상위 시간봉 근거', status: 'unverified' as const,
+      source: 'scanner-context-timeframe', observedAt: null,
+      reasons: ['상위 시간봉 자료를 확보하지 못했습니다. 기본 시간봉으로 대신 검증하지 않습니다.'] }] : []),
   ];
 
   const hardened: ScannerSignalCard = {
@@ -215,12 +222,13 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     dataState,
     strongSignalEligible,
     strategyMode,
-    signalGrade: quant.grade,
+    signalGrade: contextMissing && (quant.grade === 'S' || quant.grade === 'A') ? 'B' : quant.grade,
     dataQuality: {
-      state: quality.state,
+      state: contextMissing && quality.state === 'TRUSTED' ? 'DEGRADED' : quality.state,
       score: quality.score,
-      strongSignalAllowed: quality.strongSignalAllowed,
-      issues: quality.issues,
+      strongSignalAllowed: !contextMissing && quality.strongSignalAllowed,
+      issues: [...quality.issues, ...(contextMissing ? [{ code: 'MISSING_CANDLE' as const, severity: 'warning' as const,
+        message: '상위 시간봉 자료가 없어 강신호와 진입 계획을 차단했습니다.' }] : [])],
     },
     quantScore: quant.factors,
     aiValidation: quant.aiValidation,

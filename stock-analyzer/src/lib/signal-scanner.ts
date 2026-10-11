@@ -82,6 +82,7 @@ export interface ScannerPricePlan {
 }
 
 export interface ScannerSignalCard {
+  aiReviewEvidenceKey?: string;
   signalId: string;
   assetClass: ScannerAssetClass;
   market: string;
@@ -360,6 +361,7 @@ function asLastGoodFallback(response: ScannerResponse, error: SignalScannerReque
     cards: response.cards.map((card) => ({
       ...card,
       dataState: 'stale',
+      aiReviewEvidenceKey: undefined,
       strongSignalEligible: false,
       warnings: card.warnings.includes(reason) ? card.warnings : [...card.warnings, reason],
     })),
@@ -527,5 +529,35 @@ export function signalScannerDetailPath(card: ScannerSignalCard): string {
   }
   const coinMarket = card.assetClass === 'coin_futures' ? 'futures' : 'spot';
   return `/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${symbol}`;
+}
+
+export type ScannerAiEvidenceReview = {
+  ok: true; signalId: string; evidenceKey: string; status: 'REVIEWED' | 'UNAVAILABLE' | 'BLOCKED_DATA';
+  reason: string | null; model: string | null; facts: string[];
+  analysis: { summaryShort: string; factEvidenceRefs: number[]; inferences: string[]; uncertainty: string[]; riskFlags: string[] } | null;
+};
+
+export async function fetchScannerAiEvidenceReview(signalId: string, evidenceKey: string, signal: AbortSignal): Promise<ScannerAiEvidenceReview> {
+  const response = await authorizedFetch('/api/market/scan/ai-review', { method: 'POST', signal, cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signalId, evidenceKey }) });
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new SignalScannerRequestError(response.status,
+    isRecord(value) && typeof value.error === 'string' ? value.error : 'AI_REVIEW_UNAVAILABLE', null);
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.length <= 20 && v.every(x => typeof x === 'string' && x.length <= 1000);
+  if (!isRecord(value) || value.ok !== true || value.signalId !== signalId || value.evidenceKey !== evidenceKey
+    || !['REVIEWED', 'UNAVAILABLE', 'BLOCKED_DATA'].includes(String(value.status)) || !strings(value.facts)
+    || !isRecord(value.safety) || value.safety.executionAuthority !== 'NONE' || value.safety.publicEvidenceOnly !== true
+    || value.safety.orderAllowed !== false || value.safety.paperOrderAllowed !== false || value.safety.profitabilityPass !== false
+    || value.safety.profitProbability !== null || value.safety.scoreImpact !== 0 || value.safety.rankImpact !== 0) {
+    throw new SignalScannerRequestError(502, 'AI_REVIEW_RESPONSE_INVALID', null);
+  }
+  const a = value.analysis;
+  const facts = value.facts;
+  if (value.status === 'REVIEWED' ? !isRecord(a) || typeof a.summaryShort !== 'string' || a.summaryShort.length > 1000
+      || !strings(a.inferences) || !strings(a.uncertainty) || !strings(a.riskFlags)
+      || !Array.isArray(a.factEvidenceRefs) || a.factEvidenceRefs.length > 20
+      || a.factEvidenceRefs.some(n => !Number.isInteger(n) || n < 0 || n >= facts.length)
+    : a !== null) throw new SignalScannerRequestError(502, 'AI_REVIEW_RESPONSE_INVALID', null);
+  return value as ScannerAiEvidenceReview;
 }
 

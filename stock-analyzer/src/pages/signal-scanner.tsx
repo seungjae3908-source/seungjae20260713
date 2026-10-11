@@ -11,6 +11,8 @@ import {
 } from '@/lib/analysis-selection';
 import {
   fetchSignalScanner,
+  fetchScannerAiEvidenceReview,
+  type ScannerAiEvidenceReview,
   deriveScannerDisplayOutcome,
   signalScannerDetailPath,
   SignalScannerRequestError,
@@ -234,6 +236,32 @@ function SignalDetailPanel({
   onAiChart: () => void;
   onOrderPreparation: () => void;
 }) {
+  const auth = useAuth();
+  const reviewIdentity = JSON.stringify([auth.user?.id, card.signalId, card.aiReviewEvidenceKey]);
+  const [aiReview, setAiReview] = useState<{ identity: string; value: ScannerAiEvidenceReview } | null>(null);
+  const [aiReviewState, setAiReviewState] = useState<{ identity: string; state: 'loading' | 'error' } | null>(null);
+  const reviewController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    reviewController.current?.abort();
+    setAiReview(null); setAiReviewState(null);
+    return () => { reviewController.current?.abort(); };
+  }, [reviewIdentity]);
+  const runAiReview = async () => {
+    if (!card.aiReviewEvidenceKey || !auth.user?.id || card.dataState !== 'complete') return;
+    reviewController.current?.abort();
+    const controller = new AbortController(); reviewController.current = controller;
+    setAiReview(null); setAiReviewState({ identity: reviewIdentity, state: 'loading' });
+    try {
+      const value = await fetchScannerAiEvidenceReview(card.signalId, card.aiReviewEvidenceKey, controller.signal);
+      if (!controller.signal.aborted && reviewController.current === controller) {
+        setAiReview({ identity: reviewIdentity, value }); setAiReviewState(null);
+      }
+    } catch {
+      if (!controller.signal.aborted && reviewController.current === controller) setAiReviewState({ identity: reviewIdentity, state: 'error' });
+    }
+  };
+  const visibleReview = aiReview?.identity === reviewIdentity ? aiReview.value : null;
+  const reviewState = aiReviewState?.identity === reviewIdentity ? aiReviewState.state : null;
   const matchedEvidence = card.evidence.filter((item) => item.status === 'matched');
   const why = [...new Set([...card.matched, ...matchedEvidence.flatMap((item) => item.reasons)])].filter(Boolean).slice(0, 8);
   const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
@@ -335,6 +363,27 @@ function SignalDetailPanel({
               : <p className="mt-1 text-[10px] text-muted-foreground">차단·경고 이슈 없음</p>}
         </div>
       </div>
+      <section aria-label="AI 공개 근거 검토" data-testid="scanner-ai-evidence-review" className="mt-3 rounded-xl border border-card-border bg-background p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-xs font-black">AI 공개 근거 검토</h4>
+          <button type="button" onClick={runAiReview} disabled={!card.aiReviewEvidenceKey || !auth.user?.id || card.dataState !== 'complete' || reviewState === 'loading'}
+            className="min-h-[44px] rounded-lg border border-primary/30 px-3 py-2 text-xs font-black disabled:opacity-50">{reviewState === 'loading' ? '검토 중…' : 'AI 근거 검토'}</button>
+        </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">클릭할 때만 AI를 요청합니다. 설정된 AI 공급자에 공개 근거가 전달되며 호출 비용이 발생할 수 있습니다. 수익 확률·주문 승인 아님. 점수·순위는 변경하지 않습니다.</p>
+        {!card.aiReviewEvidenceKey && <p className="mt-2 text-xs">서버 근거가 없거나 이전 결과입니다. 다시 검색 후 검토하세요.</p>}
+        {reviewState === 'error' && <p role="alert" className="mt-2 text-xs text-warning">AI 검토를 받지 못했습니다. 신호 만료·요청 한도·공급자 상태를 확인하고 다시 검색하세요.</p>}
+        {visibleReview && <div className="mt-2 space-y-2 text-xs" aria-live="polite">
+          <p>{visibleReview.status === 'REVIEWED' ? visibleReview.analysis?.summaryShort : visibleReview.status === 'BLOCKED_DATA' ? '검증된 현재 데이터가 부족하여 AI 검토를 차단했습니다.' : 'AI 검토를 받지 못했습니다. 검증 결과를 만들어 표시하지 않습니다.'}</p>
+          {visibleReview.analysis && <>
+            <p className="font-bold">AI 추론 · 사실이 아님</p>
+            <ul className="space-y-1">{visibleReview.analysis.inferences.map((s, i) => <li key={i}>{s}</li>)}</ul>
+            <p className="font-bold">불확실성·위험</p>
+            <ul className="space-y-1">{[...visibleReview.analysis.uncertainty, ...visibleReview.analysis.riskFlags].map((s, i) => <li key={i}>{s}</li>)}</ul>
+            <p className="font-bold">참조한 서버 공개 근거</p>
+            <ul className="space-y-1 text-muted-foreground">{visibleReview.analysis.factEvidenceRefs.map(i => <li key={i}>{visibleReview.facts[i]}</li>)}</ul>
+          </>}
+        </div>}
+      </section>
     </section>
   );
 
