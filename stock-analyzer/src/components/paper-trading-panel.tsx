@@ -121,10 +121,10 @@ export function PaperTradingPanel({
   };
 
   const openPositions = state.positions.filter((position) => position.status !== 'closed');
-  const canStartManualRound = openPositions.length === 0 && !state.orders.some(order => order.status === 'pending');
+  const canStartManualRound = state.account.equity <= 0.01 && openPositions.length === 0 && !state.orders.some(order => order.status === 'pending');
   const roundSummary = useMemo(() => {
-    try { return getManualPaperRoundSummary(storage); } catch { return null; }
-  }, [storage, state.account.id]);
+    try { return getManualPaperRoundSummary(storage,state); } catch { return null; }
+  }, [storage,state]);
   const statistics = useMemo(() => calculatePaperStatistics(state.journal), [state.journal]);
   const filteredJournal = state.journal.filter((entry) => journalFilter === 'all' || entry.side === journalFilter || entry.symbol === journalFilter);
 
@@ -343,12 +343,12 @@ export function PaperTradingPanel({
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="초기 자본" value={money(state.account.initialBalance)} /><Metric label="현금" value={money(state.account.cashBalance)} /><Metric label="자산" value={money(state.account.equity)} testId="paper-equity" /><Metric label="사용 증거금" value={money(state.account.usedMargin)} /><Metric label="사용 가능" value={money(state.account.availableMargin)} /><Metric label="실현손익" value={money(state.account.realizedPnl)} /><Metric label="미실현손익" value={money(state.account.unrealizedPnl)} /><Metric label="일일 / 주간" value={`${money(state.riskState.dailyRealizedPnl)} / ${money(state.riskState.weeklyRealizedPnl)}`} /></div>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs" data-testid="manual-paper-round-controls">
           <span>보관한 연구 회차 {roundSummary?.completedRounds ?? '확인 필요'}회 · 파산 {roundSummary?.bankruptcies ?? '미확인'}회</span>
-          {roundSummary?.totalIssued ? <span>이전 전체 회차 누적 수익률 {number(roundSummary.issuedCapitalReturnPercent)}%</span> : null}
+          {roundSummary?.cumulativeIncludingActive.totalIssued ? <span>이전 + 현재 회차 합산 수익률 {number(roundSummary.cumulativeIncludingActive.totalReturnPercent)}%</span> : null}
           <button type="button" className={buttonClass} disabled={busy || !canStartManualRound}
-            onClick={() => setNewRoundConfirm(true)}>기록 보존 후 새 연구 회차</button>
+            onClick={() => setNewRoundConfirm(true)}>자본 소진 · 새 연구 회차</button>
           <button type="button" className={buttonClass} onClick={downloadRounds}>이전 회차 전체 내보내기</button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">이 기능은 현재 브라우저의 수동 코인선물 모의계좌 전용입니다. 4시장 서버 계좌나 실거래 자본을 충전하지 않습니다. 열린 포지션·미체결 주문이 없을 때만 새 회차를 시작할 수 있습니다.</p>
+        <p className="mt-2 text-xs text-muted-foreground">이 기능은 현재 브라우저의 수동 코인선물 모의계좌 전용입니다. 4시장 서버 계좌나 실거래 자본을 충전하지 않습니다. 운용자본이 소진되고 열린 포지션·미체결 주문이 없을 때만 새 회차를 시작할 수 있습니다.</p>
       </section>
 
       {futuresEnabled ? <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" data-testid="paper-order-form">
@@ -388,7 +388,7 @@ export function PaperTradingPanel({
 
     {newRoundConfirm ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="수동모의 새 연구 회차 확인"><div className="w-full max-w-md rounded-2xl bg-card p-4">
       <h2 className="font-bold">새 로컬 수동모의 연구 회차를 시작할까요?</h2>
-      <p className="mt-2 text-sm">기존 거래와 손익·파산 기록을 별도 보관한 뒤 새로운 가상자본 회차를 시작합니다. 현재 회차가 아직 수익 중이라면 조기 종료로 기록되며 파산으로 표시하지 않습니다.</p>
+      <p className="mt-2 text-sm">기존 거래와 손익·파산 기록을 별도 보관한 뒤 새로운 가상자본 회차를 시작합니다. 운용자본이 남아 있는 회차는 재시작할 수 없습니다.</p>
       <p className="mt-2 text-xs text-muted-foreground">저장 실패·진행 중 포지션·미체결 주문이 있으면 새 회차를 열지 않습니다. 운영 계좌 및 자동모의매매는 변경하지 않습니다.</p>
       <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" className={buttonClass} onClick={() => setNewRoundConfirm(false)}>취소</button><button type="button" data-testid="manual-paper-new-round-confirm" className={buttonClass} disabled={busy || !canStartManualRound} onClick={startNewManualRound}>기록 보존 후 시작</button></div>
     </div></div> : null}
