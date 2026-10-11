@@ -19,6 +19,7 @@ export type PaperRoundProposalRow = Readonly<{
   next_round_number:number;
   previous_settlement_digest_sha256:string;
   proposed_seed_krw:1000000;
+  ending_cause:'ZERO_EQUITY'|'BELOW_VERIFIED_MINIMUM';
   previous_operating_capital_krw:number;
   previous_locked_reserve_krw:number;
   minimum_entry_krw:number|null;
@@ -105,6 +106,7 @@ export async function recordPaperResearchRoundProposal(
     next_round_number:snapshot.roundNumber+1,
     previous_settlement_digest_sha256:snapshot.settlementDigestSha256,
     proposed_seed_krw:1000000,
+    ending_cause:decision.endingCause!,
     previous_operating_capital_krw:snapshot.operatingCapitalKrw,
     previous_locked_reserve_krw:snapshot.reserveKrw,
     minimum_entry_krw:snapshot.verifiedMinimumEntryKrw,
@@ -136,7 +138,8 @@ export async function appendPaperResearchRoundProposalWithServiceRole(
     || receipt.financial_mutation_allowed!==false
     || receipt.reserve_transfer_allowed!==false
     || receipt.historical_record_deletion_allowed!==false
-    || receipt.proposed_seed_krw!==1000000) {
+    || receipt.proposed_seed_krw!==1000000
+    || !['ZERO_EQUITY','BELOW_VERIFIED_MINIMUM'].includes(receipt.ending_cause)) {
     throw new Error('PAPER_ROUND_PROPOSAL_ONLY_REQUIRED');
   }
   const {data,error}=await getSupabase().from('paper_research_round_proposals')
