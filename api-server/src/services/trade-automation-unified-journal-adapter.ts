@@ -103,8 +103,14 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
       filledQuantity,
       remainingQuantity,
       averageFillPrice,
-      fees: feeForOrder(order),
-      tax: null,
+      // A numeric charge without a quote-currency receipt is not
+      // independently comparable to the actual execution cost.
+      fees: order.feeCurrency?.toUpperCase() === currencyForPlan(plan)
+        ? feeForOrder(order) : null,
+      tax: order.taxCurrency?.toUpperCase() === currencyForPlan(plan)
+        && typeof order.taxAmount === 'number'
+        && Number.isFinite(order.taxAmount) && order.taxAmount >= 0
+        ? order.taxAmount : null,
       currency: currencyForPlan(plan),
       status: statusForOrder(order),
       strategy: plan.strategyId,
