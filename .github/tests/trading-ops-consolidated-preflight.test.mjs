@@ -45,7 +45,17 @@ test('canonical app execution ledger is projected into journal without provider-
     'APP_TRADE_AUTOMATION_LEDGER_PROJECTION',
   ]) assert.ok(adapter.includes(marker), marker);
   assert.ok(route.includes('readTradeAutomationJournalPayloads'));
-  assert.ok(route.includes('knownBrokerOrderIds'));
+  const mirror = read('api-server/src/services/automatic-paper-journal-mirror.service.ts');
+  assert.ok(route.includes('reconcileCanonicalPaperJournalMirrors'));
+  assert.ok(route.includes('reconcileScopedExternalJournalHistory'));
+  assert.ok(route.includes('externalHistoryDedupAudit'));
+  assert.ok(!route.includes('knownBrokerOrderIds'));
+  for (const marker of [
+    'LIVE_HISTORY_SOURCES', 'accountIdMasked', 'brokerOrderId',
+    'verifiedLiveKey', 'exactEconomicDuplicate',
+    'JOURNAL_EXTERNAL_SCOPE_IDENTITY_CONFLICT',
+    "executionAuthority:'NONE'",
+  ]) assert.ok(mirror.includes(marker), marker);
   assert.ok(route.includes('BROKER_HISTORY_IMPORTED_PERSISTENTLY'));
   assert.ok(!route.includes("...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'"));
   assert.ok(route.includes('/paper-journal/import-account-history'));
