@@ -317,7 +317,7 @@ jobs:
           const fs=require('node:fs');
           const file=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           if(file.executionAuthority!=='NONE'||file.licensedForPublicRedistribution!==false
-            ||file.fullMarketCoverageProven!==false||file.samples?.length!==9)process.exit(1);
+            ||file.fullMarketCoverageProven!==false||file.samples?.length!==11)process.exit(1);
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
             '### Public stock source capacity probe (NOT release approval)\n\n'
             +file.samples.map(s=>'- '+s.id+': '+s.status+' (HTTP '+(s.httpStatus??'?')+')\n').join('')+'\n');
