@@ -247,7 +247,8 @@ jobs:
           root="${{ runner.temp }}/production-preactivation-evidence"
           test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root" \
+            --require-automatic-position-isolation
 
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
