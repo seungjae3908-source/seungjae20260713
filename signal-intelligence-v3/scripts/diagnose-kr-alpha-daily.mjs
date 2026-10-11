@@ -13,4 +13,5 @@ try {
 }
 console.log(JSON.stringify({publicOnly:true,executionAuthority:'NONE',
   wholeKrMarketProven:false,intradayAlphanumericSupported:false,
-  licensedMarketRedistribution:false,alphanumericDailyCanary:outcome},null,2));
+  licensedMarketRedistribution:false,alphanumericDailyCanary:outcome,
+  sourceShapeIntegrity:feed.readLastIntegrity()},null,2));
