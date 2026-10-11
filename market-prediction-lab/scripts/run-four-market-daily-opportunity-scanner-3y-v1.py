@@ -29,6 +29,8 @@ SPEC.loader.exec_module(us)
 START = us.START
 END = us.END
 WARMUP = us.WARMUP
+LEGACY_START, LEGACY_END, LEGACY_WARMUP = START, END, WARMUP
+WINDOW_MAX_UTC_DAYS = 36_600
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": "market-prediction-lab/four-market-daily-opportunity-v1"})
 
@@ -53,6 +55,45 @@ MIN_DOLLAR_VOLUME = {
 }
 CALENDAR_DAYS = {"US_STOCK": 252, "KR_STOCK": 252, "CRYPTO_SPOT": 365, "CRYPTO_FUTURES": 365}
 SIX_MONTH_DAYS = {"US_STOCK": 126, "KR_STOCK": 126, "CRYPTO_SPOT": 183, "CRYPTO_FUTURES": 183}
+
+
+def resolve_research_window(start_date: str | None, end_date: str | None):
+    """Strict UTC calendar selection, not an assertion of data coverage."""
+    if start_date is None and end_date is None:
+        return LEGACY_START, LEGACY_END, LEGACY_WARMUP, False
+    if start_date is None or end_date is None:
+        raise ValueError("RESEARCH_WINDOW_START_END_REQUIRED")
+    if not isinstance(start_date, str) or not isinstance(end_date, str):
+        raise ValueError("RESEARCH_WINDOW_DATES_INVALID")
+    if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_date)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_date)):
+        raise ValueError("RESEARCH_WINDOW_DATES_INVALID")
+    try:
+        start = pd.Timestamp(start_date, tz="UTC")
+        end_day = pd.Timestamp(end_date, tz="UTC")
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ValueError("RESEARCH_WINDOW_DATES_INVALID") from error
+    first = pd.Timestamp("1970-01-02", tz="UTC")
+    limit = pd.Timestamp("2100-01-01", tz="UTC")
+    if start < first or end_day >= limit or end_day < start:
+        raise ValueError("RESEARCH_WINDOW_DATES_INVALID")
+    requested_days = (end_day - start).days + 1
+    if requested_days > WINDOW_MAX_UTC_DAYS:
+        raise ValueError("RESEARCH_WINDOW_EXCEEDS_BOUNDED_DAY_LIMIT")
+    # Preserve the existing scanner's pre-window feature warm-up rather
+    # than treating an arbitrary first research day as a fully trained day.
+    warmup = start - (LEGACY_START - LEGACY_WARMUP)
+    return start, end_day + pd.Timedelta(days=1) - pd.Timedelta(seconds=1), warmup, True
+
+
+def use_research_window(start_date: str | None, end_date: str | None) -> bool:
+    global START, END, WARMUP
+    start, end, warmup, selected = resolve_research_window(start_date, end_date)
+    START, END, WARMUP = start, end, warmup
+    # The reused U.S. engine evaluates all candidates against its own
+    # globals. Move all three cutoffs together or the scan is inconsistent.
+    us.START, us.END, us.WARMUP = start, end, warmup
+    return selected
 
 
 def configure_us_module(market: str) -> None:
@@ -378,18 +419,17 @@ def period_table(daily: pd.Series, market: str) -> dict:
             "samples": int(len(s)),
         }
 
-    three = us.compound_period(daily) if len(daily) else 0.0
+    # Do not label a user-selected 10-day or 10-year result "THREE_YEAR".
+    total = stats(pd.Series([us.compound_period(daily)])) if len(daily) else stats(
+        pd.Series(dtype=float))
     return {
         "DAILY": stats(daily),
         "WEEKLY": stats(weekly),
         "MONTHLY": stats(monthly),
         "SIX_MONTH": stats(six),
         "YEARLY": stats(year),
-        "THREE_YEAR": {
-            "average": three, "median": three, "latest": three,
-            "positiveRate": 1.0 if three > 0 else 0.0,
-            "best": three, "worst": three, "samples": 1,
-        },
+        "SELECTED_PERIOD": total,
+        **({"THREE_YEAR": total} if START == LEGACY_START and END == LEGACY_END else {}),
     }
 
 
@@ -544,6 +584,28 @@ def self_test() -> None:
     assert blocked["pointInTimeMembershipProven"] is False
     assert not expected_market_source_failure(ValueError("BUG_IN_STRATEGY_MATH"))
     assert not expected_market_source_failure(RuntimeError("BUG_IN_STRATEGY_MATH"))
+    assert resolve_research_window(None, None) == (
+        LEGACY_START, LEGACY_END, LEGACY_WARMUP, False)
+    custom_start, custom_end, custom_warmup, custom = resolve_research_window(
+        "2020-01-01", "2026-09-30")
+    assert custom and custom_start == pd.Timestamp("2020-01-01", tz="UTC")
+    assert custom_end == pd.Timestamp("2026-09-30 23:59:59", tz="UTC")
+    assert custom_warmup == custom_start - (LEGACY_START - LEGACY_WARMUP)
+    for first, last in (
+        ("2026-10-01", None),
+        (None, "2026-10-01"),
+        ("2026-10-11", "2026-10-10"),
+        ("2026-02-30", "2026-03-01"),
+        ("2026-1-01", "2026-03-01"),
+        ("2100-01-01", "2100-01-02"),
+        ("1970-01-02", "2099-12-31"),
+    ):
+        try:
+            resolve_research_window(first, last)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("INVALID_WINDOW_WAS_ACCEPTED")
     print("FOUR_MARKET_SELF_TEST_PASS")
 
 
@@ -551,9 +613,29 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--start-date", help="Inclusive UTC YYYY-MM-DD research start")
+    parser.add_argument("--end-date", help="Inclusive UTC YYYY-MM-DD research end")
+    parser.add_argument("--validate-window-only", action="store_true",
+                        help="Validate selected dates without fetching market data")
     args = parser.parse_args()
+    try:
+        selected_by_user = use_research_window(args.start_date, args.end_date)
+    except ValueError as error:
+        parser.error(str(error))
     if args.self_test:
         self_test()
+        return
+    if args.validate_window_only:
+        print(json.dumps({
+            "status": "RESEARCH_WINDOW_VALIDATED_NO_MARKET_DATA_READ",
+            "startDate": START.strftime("%Y-%m-%d"),
+            "endDate": END.strftime("%Y-%m-%d"),
+            "selectedByUser": selected_by_user,
+            "actualMarketWideOpportunityCount": None,
+            "trueMarketWideRecall": None,
+            "profitabilityProven": False,
+            "executionAuthority": "NONE",
+        }, ensure_ascii=False))
         return
 
     started = time.time()
@@ -677,7 +759,12 @@ def main() -> None:
         "marketStatus": {m: reports[m]["status"] for m in MARKETS},
         "contract": "four-market-daily-opportunity-scanner-3y/v1",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "period": {"start": START.isoformat(), "end": END.isoformat()},
+        "period": {
+            "start": START.isoformat(), "end": END.isoformat(),
+            "selectedByUser": selected_by_user,
+            "requestedUtcCalendarDayCount": (END.normalize() - START.normalize()).days + 1,
+            "historicalWholeMarketDataCoverageVerified": False,
+        },
         "markets": reports,
         "combinedFixedFamily": combined,
         "truthBoundary": {
