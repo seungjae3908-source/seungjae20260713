@@ -37,7 +37,7 @@ import {
   isAutomaticPaperAccountId,
 } from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
-import { reconcileCanonicalPaperJournalMirrors } from '../services/automatic-paper-journal-mirror.service';
+import { reconcileCanonicalPaperJournalMirrors, reconcileScopedExternalJournalHistory } from '../services/automatic-paper-journal-mirror.service';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,
@@ -1143,15 +1143,11 @@ export function createPaperJournalRouter(
       const paperMirrors = reconcileCanonicalPaperJournalMirrors(
         storedPayloads, automationPayloads,
       );
-      const knownBrokerOrderIds = new Set(
-        paperMirrors.payloads.map((payload) => String(payload.brokerOrderId ?? ''))
-          .filter(Boolean),
-      );
-      const externalHistoryPayloads = liveHistory.payloads.filter(
-        (payload) => !knownBrokerOrderIds.has(String(payload.brokerOrderId ?? '')),
+      const externalReconciliation = reconcileScopedExternalJournalHistory(
+        paperMirrors.payloads, liveHistory.payloads,
       );
       const journal = buildUnifiedTradeJournal(
-        [...paperMirrors.payloads, ...externalHistoryPayloads],
+        [...paperMirrors.payloads, ...externalReconciliation.payloads],
         filters,
         observedAt,
       );
@@ -1165,6 +1161,7 @@ export function createPaperJournalRouter(
         result: {
           ...bound,
           paperJournalMirrorAudit: paperMirrors.audit,
+          externalHistoryDedupAudit: externalReconciliation.audit,
           liveAccountHistory: historySummary(liveHistory),
           safety: {
             ...bound.safety,
