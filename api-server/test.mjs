@@ -92,6 +92,7 @@ const groups = {
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
+    path.join(root, 'src/services/signal-intelligence-telegram-subscriber.service.test.ts'),
     path.join(root, 'src/modules/portfolio/portfolio-core.test.ts'),
     path.join(root, 'src/modules/portfolio/canonical-journal-adapter.test.ts'),
     path.join(root, 'src/modules/portfolio/evidence-weighted-capital-allocation.test.ts'),
@@ -170,6 +171,7 @@ const groups = {
   telegram: [
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
+    path.join(root, 'src/services/signal-intelligence-telegram-subscriber.service.test.ts'),
     path.join(root, 'src/services/telegram-market-brief.service.test.ts'),
     path.join(root, 'src/services/telegram-readable-format.service.test.ts'),
     path.join(root, 'src/services/telegram-investment-intelligence.service.test.ts'),
