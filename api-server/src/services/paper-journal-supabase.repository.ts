@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { isManualPaperWalletId } from './manual-four-market-paper-wallets.service';
+import { isReservedManualPaperWalletNamespace } from './manual-four-market-paper-wallets.service';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   PaperJournalError,
@@ -85,7 +85,7 @@ function createScopedPaperJournalRepository(
       if (record.kind === 'account'
         && (record.id.startsWith('automatic-paper-admin-v2:')
           || record.id.startsWith('automatic-paper-member-v2:')
-          || isManualPaperWalletId(record.id))) {
+          || isReservedManualPaperWalletNamespace(record.id))) {
         throw new PaperJournalError('PAPER_FOUR_MARKET_WALLET_SERVER_ONLY',
           '시장별 자동모의계좌는 일반 동기화로 변경할 수 없습니다.', 403);
       }
