@@ -239,6 +239,16 @@ export function classifyPublicCycleLaneStatus(response) {
   const universe = response.universe;
   const execution = response.execution;
   if (!universe || !execution) return 'SEARCH_FAILURE';
+  // Crypto Scanner may report 0 provider errors and partial=false while one
+  // fulfilled worker returned null. That null is recorded as invalid_data,
+  // NOT a verified no-signal or fully trusted candidate batch.
+  if (!Array.isArray(response.failures)) return 'SEARCH_FAILURE';
+  if (response.failures.some(f=>!f||typeof f!=='object'
+    ||f.reason==='provider_error'||f.reason==='timeout'
+    ||!['invalid_data','symbol_mapping'].includes(f.reason))) {
+    return 'SEARCH_FAILURE';
+  }
+  if (response.failures.length>0)return 'BLOCKED_DATA';
   if (INVALID_SOURCE_OUTCOMES.has(response.outcome)
     || response.dataState === 'unavailable'
     || universe.stale === true
@@ -278,6 +288,10 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
     return hold('STATUS_EVIDENCE_MISMATCH');
   const { universe, execution } = response;
   if (!universe || !execution) return hold('EVIDENCE_MISSING');
+  // Do not skip a symbol that returned null/invalid data during otherwise
+  // successful crypto stage-2. Retry the exact cursor in a later cycle.
+  if (!Array.isArray(response.failures)) return hold('FAILURE_ENVELOPE_MISSING');
+  if (response.failures.length>0) return hold('REPORTED_ITEM_FAILURE_HOLD');
   if (status === 'SEARCH_FAILURE') return hold('PROVIDER_FAILURE');
   // An as-of/source roster may still be current while the underlying
   // candles/quotes are stale. Never skip those symbols or call the page
