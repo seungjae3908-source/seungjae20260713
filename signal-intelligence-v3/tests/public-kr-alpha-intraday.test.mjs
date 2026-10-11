@@ -69,3 +69,24 @@ test('sanitized minute feed inspection classifies timestamps without exposing qu
  assert.equal(evidence.sourcePricesRedacted,true);
  assert.equal(JSON.stringify(evidence).includes('accumulatedTradingVolume'),false);
 });
+
+test('KRX closing auction 15:20–15:29 is accounted for separately from genuinely missing continuous 1m history',()=>{
+ const day=oneDay();
+ const rows=day.priceInfos.filter(v=>{
+   const hhmm=Number(v.localDateTime.slice(8,12));
+   return hhmm<1520 || hhmm>=1530;
+ });
+ for(let minute=31;minute<=40;minute++)rows.push({
+   ...rows.at(-1),
+   localDateTime:'2026100915'+String(minute).padStart(2,'0')+'00',
+ });
+ const e=inspectPublicKrAlphaSessionShape({priceInfos:rows});
+ assert.equal(e.totalRows,391);
+ assert.equal(e.missingRegularMinutes,10);
+ assert.equal(e.missingContinuousTradingMinutes,0);
+ assert.equal(e.missingClosingAuctionMinutes,10);
+ assert.equal(e.outsideAfterClose,10);
+ assert.equal(e.outsideBeforeOpen,0);
+ assert.equal(e.closingAt1530Present,true);
+ assert.equal(e.sourcePricesRedacted,true);
+});

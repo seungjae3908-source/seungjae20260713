@@ -28,7 +28,7 @@ export function inspectPublicKrAlphaSessionShape(payload){
  const rows=Array.isArray(payload?.priceInfos)?payload.priceInfos:[];
  const classes={invalidLength:0,invalidDate:0,invalidClock:0,nonzeroSeconds:0,outsideSession:0,validMinute:0};
  const sessions=new Set(),slots=new Set();
- let earliest=null,latest=null;
+ let earliest=null,latest=null,outsideBeforeOpen=0,outsideAfterClose=0;
  for(const row of rows){
   const raw=String(row?.localDateTime??'');
   const match=/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$/u.exec(raw);
@@ -39,19 +39,31 @@ export function inspectPublicKrAlphaSessionShape(payload){
   if(hour>23||minute>59){classes.invalidClock++;continue;}
   if(second!==0){classes.nonzeroSeconds++;continue;}
   const slot=hour*60+minute;
-  if(slot<OPEN_MIN||slot>CLOSE_MIN){classes.outsideSession++;continue;}
+  if(slot<OPEN_MIN||slot>CLOSE_MIN){
+   classes.outsideSession++;
+   if(slot<OPEN_MIN)outsideBeforeOpen++;else outsideAfterClose++;
+   continue;
+  }
   classes.validMinute++;sessions.add(raw.slice(0,8));slots.add(slot);
   earliest=earliest===null?slot:Math.min(earliest,slot);
   latest=latest===null?slot:Math.max(latest,slot);
  }
- let missing=0;
- for(let i=OPEN_MIN;i<CLOSE_MIN;i++)if(!slots.has(i))missing++;
+ let missing=0,continuousMissing=0,auctionMissing=0;
+ for(let i=OPEN_MIN;i<CLOSE_MIN;i++)if(!slots.has(i)){
+   missing++;
+   if(i<15*60+20)continuousMissing++;
+   else auctionMissing++;
+ }
  const toClock=n=>n===null?null:String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
  return Object.freeze({
   totalRows:rows.length,classifications:Object.freeze({...classes}),
   distinctSourceSessions:sessions.size,uniqueMinuteSlots:slots.size,
   firstClock:toClock(earliest),lastClock:toClock(latest),
   missingRegularMinutes:missing,
+  missingContinuousTradingMinutes:continuousMissing,
+  missingClosingAuctionMinutes:auctionMissing,
+  outsideBeforeOpen,outsideAfterClose,
+  closingAt1530Present:slots.has(CLOSE_MIN),
   sourcePricesRedacted:true,fullMarketSupported:false,executionAuthority:'NONE',
  });
 }

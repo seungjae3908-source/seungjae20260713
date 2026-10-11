@@ -407,3 +407,26 @@ test('KR partial observation cursor also holds on insufficient candle evidence',
   assert.equal(classifyPublicCycleLaneStatus(bad),'SEARCH_FAILURE');
   assert.equal(decidePublicCycleCursor({response:bad,status:'SEARCH_FAILURE',cursor:0}).nextCursor,0);
 });
+
+test('search cursor reason separates invalid candle evidence from HTTP, timeout, stale and unknown',()=>{
+ const seed=result({
+  dataState:'complete',cards:[],
+  universe:{...result().universe,partial:false},
+ });
+ const cases=[
+  [{...seed,execution:{...seed.execution,insufficientDataCount:2}},'INSUFFICIENT_CANDLE_DATA'],
+  [{...seed,execution:{...seed.execution,providerErrorCount:1}},'PROVIDER_FAILURE'],
+  [{...seed,execution:{...seed.execution,timeoutCount:1}},'REQUEST_TIMEOUT'],
+  [{...seed,failures:[{reason:'invalid_data',message:'source malformed'}]},'INSUFFICIENT_CANDLE_DATA'],
+  [{...seed,dataState:'stale'},'STALE_CANDLE_HOLD'],
+  [{...seed,outcome:'FRONTEND_RENDER_FAILURE'},'UNVERIFIED_SEARCH_FAILURE'],
+ ];
+ for(const [row,expected] of cases){
+  const status=classifyPublicCycleLaneStatus(row);
+  assert.equal(status,'SEARCH_FAILURE');
+  const next=decidePublicCycleCursor({response:row,status,cursor:0});
+  assert.equal(next.reason,expected);
+  assert.equal(next.nextCursor,0);
+  assert.equal(next.blockedObservationOnly,false);
+ }
+});

@@ -242,7 +242,24 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
     return hold('STATUS_EVIDENCE_MISMATCH');
   const { universe, execution } = response;
   if (!universe || !execution) return hold('EVIDENCE_MISSING');
-  if (status === 'SEARCH_FAILURE') return hold('PROVIDER_FAILURE');
+  if (status === 'SEARCH_FAILURE') {
+    const failures=Array.isArray(response.failures)?response.failures:[];
+    const providerBroken=Number(execution.providerErrorCount??0)>0
+      ||Number(universe.providerErrorCount??0)>0
+      ||failures.some(f=>f?.reason==='provider_error');
+    const timedOut=execution.timedOut===true
+      ||Number(execution.timeoutCount??0)>0
+      ||failures.some(f=>f?.reason==='timeout')
+      ||response.outcome==='REQUEST_TIMEOUT';
+    const badCandles=Number(execution.insufficientDataCount??0)>0
+      ||failures.some(f=>f?.reason==='invalid_data'||f?.reason==='symbol_mapping')
+      ||response.outcome==='DATA_QUALITY_REJECT';
+    return hold(providerBroken?'PROVIDER_FAILURE'
+      :timedOut?'REQUEST_TIMEOUT'
+      :badCandles?'INSUFFICIENT_CANDLE_DATA'
+      :response.dataState==='stale'?'STALE_CANDLE_HOLD'
+      :'UNVERIFIED_SEARCH_FAILURE');
+  }
   // An as-of/source roster may still be current while the underlying
   // candles/quotes are stale. Never skip those symbols or call the page
   // explored merely because the public ticker roster was reachable.
