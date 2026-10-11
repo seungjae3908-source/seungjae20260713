@@ -60,7 +60,7 @@ export type TelegramAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
       errorCode?: string | null;
     };
 
@@ -77,7 +77,7 @@ export type TelegramTrackedAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
       errorCode?: string | null;
     };
 
@@ -91,6 +91,8 @@ type TelegramSendResponse = {
 const deliveredAtByHash = new Map<string, number>();
 const deliveredAtByCooldownKey = new Map<string, number>();
 const inFlightHashes = new Set<string>();
+// A possibly accepted POST must not be retransmitted during this process.
+const unconfirmedAtByHash = new Map<string, number>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -268,6 +270,7 @@ export function clearTelegramAlertState(): void {
   deliveredAtByHash.clear();
   deliveredAtByCooldownKey.clear();
   inFlightHashes.clear();
+  unconfirmedAtByHash.clear();
 }
 
 function retryDelay(response: Response, attempt: number): number {
@@ -436,6 +439,11 @@ export async function sendTelegramAlertWithReceipt(
     DEFAULT_DUPLICATE_WINDOW_MS,
   );
   const cooldownMs = normalizeWindow(input.cooldownMs, DEFAULT_COOLDOWN_MS);
+  const uncertainAt = unconfirmedAtByHash.get(hash);
+  if (uncertainAt != null && now - uncertainAt <= 14 * 24 * 60 * 60_000) {
+    return { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+  }
   const lastDuplicate = deliveredAtByHash.get(hash);
   if (
     inFlightHashes.has(hash)
@@ -453,14 +461,17 @@ export async function sendTelegramAlertWithReceipt(
   try {
     const result = await sendOnce(botToken, destination, rendered, input, 0);
     if (!result.delivered) {
+      const uncertain = result.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+      if (uncertain) unconfirmedAtByHash.set(hash, Date.now());
       logger.warn(
-        { alertType: input.type, attempts: result.attempts },
+        { alertType: input.type, attempts: result.attempts,
+          code: uncertain ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : 'TELEGRAM_DELIVERY_REJECTED' },
         'telegram alert delivery failed',
       );
       return {
         ok: false,
         attempts: result.attempts,
-        skipped: 'DELIVERY_FAILED',
+        skipped: uncertain ? 'OUTCOME_UNCONFIRMED' : 'DELIVERY_FAILED',
         errorCode: result.errorCode,
       };
     }
