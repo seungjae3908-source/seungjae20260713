@@ -50,7 +50,7 @@ test('server exposes read-only fresh snapshot and safety health', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'signal-v3-'));
   const state = join(dir, 'snapshot.json');
   const port = 18000 + Math.floor(Math.random() * 1000);
-  const snapshot = runSignalIntelligenceV3([candidate()]);
+  const snapshot = { ...runSignalIntelligenceV3([candidate()]), serviceSha: SHA };
   await writeFile(state, `${JSON.stringify(snapshot)}\n`);
   const server = await startServer(state, port);
   try {
@@ -96,6 +96,33 @@ test('server fails signal reads closed when snapshot is missing', async () => {
   }
 });
 
+test('server never attributes a previous release snapshot to the current service SHA', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'signal-v3-sha-mismatch-'));
+  const file = join(dir, 'previous-release.json');
+  const port = 20100 + Math.floor(Math.random() * 500);
+  const mismatched = { ...runSignalIntelligenceV3([candidate()]), serviceSha: 'b'.repeat(40) };
+  await writeFile(file, JSON.stringify(mismatched) + '\n');
+  const server = await startServer(file, port);
+  try {
+    const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(health.serviceSha, SHA);
+    assert.equal(health.snapshotReady, false);
+    assert.equal(health.snapshotFresh, false);
+    assert.equal(health.snapshotError, 'SNAPSHOT_SERVICE_SHA_MISMATCH');
+    assert.equal(health.executionAuthority, 'NONE');
+    const response = await fetch(`http://127.0.0.1:${port}/v1/signals`);
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.equal(payload.error, 'SNAPSHOT_SERVICE_SHA_MISMATCH');
+    assert.equal(payload.executionAuthority, 'NONE');
+    assert.equal('snapshot' in payload, false);
+  } finally {
+    server.child.kill('SIGTERM');
+    await new Promise(resolve => server.child.once('exit', resolve));
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
 test('non-loopback bind is rejected', async () => {
   const child = spawn(process.execPath, ['signal-intelligence-v3/src/server.mjs'], {
     cwd: process.cwd(),
@@ -118,7 +145,7 @@ test('full-profile blocked source data cannot masquerade as fresh server health'
   const dir=await mkdtemp(join(tmpdir(),'signal-v3-'));
   const state=join(dir,'partial-snapshot.json');
   const port=23000+Math.floor(Math.random()*1000);
-  const base=runSignalIntelligenceV3([candidate()]);
+  const base={...runSignalIntelligenceV3([candidate()]),serviceSha:SHA};
   await writeFile(state,JSON.stringify({...base,serviceSha:SHA,
     profile:{fullStrategyCoverage:true},coverage:[]})+'\n');
   const server=await startServer(state,port);
@@ -176,7 +203,7 @@ test('future-dated snapshot and invalid max-age cannot produce a fresh signal',a
   const dir=await mkdtemp(join(tmpdir(),'signal-v3-future-'));
   const state=join(dir,'future-snapshot.json');
   const port=26500+Math.floor(Math.random()*1000);
-  const base=runSignalIntelligenceV3([candidate()]);
+  const base={...runSignalIntelligenceV3([candidate()]),serviceSha:SHA};
   await writeFile(state,JSON.stringify({
     ...base,generatedAt:new Date(Date.now()+10*60_000).toISOString(),
   }));
