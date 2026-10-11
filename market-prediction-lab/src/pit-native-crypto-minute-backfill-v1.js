@@ -1,0 +1,256 @@
+import { createHash } from "node:crypto";
+import { auditHistoricalPITVenueUniverseV1 } from "./historical-pit-venue-universe-gate-v1.js";
+import { collectUpbitSpotHistory } from "./upbit-spot-history.js";
+import { collectBitgetCandles } from "./bitget-candle-collector.js";
+import { BitgetPublicClient, BitgetPublicApiError } from "./bitget-public-client.js";
+import {
+  persistResearchMinuteSessionV1,
+  deriveArchivedResearchTimeframesV1,
+} from "./research-minute-archive-v1.js";
+
+/**
+ * PUBLIC-READ-OPT-IN, ONE historical PIT crypto symbol and ONE closed UTC day.
+ * Bounded Upbit/Bitget existing collectors -> exact venue 1m source adapter ->
+ * existing private immutable gzip archive. No private API, key, order or DB.
+ *
+ * Historical REST data captured TODAY were NOT necessarily published to a
+ * historical scanner at bar close: availableAtMs is conservative retrieval
+ * time, never a fabricated historical quote publication time. The archive
+ * may inform retrospective market-event denominators only once independent
+ * PIT roster, source license, missing/no-trade proof and as-of evidence exist.
+ */
+const DAY = 86_400_000, MIN = 60_000;
+const MARKET = Object.freeze({
+  CRYPTO_SPOT: Object.freeze({
+    venue: "UPBIT_KRW", sourceId: "UPBIT_PUBLIC_REST_RETROSPECTIVE_1M",
+  }),
+  CRYPTO_FUTURES: Object.freeze({
+    venue: "BITGET_USDT_FUTURES",
+    sourceId: "BITGET_PUBLIC_V2_RETROSPECTIVE_1M",
+  }),
+});
+const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
+const SHA = /^[0-9a-f]{64}$/u;
+const digest = rows => createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+const stop = (market, symbol, dayStartMs, reason, extra = {}) => Object.freeze({
+  schemaVersion: "pit-native-crypto-minute-backfill-v1",
+  status: "BLOCKED_DATA", reason, market, venue: MARKET[market]?.venue ?? null,
+  symbol, dayStartMs, ...extra,
+  historicalFullMarketPITUniverseVerified: false,
+  sourceHistoricalPublicationTimeProven: false,
+  nativeMinutesNoTradeGapVerified: false,
+  actualMarketWideOpportunityCount: null, trueMarketWideRecall: null,
+  actualFillCount: null, netProfitPct: null, profitabilityProven: false,
+  executionAuthority: "NONE", liveTrading: false, autoTrading: false,
+  realOrders: false, privateTradingApiAllowed: false,
+  sourceRedistributionAllowed: false,
+});
+function validate(input) {
+  if (!input || !Object.hasOwn(MARKET, input.market)
+    || typeof input.symbol !== "string" || !SYMBOL.test(input.symbol)
+    || (input.market === "CRYPTO_SPOT" && !/^KRW-[A-Z0-9]{1,20}$/u.test(input.symbol))
+    || (input.market === "CRYPTO_FUTURES" && !/^[A-Z0-9]{2,30}USDT$/u.test(input.symbol))
+    || !Number.isSafeInteger(input.dayStartMs) || input.dayStartMs <= 0
+    || input.dayStartMs % DAY !== 0
+    || !SHA.test(input.expectedRosterDigestSha256 ?? "")
+    || typeof input.root !== "string"
+    || ![true,false].includes(input.allowPublicReadOnlyFetch)
+    || ![true,false].includes(input.retryPartialSource)
+    || typeof input.nowImpl !== "function") {
+    throw new TypeError("PIT_NATIVE_MINUTE_BACKFILL_ARGUMENTS_INVALID");
+  }
+}
+function eligibleLife(manifest, symbol, start, end) {
+  const rows = manifest.memberships.filter(r =>
+    String(r.symbol).trim().toUpperCase() === symbol
+    && r.listedAtMs < end && (r.removedAtMs ?? Infinity) > start);
+  if (rows.length !== 1) return rows.length === 0
+    ? "HISTORIC_SYMBOL_NOT_IN_PIT_DAY" : "PIT_TICKER_REUSE_NEEDS_STABLE_IDENTIFIER";
+  const row = rows[0];
+  if (row.listedAtMs > start || (row.removedAtMs ?? Infinity) < end)
+    return "PIT_INTRADAY_LISTING_OR_DELISTING_NEEDS_SESSION_PROOF";
+  if (row.halts.some(h => h.startMs < end && h.endMs > start))
+    return "PIT_HISTORIC_TRADING_HALT_NEEDS_SOURCE_PROOF";
+  return null;
+}
+function expectedProviderFailure(error) {
+  const code = String(error?.message ?? "");
+  return error instanceof BitgetPublicApiError
+    || /^UPBIT_HISTORY_HTTP_\d{3}$/u.test(code)
+    || /^UPBIT_HISTORY_(RANGE_INCOMPLETE|INSUFFICIENT_\d+)$/u.test(code)
+    || /^BITGET_HISTORY_RANGE_INCOMPLETE$/u.test(code)
+    || /^not enough candles collected: \d+$/u.test(code)
+    || /^(?:fetch failed|network error|request timeout|The operation was aborted)$/iu.test(code);
+}
+function normalizeCollected({
+  market, symbol, dayStartMs, receivedAtMs, collected,
+}) {
+  const policy = MARKET[market], end = dayStartMs + DAY;
+  const correctSource = market === "CRYPTO_SPOT"
+    ? collected?.market === market && collected?.providerMarket === symbol
+      && collected?.source === "upbit-public-candles"
+    : collected?.market === market && collected?.symbol === symbol
+      && collected?.provider === "bitget-public-v2"
+      && collected?.productType === "usdt-futures";
+  if (!correctSource || collected?.timeframe !== "1m"
+    || collected?.requestedStartTime !== dayStartMs
+    || collected?.requestedEndTime !== end
+    || collected?.rawPageWindowTraversed !== true
+    || collected?.reachedRequestedStart !== true
+    || collected?.historicalSignalAvailabilityProven !== false
+    || collected?.actualFillProven !== false
+    || !Array.isArray(collected.candles)
+    || collected.candles.length < 2 || collected.candles.length > 1440) {
+    return { error: "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED" };
+  }
+  let previous = 0;
+  const bars = [];
+  for (const row of collected.candles) {
+    const ts = row?.timestamp;
+    if (!Number.isSafeInteger(ts) || ts < dayStartMs || ts >= end
+      || ts % MIN !== 0 || ts <= previous
+      || typeof row.open !== "number" || !Number.isFinite(row.open)
+      || typeof row.high !== "number" || !Number.isFinite(row.high)
+      || typeof row.low !== "number" || !Number.isFinite(row.low)
+      || typeof row.close !== "number" || !Number.isFinite(row.close)
+      || typeof row.volume !== "number" || !Number.isFinite(row.volume)
+      || row.volume < 0 || row.high < Math.max(row.open,row.close)
+      || row.low > Math.min(row.open,row.close) || row.low > row.high
+      || [row.open,row.high,row.low,row.close].some(n=>n<=0)) {
+      return { error: "NATIVE_1M_ROW_ORDER_OR_OHLC_INVALID" };
+    }
+    previous = ts;
+    bars.push({
+      market,venue:policy.venue,symbol,sourceId:policy.sourceId,
+      timestampMs:ts,
+      // Capture time is a conservative bound; never imply live as-of
+      // publication at the original historical bar close.
+      availableAtMs:Math.max(ts+MIN,receivedAtMs),
+      open:row.open,high:row.high,low:row.low,close:row.close,volume:row.volume,
+    });
+  }
+  return {
+    source:{
+      market,venue:policy.venue,symbol,sourceId:policy.sourceId,
+      session:{startMs:dayStartMs,endMs:end,kind:"UTC_24H",timeZone:"UTC",
+        calendarSourceId:"RETROSPECTIVE_UTC_DAY_NOT_INDEPENDENT_PIT_PROOF"},
+      minuteBars:bars,sourceMinuteRowsSha256:digest(bars),
+      asOfMs:receivedAtMs,
+    },
+  };
+}
+export async function collectPITNativeCryptoMinuteSourceV1({
+  root,market,symbol,dayStartMs,manifest=null,
+  expectedRosterDigestSha256=null,
+  allowPublicReadOnlyFetch=false,retryPartialSource=false,
+  nowImpl=()=>Date.now(),
+  upbitFetchImpl=null,bitgetClient=null,
+} = {}) {
+  validate({root,market,symbol,dayStartMs,
+    expectedRosterDigestSha256,allowPublicReadOnlyFetch,retryPartialSource,nowImpl});
+  const end=dayStartMs+DAY;
+  const now=nowImpl();
+  if (!Number.isSafeInteger(now) || now < end
+    || now <= 0) return stop(market,symbol,dayStartMs,"HISTORIC_UTC_DAY_NOT_CLOSED");
+  if (manifest?.rawMembershipDigestSha256 !== expectedRosterDigestSha256)
+    return stop(market,symbol,dayStartMs,"PIT_ROSTER_DIGEST_LEASE_MISMATCH");
+  const pit=auditHistoricalPITVenueUniverseV1({
+    market,dayStartMs,dayEndMs:end,manifest,selectedRows:[],
+  });
+  if (!["TEST_FIXTURE_ONLY","SOURCE_ATTESTED_PIT_COHORT_ONLY"]
+    .includes(pit.status))
+    return stop(market,symbol,dayStartMs,"PIT_"+pit.reason);
+  if (pit.status==="TEST_FIXTURE_ONLY")
+    return stop(market,symbol,dayStartMs,
+      "PIT_FIXTURE_NOT_ELIGIBLE_FOR_PUBLIC_SOURCE_BACKFILL");
+  const life=eligibleLife(manifest,symbol,dayStartMs,end);
+  if (life) return stop(market,symbol,dayStartMs,life);
+  // Inspect before network I/O. Do not refetch retained complete data.
+  const existing=await deriveArchivedResearchTimeframesV1({
+    root,market,symbol,sessionStartMs:dayStartMs,asOfMs:now,
+    timeframes:["1m"],
+  });
+  if (existing.status==="BLOCKED_DATA"
+    && existing.reason!=="ARCHIVED_SESSION_NOT_FOUND") {
+    return stop(market,symbol,dayStartMs,
+      "EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW",{
+        archiveReason:existing.reason,
+      });
+  }
+  if (existing.sourceMinuteIntegrityVerified===true) {
+    const complete=existing.intervalData?.["1m"]?.sourceSessionCoverageComplete;
+    if (complete===true) {
+      return stop(market,symbol,dayStartMs,"ALREADY_RETAINED_COMPLETE_1M_SOURCE",{
+        retainedOriginalMinuteCount:existing.sourceMinuteRows,
+        existingSourceDigestSha256:existing.archiveSourceDigestSha256,
+      });
+    }
+    if (!retryPartialSource) {
+      return stop(market,symbol,dayStartMs,
+        "EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY",{
+          retainedOriginalMinuteCount:existing.sourceMinuteRows,
+        });
+    }
+  }
+  if (!allowPublicReadOnlyFetch)
+    return stop(market,symbol,dayStartMs,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  let collected;
+  try {
+    collected=market==="CRYPTO_SPOT"
+      ?await collectUpbitSpotHistory({
+        symbol,timeframe:"1m",startTime:dayStartMs,endTime:end,
+        minCandles:2,maxPages:10,minIntervalMs:220,
+        requireFullWindow:true,requireMarketIdentity:true,
+        ...(upbitFetchImpl?{fetchImpl:upbitFetchImpl}:{}),
+      })
+      :await collectBitgetCandles({
+        client:bitgetClient??new BitgetPublicClient({
+          timeoutMs:12_000,maxRetries:1,minIntervalMs:220,
+        }),
+        market,symbol,timeframe:"1m",startTime:dayStartMs,endTime:end,
+        maxCandles:1600,minCandles:2,requireFullWindow:true,
+        productType:"usdt-futures",
+      });
+  } catch (error) {
+    if (error?.message === "UPBIT_HISTORY_MARKET_IDENTITY_UNVERIFIED")
+      return stop(market,symbol,dayStartMs,
+        "NATIVE_PROVIDER_MARKET_IDENTITY_INVALID");
+    if (!expectedProviderFailure(error)) throw error;
+    return stop(market,symbol,dayStartMs,"NATIVE_1M_PROVIDER_DATA_UNAVAILABLE",{
+      providerReason:String(error.message).slice(0,120),
+    });
+  }
+  const collectedAtMs=nowImpl();
+  if (!Number.isSafeInteger(collectedAtMs) || collectedAtMs < now
+    || collectedAtMs < end) {
+    throw new TypeError("PIT_NATIVE_MINUTE_PROVIDER_CLOCK_INVALID");
+  }
+  const parsed=normalizeCollected({
+    market,symbol,dayStartMs,receivedAtMs:collectedAtMs,collected,
+  });
+  if (!parsed.source)
+    return stop(market,symbol,dayStartMs,parsed.error);
+  const stored=await persistResearchMinuteSessionV1({
+    root,source:parsed.source,
+  });
+  return Object.freeze({
+    schemaVersion:"pit-native-crypto-minute-backfill-v1",
+    status:"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY",
+    reason:"HISTORICAL_SCANNER_PUBLICATION_NOT_ESTABLISHED",
+    market,venue:MARKET[market].venue,symbol,dayStartMs,
+    archiveStatus:stored.status,
+    sourceMinuteCount:stored.storedOneMinuteRows,
+    archiveSourceDigestSha256:stored.sourceDigestSha256,
+    providerRequestWindowVerified:true,
+    originalMinutePublicationTimeAssumed:false,
+    availableAtMsConservativelyBoundToRetrieval:true,
+    historicalFullMarketPITUniverseVerified:false,
+    sourceHistoricalPublicationTimeProven:false,
+    nativeMinutesNoTradeGapVerified:false,
+    actualMarketWideOpportunityCount:null,trueMarketWideRecall:null,
+    actualFillCount:null,netProfitPct:null,profitabilityProven:false,
+    executionAuthority:"NONE",liveTrading:false,autoTrading:false,
+    realOrders:false,privateTradingApiAllowed:false,
+    sourceRedistributionAllowed:false,
+  });
+}
