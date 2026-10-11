@@ -170,8 +170,9 @@ test('different canonical/vault hash casing dedups only for the verified same ow
   const appMask='UPBIT-****-'+hash('UPBIT:'+owner);
   const vaultMask='UPBIT-****-'+hash('upbit:'+owner);
   assert.notEqual(appMask,vaultMask);
-  const app=canonical('e5ef8405-63c8-4489-9bc5-46c1a5b82f74',{
-    source:'APP_AUTO',accountIdMasked:appMask,
+  const uuid='e5ef8405-63c8-4489-9bc5-46c1a5b82f74';
+  const app=canonical(uuid,{
+    source:'APP_AUTO',accountIdMasked:appMask,brokerOrderId:uuid,
   });
   const external={...app,source:'UPBIT_API',accountIdMasked:vaultMask};
   assert.equal(reconcileScopedExternalJournalHistory([app],[external]).payloads.length,1);
