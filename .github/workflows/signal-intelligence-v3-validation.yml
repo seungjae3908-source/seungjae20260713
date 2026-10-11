@@ -110,10 +110,7 @@ jobs:
         run: |
           mkdir -p api-server/.signal-intelligence
           BANNER='import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'
-          pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
-            --bundle --platform=node --format=esm --target=node20 \
-            --banner:js="$BANNER" \
-            --outfile=./.signal-intelligence/public-cycle.mjs
+          node signal-intelligence-v3/scripts/build-public-producer.mjs
           pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/diagnose-public-providers.ts \
             --bundle --platform=node --format=esm --target=node20 \
             --banner:js="$BANNER" \

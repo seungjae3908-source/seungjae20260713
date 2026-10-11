@@ -96,39 +96,6 @@ export class CryptoScannerProviderError extends Error {
   }
 }
 
-/**
- * The normal member scanner intentionally ranks the universe by 24h
- * tradingValue. Research V3, however, paginates using a persistent cursor
- * over many cycles. As 24h rankings change, cursor-by-rank silently repeats
- * or skips symbols. Only the explicitly identified V3 public-only scanner
- * takes a canonical ASCII-symbol ordering; all ordinary member and Forward
- * order/selection semantics stay unchanged.
- *
- * This is NOT a full-roster historical membership proof: listings/quotes may
- * be added or removed between cycles, even when order is stable.
- */
-export const SIGNAL_V3_PUBLIC_CRYPTO_MEMBER = 'signal-intelligence-v3-public-only';
-export function cryptoScannerTraversalUniverse(
-  universe: CryptoUniverse,memberId: string,
-): CryptoUniverse {
-  if(memberId!==SIGNAL_V3_PUBLIC_CRYPTO_MEMBER)return universe;
-  if(!universe||!Array.isArray(universe.rows)||universe.rows.length===0)
-    throw new CryptoScannerProviderError('V3_PUBLIC_ROSTER_INVALID');
-  const rows=[...universe.rows];
-  // Provider ticker identity is case-normalized by both public upstreams.
-  // Fail closed on malformed/duplicate identities rather than silently
-  // treating repeat rows as distinct listed crypto instruments.
-  if(rows.some(row=>typeof row?.symbol!=='string'
-    ||!/^[A-Z0-9][A-Z0-9._-]{0,39}$/u.test(row.symbol)))
-    throw new CryptoScannerProviderError('V3_PUBLIC_ROSTER_SYMBOL_INVALID');
-  rows.sort((a,b)=>a.symbol<b.symbol?-1:a.symbol>b.symbol?1:0);
-  for(let i=1;i<rows.length;i++){
-    if(rows[i-1].symbol===rows[i].symbol)
-      throw new CryptoScannerProviderError('V3_PUBLIC_ROSTER_DUPLICATE_SYMBOL');
-  }
-  return {...universe,rows};
-}
-
 interface UpbitMarketRow {
   market?: unknown;
   korean_name?: unknown;
@@ -888,10 +855,7 @@ export function createCryptoSignalScannerService(
       const key = cacheKey({ ...request, strategyMode });
       let universe: CryptoUniverse;
       try {
-        universe = cryptoScannerTraversalUniverse(
-          await providers.getUniverse(request.market, request.signal),
-          request.memberId,
-        );
+        universe = await providers.getUniverse(request.market, request.signal);
       } catch (error) {
         if (request.signal?.aborted) throw error;
         const cached = lastGood.get(key);
