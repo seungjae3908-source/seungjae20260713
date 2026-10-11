@@ -18,6 +18,13 @@ create table public.paper_research_round_proposals (
     check (previous_settlement_digest_sha256 ~ '^[0-9a-f]{64}$'),
   proposed_seed_krw numeric(20,2) not null default 1000000
     check (proposed_seed_krw = 1000000),
+  ending_cause text not null
+    check (ending_cause in ('ZERO_EQUITY','BELOW_VERIFIED_MINIMUM')),
+  -- A nonzero residual is NOT a bankruptcy. Never erase it from research
+  -- performance when a small balance cannot satisfy provider minimum size.
+  constraint paper_round_zero_equity_evidence check (
+    ending_cause <> 'ZERO_EQUITY' or previous_operating_capital_krw = 0
+  ),
   previous_operating_capital_krw numeric(20,2) not null
     check (previous_operating_capital_krw >= 0),
   previous_locked_reserve_krw numeric(20,2) not null
