@@ -32,6 +32,7 @@ import {
   type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
+import './signal-intelligence-telegram-subscriber.service.test';
 
 const originalFetch = globalThis.fetch;
 const originalEnv = {
