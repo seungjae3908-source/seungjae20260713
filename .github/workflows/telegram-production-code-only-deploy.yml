@@ -226,14 +226,48 @@ jobs:
             });
             const verdict=module.classifyTelegramCodeOnlyDiff(response.data);
             if(!verdict.ok){core.setFailed(verdict.code);return;}
+            const pinnedFiles={
+              '.github/tests/telegram-production-worker-readonly-audit.test.mjs':'d440d93a9ed7a9266bcab87f3d84452c3f18f40d',
+              '.github/workflows/telegram-production-worker-readonly-audit.yml':'219366275a24432ed0bd4c89cb8dabbad5464495',
+              'api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts':'19a6484b6d9c91f10bfd07399ae5c1b8ed5cfb95',
+              'api-server/src/index.ts':'fad14b9f927253a359cb188d3781c1969e43f4db',
+              'api-server/src/services/signal-intelligence-telegram-subscriber.service.test.ts':'b2279358358f5cb9364846939e5e620732f16f16',
+              'api-server/src/services/signal-intelligence-telegram-subscriber.service.ts':'d8a54df4e7b1c1a8c4aad811ce61389017ac411b',
+              'api-server/src/services/telegram-intelligence-worker.service.ts':'2e35e8ab95912975475587afeef240c251170425',
+              'api-server/src/services/telegram-notification.service.test.ts':'e2b7250649ae5cc5deaf1e0500d93f5d9d0d0f1f',
+              'docs/telegram-production-worker-readonly-audit.md':'9958f8c214c5bfebf6fa1127c24cd19f0de14d16',
+              'ops/telegram-production-worker-readonly-audit.mjs':'9fbb173a41b15c561c34388e1c8b9d014163e2ea',
+            };
+            for(const [path,sha] of Object.entries(pinnedFiles)){
+              const result=await github.rest.repos.getContent({
+                owner:context.repo.owner,repo:context.repo.repo,
+                path,ref:process.env.EXPECTED_SHA,
+              });
+              if(Array.isArray(result.data)||result.data?.sha!==sha){
+                core.setFailed('TELEGRAM_PINNED_RELEASE_SOURCE_CHANGED');return;
+              }
+            }
             core.info('TELEGRAM_CODE_ONLY_SOURCE_SCOPE_PASS; files='+verdict.changedFileCount);
+
+      - name: Revalidate immutable main immediately before Production mutation
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const main=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            if(main!==process.env.EXPECTED_SHA)
+              core.setFailed('TELEGRAM_RELEASE_MAIN_MOVED_AT_DEPLOY_BOUNDARY');
 
       - name: Deploy exact code using existing canary, PM2 and rollback script
         env:
           APPROVED_SHA: ${{ steps.target.outputs.sha }}
+          EXPECTED_PRE_SHA: ${{ steps.previous.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$APPROVED_SHA" "$REPOSITORY_URL")"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PREVIOUS_SHA=%q' "$APPROVED_SHA" "$REPOSITORY_URL" "$EXPECTED_PRE_SHA")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
@@ -241,6 +275,18 @@ jobs:
           LIVE_DIR=/opt/stock-app
           SOURCE_DIR="$(mktemp -d /tmp/stock-app-telegram-only.XXXXXX)"
           trap 'rm -rf -- "$SOURCE_DIR"' EXIT
+          node <<'NODE'
+          const fs=require('node:fs');
+          const {execFileSync}=require('node:child_process');
+          const prev=process.env.PREVIOUS_SHA;
+          const marker=fs.readFileSync('/opt/stock-app/.deploy/current-sha','utf8').trim();
+          const rows=JSON.parse(execFileSync('pm2',['jlist'],{
+            encoding:'utf8',timeout:10000,maxBuffer:20000000,
+          })).filter(x=>x.name==='stock-app');
+          if(!/^[0-9a-f]{40}$/.test(prev)||marker!==prev||rows.length!==1
+            ||rows[0].pm2_env?.DEPLOY_SHA!==prev||rows[0].pm2_env?.status!=='online')
+            throw Error('TELEGRAM_PREDEPLOY_RUNTIME_MOVED');
+          NODE
           git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
           git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
           resolved="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
