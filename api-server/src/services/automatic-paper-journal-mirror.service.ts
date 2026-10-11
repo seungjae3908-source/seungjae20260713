@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Read-only owner-scoped reconciliation of a durable APP_PAPER execution
  * mirror with the canonical trading order projection. The historical mirror
@@ -126,22 +128,52 @@ export function reconcileCanonicalPaperJournalMirrors(
 const LIVE_HISTORY_SOURCES = new Set([
   'APP_AUTO', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',
 ]);
-function verifiedLiveKey(payload: Payload): string | null {
+// The current APP_AUTO order adapter hashes uppercase BROKER:userId; the
+// read-only Upbit/Kiwoom vault provider hashes lowercase provider:userId.
+// Neither string is a real broker account number. Normalize ONLY when both
+// exact role-specific masks are independently verifiable for this owner.
+// TOSS account references and non-vault sources must remain independent.
+function verifiedOwnerAccountScope(payload: Payload, ownerId?: string): string | null {
+  if (!nonempty(payload.accountIdMasked)
+    || !payload.accountIdMasked.includes('****')
+    || payload.accountIdMasked.includes('UNAVAILABLE')) return null;
+  const broker=String(payload.broker ?? '').toUpperCase();
+  const source=String(payload.source ?? '');
+  if (nonempty(ownerId) && ['UPBIT','KIWOOM'].includes(broker)) {
+    const prefix=broker + '-****-';
+    const hash=(identity: string) =>
+      createHash('sha256').update(identity).digest('hex').slice(0,10);
+    const expectedApp=prefix+hash(broker+':'+ownerId);
+    const expectedVault=prefix+hash(broker.toLowerCase()+':'+ownerId);
+    if ((source==='APP_AUTO' && payload.accountIdMasked===expectedApp)
+      || (source===broker+'_API' && payload.accountIdMasked===expectedVault)) {
+      return 'VERIFIED_SINGLE_PROVIDER_OWNER_VAULT';
+    }
+  }
+  return payload.accountIdMasked;
+}
+function verifiedLiveKey(payload: Payload, ownerId?: string): string | null {
   if (payload.recordType !== 'unified_trade_order'
     || !LIVE_HISTORY_SOURCES.has(String(payload.source))) return null;
-  const parts = [
-    payload.broker, payload.market, payload.accountIdMasked,
-    payload.brokerOrderId,
-  ];
-  if (parts.some((value) => !nonempty(value))
-    || !(payload.accountIdMasked as string).includes('****')
-    || (payload.accountIdMasked as string).includes('UNAVAILABLE')) return null;
+  const scope=verifiedOwnerAccountScope(payload,ownerId);
+  const parts=[payload.broker,payload.market,scope,payload.brokerOrderId];
+  if (parts.some((value)=>!nonempty(value))) return null;
   return JSON.stringify(parts);
+}
+function sameKstFillDate(existing: Payload, external: Payload): boolean {
+  const first=typeof existing.filledAt==='string' ? Date.parse(existing.filledAt) : NaN;
+  const second=typeof external.filledAt==='string' ? Date.parse(external.filledAt) : NaN;
+  if (!Number.isFinite(first)||!Number.isFinite(second)) return false;
+  const kstDate=(ms: number) => new Date(ms+9*60*60_000).toISOString().slice(0,10);
+  return kstDate(first)===kstDate(second);
 }
 function exactEconomicDuplicate(existing: Payload, external: Payload): boolean {
   for (const key of ['symbol','side','positionSide','positionEffect','currency']) {
     if (existing[key] !== external[key]) return false;
   }
+  // Order IDs can be reused on a later session. Refuse silent suppression
+  // unless both verified fills occurred on the same KST trading date.
+  if (!sameKstFillDate(existing,external)) return false;
   if (existing.status !== external.status
     || !positive(existing.filledQuantity) || !positive(external.filledQuantity)
     || !equalNumber(existing.filledQuantity,external.filledQuantity)
@@ -163,7 +195,7 @@ function exactEconomicDuplicate(existing: Payload, external: Payload): boolean {
   return true;
 }
 export function reconcileScopedExternalJournalHistory(
-  known: readonly Payload[], external: readonly Payload[],
+  known: readonly Payload[], external: readonly Payload[], ownerId?: string,
 ): Readonly<{ payloads: readonly Payload[]; audit: Readonly<{
   contract: string;
   suppressedVerifiedDuplicateCount: number;
@@ -177,7 +209,7 @@ export function reconcileScopedExternalJournalHistory(
   const knownByScope = new Map<string, Payload[]>();
   for (const payload of known) {
     if (!object(payload)) throw new Error('JOURNAL_EXTERNAL_KNOWN_PAYLOAD_INVALID');
-    const key = verifiedLiveKey(payload);
+    const key = verifiedLiveKey(payload, ownerId);
     if (!key) continue;
     const group = knownByScope.get(key) ?? [];
     group.push(payload);
@@ -187,7 +219,7 @@ export function reconcileScopedExternalJournalHistory(
   const retained: Payload[]=[];
   for (const payload of external) {
     if (!object(payload)) throw new Error('JOURNAL_EXTERNAL_PAYLOAD_INVALID');
-    const key=verifiedLiveKey(payload);
+    const key=verifiedLiveKey(payload, ownerId);
     const candidates=key ? knownByScope.get(key) ?? [] : [];
     for (const previous of candidates) {
       // Same provider/account/order cannot be silently relabeled as a

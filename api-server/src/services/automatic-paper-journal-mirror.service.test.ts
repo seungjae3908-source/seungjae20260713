@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -16,7 +17,8 @@ function canonical(id: string, overrides: Record<string, unknown> = {}) {
     clientOrderId: 'client-' + id, canonicalOrderId: id,
     canonicalLineage: { orderIds: [id] },
     filledQuantity: 1, averageFillPrice: 100,
-    status: 'FILLED', accountIdMasked: 'UPBIT-****-owner-hash',
+    status: 'FILLED', filledAt:'2026-10-11T00:10:00.000Z',
+    accountIdMasked: 'UPBIT-****-owner-hash',
     ...overrides,
   };
 }
@@ -159,4 +161,47 @@ test('invalid provider fee or tax amounts cannot disappear through external dedu
     assert.equal(result.payloads.length,1);
     assert.equal(result.audit.suppressedVerifiedDuplicateCount,0);
   }
+});
+
+test('different canonical/vault hash casing dedups only for the verified same owner', () => {
+  const owner='11111111-1111-1111-1111-111111111111';
+  const hash=(value: string) =>
+    createHash('sha256').update(value).digest('hex').slice(0,10);
+  const appMask='UPBIT-****-'+hash('UPBIT:'+owner);
+  const vaultMask='UPBIT-****-'+hash('upbit:'+owner);
+  assert.notEqual(appMask,vaultMask);
+  const app=canonical('same-provider-order',{
+    source:'APP_AUTO',accountIdMasked:appMask,
+  });
+  const external={...app,source:'UPBIT_API',accountIdMasked:vaultMask};
+  assert.equal(reconcileScopedExternalJournalHistory([app],[external]).payloads.length,1);
+  const valid=reconcileScopedExternalJournalHistory([app],[external],owner);
+  assert.equal(valid.payloads.length,0);
+  assert.equal(valid.audit.suppressedVerifiedDuplicateCount,1);
+  assert.equal(reconcileScopedExternalJournalHistory(
+    [app],[external],'22222222-2222-2222-2222-222222222222',
+  ).payloads.length,1);
+  assert.equal(reconcileScopedExternalJournalHistory(
+    [app],[{...external,accountIdMasked:'UPBIT-****-FORGED'}],owner,
+  ).payloads.length,1);
+});
+
+test('source-bound vault account aliases cannot cross brokers, dates or Toss accounts', () => {
+  const owner='11111111-1111-1111-1111-111111111111';
+  const hash=(s:string)=>createHash('sha256').update(s).digest('hex').slice(0,10);
+  const app=canonical('reuse',{
+    source:'APP_AUTO',accountIdMasked:'KIWOOM-****-'+hash('KIWOOM:'+owner),
+    broker:'KIWOOM',market:'US_STOCK',symbol:'AAPL',currency:'USD',
+  });
+  const external={...app,source:'KIWOOM_API',
+    accountIdMasked:'KIWOOM-****-'+hash('kiwoom:'+owner)};
+  assert.equal(reconcileScopedExternalJournalHistory([app],[external],owner).payloads.length,0);
+  assert.equal(reconcileScopedExternalJournalHistory(
+    [app],[{...external,filledAt:'2026-10-09T00:10:00.000Z'}],owner,
+  ).payloads.length,1);
+  const toss=canonical('reuse',{source:'APP_AUTO',broker:'TOSS',market:'KR_STOCK',
+    accountIdMasked:'TOSS-****-APP',symbol:'005930'});
+  assert.equal(reconcileScopedExternalJournalHistory(
+    [toss],[{...toss,source:'TOSS_API',accountIdMasked:'TOSS-****-REAL'}],owner,
+  ).payloads.length,1);
 });
