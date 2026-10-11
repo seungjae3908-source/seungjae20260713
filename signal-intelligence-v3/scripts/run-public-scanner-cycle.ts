@@ -428,6 +428,20 @@ function laneStatus(response) {
   return classifyPublicCycleLaneStatus(response);
 }
 
+function verifiedThrownProviderMetrics(error) {
+  // Only bounded Scanner's pre-defined numeric error format is accepted.
+  // Never export exception text, symbols, URLs or raw provider responses.
+  const raw=error instanceof Error?error.message:'';
+  const matched=/^SCAN_PROVIDER_ERROR: completed=(\\d+), providerErrors=(\\d+), workerErrors=(\\d+), timeouts=(\\d+), started=(\\d+)$/u.exec(raw);
+  if(!matched)return null;
+  const [completed,providerErrors,workerErrors,timeouts,started]=matched.slice(1).map(Number);
+  if(![completed,providerErrors,workerErrors,timeouts,started].every(Number.isSafeInteger)
+    ||completed!==0||started<1||providerErrors+timeouts===0
+    ||providerErrors+workerErrors+timeouts>started)return null;
+  return Object.freeze({completed,providerErrors,workerErrors,timeouts,started,
+    sourceFailureConfirmed:true,fullMarketVerified:false});
+}
+
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
@@ -570,6 +584,7 @@ async function main() {
       });
     } catch (error) {
       // An HTTP/runtime failure must not build an insufficient-data retry streak.
+      const thrownProviderMetrics = verifiedThrownProviderMetrics(error);
       state.dataRetry[lane.id] = null;
       coverage.push({
         laneId: lane.id,
@@ -591,6 +606,11 @@ async function main() {
         partialExecution: null,
         leverage: { evaluated: 0, available: 0, blocked: 0, unavailable: 0 },
         lastGoodPreserved: true,
+        // Missing batch evidence stays null; sanitized aggregate failures
+        // are diagnostics only and never convert this lane into a PASS.
+        providerErrors: thrownProviderMetrics?.providerErrors ?? null,
+        timeouts: thrownProviderMetrics?.timeouts ?? null,
+        thrownProviderMetrics,
         error: error instanceof Error ? error.message.split(':')[0] : 'UNKNOWN',
       });
     }
