@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth';
 import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, readResearchSameCandidate, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
 import type { ResearchSameCandidatePrewireResult } from '../../../api-server/src/services/research-same-candidate-prewire.service';
 import { ResearchSameCandidatePreview } from './research-same-candidate-preview';
+import { buildOwnerApprovedReferenceDsl } from '../../../research-production/src/research-owner-criteria.mjs';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
   ['propose_candidates', '후보 가설 제안'], ['interpret_evidence', '검증 증거 해석'],
@@ -18,6 +19,7 @@ const bundleLabels: Record<string, string> = { strategy: '전략', model: '분�
 function copilotStatusLabel(status: string) {
   if (status === 'needs_context') return '추가 근거 필요';
   if (status === 'ready') return '사용 가능';
+  if (status === 'READY') return '검증 기록 있음';
   if (status === 'blocked') return '차단됨';
   if (status === 'BLOCKED_DATA') return '자료 부족';
   if (status === 'MISSING_EVIDENCE') return '근거 미수집';
@@ -39,6 +41,8 @@ export function ResearchCopilotPanel({ onOpenReview }: { onOpenReview?: () => vo
   const snapshot = useQuery({ queryKey: ['admin', profile?.id, 'research-copilot'], queryFn: ({ signal }) => fetchCopilotSnapshot(signal), enabled: isAdmin && Boolean(profile?.id), staleTime: 30_000, retry: false });
   const [review, setReview] = useState<CopilotReview | null>(null);
   const [dsl, setDsl] = useState('');
+  const [referenceMarket, setReferenceMarket] = useState('CRYPTO_FUTURES');
+  const [referenceDirection, setReferenceDirection] = useState('LONG');
   const [validation, setValidation] = useState<DslValidation | null>(null);
   const [sameCandidate, setSameCandidate] = useState<ResearchSameCandidatePrewireResult | null>(null);
   const [error, setError] = useState('');
@@ -49,7 +53,7 @@ export function ResearchCopilotPanel({ onOpenReview }: { onOpenReview?: () => vo
   // React Query retains cached data on refetch failure. It must not look like current evidence.
   const data = snapshot.isError ? undefined : snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
-  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setSameCandidate(null); setBusy(false); }, [profile?.id]);
+  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setDsl(''); setReferenceMarket('CRYPTO_FUTURES'); setReferenceDirection('LONG'); setReview(null); setValidation(null); setSameCandidate(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
@@ -84,6 +88,12 @@ export function ResearchCopilotPanel({ onOpenReview }: { onOpenReview?: () => vo
       const result = await validateResearchDsl(value, signal);
       if (!signal.aborted) setValidation(result);
     });
+  }
+  function loadApprovedReference() {
+    if (busy) return;
+    artifactPin.current = null;
+    setValidation(null); setSameCandidate(null); setError('');
+    setDsl(JSON.stringify(buildOwnerApprovedReferenceDsl(referenceMarket, referenceDirection), null, 2));
   }
   function submitBacktest() {
     const bundle = validation?.bundle;
@@ -151,12 +161,22 @@ export function ResearchCopilotPanel({ onOpenReview }: { onOpenReview?: () => vo
         </details>
         <section aria-label="DSL 검증" className="rounded-2xl border border-border bg-card p-4">
           <h2 className="font-bold">전략 검증·백테스트</h2>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <select aria-label="승인 전략 시장" value={referenceMarket} disabled={busy} className={button + ' min-w-0 bg-background'} onChange={event => { setReferenceMarket(event.target.value); setReferenceDirection('LONG'); }}>
+              <option value="KR_STOCK">국내주식 · 1배</option><option value="US_STOCK">미국주식 · 1배</option>
+              <option value="CRYPTO_SPOT">코인현물 · 1배</option><option value="CRYPTO_FUTURES">코인선물 · 7배</option>
+            </select>
+            <select aria-label="승인 전략 방향" value={referenceDirection} disabled={busy} className={button + ' min-w-0 bg-background'} onChange={event => setReferenceDirection(event.target.value)}>
+              <option value="LONG">매수 · 롱</option>{referenceMarket === 'CRYPTO_FUTURES' ? <option value="SHORT">매도 · 숏</option> : null}
+            </select>
+            <button className={button + ' col-span-2'} disabled={busy} onClick={loadApprovedReference}>승인 전략 불러오기</button>
+          </div>
           <label htmlFor="research-dsl" className="mt-4 block text-sm font-bold">연구 전략 입력</label>
           <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); setSameCandidate(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>전략 검증</button>
           {validation ? <div role="status" className="mt-3 break-all text-sm"><p>{validation.status === 'ready' ? 'DSL 유효 · 전략 미평가' : 'DSL 차단: 지원 범위·필드·연산자·깊이를 확인하세요.'}</p>
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
-            {!validation.bundle ? <p className="mt-2">Bundle 응답 없음 · 실행 차단</p> : null}
+            {!validation.bundle ? <p className="mt-2">연구 입력 응답 없음 · 실행 차단</p> : null}
           </div> : null}
           {validation?.bundle ? <div aria-label="Backtest Bundle" className="mt-4 space-y-3 break-words text-sm [overflow-wrap:anywhere]">
             <p className="font-bold">백테스트 · {validation.bundle.backtestCompleted ? '완료' : validation.bundle.backtestExecutable ? '실행 가능' : '입력 연결 필요'}</p>
@@ -177,9 +197,9 @@ export function ResearchCopilotPanel({ onOpenReview }: { onOpenReview?: () => vo
             <button className={button + ' ml-0 sm:ml-2'} disabled={busy || !validation.bundle.researchBundleReady} onClick={readBacktest}>저장된 연구 결과 재조회</button>
             <section aria-label="선택 후보의 증거 연결" className="rounded-xl border border-border p-3">
               <h3 className="font-bold">이 후보의 다음 단절 지점</h3>
-              <p className="mt-2">{!validation.bundle.researchBundleReady ? 'BLOCKED_DATA · 실행 가능한 canonical Bundle 부족' : !validation.bundle.backtestCompleted ? `Backtest · ${validation.bundle.backtestStatus}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? 'MISSING_EVIDENCE · 영구 결과 재조회 미확인' : 'NOT_EVALUABLE · 동일 후보의 OOS/WF/Holdout 평가 증거 부족'}</p>
+              <p className="mt-2">{!validation.bundle.researchBundleReady ? '자료 부족 · 실행 가능한 연구 입력 미연결' : !validation.bundle.backtestCompleted ? `백테스트 · ${copilotStatusLabel(validation.bundle.backtestStatus)}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? '근거 미수집 · 저장 결과 재조회 미확인' : '평가 대기 · 동일 후보의 미사용 표본·순차·최종 검증 근거 부족'}</p>
               <button className={button + ' mt-3'} disabled={busy || validation.bundle.publicationStatus !== 'READBACK_VERIFIED' || !validation.bundle.backtestCompleted} onClick={readSameCandidate}>동일 후보 모의매매 근거 조회</button>
-              {sameCandidate ? <ResearchSameCandidatePreview result={sameCandidate} /> : <p className="mt-2">Forward / Shadow / Paper / Settlement · NOT_PROVEN — 이 후보의 서버 증거를 조회해야 합니다.</p>}
+              {sameCandidate ? <ResearchSameCandidatePreview result={sameCandidate} /> : <p className="mt-2">후속 관찰·모의매매·정산 근거 미확인</p>}
               <p className="mt-2 text-xs">독립 표본 수: 확인 불가 · 수익성 입증 없음</p>
               <details className="mt-3">
                 <summary className="min-h-11 cursor-pointer py-3 font-bold">이 후보의 식별자와 출처 자세히</summary>

@@ -201,10 +201,10 @@ for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${w
   const submit = page.getByRole('button', { name: '연구 백테스트 제출' });
   await expect(submit).toBeEnabled(); await submit.click();
   await expect(page.getByLabel('Backtest Bundle')).toContainText('Backtest Bundle · COMPLETED');
-  await expect(page.getByLabel('Backtest Bundle')).toContainText('영구 결과 재조회 미확인');
+  await expect(page.getByLabel('Backtest Bundle')).toContainText('저장 결과 재조회 미확인');
   await page.getByRole('button', { name: '저장된 연구 결과 재조회' }).click();
   await expect(page.getByLabel('Backtest Bundle')).toContainText('결과 보존·재조회: READBACK_VERIFIED');
-  await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('동일 후보의 OOS/WF/Holdout 평가 증거 부족');
+  await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('동일 후보의 미사용 표본·순차·최종 검증 근거 부족');
   await expect(submit).toBeDisabled();
   await page.getByText('이 후보의 식별자와 출처 자세히', { exact: true }).press('Enter');
   await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText(diagnostics.canonical.bundle.dataset.id);
@@ -307,3 +307,34 @@ test('regular member can read shared research but cannot reach admin AI mutation
   expect(diagnostics.calls.filter(call => call.includes('/research/copilot'))).toEqual([]);
   diagnostics.clean();
 });
+
+for (const width of [320, 1440]) {
+  test(`approved reference ${width}px follows cash 1x LONG and futures 7x LONG/SHORT without synthetic readiness`, async ({ page }) => {
+    const diagnostics = await setup(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/research-center');
+    await page.getByRole('button', { name: 'AI', exact: true }).click();
+    const market = page.getByLabel('승인 전략 시장');
+    const direction = page.getByLabel('승인 전략 방향');
+    const text = page.getByLabel('연구 전략 입력');
+    for (const [marketValue, directionValue] of [['CRYPTO_FUTURES', 'SHORT'], ['KR_STOCK', 'LONG'], ['US_STOCK', 'LONG'], ['CRYPTO_SPOT', 'LONG'], ['CRYPTO_FUTURES', 'LONG']]) {
+      await market.selectOption(marketValue);
+      await expect(direction.locator('option')).toHaveCount(marketValue === 'CRYPTO_FUTURES' ? 2 : 1);
+      await direction.selectOption(directionValue);
+      const requests = diagnostics.calls.filter(call => call.startsWith('POST')).length;
+      await page.getByRole('button', { name: '승인 전략 불러오기' }).click();
+      await expect(page.getByLabel('Backtest Bundle')).toHaveCount(0);
+      expect(diagnostics.calls.filter(call => call.startsWith('POST')).length).toBe(requests);
+      const loaded = JSON.parse(await text.inputValue());
+      expect(loaded.market).toBe(marketValue); expect(loaded.direction).toBe(directionValue);
+      expect(loaded.parameterSpace.map((p: { min: number; max: number }) => p.min === p.max).every(Boolean)).toBe(true);
+      await page.getByRole('button', { name: '전략 검증', exact: true }).click();
+      await expect(page.getByText('DSL 유효 · 전략 미평가')).toBeVisible();
+      await expect(page.getByRole('button', { name: '연구 백테스트 제출' })).toBeDisabled();
+    }
+    expect(diagnostics.reviewRequests()).toBe(0);
+    expect(diagnostics.calls.filter(call => call.endsWith('/submit-backtest'))).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    diagnostics.clean();
+  });
+}
