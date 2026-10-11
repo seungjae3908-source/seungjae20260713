@@ -111,6 +111,26 @@ test('Production Automatic LIVE-only preactivation is responsive, exact-SHA and 
     await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('auto-trading-page')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('auto-trading-responsive-layout')).toBeVisible();
+    await expect(page.getByTestId('technical-trading-modes')).toContainText('자동매매');
+    await expect(page.getByTestId('trading-paper-modes')).toHaveCount(0);
+    await expect(page.getByTestId('auto-trading-runtime-summary')).not.toContainText('확인 중');
+    const holdings = page.getByTestId('trading-holdings');
+    await expect(holdings).toBeVisible();
+    await expect(holdings.getByRole('status')).toHaveCount(0);
+    await expect(holdings.getByRole('alert')).toHaveCount(0);
+    const holdingButtons = holdings.getByRole('button').filter({ visible: true });
+    if (await holdingButtons.count() > 0) {
+      await holdingButtons.first().click();
+      const detail = page.getByTestId('holding-detail-dialog');
+      await expect(detail).toBeVisible();
+      await expect(detail.getByRole('button', { name: '종목상세', exact: true })).toBeVisible();
+      await expect(detail.getByRole('button', { name: 'AI차트', exact: true })).toBeVisible();
+      await expect(detail.getByTestId('holding-entry-evidence')).toBeVisible();
+      await expect(detail.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(detail).not.toBeVisible();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
     await expect(page.getByTestId('optional-paper-readiness')).toHaveCount(0);
     if (viewport.width < 640) await expect(page.getByTestId('trading-market-select')).toBeVisible();

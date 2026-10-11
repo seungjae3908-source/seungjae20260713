@@ -6,6 +6,12 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
+import {
+  canonicalAutomaticLivePositions,
+  readAutomaticLiveExecutionAccount,
+  automaticLiveIsolationReceipt,
+} from '../services/automatic-live-position-isolation.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
@@ -1334,6 +1340,63 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     }
     return errorResponse(res, error);
   }
+});
+
+router.get('/live-position-isolation/:provider', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    if (!req.member || !hasCapability(req.member, 'canPlaceOrders')
+      || !hasCapability(req.member, 'canAccessAutoTrading')) {
+      return res.status(403).json({ ok: false, error: 'MEMBER_ORDER_CAPABILITY_REQUIRED' });
+    }
+    const provider = String(req.params.provider) as AccountProvider;
+    if (!EXCHANGES.has(provider) || provider === 'bitget' && !hasCapability(req.member, 'canAccessFutures')) {
+      return res.status(403).json({ ok: false, error: 'ACCOUNT_PROVIDER_CAPABILITY_REQUIRED' });
+    }
+    const { userId, repository } = context(req);
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(repository, userId, provider),
+      repository.listPlans(userId), repository.listOrders(userId),
+    ]);
+    return res.json({ ok: true, ...automaticLiveIsolationReceipt(snapshot,
+      canonicalAutomaticLivePositions(plans, orders), maximumBitgetLeverage(req)) });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/holdings', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    const accountMode = String(req.query.accountMode ?? 'live');
+    const origin = String(req.query.origin ?? 'automatic');
+    const provider = String(req.query.provider ?? '') as AccountProvider;
+    if (!['live', 'paper'].includes(accountMode) || !['automatic', 'manual'].includes(origin)) {
+      return res.status(400).json({ ok: false, error: 'HOLDINGS_SCOPE_INVALID' });
+    }
+    if (!req.member || !hasCapability(req.member, accountMode === 'live' ? 'canPlaceOrders' : 'canAccessPaperTrading')) {
+      return res.status(403).json({ ok: false, error: 'HOLDINGS_CAPABILITY_REQUIRED' });
+    }
+    if (accountMode === 'live' && (!EXCHANGES.has(provider)
+      || !hasCapability(req.member, 'canAccessAutoTrading')
+      || provider === 'bitget' && !hasCapability(req.member, 'canAccessFutures'))) {
+      return res.status(403).json({ ok: false, error: 'ACCOUNT_PROVIDER_CAPABILITY_REQUIRED' });
+    }
+    const { userId, repository } = context(req);
+    const [plans, orders, snapshot, paperWalletRecords] = await Promise.all([
+      repository.listPlans(userId), repository.listOrders(userId),
+      accountMode === 'live' ? readAutomaticLiveExecutionAccount(repository, userId, provider) : Promise.resolve(null),
+      accountMode === 'paper' && origin === 'automatic'
+        ? paperRuntimeRecordsReaderForTests ? paperRuntimeRecordsReaderForTests(userId)
+          : req.accessToken ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
+            : Promise.reject(new Error('LOGIN_REQUIRED'))
+        : Promise.resolve(null),
+    ]);
+    const result = snapshot ? liveTradingHoldings(snapshot, plans, orders)
+      : paperTradingHoldings(plans, orders, origin as 'automatic' | 'manual', paperWalletRecords ? {
+        records: paperWalletRecords, role: hasCapability(req.member, 'canManageMembers') ? 'admin' : 'member', nowMs: Date.now(),
+      } : undefined);
+    return res.json({ ok: true, ...result, items: result.items.filter(row =>
+      row.market !== 'BITGET' || hasCapability(req.member!, 'canAccessFutures')) });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/execution-ledger', async (req: AuthenticatedRequest, res) => {
