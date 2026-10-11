@@ -27,8 +27,8 @@ test('AI Chart keeps three mobile tabs and a shared mounted chart without introd
   expect(source).toContain('읽기 전용');
 });
 
-for (const width of [360, 390, 412, 430]) {
-  test(`mobile ${width}px opens chart without overflow and all tabs fit`, async ({ page }) => {
+for (const width of [360, 390, 412, 430, 768]) {
+  test(`mobile or tablet ${width}px opens chart without overflow and all tabs fit`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 }); await prime(page); await page.goto(chartUrl);
     const tabs = page.getByTestId('ai-chart-mobile-tabs');
     await expect(tabs).toBeVisible(); await expect(tabs.getByRole('tab')).toHaveCount(3);

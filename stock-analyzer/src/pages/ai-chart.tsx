@@ -220,7 +220,7 @@ function initialStrategyMode(selection: AnalysisSelection): AiChartStrategyMode 
 }
 
 function useDesktopChartLayout(): boolean {
-  const query = '(min-width: 768px)';
+  const query = '(min-width: 1024px)';
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
@@ -801,9 +801,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       {mobile && <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl">
         <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
       </div>}
-      <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:grid-cols-[minmax(0,1fr)_280px] md:p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_340px]">
         <section data-testid="ai-chart-mobile-chart" hidden={hasSelection && mobile && mobileTab !== 'chart'} className="min-w-0 space-y-3">{chart}</section>
-        <aside hidden={!hasSelection} className="min-w-0 space-y-3 md:sticky md:top-20">
+        <aside hidden={!hasSelection} className="min-w-0 space-y-3 lg:sticky lg:top-20">
           <div data-testid="ai-chart-mobile-judgment" hidden={mobile && mobileTab !== 'summary'}>{details}</div>
           <div data-testid="ai-chart-mobile-live" hidden={mobile && mobileTab !== 'live'}><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div>
         </aside>
