@@ -125,6 +125,36 @@ export async function recordPaperResearchRoundProposal(
   }
 }
 
+/**
+ * A 23505 conflict may be on ANY unique key (proposal_id, market/epoch or
+ * sequence), not necessarily a replay of identical evidence. Never call an
+ * unrelated, changed or colliding proof an idempotent successful proposal.
+ */
+export function samePaperRoundProposalEvidence(
+  expected:PaperRoundProposalRow, existing:Record<string,unknown>,
+):boolean {
+  const sameText=[
+    'proposal_id','user_id','owner_role','trading_mode','market','current_epoch_id',
+    'previous_settlement_digest_sha256','ending_cause','status','execution_authority',
+  ] as const;
+  if(!sameText.every(key=>existing[key]===expected[key]))return false;
+  const sameNumbers=[
+    'next_round_number','proposed_seed_krw','previous_operating_capital_krw',
+    'previous_locked_reserve_krw',
+  ] as const;
+  if(!sameNumbers.every(key=>Number.isFinite(Number(existing[key]))
+      && Number(existing[key])===expected[key]))return false;
+  if((existing.minimum_entry_krw===null)!==(expected.minimum_entry_krw===null))return false;
+  if(expected.minimum_entry_krw!==null &&
+    (!Number.isFinite(Number(existing.minimum_entry_krw))
+      ||Number(existing.minimum_entry_krw)!==expected.minimum_entry_krw))return false;
+  if(!Number.isFinite(Date.parse(String(existing.observed_at??'')))
+    || Date.parse(String(existing.observed_at))!==Date.parse(expected.observed_at))return false;
+  return existing.financial_mutation_allowed===false
+    && existing.reserve_transfer_allowed===false
+    && existing.historical_record_deletion_allowed===false;
+}
+
 /** The only permitted durable write is an audit-only append to the isolated
  * proposal table. Not called by a route or worker until separately approved.
  */
@@ -144,7 +174,23 @@ export async function appendPaperResearchRoundProposalWithServiceRole(
   }
   const {data,error}=await getSupabase().from('paper_research_round_proposals')
     .insert(receipt).select('proposal_id').single();
-  if(error?.code==='23505')return 'DUPLICATE';
+  if(error?.code==='23505'){
+    // A uniqueness violation on (owner,mode,market,epoch) from a *different*
+    // digest or role is a collision, never an accepted duplicate.
+    const {data:recorded,error:readError}=await getSupabase()
+      .from('paper_research_round_proposals')
+      .select('proposal_id,user_id,owner_role,trading_mode,market,current_epoch_id,next_round_number,previous_settlement_digest_sha256,proposed_seed_krw,ending_cause,previous_operating_capital_krw,previous_locked_reserve_krw,minimum_entry_krw,observed_at,status,execution_authority,financial_mutation_allowed,reserve_transfer_allowed,historical_record_deletion_allowed')
+      .eq('user_id',receipt.user_id)
+      .eq('owner_role',receipt.owner_role)
+      .eq('trading_mode',receipt.trading_mode)
+      .eq('market',receipt.market)
+      .eq('current_epoch_id',receipt.current_epoch_id)
+      .maybeSingle();
+    if(readError || !recorded || !samePaperRoundProposalEvidence(receipt,recorded)){
+      throw new Error('PAPER_ROUND_PROPOSAL_CONFLICT_DIFFERENT_EVIDENCE');
+    }
+    return 'DUPLICATE';
+  }
   if(error || data?.proposal_id!==receipt.proposal_id)throw new Error('PAPER_ROUND_APPEND_FAILED');
   return 'INSERTED';
 }
