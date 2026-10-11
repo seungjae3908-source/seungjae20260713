@@ -168,7 +168,7 @@ test('market-specific high-water mark produces half compound/half reserve withou
   const loss = projectAdminMarketCapital('us_stock',[trade('loss',-100_000,'us_stock',1)],
     AT.getTime()+5_000);
   assert.equal(loss.operatingCapitalKrw,900_000);
-  assert.equal(loss.newEntriesAllowed,false);
+  assert.equal(loss.newEntriesAllowed,true);
   const duplicate = projectAdminMarketCapital('us_stock',[
     trade('same',10_000,'us_stock',1),trade('same',10_000,'us_stock',1),
   ], AT.getTime()+5_000);
@@ -183,7 +183,7 @@ test('simultaneous net loss never mints a false 50% reserve from ordering', () =
   ],AT.getTime()+5_000);
   assert.equal(projected.operatingCapitalKrw,950_000);
   assert.equal(projected.reserveKrw,0);
-  assert.equal(projected.newEntriesAllowed,false);
+  assert.equal(projected.newEntriesAllowed,true);
 });
 
 test('market budget admits only canonical settlement-backed compounding and never borrows from another market', () => {
@@ -217,7 +217,7 @@ test('market budget admits only canonical settlement-backed compounding and neve
   assert.equal(invalid.availableToTradeKrw,0);
 });
 
-test('admin market daily loss count and 50k net loss guard stay market-specific', () => {
+test('admin Paper loss counters remain market-specific observations after five losses', () => {
   const now=AT.getTime()+10_000;
   const losses=Array.from({length:5},(_,i)=>({
     id:'losing-'+i,market:'crypto_spot' as const,
@@ -226,7 +226,8 @@ test('admin market daily loss count and 50k net loss guard stay market-specific'
   }));
   const projected=projectAdminMarketCapital('crypto_spot',losses,now);
   assert.equal(projected.dailyLosingTrades,5);
-  assert.equal(projected.newEntriesAllowed,false);
+  assert.equal(projected.newEntriesAllowed,true);
+  assert.equal(projected.operatingCapitalKrw,975_000);
   const untouched=projectAdminMarketCapital('domestic_stock',losses,now);
   assert.equal(untouched.dailyLosingTrades,0);
   assert.equal(untouched.newEntriesAllowed,true);
@@ -295,7 +296,8 @@ test('one verified small loss reduces actual collateral but does not falsely tri
       netPnlKrw: -5_000, fullCostsVerified: true, closeTimeFxVerified: true,
     })), now);
   assert.equal(stopped.dailyLosingTrades, 5);
-  assert.equal(stopped.newEntriesAllowed, false);
+  assert.equal(stopped.newEntriesAllowed, true);
+  assert.equal(stopped.operatingCapitalKrw, 975_000);
 });
 
 test('verified 50/50 compound cash is market-local and cannot expand Live order policy', () => {
@@ -327,4 +329,34 @@ test('wallet seed alone cannot authorize Paper trading without canonical closing
   });
   assert.equal(reviewed.ready,true);
   assert.equal(reviewed.availableToTradeKrw,1_000_000);
+});
+
+test('all four markets/roles continue Paper losses until verified capital is exhausted, without reserve refill', () => {
+  const now = AT.getTime() + 60_000;
+  for (const market of ADMIN_FOUR_PAPER_MARKETS) {
+    for (const project of [projectAdminMarketCapital, projectMemberMarketCapital]) {
+      const rows = Array.from({length:10}, (_,i) => ({
+        id:`continuous-${market}-${i}`,market,
+        closedAt:new Date(AT.getTime()+i*1000).toISOString(),
+        netPnlKrw:-50_000,fullCostsVerified:true,closeTimeFxVerified:true,
+      }));
+      const multipleLosses=project(market,rows,now);
+      assert.equal(multipleLosses.dailyLosingTrades,10);
+      assert.equal(multipleLosses.operatingCapitalKrw,500_000);
+      assert.equal(multipleLosses.settlementReady,true);
+      assert.equal(multipleLosses.newEntriesAllowed,true);
+      assert.equal(multipleLosses.reserveKrw,0);
+      // Explicit capital exhaustion is a simulation end, not a hidden seed reset.
+      const exhausted=project(market, [...rows,{
+        id:`exhausted-${market}`,market,
+        closedAt:new Date(now-1_000).toISOString(),
+        netPnlKrw:-500_000,fullCostsVerified:true,closeTimeFxVerified:true,
+      }],now);
+      assert.equal(exhausted.operatingCapitalKrw,0);
+      assert.equal(exhausted.newEntriesAllowed,false);
+      assert.equal(exhausted.reserveKrw,0);
+      assert.equal(exhausted.settledTrades,11);
+      assert.equal(exhausted.settledNetPnlKrw,-1_000_000);
+    }
+  }
 });
