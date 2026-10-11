@@ -141,6 +141,49 @@ test("complete 1440m spot per symbol is local source-only, never canonical full 
     assert.equal(report.trueMarketWideRecall,null);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+test("full retrospectively retrieved 1m sources are physically present but not as-of research PASS",async()=>{
+  const root=temp(),market="CRYPTO_SPOT",manifest=make(market,1);
+  const observedAtMs=Date.parse("2026-10-11T02:00:00Z");
+  try{
+    const original=minuteSource(market,symbol(market,0),1440);
+    for(const bar of original.minuteBars) bar.availableAtMs=observedAtMs;
+    original.sourceMinuteRowsSha256=hash(original.minuteBars);
+    original.asOfMs=observedAtMs;
+    await store({root,source:original});
+    const receipts=await pages(root,market,manifest);
+    assert.equal(receipts.length,1);
+    assert.equal(receipts[0].status,
+      "PIT_MINUTE_SOURCE_CHUNK_PRESENT_NOT_INDEPENDENTLY_VERIFIED");
+    assert.equal(receipts[0].retrospectiveSourceMembers,1);
+    assert.equal(receipts[0].retrospectiveMinuteRows,1440);
+    assert.equal(receipts[0].sourceLimitedMembers,0);
+    assert.equal(receipts[0].memberSourceStatuses[0].status,
+      "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY");
+    const report=aggregate(market,manifest,receipts);
+    assert.equal(report.status,"SOURCE_ATTESTED_DAY_MINUTE_INVENTORY_ONLY");
+    assert.equal(report.localArchiveRowsPresentForEverySelectedPITMember,true);
+    assert.equal(report.archiveSourceCompletenessEstablished,false);
+    assert.equal(report.retrospectiveSourceMembers,1);
+    assert.equal(report.retrospectiveMinuteRows,1440);
+    assert.equal(report.sourceMinuteRows,1440);
+    assert.equal(report.missingSourceSessionCount,0);
+    assert.equal(report.retrospectiveMinutesAreNotAsOfScannerEvidence,true);
+    assert.equal(report.memberSourceStatusCounts[
+      "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY"],1);
+    assert.equal(report.trueMarketWideRecall,null);
+    assert.equal(report.actualFillCount,null);
+    assert.equal(report.profitabilityProven,false);
+    const badCount=structuredClone(receipts);
+    badCount[0].retrospectiveMinuteRows=1439;
+    assert.equal(aggregate(market,manifest,badCount).reason,
+      "PIT_MINUTE_DAY_PAGE_COUNTER_CONTRADICTION");
+    const badMember=structuredClone(receipts);
+    badMember[0].memberSourceStatuses[0].retrospectiveSourceSessionCount=0;
+    assert.equal(aggregate(market,manifest,badMember).reason,
+      "PIT_MINUTE_DAY_MEMBER_SOURCE_CONTRADICTION");
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
 test("out-of-order, skipped, duplicate and swapped manifest pages fail closed",async()=>{
   const root=temp(),market="CRYPTO_FUTURES",manifest=make(market);
   try{

@@ -193,6 +193,85 @@ export async function persistResearchMinuteSessionV1({ root, source } = {}) {
   });
 }
 
+/**
+ * OFFLINE original-slot inventory, intentionally separated from the as-of
+ * resampler. A retrospectively downloaded 1m row is a physically stored row
+ * even if it was NOT demonstrably available to a historical scanner.
+ *
+ * Complete minute slots means one native OHLCV row per expected minute, NOT
+ * certified no-trade gaps, source-license authenticity, PIT population, or
+ * a backtest/OOS profitability PASS.
+ */
+export async function inspectArchivedResearchMinuteSessionV1({
+  root, market, symbol, sessionStartMs, sourceDigestSha256 = null,
+} = {}) {
+  const directory = await sessionDirectory(root, {
+    market, symbol, sessionStartMs,
+  }, false);
+  if (sourceDigestSha256 != null && !SHA.test(sourceDigestSha256))
+    throw new TypeError("MINUTE_ARCHIVE_SOURCE_REVISION_INVALID");
+  if (!directory) {
+    return safety({ status: "BLOCKED_DATA",
+      reason: "ARCHIVED_SESSION_NOT_FOUND", market, symbol, sessionStartMs });
+  }
+  const filenames = (await readdir(directory)).filter(name =>
+    name.endsWith(".json.gz"));
+  if (filenames.some(name => !/^[0-9a-f]{64}\.json\.gz$/u.test(name)))
+    throw new TypeError("MINUTE_ARCHIVE_REVISION_FILENAME_INVALID");
+  const revisions = filenames.map(name => name.slice(0, 64)).sort();
+  if (!revisions.length || (sourceDigestSha256 != null
+    && !revisions.includes(sourceDigestSha256))) {
+    return safety({ status: "BLOCKED_DATA",
+      reason: "ARCHIVED_REVISION_NOT_FOUND", market, symbol, sessionStartMs,
+      archivedRevisionCount: revisions.length });
+  }
+  if (sourceDigestSha256 == null && revisions.length > 1) {
+    return safety({ status: "BLOCKED_DATA",
+      reason: "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION",
+      market, symbol, sessionStartMs,
+      archivedRevisionCount: revisions.length });
+  }
+  const digest = sourceDigestSha256 ?? revisions[0];
+  const source = await loadRecord(join(directory, digest + ".json.gz"), digest);
+  if (source.market !== market || source.symbol !== symbol
+    || source.session.startMs !== sessionStartMs)
+    throw new TypeError("MINUTE_ARCHIVE_PATH_IDENTITY_MISMATCH");
+  const sessionMinuteSlots =
+    (source.session.endMs - source.session.startMs) / 60_000;
+  const storedMinuteRows = source.minuteBars.length;
+  const historicallyUnavailableRows = source.minuteBars.filter(bar =>
+    bar.availableAtMs > source.session.endMs).length;
+  const missingUnverifiedMinuteSlots = sessionMinuteSlots - storedMinuteRows;
+  return safety({
+    status: missingUnverifiedMinuteSlots > 0
+      ? "PARTIAL_OBSERVED_MINUTE_SLOTS_SOURCE_ONLY"
+      : "OBSERVED_ALL_MINUTE_SLOTS_SOURCE_ONLY",
+    market, venue: source.venue, symbol,
+    sourceId: source.sourceId,
+    sessionStartMs, archiveSessionEndMs: source.session.endMs,
+    sessionKind: source.session.kind,
+    sessionTimeZone: source.session.timeZone,
+    archiveSourceDigestSha256: digest,
+    archivedRevisionCount: revisions.length,
+    sourceMinuteRowsSha256: source.sourceMinuteRowsSha256,
+    sourceMinuteIntegrityVerified: true,
+    sourceMinuteRows: storedMinuteRows,
+    sessionExpectedMinuteSlots: sessionMinuteSlots,
+    missingUnverifiedSourceMinuteSlots: missingUnverifiedMinuteSlots,
+    nativeMinuteSlotInventoryComplete: missingUnverifiedMinuteSlots === 0,
+    originalRowsUnavailableBySessionEnd: historicallyUnavailableRows,
+    originalMinuteObservationTimesRetrospective:
+      historicallyUnavailableRows > 0,
+    // A self-attested old availability timestamp cannot itself prove it
+    // was available to a historical scanner at decision time.
+    originalScannerAvailabilityIndependentlyVerified: false,
+    originalNoTradeGapsIndependentlyAuthenticated: false,
+    independentHistoricalSourceAuthenticityVerified: false,
+    originalScannerEarlyDiscoveryVerified: false,
+    fullMarketOpportunityDenominatorVerified: false,
+  });
+}
+
 /** Read a specified session/revision and derive bars only available at cutoff. */
 export async function deriveArchivedResearchTimeframesV1({
   root, market, symbol, sessionStartMs, sourceDigestSha256 = null,
