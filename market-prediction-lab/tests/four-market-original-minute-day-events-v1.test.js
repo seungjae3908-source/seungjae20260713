@@ -178,3 +178,42 @@ test("full-day KR/US archive is replayed as ONE multi-session strategy with pre/
   }
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("KR and US historical delisting excludes following day but preserves all earlier pre/regular sessions",async()=>{
+ const root=ROOT();
+ try{
+   for(const market of Object.keys(P)){
+     const c=context(market,root);
+     await save({root,source:c.pre});
+     await save({root,source:c.regular});
+     const symbol=P[market].symbol;
+     const memberships=c.manifest.memberships.map(row=>
+       row.symbol===symbol?{...row,removedAtMs:D+DAY}:row);
+     const manifest={...c.manifest,memberships,
+       rawMembershipDigestSha256:digestPITMembershipRowsV1(memberships)};
+     const day2Start=P[market].regular+DAY;
+     const calendar={...c.stockCalendar,
+       tradingDates:["2015-01-05","2026-09-18",
+         "2026-09-19","2028-01-03"],
+       sessions:[...c.stockCalendar.sessions,
+         {tradingDateLocal:"2026-09-19",
+           startMs:day2Start,endMs:day2Start+30*MIN,
+           kind:"REGULAR",timeZone:P[market].zone}],
+     };
+     const result=await period({
+       root,market,symbol,manifest,stockCalendar:calendar,
+       researchWindow:{startDate:"2026-09-18",endDate:"2026-09-19"},
+       asOfMs:D+5*DAY,timeframe:"5m",direction:"LONG",
+       fxRateKRWPerQuote:market==="US_STOCK"?1300:null,
+     });
+     assert.equal(result.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY",market);
+     assert.equal(result.indexedPrivateSessions,2,market);
+     assert.equal(result.sourceSessionsRead,2,market);
+     assert.equal(result.historicalLifecycleExcludedTradingDates,1,market);
+     assert.equal(result.profitabilityProven,false,market);
+     assert.equal(result.executionAuthority,"NONE",market);
+     assert.equal(result.actualFillCount,null,market);
+   }
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
