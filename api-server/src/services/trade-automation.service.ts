@@ -364,6 +364,56 @@ export class TradeAutomationService {
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
     if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
     if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
+    // Synthetic cost/FX evidence is accepted only on the server's actual
+    // Paper FILLED transition. Ordinary Live, manual and mock executions
+    // cannot use this metadata to make an unverified Paper profit.
+    if (toState === 'FILLED' && reason === 'PAPER_BROKER_FILLED') {
+      const paperPlan = await this.repository.getPlan(order.userId, order.planId);
+      if (paperPlan?.accountMode === 'paper' && paperPlan.exchange === order.exchange) {
+        const usMarket = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
+          String(paperPlan.market).toUpperCase(),
+        ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(paperPlan.stockExchange ?? '').toUpperCase());
+        const nativeCurrency = paperPlan.exchange === 'bitget' ? 'USDT'
+          : paperPlan.exchange === 'upbit' || (!usMarket && paperPlan.exchange !== 'bitget')
+            ? 'KRW' : 'USD';
+        const expectedFx = nativeCurrency === 'KRW' ? 'NATIVE_KRW'
+          : nativeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+        const receivedPolicy = metadata.trustedPaperCostPolicyId;
+        if (typeof receivedPolicy === 'string'
+          && /^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(receivedPolicy)
+          && metadata.taxCurrency === nativeCurrency
+          && typeof metadata.taxAmount === 'number'
+          && Number.isFinite(metadata.taxAmount) && metadata.taxAmount >= 0
+          && metadata.taxAmount <= (next.averageFillPrice ?? 0) * next.filledQuantity
+          && next.feeCurrency === nativeCurrency
+          && typeof next.feeAmount === 'number' && Number.isFinite(next.feeAmount)
+          && next.feeAmount >= 0) {
+          next.taxAmount = metadata.taxAmount;
+          next.taxCurrency = nativeCurrency;
+        }
+        const quote = metadata.settlementFxEvidence;
+        if (quote && typeof quote === 'object' && !Array.isArray(quote)) {
+          const value = quote as Record<string, unknown>;
+          const rate = value.krwPerQuoteCurrency;
+          const quoteMs = typeof value.observedAt === 'string'
+            ? Date.parse(value.observedAt) : Number.NaN;
+          const nowMs = Date.parse(next.updatedAt);
+          const ageMax = nativeCurrency === 'USD' ? 86_400_000
+            : nativeCurrency === 'USDT' ? 600_000 : 300_000;
+          if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+            && (nativeCurrency !== 'KRW' || rate === 1)
+            && value.source === expectedFx
+            && Number.isFinite(quoteMs) && Number.isFinite(nowMs)
+            && quoteMs <= nowMs + 5_000 && nowMs - quoteMs <= ageMax) {
+            next.settlementFxEvidence = Object.freeze({
+              krwPerQuoteCurrency: rate,
+              source: expectedFx,
+              observedAt: new Date(quoteMs).toISOString(),
+            });
+          }
+        }
+      }
+    }
     // A state of FILLED is not evidence of an execution. Never persist the
     // terminal state with zero/missing quantity or price in any market.
     // A provider acknowledgement alone cannot reconstruct an actual fill.

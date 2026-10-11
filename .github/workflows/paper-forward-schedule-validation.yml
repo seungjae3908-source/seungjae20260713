@@ -237,6 +237,8 @@ on:
       - api-server/src/services/member-auto-trading-exit-plan.service.ts
       - api-server/src/services/member-auto-trading-exit-plan.service.test.ts
       - api-server/src/services/trade-execution.service.ts
+      - api-server/src/services/trade-automation.repository.ts
+      - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/trade-execution-pre-submission.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
@@ -379,6 +381,8 @@ jobs:
             api-server/src/services/member-auto-trading-exit-plan.service.ts
             api-server/src/services/member-auto-trading-exit-plan.service.test.ts
             api-server/src/services/trade-execution.service.ts
+            api-server/src/services/trade-automation.repository.ts
+            api-server/src/services/trade-automation.service.ts
             api-server/src/services/trade-execution-pre-submission.test.ts
             api-server/src/services/member-auto-trading-background-worker.service.ts
             api-server/src/services/member-auto-trading-background-worker.service.test.ts
