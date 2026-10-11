@@ -330,8 +330,8 @@ export interface ResearchCenterOverview {
   strategyHealth?: StrategyHealthBinding;
 }
 
-export async function fetchResearchCenterOverview(signal?: AbortSignal): Promise<ResearchCenterOverview> {
-  const response = await authorizedFetch('/api/admin/research/overview', { method: 'GET', signal });
+export async function fetchResearchCenterOverview(signal?: AbortSignal, access: 'admin' | 'member' = 'admin'): Promise<ResearchCenterOverview> {
+  const response = await authorizedFetch(access === 'admin' ? '/api/admin/research/overview' : '/api/research/overview', { method: 'GET', signal });
   const body = await response.json().catch(() => null) as ResearchCenterOverview | { error?: string; message?: string } | null;
   if (!response.ok || !body || !('schemaVersion' in body) || body.schemaVersion !== 'research-dashboard-overview-v1') {
     const error = body && 'error' in body ? body.error : null;
