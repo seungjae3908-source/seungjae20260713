@@ -168,6 +168,8 @@ const groups = {
   // Scope-only Telegram QA. Keep full app, market, chart and provider tests
   // in their existing required CI; never use this lane as a CI bypass.
   telegram: [
+    path.join(root, 'src/services/telegram-v3-current-source.service.test.ts'),
+    path.join(root, 'src/services/signal-intelligence-telegram-subscriber.service.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
     path.join(root, 'src/services/telegram-market-brief.service.test.ts'),
