@@ -130,6 +130,21 @@ function assertAccountReceipt(account, { targetSha, productionDeployRunId }) {
   assertNoForbiddenEvidenceKeys(account);
 }
 
+function assertAutomaticPositionIsolationReceipt(account) {
+  for (const row of providerRows(account, 'POSTDEPLOY_QA_ACCOUNT')) {
+    const proof = row.automaticPositionIsolation;
+    if (proof?.policyVersion !== 'manual-protected-auto-ledger-v1' || proof.provider !== row.provider
+      || proof.ok !== true || proof.ready !== true || proof.fresh !== true
+      || proof.manualEntryBlocked !== true || proof.canonicalExitOnly !== true
+      || proof.ambiguousPositionCount !== 0
+      || !Number.isSafeInteger(proof.manualProtectedPositionCount) || proof.manualProtectedPositionCount < 0
+      || !Number.isSafeInteger(proof.automaticOwnedPositionCount) || proof.automaticOwnedPositionCount < 0) {
+      throw new Error(`POSTDEPLOY_QA_AUTOMATIC_POSITION_ISOLATION_INVALID:${row.provider}`);
+    }
+    requireZeroAuthority(proof, 'POSTDEPLOY_QA_POSITION_ISOLATION');
+  }
+}
+
 function assertCredentialReceipt(credential, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   if (credential?.schemaVersion !== 'production-live-credential-reuse-qa-v1'
@@ -423,6 +438,7 @@ function buildProductionPostdeployQaEvidence({
     throw new Error('POSTDEPLOY_QA_SCOPE_INVALID');
   }
   assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });
+  if (qaScope === 'auto_live') assertAutomaticPositionIsolationReceipt(account);
   assertCredentialReceipt(credential, { targetSha: sha, productionDeployRunId: deployRunId });
 
   const actualMainSha = String(context?.mainSha ?? '').trim().toLowerCase();
@@ -497,6 +513,7 @@ function buildProductionPostdeployQaEvidence({
     tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
     autoLiveQa: qaScope === 'auto_live' ? 'PASS' : 'NOT_RUN',
     canonicalAutoLiveSignalSource: qaScope === 'auto_live' ? 'PASS' : 'NOT_EVALUATED',
+    automaticPositionIsolation: qaScope === 'auto_live' ? 'PASS' : 'NOT_EVALUATED',
     telegramActivationState: qaScope === 'trading_core'
       ? tradingCore.telegramActivationState
       : 'NOT_EVALUATED',
@@ -553,6 +570,7 @@ function buildProductionPostdeployQaEvidence({
 }
 
 module.exports = {
+  assertAutomaticPositionIsolationReceipt,
   REQUIRED_PROVIDERS,
   REQUIRED_CREDENTIAL_REUSE_PATHS,
   ZERO_COUNTERS,
