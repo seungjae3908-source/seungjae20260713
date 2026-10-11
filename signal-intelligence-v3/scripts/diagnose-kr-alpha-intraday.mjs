@@ -10,6 +10,10 @@ try{
   oneMinuteCount:session.oneMinute.length,fiveMinuteCount:session.fiveMinute.length,
   closeMarkerVerified:session.sourceCloseMarkerPresent,
   sourceSessionContinuityVerified:session.sourceSessionContinuityVerified,
+  closingAuctionMinutesAbsent:session.closingAuctionMinutesAbsent,
+  excludedAfterCloseRows:session.excludedAfterCloseRows,
+  closingAuctionNotUsedForIntradaySignals:session.closingAuctionNotUsedForIntradaySignals,
+  full390MinuteContinuousTrading:session.full390MinuteContinuousTrading,
  };
 }catch(error){
  result={verdict:'SOURCE_REQUIRES_REVIEW',

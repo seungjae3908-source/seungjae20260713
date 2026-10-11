@@ -20,7 +20,7 @@ function parseMinute(raw){
  if(check.getUTCFullYear()!==year||check.getUTCMonth()!==month-1||check.getUTCDate()!==day
   ||hour>23||minute>59||second!==0)return null;
  const slot=hour*60+minute;
- if(slot<OPEN_MIN||slot>CLOSE_MIN)return null;
+ if(slot<OPEN_MIN||slot>20*60)return null;
  return {at:Date.UTC(year,month-1,day,hour-9,minute),slot,
    session:year+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0')};
 }
@@ -71,76 +71,87 @@ export function inspectPublicKrAlphaSessionShape(payload){
 export function parsePublicKrAlphaOneSession(payload,requestedCode,now=Date.now()){
  const code=krAlphaDailyCode(requestedCode);
  if(!payload||typeof payload!=='object'||Array.isArray(payload)
-  || (payload.code!=null&&String(payload.code).trim().toUpperCase()!==code))
+  ||(payload.code!=null&&String(payload.code).trim().toUpperCase()!==code))
   throw Error('KR_ALPHA_MINUTE_SOURCE_IDENTITY_INVALID');
- if(!Array.isArray(payload.priceInfos)||payload.priceInfos.length<390
-  ||payload.priceInfos.length>1000)
-  throw Error('KR_ALPHA_MINUTE_SOURCE_INCOMPLETE');
+ if(!Array.isArray(payload.priceInfos)||payload.priceInfos.length<381
+  ||payload.priceInfos.length>1000)throw Error('KR_ALPHA_MINUTE_SOURCE_INCOMPLETE');
  if(!Number.isFinite(now)||now<=0)throw Error('KR_ALPHA_MINUTE_CLOCK_INVALID');
+ const shape=inspectPublicKrAlphaSessionShape(payload);
+ if(Object.entries(shape.classifications).some(([key,value])=>
+  ['invalidLength','invalidDate','invalidClock','nonzeroSeconds'].includes(key)&&value>0)
+  ||shape.outsideBeforeOpen>0 ||shape.missingContinuousTradingMinutes!==0
+  ||shape.closingAt1530Present!==true)
+  throw Error('KR_ALPHA_MINUTE_INCOMPLETE_CONTINUOUS_SESSION');
  const bySlot=new Map();
+ let excludedAfterClose=0,excludedAuction=0;
  for(const raw of payload.priceInfos){
   const ts=parseMinute(raw?.localDateTime);
   if(!ts)throw Error('KR_ALPHA_MINUTE_TIMESTAMP_INVALID');
   if(ts.at>now)throw Error('KR_ALPHA_MINUTE_FUTURE_BAR');
+  if(ts.slot>CLOSE_MIN){excludedAfterClose++;continue;}
+  // 15:20..15:29 is the KRX closing call auction, not an uninterrupted
+  // series of regular continuous executions. Do not synthesize 10 bars.
+  if(ts.slot>=15*60+20 && ts.slot<CLOSE_MIN){excludedAuction++;continue;}
   const o=nums(raw.openPrice),h=nums(raw.highPrice),
-        l=nums(raw.lowPrice),c=nums(raw.currentPrice),
-        cum=nums(raw.accumulatedTradingVolume);
+   l=nums(raw.lowPrice),c=nums(raw.currentPrice),
+   cum=nums(raw.accumulatedTradingVolume);
   if(o===null||h===null||l===null||c===null||cum===null
    ||o<=0||l<=0||c<=0||h<Math.max(o,c,l)||l>Math.min(o,c,h)||cum<0)
-    throw Error('KR_ALPHA_MINUTE_OHLCV_INVALID');
-  const key=ts.at,bar={...ts,open:o,high:h,low:l,close:c,cumulativeVolume:cum};
-  if(bySlot.has(key)){
-   const old=bySlot.get(key);
-   if(!['open','high','low','close','cumulativeVolume'].every(k=>old[k]===bar[k]))
+   throw Error('KR_ALPHA_MINUTE_OHLCV_INVALID');
+  const bar={...ts,open:o,high:h,low:l,close:c,cumulativeVolume:cum};
+  if(bySlot.has(ts.at)){
+   const before=bySlot.get(ts.at);
+   if(!['open','high','low','close','cumulativeVolume'].every(k=>before[k]===bar[k]))
     throw Error('KR_ALPHA_MINUTE_CONFLICTING_BAR');
    continue;
   }
-  bySlot.set(key,bar);
+  bySlot.set(ts.at,bar);
  }
  const ordered=[...bySlot.values()].sort((a,b)=>a.at-b.at);
  if(new Set(ordered.map(x=>x.session)).size!==1)
   throw Error('KR_ALPHA_MINUTE_MULTIPLE_SESSIONS');
- // For daily start/end integrity, require a continuous 09:00..15:29 run
- // and optional 15:30 closing snapshot. Missing early/later bars cannot
- // certify a daily range or be filled with synthetic zeros.
- if(ordered.length<390||ordered[0].slot!==OPEN_MIN)
-  throw Error('KR_ALPHA_MINUTE_OPEN_MISSING');
- const minutes=ordered.filter(b=>b.slot<CLOSE_MIN);
- if(minutes.length!==390)throw Error('KR_ALPHA_MINUTE_INCOMPLETE_SESSION');
+ const continuous=ordered.filter(x=>x.slot<15*60+20);
+ const closing=ordered.find(x=>x.slot===CLOSE_MIN);
+ if(continuous.length!==380||!closing||continuous[0].slot!==OPEN_MIN)
+  throw Error('KR_ALPHA_MINUTE_INCOMPLETE_CONTINUOUS_SESSION');
  let cumulative=0;
- const sourceMinutes=[];
- for(let i=0;i<minutes.length;i++){
-  const bar=minutes[i],expectedAt=minutes[0].at+i*MINUTE;
-  if(bar.at!==expectedAt)throw Error('KR_ALPHA_MINUTE_GAP');
+ const oneMinute=[];
+ for(let i=0;i<continuous.length;i++){
+  const bar=continuous[i];
+  if(bar.at!==continuous[0].at+i*MINUTE)
+   throw Error('KR_ALPHA_MINUTE_GAP');
   if(bar.cumulativeVolume<cumulative)
    throw Error('KR_ALPHA_MINUTE_CUMULATIVE_VOLUME_NONMONOTONIC');
   const volume=bar.cumulativeVolume-cumulative;
   cumulative=bar.cumulativeVolume;
-  sourceMinutes.push({time:new Date(bar.at).toISOString(),
+  oneMinute.push({time:new Date(bar.at).toISOString(),
    open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume});
  }
- if(ordered.length===391){
-  const closing=ordered.at(-1);
-  if(closing.slot!==CLOSE_MIN || closing.cumulativeVolume!==cumulative)
-   throw Error('KR_ALPHA_MINUTE_CLOSING_VOLUME_UNVERIFIED');
- }
- const five=[];
- for(let i=0;i<sourceMinutes.length;i+=5){
-  const group=sourceMinutes.slice(i,i+5);
-  if(group.length!==5)throw Error('KR_ALPHA_FIVE_MINUTE_INCOMPLETE');
-  five.push({
-   time:group[0].time,
-   open:group[0].open,high:Math.max(...group.map(x=>x.high)),
-   low:Math.min(...group.map(x=>x.low)),close:group.at(-1).close,
-   volume:group.reduce((sum,x)=>sum+x.volume,0),
-  });
+ if(closing.cumulativeVolume<cumulative)
+  throw Error('KR_ALPHA_MINUTE_CLOSING_VOLUME_UNVERIFIED');
+ const fiveMinute=[];
+ for(let i=0;i<oneMinute.length;i+=5){
+  const bucket=oneMinute.slice(i,i+5);
+  if(bucket.length!==5)throw Error('KR_ALPHA_FIVE_MINUTE_INCOMPLETE');
+  fiveMinute.push({time:bucket[0].time,open:bucket[0].open,
+   high:Math.max(...bucket.map(x=>x.high)),
+   low:Math.min(...bucket.map(x=>x.low)),close:bucket.at(-1).close,
+   volume:bucket.reduce((sum,x)=>sum+x.volume,0)});
  }
  return Object.freeze({
-  requestedCode:code,firstSession:minutes[0].session,
-  oneMinute:Object.freeze(sourceMinutes.map(x=>Object.freeze(x))),
-  fiveMinute:Object.freeze(five.map(x=>Object.freeze(x))),
-  sourceCloseMarkerPresent:ordered.length===391,
+  requestedCode:code,firstSession:continuous[0].session,
+  oneMinute:Object.freeze(oneMinute.map(x=>Object.freeze(x))),
+  fiveMinute:Object.freeze(fiveMinute.map(x=>Object.freeze(x))),
+  sourceCloseMarkerPresent:true,
   sourceSessionContinuityVerified:true,
+  continuousTradingMinutes:380,fullyObservedFiveMinuteBuckets:76,
+  excludedClosingAuctionMinutes:excludedAuction,
+  closingAuctionMinutesAbsent:shape.missingClosingAuctionMinutes,
+  excludedAfterCloseRows:excludedAfterClose,
+  closeAuctionVolumeNonnegative:true,
+  // Closing-auction prices are not injected into 1m/5m indicators.
+  closingAuctionNotUsedForIntradaySignals:true,
+  full390MinuteContinuousTrading:false,
   sourceConstituentCoverageVerified:false,licensedDistribution:false,
   sourceOnly:true,executionAuthority:'NONE',
  });
