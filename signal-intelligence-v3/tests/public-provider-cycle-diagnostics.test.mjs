@@ -138,3 +138,20 @@ test('member UI first-page evidence does not certify a whole-market release',()=
   assert.equal(d.releaseReadiness.ready,false);
   assert.ok(!d.releaseReadiness.blockers.includes('MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED'));
 });
+
+test('insufficient stock candles are preserved apart from network failures in the same-cycle report',()=>{
+  const s=snapshot();
+  const us=s.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+  us.status='SEARCH_FAILURE';
+  us.providerErrors=0;us.timeouts=0;
+  us.requestedCount=20;us.startedCount=20;us.completedCount=20;
+  us.insufficientDataCount=7;us.invalidDataFailureCount=0;
+  const diag=inspectExactPublicProviderCycle(s,SHA,NOW);
+  const lane=diag.rows.find(x=>x.market==='US_STOCK').lanes[0];
+  assert.equal(lane.insufficientDataCount,7);
+  assert.equal(lane.requestedCount,20);
+  assert.equal(lane.completedCount,20);
+  assert.equal(diag.rows.find(x=>x.market==='US_STOCK').providerErrorCount,0);
+  assert.equal(diag.releaseReadiness.authenticatedMemberRouteVerified,false);
+  assert.ok(diag.releaseReadiness.blockers.includes('AUTHENTICATED_MEMBER_ROUTE_AND_WILLIAMS_OVERLAY_NOT_PROVEN'));
+});

@@ -62,6 +62,8 @@ export function summarizePublicProviderFailureReasons(failures) {
 
 function statusFor(rows) {
   if (rows.some(row => row.status === 'SEARCH_FAILURE'
+    || Number(row.insufficientDataCount ?? 0) > 0
+    || Number(row.invalidDataFailureCount ?? 0) > 0
     || Number(row.publicProviderFailureSummary?.categories?.INVALID_DATA ?? 0) > 0
     || Number(row.publicProviderFailureSummary?.categories?.SYMBOL_MAPPING ?? 0) > 0))
     return 'PROVIDER_BLOCKED';
@@ -111,6 +113,11 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
         cursorAfter:count(row.cursorAfter)?row.cursorAfter:null,
         cursorRotatedBlockedOnly:row.cursorRotatedBlockedOnly===true,
         universePartial:row.universePartial===true,
+        requestedCount:count(row.requestedCount)?row.requestedCount:null,
+        startedCount:count(row.startedCount)?row.startedCount:null,
+        completedCount:count(row.completedCount)?row.completedCount:null,
+        insufficientDataCount:count(row.insufficientDataCount)?row.insufficientDataCount:null,
+        invalidDataFailureCount:count(row.invalidDataFailureCount)?row.invalidDataFailureCount:null,
         publicProviderFailureSummary: row.publicProviderFailureSummary &&
           row.publicProviderFailureSummary.symbolsRedacted === true &&
           typeof row.publicProviderFailureSummary === 'object'
@@ -149,12 +156,15 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
     ...(memberUiProfileObserved ? [] : ['MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED']),
     'CANONICAL_OOS_FULL_COST_PASS_NOT_PROVEN',
     'PROSPECTIVE_PAPER_FILL_NOT_PROVEN',
+    'AUTHENTICATED_MEMBER_ROUTE_AND_WILLIAMS_OVERLAY_NOT_PROVEN',
   ];
   return Object.freeze({
     releaseReadiness: Object.freeze({
       status: 'BLOCKED',
       ready: false,
       memberUiFirstBatchObserved: memberUiProfileObserved,
+      memberUiTimeframesObserved: memberUiProfileObserved,
+      authenticatedMemberRouteVerified: false,
       profileSurface: snapshot.profile?.surface ?? 'RESEARCH_V3',
       observedTimeframes: Object.freeze([...new Set(snapshot.profile?.timeframes ?? [])]),
       blockers: Object.freeze(blockers),
