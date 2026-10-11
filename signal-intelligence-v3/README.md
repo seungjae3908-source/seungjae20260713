@@ -216,3 +216,15 @@ a legitimate read-only source for nonnumeric KRX instruments but is not
 a claim that any vendor universally supports them. No new provider
 requests, chart fabrication, private access, release activation or
 trading authority are introduced.
+
+## Draft: cache and first-fetch KRX public roster completeness now agree
+
+The shared ScannerUniverseService previously returned `partial:false`
+on both fresh and cached `krx-symbol-master` results even when it
+explicitly excluded 2,837 listed alphanumeric codes. V3 subsequently
+blocked that contradiction, but other clients could misinterpret a
+reachable eligible-only page as **entire market complete**.
+Both fresh/cached public-source metadata now marks a known
+raw-vs-eligible discrepancy as `partial:true`, including inconsistent
+counts. This does **not** expand the covered roster or grant any order
+or alert authority. Verified source-size equality retains `partial:false`.

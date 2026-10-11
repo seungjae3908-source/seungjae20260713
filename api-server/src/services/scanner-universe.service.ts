@@ -57,6 +57,23 @@ type CacheRow = {
 const lastGood = new Map<MarketScope, CacheRow>();
 const CACHE_MS = 12 * 60 * 60_000;
 
+/** The same public KRX roster may be successfully fetched but still exclude
+ * listed instruments unsupported by its configured candle provider.
+ * Source reachability and whole-roster completeness are distinct facts.
+ * Fail closed for inconsistent coverage arithmetic, never call this full.
+ */
+export function scannerUniverseCoveragePartial(
+  rawTotalCount: number,
+  eligibleCount: number,
+  explainedExcludedCount: number,
+): boolean {
+  if (![rawTotalCount, eligibleCount, explainedExcludedCount]
+    .every(value => Number.isSafeInteger(value) && value >= 0)
+    || rawTotalCount < eligibleCount
+    || rawTotalCount - eligibleCount !== explainedExcludedCount) return true;
+  return explainedExcludedCount > 0;
+}
+
 function catalogFallback(market: MarketScope): ScannerUniverseEntry[] {
   return CATALOG
     .filter((entry) => entry.market === market)
@@ -229,7 +246,10 @@ export const ScannerUniverseService = {
         explainedExcludedCount: cached.explainedExclusions.length,
         explainedExclusions: cached.explainedExclusions,
         source: cached.source,
-        partial: false,
+        partial: scannerUniverseCoveragePartial(
+          cached.rawTotalCount, cached.entries.length,
+          cached.explainedExclusions.length,
+        ),
         stale: false,
         providerErrorCount: 0,
         loadedAt: new Date(cached.at).toISOString(),
@@ -259,7 +279,10 @@ export const ScannerUniverseService = {
           explainedExcludedCount: capability.exclusions.length,
           explainedExclusions: capability.exclusions,
           source,
-          partial: false,
+          partial: scannerUniverseCoveragePartial(
+            capability.rawTotalCount, live.length,
+            capability.exclusions.length,
+          ),
           stale: false,
           providerErrorCount: 0,
           loadedAt: new Date(now).toISOString(),
