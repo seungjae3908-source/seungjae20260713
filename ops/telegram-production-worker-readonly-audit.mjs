@@ -9,7 +9,14 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { get as httpGet } from 'node:http';
 
-const ROOT = '/opt/stock-app/api-server';
+// PM2 is started from Production root, NOT from its api-server child folder.
+const ROOT = '/opt/stock-app';
+const ENTRYPOINT = path.join(ROOT, 'api-server', 'dist', 'index.mjs');
+const STATE_ROOTS = Object.freeze([
+  path.join(ROOT, '.runtime'),
+  path.join(ROOT, 'api-server', '.runtime'),
+  '/opt/stock-app-data',
+]);
 const MARKER = '/opt/stock-app/.deploy/current-sha';
 const MAX_STATE_BYTES = 1_048_576;
 const ROOM_KEYS = Object.freeze([
@@ -83,7 +90,7 @@ export function inspectDeliveryStateText(raw, type, nowMs = Date.now()) {
 
 function pathWithinRoot(filePath) {
   const candidate = path.resolve(ROOT, filePath);
-  const allowed = [ROOT, '/opt/stock-app-data'];
+  const allowed = STATE_ROOTS;
   if (!allowed.some(root => candidate.startsWith(root + path.sep))) return null;
   try {
     const parentReal = fs.realpathSync(path.dirname(candidate));
@@ -95,10 +102,14 @@ function pathWithinRoot(filePath) {
   return candidate;
 }
 
-export function readStateFile(configuredPath, defaultFilename, type, nowMs = Date.now()) {
+export function resolveSafeTelegramStatePath(configuredPath, defaultFilename) {
   const filename = typeof configuredPath === 'string' && configuredPath.trim()
     ? configuredPath.trim() : path.join(ROOT, '.runtime', defaultFilename);
-  const candidate = pathWithinRoot(filename);
+  return pathWithinRoot(filename);
+}
+
+export function readStateFile(configuredPath, defaultFilename, type, nowMs = Date.now()) {
+  const candidate = resolveSafeTelegramStatePath(configuredPath, defaultFilename);
   if (!candidate) return emptyState('UNSAFE_PATH');
   let fd;
   try {
@@ -116,6 +127,15 @@ export function readStateFile(configuredPath, defaultFilename, type, nowMs = Dat
   }
 }
 
+// Preserve exact PM2 cwd and entrypoint gates used by the existing Production
+// deploy and Telegram six-room binding scripts; never emit those paths in receipts.
+export function canonicalPm2Paths(runtime) {
+  return {
+    canonicalCwd: runtime?.pm_cwd === ROOT,
+    canonicalEntrypoint: runtime?.pm_exec_path === ENTRYPOINT,
+  };
+}
+
 function readPm2Snapshot() {
   const all = JSON.parse(execFileSync('pm2', ['jlist'], {
     encoding: 'utf8', maxBuffer: 20_000_000, timeout: 10000,
@@ -129,7 +149,7 @@ function readPm2Snapshot() {
   return {
     runtime, pm2Sha: safeSha(runtime.DEPLOY_SHA), markerSha: marker,
     online: runtime.status === 'online',
-    canonicalCwd: runtime.pm_cwd === ROOT,
+    ...canonicalPm2Paths(runtime),
   };
 }
 
@@ -272,11 +292,20 @@ export async function observeProductionTelegram({
     receipt.pm2Sha = safeSha(observed.pm2Sha);
     receipt.markerSha = safeSha(observed.markerSha);
     receipt.pm2Online = observed.online === true;
-    receipt.exactDeployedIdentity = receipt.pm2Online && observed.canonicalCwd === true
+    receipt.exactDeployedIdentity = receipt.pm2Online
+      && observed.canonicalCwd === true && observed.canonicalEntrypoint === true
       && receipt.pm2Sha === receipt.expectedDeployedSha
       && receipt.markerSha === receipt.expectedDeployedSha;
     if (!receipt.exactDeployedIdentity) {
-      receipt.classification = 'PRODUCTION_IDENTITY_MISMATCH'; return receipt;
+      // Safe, actionable failure classification — never print cwd/entrypoint.
+      receipt.classification = !receipt.pm2Online ? 'PM2_NOT_ONLINE'
+        : receipt.pm2Sha !== receipt.expectedDeployedSha
+          || receipt.markerSha !== receipt.expectedDeployedSha
+          ? 'PRODUCTION_SHA_MISMATCH'
+          : observed.canonicalCwd !== true ? 'PM2_CWD_MISMATCH'
+            : observed.canonicalEntrypoint !== true ? 'PM2_ENTRYPOINT_MISMATCH'
+              : 'PRODUCTION_IDENTITY_MISMATCH';
+      return receipt;
     }
     const ids = ROOM_KEYS.map(key => String(runtime[key] ?? '').trim());
     receipt.roomBindingsValid = ids.every(id => /^-100[0-9]{8,15}$/u.test(id))
