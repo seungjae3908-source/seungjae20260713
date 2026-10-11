@@ -41,3 +41,12 @@ test('a material net/gross discrepancy is disclosed rather than invented away', 
   const review=explainManualPaperTrade(fixture({grossPnl:40,netPnl:50}));
   assert.ok(review.observedReasons.some(x=>x.includes('일치하지 않아')));
 });
+
+test('short-side funding credit is allowed and offsets commission without imagined evidence', () => {
+  const review=explainManualPaperTrade(fixture({
+    grossPnl:40,netPnl:38,entryFee:2,exitFee:2,slippageCost:2,fundingCost:-4,
+  }));
+  assert.equal(review.outcome,'PROFIT');
+  assert.equal(review.recordedCosts,2);
+  assert.equal(review.netPnl,38);
+});
