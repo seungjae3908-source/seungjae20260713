@@ -223,7 +223,9 @@ export function evaluateTradingPlan(
   if (paperResearch && !riskReducing) {
     if (snapshot.dailyPnlPercent <= -10) warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED');
     else if (snapshot.dailyPnlPercent <= -5) warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_5PCT_OBSERVED');
-    if (Number.isFinite(snapshot.weeklyPnlPercent) && snapshot.weeklyPnlPercent <= -policy.weeklyLossLimitPercent) {
+    if (typeof snapshot.weeklyPnlPercent === 'number'
+      && Number.isFinite(snapshot.weeklyPnlPercent)
+      && snapshot.weeklyPnlPercent <= -policy.weeklyLossLimitPercent) {
       warnings.push('PAPER_RESEARCH_WEEKLY_DRAWDOWN_OBSERVED');
     }
   }
