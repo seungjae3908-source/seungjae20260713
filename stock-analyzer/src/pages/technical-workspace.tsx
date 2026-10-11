@@ -42,7 +42,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '매매 화면에서 자동매매와 모의매매를 전환하고 국내주식·미국주식·코인현물·코인선물을 같은 구조로 확인합니다. UI 전환만으로 실거래는 활성화하지 않습니다.',
+  '자동매매 화면은 국내주식·미국주식·코인현물·코인선물의 LIVE 상태와 설정만 보여 줍니다. 모의매매와 텔레그램은 별도 기능이며 자동매매 Gate를 대신하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
