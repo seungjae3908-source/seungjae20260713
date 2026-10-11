@@ -222,7 +222,8 @@ test('Paper composite page keeps both owner-scoped panels and the original backt
   assert.match(source, /import \{ManualFourMarketWalletPanel\}/);
   assert.match(source, /<FourMarketPaperStatusPanel \/>/);
   assert.match(source, /<ManualFourMarketWalletPanel \/>/);
-  assert.match(source, /<AutoTradingPage initialMode="paper" \/>/);
+  assert.match(source, /<AutoTradingPage key=\{search\} initialMode="paper"/);
+  assert.match(source, /paperOrigin=\{new URLSearchParams\(search\)\.get\('kind'\) === 'manual' \? 'manual' : 'automatic'\}/);
   assert.match(source, /<BacktestPaperCandidatePreview imported=\{imported\} \/>/);
   assert.doesNotMatch(source, /initialMode="live"/);
 });
