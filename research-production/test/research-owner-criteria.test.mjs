@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { researchOwnerMarketCriteria, researchOwnerExposureBounds } from '../src/research-owner-criteria.mjs';
+import { researchOwnerMarketCriteria, researchOwnerExposureBounds, buildOwnerApprovedReferenceDsl } from '../src/research-owner-criteria.mjs';
+import { createSafeStrategyDslV1 } from '../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js';
 
 test('owner scope permits only 1x LONG in stocks and spot, and 7x LONG/SHORT in futures', () => {
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']) {
@@ -18,6 +19,24 @@ test('owner scope permits only 1x LONG in stocks and spot, and 7x LONG/SHORT in 
   }
   assert.throws(() => researchOwnerMarketCriteria('UNKNOWN', 'LONG'));
   assert.throws(() => researchOwnerMarketCriteria('CRYPTO_FUTURES', 'BUY'));
+});
+
+test('approved reference compiles for exactly five market/direction pairs, without search or evidence authority', () => {
+  for (const [market, direction] of [['KR_STOCK', 'LONG'], ['US_STOCK', 'LONG'], ['CRYPTO_SPOT', 'LONG'], ['CRYPTO_FUTURES', 'LONG'], ['CRYPTO_FUTURES', 'SHORT']]) {
+    const raw = buildOwnerApprovedReferenceDsl(market, direction);
+    const dsl = createSafeStrategyDslV1(raw);
+    assert.equal(dsl.market, market); assert.equal(dsl.direction, direction);
+    assert.equal(dsl.timeframe, '15m');
+    assert.equal(dsl.entryDsl.rules[0].operator, direction === 'SHORT' ? 'CROSSUNDER' : 'CROSSOVER');
+    for (const parameter of raw.parameterSpace) assert.equal(parameter.min, parameter.max);
+    assert.equal(raw.parameterSpace.find(p => p.name === 'fast').min, 20);
+    assert.equal(raw.parameterSpace.find(p => p.name === 'slow').min, 60);
+    assert.equal(raw.parameterSpace.find(p => p.name === 'holding').min, 4);
+    assert.equal(raw.parameterSpace.find(p => p.name === 'stop').min, 0.01);
+    assert.equal('leverage' in raw, false, 'leverage must stay in canonical risk sizing, not the DSL');
+    assert.equal('dataset' in raw, false); assert.equal('backtest' in raw, false);
+  }
+  for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']) assert.throws(() => buildOwnerApprovedReferenceDsl(market, 'SHORT'));
 });
 
 test('7x never expands exposure beyond the approved 0.5% capital risk bound', () => {
