@@ -194,6 +194,10 @@ on:
       - 'market-prediction-lab/tests/*.test.js'
       - api-server/src/services/manual-four-market-paper-cycle.service.ts
       - api-server/src/services/manual-four-market-paper-cycle.service.test.ts
+      - api-server/src/services/automatic-paper-v3-epoch.service.ts
+      - api-server/src/services/automatic-paper-v3-epoch.service.test.ts
+      - api-server/src/services/automatic-paper-v3-epoch-migration.test.ts
+      - api-server/supabase/migrations/2026101104_paper_research_round_wallet_epochs.sql
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -576,6 +580,10 @@ jobs:
             stock-analyzer/src/lib/manual-four-market-paper-status.ts
             api-server/src/services/manual-four-market-paper-cycle.service.ts
             api-server/src/services/manual-four-market-paper-cycle.service.test.ts
+            api-server/src/services/automatic-paper-v3-epoch.service.ts
+            api-server/src/services/automatic-paper-v3-epoch.service.test.ts
+            api-server/src/services/automatic-paper-v3-epoch-migration.test.ts
+            api-server/supabase/migrations/2026101104_paper_research_round_wallet_epochs.sql
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
