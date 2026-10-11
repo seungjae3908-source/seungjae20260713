@@ -9,6 +9,8 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { createResearchWorkspaceRouter } from './research-workspace';
 import { sealPITMinuteDayCompactReceiptV1 } from
   '../../../market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js';
+import { publishResearchOriginalMinuteDiagnosticV1 } from
+  '../../../market-prediction-lab/src/research-original-minute-diagnostic-publisher-v1.js';
 
 const DAY = 86_400_000;
 const D0 = Date.parse('2026-09-18T00:00:00Z');
@@ -291,6 +293,32 @@ test('research original minute model report: admin GET only, sanitized period an
     assert.equal(out.actualFillCount, null);
     assert.equal(out.profitabilityProven, false);
     assert.equal(out.executionAuthority, 'NONE');
+    // Full OFFLINE source result --> explicit local publisher --> existing
+    // admin GET, without a direct hand-copy of the final market report.
+    const original = join(root, 'private-completed-model-result.json');
+    writeFileSync(original, JSON.stringify(body), { mode: 0o600 });
+    const published = await publishResearchOriginalMinuteDiagnosticV1({
+      sourceResultPath: original,
+      reportRoot: root,
+      market: 'CRYPTO_SPOT',
+      allowLocalReportPublish: true,
+      allowReplaceExisting: true,
+    });
+    assert.equal(published.published, true);
+    assert.equal(published.reportReplaced, true);
+    const readPublished = await responseData(await fetch(base + endpoint + query, {
+      headers: admin,
+    }));
+    assert.equal(readPublished.available, true);
+    assert.equal(readPublished.report.kind, 'PERIOD');
+    assert.equal(readPublished.report.modeledReturnPercent, 3.25);
+    assert.equal(readPublished.publicationAgeStatus, 'LOCAL_PUBLICATION_ONLY');
+    assert.ok(Number.isSafeInteger(readPublished.reportPublishedAtMs));
+    assert.equal(readPublished.publicationTimeIndependentlyAttested, false);
+    assert.equal(readPublished.actualMarketWideOpportunityCount, null);
+    assert.equal(readPublished.actualFillCount, null);
+    assert.equal(readPublished.profitabilityProven, false);
+    assert.equal(readPublished.executionAuthority, 'NONE');
     chmodSync(file, 0o644);
     const denied = await fetch(base + endpoint + query, { headers: admin });
     assert.equal(denied.status, 503);
