@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {currentPagePublication} from '../src/public-v3-current-page-gate.mjs';
+import {currentPagePublication,currentPublicV3CycleReady} from '../src/public-v3-current-page-gate.mjs';
 
 const markets=['KR','US','SPOT','FUTURES'];
 const modes=['SCALPING_15M','SWING_60M','MID_LONG_1D'];
 const allLanes=markets.flatMap(m=>modes.map(mode=>m+'_'+mode));
 const readyLane=id=>({
   laneId:id,status:'CANDIDATES_AVAILABLE',
+  universeSource:id.startsWith('KR_')?'krx-symbol-master':
+    id.startsWith('US_')?'nasdaq-trader-public-directory':
+      id.startsWith('SPOT_')?'upbit-public':'bitget-public',
+  scannedCards:2,retainedFromBatch:2,
   cursorBefore:10,cursorAfter:15,totalUniverse:200,
   lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
   responseDataState:'complete',universePartial:false,universeStale:false,
@@ -101,4 +105,24 @@ test('valid final wrap to zero remains a verifiable completed source page',()=>{
   snapshot.rows[0].provenance.cursor=195;
   const result=currentPagePublication(snapshot,lanes);
   assert.deepEqual(result.allowedIds,['verified']);
+});
+
+test('source freshness requires exactly 12 complete pages and correct market roster',()=>{
+  const lanes=receipt();
+  assert.equal(currentPublicV3CycleReady(lanes),true);
+  const variant=receipt();
+  variant[3]={...variant[3],universeSource:'bitget-public'};
+  assert.equal(currentPublicV3CycleReady(variant),false);
+  assert.deepEqual(currentPagePublication(input(),variant).events,[]);
+  const partial=receipt();partial[0].universePartial=true;
+  assert.equal(currentPublicV3CycleReady(partial),false);
+  const blocked=receipt();blocked[2].status='BLOCKED_DATA';
+  assert.equal(currentPublicV3CycleReady(blocked),false);
+  const noTrade=receipt();
+  noTrade[8]={...noTrade[8],status:'VALID_NO_TRADE',
+    scannedCards:0,retainedFromBatch:0};
+  assert.equal(currentPublicV3CycleReady(noTrade),true);
+  noTrade[8].retainedFromBatch=1;
+  assert.equal(currentPublicV3CycleReady(noTrade),false);
+  assert.equal(currentPublicV3CycleReady(receipt().slice(1)),false);
 });
