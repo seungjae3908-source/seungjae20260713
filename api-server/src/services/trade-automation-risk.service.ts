@@ -209,13 +209,24 @@ export function evaluateTradingPlan(
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
   const riskReducing = isRiskReducingExitPlan(plan);
+  // Never interpret a PAPER losing streak as a LIVE halt. Account mode is
+  // checked on each plan create/approve/pre-submission recheck, not a client
+  // opt-in toggle; every other exposure/data/margin/emergency gate remains.
+  const paperResearch = plan.accountMode === 'paper';
   if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
   if (policy.newEntriesStopped && !riskReducing) add(blockCodes, 'NEW_ENTRIES_STOPPED');
   if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
-  if (!riskReducing && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
-  if (!riskReducing && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
+  if (!riskReducing && !paperResearch && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
+  if (!riskReducing && !paperResearch && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
+  if (paperResearch && !riskReducing) {
+    if (snapshot.dailyPnlPercent <= -10) warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED');
+    else if (snapshot.dailyPnlPercent <= -5) warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_5PCT_OBSERVED');
+    if (Number.isFinite(snapshot.weeklyPnlPercent) && snapshot.weeklyPnlPercent <= -policy.weeklyLossLimitPercent) {
+      warnings.push('PAPER_RESEARCH_WEEKLY_DRAWDOWN_OBSERVED');
+    }
+  }
   if (!riskReducing && snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
   if (!riskReducing && snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100 > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
@@ -239,7 +250,10 @@ export function evaluateTradingPlan(
   if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
   if (!riskReducing && policy.maxDailyOrders > 0
     && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
-  if (!riskReducing && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
+  if (!riskReducing && !paperResearch && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
+  if (!riskReducing && paperResearch && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) {
+    warnings.push('PAPER_RESEARCH_LOSING_STREAK_OBSERVED');
+  }
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
 
   const nowMs = Date.now();
