@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "research-criteria-review-draft-v1",
+  "status": "USER_APPROVED_CRITERIA_PENDING_CANONICAL_EVIDENCE",
+  "runtimeActivationAllowed": false,
+  "approval": {
+    "channel": "DIRECT_HUMAN_CONVERSATION",
+    "scope": "RESEARCH_AND_PAPER_ONLY",
+    "statement": "국내주식/해외주식/코인현물은 1배 (매수만), 코인선물은 7배(롱/숏), 나머지 정책은 제안한 기준",
+    "githubApprovalIssue": null,
+    "githubApprovalCommentId": null
+  },
+  "evidenceCredit": 0,
+  "profitabilityProven": false,
+  "executionAuthority": "NONE",
+  "liveTrading": false,
+  "privateApi": false,
+  "orderAllowed": false,
+  "proposedReferenceStrategy": {
+    "purpose": "FUNCTIONAL_RESEARCH_ONLY_NOT_PROFITABILITY_RECOMMENDATION",
+    "timeframe": "15m",
+    "cashMarketDirection": "LONG",
+    "futuresDirections": ["LONG", "SHORT"],
+    "longEntry": "EMA20_CROSSOVER_EMA60_CLOSED_CANDLE",
+    "shortEntryForFuturesOnly": "EMA20_CROSSUNDER_EMA60_CLOSED_CANDLE",
+    "timeExitBars": 4,
+    "parameterSearchAllowed": false
+  },
+  "proposedChronologicalSplit": {
+    "train": 0.6,
+    "validation": 0.2,
+    "oos": 0.2,
+    "existingSamplesMayBeRelabeled": false,
+    "freezeBeforeOutcomeRequired": true,
+    "holdoutIsSeparateAndLocked": true
+  },
+  "proposedPaperRisk": {
+    "initialCapitalKrwForNewAccountOnly": 1000000,
+    "marketRules": {
+      "KR_STOCK": {"requestedLeverage": 1, "maximumLeverage": 1, "directions": ["LONG"]},
+      "US_STOCK": {"requestedLeverage": 1, "maximumLeverage": 1, "directions": ["LONG"]},
+      "CRYPTO_SPOT": {"requestedLeverage": 1, "maximumLeverage": 1, "directions": ["LONG"]},
+      "CRYPTO_FUTURES": {"requestedLeverage": 7, "maximumLeverage": 7, "directions": ["LONG", "SHORT"]}
+    },
+    "maximumCapitalFractionPerEntry": 0.25,
+    "maximumConcurrentPositions": 1,
+    "stopLossPriceFraction": 0.01,
+    "maximumCapitalRiskFraction": 0.005,
+    "preserveStricterExistingLimits": true
+  },
+  "requiredActualInputs": [
+    "APPROVED_CANONICAL_STRATEGY_FILE",
+    "FROZEN_MARKET_SYMBOL_AND_DATASET_INTERVALS",
+    "POINT_IN_TIME_CLOSED_CANDLE_RECEIPTS",
+    "FROZEN_CHRONOLOGICAL_SPLIT_RECEIPTS",
+    "EIGHT_COMPONENT_COST_RECEIPTS",
+    "PUBLIC_QUANTITY_AND_FX_RULES",
+    "MODEL_AND_FEATURE_IDENTITIES",
+    "DURABLE_STORAGE_PUBLICATION_AND_READBACK"
+  ],
+  "promotionMinimumSampleAndStatisticalThresholds": null,
+  "note": "User-approved scope and numerical criteria only. Not canonical market evidence, production activation receipt, model or dataset."
+}
