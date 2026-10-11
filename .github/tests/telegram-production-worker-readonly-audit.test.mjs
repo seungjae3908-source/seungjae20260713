@@ -568,6 +568,11 @@ test('fixed read-only V3 state evidence is safe and classifies stale writer vs t
     startedAgeBand:'UNDER_5M'},stale,timer),'RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{lastResult:'FAILED'},
     stale,timer),'CYCLE_FAILED_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',
+    startedAgeBand:'OVER_60M'},stale,timer),'CYCLE_RUNNING_OVER_60M_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',
+    startedAgeBand:'UNDER_15M'},stale,timer),'CYCLE_RUNNING_WITH_STALE_SNAPSHOT');
+
   assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
     startedAgeBand:'OVER_60M'},stale,timer),'TIMER_NOT_RECENT_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{},data,timer),'HTTP_FILE_AGE_DISAGREE');
