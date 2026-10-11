@@ -62,6 +62,7 @@ export type ManualPaperFourMarketOwnerEvidence=Readonly<{
   ownerId:string;
   accountId:string;
   market:AdminPaperMarket;
+  strategyId:string;
   strategyCandidateId:string;
   strategyValidatedAtMs:number;
   strategySourceId:string;
@@ -158,7 +159,7 @@ export function evaluateManualFourMarketPaperClosedCycle(
     ?manualPaperWalletId(s.role,s.market):null;
   if(accountId!==s.accountId||o.ownerId!==s.ownerId
     ||o.accountId!==s.accountId||o.market!==s.market
-    ||o.strategyCandidateId!==s.candidateId
+    ||o.strategyCandidateId!==s.candidateId||o.strategyId!==s.strategyId
     ||!idPattern.test(o.strategySourceId)||o.walletReadbackReady!==true
     ||o.ownerRlsReady!==true||o.initialCapitalKrw!==1000000
     ||!Number.isSafeInteger(o.currentRoundNumber)||o.currentRoundNumber<1
@@ -249,11 +250,18 @@ export function evaluateManualFourMarketPaperClosedCycle(
   const entryValueKrw=qty*entryPrice*c.entryFxKrwPerQuote;
   const closeValueKrw=qty*exitPrice*c.exitFxKrwPerQuote;
   const grossKrw=s.side==='SHORT'?entryValueKrw-closeValueKrw:closeValueKrw-entryValueKrw;
+  // Decompose observed price and as-of FX arithmetic; neither effect proves
+  // that the selected signal *caused* a win or loss.
+  const direction=s.side==='SHORT'?-1:1;
+  const priceMovementKrw=direction*qty*(exitPrice-entryPrice)*c.entryFxKrwPerQuote;
+  const fxTranslationKrw=direction*qty*exitPrice*
+    (c.exitFxKrwPerQuote-c.entryFxKrwPerQuote);
   const commissionKrw=entryValueKrw*c.entryCommissionRate
     +closeValueKrw*c.exitCommissionRate;
   const costKrw=commissionKrw+c.spreadAndSlippageKrw+c.taxKrw+c.signedFundingKrw;
   const netKrw=grossKrw-costKrw;
-  if(![qty,entryValueKrw,closeValueKrw,grossKrw,costKrw,netKrw].every(Number.isFinite)
+  if(![qty,entryValueKrw,closeValueKrw,grossKrw,
+    priceMovementKrw,fxTranslationKrw,costKrw,netKrw].every(Number.isFinite)
     ||qty<=0||entryValueKrw>Number.MAX_SAFE_INTEGER
     ||Math.abs(netKrw)>Number.MAX_SAFE_INTEGER)
     return blocked(input,['PAPER_CYCLE_CALCULATION_OVERFLOW']);
@@ -292,7 +300,11 @@ export function evaluateManualFourMarketPaperClosedCycle(
     entryFxSourceId:c.entryFxSourceId,exitFxSourceId:c.exitFxSourceId,
     entryFxObservedAtMs:c.entryFxObservedAtMs,
     exitFxObservedAtMs:c.exitFxObservedAtMs,
-    grossPnlKrw:cents(grossKrw),commissionKrw:cents(commissionKrw),
+    grossPnlKrw:cents(grossKrw),
+    priceMovementKrw:cents(priceMovementKrw),
+    fxTranslationKrw:cents(fxTranslationKrw),
+    pnlAttributionBasis:'PRICE_FX_COST_ARITHMETIC_ONLY',
+    commissionKrw:cents(commissionKrw),
     slippageKrw:cents(c.spreadAndSlippageKrw),
     taxKrw:cents(c.taxKrw),fundingCostKrw:cents(c.signedFundingKrw),
     netPnlKrw:cents(netKrw),
