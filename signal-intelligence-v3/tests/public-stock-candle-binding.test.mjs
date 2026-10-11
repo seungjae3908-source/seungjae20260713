@@ -59,7 +59,7 @@ test('known KRX public-roster exclusions cannot silently become complete coverag
     execution:{requestedCount:20,startedCount:20,completedCount:20,
       providerErrorCount:0,timeoutCount:0,partial:false,
       timedOut:false,cancelled:false,duplicate:false},
-    cards:[],dataState:'complete',outcome:'VALID_ZERO_SIGNAL',
+    cards:[],failures:[],dataState:'complete',outcome:'VALID_ZERO_SIGNAL',
   };
   assert.equal(classifyPublicCycleLaneStatus(response),'VALID_NO_TRADE');
   const incomplete=enforcePublicStockRosterCoverage(response,{
