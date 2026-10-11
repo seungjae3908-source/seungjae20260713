@@ -2,7 +2,7 @@ import path from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
-const localPort = Number(process.env.RESEARCH_E2E_PORT ?? 4173);
+const localPort = Number(process.env.RESEARCH_E2E_PORT ?? process.env.APP_E2E_PORT ?? 4173);
 if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error('Invalid isolated E2E port');
 const baseURL = stagingMode
   ? process.env.STAGING_BASE_URL

@@ -17,6 +17,7 @@ import {
   type IPriceLine,
   type ISeriesApi,
   type UTCTimestamp,
+  type Time,
 } from 'lightweight-charts';
 import { Expand, LocateFixed, Maximize2, Minimize2 } from 'lucide-react';
 import {
@@ -33,9 +34,12 @@ import {
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
 import { buildChartPatternOverlay } from '@/lib/chart-pattern-overlay';
+import { retainLogicalViewportOnHistoryPrepend } from '@/lib/chart-history-viewport';
 import { analyzeChartStructure } from '@/lib/chart-structure-engine';
 import type { UnifiedChartTimeframe } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
+import { useChartCurrency } from './chart-currency-provider';
+import type { AutoDrawing } from '@/lib/chart-auto-drawing';
 
 type LineKey =
   | 'sma5'
@@ -121,6 +125,11 @@ type Props = {
   resetKey: string;
   market: AnalysisMarket;
   onCandleSelect: (time: number) => void;
+  onRequestOlderCandles?: () => void;
+  canLoadOlderCandles?: boolean;
+  autoDrawing?: AutoDrawing;
+  autoPatterns?: boolean;
+  autoWaves?: boolean;
 };
 
 function createLine(
@@ -167,8 +176,9 @@ function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi)
 }
 
 const LEGEND_NUMBER_FORMATTER = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 });
-const LEGEND_DATE_FORMATTER = new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit' });
+const LEGEND_DATE_FORMATTER = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit' });
 const LEGEND_DATETIME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
@@ -189,14 +199,15 @@ function updateCrosshairLegend(
   element: HTMLDivElement | null,
   candle: Pick<NormalizedChartCandle, 'time' | 'open' | 'high' | 'low' | 'close' | 'volume'> | null,
   timeframe: UnifiedChartTimeframe,
+  money: (value: number) => string = formatLegendNumber,
 ): void {
   if (!element || !candle) return;
   const label = [
     formatLegendTime(candle.time, timeframe),
-    `시 ${formatLegendNumber(candle.open)}`,
-    `고 ${formatLegendNumber(candle.high)}`,
-    `저 ${formatLegendNumber(candle.low)}`,
-    `종 ${formatLegendNumber(candle.close)}`,
+    `시 ${money(candle.open)}`,
+    `고 ${money(candle.high)}`,
+    `저 ${money(candle.low)}`,
+    `종 ${money(candle.close)}`,
     `거래량 ${formatLegendNumber(candle.volume)}`,
   ].join(' · ');
   if (element.dataset.candleTime === String(candle.time) && element.textContent === label) return;
@@ -294,7 +305,17 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   resetKey,
   market,
   onCandleSelect,
+  onRequestOlderCandles,
+  canLoadOlderCandles = false,
+  autoDrawing,
+  autoPatterns = false,
+  autoWaves = false,
 }: Props, ref) {
+  const { format } = useChartCurrency();
+  const moneyRef = useRef((value: number) => format(value, market));
+  moneyRef.current = (value: number) => format(value, market);
+  const drawingLinesRef = useRef<Array<ISeriesApi<'Line'>>>([]);
+  const drawingPriceLinesRef = useRef<IPriceLine[]>([]);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const crosshairLegendRef = useRef<HTMLDivElement | null>(null);
@@ -302,6 +323,16 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const latestCandleRef = useRef<NormalizedChartCandle | null>(candles.at(-1) ?? null);
   const instanceRef = useRef<ChartInstance | null>(null);
   const storedViewportRef = useRef<StoredViewport | null>(null);
+  const previouslyRenderedOldestTimeRef = useRef<number | null>(null);
+  // Historical requests are triggered by an actual pan/zoom gesture near the
+  // left edge. Refs avoid tearing down lightweight-charts on each new page.
+  const olderCallbackRef = useRef(onRequestOlderCandles);
+  olderCallbackRef.current = onRequestOlderCandles;
+  const canLoadOlderRef = useRef(canLoadOlderCandles);
+  canLoadOlderRef.current = canLoadOlderCandles;
+  const gestureToOldestRef = useRef(false);
+  const candleCountRef = useRef(candles.length);
+  candleCountRef.current = candles.length;
   const [fullscreen, setFullscreen] = useState(false);
   const [positionOverlay, setPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
   const hasChartData = candles.length >= 2;
@@ -310,6 +341,11 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     [market, resetKey, timeframe],
   );
   const latestChartPrice = candles.at(-1)?.close ?? null;
+
+  useEffect(() => {
+    gestureToOldestRef.current = false;
+    previouslyRenderedOldestTimeRef.current = null;
+  }, [resetKey]);
 
   useImperativeHandle(ref, () => ({
     applyRealtimeCandle: (candle) => {
@@ -346,7 +382,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       });
       latestCandleRef.current = candle;
       if (!crosshairActiveRef.current) {
-        updateCrosshairLegend(crosshairLegendRef.current, candle, timeframe);
+        updateCrosshairLegend(crosshairLegendRef.current, candle, timeframe, moneyRef.current);
       }
       return true;
     },
@@ -397,6 +433,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         secondsVisible: false,
         rightOffset: 6,
         barSpacing: timeframe.endsWith('m') ? 8 : 7,
+        tickMarkFormatter: (time: Time) => typeof time === 'number' ? formatLegendTime(time, timeframe) : '',
       },
       handleScroll: {
         mouseWheel: true,
@@ -409,6 +446,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         mouseWheel: true,
         pinch: true,
       },
+      localization: { locale: 'ko-KR', priceFormatter: (value: number) => moneyRef.current(value), timeFormatter: (time: Time) => typeof time === 'number' ? formatLegendTime(time, timeframe) : '' },
     });
     const candle = chart.addCandlestickSeries({
       upColor: '#ef4444',
@@ -478,15 +516,23 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
           low: candleRow.low,
           close: candleRow.close,
           volume: volumeValue,
-        }, timeframe);
+        }, timeframe, moneyRef.current);
         return;
       }
       crosshairActiveRef.current = false;
-      updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe);
+      updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, moneyRef.current);
     };
     const publishVisibleRange = () => {
       const range = exposeLogicalViewport(wrapperRef.current, chart);
       if (range) storedViewportRef.current = { resetKey, logicalRange: range };
+      // A first render / resize must not kick off hidden HTTP pagination.
+      // Only a user's pan/zoom into the genuine oldest section requests a page.
+      const nearOldest = range != null
+        && range.from <= Math.min(24, Math.max(8, Math.floor(candleCountRef.current * 0.08)));
+      if (nearOldest && gestureToOldestRef.current && canLoadOlderRef.current && olderCallbackRef.current) {
+        gestureToOldestRef.current = false;
+        olderCallbackRef.current();
+      }
     };
     chart.subscribeClick(handleClick);
     chart.subscribeCrosshairMove(handleCrosshairMove);
@@ -495,8 +541,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
 
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
-      if (!rect) return;
-      chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 390) });
+      if (!rect || rect.width < 1 || rect.height < 1) return;
+      chart.applyOptions({ width: Math.round(rect.width), height: Math.round(rect.height) });
       exposeLogicalViewport(wrapperRef.current, chart);
     });
     observer.observe(container);
@@ -509,9 +555,48 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishVisibleRange);
       instanceRef.current = null;
+      drawingLinesRef.current = [];
+      drawingPriceLinesRef.current = [];
       chart.remove();
     };
   }, [hasChartData, onCandleSelect, resetKey, timeframe]);
+
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    const priceFormat = { type: 'custom' as const, minMove: 0.00000001, formatter: (value: number) => format(value, market) };
+    instance.candle.applyOptions({ priceFormat });
+    Object.values(instance.lines).forEach(series => series.applyOptions({ priceFormat }));
+    instance.chart.applyOptions({ localization: { priceFormatter: priceFormat.formatter } });
+    updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, moneyRef.current);
+  }, [format, hasChartData, market, resetKey, timeframe]);
+
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    for (const series of drawingLinesRef.current) instance.chart.removeSeries(series);
+    drawingLinesRef.current = [];
+    removePriceLines(instance.candle, drawingPriceLinesRef.current);
+    if (!autoDrawing) return;
+    const segments = [
+      ...(autoPatterns ? autoDrawing.patterns.slice(0, 1).flatMap(pattern => pattern.segments) : []),
+      ...(autoWaves ? autoDrawing.waves.slice(0, 1).flatMap(wave => wave.segments) : []),
+    ];
+    const tail = autoDrawing.swings.slice(-2);
+    if (autoWaves && tail.length === 2 && !tail[1].confirmed) segments.push({ points: tail, role: 'forming' });
+    for (const segment of segments) {
+      const series = instance.chart.addLineSeries({ color: segment.role === 'wave' ? '#a78bfa' : '#22d3ee', lineWidth: 2,
+        lineStyle: segment.role === 'forming' ? LineStyle.Dashed : LineStyle.Solid, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+      series.setData(segment.points.filter((point, i, all) => i === 0 || point.time > all[i - 1].time).map(point => ({ time: point.time as UTCTimestamp, value: point.price })));
+      drawingLinesRef.current.push(series);
+    }
+    const pattern = autoPatterns ? autoDrawing.patterns[0] : null;
+    if (pattern && pattern.status !== 'invalidated') {
+      for (const row of [{ price: pattern.confirmation, title: '돌파 확인', color: '#22d3ee' }, { price: pattern.invalidation, title: '패턴 무효화', color: '#ef4444' }, { price: (pattern.target[0] + pattern.target[1]) / 2, title: '측정 목표', color: '#a78bfa' }]) {
+        if (row.price > 0) drawingPriceLinesRef.current.push(instance.candle.createPriceLine({ ...row, lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false }));
+      }
+    }
+  }, [autoDrawing, autoPatterns, autoWaves, hasChartData, resetKey]);
 
   useEffect(() => {
     const instance = instanceRef.current;
@@ -544,7 +629,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     if (!instance) return;
     latestCandleRef.current = candles.at(-1) ?? null;
     crosshairActiveRef.current = false;
-    updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe);
+    updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, moneyRef.current);
     const beforeUpdate = logicalViewport(instance.chart)
       ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
 
@@ -686,13 +771,22 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         });
       }
     }
+    if (autoWaves && autoDrawing?.waves[0]) for (const point of autoDrawing.waves[0].points) {
+      markers.push({ time: point.time as UTCTimestamp, position: point.kind === 'high' ? 'aboveBar' : 'belowBar', color: '#a78bfa', shape: 'circle', text: point.label });
+    }
     markers.sort((left, right) => Number(left.time) - Number(right.time));
     instance.candle.setMarkers(markers as never[]);
 
-    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const anchoredRange = retainLogicalViewportOnHistoryPrepend(
+      beforeUpdate,
+      previouslyRenderedOldestTimeRef.current,
+      candles.map((row) => row.time),
+    );
+    previouslyRenderedOldestTimeRef.current = candles[0]?.time ?? null;
+    restoreLogicalViewport(instance.chart, anchoredRange);
     const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
-  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey, timeframe]);
+  }, [analysis, autoDrawing, autoWaves, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey, timeframe]);
 
   useEffect(() => {
     const instance = instanceRef.current;
@@ -760,6 +854,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     <div className="space-y-3" data-testid="pattern-aware-chart-region">
       <div
         ref={wrapperRef}
+        onWheelCapture={() => { gestureToOldestRef.current = true; }}
+        onPointerDownCapture={() => { gestureToOldestRef.current = true; }}
         data-testid="unified-chart-wrapper"
         data-pattern-overlay-id={overlays.markers ? patternOverlay?.analysisId ?? '' : ''}
         data-position-average={positionOverlay?.position.averageEntryPrice ?? ''}
@@ -785,7 +881,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
               : 'relative mx-2 mb-1 mt-[3.75rem] sm:absolute sm:left-auto sm:right-2 sm:top-2 sm:mx-0 sm:mb-0 sm:mt-0 sm:max-w-[28rem]',
           )}
         />
-        <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
+        <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y md:h-[480px] xl:h-[540px]', fullscreen && '!h-[100dvh]')} />
       </div>
       {chartSymbol ? (
         <div className="px-3 sm:px-4">
@@ -799,9 +895,9 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
           />
         </div>
       ) : null}
-      <div className="px-4 pb-4">
+      <details className="px-4 pb-4"><summary className="cursor-pointer text-xs text-muted-foreground">기존 패턴 상세</summary>
         <ChartPatternOverlayPanel overlay={patternOverlay} market={market} visible={overlays.markers} />
-      </div>
+      </details>
     </div>
   );
 });

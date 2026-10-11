@@ -55,6 +55,11 @@ async function installMocks(context: BrowserContext) {
       return;
     }
 
+    if (url.pathname.startsWith('/api/')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, items: [], results: [] }) });
+      return;
+    }
+
     await route.continue();
   });
 }
@@ -69,24 +74,21 @@ async function visibleRange(page: Page) {
   return String(value);
 }
 
-test('AI Chart desktop pane geometry is loaded without changing mobile source layout', () => {
+test('AI Chart route scrolling keeps the below-chart dashboard accessible', () => {
   expect(indexSource).toContain('<link rel="stylesheet" href="/ai-chart-pane-scroll.css" />');
   expect(cssSource).toContain('@media (min-width: 1024px)');
-  expect(cssSource).toContain('overflow: hidden !important');
-  expect(cssSource).toContain('overflow-y: auto');
-  expect(cssSource).toContain('overscroll-behavior: contain');
-  expect(cssSource).toContain('> main.mx-auto.grid.max-w-7xl > section');
-  expect(cssSource).toContain('> main.mx-auto.grid.max-w-7xl > aside');
-  expect(cssSource).toContain('section:has([data-testid="unified-chart-canvas"]:hover)');
+  expect(cssSource).toContain('overflow-y: auto !important');
+  expect(cssSource).toContain('main[data-testid="ai-chart-workspace"]');
+  expect(cssSource).not.toContain('overflow: hidden !important');
 });
 
-test('desktop chart wheel interaction and analysis scrolling are independent while navigation stays fixed', async ({ page, context }) => {
+test('desktop chart owns zoom gestures; route scrolling reaches dashboard while navigation stays fixed', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 620 });
   await installMocks(context);
   await page.goto(chartUrl);
 
   const shell = page.locator(paneSelector).first();
-  const workspace = shell.locator(':scope > main.mx-auto.grid.max-w-7xl');
+  const workspace = shell.getByTestId('ai-chart-workspace');
   const chartPane = workspace.locator(':scope > section');
   const analysisPane = workspace.locator(':scope > aside');
   const canvas = page.getByTestId('unified-chart-canvas');
@@ -99,36 +101,32 @@ test('desktop chart wheel interaction and analysis scrolling are independent whi
   await expect(canvas).toBeVisible();
   await expect(nav).toBeVisible();
 
-  expect(await shell.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
-  expect(await workspace.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
-  expect(await chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
-  expect(await analysisPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
-  expect(await chartPane.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
-  expect(await analysisPane.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
+  expect(await shell.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
+  expect(await shell.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
 
   const navBefore = await nav.boundingBox();
   expect(navBefore).not.toBeNull();
 
   await canvas.scrollIntoViewIfNeeded();
-  const chartScrollBeforeZoom = await scrollTop(chartPane);
+  const chartScrollBeforeZoom = await scrollTop(shell);
   const rangeBefore = await visibleRange(page);
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   const x = box!.x + box!.width * 0.58;
   const y = box!.y + box!.height * 0.55;
   await page.mouse.move(x, y);
-  await expect.poll(() => chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
   await page.mouse.wheel(0, -420);
   await expect.poll(() => visibleRange(page)).not.toBe(rangeBefore);
-  expect(await scrollTop(chartPane)).toBe(chartScrollBeforeZoom);
-  expect(await scrollTop(analysisPane)).toBe(0);
+  expect(await scrollTop(shell)).toBe(chartScrollBeforeZoom);
 
   await analysisPane.hover({ position: { x: 120, y: 160 } });
-  await expect.poll(() => chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
-  const chartScrollBeforeAnalysis = await scrollTop(chartPane);
+  const chartScrollBeforeAnalysis = await scrollTop(shell);
   await page.mouse.wheel(0, 700);
-  await expect.poll(() => scrollTop(analysisPane)).toBeGreaterThan(0);
-  expect(await scrollTop(chartPane)).toBe(chartScrollBeforeAnalysis);
+  await expect.poll(() => scrollTop(shell)).toBeGreaterThan(chartScrollBeforeAnalysis);
+  const preview = page.getByTestId('chart-manual-preview');
+  await preview.scrollIntoViewIfNeeded();
+  const previewBox = await preview.boundingBox();
+  expect(previewBox!.y + previewBox!.height).toBeLessThanOrEqual(620);
 
   const navAfter = await nav.boundingBox();
   expect(navAfter).not.toBeNull();
