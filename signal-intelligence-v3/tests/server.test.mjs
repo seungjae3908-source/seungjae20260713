@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -16,7 +16,7 @@ function candidate() {
   };
 }
 
-async function startServer(stateFile, port) {
+async function startServer(stateFile, port, producerPath = '', maxStateAge = '600000') {
   const child = spawn(process.execPath, ['signal-intelligence-v3/src/server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -25,7 +25,8 @@ async function startServer(stateFile, port) {
       SIGNAL_INTELLIGENCE_HOST: '127.0.0.1',
       SIGNAL_INTELLIGENCE_PORT: String(port),
       SIGNAL_INTELLIGENCE_STATE_FILE: stateFile,
-      SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS: '600000',
+      SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS: maxStateAge,
+      SIGNAL_INTELLIGENCE_PRODUCER_PATH: producerPath,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -132,4 +133,76 @@ test('full-profile blocked source data cannot masquerade as fresh server health'
     await new Promise(resolve=>server.child.once('exit',resolve));
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+test('manual read-only public rescan inherits the same writable state directory as timer',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'signal-v3-rescan-'));
+  const state=join(dir,'latest-snapshot.json');
+  const output=join(dir,'fake-producer-result.json');
+  const producer=join(dir,'fake-public-producer.mjs');
+  await writeFile(producer,"import {writeFile} from 'node:fs/promises';\n"+
+    "await writeFile("+JSON.stringify(output)+",JSON.stringify({"+
+    "stateDir:process.env.SIGNAL_INTELLIGENCE_STATE_DIR,"+
+    "stateFile:process.env.SIGNAL_INTELLIGENCE_STATE_FILE,"+
+    "executionAuthority:process.env.SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY,"+
+    "publicOnly:process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE,"+
+    "live:process.env.LIVE_TRADING}));");
+  const port=25000+Math.floor(Math.random()*1000);
+  const instance=await startServer(state,port,producer);
+  try{
+    const response=await fetch(`http://127.0.0.1:${port}/internal/rescan`,{method:'POST'});
+    assert.equal(response.status,202);
+    assert.equal((await response.json()).publicDataRescan,true);
+    let result=null;
+    for(let i=0;i<35;i++){
+      try{result=JSON.parse(await readFile(output,'utf8'));break;}catch{
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+    }
+    assert.ok(result,'mock producer finished');
+    assert.equal(result.stateDir,dir);
+    assert.equal(result.stateFile,state);
+    assert.equal(result.executionAuthority,'NONE');
+    assert.equal(result.publicOnly,'true');
+    assert.equal(result.live,'false');
+  }finally{
+    instance.child.kill('SIGTERM');
+    await new Promise(resolve=>instance.child.once('exit',resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('future-dated snapshot and invalid max-age cannot produce a fresh signal',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'signal-v3-future-'));
+  const state=join(dir,'future-snapshot.json');
+  const port=26500+Math.floor(Math.random()*1000);
+  const base=runSignalIntelligenceV3([candidate()]);
+  await writeFile(state,JSON.stringify({
+    ...base,generatedAt:new Date(Date.now()+10*60_000).toISOString(),
+  }));
+  const instance=await startServer(state,port);
+  try{
+    const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(health.snapshotReady,true);
+    assert.equal(health.snapshotFresh,false);
+    const s=await fetch(`http://127.0.0.1:${port}/v1/signals`);
+    assert.equal(s.status,503);
+    assert.equal((await s.json()).executionAuthority,'NONE');
+  }finally{
+    instance.child.kill('SIGTERM');
+    await new Promise(resolve=>instance.child.once('exit',resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+  const invalid=spawn(process.execPath,['signal-intelligence-v3/src/server.mjs'],{
+    cwd:process.cwd(),env:{...process.env,
+      SIGNAL_INTELLIGENCE_SERVICE_SHA:SHA,
+      SIGNAL_INTELLIGENCE_HOST:'127.0.0.1',
+      SIGNAL_INTELLIGENCE_PORT:'29999',
+      SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS:'NaN',
+    },stdio:['ignore','pipe','pipe'],
+  });
+  let stderr='';invalid.stderr.on('data',v=>{stderr+=v;});
+  const result=await new Promise(resolve=>invalid.once('exit',resolve));
+  assert.notEqual(result,0);
+  assert.match(stderr,/SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID/);
 });
