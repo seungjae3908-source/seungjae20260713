@@ -2,7 +2,7 @@ import {createHash} from "node:crypto";
 import {isAbsolute,resolve} from "node:path";
 import {planFourMarketPITReplayWorkV1} from "./four-market-pit-replay-work-queue-v1.js";
 import {runFourMarketOriginalMinuteReplayV1} from "./four-market-original-minute-replay-v1.js";
-import {auditFourMarketOriginalMinuteOpportunityV1} from "./four-market-original-minute-opportunities-v1.js";
+import {auditFourMarketOriginalMinuteOpportunityDayV1} from "./four-market-original-minute-opportunities-v1.js";
 import {listArchivedResearchMinuteSessionsV1}
   from "./research-minute-archive-v1.js";
 
@@ -205,26 +205,21 @@ export async function runFourMarketOriginalMinuteBatchV1({
     let observedLabels=0,sourceEventDigests=[];
     let eventBlocked=false;
     if(inspectOpportunities){
-      for(const session of sessions){
-        try{
-          const result=await auditFourMarketOriginalMinuteOpportunityV1({
-            root,market,symbol:task.symbol,day:task.date,
-            sessionStartMs:session.startMs,
-            sessionEndMs:session.endMs,
-            sessionKind:session.kind,
-            sessionTimeZone:session.zone,
-            sourceDigestSha256:session.sourceDigestSha256??null,
-            manifest,asOfMs,side:direction,thresholdPercents,
-          });
-          if(result.status!=="SOURCE_ONLY_OBSERVED_PRICE_EVENTS"
-            ||result.executionAuthority!=="NONE"
-            ||result.profitabilityProven!==false){
-            eventBlocked=true;break;
-          }
-          observedLabels+=result.retrospectiveEventCount;
-          sourceEventDigests.push(result.sourceDigestSha256);
-        }catch{eventBlocked=true;break;}
-      }
+      try{
+        const dated=await auditFourMarketOriginalMinuteOpportunityDayV1({
+          root,market,symbol:task.symbol,day:task.date,
+          sessions,stockCalendar,manifest,asOfMs,
+          side:direction,thresholdPercents,
+        });
+        if(dated.status!=="SOURCE_ONLY_OBSERVED_PRICE_EVENTS"
+          ||dated.executionAuthority!=="NONE"
+          ||dated.profitabilityProven!==false){
+          eventBlocked=true;
+        }else{
+          observedLabels=dated.retrospectiveEventCount;
+          sourceEventDigests=[dated.sourceDigestChainSha256];
+        }
+      }catch{eventBlocked=true;}
     }
     if(eventBlocked){
       blockedSourceTasks++;
