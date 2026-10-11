@@ -31,6 +31,8 @@ test('generic Paper sync rejects forged manual four-market reserved IDs before t
     'manual-paper-admin-v1:crypto_futures',
     'manual-paper-member-v1:fake-market',
     'manual-paper-admin-v1:future-added-market',
+    'manual-paper-member-v2:us_stock',
+    'manual-paper-unknown-v1:crypto_spot',
   ]) {
     await assert.rejects(()=>repository.upsertRecord(USER_A,{
       kind:'account',id,version:1,updatedAt:new Date().toISOString(),
