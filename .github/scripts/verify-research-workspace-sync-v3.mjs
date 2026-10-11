@@ -321,6 +321,12 @@ const automaticTradingDriftReviewed=[
  // Read-only holdings UI and entry evidence, with no new database or financial scope.
  'stock-analyzer/src/components/bottom-nav.tsx',
  'stock-analyzer/e2e/app-navigation.spec.ts',
+ 'stock-analyzer/e2e/technical-workspace-professional.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/responsive-ai-chart-unification.spec.ts',
+ 'stock-analyzer/e2e/scanner-chart-broadcast.spec.ts',
+ 'stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts',
+ 'stock-analyzer/e2e/full-product-browser-flow.spec.ts',
  'api-server/src/services/trading-holdings-readonly.service.ts',
  'api-server/src/features/account-readonly/account-readonly.contract.ts',
  'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
