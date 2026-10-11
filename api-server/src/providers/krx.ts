@@ -82,8 +82,11 @@ export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
     }
     for (const p of products) {
       if (!p.short_code || !p.codeName) continue;
-      // Everything in the securities-product finder is an ETF/ETN; if the name
-      // doesn't self-identify, default to ETF rather than mislabeling as STOCK.
+      // The securities-product finder does not supply a normalized subtype.
+      // This fallback is a legacy display heuristic, NOT exchange-verified
+      // proof that an unidentified product is an ETF rather than ETN/ELW/etc.
+      // The V3 roster diagnostics expose this uncertainty and block any
+      // assertion that such an eligible-only scan covers all KRX instruments.
       let at = classifyAssetType(p.codeName, 'KR');
       if (at === 'STOCK' || at === 'ADR' || at === 'REIT') at = 'ETF';
       out.push({

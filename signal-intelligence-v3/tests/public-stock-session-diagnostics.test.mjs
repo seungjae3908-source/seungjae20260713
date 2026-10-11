@@ -56,10 +56,10 @@ test('KR public exclusions are aggregates, not proof of universal vendor support
   const summary=summarizePublicKrExclusions({
     explainedExcludedCount:4,
     explainedExclusions:[
-      {ticker:'A12345',assetType:'STOCK',name:'CONFIDENTIAL_A'},
-      {ticker:'Q12345',assetType:'ETF',name:'CONFIDENTIAL_B'},
-      {ticker:'005930',assetType:'STOCK'},
-      {ticker:'LONGPRIVATECODE',assetType:'LEVERAGED_ETN'},
+      {ticker:'A12345',assetType:'STOCK',name:'CONFIDENTIAL_A',exchange:'코스닥'},
+      {ticker:'Q12345',assetType:'ETF',name:'CONFIDENTIAL_B',exchange:'ETF·ETN'},
+      {ticker:'005930',assetType:'STOCK',exchange:'코스피'},
+      {ticker:'LONGPRIVATECODE',assetType:'LEVERAGED_ETN',exchange:'ETF·ETN'},
     ],
   });
   assert.equal(summary.alphanumericSixCodeCount,2);
@@ -70,9 +70,31 @@ test('KR public exclusions are aggregates, not proof of universal vendor support
   assert.equal(summary.fullUniverseCovered,false);
   assert.equal(summary.countEvidenceMatches,true);
   assert.equal(summary.vendorSupportVerified,false);
+  assert.equal(summary.instrumentClassificationVerified,false);
+  assert.equal(summary.securitiesProductSubtypeVerified,false);
+  assert.equal(summary.securitiesProductFinderCount,2);
+  assert.equal(summary.stockFinderCount,2);
+  assert.equal(summary.unknownFinderCount,0);
   for(const value of ['CONFIDENTIAL_A','CONFIDENTIAL_B','LONGPRIVATECODE'])
     assert.equal(JSON.stringify(summary).includes(value),false);
   assert.equal(summarizePublicKrExclusions({
     explainedExcludedCount:2837,explainedExclusions:[],
   }).countEvidenceMatches,false);
+});
+
+test('missing product lineage is UNKNOWN and cannot turn heuristic ETF into confirmed ETF',()=>{
+  const summary=summarizePublicKrExclusions({
+    explainedExcludedCount:2,
+    explainedExclusions:[
+      {ticker:'X12345',assetType:'ETF',exchange:'ETF·ETN',
+        name:'PRIVATE_ELW_POSSIBLE'},
+      {ticker:'Y12345',assetType:'ETF',exchange:null},
+    ],
+  });
+  assert.equal(summary.byAssetType.ETF,2);
+  assert.equal(summary.securitiesProductFinderCount,1);
+  assert.equal(summary.unknownFinderCount,1);
+  assert.equal(summary.instrumentClassificationVerified,false);
+  assert.equal(summary.securitiesProductSubtypeVerified,false);
+  assert.ok(!JSON.stringify(summary).includes('PRIVATE_ELW_POSSIBLE'));
 });
