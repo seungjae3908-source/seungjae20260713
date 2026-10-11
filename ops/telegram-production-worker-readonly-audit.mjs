@@ -478,6 +478,73 @@ export async function readSignalV3HealthOnce({
   });
 }
 
+
+const V3_DEFAULT_PATH='/opt/investment-signal-intelligence/state/latest-snapshot.json';
+function missingV3(status){return {status,serviceSha:null,
+  generatedAgeBand:'UNKNOWN',fileAgeBand:'UNKNOWN'};}
+/** Hardcoded public snapshot path; no arbitrary file read, no symlink follow,
+ * no raw candle/strategy/member/secret or pathname in the report.
+ */
+export function readV3SnapshotFile({fsOps=fs,nowMs=Date.now(),
+  filePath=V3_DEFAULT_PATH}={}){
+  if(filePath!==V3_DEFAULT_PATH)return missingV3('UNSAFE_PATH');
+  if(!Number.isSafeInteger(nowMs)||nowMs<=0)return missingV3('INVALID_CLOCK');
+  let fd=null;
+  try{
+    fd=fsOps.openSync(filePath,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+    const stat=fsOps.fstatSync(fd),n=Number(stat?.size);
+    if(!stat?.isFile?.())return missingV3('UNSAFE_FILE');
+    if(!Number.isSafeInteger(n)||n<=0||n>4*1024*1024)
+      return missingV3('INVALID_SIZE');
+    const buf=Buffer.alloc(n);let got=0;
+    while(got<n){
+      const bytes=fsOps.readSync(fd,buf,got,n-got,got);
+      if(!Number.isSafeInteger(bytes)||bytes<1||bytes>n-got)
+        return missingV3('UNREADABLE');
+      got+=bytes;
+    }
+    let obj;try{obj=JSON.parse(buf.toString('utf8'));}
+    catch{return missingV3('INVALID_JSON');}
+    const sha=safeSha(obj?.serviceSha);
+    if(!sha||obj?.publicDataOnly!==true
+      ||obj?.safety?.executionAuthority!=='NONE'
+      ||obj?.safety?.privateTradingApiAllowed!==false
+      ||obj?.safety?.realOrderAllowed!==false)
+      return missingV3('INVALID_ENVELOPE');
+    const generated=Date.parse(obj?.generatedAt??'');
+    const fileAge=nowMs-Number(stat.mtimeMs);
+    const genAge=nowMs-generated;
+    if(!Number.isFinite(generated)||!Number.isFinite(fileAge))
+      return missingV3('INVALID_TIMESTAMP');
+    if(genAge< -5000||fileAge< -5000)return missingV3('FUTURE_TIMESTAMP');
+    return {status:genAge>900000?'STALE_PUBLICATION':'RECENT_PUBLICATION',
+      serviceSha:sha,generatedAgeBand:safeSignalAgeBand(Math.max(0,genAge)),
+      fileAgeBand:safeSignalAgeBand(Math.max(0,fileAge))};
+  }catch(err){return missingV3(err?.code==='ENOENT'?'ABSENT':'UNREADABLE');}
+  finally{if(fd!==null)try{fsOps.closeSync(fd);}catch{/* no output */}}
+}
+export function v3StalenessHypothesis(health,cycle,file,units){
+  if(health?.status==='NOT_CHECKED')return 'NOT_CHECKED';
+  if(file?.status==='ABSENT')return 'DEFAULT_FILE_ABSENT';
+  if(!['RECENT_PUBLICATION','STALE_PUBLICATION'].includes(file?.status))
+    return 'FILE_NOT_VERIFIABLE';
+  if(health?.serviceSha&&health.serviceSha!==file.serviceSha)
+    return 'SHA_OR_READ_PATH_MISMATCH_SUSPECT';
+  if(health?.status==='READY')
+    return file.status==='RECENT_PUBLICATION'?'RECENT_HTTP_AND_FILE':'HTTP_FILE_AGE_DISAGREE';
+  if(health?.status==='SNAPSHOT_STALE'){
+    if(file.status==='RECENT_PUBLICATION')return 'HTTP_FILE_AGE_DISAGREE';
+    if(cycle?.lastResult==='FAILED')return 'CYCLE_FAILED_SUSPECT';
+    if(units?.timer!=='ACTIVE'||cycle?.startedAgeBand==='OVER_60M')
+      return 'TIMER_NOT_RECENT_SUSPECT';
+    if(cycle?.lastResult==='SUCCEEDED'
+      &&['UNDER_5M','UNDER_15M'].includes(cycle.startedAgeBand))
+      return 'RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT';
+    return 'STALE_PUBLICATION_UNEXPLAINED';
+  }
+  return 'UNRESOLVED';
+}
+
 /**
  * PM2 opportunity through today's Korea 07:50–08:10 briefing window.
  * This cannot establish worker execution or any Telegram delivery.
@@ -521,10 +588,11 @@ export async function observeProductionTelegram({
   signalHealth = readSignalV3HealthOnce,
   signalUnits = readSignalV3Units,
   signalCycle = readSignalV3CycleResult,
+  signalFile = readV3SnapshotFile,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v5',
+    schemaVersion: 'telegram-production-worker-readonly-v6',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
@@ -541,6 +609,8 @@ export async function observeProductionTelegram({
     signalHealth: emptySignalHealth('NOT_CHECKED'),
     signalUnits: { server: 'NOT_CHECKED', timer: 'NOT_CHECKED', cycle: 'NOT_CHECKED' },
     signalCycle: { unitState:'NOT_CHECKED',lastResult:'NOT_OBSERVED',exitCode:null,hasStarted:false,startedAgeBand:'UNKNOWN' },
+    signalFile: missingV3('NOT_CHECKED'),
+    staleCause: 'NOT_CHECKED',
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -622,6 +692,9 @@ export async function observeProductionTelegram({
     receipt.signalHealth = await signalHealth({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     receipt.signalUnits = signalUnits();
     receipt.signalCycle = signalCycle();
+    receipt.signalFile = signalFile({nowMs});
+    receipt.staleCause = v3StalenessHypothesis(receipt.signalHealth,
+      receipt.signalCycle,receipt.signalFile,receipt.signalUnits);
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
       || receipt.signalSubscriber.recordCount > 0 ? 'PERSISTED_LEDGER_ONLY' : 'NO_DELIVERY_PROOF';
