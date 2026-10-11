@@ -107,6 +107,29 @@ test('market and signal ledgers emit only fixed labels/counts and never IDs',()=
   assert.ok(!JSON.stringify(signal).includes('PRIVATE_MEMBER_SIGNAL_IDENTIFIER'));
 });
 
+test('unconfirmed Bot API POST is never a SENT receipt in protected read-only diagnostics',()=>{
+  for (const type of ['market','signal']){
+    const key=type==='market'?marketKey:signalKey;
+    const input=JSON.stringify({version:1,delivered:{},
+      unconfirmed:{[key]:new Date(now-30_000).toISOString()}});
+    const receipt=inspectDeliveryStateText(input,type,now);
+    assert.equal(receipt.status,'UNCONFIRMED_ONLY');
+    assert.equal(receipt.recordCount,0);
+    assert.equal(receipt.unconfirmedCount,1);
+    assert.equal(receipt.unconfirmedRecent24hCount,1);
+    assert.equal(receipt.lastEvidenceAt,null);
+    assert.equal(receipt.lastUnconfirmedAt,new Date(now-30_000).toISOString());
+    assert.equal(JSON.stringify(receipt).includes(key),false);
+    const future=JSON.stringify({version:1,delivered:{},
+      unconfirmed:{[key]:new Date(now+60_000).toISOString()}});
+    assert.equal(inspectDeliveryStateText(future,type,now).status,'INVALID');
+  }
+  const yaml=fs.readFileSync('.github/workflows/telegram-production-worker-readonly-audit.yml','utf8');
+  assert.ok(yaml.includes("'UNCONFIRMED_ONLY'"));
+  assert.ok(yaml.includes("'CYCLE_RUNNING_OVER_60M_SUSPECT'"));
+  assert.ok(yaml.includes('uncertain outcomes (NOT SENT)'));
+});
+
 test('ledger parser fails closed on empty/malformed/future and bounded entries',()=>{
   assert.equal(inspectDeliveryStateText('{bad','market',now).status,'INVALID');
   assert.equal(inspectDeliveryStateText('{"version":2,"delivered":{}}','market',now).status,'INVALID');
