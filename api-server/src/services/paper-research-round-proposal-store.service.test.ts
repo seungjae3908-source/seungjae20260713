@@ -149,6 +149,8 @@ test('same-round idempotency requires byte-equivalent immutable economic evidenc
     {previous_settlement_digest_sha256:'b'.repeat(64)},
     {ending_cause:'BELOW_VERIFIED_MINIMUM'},
     {proposed_seed_krw:2000000},{previous_operating_capital_krw:1},
+    {previous_operating_capital_krw:null},{previous_operating_capital_krw:''},
+    {previous_locked_reserve_krw:null},
     {previous_locked_reserve_krw:0},{minimum_entry_krw:1000},
     {observed_at:'2026-10-11T04:00:00.000Z'},{status:'SETTLED'},
     {execution_authority:'LIVE'},{financial_mutation_allowed:true},
