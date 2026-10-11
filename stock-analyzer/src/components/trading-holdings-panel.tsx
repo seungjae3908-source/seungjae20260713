@@ -179,7 +179,8 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
               onClick={() => setSelectedId(null)}><X className="h-4 w-4" /></button>
           </div>
           <dl className="grid grid-cols-2 gap-3 text-sm">
-            <Metric label={selected.entryEvidence ? '진입가 · 실제 체결' : '평균매수가'} value={price(selected.entryEvidence?.entryPrice ?? selected.averageEntryPrice, selected.currency)} />
+            <Metric label={selected.entryEvidence ? '진입가 · 실제 체결' : '평균매수가'} value={price(selected.entryEvidence
+              ? selected.entryEvidence.entryPrice : selected.averageEntryPrice, selected.currency)} />
             <Metric label="현재가" value={price(selected.currentPrice, selected.currency)} />
             <Metric label="목표가 · 저장된 계획" value={selected.entryEvidence?.targetPrices.length
               ? selected.entryEvidence.targetPrices.map(value => price(value, selected.currency)).join(' / ') : '미설정'} />
