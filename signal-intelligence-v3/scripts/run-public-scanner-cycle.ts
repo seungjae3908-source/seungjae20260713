@@ -30,6 +30,7 @@ import {
   summarizePublicKrExclusions,
 } from '../src/public-stock-session-diagnostics.mjs';
 import { evaluateScannerDataQuality } from '../../api-server/src/services/scanner-data-quality.service';
+import { recoverV3CompletedPublicBars } from '../src/public-stock-complete-bars-recovery.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -252,16 +253,56 @@ async function withStockPublicOnly(lane, operation) {
   const sessionGapAudit = createPublicStockSessionGapAudit(lane.market, lane.timeframe);
   const qualityWindow = lane.strategyMode === 'scalping' ? 240
     : lane.strategyMode === 'swing' ? 320 : 400;
+  // Verified V3-only public lower-bar repair never replaces native bars,
+  // fabricates no-trade candles or affects normal member/Paper scanners.
+  const gapRecovery = {attempted:0,inserted:0,unchanged:0,
+    sourceFailed:0,conflicting:0,providerRequestsAdded:0};
   // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
   // getCandles. Bind BOTH methods to the same isolated Yahoo-only fetcher
   // so the real scanner cannot bypass this public source via app fallbacks.
   const restoreCandles = bindPublicStockCandleSource(marketData, async (ticker, timeframe = '1D') => {
     const entry = entryByTicker.get(String(ticker).toUpperCase());
     const candidates = yahooProviderCandidates(lane, ticker, entry);
-    const candles = await withProviderFallback(candidates,
-      (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-    // Reuse the very same public candles. Count only bounded quality codes,
-    // never symbols, candle payloads, exception text or extra HTTP requests.
+    let successfulSymbol = null;
+    const native = await withProviderFallback(candidates, async providerSymbol => {
+      const rows = await yahoo.getCandles(providerSymbol, timeframe);
+      if (Array.isArray(rows) && rows.length>0) successfulSymbol = providerSymbol;
+      return rows;
+    });
+    let candles = native;
+    // Only a BLOCKING missing-candle defect triggers one bounded public
+    // shorter-interval Yahoo query. Verified complete lower bars may fill
+    // gaps; failures leave the original source untouched and still blocked.
+    if (lane.market === 'US_STOCK' && String(timeframe) === lane.timeframe
+      && (timeframe === '15m' || timeframe === '60m')
+      && successfulSymbol) {
+      let missing=false;
+      try {
+        const preliminary=evaluateScannerDataQuality({
+          symbol:'PUBLIC_SOURCE_DIAGNOSTIC',timeframe,
+          candles:native.slice(-qualityWindow),now:Date.now(),
+          sessionAware:true,
+        });
+        missing=preliminary.issues.some(issue=>
+          issue.code==='MISSING_CANDLE'&&issue.severity==='blocking');
+      } catch { /* invalid native data must remain blocked */ }
+      if(missing){
+        gapRecovery.attempted+=1;
+        gapRecovery.providerRequestsAdded+=1;
+        try {
+          const lowerTimeframe=timeframe==='15m'?'5m':'15m';
+          const lower=await yahoo.getCandles(successfulSymbol,lowerTimeframe);
+          const result=recoverV3CompletedPublicBars(native,lower,{
+            market:lane.market,timeframe,nowMs:Date.now(),
+          });
+          if(result.status==='CONFLICTING_PROVIDER_BARS')gapRecovery.conflicting+=1;
+          else if(result.added>0){
+            candles=result.candles;gapRecovery.inserted+=result.added;
+          }else gapRecovery.unchanged+=1;
+        }catch{gapRecovery.sourceFailed+=1;}
+      }
+    }
+    // One final aggregate observation of the actual series passed to Scanner.
     if (String(timeframe) === lane.timeframe) {
       sessionGapAudit.observe(candles.slice(-qualityWindow));
       try {
@@ -302,6 +343,10 @@ async function withStockPublicOnly(lane, operation) {
       ...withRosterEvidence,
       publicStockQualityDiagnostic: qualityCounter.snapshot(),
       publicStockSessionDiagnostic: sessionGapAudit.snapshot(),
+      publicGapRecoveryDiagnostic: Object.freeze({
+        ...gapRecovery, providerName:'yahoo-public',scope:'V3_US_REGULAR_COMPLETE_LOWER_ONLY',
+        sourceSymbolsIncluded:false,fullRosterPassProven:false,economicAuthority:'NONE',
+      }),
       publicKrExclusionDiagnostic: lane.market === 'KR_STOCK'
         ? summarizePublicKrExclusions(targetUniverse) : null,
     };
@@ -480,6 +525,7 @@ async function main() {
         // Diagnostic-only: distinguish regular hours vs other gap candidates.
         // This does NOT waive MISSING_CANDLE or create a verified signal.
         publicStockSessionDiagnostic: response.publicStockSessionDiagnostic ?? null,
+        publicGapRecoveryDiagnostic: response.publicGapRecoveryDiagnostic ?? null,
         publicKrExclusionDiagnostic: response.publicKrExclusionDiagnostic ?? null,
         // The prior futures 60m SEARCH_FAILURE reported 0 provider errors
         // while hiding incomplete started/completed work. Preserve the exact
