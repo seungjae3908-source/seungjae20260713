@@ -176,7 +176,10 @@ const cycleEvidence:ManualPaperFourMarketCycleInput={
     entryCommissionRate:0.001,exitCommissionRate:0.001,
     spreadAndSlippageKrw:100,taxKrw:0,signedFundingKrw:0,
     entryFxKrwPerQuote:1400,exitFxKrwPerQuote:1400,
-    fxSourceId:'server-fx-1',fxObservedAtMs:NOW.getTime()-15_000,
+    entryFxSourceId:'server-fx-entry-1',
+    entryFxObservedAtMs:NOW.getTime()-40_000,
+    exitFxSourceId:'server-fx-exit-2',
+    exitFxObservedAtMs:NOW.getTime()-20_000,
   },nowMs:NOW.getTime(),
 };
 test('manual research cycle preview defaults off and cannot mint Paper even with crafted client economics',async()=>{
