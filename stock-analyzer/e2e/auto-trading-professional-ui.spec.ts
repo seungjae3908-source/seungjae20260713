@@ -6,7 +6,7 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('trading shell separates Auto and Paper routes without duplicate in-page mode tabs', () => {
+test('technical trading has one menu entry and shared live/paper shell with separate execution scopes', () => {
   const page = source('src/pages/auto-trading.tsx');
   const paper = source('src/pages/paper-trading.tsx');
   const workspace = source('src/pages/technical-workspace.tsx');
@@ -15,13 +15,25 @@ test('trading shell separates Auto and Paper routes without duplicate in-page mo
   expect(page).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
   expect(page).not.toContain('data-testid="trading-mode-tabs"');
   expect(page).toContain('data-testid="trading-market-select"');
-  expect(paper).toContain('<AutoTradingPage initialMode="paper" />');
-  expect(workspace).toContain("{ value: 'trade', label: '자동매매' }");
-  expect(workspace).toContain("trade: '자동매매'");
-  expect(navigation).toContain("label: '자동매매'");
-  expect(navigation).toContain("label: '모의매매'");
-  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(1);
+  expect(paper).toContain('initialMode="paper"');
+  expect(paper).toContain("get('kind') === 'manual'");
+  expect(workspace).toContain("{ value: 'trade', label: '기술매매' }");
+  expect(workspace).toContain("trade: '기술매매'");
+  expect(navigation).toContain("label: '기술매매'");
+  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(0);
+  expect(page).toContain('data-testid="technical-trading-modes"');
+  expect(page).toContain('data-testid="trading-paper-modes"');
+  expect(page).toContain('<TradingHoldingsPanel');
+  expect(page).not.toContain('data-testid="trading-workspace-safety-note"');
   expect(navigation).not.toContain("label: '승인형 주문'");
+});
+
+test('LIVE status fetching is not accidentally restricted to Paper mode', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const statusEffect = page.slice(page.indexOf('useEffect(() => {', page.indexOf('setSection(next.section)')),
+    page.indexOf("setAutoPaperPreflight(null)"));
+  expect(statusEffect).toContain("authorizedFetch('/api/trade-automation/status'");
+  expect(statusEffect).not.toContain("if (mode !== 'paper') return");
 });
 
 test('trading shell keeps professional typography and standing-authorization safety contract', () => {
@@ -43,7 +55,8 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).not.toContain('font-black');
   expect(page).not.toContain('TradeApprovalQueue');
   expect(page).not.toContain('approvalFixture');
-  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />');
+  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot}');
+  expect(page).toContain('onStatusRead={receiveSettingsStatus}');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
 
