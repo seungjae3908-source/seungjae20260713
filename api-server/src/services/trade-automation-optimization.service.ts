@@ -63,23 +63,25 @@ export function evaluateTradingOptimization(
   plan: TradingPlanInput,
   policy: TradingPolicy,
   now = Date.now(),
+  options: { manualUserOrder?: boolean } = {},
 ): TradingOptimizationAssessment {
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
-  const formulaAiException = plan.accountMode === 'live'
+  const manualUserOrder = options.manualUserOrder === true;
+  const formulaAiException = plan.accountMode === 'live' && !manualUserOrder
     ? evaluateFormulaAiLiveException(plan, now)
     : null;
   const paperFormulaException = plan.accountMode === 'paper'
     && policy.mode === 'automatic' && policy.pilotStage === 'formula-ai-exception'
     ? evaluateFormulaAiPaperException(plan, now) : null;
-  const profitabilityAttestation = formulaAiException?.allowed
+  const profitabilityAttestation = manualUserOrder || formulaAiException?.allowed
     ? null
     : attestLiveTradingProfitability(plan, undefined, {
       now,
       maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
     });
-  const economics = plan.accountMode === 'live'
+  const economics = manualUserOrder ? null : plan.accountMode === 'live'
     ? formulaAiException?.allowed
       ? plan.economics
       : profitabilityAttestation?.serverEconomics ?? null
@@ -92,6 +94,7 @@ export function evaluateTradingOptimization(
   if (paperFormulaException?.allowed) {
     warnings.push('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
   }
+  if (manualUserOrder) warnings.push('USER_MANUAL_ORDER_NO_STRATEGY_PROFITABILITY_CLAIM');
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
     add(blockCodes, 'ENTRY_ZONE_INVALID');
@@ -116,7 +119,7 @@ export function evaluateTradingOptimization(
     && policy.mode === 'automatic' && policy.pilotStage !== 'formula-ai-exception'
     && plan.economics == null;
   const historicalEconomicsBypassed =
-    (plan.accountMode === 'live' && formulaAiException?.allowed === true)
+    manualUserOrder || (plan.accountMode === 'live' && formulaAiException?.allowed === true)
     || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true)
     || exploratoryPaperOnly;
   if (exploratoryPaperOnly) {

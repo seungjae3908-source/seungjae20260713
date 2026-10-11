@@ -1,5 +1,6 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { hasServerManualOrderAuthority } from './manual-order-authority.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
@@ -286,6 +287,7 @@ export class TradePreSubmissionRiskService {
         || process.env.TRADING_EMERGENCY_STOP === 'true'
         || await this.repository.getGlobalEmergencyStop(),
       serverLiveEnabled: input.serverLiveEnabled,
+      manualUserOrder: hasServerManualOrderAuthority(currentPlan),
     });
     blockCodes.push(...baseDecision.blockCodes);
     warnings.push(...baseDecision.warnings);

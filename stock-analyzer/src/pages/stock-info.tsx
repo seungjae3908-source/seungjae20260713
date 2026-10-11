@@ -219,6 +219,7 @@ export default function StockInfoPage() {
 		params.set('asset', 'stock');
 		params.set('market', market);
 		params.set('ticker', ticker);
+		params.set('tab', 'analysis');
 		params.delete('view');
 		navigate(`/stock-info/analysis?${params.toString()}`);
 	}

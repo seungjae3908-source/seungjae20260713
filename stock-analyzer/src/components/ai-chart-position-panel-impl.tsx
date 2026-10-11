@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useChartCurrency } from './chart-currency-provider';
 import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeApprovalQueue } from '@/components/trade-approval-queue';
@@ -98,6 +99,8 @@ type Props = {
   symbol: string;
   chartPrice: number | null;
   pricePlan?: AnalysisPricePlan;
+  initialCockpitOpen?: boolean;
+  initialCockpitTab?: CockpitTab;
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
 
@@ -721,7 +724,15 @@ function pnlSourceLabel(source: 'POSITION_QUANTITY' | 'PROVIDER_IMPLIED' | null)
   return '금액 근거 없음';
 }
 
-export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
+export function AiChartPositionPanel({
+  selection, market, symbol, chartPrice, pricePlan,
+  initialCockpitOpen = false, initialCockpitTab = 'entry', onOverlayChange,
+}: Props) {
+  const { format: formatPrice } = useChartCurrency();
+  const formatPnl = (value: number | null | undefined, sourceMarket: AnalysisMarket) => {
+    const formatted = formatPrice(value, sourceMarket);
+    return value != null && Number.isFinite(value) && value > 0 && !formatted.endsWith('미제공') ? `+${formatted}` : formatted;
+  };
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
   const [linesVisible, setLinesVisible] = useState(true);
@@ -730,8 +741,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [entryFeeText, setEntryFeeText] = useState('');
   const [exitFeeText, setExitFeeText] = useState('');
   const [targetPercents, setTargetPercents] = useState<Record<number, string>>({});
-  const [cockpitOpen, setCockpitOpen] = useState(false);
-  const [cockpitTab, setCockpitTab] = useState<CockpitTab>('entry');
+  const [cockpitOpen, setCockpitOpen] = useState(initialCockpitOpen);
+  const [cockpitTab, setCockpitTab] = useState<CockpitTab>(initialCockpitTab);
   const [orderDashboard, setOrderDashboard] = useState<OrderDashboardState>({ kind: 'idle' });
   const [orderMessage, setOrderMessage] = useState('');
   const [orderActionId, setOrderActionId] = useState<string | null>(null);
@@ -810,8 +821,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setEntryFeeText('');
     setExitFeeText('');
     setTargetPercents({});
-    setCockpitOpen(false);
-    setCockpitTab('entry');
+    setCockpitOpen(initialCockpitOpen);
+    setCockpitTab(initialCockpitTab);
     setOrderDashboard({ kind: 'idle' });
     setOrderMessage('');
     setOrderActionId(null);
@@ -827,7 +838,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
-  }, [market, onOverlayChange, symbol]);
+  }, [initialCockpitOpen, initialCockpitTab, market, onOverlayChange, symbol]);
 
   useEffect(() => {
     return () => {
@@ -2223,7 +2234,23 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                 ) : null}
 
                 {cockpitTab === 'exit' ? (
-                  position ? (
+                  state.kind !== 'ready' ? (
+                    <section
+                      role="status"
+                      data-testid="ai-chart-exit-dashboard-unchecked"
+                      data-account-state={state.kind}
+                      className="rounded-2xl border border-warning/30 bg-warning/5 p-3"
+                    >
+                      <p className="text-[10px] font-black">부분청산 · 전량종료</p>
+                      <p className="mt-1 text-[9px] font-bold leading-4 text-muted-foreground">
+                        {state.kind === 'idle'
+                          ? '아직 실계좌 보유상태를 조회하지 않았습니다. 내 포지션 확인 후 종료 가능 여부를 판단합니다.'
+                          : state.kind === 'loading'
+                            ? '실계좌 보유상태를 확인 중입니다. 확인되기 전에는 종료계획을 만들지 않습니다.'
+                            : '실계좌 보유상태를 확인할 수 없습니다. 보유 없음으로 간주하지 않으며 종료계획을 차단합니다.'}
+                      </p>
+                    </section>
+                  ) : position ? (
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard">
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -2681,6 +2708,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             </div>
           )}
 
+          <details className="rounded-xl border border-card-border p-3"><summary className="cursor-pointer text-xs font-bold text-muted-foreground">손익 시나리오·분할 계산</summary><div className="mt-3 space-y-3">
           {guidance && (
             <div data-testid="ai-chart-position-guidance" className="rounded-xl border border-card-border bg-secondary/35 p-3">
               <div className="flex items-center gap-1.5">
@@ -2834,6 +2862,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
             {state.snapshot.stale ? ' · 오래된 마지막 정상값' : ' · 최신 조회'}
             {' · '}누락된 가격·수량·수수료 근거는 0으로 바꾸지 않고 미제공으로 유지합니다.
           </p>
+          </div></details>
         </div>
       )}
     </section>

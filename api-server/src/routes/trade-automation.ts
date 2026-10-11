@@ -53,6 +53,9 @@ import { FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION } from '../services/formula-ai
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
+import { parseChartManualOrder } from '../services/chart-manual-order.service';
+import { loadChartPublicFxQuotes } from '../services/public-fx.service';
+import { getFuturesContractRules } from '../services/futures-contract-rules.service';
 import type {
   ExchangeConnection,
   TradingAssetClass,
@@ -1805,6 +1808,53 @@ router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) =
       providerMutationRequests: 0,
       existingProviderOrdersCanceled: false,
     });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/chart/manual-plan', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!requireLiveOrderCapability(req, res)) return;
+  try {
+    if (Buffer.byteLength(JSON.stringify(req.body ?? {})) > 4096) throw new Error('MANUAL_ORDER_REQUEST_TOO_LARGE');
+    // Reject unsupported market orders before private reads or plan mutations.
+    if (req.body?.orderType === 'market') throw new Error('MANUAL_ORDER_MARKET_VERIFICATION_REQUIRED');
+    const selectedMarket = String(req.body?.market ?? '').toUpperCase();
+    if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(selectedMarket)) throw new Error('MANUAL_ORDER_MARKET_INVALID');
+    const currency = selectedMarket === 'BITGET' ? 'USDT' : selectedMarket === 'US' ? 'USD' : 'KRW';
+    let fx = 1;
+    let conversion: { currency: string; krwRate: number; source: string; asOf: string } | null = null;
+    if (currency !== 'KRW') {
+      const quote = (await loadChartPublicFxQuotes()).quotes.find(row => row.currency === currency);
+      const age = Date.now() - Date.parse(quote?.asOf ?? '');
+      if (!quote || !Number.isFinite(age) || age < -5000 || age > 600_000 || !Number.isFinite(quote.krwRate) || quote.krwRate <= 0) throw new Error('MANUAL_ORDER_FRESH_FX_REQUIRED');
+      fx = quote.krwRate;
+      conversion = quote;
+    }
+    let quantityStep: number | undefined;
+    if (selectedMarket === 'BITGET' && req.body?.sizeMode === 'amount') {
+      const rules = await getFuturesContractRules(req.body?.symbol);
+      const rulesAge = Date.now() - Date.parse(rules.updatedAt);
+      if (rules.status !== 'live' || !Number.isFinite(rulesAge) || rulesAge < -5000 || rulesAge > 600_000 || !rules.quantityStep) throw new Error('MANUAL_ORDER_QUANTITY_RULES_REQUIRED');
+      quantityStep = rules.quantityStep;
+    }
+    const input = parseChartManualOrder(req.body, maximumBitgetLeverage(req), { krwPerNativeCurrency: fx, quantityStep });
+    const { userId, repository, automation, execution } = context(req);
+    const [policy, orders, globalStop] = await Promise.all([repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop()]);
+    if (policy.emergencyStopped || globalStop || process.env.TRADING_EMERGENCY_STOP === 'true') throw new Error('TRADING_EMERGENCY_STOP');
+    if (input.exchange === 'bitget' && Number(input.leverage) > policy.bitgetLeverage) throw new Error('MANUAL_ORDER_LEVERAGE_POLICY_LIMIT');
+    input.estimatedKrw = input.quantity! * input.limitPrice! * fx;
+    const preview = await execution.previewLiveRiskSnapshot(userId, input, { fxKrwPerQuoteCurrency: fx });
+    if (preview.orderRequests !== 0 || preview.cancelRequests !== 0 || preview.amendRequests !== 0 || preview.transferRequests !== 0 || preview.withdrawalRequests !== 0) throw new Error('MANUAL_ORDER_PREVIEW_CONTRACT_INVALID');
+    const today = new Date().toISOString().slice(0, 10);
+    input.marketSnapshot = { ...preview.snapshot, dailyOrderCount: Math.max(preview.snapshot.dailyOrderCount, orders.filter(order => order.createdAt.slice(0, 10) === today).length),
+      // This is a validated human order intention, not a manufactured AI signal.
+      signalState: 'READY_FOR_APPROVAL', signalObservedAt: preview.snapshot.observedAt };
+    input.estimatedSlippagePercent = preview.snapshot.estimatedSlippagePercent;
+    input.averageSpreadPercent = preview.snapshot.spreadPercent;
+    const result = await automation.createPlan(userId, input, policy, false, { manualApprovalOnly: true });
+    if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
+    if (result.plan.executionMode !== 'manual' || result.plan.state !== 'APPROVAL_PENDING') throw new Error('MANUAL_ORDER_ALREADY_PROCESSED');
+    return res.json({ ok: true, plan: result.plan, conversion, inputCurrency: req.body?.inputCurrency ?? currency, duplicate: result.duplicate, orderSubmitted: false, automaticExecutionTriggered: false, requiresExplicitApproval: true });
   } catch (error) { return errorResponse(res, error); }
 });
 
