@@ -173,3 +173,59 @@ test("unsafe permissions and symlinked report files are never read",async()=>{
       /NATIVE_DIAGNOSTIC_PRIVATE_ROOT_REQUIRED/);
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
+
+test("paired PERIOD + SWEEP report across four venues uses both read-only receipts without any Paper permission",async()=>{
+  for(const marketName of ["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]){
+    const folder=root();
+    try{
+      const symbols={KR_STOCK:"005930",US_STOCK:"AAPL",
+        CRYPTO_SPOT:"KRW-BTC",CRYPTO_FUTURES:"BTCUSDT"};
+      const p={...period(),market:marketName,symbol:symbols[marketName],
+        sourceSessionIndexDigestSha256:"a".repeat(64)};
+      const all={...sweep(),market:marketName,pageChainSha256:"b".repeat(64)};
+      const first=join(folder,marketName+".json");
+      const second=join(folder,marketName+".SWEEP.json");
+      writeFileSync(first,JSON.stringify(p),{mode:0o600});
+      writeFileSync(second,JSON.stringify({...all,apiKey:"PAIR_PRIVATE_TOKEN",
+        rawMinuteCandles:[1]}),{mode:0o600});
+      const out=await read({root:folder,market:marketName});
+      assert.equal(out.available,true);
+      assert.equal(out.report.kind,"PERIOD");
+      assert.equal(out.supplementarySweepReport.kind,"SWEEP");
+      assert.equal(out.supplementarySweepWindowMatches,true);
+      const review=out.report.canonicalPaperResearchReview;
+      assert.equal(review.status,"RESEARCH_HOLD");
+      assert.equal(review.blockers.includes(
+        "HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED"),false);
+      assert.equal(review.blockers.includes(
+        "HISTORIC_PIT_SWEEP_LINEAGE_OR_COMPLETENESS_UNVERIFIED"),false);
+      assert.equal(review.blockers.includes(
+        "ORIGINAL_ONE_MINUTE_MODEL_LINEAGE_OR_COUNTER_UNVERIFIED"),false);
+      assert.ok(review.blockers.includes(
+        "FROZEN_STRATEGY_AND_INDEPENDENT_OOS_UNVERIFIED"));
+      assert.equal(review.paperAdmissionAllowed,false);
+      assert.equal(out.profitabilityProven,false);
+      assert.equal(out.actualFillCount,null);
+      assert.doesNotMatch(JSON.stringify(out),/PAIR_PRIVATE_TOKEN|rawMinuteCandles/);
+      writeFileSync(second,JSON.stringify({...all,selectedStartDate:"2025-09-01"}),{mode:0o600});
+      const mismatched=await read({root:folder,market:marketName});
+      assert.equal(mismatched.supplementarySweepWindowMatches,false);
+      assert.ok(mismatched.report.canonicalPaperResearchReview.blockers
+        .includes("PERIOD_SWEEP_SELECTED_DATE_WINDOW_MISMATCH"));
+      chmodSync(second,0o644);
+      await assert.rejects(()=>read({root:folder,market:marketName}),
+        /NATIVE_DIAGNOSTIC_PRIVATE_FILE_INVALID/);
+    }finally{rmSync(folder,{recursive:true,force:true});}
+  }
+});
+test("a fixed SWEEP sidecar alone shows historical price-label evidence but never market recall",async()=>{
+  const folder=root();
+  try{
+    save(folder,sweep(),market+".SWEEP.json");
+    const out=await read({root:folder,market});
+    assert.equal(out.report.kind,"SWEEP");
+    assert.equal(out.supplementarySweepReport,null);
+    assert.equal(out.paperAdmissionAllowed,false);
+    assert.equal(out.actualMarketWideOpportunityCount,null);
+  }finally{rmSync(folder,{recursive:true,force:true});}
+});

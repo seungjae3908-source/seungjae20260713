@@ -157,10 +157,12 @@ test("the same private publisher can migrate an explicitly approved legacy direc
     const pub=await publish({sourceResultPath:file,
       reportRoot:env.reportRoot,market,
       allowLocalReportPublish:true,allowReplaceExisting:true});
-    assert.equal(pub.reportReplaced,true);
+    assert.equal(pub.reportReplaced,false);
     const got=await read({root:env.reportRoot,market});
-    assert.equal(got.report.kind,"SWEEP");
-    assert.equal(got.report.sourceOnlyObservedPriceEventLabels,123);
+    assert.equal(got.report.kind,"PERIOD");
+    assert.equal(got.supplementarySweepReport.kind,"SWEEP");
+    assert.equal(got.supplementarySweepWindowMatches,true);
+    assert.equal(got.supplementarySweepReport.sourceOnlyObservedPriceEventLabels,123);
     assert.equal(got.actualMarketWideOpportunityCount,null);
     assert.equal(got.profitabilityProven,false);
   }finally{rmSync(env.base,{recursive:true,force:true});}
@@ -314,5 +316,35 @@ test("historical PERIOD and SWEEP status schemas cannot be cross-labeled or clai
       }),/NATIVE_DIAGNOSTIC_.*MISMATCH|RESEARCH_PUBLISH_ORIGINAL_LINEAGE_INVALID/);
       assert.equal(existsSync(join(env.reportRoot,market+".json")),false);
     }
+  }finally{rmSync(env.base,{recursive:true,force:true});}
+});
+
+test("publisher keeps both period and sweep in 0600 private files and calls read-only canonical review",async()=>{
+  const env=setup(),market="US_STOCK";
+  try{
+    const p=source(env.privateDir,{...period(market),
+      sourceSessionIndexDigestSha256:"c".repeat(64)},"pair-period.json");
+    const sw=source(env.privateDir,{...sweep(market),
+      pageChainSha256:"d".repeat(64),apiKey:"PAIR_SECRET_PRIVATE"},"pair-sweep.json");
+    assert.equal((await publish({sourceResultPath:p,
+      reportRoot:env.reportRoot,market,allowLocalReportPublish:true})).published,true);
+    const published=await publish({sourceResultPath:sw,
+      reportRoot:env.reportRoot,market,allowLocalReportPublish:true});
+    assert.equal(published.published,true);
+    assert.equal(published.reportReplaced,false);
+    for(const file of [market+".json",market+".SWEEP.json"])
+      assert.equal(statSync(join(env.reportRoot,file)).mode&0o077,0);
+    assert.doesNotMatch(readFileSync(join(env.reportRoot,market+".SWEEP.json"),"utf8"),
+      /PAIR_SECRET_PRIVATE/);
+    const got=await read({root:env.reportRoot,market});
+    assert.equal(got.report.kind,"PERIOD");
+    assert.equal(got.supplementarySweepReport.kind,"SWEEP");
+    assert.equal(got.supplementarySweepWindowMatches,true);
+    const reasons=got.report.canonicalPaperResearchReview.blockers;
+    assert.ok(!reasons.includes("HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED"));
+    assert.ok(reasons.includes("FUTURE_PROSPECTIVE_SIGNAL_UNVERIFIED"));
+    assert.equal(got.paperAdmissionAllowed,false);
+    assert.equal(got.profitabilityProven,false);
+    assert.equal(got.executionAuthority,"NONE");
   }finally{rmSync(env.base,{recursive:true,force:true});}
 });

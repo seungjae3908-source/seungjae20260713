@@ -131,6 +131,7 @@ function publicationProjection(raw,market,sourceDigestSha256,publishedAtMs){
       modeledTradeCount:report?.modeledTradeCount??null,
       modeledReturnPercent:report?.modeledReturnPercent??null,
       modeledNetPnlKRW:report?.modeledNetPnlKRW??null,
+      sourceSessionIndexDigestSha256:raw.sourceSessionIndexDigestSha256??null,
     });
   return Object.freeze({...required,
     pageCountSelfAttested:raw.pageCountSelfAttested??null,
@@ -141,6 +142,7 @@ function publicationProjection(raw,market,sourceDigestSha256,publishedAtMs){
       report?.sourceOnlyObservedPriceEventLabels??null,
     localPageTraversalReachedEnd:
       raw.localPageTraversalReachedEnd===true,
+    pageChainSha256:raw.pageChainSha256??null,
   });
 }
 /**
@@ -162,13 +164,16 @@ export async function publishResearchOriginalMinuteDiagnosticV1({
     fail("RESEARCH_PUBLISH_SOURCE_PATH_INVALID");
   await directoryCheck(reportRoot);
   await directoryCheck(dirname(sourceResultPath));
-  const target=join(reportRoot,market+".json");
-  if(sourceResultPath===target)
-    fail("RESEARCH_PUBLISH_SOURCE_AND_DESTINATION_CANNOT_MATCH");
   const now=nowImpl();
   if(!Number.isSafeInteger(now)||now<946684800000||now>Date.now()+300_000)
     fail("RESEARCH_PUBLISH_PUBLICATION_TIME_INVALID");
   const source=await readPrivateOriginal(sourceResultPath);
+  // Separate native whole-market sweep and per-symbol period diagnostics.
+  const isSweep=source.data?.schemaVersion===
+    "four-market-original-minute-sweep-v1";
+  const target=join(reportRoot,market+(isSweep?".SWEEP":"")+".json");
+  if(sourceResultPath===target)
+    fail("RESEARCH_PUBLISH_SOURCE_AND_DESTINATION_CANNOT_MATCH");
   const projected=publicationProjection(source.data,market,
     source.sourceDigestSha256,now);
   // A canonical model-evidence identity ignores result-file whitespace and
