@@ -598,3 +598,28 @@ test('outage fallback never retains previously LISTED symbols as currently verif
   assert.equal(evidence.source, 'last-good-cache');
   assert.equal(evidence.providerErrorCount, 1);
 });
+
+test('US 4H is blocked by default and admitted only behind explicit complete-session aggregation ownership', async () => {
+  const us: CatalogEntry={...item(1),market:'US',currency:'USD'};
+  let calls=0;
+  const service=createBoundedScannerService(deps([us],{
+    getCandles: async (_ticker,tf) => {
+      calls += 1;
+      assert.equal(tf,'4H');
+      return candleRows();
+    },
+  }));
+  await assert.rejects(
+    service.scan('US',[],{timeframe:'4H'},{deadlineMs:500,itemTimeoutMs:200}),
+    /SCAN_TIMEFRAME_UNSUPPORTED:US:4H/,
+  );
+  assert.equal(calls,0,'unverified US 4H must not contact provider');
+  const result=await service.scan('US',[],{timeframe:'4H'},{
+    deadlineMs:500,itemTimeoutMs:200,
+    verifiedUs4hSessionAggregation:true,
+  });
+  assert.equal(result.timeframe,'4H');
+  assert.equal(result.requestedCount,1);
+  assert.equal(result.providerErrorCount,0);
+  assert.ok(calls>0);
+});

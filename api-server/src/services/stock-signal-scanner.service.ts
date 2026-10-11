@@ -217,6 +217,10 @@ export const StockSignalScannerService = {
       itemTimeoutMs: 4_000,
       concurrency: 6,
       limit: universe.entries.length || 1,
+      // loadStockCandles('US','4H') above composes only four complete
+      // consecutive 60m candles anchored to the same US trading session.
+      // The bounded core rejects all other unverified US 4H callers.
+      verifiedUs4hSessionAggregation: request.market === 'US' && primaryTimeframe === '4H',
     };
     let raw: Awaited<ReturnType<ReturnType<typeof createBoundedScannerService>['scan']>>;
     try {
