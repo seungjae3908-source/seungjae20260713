@@ -67,7 +67,8 @@ jobs:
           grep -Fq 'RESEARCH_PRODUCTION_FORMULA_FORWARD_PLAN_INVALID' .github/workflows/research-production-activation.yml
           grep -Fq 'formula-backtest-queue' .github/workflows/research-production-activation.yml
           grep -q 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' research-production/deploy/activate-server.sh
-          grep -q 'natural-paper-btcusdt-v1.json' .github/workflows/research-production-activation.yml
+          grep -q 'natural-paper-btcusdt-v2.json' .github/workflows/research-production-activation.yml
+          node --test market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js market-prediction-lab/tests/paper-risk-policy-human-approval-v2.test.js
 
   authorize:
     if: >-
@@ -288,10 +289,11 @@ jobs:
               if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
             }
 
-            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              head_sha: targetSha,
+              workflow_id: 'futures-public-network-smoke.yml',
+              branch: 'main',
               per_page: 100,
             });
             const targetApplicationRuns = targetRuns
@@ -410,7 +412,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
-      PAPER_FORWARD_RISK_POLICY_DECISION_PATH: /opt/investment-research/releases/${{ needs.authorize.outputs.target_sha }}/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
+      PAPER_FORWARD_RISK_POLICY_DECISION_PATH: /opt/investment-research/releases/${{ needs.authorize.outputs.target_sha }}/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v2.json
     steps:
       - uses: actions/checkout@v4
         with:

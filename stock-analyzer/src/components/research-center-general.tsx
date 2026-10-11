@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
+import { ResearchDetailDialog } from './research-detail-dialog';
+import { useAuth } from '@/lib/auth';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
@@ -17,11 +19,11 @@ function formatDate(value: number | null | undefined) {
 }
 
 function researchState(overview: ResearchCenterOverview) {
-  if (!overview.state.present) return { value: '근거 미수집', detail: '연구 overview 근거가 아직 없습니다.', tone: 'neutral' as const };
+  if (!overview.state.present) return { value: '근거 미수집', detail: '연구 기록 미수집', tone: 'neutral' as const };
   if ((overview.research.failedTasks ?? 0) > 0) return { value: '확인 필요', detail: `실패 작업 ${overview.research.failedTasks}건`, tone: 'warning' as const };
   if ((overview.research.blockedDataTasks ?? 0) > 0) return { value: '근거 수집 중', detail: `데이터 대기 작업 ${overview.research.blockedDataTasks}건`, tone: 'progress' as const };
   if (/collect|running|progress/i.test(overview.research.status)) return { value: '연구 진행 중', detail: '새 근거를 수집하고 있습니다.', tone: 'progress' as const };
-  return { value: '연구 상태 확인됨', detail: '현재 read-only overview가 연결되어 있습니다.', tone: 'normal' as const };
+  return { value: '연구 상태 확인됨', detail: '연구 기록 조회됨', tone: 'normal' as const };
 }
 
 function executionState(overview: ResearchCenterOverview) {
@@ -35,9 +37,9 @@ function executionState(overview: ResearchCenterOverview) {
 
 function dataFactoryState(overview: ResearchCenterOverview) {
   const temporal = overview.dataFactory?.temporalCryptoFutures;
-  if (!temporal) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
-  if (!temporal.present) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
-  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: 'Temporal evidence 무결성 검증에 실패했습니다.', tone: 'warning' as const };
+  if (!temporal) return { value: '미수집', detail: '시간순 기록 미수집', tone: 'neutral' as const };
+  if (!temporal.present) return { value: '미수집', detail: '시간순 기록 미수집', tone: 'neutral' as const };
+  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: '시간순 기록 검증 실패', tone: 'warning' as const };
   if (temporal.status === 'partial_failure') {
     return {
       value: temporal.observationCount == null ? '부분 실패' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
@@ -47,7 +49,7 @@ function dataFactoryState(overview: ResearchCenterOverview) {
   }
   return {
     value: temporal.observationCount == null ? '누적 중' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
-    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 심볼 · public temporal evidence`,
+    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 종목 · 시간순 기록`,
     tone: 'progress' as const,
   };
 }
@@ -62,13 +64,13 @@ function factoryRuntimeState(overview: ResearchCenterOverview) {
     return { value: '정책 확정 필요', detail: '후보 수·단계별 축소 정책이 아직 승인되지 않았습니다.', tone: 'warning' as const };
   }
   if (factory.status === 'BLOCKED_NO_READY_PROFILES') {
-    return { value: '연구 데이터 대기', detail: 'Canonical 시장 프로필 근거가 준비되는 중입니다.', tone: 'progress' as const };
+    return { value: '연구 데이터 대기', detail: '시장 프로필 근거가 준비되는 중입니다.', tone: 'progress' as const };
   }
   if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING') {
-    return { value: '개발 진단 필요', detail: '준비된 프로필의 DEVELOPMENT-only 진단 근거가 아직 없습니다.', tone: 'progress' as const };
+    return { value: '개발 진단 필요', detail: '준비된 프로필의 개발 진단 근거가 아직 없습니다.', tone: 'progress' as const };
   }
   if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID') {
-    return { value: '개발 진단 오류', detail: '진단값 형식 또는 hindsight 금지 규칙을 확인해야 합니다.', tone: 'warning' as const };
+    return { value: '개발 진단 오류', detail: '진단값 형식 또는 미래정보 사용 금지 규칙을 확인해야 합니다.', tone: 'warning' as const };
   }
   if (factory.status === 'BLOCKED_RUNTIME_BINDINGS') {
     return { value: '엔진 연결 중', detail: '기존 백테스터·검증 owner 연결 근거를 기다립니다.', tone: 'progress' as const };
@@ -83,7 +85,7 @@ function paperSample(overview: ResearchCenterOverview) {
   const value = overview.paper.ledger.sampleCount ?? overview.paper.ledger.settlementCount;
   if (value == null) return { value: '미확인', detail: '모의매매 표본 수 근거가 없습니다.', tone: 'neutral' as const };
   if (value === 0) return { value: '0건', detail: '아직 정산된 모의매매 표본이 없습니다.', tone: 'progress' as const };
-  return { value: `${value.toLocaleString('ko-KR')}건`, detail: '현재 overview가 제공한 표본 수입니다.', tone: 'normal' as const };
+  return { value: `${value.toLocaleString('ko-KR')}건`, detail: '정산 표본 확인됨', tone: 'normal' as const };
 }
 
 function shadowState(overview: ResearchCenterOverview) {
@@ -97,7 +99,7 @@ function shadowState(overview: ResearchCenterOverview) {
 }
 
 function profitabilityState(overview: ResearchCenterOverview) {
-  if (overview.profitability.proven) return { value: '검증 완료', detail: '현재 canonical overview가 수익성 검증 충족을 보고합니다.', tone: 'normal' as const };
+  if (overview.profitability.proven) return { value: '검증 완료', detail: '수익성 검증 충족', tone: 'normal' as const };
   return { value: '검증 중', detail: '미검증은 수익성이 없다는 뜻이 아닙니다.', tone: 'progress' as const };
 }
 
@@ -117,7 +119,7 @@ type FullCostComponentState = ResearchCandidatePerformance['fullCostEvidence']['
 
 function fullCostStateLabel(state: FullCostComponentState) {
   if (state === 'MEASURED') return '관측됨';
-  if (state === 'MODELED') return '모델값 · 경제증거 아님';
+  if (state === 'MODELED') return '모델값 · 실측 아님';
   if (state === 'BLOCKED_DATA') return '데이터 차단';
   return '미확인';
 }
@@ -210,91 +212,49 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
 
 function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) {
   const cost = fullCostEvidenceState(overview);
-  const incomplete = cost.rows.filter((row) => row.state !== 'MEASURED');
-  const ledgerSettlementN = overview.paper.ledger.settlementCount;
-  const settlementLabel = cost.settlementN == null
-    ? '후보 Settlement 미확인'
-    : cost.settlementN === 0
-      ? '후보 Settlement 0건 · 미연결'
-      : `후보 Settlement ${cost.settlementN.toLocaleString('ko-KR')}건 연결`;
-  const reason = cost.fullCostReady
-    ? '8개 비용과 canonical 연결 근거가 모두 FULL_COST_READY로 확인됐습니다.'
-    : incomplete.length > 0
-      ? `${incomplete.map((row) => row.label).join(' · ')} 근거가 실측 완료 상태가 아닙니다.`
-      : '8개 비용이 모두 관측돼도 canonical FULL_COST_READY가 false입니다. Settlement·identity·cost-policy 연결 근거를 더 확인해야 합니다.';
-
   return (
-    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="Full Cost 경제증거">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Economic evidence</p>
-          <h2 className="mt-1 text-lg font-black">Full Cost 8개 비용</h2>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            같은 후보의 비용·Settlement가 연결돼야 합니다. MODELED 값은 실제 경제증거로 승격하지 않습니다.
-          </p>
-        </div>
-        <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${cost.fullCostReady ? TONE.normal : TONE.warning}`}>
-          FULL_COST_READY · {cost.fullCostReady ? '충족' : '미충족'}
-        </span>
+    <section className="rounded-2xl border border-card-border bg-card p-3" data-testid="research-full-cost-summary" aria-label="총비용 검증">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base font-black">총비용 8개 항목</h2>
+        <span className={`rounded-full border px-2 py-1 text-xs font-bold ${cost.fullCostReady ? TONE.normal : TONE.warning}`}>비용 검증 · {cost.fullCostReady ? '충족' : '미충족'}</span>
       </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">실측 완료</p>
-          <p className="mt-1 text-base font-black tabular-nums">{cost.measured}/8</p>
-        </div>
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">모델값</p>
-          <p className="mt-1 text-base font-black tabular-nums">{cost.modeled}개</p>
-        </div>
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">미확인/차단</p>
-          <p className="mt-1 text-base font-black tabular-nums">{cost.unknown + cost.blocked}개</p>
-        </div>
-        <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">Settlement 연결</p>
-          <p className="mt-1 break-keep text-sm font-black">{settlementLabel}</p>
-        </div>
-      </div>
-
-      <div className="mt-3 rounded-xl border border-warning/25 bg-warning/5 p-3">
-        <p className="text-xs font-black">왜 아직 미충족인가요?</p>
-        <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{reason}</p>
-        <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">FIRST_ZERO · {cost.firstZero}</p>
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          전체 Paper ledger Settlement · {ledgerSettlementN == null ? '미확인' : `${ledgerSettlementN.toLocaleString('ko-KR')}건`} · 후보별 Settlement와 별도 집계
-        </p>
-      </div>
-
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <p className="mt-2 text-sm">실측 {cost.measured}/8 · 모델값 {cost.modeled}개 · 미확인·차단 {cost.unknown + cost.blocked}개</p>
+      <p className="mt-1 text-xs text-muted-foreground">후보 정산 {cost.settlementN == null ? '미확인' : `${cost.settlementN.toLocaleString('ko-KR')}건 연결`}</p>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {cost.rows.map((row) => (
-          <article key={row.key} className="min-w-0 rounded-xl border border-card-border bg-background p-3" data-testid={`research-full-cost-${row.key}`}>
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-xs font-black">{row.label}</p>
-              <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${fullCostStateClass(row.state)}`}>{fullCostStateLabel(row.state)}</span>
+          <article key={row.key} className="min-w-0 rounded-xl border border-card-border p-3" data-testid={`research-full-cost-${row.key}`}>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold">{row.label}</p>
+              <span className={`rounded-full border px-2 py-1 text-xs ${fullCostStateClass(row.state)}`}>{fullCostStateLabel(row.state)}</span>
             </div>
-            <p className="mt-2 text-sm font-black tabular-nums">{formatCostValue(row.valuePercent)}</p>
-            <p className="mt-2 break-all text-[10px] leading-4 text-muted-foreground">출처 · {row.provenance ?? '미제공'}</p>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Freshness · API 미제공</p>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Quality · API 미제공</p>
-            <p className="mt-1 font-mono text-[9px] text-muted-foreground">state={row.state}</p>
+            <p className="mt-2 font-bold tabular-nums">{formatCostValue(row.valuePercent)}</p>
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="min-h-11 cursor-pointer py-3">측정 근거</summary>
+              <p className="break-all">출처 · {row.provenance ?? '미제공'}</p>
+              <p>최신성 · 미제공</p><p>품질 · 미제공</p>
+            </details>
           </article>
         ))}
       </div>
+      <details className="mt-3 text-xs text-muted-foreground">
+        <summary className="min-h-11 cursor-pointer py-3">연결 진단</summary>
+        <p className="break-all">{cost.firstZero}</p>
+        <p>전체 모의매매 정산 · {overview.paper.ledger.settlementCount == null ? '미확인' : `${overview.paper.ledger.settlementCount.toLocaleString('ko-KR')}건`}</p>
+      </details>
     </section>
   );
 }
-
 export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => void }) {
+  const { profile, isAdmin } = useAuth();
   const query = useQuery({
-    queryKey: ['admin', 'research-center', 'overview'],
-    queryFn: ({ signal }) => fetchResearchCenterOverview(signal),
+    queryKey: ['research-center', 'overview', profile?.id, isAdmin ? 'admin' : 'member'],
+    queryFn: ({ signal }) => fetchResearchCenterOverview(signal, isAdmin ? 'admin' : 'member'),
     staleTime: 30_000,
     retry: 1,
   });
 
   const overview = query.data;
-  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability'>('research');
+  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability' | null>(null);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-general-view">
@@ -304,11 +264,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
           <header className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Research Center</p>
-                <h1 className="mt-1 text-xl font-black sm:text-2xl">현재 어디까지 왔나요?</h1>
-                <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
-                  카드 하나를 누르면 왜 그런 상태인지와 다음에 볼 것을 바로 설명합니다.
-                </p>
+                <h1 className="text-xl font-black sm:text-2xl">연구센터</h1>
               </div>
               <button
                 type="button"
@@ -332,7 +288,6 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
           {query.isError ? (
             <section role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-5 text-center">
               <h2 className="text-base font-bold text-destructive">연구 상태를 불러오지 못했습니다.</h2>
-              <p className="mt-2 text-sm text-muted-foreground">오류를 정상이나 0으로 바꾸지 않습니다.</p>
               <button type="button" onClick={() => void query.refetch()} className="mt-4 min-h-11 rounded-xl border border-destructive/30 px-4 text-sm font-semibold">다시 확인</button>
             </section>
           ) : null}
@@ -348,32 +303,10 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
             const fullCost = fullCostEvidenceState(overview);
             const paperSummary = {
               ...sample,
-              detail: `${sample.detail} · Full Cost ${fullCost.fullCostReady ? '충족' : `${fullCost.measured}/8 실측`}`,
+              detail: `정산 표본 · 비용 ${fullCost.measured}/8 확인`,
             };
             return (
               <>
-
-                <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 진행 흐름">
-                  <p className="text-xs font-bold text-muted-foreground">전체 흐름</p>
-                  <h2 className="mt-1 text-base font-black">수집 → 검증 → 모의매매 → 수익성</h2>
-                  <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                    {[
-                      ['수집', dataFactory],
-                      ['검증', research],
-                      ['모의매매', sample],
-                      ['수익성', profitability],
-                    ].map(([label, state]) => {
-                      const item = state as typeof research;
-                      return (
-                        <div key={label as string} className="min-w-0">
-                          <div className={'mx-auto h-1.5 rounded-full ' + (item.tone === 'normal' ? 'bg-positive' : item.tone === 'warning' ? 'bg-warning' : item.tone === 'progress' ? 'bg-primary' : 'bg-muted')} />
-                          <p className="mt-2 truncate text-[11px] font-bold">{label as string}</p>
-                          <p className="truncate text-[10px] text-muted-foreground">{item.value}</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
 
                 <section className="grid grid-cols-2 gap-2" aria-label="연구 핵심 상태">
                   <SummaryCard testId="research-summary-research" selected={selected === 'research'} onClick={() => setSelected('research')} icon={<Activity className="h-5 w-5" />} label="연구 상태" {...research} />
@@ -382,7 +315,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                   <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
 
-                {(() => {
+                {selected && (() => {
                   const info = {
                     research: {
                       label: '연구 상태',
@@ -410,41 +343,28 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                     },
                   }[selected];
                   return (
-                    <section className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm" data-testid="research-general-selected-detail" aria-live="polite">
-                      <p className="text-[11px] font-black text-primary">선택한 항목</p>
-                      <h2 className="mt-1 text-lg font-black">{info.label} · {info.state.value}</h2>
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">왜 이렇게 표시되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.why}</p>
-                        </div>
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.next}</p>
-                        </div>
-                      </div>
+                    <ResearchDetailDialog title={`${info.label} · ${info.state.value}`} onClose={() => setSelected(null)}>
+                      <section data-testid="research-general-selected-detail">
+                        <p className="text-sm text-muted-foreground">{info.state.detail}</p>
+                      </section>
+                      {selected === 'paper' || selected === 'profitability' ? <FullCostVisibility overview={overview} /> : null}
                       {onOpenExpert ? (
                         <button type="button" onClick={onOpenExpert} className="mt-3 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-4 text-sm font-black text-primary">
                           상세 근거 보기
                         </button>
                       ) : null}
-                    </section>
+                    </ResearchDetailDialog>
                   );
                 })()}
-
-                {selected === 'paper' || selected === 'profitability'
-                  ? <FullCostVisibility overview={overview} />
-                  : null}
 
                 <details className="rounded-2xl border border-card-border bg-card shadow-sm">
                   <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-black">
                     <span>기타 상태 보기</span>
-                    <span className="text-xs font-medium text-muted-foreground">팩토리 · Shadow · 실행 권한</span>
                   </summary>
                   <div className="grid gap-2 border-t border-card-border p-3 sm:grid-cols-3">
                     {[
                       ['리서치 팩토리', factoryRuntime],
-                      ['Shadow 기록', shadow],
+                      ['관찰 기록', shadow],
                       ['실행 권한', execution],
                     ].map(([label, state]) => {
                       const item = state as typeof research;
@@ -459,17 +379,6 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                   </div>
                 </details>
 
-                <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                    <div>
-                      <h2 className="text-sm font-black">이 화면은 이렇게 보면 됩니다</h2>
-                      <p className="mt-1 break-keep text-sm leading-6 text-muted-foreground">
-                        위 카드 하나를 누르면 설명이 바뀝니다. SHA·원본 식별자·검증 코드는 필요할 때만 ‘상세 근거 보기’에서 확인하세요.
-                      </p>
-                    </div>
-                  </div>
-                </section>
               </>
             );
           })() : null}

@@ -56,6 +56,19 @@ test('runtime policy files require explicit YouTube approval and free AI provide
   assert.doesNotMatch(script, /source\s+"\$AI_POLICY_ENV"|source\s+"\$VIDEO_POLICY_ENV"/);
 });
 
+test('free consent writes are isolated from read-only preflight and require an exact owner command', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.match(script, /confirm-free-only\) confirm_free_only/);
+  assert.match(script, /RESEARCH_FREE_ONLY_OWNER_COMMENT_ID/);
+  const preflight = script.slice(script.indexOf('\npreflight() {'), script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(preflight, /confirm-research-free-policy|confirm_free_only|chown|chmod/);
+  assert.match(workflow, / --confirm-free-only/);
+  assert.match(workflow, /comment\.user\.login == github\.repository_owner/);
+  assert.match(workflow, /author_association == 'OWNER'/);
+  assert.match(workflow, /core\.setOutput\('free_only_owner_comment_id', match\[2\] \? String\(context\.payload\.comment\.id\)/);
+});
+
 test('provider materialization fallback is non-recursive and preserves existing isolated env first', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   const start = script.indexOf('materialize_or_reuse_provider_env()');
