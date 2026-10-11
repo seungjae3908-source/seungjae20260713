@@ -540,6 +540,21 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
         independentOOSProven: false, independentFullCostProven: false,
         originalHistoricalSignalVerified: false, paperCandidatePASS: false,
         executionAuthority: 'NONE',
+        canonicalPaperResearchReview: {
+          status: 'RESEARCH_HOLD', blockerCount: 3,
+          blockers: [
+            'INDEPENDENT_WHOLE_VENUE_HISTORICAL_PIT_ROSTER_MISSING',
+            'FROZEN_STRATEGY_AND_INDEPENDENT_OOS_UNVERIFIED',
+            'AUTOMATIC_PAPER_FILL_SETTLEMENT_JOURNAL_TELEGRAM_UNVERIFIED',
+          ],
+          canonicalProfitabilityStatus: 'RESEARCH_HOLD',
+          canonicalPaperBridgeStatus: 'BLOCKED',
+          canonicalPaperBridgeBlockers: [
+            'ADMISSION_EVIDENCE_BUNDLE_REQUIRED',
+          ],
+          paperAdmissionAllowed: false,
+          executionAuthority: 'NONE',
+        },
       },
     });
   });
@@ -554,6 +569,14 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
   await expect(panel).toContainText('3.25%');
   await expect(panel).toContainText('독립 OOS 미검증');
   await expect(panel).toContainText('결과 발행 시각(서버 로컬 기록)');
+  await expect(panel.getByTestId('research-native-paper-blockers'))
+    .toContainText('RESEARCH_HOLD');
+  await expect(panel.getByTestId('research-native-paper-blockers'))
+    .toContainText('전략 동결·독립 OOS·워크포워드 검증');
+  await expect(panel.getByTestId('research-native-paper-blockers'))
+    .toContainText('모의주문·체결·정산·일지·텔레그램 폐루프');
+  await expect(panel.getByTestId('research-native-paper-blockers'))
+    .toContainText('BLOCKED');
   await expect(panel).toContainText('실제 수익성 미증명');
   expect(reads).toHaveLength(1);
   expect(reads[0]).toMatchObject({

@@ -23,6 +23,16 @@ export type ResearchOriginalMinuteDiagnosticSummary = {
   sourceOnlyObservedPriceEventLabels?:number;
   actualMarketWideOpportunityCount?:null;
   fullMarketOpportunityDenominatorVerified?:false;
+  canonicalPaperResearchReview?:{
+    status:'RESEARCH_HOLD';
+    blockerCount:number;
+    blockers:readonly string[];
+    canonicalProfitabilityStatus:'RESEARCH_HOLD';
+    canonicalPaperBridgeStatus:'BLOCKED';
+    canonicalPaperBridgeBlockers:readonly string[];
+    paperAdmissionAllowed:false;
+    executionAuthority:'NONE';
+  };
 };
 export type ResearchOriginalMinuteDiagnosticResponse={
   schemaVersion:'research-original-minute-diagnostic-readonly-v1';
