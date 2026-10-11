@@ -1527,7 +1527,8 @@ async function liveJournalRiskState(
   const owned = canonicalAutomaticLivePositions(runtime.plans, runtime.orders);
   const { automaticOwned } = assertCanonicalLiveProviderPositions(snapshot, owned);
   const livePlans = owned.map((row) => row.plan);
-  const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
+  const liveBySymbol = new Map(livePlans.filter((plan) => plan.exchange === snapshot.provider)
+    .map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
   for (const position of automaticOwned) {
     if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
