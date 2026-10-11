@@ -7,6 +7,7 @@ import './paper-research-round-proposal-store.service.test';
 import './paper-research-round-proposal-migration.test';
 import './manual-four-market-paper-wallets.service.test';
 import './manual-four-market-paper-wallet-migration.test';
+import './manual-four-market-paper-cycle.service.test';
 import type { StoredPaperJournalRecord, PaperJournalSyncRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
