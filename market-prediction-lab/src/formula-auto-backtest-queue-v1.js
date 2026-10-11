@@ -19,6 +19,9 @@ export const FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1 = 'research-formula-pap
 export const FORMULA_AUTO_BACKTEST_STATES_V1 = Object.freeze(['PASS', 'HOLD', 'RESERVE', 'EXCLUDE']);
 
 const SAFE_FILE = /^[A-Za-z0-9._-]{1,180}\.json$/u;
+// Bounded research inputs/results must not exhaust the small 4GiB host.
+const MAX_QUEUE_ITEM_BYTES = 64 * 1024 * 1024;
+const MAX_QUEUE_RESULT_BYTES = 64 * 1024 * 1024;
 const FORBIDDEN_CREDENTIAL_KEY = /^(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|password|passphrase|authorization|cookie|bearer|private[_-]?key|account[_-]?token)$/iu;
 const STRUCTURAL_REJECT_CODES = new Set([
   'FORMULA_INVALID',
@@ -471,6 +474,9 @@ export async function processFormulaAutoBacktestQueueV1({
     const path = join(inbox, name);
     const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) continue;
+    if (info.size <= 0 || info.size > MAX_QUEUE_ITEM_BYTES
+      || info.nlink !== 1 || (info.mode & 0o022) !== 0)
+      throw new Error('FORMULA_QUEUE_INPUT_UNSAFE_FILE');
     const item = JSON.parse(await readFile(path, 'utf8'));
     const itemDigest = digest(item);
     const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
@@ -478,6 +484,12 @@ export async function processFormulaAutoBacktestQueueV1({
     const resultPath = join(resultsRoot, itemDigest + '.json');
     let result;
     try {
+      const cachedInfo = await lstat(resultPath);
+      if (!cachedInfo.isFile() || cachedInfo.isSymbolicLink()
+        || cachedInfo.nlink !== 1 || cachedInfo.size <= 0
+        || cachedInfo.size > MAX_QUEUE_RESULT_BYTES
+        || (cachedInfo.mode & 0o022) !== 0)
+        throw new Error('FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE');
       const cached = JSON.parse(await readFile(resultPath, 'utf8'));
       // A matching filename does not authenticate the contents. In
       // particular, a cached synthetic PASS must never mint a Paper registry
