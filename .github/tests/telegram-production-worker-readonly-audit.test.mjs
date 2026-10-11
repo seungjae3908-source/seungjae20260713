@@ -6,7 +6,7 @@ import {
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
   readSignalV3Units, readSignalV3HealthOnce, readSignalV3CycleResult,
-  safeSignalAgeBand,
+  safeSignalAgeBand, readV3SnapshotFile, v3StalenessHypothesis,
   morningWindowProcessCoverage,
   sanitizeBriefWorkerHealth,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
@@ -45,6 +45,8 @@ const safeSignalDiagnostics={
     snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'}),
   signalUnits:()=>({server:'ACTIVE',timer:'ACTIVE',cycle:'INACTIVE'}),
   signalCycle:()=>({unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true,startedAgeBand:'UNDER_5M'}),
+  signalFile:()=>({status:'RECENT_PUBLICATION',serviceSha:deployed,
+    generatedAgeBand:'UNDER_5M',fileAgeBand:'UNDER_5M'}),
 };
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
@@ -149,7 +151,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
   assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
-  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v5');
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v6');
   assert.equal(result.briefWorker.status,'NOT_AVAILABLE');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
@@ -522,4 +524,38 @@ test('Signal V3 source /health refuses false-fresh metadata and unsafe age',asyn
   assert.equal(invalid.status,'INVALID_RESPONSE');
   assert.ok(!JSON.stringify(stale).includes('SECRET_NEVER_LOG'));
   assert.ok(!JSON.stringify(invalid).includes('SECRET_NEVER_LOG'));
+});
+
+test('fixed read-only V3 state evidence is safe and classifies stale writer vs timer',()=>{
+  const raw=Buffer.from(JSON.stringify({serviceSha:deployed,
+    generatedAt:new Date(now-120000).toISOString(),publicDataOnly:true,
+    safety:{executionAuthority:'NONE',privateTradingApiAllowed:false,
+      realOrderAllowed:false},events:[{symbol:'PRIVATE_TICKER',secret:'PRIVATE_TOKEN'}]}));
+  let closed=0;
+  const fsOps={
+    openSync(file,flags){
+      assert.equal(file,'/opt/investment-signal-intelligence/state/latest-snapshot.json');
+      assert.ok((flags&fs.constants.O_NOFOLLOW)!==0);return 3;},
+    fstatSync(){return {isFile:()=>true,size:raw.length,mtimeMs:now-60000};},
+    readSync(_fd,b,at,n,pos){return raw.copy(b,at,pos,pos+n);},
+    closeSync(){closed++;},
+  };
+  const data=readV3SnapshotFile({fsOps,nowMs:now});
+  assert.equal(data.status,'RECENT_PUBLICATION');
+  assert.equal(data.serviceSha,deployed);
+  assert.equal(closed,1);
+  assert.equal(JSON.stringify(data).includes('PRIVATE_'),false);
+  assert.equal(readV3SnapshotFile({filePath:'/etc/passwd',fsOps,nowMs:now}).status,
+    'UNSAFE_PATH');
+  const absent={openSync(){const err=Error('SECRET_PATH');err.code='ENOENT';throw err;}};
+  assert.equal(readV3SnapshotFile({fsOps:absent,nowMs:now}).status,'ABSENT');
+  const stale={...data,status:'STALE_PUBLICATION'};
+  const health={status:'SNAPSHOT_STALE',serviceSha:deployed},timer={timer:'ACTIVE'};
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
+    startedAgeBand:'UNDER_5M'},stale,timer),'RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'FAILED'},
+    stale,timer),'CYCLE_FAILED_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
+    startedAgeBand:'OVER_60M'},stale,timer),'TIMER_NOT_RECENT_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{},data,timer),'HTTP_FILE_AGE_DISAGREE');
 });
