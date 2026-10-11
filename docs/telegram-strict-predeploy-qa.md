@@ -24,6 +24,15 @@
 
 ## Enforceability caveat
 
+The new PR CI tests the evaluator and mocked integration. The same Draft also inserts two concrete read-only vetoes into the existing code-only release workflow **before deployment**: (1) two recent independent successful protected Staging Telegram-only TLS runs, with no recent failures, and (2) Production-local Signal V3 systemd server/timer and bounded loopback /health plus /v1/signals freshness checks. Both block on HTTP 503 or stale data and never call POST, send messages, or alter PM2.
+
+That workflow is a pinned one-time historical release route, already used for #1828. Its lineage constraints intentionally do not provide a general new-release path; a future approved release needs its exact artifact/lineage review again. These Draft vetoes do not retroactively change the completed Production deployment.
+
 The new PR CI tests only the evaluator and mocked integration. A successful PR CI run **is not** the trusted live evidence object. A release workflow must separately verify the artifact origin and same-SHA protected Staging/Production read-only receipts and call this evaluator before issuing a deploy-ready decision. Until that wiring is reviewed and merged, it is a Draft guard **not yet automatically enforced** by the already-run one-time #1828 deployment workflow.
 
 Replit/Replit Agent prohibited. No real message sends, no database mutations, no live orders, no secrets, no operating deployments in this Draft.
+## Technical hold and follow-through
+
+- The modified code-only Production workflow retains the separate protected production approval and all previous exact-main, immutable-blob, six-room, no-LIVE, canary, backup and rollback gates; it now fails closed earlier if the latest protected Staging network QA set is unstable or current Signal V3 health/source is stale.
+- No new Telegram release may proceed based only on CI 6/6 or previously successful Staging Readiness. Two independently timed Staging TLS success receipts and fresh V3 signal must be observed at actual runtime before asking for Production approval.
+- The complete pure GO/NO-GO manifest evaluator still requires provenance-verified collection of actual Staging dry-run, read-only bot permissions and V3 cycle receipts. This wiring is a follow-up task and MUST not be mislabeled finished just because a unit test passed.
