@@ -502,8 +502,11 @@ async function main() {
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
-  await atomicJson(CYCLE_STATE_FILE, state);
+  // Snapshot first, cursor state second: a crash between writes may replay a
+  // page (safe, source-bounded), but must never permanently skip unpublished
+  // research coverage. There is no order authority in this public producer.
   await atomicJson(SNAPSHOT_FILE, snapshot);
+  await atomicJson(CYCLE_STATE_FILE, state);
 
   process.stdout.write(`${JSON.stringify({
     ok: true,

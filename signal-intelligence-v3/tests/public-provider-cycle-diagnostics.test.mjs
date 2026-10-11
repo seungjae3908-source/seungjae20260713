@@ -126,7 +126,7 @@ test('explicit product readiness remains blocked even if all contract lanes are 
   const row=corrupt.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='MID_LONG');
   row.publicProviderFailureSummary=summarizePublicProviderFailureReasons([{symbol:'REDACT_ME',reason:'invalid_data',message:'missing bars'}]);
   const blocked=inspectExactPublicProviderCycle(corrupt,SHA,NOW);
-  assert.equal(blocked.rows.find(x=>x.market==='CRYPTO_SPOT').status,'PROVIDER_BLOCKED');
+  assert.equal(blocked.rows.find(x=>x.market==='CRYPTO_SPOT').status,'DATA_QUALITY_BLOCKED');
   assert.equal(JSON.stringify(blocked.releaseReadiness).includes('REDACT_ME'),false);
 });
 test('member UI first-page evidence does not certify a whole-market release',()=>{
@@ -154,4 +154,15 @@ test('insufficient stock candles are preserved apart from network failures in th
   assert.equal(diag.rows.find(x=>x.market==='US_STOCK').providerErrorCount,0);
   assert.equal(diag.releaseReadiness.authenticatedMemberRouteVerified,false);
   assert.ok(diag.releaseReadiness.blockers.includes('AUTHENTICATED_MEMBER_ROUTE_AND_WILLIAMS_OVERLAY_NOT_PROVEN'));
+});
+
+test('provider HTTP errors and data-quality missing bars receive different top-level reason classes',()=>{
+  const a=snapshot();
+  const spot=a.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='MID_LONG');
+  spot.status='SEARCH_FAILURE';spot.insufficientDataCount=2;spot.invalidDataFailureCount=2;
+  const us=a.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+  us.status='SEARCH_FAILURE';us.providerErrors=1;
+  const d=inspectExactPublicProviderCycle(a,SHA,NOW);
+  assert.equal(d.rows.find(x=>x.market==='CRYPTO_SPOT').status,'DATA_QUALITY_BLOCKED');
+  assert.equal(d.rows.find(x=>x.market==='US_STOCK').status,'PROVIDER_BLOCKED');
 });
