@@ -38,6 +38,8 @@ import {
   type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
+import { deliverMemberWatchlistTelegramForSignal } from './member-watchlist-telegram-producer.service';
+import { TELEGRAM_POLICY_SAFETY } from './telegram-alert-policy.service';
 import './signal-intelligence-telegram-subscriber.service.test';
 
 const originalFetch = globalThis.fetch;
@@ -943,4 +945,62 @@ test('scheduled market brief errors keep sensitive provider messages out of sani
     if(before===undefined)delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
     else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=before;
   }
+});
+
+test('member watchlist BATCHED personal digest is counted as durable queue, never delivered or skipped', async () => {
+  const event = {
+    type:'NEW_CANDIDATE' as const,
+    id:'US_STOCK|AAPL|SWING|60m|BUY',
+    serviceSha:'a'.repeat(40),
+    market:'US_STOCK' as const,
+    symbol:'AAPL',
+    strategy:'SWING',
+    timeframe:'60m',
+    direction:'BUY' as const,
+    validationTier:'RESEARCH_CANDIDATE' as const,
+    occurredAt:'2026-10-11T06:00:00.000Z',
+  };
+  const accepted=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:true,deliveryId:'mock-outbox-id',
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(accepted.eligible,true);
+  assert.equal(accepted.attempted,1);
+  assert.equal(accepted.queued,1,'a saved digest is a real queued alert');
+  assert.equal(accepted.delivered,0,'a saved digest is NOT Telegram Bot API acceptance');
+  assert.equal(accepted.skipped,0,'queued digest must not be reported as suppressed');
+  assert.equal(accepted.failed,0);
+  assert.equal(accepted.reason,'COMPLETE');
+
+  const refused=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:false,deliveryId:null,
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(refused.queued,0);
+  assert.equal(refused.delivered,0);
+  assert.equal(refused.skipped,1,'a rejected digest entry is not a queued success');
 });
