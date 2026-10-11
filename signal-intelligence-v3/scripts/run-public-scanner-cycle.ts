@@ -16,7 +16,10 @@ import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
 import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
-import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic} from '../src/public-watch-v3-priority.mjs';
+import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic,
+  selectV3OutOfCursorResearch} from '../src/public-watch-v3-priority.mjs';
+import {runV3OutOfCursorResearch} from '../src/public-watch-v3-offpage-research.mjs';
+import {validV3PublicPriorityRequest} from '../src/public-v3-priority-public-route.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
@@ -455,6 +458,51 @@ function laneStatus(response) {
   return classifyPublicCycleLaneStatus(response);
 }
 
+/** One read-only single-symbol V3 scanner operation for a verified off-page
+ * public Watch observation. The esbuild V3-only scanner build forces an exact
+ * currently listed symbol with no normal roster/page cursor modifications.
+ * All outbound URLs pass the fixed Upbit/Bitget public GET allowlist and
+ * are counted/capped, including retries and rejected provider responses.
+ */
+async function scanSingleV3WatchResearch(row) {
+  const market=row.market==='CRYPTO_SPOT'?'spot':'futures';
+  const oldFetch=globalThis.fetch;
+  let publicHttpRequests=0;
+  globalThis.fetch=async(input,init={})=>{
+    const url=typeof input==='string'||input instanceof URL
+      ? String(input):String(input?.url??'');
+    const method=String(init?.method??(typeof input==='object'?input?.method:null)??'GET')
+      .toUpperCase();
+    if(!validV3PublicPriorityRequest(url,market,method))
+      throw Error('PUBLIC_V3_PRIORITY_UNSAFE_OUTBOUND');
+    if(publicHttpRequests>=20)
+      throw Error('PUBLIC_V3_PRIORITY_HTTP_BUDGET_EXHAUSTED');
+    publicHttpRequests+=1;
+    return oldFetch(input,init);
+  };
+  try {
+    // No canonical adaptation, economics, Telegram or Paper: the response
+    // is reduced immediately to bounded review counters by the caller.
+    const operation=()=>CryptoSignalScannerService.scan({
+      memberId:'signal-intelligence-v3-priority-preflight-public-only',
+      prioritySymbol:row.symbol,
+      market,strategyMode:'scalping',timeframe:'15m',condition:'trend',
+      cursor:0,batchSize:5,minimumScore:0,maximumRiskScore:100,
+    });
+    const response=market==='spot'
+      ? await withUpbitPacing(operation)
+      : await withBitgetPublicPacing(operation);
+    return Object.freeze({response,httpRequests:publicHttpRequests,
+      requestCountMeasured:true});
+  }catch {
+    // No raw HTTP error, symbol, personal detail or token is ever persisted.
+    return Object.freeze({response:null,scannerFailed:true,
+      httpRequests:publicHttpRequests,requestCountMeasured:true});
+  }finally {
+    globalThis.fetch=oldFetch;
+  }
+}
+
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
@@ -584,6 +632,19 @@ async function main() {
     }
   }
 
+  // Optional Stage-1 priority *outside* canonical cursor windows.
+  // This is a separate public 15m research data-quality observation with
+  // max ONE current listed coin per market and no Signal/Telegram authority.
+  // If the watcher was not verified, or its observations became stale while
+  // the twelve normal lanes ran, no additional public requests are made.
+  const watchOutOfPage=selectV3OutOfCursorResearch(stageOneWatch);
+  const offPageResearch=await runV3OutOfCursorResearch(watchOutOfPage,{
+    enabled:process.env.SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED==='true'
+      && ['VALIDATED','PARTIAL_SOURCE'].includes(stageOneWatch.status),
+    nowMs:Date.now(),
+    scanOne:scanSingleV3WatchResearch,
+  });
+
   // Persistence of bounded cursor-only counts NEVER means all raw symbols
   // were covered. Failed/blocked pages are not trusted candidate evidence.
   state.rosterProgress = accumulatePublicV3RosterProgress(
@@ -609,6 +670,7 @@ async function main() {
     economicReadiness,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
+    publicStageTwoOffPageResearch:offPageResearch,
     releaseStateReset: releaseChanged,
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
@@ -627,6 +689,7 @@ async function main() {
     economicReadiness,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
+    publicStageTwoOffPageResearch:offPageResearch,
     coverage,
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     executionAuthority: 'NONE',
