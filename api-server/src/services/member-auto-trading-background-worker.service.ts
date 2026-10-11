@@ -17,7 +17,7 @@ import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
@@ -1660,6 +1660,9 @@ async function executeAutomaticPlan(input: {
         }
         return input.verifiedPaperFxQuote!;
       },
+      // Only a protected, versioned server schedule may attest Paper tax;
+      // a research-supplied cost guess can never certify settlement.
+      costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
     })
     : new TradeExecutionService(input.repository);
   const created = await automation.createPlan(
