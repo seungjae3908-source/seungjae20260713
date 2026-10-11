@@ -170,7 +170,7 @@ test('different canonical/vault hash casing dedups only for the verified same ow
   const appMask='UPBIT-****-'+hash('UPBIT:'+owner);
   const vaultMask='UPBIT-****-'+hash('upbit:'+owner);
   assert.notEqual(appMask,vaultMask);
-  const app=canonical('same-provider-order',{
+  const app=canonical('e5ef8405-63c8-4489-9bc5-46c1a5b82f74',{
     source:'APP_AUTO',accountIdMasked:appMask,
   });
   const external={...app,source:'UPBIT_API',accountIdMasked:vaultMask};
@@ -184,6 +184,11 @@ test('different canonical/vault hash casing dedups only for the verified same ow
   assert.equal(reconcileScopedExternalJournalHistory(
     [app],[{...external,accountIdMasked:'UPBIT-****-FORGED'}],owner,
   ).payloads.length,1);
+  assert.equal(reconcileScopedExternalJournalHistory(
+    [canonical('not-a-uuid',{source:'APP_AUTO',accountIdMasked:appMask})],
+    [{...external,brokerOrderId:'not-a-uuid'}],owner,
+  ).payloads.length,1);
+
 });
 
 test('source-bound vault account aliases cannot cross brokers, dates or Toss accounts', () => {
@@ -195,7 +200,9 @@ test('source-bound vault account aliases cannot cross brokers, dates or Toss acc
   });
   const external={...app,source:'KIWOOM_API',
     accountIdMasked:'KIWOOM-****-'+hash('kiwoom:'+owner)};
-  assert.equal(reconcileScopedExternalJournalHistory([app],[external],owner).payloads.length,0);
+  assert.equal(reconcileScopedExternalJournalHistory([app],[external],owner).payloads.length,1);
+  // A user-level Kiwoom vault is not evidence of the *actual* stock account.
+  // Never suppress a stock fill on a potentially reused broker order number.
   assert.equal(reconcileScopedExternalJournalHistory(
     [app],[{...external,filledAt:'2026-10-09T00:10:00.000Z'}],owner,
   ).payloads.length,1);
