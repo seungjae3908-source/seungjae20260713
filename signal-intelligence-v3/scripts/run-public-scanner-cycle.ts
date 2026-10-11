@@ -21,6 +21,7 @@ import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } fr
 import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
 import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
 import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs';
+import {choosePublicStockCandles,choosePublicStockQuote} from '../src/public-stock-source-selection.mjs';
 import {createPublicKrAlphaHistoricalDailyFeed} from '../src/public-kr-alpha-historical-daily.mjs';
 import {publicKrAlphaDailyQuote} from '../src/public-kr-alpha-daily.mjs';
 import {includeProvisionalKrAlphanumericRoster} from '../src/public-kr-provisional-roster.mjs';
@@ -198,21 +199,6 @@ function yahooProviderCandidates(lane, ticker, entry) {
   return [clean];
 }
 
-async function withProviderFallback(candidates, operation) {
-  let lastError;
-  for (const candidate of candidates) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await operation(candidate);
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) await sleep(150 * attempt);
-      }
-    }
-  }
-  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
-}
-
 async function withUpbitPacing(operation) {
   const originalFetch = globalThis.fetch;
   // Official public Quotation rate limits are separated by IP/group.
@@ -291,31 +277,40 @@ async function withStockPublicOnly(lane, operation) {
     marketData, scannerUniverse: universe,
     scannerMarket: lane.scannerMarket, targetUniverse,
     readPublicCandles: async (ticker, timeframe, entry) => {
-      try {
-        if (researchAlpha(ticker,entry)) {
+      if (researchAlpha(ticker,entry)) {
+        try {
           if (timeframe !== '1D') throw new Error('KR_ALPHA_PUBLIC_SOURCE_INTRADAY_NOT_VERIFIED');
           const candles=await KR_ALPHA_DAILY_FEED.getCandles(ticker,timeframe);
           audit.recordCandles(timeframe,candles);
           return {candles,provider:'naver-public-dayCandle'};
-        }
-        const symbols = yahooProviderCandidates(lane, ticker, entry);
-        const candles=await withProviderFallback(symbols, (symbol) => yahoo.getCandles(symbol, timeframe));
-        audit.recordCandles(timeframe,candles);
-        return {candles,provider:'yahoo-public'};
-      } catch(error){audit.candleError(timeframe,error);throw error;}
+        } catch(error){audit.candleError(timeframe,error);throw error;}
+      }
+      const symbols = yahooProviderCandidates(lane, ticker, entry);
+      const candles=await choosePublicStockCandles({
+        symbols,timeframe,now:Date.now(),preferAtLeast:20,
+        load:(symbol,tf)=>yahoo.getCandles(symbol,tf),
+        onSource:(rows)=>audit.recordCandles(timeframe,rows),
+        onError:(error)=>audit.candleError(timeframe,error),
+      });
+      // An alternate Yahoo class/exchange symbol is only considered after a
+      // bad, empty or too-short returned chart. No invented OHLC or 429 retry.
+      return {candles,provider:'yahoo-public'};
     },
     readPublicQuote: async (ticker, entry) => {
-      try {
-        if (researchAlpha(ticker,entry)) {
+      if (researchAlpha(ticker,entry)) {
+        try {
           const quote=publicKrAlphaDailyQuote(ticker,(await KR_ALPHA_DAILY_FEED.read(ticker)).candles);
           audit.recordQuote(quote);
           return quote;
-        }
-        const symbols = yahooProviderCandidates(lane, ticker, entry);
-        const quote=await withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
-        audit.recordQuote(quote);
-        return quote;
-      }catch(error){audit.quoteError(error);throw error;}
+        }catch(error){audit.quoteError(error);throw error;}
+      }
+      const symbols = yahooProviderCandidates(lane, ticker, entry);
+      return choosePublicStockQuote({
+        symbols,now:Date.now(),
+        load:(symbol)=>yahoo.getQuote(symbol),
+        onSource:(quote)=>audit.recordQuote(quote),
+        onError:(error)=>audit.quoteError(error),
+      });
     },
     operation: () => operation(targetUniverse),
   });
