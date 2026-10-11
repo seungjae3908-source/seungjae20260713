@@ -16,6 +16,7 @@ import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
 import { summarizeV3RawCryptoQuality } from '../src/public-v3-crypto-quality-diagnostic.mjs';
+import { selectV3TrustedSpotResearchOnly } from '../src/public-v3-spot-blocked-page-research.mjs';
 import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
 import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic,
   selectV3OutOfCursorResearch} from '../src/public-watch-v3-priority.mjs';
@@ -543,7 +544,38 @@ async function main() {
       });
       const status = recovery ? 'BLOCKED_DATA' : laneStatus(response);
       let adapted = [];
+      let blockedSpotResearchOnly=0;
+      let blockedSpotResearchDiagnostic=null;
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
+      if(status==='BLOCKED_DATA'&&lane.market==='CRYPTO_SPOT'){
+        // The whole source page stays BLOCKED_DATA for publication.
+        // Separately preserve only independently trusted current cards
+        // as research inputs, never as canonical source-page signal events.
+        const isolated=selectV3TrustedSpotResearchOnly(response,{
+          status,cursor,nowMs:Date.now(),
+        });
+        blockedSpotResearchDiagnostic=isolated.diagnostic;
+        if(isolated.cards.length){
+          const researchInputs=adaptCanonicalScannerCards(
+            isolated.cards.map(card=>({card,timeframe:lane.timeframe})),
+            {nowMs:Date.now()},
+          ).filter(row=>row.dataStatus==='READY');
+          for(const input of researchInputs){
+            const card=isolated.cards.find(raw=>raw.symbol===input.symbol);
+            if(!card)continue;
+            state.retained[retainedKey(input)]={
+              input:{...input,provenance:{...input.provenance,
+                laneId:lane.id,cursor,sourceCycleId,
+                blockedPageResearchOnly:true,economicAuthority:'NONE',
+                publicationEligible:false,
+              }},
+              expiresAt:card.expiresAt??fallbackExpiry(lane,nowMs),
+              laneId:lane.id,cursor,
+            };
+            blockedSpotResearchOnly+=1;
+          }
+        }
+      }
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
         clearScannedWindow(state, lane.id, cursor);
         adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: lane.timeframe })), { nowMs });
@@ -608,6 +640,8 @@ async function main() {
         responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
+        blockedSpotResearchOnly,
+        blockedSpotResearchDiagnostic,
         status,
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
