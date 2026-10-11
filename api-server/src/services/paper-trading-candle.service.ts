@@ -136,10 +136,17 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
       // Second target is a fraction of the ORIGINAL position, just like TP1.
       // Closing the whole remainder silently ignores explicit 25%/25% plans.
       // Any unallocated portion stays open for stop/manual close.
-      const targetQuantity = Math.min(
-        position.remainingQuantity,
-        floorQuantityToRules(position.quantity * position.targetClosePercent2 / 100, null, 8),
+      const allocatedQuantity = floorQuantityToRules(
+        position.quantity * position.targetClosePercent2 / 100, null, 8,
       );
+      // Two configured targets totaling 100% should finish the position,
+      // including exchange-step rounding dust from TP1. A 25%/25% plan must
+      // leave the unallocated 50% open for a later stop/manual close.
+      const allTargetsAccountedFor = position.target1Executed
+        && position.targetClosePercent1 + position.targetClosePercent2 >= 100 - EPSILON;
+      const targetQuantity = allTargetsAccountedFor
+        ? position.remainingQuantity
+        : Math.min(position.remainingQuantity, allocatedQuantity);
       if (targetQuantity > EPSILON) {
         fills.push(closePositionInternal(
           state,
