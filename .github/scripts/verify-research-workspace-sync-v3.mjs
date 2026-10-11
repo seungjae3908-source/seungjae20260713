@@ -421,6 +421,8 @@ const memberTelegramReviewed=[
 // Exact Paper-only integration additions reviewed from Draft #1836/#1839/#1840.
 // NO wildcard: original LIVE/Production/RLS/research guards remain enabled.
 const paperFourModeIntegrationReviewed=[
+ 'api-server/src/services/manual-four-market-paper-cycle.service.ts',
+ 'api-server/src/services/manual-four-market-paper-cycle.service.test.ts',
  'api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts',
  'api-server/src/routes/manual-four-market-paper-wallets.ts',
  'api-server/src/routes/paper-trading.smoke.test.ts',
