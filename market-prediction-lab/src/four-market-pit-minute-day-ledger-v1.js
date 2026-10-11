@@ -287,6 +287,9 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
     reason:complete?"RETROSPECTIVE_SOURCE_INVENTORY_NOT_CANONICAL_PIT_PROOF"
       :"HISTORICAL_MEMBER_MINUTE_SOURCE_MISSING_PARTIAL_OR_BLOCKED",
     pitGateStatus:pit.status, sourceStatus:expectedStatus,
+    // Retain the same source ID already validated for every input page.
+    // Used for later bounded multi-day compact receipt lineage checks.
+    pitRosterSourceId:manifest.sourceId,
     pitRosterDigestSha256:manifest.rawMembershipDigestSha256,
     sessionCalendarDigestSha256:calendarDigest,
     pageReceiptDigestsSha256:hash(pageDigestInputs),
