@@ -146,3 +146,17 @@ test('conflicting symbol or trade side within exact provider account and order s
     );
   }
 });
+
+test('invalid provider fee or tax amounts cannot disappear through external dedup', () => {
+  const known=canonical('cost',{source:'APP_AUTO',accountIdMasked:'UPBIT-****-ABC',
+    fees:0.1,tax:0});
+  for(const invalid of [
+    {fees:-1},{tax:-1},{fees:'UNKNOWN'},{tax:'UNKNOWN'},
+    {fees:NaN},{tax:Infinity},
+  ]) {
+    const provider={...known,source:'UPBIT_API',...invalid};
+    const result=reconcileScopedExternalJournalHistory([known],[provider]);
+    assert.equal(result.payloads.length,1);
+    assert.equal(result.audit.suppressedVerifiedDuplicateCount,0);
+  }
+});
