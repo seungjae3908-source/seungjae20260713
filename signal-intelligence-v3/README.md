@@ -73,3 +73,19 @@ node signal-intelligence-v3/scripts/run-cycle.mjs \
 ```
 
 The input is canonical deterministic evidence from the existing Scanner/Profit/Risk pipeline. The output can be consumed by both the application and Telegram without recalculating signals independently.
+
+## Draft: public-only stock candle metadata path
+
+The V3 stock Scanner actually invokes `MarketDataService.getCandlesMeta()`
+through `ScannerProviderHealthTracker`, not just `getCandles()`.
+The isolated V3 producer now binds **both** methods to the same Yahoo
+public-only handler for the duration of each KR/US lane and restores them
+on exit. An unavailable public response stays unavailable rather than
+falling into a differently sourced app candle chain. Deterministic
+regression tests assert both methods, restoration and fail-closed behavior.
+
+This binding fix alone does not prove the three existing KR/US
+`BLOCKED_DATA` lanes are resolved or that a source offers complete
+timeframe/session coverage. Retain the strict no-signal/NO-GO state until
+fresh source-backed real provider runs pass. No member Scanner, Paper,
+production application, order or account code is modified by this Draft.

@@ -14,6 +14,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
+import { bindPublicStockCandleSource } from '../src/public-stock-candle-binding.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -234,7 +235,6 @@ async function withUpbitPacing(operation) {
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
-  const originalCandles = marketData.getCandles;
   const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
 
@@ -256,11 +256,14 @@ async function withStockPublicOnly(lane, operation) {
   }
 
   const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
-  marketData.getCandles = async (ticker, timeframe = '1D') => {
+  // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
+  // getCandles. Bind BOTH methods to the same isolated Yahoo-only fetcher
+  // so the real scanner cannot bypass this public source via app fallbacks.
+  const restoreCandles = bindPublicStockCandleSource(marketData, async (ticker, timeframe = '1D') => {
     const entry = entryByTicker.get(String(ticker).toUpperCase());
     const candidates = yahooProviderCandidates(lane, ticker, entry);
     return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-  };
+  });
   marketData.getQuote = async (ticker) => {
     const originalTicker = String(ticker).toUpperCase();
     const entry = entryByTicker.get(originalTicker);
@@ -279,7 +282,7 @@ async function withStockPublicOnly(lane, operation) {
   };
 
   try { return await operation(); } finally {
-    marketData.getCandles = originalCandles;
+    restoreCandles();
     marketData.getQuote = originalQuote;
     universe.get = originalUniverseGet;
   }
