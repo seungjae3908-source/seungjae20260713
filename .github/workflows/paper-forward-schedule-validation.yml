@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
+      - .github/scripts/paper-forward-reviewed-paths.mjs
+      - .github/scripts/research-center-batch-scope.mjs
+      - .github/tests/research-center-batch-scope.test.mjs
       - market-prediction-lab/src/paper-public-provider-authority-v1.js
       - market-prediction-lab/src/adaptive-multi-evidence-cost-liquidity-v2.js
       - market-prediction-lab/src/adaptive-multi-evidence-e2e-v2.js
@@ -38,7 +41,38 @@ on:
       - market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
       - market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
       - market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
+      - .github/workflows/public-forward-liquidity-server-shadow-activation.yml
+      - .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
+      - ops/activate-public-forward-liquidity-server-canonical-v1.sh
+      - ops/check-public-forward-liquidity-server-component-equivalence-v1.sh
+      - market-intelligence-sidecar/config/public-forward-liquidity-server-component-paths-v1.txt
+      - market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
+      - market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs
+      - market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+      - market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - .github/scripts/current-main-ci-provenance.cjs
+      - .github/tests/current-main-ci-provenance.test.cjs
+      - .github/tests/production-automatic-paper-only-gate-contract.test.mjs
+      - .github/workflows/production-automatic-paper-only-gate.yml
+      - stock-analyzer/e2e/production-automatic-paper-activation.spec.ts
+      - stock-analyzer/playwright.production-automatic-paper-activation.config.ts
+      - api-server/src/routes/backtests.ts
+      - api-server/src/services/backtest-data.service.ts
+      - api-server/src/services/backtest-engine.service.test.ts
+      - api-server/src/services/backtest-engine.service.ts
+      - api-server/src/services/backtest-paper-handoff.service.test.ts
+      - api-server/src/services/backtest-paper-handoff.service.ts
+      - api-server/src/services/futures-market-data.service.ts
+      - api-server/src/services/paper-trading.types.ts
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.js
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
+      - stock-analyzer/src/components/backtest-research-panel.tsx
+      - stock-analyzer/src/lib/backtest.ts
+      - stock-analyzer/e2e/phase5-backtest.spec.ts
+      - stock-analyzer/src/pages/phase5-backtest-e2e.tsx
+      - stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
+      - stock-analyzer/src/lib/excel-export.ts
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
@@ -62,6 +96,7 @@ on:
       - .github/workflows/paper-canonical-evidence-bridge.yml
       - .github/workflows/paper-canonical-runtime-readiness.yml
       - .github/workflows/paper-canonical-seven-blocker-repair.yml
+      - .github/tests/pr-exact-head-paper-repair-checkout.test.mjs
       - api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts
       - market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
       - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
@@ -125,6 +160,7 @@ on:
       - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
       - market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
       - market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
+      - market-prediction-lab/src/bitget-funding-cost-owner-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/scripts/run-shadow-cycle.js
@@ -152,6 +188,7 @@ on:
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
       - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
       - market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
+      - market-prediction-lab/tests/bitget-funding-cost-owner-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
@@ -174,8 +211,11 @@ on:
       - .github/workflows/research-production-forward-one-shot.yml
       - research-production/test/research-production-forward-one-shot-workflow.test.mjs
       - ops/install-paper-forward-schedule.sh
+      - ops/verify-paper-forward-genuine-cost-window.mjs
+      - .github/tests/paper-forward-genuine-cost-window.test.mjs
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -183,6 +223,36 @@ on:
       - .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
       - .github/workflows/paper-forward-schedule-disable.yml
       - .github/workflows/paper-forward-schedule-validation.yml
+      - .github/workflows/research-center-predeploy-validation.yml
+      - .github/workflows/research-production-validation.yml
+      - market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+      - market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
+      - api-server/src/services/trade-automation-unified-journal-adapter.ts
+      - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.test.ts
+      - api-server/src/services/automatic-paper-journal-mirror.service.ts
+      - api-server/src/services/automatic-paper-journal-mirror.service.test.ts
+      - api-server/src/services/unified-trade-journal.service.test.ts
+      - api-server/src/routes/paper-journal.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.test.ts
+      - api-server/src/services/trade-execution.service.ts
+      - api-server/src/services/paper-futures-funding-certificate.service.ts
+      - api-server/src/services/paper-futures-funding-certificate.service.test.ts
+      - api-server/src/services/trade-automation.repository.ts
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-execution-pre-submission.test.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - .github/tests/trading-ops-consolidated-preflight.test.mjs
+      - market-prediction-lab/src/formula-paper-registry-readback-v1.js
+      - market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
+      - market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+      - market-prediction-lab/tests/research-bundle-formula-fixture.js
+      - research-production/test/historical-pipelines.test.mjs
       - .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
       - .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
       - .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
@@ -256,11 +326,13 @@ jobs:
           set -Eeuo pipefail
           python - <<'PY'
           from pathlib import Path
+          import subprocess
           text = Path('.github/workflows/paper-forward-schedule-validation.yml').read_text()
           pull = text.split('  pull_request:\n', 1)[1].split('  push:\n', 1)[0]
           trigger = [line.split('- ', 1)[1].strip() for line in pull.splitlines() if line.startswith('      - ')]
-          bounded = text.split('          allowed=(\n', 1)[1].split('          )\n', 1)[0]
-          allowed = [line.strip() for line in bounded.splitlines() if line.strip()]
+          allowed = subprocess.check_output(
+              ['node', '.github/scripts/paper-forward-reviewed-paths.mjs'], text=True
+          ).splitlines()
           if len(trigger) != len(set(trigger)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_DUPLICATE_PATH')
           if len(allowed) != len(set(allowed)):
@@ -270,7 +342,7 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
-      - name: Require bounded non-UI diff
+      - name: Require bounded Paper and four-market backtester diff
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -281,217 +353,51 @@ jobs:
           fi
           git cat-file -e "$base^{commit}"
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
-          allowed=(
-            .github/workflows/authoritative-paper-runtime-factory-v1.yml
-            .github/workflows/paper-forward-schedule-validation.yml
-            api-server/scripts/build-authoritative-paper-runtime-package.mjs
-            api-server/src/services/authoritative-paper-callback-owners.service.ts
-            api-server/src/services/authoritative-paper-evidence-sources.service.ts
-            api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
-            api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
-            api-server/src/services/authoritative-paper-runtime-package.entry.ts
-            api-server/src/services/paper-trading-state-snapshot.service.ts
-            api-server/src/services/paper-trading-state-publisher.service.ts
-            api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.ts
-            api-server/src/services/manual-paper-canonical-runtime-evidence-source.service.test.ts
-            api-server/src/services/manual-paper-canonical-runtime-readiness.service.ts
-            api-server/src/services/manual-paper-canonical-runtime-readiness.service.test.ts
-            api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
-            api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
-            ops/check-paper-canonical-pm2-safety.mjs
-            market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
-            ops/materialize-paper-canonical-forward-observer.mjs
-            ops/publish-paper-canonical-validation-freshness-policy.mjs
-            market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
-            market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
-            .github/workflows/paper-canonical-evidence-bridge.yml
-            .github/workflows/paper-canonical-runtime-readiness.yml
-            .github/workflows/paper-canonical-seven-blocker-repair.yml
-            api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts
-            market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
-            market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
-            market-prediction-lab/tests/paper-canonical-seven-blocker-repair-cli-v1.test.js
-            ops/plan-paper-canonical-seven-blocker-repair.mjs
-            api-server/src/services/manual-paper-natural-contract.d.ts
-            api-server/src/routes/paper-trading.ts
-            api-server/src/routes/paper-trading.smoke.test.ts
-            api-server/src/services/paper-simulated-execution-evidence.service.ts
-            api-server/src/services/crypto-signal-scanner.service.ts
-            api-server/src/services/crypto-signal-scanner.service.test.ts
-            api-server/src/services/forward-recommendation-observer-runtime.service.ts
-            api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
-            api-server/src/services/fast-profitability-activation.service.test.ts
-            api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
-            api-server/src/services/forward-observer-canonical-metadata.service.ts
-            api-server/src/services/forward-observer-canonical-metadata.service.test.ts
-            api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
-            api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
-            api-server/src/services/forward-observer-validation-receipt-owner.service.ts
-            api-server/src/services/forward-observer-validation-receipt-owner.service.test.ts
-            api-server/src/services/scanner-canonical-paper-identity.service.ts
-            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
-            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
-            api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
-            api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
-            api-server/src/services/scanner-market-profile-overlay.service.test.ts
-            api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
-            api-server/src/services/strategy-promotion.service.ts
-            api-server/src/services/strategy-promotion.service.test.ts
-            market-intelligence-sidecar/src/execution-quality.mjs
-            market-intelligence-sidecar/src/execution-quality.d.mts
-            market-intelligence-sidecar/tests/execution-quality.test.mjs
-            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
-            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
-            market-prediction-lab/src/adaptive-multi-evidence-cost-liquidity-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-e2e-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-event-normalization-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-formula-tournament-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-global-risk-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-independence-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-journal-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-market-features-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-meta-decision-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-natural-paper-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-position-policy-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-regime-router-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-research-ingest-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-strategy-health-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-strategy-portfolio-v2.js
-            market-prediction-lab/src/adaptive-multi-evidence-validation-v2.js
-            market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
-            market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
-            market-prediction-lab/src/authoritative-paper-runtime-stage-evidence-caller-v1.js
-            market-prediction-lab/src/authoritative-paper-runtime-stage-evidence-reader-v1.js
-            market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
-            market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
-            market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
-            market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
-            market-prediction-lab/tests/canonical-paper-admission-bridge-v1.test.js
-            market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
-            market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
-            market-prediction-lab/src/bitget-position-tier-v1.js
-            market-prediction-lab/src/bitget-position-tier-v1.d.ts
-            market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
-            market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
-            market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
-            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js
-            market-prediction-lab/src/member-auto-trading-paper-handoff-v1.d.ts
-            market-prediction-lab/src/four-market-paper-sampler-v1.js
-            market-prediction-lab/src/four-market-paper-settlement-v1.js
-            market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
-            market-prediction-lab/src/paper-public-provider-authority-v1.js
-            market-prediction-lab/src/natural-paper-public-position-observation-v1.js
-            market-prediction-lab/src/paper-scheduler-driver-v1.js
-            market-prediction-lab/src/paper-forward-schedule-runtime-base-v1.js
-            market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
-            market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
-            market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
-            market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
-            market-prediction-lab/src/recurring-paper-loop-v1.js
-            market-prediction-lab/scripts/run-paper-forward-schedule.js
-            market-prediction-lab/scripts/run-shadow-cycle.js
-            market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
-            market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
-            market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
-            market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-cost-liquidity-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-event-normalization-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-formula-tournament-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-global-risk-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-independence-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-journal-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-market-features-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-meta-decision-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-position-policy-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-regime-router-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-research-ingest-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
-            market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
-            market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
-            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
-            market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js
-            market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js
-            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
-            market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
-            market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
-            market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
-            market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
-            market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
-            market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
-            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
-            market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
-            market-prediction-lab/tests/paper-scheduler-driver-v1.test.js
-            market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
-            market-prediction-lab/tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js
-            market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
-            market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
-            market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
-            market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
-            market-prediction-lab/tests/recurring-paper-loop-v1.test.js
-            market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
-            market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
-            market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
-            market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
-            market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
-            market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
-            research-production/deploy/prepare-paper-state-readonly-transport.mjs
-            research-production/deploy/research-production@.service
-            research-production/src/engine.mjs
-            research-production/src/natural-cycle-verdict-trace.mjs
-            research-production/test/paper-state-readonly-transport.test.mjs
-            research-production/test/research-engine.test.mjs
-            research-production/test/paper-risk-policy-transport.test.mjs
-            .github/workflows/prediction-lab-pr-head-unit.yml
-            research-production/test/natural-cycle-verdict-trace.test.mjs
-            market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
-            ops/research-production-readonly-evidence.sh
-            .github/workflows/research-production-natural-cycle-evidence.yml
-            .github/workflows/research-production-forward-one-shot.yml
-            research-production/test/research-production-forward-one-shot-workflow.test.mjs
-            ops/install-paper-forward-schedule.sh
-            ops/bridge-paper-forward-no-deploy-snapshot.mjs
-            ops/run-paper-forward-flat-snapshot-republish.mjs
-            ops/collect-paper-forward-no-deploy-diagnostics.mjs
-            ops/disable-paper-forward-schedule.sh
-            .github/workflows/paper-forward-schedule-activation.yml
-            .github/workflows/paper-forward-schedule-no-deploy-activation.yml
-            .github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml
-            .github/workflows/paper-forward-schedule-disable.yml
-            .github/workflows/prediction-lab-scanner-spot-4h-dataset-evidence.yml
-            .github/workflows/prediction-lab-scanner-spot-spread-archive-validation.yml
-            .github/workflows/prediction-lab-scanner-spot-spread-forward-collector-dormant.yml
-            market-prediction-lab/docs/scanner-quality-current-evidence-readiness-20260927.md
-            market-prediction-lab/scripts/run-scanner-quality-artifact-producer-v1.js
-            market-prediction-lab/scripts/run-scanner-spot-4h-dataset-materializer-v1.js
-            market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js
-            market-prediction-lab/src/scanner-quality-artifact-producer-v1.js
-            market-prediction-lab/src/scanner-spot-4h-dataset-materializer-v1.js
-            market-prediction-lab/src/scanner-spot-spread-archive-v1.js
-            market-prediction-lab/src/upbit-spot-history.js
-            market-prediction-lab/tests/scanner-quality-artifact-producer-cli-v1.test.js
-            market-prediction-lab/tests/scanner-quality-artifact-producer-v1.test.js
-            market-prediction-lab/tests/scanner-spot-4h-dataset-materializer-v1.test.js
-            market-prediction-lab/tests/scanner-spot-spread-archive-v1.test.js
-            market-prediction-lab/tests/scanner-spot-spread-forward-collector-dormant.test.js
-            market-prediction-lab/tests/upbit-spot-history.test.js
-            research-production/src/research-canonical-dataset-component.mjs
-            research-production/src/research-dataset-snapshot-store.mjs
-            research-production/test/research-canonical-dataset-component.test.mjs
-            research-production/test/research-dataset-snapshot-store.test.mjs
-          )
+          mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
+          # The Research Center batch shares Paper readbacks, not Live authority.
+          # Add exact reviewed paths, while preserving every Paper safety test.
+          node --test .github/tests/research-center-batch-scope.test.mjs
+          mapfile -t research_batch < <(node .github/scripts/research-center-batch-scope.mjs --list-paths)
+          test "${#research_batch[@]}" -gt 0
+          allowed+=("${research_batch[@]}")
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
           for path in "${changed[@]}"; do
+            # Exactly these unrelated paths use their own Research AI /
+            # public forward sample authority checks; never waive Paper paths.
+            case "$path" in
+              .github/workflows/research-ai-production-activation.yml|research-production/bin/research-approved-job-intake.mjs|research-production/test/research-ai-activation-contract.test.mjs|research-production/test/research-approved-job-intake.test.mjs|.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml|.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml|.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml|market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs|market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs) continue ;;
+            esac
             printf '%s\n' "${allowed[@]}" | grep -Fx "$path" >/dev/null || {
               echo "unexpected path: $path" >&2
               exit 1
             }
-            [[ "$path" != stock-analyzer/* ]]
+            if [[ "$path" == stock-analyzer/* ]]; then
+              case "$path" in
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
+                *)
+                  printf '%s\n' "${research_batch[@]}" | grep -Fx "$path" >/dev/null || {
+                    echo "Unexpected Paper-facing UI change: $path" >&2
+                    exit 1
+                  }
+                  ;;
+              esac
+            fi
           done
+
+      - name: Verify Research formula queue does not grant execution authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          node --check market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+          node --test market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+          node --check market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+          node --test market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
+          node --test market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
+          grep -Fq "executionAuthority: 'NONE'" market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          grep -Fq 'FORMULA_QUEUE_UNATTESTED_STAGE_EVIDENCE_FORBIDDEN' market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          grep -Fq "id: 'formula-backtest-queue'" research-production/src/engine.mjs
 
       - name: Validate JavaScript and shell syntax
         shell: bash
@@ -523,7 +429,9 @@ jobs:
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
           node --check market-prediction-lab/src/recurring-paper-loop-v1.js
           node --check market-prediction-lab/src/natural-paper-authoritative-settlement-cost-collector-v1.js
+          node --check market-prediction-lab/src/bitget-funding-cost-owner-v1.js
           node --check market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
+          node --check market-prediction-lab/tests/bitget-funding-cost-owner-v1.test.js
           node --check market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js

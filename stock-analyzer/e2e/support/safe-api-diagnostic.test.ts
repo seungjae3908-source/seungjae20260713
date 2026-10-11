@@ -1,6 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { collectSafeApiDiagnostic } from './safe-api-diagnostic';
+import { READONLY_RUNTIME_ERROR_PATTERN, summarizeAutomaticWarmupPositions } from '../production-account-readonly-live-qa-diagnostic';
+
+test('runtime failure classification retains known credential/network blockers but never raw messages', () => {
+  const safe = new RegExp(READONLY_RUNTIME_ERROR_PATTERN);
+  for (const code of ['CREDENTIALS_UNAVAILABLE', 'ACCOUNT_NOT_CONFIGURED', 'RATE_LIMITED',
+    'PROVIDER_TIMEOUT', 'KIWOOM_AUTH_OR_IP_REJECTED_CODE_8001', 'BACKGROUND_LIVE_CANONICAL_HISTORY_LIMIT'])
+    assert.equal(safe.test(code), true);
+  for (const raw of ['apiKey=private', 'CREDENTIALS_UNAVAILABLE: private', 'RATE_LIMITED\npassword',
+    'not a known code', 'ACCOUNT_NOT_CONFIGURED ']) assert.equal(safe.test(raw), false);
+});
+
+test('automatic warmup diagnostic distinguishes settlement cash, held exposure and unknown quantities without recording account values', () => {
+  assert.deepEqual(summarizeAutomaticWarmupPositions(undefined), {
+    positionsPresent: false, nonCashPositionCount: null, unknownPositionQuantityCount: null,
+  });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'upbit', positions: [
+    { symbol: 'KRW', quantity: null }, { symbol: 'BTC', quantity: 0.2 },
+    { symbol: 'ETH', quantity: null }, { symbol: 'XRP', quantity: 0 },
+  ] }), { positionsPresent: true, nonCashPositionCount: 1, unknownPositionQuantityCount: 1 });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'bitget', positions: [
+    { symbol: 'BTCUSDT', quantity: -1 }, { symbol: 'ETHUSDT', quantity: NaN },
+  ] }), { positionsPresent: true, nonCashPositionCount: 1, unknownPositionQuantityCount: 1 });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'toss', positions: [] }), {
+    positionsPresent: true, nonCashPositionCount: 0, unknownPositionQuantityCount: 0,
+  });
+});
 
 function response(status: number, body: unknown) {
   return {

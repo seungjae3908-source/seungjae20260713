@@ -302,22 +302,37 @@ jobs:
               gh api --paginate "repos/$REPOSITORY/actions/artifacts?per_page=100" \
                 --jq '.artifacts[] | [.id, .expired, .created_at, .workflow_run.id, .name] | @tsv' \
                 > "$artifact_index"
-              publication_receipt_count="$(awk -F '\t' '$5 ~ /^canonical-shadow-publication-receipt-/ { count++ } END { print count + 0 }' "$artifact_index")"
+              successful_publisher_runs="$RUNNER_TEMP/canonical-shadow-successful-publisher-runs.txt"
+              gh api --paginate "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100" \
+                --jq '.workflow_runs[].id' > "$successful_publisher_runs"
+              # A receipt artifact is authoritative history only when its owning Publisher run succeeded.
+              # Failed Publisher runs may upload diagnostic/partial artifacts before a later fail-closed step;
+              # those artifacts must not permanently strand explicit one-shot recovery.
+              publication_receipt_count="$(awk -F '\t' '
+                NR==FNR { successful[$1]=1; next }
+                $5 ~ /^canonical-shadow-publication-receipt-/ && successful[$4] { seen[$4]=1 }
+                END { count=0; for (run in seen) count++; print count + 0 }
+              ' "$successful_publisher_runs" "$artifact_index")"
               [[ "$publication_receipt_count" =~ ^[0-9]+$ ]]
               if [[ "$publication_receipt_count" != '0' ]]; then
-                echo "Canonical publication receipt history exists but no valid predecessor is usable; fail closed instead of bootstrap recovery" >&2
+                echo "Authoritative successful Publisher receipt history exists but no valid predecessor is usable; fail closed instead of bootstrap recovery" >&2
                 exit 1
               fi
 
-              comments_json="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100")"
-              recovery_approval_id="$(printf '%s' "$comments_json" | RECOVERY_OWNER="${REPOSITORY%%/*}" RECOVERY_TARGET_SHA="$TARGET_SHA" node -e '
-                let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-                  const pages=JSON.parse(s);const rows=pages.flat();
-                  const expected=`/approve-canonical-shadow-recovery ${process.env.RECOVERY_TARGET_SHA}`;
-                  const matches=rows.filter(x=>x?.user?.login===process.env.RECOVERY_OWNER&&String(x?.body??"").trim()===expected)
-                    .sort((a,b)=>Number(b.id)-Number(a.id));
-                  if(matches[0])process.stdout.write(String(matches[0].id));
-                });')"
+              recovery_owner="${REPOSITORY%%/*}"
+              recovery_expected="/approve-canonical-shadow-recovery $TARGET_SHA"
+              recovery_approval_id="$(
+                gh api --paginate "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100" \
+                  | jq -sr --arg owner "$recovery_owner" --arg expected "$recovery_expected" '
+                      flatten(1)
+                      | map(select(
+                          (.user.login // "") == $owner
+                          and ((.body // "") | gsub("^\\s+|\\s+$"; "")) == $expected
+                        ))
+                      | sort_by(.id)
+                      | (last.id // empty)
+                    '
+              )"
               [[ "$recovery_approval_id" =~ ^[1-9][0-9]*$ ]] || {
                 echo "No successfully published canonical predecessor receipt found; exact #$HUB_ISSUE_NUMBER approval /approve-canonical-shadow-recovery $TARGET_SHA is required" >&2
                 exit 1

@@ -37,6 +37,7 @@ export const APP_ROUTES = {
   telegramOrder: '/telegram-order',
   aiChart: '/ai-chart',
   autoTrading: '/auto-trading',
+  autoRehearsalPreview: '/auto-rehearsal-preview',
   backtests: '/backtests',
   paperTrading: '/paper-trading',
   strategyPromotion: '/strategy-promotion',
@@ -235,12 +236,12 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.aiChart,
         label: 'AI차트',
         icon: 'chart',
-        capability: 'canAccessRiskPreview',
+        capability: 'canAccessAiChart',
       },
       {
         id: 'auto-trading',
         href: APP_ROUTES.autoTrading,
-        label: '자동매매',
+        label: '기술매매',
         icon: 'power',
         capability: 'canAccessAutoTrading',
       },
@@ -250,13 +251,6 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         label: '과거검증',
         icon: 'chart',
         capability: 'canAccessBacktests',
-      },
-      {
-        id: 'paper-trading',
-        href: APP_ROUTES.paperTrading,
-        label: '모의매매',
-        icon: 'power',
-        capability: 'canAccessPaperTrading',
       },
     ],
   },
@@ -276,7 +270,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     menu: [
       { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 정보', icon: 'chat', capability: 'canAccessBasicInfo' },
-      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },
+      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
       {
         id: 'portfolio',
         href: APP_ROUTES.portfolio,
@@ -329,6 +323,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'telegram-order', title: '주문 준비', breadcrumb: ['기술', '주문 준비'], groupId: 'technical', exactPaths: [APP_ROUTES.telegramOrder], transient: true },
   { id: 'ai-chart', title: 'AI차트', breadcrumb: ['기술', 'AI차트'], groupId: 'technical', exactPaths: [APP_ROUTES.aiChart] },
   { id: 'auto-trading', title: '자동매매', breadcrumb: ['기술', '자동매매'], groupId: 'technical', exactPaths: [APP_ROUTES.autoTrading] },
+  { id: 'auto-rehearsal-preview', title: '자동매매 리허설 Preview', breadcrumb: ['기술', '자동매매 리허설 Preview'], groupId: 'technical', exactPaths: [APP_ROUTES.autoRehearsalPreview], transient: true },
   { id: 'backtests', title: '과거검증', breadcrumb: ['기술', '과거검증'], groupId: 'technical', exactPaths: [APP_ROUTES.backtests] },
   { id: 'paper-trading', title: '모의매매', breadcrumb: ['기술', '모의매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
   { id: 'strategy-promotion', title: '전략 승격센터', breadcrumb: ['기술', '전략 승격센터'], groupId: 'technical', exactPaths: [APP_ROUTES.strategyPromotion] },
@@ -362,6 +357,7 @@ export function navigationGroupMatches(group: NavigationGroup, location: string)
 }
 
 export function navigationMenuItemMatches(item: NavigationMenuItem, location: string): boolean {
+  if (item.id === 'auto-trading' && cleanAppPath(location) === APP_ROUTES.paperTrading) return true;
   return cleanAppPath(location) === item.href;
 }
 

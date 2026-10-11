@@ -105,6 +105,15 @@ if (!bootstrap) {
   );
 }
 
+// Require the atomic Staging DB bootstrap's admin V2 RLS proof.
+addCheck(
+  'administrator four-market Paper V2 RLS staging proof',
+  bootstrap?.admin_v2_rls_verified === true ? 'passed' : 'failed',
+  bootstrap?.admin_v2_rls_verified === true
+    ? 'admin_v2_rls_verified=true; four-market immutable virtual seed protected'
+    : 'STAGING_ADMIN_V2_RLS_PROOF_REQUIRED',
+);
+
 const accountsCreated = Number(accountProvisioning?.created ?? 0);
 const provisioningOk = accountProvisioning?.status === 'passed'
   && accountsCreated === 4

@@ -14,6 +14,8 @@ const workflow = await read('.github/workflows/staging-dispatch-bridge.yml');
 const documentation = await read('docs/staging-dispatch-bridge.md');
 
 assert(workflow.includes("startsWith(github.event.comment.body, '/run-staging ')"), 'unrelated owner comments must not start the dispatch job');
+assert(workflow.includes('github.event.issue.number == 1555'), 'rollover control issue #1555 must be accepted after legacy issue saturation');
+assert(workflow.includes("github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'"), 'rollover control issue title must be pinned exactly');
 assert(workflow.includes('Require exact current main SHA'), 'state-changing staging dispatch must require the exact current main revision');
 assert(workflow.includes('MAIN_SHA="$(git rev-parse origin/main^{commit})"'), 'dispatch bridge must resolve current main immediately before dispatch');
 assert(workflow.includes('[[ "$TARGET_SHA" == "$MAIN_SHA" ]]'), 'dispatch bridge must reject stale main revisions');

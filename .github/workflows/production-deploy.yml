@@ -17,10 +17,95 @@ on:
         required: false
         default: false
         type: boolean
+      apply_admin_trading_policy_limit_1m:
+        description: One-time administrator-only migration of the saved Production order baseline to 1,000,000 KRW
+        required: false
+        default: false
+        type: boolean
+      prepare_admin_auto_live_policy:
+        description: Prepare the administrator four-market Automatic LIVE policy without granting execution authority
+        required: false
+        default: false
+        type: boolean
+      qa_scope:
+        description: Post-deploy QA scope
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - trading_core
+          - auto_live
+          - automation_research
+          - member
   pull_request:
     paths:
       - .github/workflows/production-deploy.yml
       - .github/workflows/production-one-time-approval.yml
+      - .github/workflows/production-postdeploy-qa.yml
+      - .github/workflows/production-trading-core-qa.yml
+      - .github/tests/production-trading-core-qa-contract.test.mjs
+      - stock-analyzer/e2e/production-trading-core-qa.spec.ts
+      - stock-analyzer/playwright.production-trading-core.config.ts
+      - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
+      - stock-analyzer/playwright.production-auto-live-only.config.ts
+      - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
+      - stock-analyzer/playwright.production-auto-live-policy-prepare.config.ts
+      - stock-analyzer/e2e/production-automation-research-core-qa.spec.ts
+      - stock-analyzer/playwright.production-automation-research-core.config.ts
+      - stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts
+      - stock-analyzer/playwright.production-automation-research-predeploy.config.ts
+      - stock-analyzer/src/pages/auto-trading.tsx
+      - stock-analyzer/src/pages/paper-trading.tsx
+      - stock-analyzer/src/pages/research-center.tsx
+      - stock-analyzer/src/pages/research-center-workspace.tsx
+      - stock-analyzer/src/pages/backtests.tsx
+      - stock-analyzer/src/components/backtest-research-panel.tsx
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/routes/paper-journal.ts
+      - api-server/src/routes/admin.ts
+      - api-server/src/routes/backtests.ts
+      - .github/workflows/staging-trading-core-only.yml
+      - .github/scripts/build-staging-trading-core-only-verdict.mjs
+      - .github/scripts/build-staging-auto-live-only-verdict.mjs
+      - .github/scripts/verify-staging-auto-live-verdict.mjs
+      - ops/production-auto-live-signal-source-audit.mjs
+      - .github/scripts/verify-staging-automation-research-verdict.mjs
+      - .github/scripts/verify-production-automation-research-core-receipt.mjs
+      - .github/tests/production-automation-research-core-qa-contract.test.mjs
+      - .github/tests/production-automation-research-predeploy-contract.test.mjs
+      - stock-analyzer/e2e/production-trading-policy-limit-apply.spec.ts
+      - stock-analyzer/playwright.production-trading-policy-limit.config.ts
+      - .github/tests/production-trading-policy-limit-apply-contract.test.mjs
+      - stock-analyzer/e2e/production-member-readonly-qa.spec.ts
+      - stock-analyzer/playwright.production-member.config.ts
+      - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/verify-production-qa-receipt.cjs
+      - .github/scripts/verify-production-qa-receipt.cjs
+      - .github/scripts/verify-production-deploy-execution.cjs
+      - ops/apply-production-paper-journal-privileges.mjs
+      - ops/classify-production-paper-journal-privilege-failure.mjs
+      - ops/verify-production-paper-journal-privileges.mjs
+      - ops/apply-production-member-access-hardening.mjs
+      - ops/verify-production-member-access-hardening.mjs
+      - ops/apply-production-admin-four-paper-rls.mjs
+      - ops/verify-production-admin-four-paper-rls.mjs
+      - .github/tests/production-admin-four-paper-rls.test.mjs
+      - api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql
+      - api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
+      - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+      - api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
+      - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
+      - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
+      - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
+      - .github/scripts/build-production-postdeploy-context.mjs
+      - .github/scripts/build-production-postdeploy-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - api-server/src/features/account-readonly/account-readonly.contract.ts
+      - api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts
+      - .github/scripts/verify-production-postdeploy-qa-contract.mjs
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/post-merge-release-provenance.yml
       - .github/workflows/staging-readiness.yml
@@ -79,6 +164,27 @@ jobs:
         run: node api-server/scripts/verify-production-verification-contract.mjs
       - name: Verify Production trade schema read-only gate contract
         run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
+      - name: Verify Production paper journal privilege contract
+        run: node ops/verify-production-paper-journal-privileges.mjs --static
+      - name: Verify Production member access hardening contract
+        run: node ops/verify-production-member-access-hardening.mjs --static
+      - name: Verify administrator 4-market Paper RLS deployment contract
+        run: |
+          node --check ops/apply-production-admin-four-paper-rls.mjs
+          node --check ops/verify-production-admin-four-paper-rls.mjs
+          node ops/verify-production-admin-four-paper-rls.mjs --static
+          node --test .github/tests/production-admin-four-paper-rls.test.mjs
+      - name: Verify approval-free post-deploy QA isolation contract
+        run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - name: Verify Automation/Paper/Research/Backtester scoped QA contract
+        run: node --test .github/tests/production-automation-research-core-qa-contract.test.mjs
+      - name: Verify Automatic LIVE-only release contract
+        run: |
+          node --check ops/production-auto-live-signal-source-audit.mjs
+          node api-server/scripts/verify-staging-deploy-script-contract.mjs
+          node --test .github/tests/production-auto-live-only-release-contract.test.mjs
+      - name: Verify one-approval 1M Production trading-policy migration contract
+        run: node --test .github/tests/production-trading-policy-limit-apply-contract.test.mjs
 
   approval-gate:
     name: Validate immutable main revision, release provenance, and exact staging verdict
@@ -99,8 +205,15 @@ jobs:
         id: target
         env:
           TARGET_SHA: ${{ inputs.sha }}
+          QA_SCOPE: ${{ inputs.qa_scope }}
+          PREPARE_ADMIN_AUTO_LIVE_POLICY: ${{ inputs.prepare_admin_auto_live_policy }}
         run: |
           set -Eeuo pipefail
+          if [[ "$QA_SCOPE" == auto_live ]]; then
+            [[ "$PREPARE_ADMIN_AUTO_LIVE_POLICY" == true ]] || { echo 'AUTO_LIVE_POLICY_PREPARATION_REQUIRED' >&2; exit 1; }
+          else
+            [[ "$PREPARE_ADMIN_AUTO_LIVE_POLICY" == false ]] || { echo 'AUTO_LIVE_POLICY_PREPARATION_SCOPE_INVALID' >&2; exit 1; }
+          fi
           [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
             echo 'Production deployment requires an exact 40-character commit SHA.' >&2
             exit 1
@@ -164,10 +277,16 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          QA_SCOPE: ${{ inputs.qa_scope }}
         with:
           script: |
             const targetSha = process.env.TARGET_SHA;
-            const artifactName = `staging-verdict-${targetSha}`;
+            const scoped = ['automation_research', 'auto_live'].includes(process.env.QA_SCOPE);
+            const artifactName = process.env.QA_SCOPE === 'automation_research'
+              ? `staging-automation-research-verdict-${targetSha}`
+              : process.env.QA_SCOPE === 'auto_live'
+                ? `staging-auto-live-verdict-${targetSha}`
+                : `staging-verdict-${targetSha}`;
             const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -188,7 +307,9 @@ jobs:
               const valid = run.event === 'workflow_dispatch'
                 && run.head_branch === 'main'
                 && run.head_sha === targetSha
-                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.path === (scoped
+                  ? '.github/workflows/staging-trading-core-only.yml'
+                  : '.github/workflows/staging-readiness.yml')
                 && run.status === 'completed'
                 && run.conclusion === 'success';
               if (valid) {
@@ -206,15 +327,30 @@ jobs:
       - name: Download exact staging verdict artifact
         uses: actions/download-artifact@v4
         with:
-          name: staging-verdict-${{ steps.target.outputs.sha }}
+          name: ${{ inputs.qa_scope == 'automation_research' && format('staging-automation-research-verdict-{0}', steps.target.outputs.sha) || inputs.qa_scope == 'auto_live' && format('staging-auto-live-verdict-{0}', steps.target.outputs.sha) || format('staging-verdict-{0}', steps.target.outputs.sha) }}
           path: staging-verdict
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.verdict-artifact.outputs.run_id }}
       - name: Require release_ready true, exact SHA, zero failures, and zero skipped checks
+        if: ${{ inputs.qa_scope != 'automation_research' && inputs.qa_scope != 'auto_live' }}
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+      - name: Require exact Automation/Paper/Research/Backtester scoped release verdict
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: >-
+          node .github/scripts/verify-staging-automation-research-verdict.mjs
+          staging-verdict/automation-research-staging-verdict.json "$TARGET_SHA"
+      - name: Require exact Automatic LIVE-only scoped release verdict
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: >-
+          node .github/scripts/verify-staging-auto-live-verdict.mjs
+          staging-verdict/staging-auto-live-verdict.json "$TARGET_SHA"
       - name: Record accepted staging evidence
         run: |
           {
@@ -222,7 +358,8 @@ jobs:
             echo
             echo "- Target SHA: \`${{ steps.target.outputs.sha }}\`"
             echo "- Staging Run ID: \`${{ steps.verdict-artifact.outputs.run_id }}\`"
-            echo '- staging-verdict.json: `release_ready=true`'
+            echo "- QA scope: \`${{ inputs.qa_scope }}\`"
+            echo '- exact-SHA Staging verdict: `release_ready=true`'
             echo '- Failed checks: `0`'
             echo '- Skipped checks: `0`'
             echo '- Production deployment has not started yet.'
@@ -233,17 +370,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: approval-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
     environment: production
     env:
-      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-      SSH_USER: ${{ secrets.PROD_SSH_USER }}
-      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
       DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
       FORCE_REBUILD: ${{ inputs.force_rebuild }}
+      QA_SCOPE: ${{ inputs.qa_scope }}
       PUBLIC_BASE_URL: https://lsj119.com
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
@@ -252,12 +385,75 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           persist-credentials: false
       - name: Validate production secrets
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
         run: |
           set -Eeuo pipefail
           [[ -n "$SSH_HOST" ]] || { echo 'Missing PROD_SSH_HOST' >&2; exit 1; }
           [[ -n "$SSH_USER" ]] || { echo 'Missing PROD_SSH_USER' >&2; exit 1; }
           [[ -n "$SSH_PRIVATE_KEY" ]] || { echo 'Missing PROD_SSH_PRIVATE_KEY' >&2; exit 1; }
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'Missing Production read-only QA credential' >&2
+            exit 1
+          }
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+
+      # Install and prove the exact-SHA QA harness before creating SSH
+      # authority or touching Production. This turns missing dependencies and
+      # provider or Paper drift into a pre-deployment failure. Telegram is a
+      # separately operated integration and cannot block this four-feature lane.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install exact-SHA QA dependencies before Production mutation
+        run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium before Production mutation
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority
+        id: automation_research_predeploy
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        working-directory: stock-analyzer
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_AUTOMATION_RESEARCH_PREDEPLOY: 'true'
+          PRODUCTION_AUTOMATION_RESEARCH_PREDEPLOY_ARTIFACT_DIR: production-automation-research-predeploy-artifacts
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/automation-research-predeploy
+        run: pnpm exec playwright test --config=playwright.production-automation-research-predeploy.config.ts
+
+      - name: Upload pre-deploy external readiness evidence
+        if: ${{ always() && inputs.qa_scope == 'automation_research' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-automation-research-predeploy-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-automation-research-predeploy-artifacts
+            stock-analyzer/production-login-diagnostics/automation-research-predeploy
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -Eeuo pipefail
           umask 077
@@ -268,8 +464,12 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Require canonical Production trade schema before application mutation
+      - name: Require canonical Production trade schema and journal privileges before application mutation
+        id: database-gates
         env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
           PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           set -Eeuo pipefail
@@ -311,7 +511,171 @@ jobs:
             exit "$audit_status"
           fi
 
+          if [[ "$QA_SCOPE" != "auto_live" ]]; then
+          (
+            paper_artifact="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.json")"
+            paper_stderr="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.stderr")"
+            paper_archive="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.tar.gz")"
+            remote_dir="$({
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/paper-journal-privileges.XXXXXX'
+            })"
+            [[ "$remote_dir" =~ ^/tmp/paper-journal-privileges\.[A-Za-z0-9]+$ ]] || {
+              echo 'Production paper journal temporary directory was rejected.' >&2
+              exit 1
+            }
+            quoted_remote_dir="$(printf '%q' "$remote_dir")"
+            cleanup_paper_gate() {
+              rm -f "$paper_stderr" "$paper_archive"
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" \
+                "case $quoted_remote_dir in /tmp/paper-journal-privileges.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup_paper_gate EXIT
+            tar -czf "$paper_archive" \
+              ops/apply-production-paper-journal-privileges.mjs \
+              ops/classify-production-paper-journal-privilege-failure.mjs \
+              api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql \
+              api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql \
+              api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
+            scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$paper_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+            paper_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-paper-journal-privileges.mjs' \
+              "$remote_dir" "$TARGET_SHA")"
+            if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+              -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$paper_command" > "$paper_artifact" 2> "$paper_stderr"; then
+              classification="$(grep -Eo '^\[production-paper-journal-privileges\] [A-Za-z0-9_:-]+' "$paper_stderr" | tail -n 1 | sed 's/^\[production-paper-journal-privileges\] //' || true)"
+              [[ -n "$classification" ]] || classification='unknown_safe_failure'
+              echo "Production paper journal privilege apply failed safely: $classification" >&2
+              exit 1
+            fi
+            node ops/verify-production-paper-journal-privileges.mjs --artifact "$paper_artifact"
+            printf 'paper_journal_artifact=%s\n' "$paper_artifact" >> "$GITHUB_OUTPUT"
+          )
+          fi
+
+          (
+            member_artifact="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.json")"
+            member_stderr="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.stderr")"
+            member_archive="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.tar.gz")"
+            remote_dir="$({
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/member-access-hardening.XXXXXX'
+            })"
+            [[ "$remote_dir" =~ ^/tmp/member-access-hardening\.[A-Za-z0-9]+$ ]] || {
+              echo 'Production member access temporary directory was rejected.' >&2
+              exit 1
+            }
+            quoted_remote_dir="$(printf '%q' "$remote_dir")"
+            cleanup_member_gate() {
+              rm -f "$member_stderr" "$member_archive"
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" \
+                "case $quoted_remote_dir in /tmp/member-access-hardening.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup_member_gate EXIT
+            tar -czf "$member_archive" \
+              ops/apply-production-member-access-hardening.mjs \
+              api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql \
+              api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
+            scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$member_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+            member_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-member-access-hardening.mjs' \
+              "$remote_dir" "$TARGET_SHA")"
+            if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+              -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$member_command" > "$member_artifact" 2> "$member_stderr"; then
+              classification="$(grep -Eo '^\[production-member-access-hardening\] [A-Za-z0-9_:-]+' "$member_stderr" | tail -n 1 | sed 's/^\[production-member-access-hardening\] //' || true)"
+              [[ -n "$classification" ]] || classification='unknown_safe_failure'
+              echo "Production member access hardening failed safely: $classification" >&2
+              exit 1
+            fi
+            node ops/verify-production-member-access-hardening.mjs --artifact "$member_artifact"
+            printf 'member_access_artifact=%s\n' "$member_artifact" >> "$GITHUB_OUTPUT"
+          )
+
+          if [[ "$QA_SCOPE" != "auto_live" ]]; then
+          (
+          set -Eeuo pipefail
+          umask 077
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'Protected Production Paper RLS database credential missing.' >&2
+            exit 1
+          }
+          artifact="$(mktemp "$RUNNER_TEMP/production-admin-paper-rls.XXXXXX.json")"
+          stderr="$(mktemp "$RUNNER_TEMP/production-admin-paper-rls.XXXXXX.stderr")"
+          archive="$(mktemp "$RUNNER_TEMP/production-admin-paper-rls.XXXXXX.tar.gz")"
+          remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/admin-paper-rls.XXXXXX')"
+          [[ "$remote_dir" =~ ^/tmp/admin-paper-rls\.[A-Za-z0-9]+$ ]] || {
+            echo 'Protected Production Paper temporary path invalid.' >&2
+            exit 1
+          }
+          cleanup_admin_paper() {
+            rm -f -- "$archive" "$stderr"
+            quoted="$(printf '%q' "$remote_dir")"
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "case $quoted in /tmp/admin-paper-rls.*) find $quoted -depth -mindepth 1 -delete && rmdir $quoted ;; *) exit 2 ;; esac" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_admin_paper EXIT
+          tar -czf "$archive" \
+            ops/apply-production-admin-four-paper-rls.mjs \
+            api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql \
+            api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+          cmd="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-admin-four-paper-rls.mjs' \
+            "$remote_dir" "$TARGET_SHA")"
+          if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+            -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$cmd" > "$artifact" 2> "$stderr"; then
+            classification="$(grep -Eo '^\[production-admin-four-paper-rls\] [A-Za-z0-9_:-]+' "$stderr" | tail -n 1 | sed 's/^\[production-admin-four-paper-rls\] //' || true)"
+            [[ -n "$classification" ]] || classification='PROTECTED_MIGRATION_FAILED'
+            echo "Protected administrator Paper RLS migration blocked: $classification" >&2
+            exit 1
+          fi
+          node ops/verify-production-admin-four-paper-rls.mjs --artifact "$artifact"
+          echo "admin_paper_rls_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          )
+          fi
+
+      - name: Upload sanitized Production paper journal privilege evidence
+        if: ${{ inputs.qa_scope != 'auto_live' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload sanitized Production member access hardening evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-access-hardening-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.member_access_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+
+      - name: Upload verified administrator Paper RLS migration attestation
+        if: ${{ inputs.qa_scope != 'auto_live' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-admin-four-paper-rls-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.admin_paper_rls_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Deploy exact approved revision
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q DATA_PROBE_PATH=%q FORCE_REBUILD=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
@@ -359,7 +723,496 @@ jobs:
             CANARY_PORT="$CANARY_PORT" DATA_PROBE_PATH="$DATA_PROBE_PATH" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
             "$DEPLOY_SCRIPT" "$TARGET_SHA"
           REMOTE
-      - name: Deployment summary
+      - name: Record successful deployment boundary
+        run: |
+          set -Eeuo pipefail
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "DEPLOYMENT_COMPLETED_AT=$completed_at" >> "$GITHUB_ENV"
+          echo "QA_STARTED_AT=$completed_at" >> "$GITHUB_ENV"
+
+      - name: Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS
+        id: auto_live_signal_schedule
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p postdeploy-evidence
+          activation="postdeploy-evidence/production-auto-live-signal-schedule.json"
+          remote_command="$(printf 'cd /opt/stock-app && TARGET_SHA=%q bash -s' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$activation" <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" = "$TARGET_SHA"
+          PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
+            bash ops/disable-paper-forward-schedule.sh >/dev/null
+          LIVE_DIR=/opt/stock-app \
+            PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
+            PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false \
+            bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"
+          REMOTE
+          node - "$activation" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (value?.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+            || value?.targetSha !== process.env.TARGET_SHA
+            || value?.scheduleActive !== true
+            || value?.paperTradeOutcomeAccumulationEnabled !== false
+            || value?.simulatedFinancialAdaptersEnabled !== false
+            || value?.externalFinancialMutationAllowed !== false
+            || value?.privateRequestCount !== 0
+            || value?.financialMutationCount !== 0
+            || value?.liveTrading !== false) {
+            throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_SCHEDULE_INVALID');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `activation_at_ms=${value.activationAtMs}\n`);
+          NODE
+
+      - name: Refresh and verify fresh canonical Automatic LIVE signal source
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SIGNAL_SCHEDULE_ACTIVATED_AT_MS: ${{ steps.auto_live_signal_schedule.outputs.activation_at_ms }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p postdeploy-evidence
+          receipt="postdeploy-evidence/production-auto-live-signal-source.json"
+          refresh="postdeploy-evidence/production-auto-live-signal-refresh.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' > "$refresh" <<'REMOTE'
+          set -Eeuo pipefail
+          state_root=/opt/stock-app-data/paper-forward-v1
+          test ! -e "$state_root/DISABLED"
+          test ! -e "$state_root/runtime-state/DISABLED"
+          flock -w 120 "$state_root/cron.lock" "$state_root/bin/run-paper-forward-schedule"
+          tail -n 1 "$state_root/logs/cron.log"
+          REMOTE
+          node - "$refresh" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (value?.status !== 'COMPLETED'
+            || value?.naturalRuntimeSha !== process.env.TARGET_SHA
+            || value?.paperTradeOutcomeAccumulationEnabled !== false
+            || value?.simulatedFinancialAdaptersEnabled !== false
+            || value?.externalFinancialMutationAllowed !== false
+            || value?.privateRequestCount !== 0
+            || value?.financialMutationCount !== 0
+            || value?.liveTrading !== false
+            || value?.orderAuthority !== false) {
+            throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_REFRESH_INVALID');
+          }
+          NODE
+          remote_command="$(printf 'cd /opt/stock-app && node ops/production-auto-live-signal-source-audit.mjs %q %q %q' \
+            '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json' \
+            "$TARGET_SHA" "$GITHUB_RUN_ID")"
+          remote_command="$remote_command $(printf '%q' "$SIGNAL_SCHEDULE_ACTIVATED_AT_MS")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$receipt"
+          node - "$receipt" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (value?.schemaVersion !== 'production-auto-live-signal-source-v1'
+            || value?.targetSha !== process.env.TARGET_SHA
+            || value?.productionDeployRunId !== Number(process.env.GITHUB_RUN_ID)
+            || value?.canonicalValidation !== true
+            || value?.handoffStatus !== 'READY'
+            || value?.handoffFresh !== true
+            || value?.handoffEvaluatedAfterScheduleActivation !== true
+            || value?.scheduleActive !== true
+            || value?.scheduleEntryCount !== 1
+            || value?.executionAuthority !== 'NONE'
+            || value?.realOrderSubmitted !== false) {
+            throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_RECEIPT_INVALID');
+          }
+          NODE
+
+      - name: Upload sanitized Automatic LIVE signal-source evidence
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-auto-live-signal-source-${{ env.TARGET_SHA }}
+          path: |
+            postdeploy-evidence/production-auto-live-signal-schedule.json
+            postdeploy-evidence/production-auto-live-signal-refresh.json
+            postdeploy-evidence/production-auto-live-signal-source.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Destroy deployment authority before read-only QA
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+            chmod u+w "$HOME/.ssh/id_ed25519"
+            rm -f -- "$HOME/.ssh/id_ed25519"
+          fi
+          test ! -e "$HOME/.ssh/id_ed25519"
+
+      - name: Require exact Production identity before the one-time administrator 1M policy migration
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+        run: |
+          set -Eeuo pipefail
+          health="$RUNNER_TEMP/production-trading-policy-health.json"
+          curl --fail --silent --show-error --max-time 15 "$PUBLIC_BASE_URL/api/health" -o "$health"
+          node - "$health" <<'NODE'
+          const fs = require('node:fs');
+          const { assertProductionRuntimeIdentity } = require('./.github/scripts/production-deploy-provenance.cjs');
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          assertProductionRuntimeIdentity(health, process.env.EXPECTED_DEPLOY_SHA);
+          if (health?.autoTradingBackground?.liveEntriesArmed !== false
+            || health?.autoTradingBackground?.liveModeRequested !== false) {
+            throw new Error('PRODUCTION_TRADING_POLICY_LIVE_BACKGROUND_MUST_BE_OFF');
+          }
+          NODE
+
+      - name: Apply and verify the one-time administrator 1M Production order policy
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
+        working-directory: stock-analyzer
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_POLICY_LIMIT_APPLY: 'true'
+          PRODUCTION_TRADING_POLICY_ARTIFACT_DIR: production-trading-policy-artifacts
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-policy-limit
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+        run: pnpm exec playwright test --config=playwright.production-trading-policy-limit.config.ts
+
+      - name: Upload sanitized one-time administrator 1M Production policy evidence
+        if: ${{ always() && inputs.apply_admin_trading_policy_limit_1m }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-admin-trading-policy-limit-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-trading-policy-artifacts
+            stock-analyzer/production-login-diagnostics/trading-policy-limit
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Pre-QA identity, authority, and gate-conflict check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+        run: >-
+          node .github/scripts/build-production-postdeploy-context.mjs
+          postdeploy-evidence/production-postdeploy-context.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
+
+      - name: 1 · Comprehensive Production read-only QA
+        if: ${{ inputs.qa_scope == 'full' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh comprehensive
+
+      - name: Upload Comprehensive QA evidence
+        if: ${{ inputs.qa_scope == 'full' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-comprehensive-readonly-${{ github.run_id }}
+          path: stock-analyzer/production-comprehensive-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 1M · Member-only Production read-only QA
+        id: member_qa
+        if: ${{ inputs.qa_scope == 'member' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh member
+
+      - name: Upload Member-only QA evidence
+        if: ${{ always() && steps.member_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-readonly-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-member-readonly-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 2 · Four-provider Account Production read-only QA
+        id: account_qa
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+          PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/account
+        run: bash .github/scripts/run-production-readonly-qa.sh account
+
+      - name: Upload Four-provider Account QA evidence
+        if: ${{ always() && steps.account_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-account-readonly-artifacts
+            stock-analyzer/production-login-diagnostics/account
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 3 · Production Credential Reuse QA
+        id: credential_qa
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/credential
+        run: bash .github/scripts/run-production-readonly-qa.sh credential
+
+      - name: Upload Credential Reuse QA evidence
+        if: ${{ always() && steps.credential_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-credential-reuse-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-live-credential-reuse-artifacts
+            stock-analyzer/production-login-diagnostics/credential
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Prepare administrator four-market Automatic LIVE policy without execution authority
+        id: auto_live_policy
+        if: ${{ inputs.qa_scope == 'auto_live' && inputs.prepare_admin_auto_live_policy }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_AUTO_LIVE_POLICY_PREPARE: 'true'
+          PRODUCTION_AUTO_LIVE_POLICY_ARTIFACT_DIR: production-auto-live-policy-artifacts
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-auto-live-policy-prepare.config.ts
+
+      - name: Upload sanitized Automatic LIVE policy preparation evidence
+        if: ${{ always() && steps.auto_live_policy.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-auto-live-policy-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-auto-live-policy-artifacts/production-auto-live-policy-prepare.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Automatic LIVE-only Production read-only QA
+        id: auto_live_qa
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_AUTO_LIVE_ONLY_QA: 'true'
+          PRODUCTION_AUTO_LIVE_ARTIFACT_DIR: production-auto-live-artifacts
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-auto-live-only.config.ts
+
+      - name: Upload sanitized Automatic LIVE-only QA evidence
+        if: ${{ always() && steps.auto_live_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-auto-live-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-auto-live-artifacts/production-auto-live-qa.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA
+        id: trading_core_qa
+        if: ${{ inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_CORE_QA: 'true'
+          PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'
+          PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM: 'false'
+          PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-core
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
+
+      - name: Upload Trading Core QA evidence
+        if: ${{ always() && steps.trading_core_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-trading-core-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-trading-core-artifacts
+            stock-analyzer/production-login-diagnostics/trading-core
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 1AR · Auto, Paper, Research and Backtester Production pre-activation QA
+        id: automation_research_qa
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_AUTOMATION_RESEARCH_QA: 'true'
+          PRODUCTION_AUTOMATION_RESEARCH_ARTIFACT_DIR: production-automation-research-artifacts
+          LIVE_TRADING: 'false'
+          AUTO_TRADING: 'false'
+          REAL_ORDER_ENABLED: 'false'
+          PRIVATE_TRADING_API_ALLOWED: 'false'
+          ORDER_EXECUTION_ENABLED: 'false'
+          LIVE_AUTOMATIC_TRADING_ENABLED: 'false'
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-automation-research-core.config.ts
+
+      - name: Verify Auto/Paper/Research/Backtester Production pre-activation receipt
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        run: >-
+          node .github/scripts/verify-production-automation-research-core-receipt.mjs
+          stock-analyzer/production-automation-research-artifacts/production-automation-research-core-qa.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID"
+
+      - name: Upload Auto/Paper/Research/Backtester QA evidence
+        if: ${{ always() && steps.automation_research_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-automation-research-core-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-automation-research-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Final exact-SHA identity, safety, and gate-conflict check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+        run: >-
+          node .github/scripts/build-production-postdeploy-context.mjs
+          postdeploy-evidence/production-postdeploy-context.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
+
+      - name: Assemble exact-run post-deploy evidence
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research' }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$QA_SCOPE" == "full" ]]; then
+            cp stock-analyzer/production-comprehensive-artifacts/production-comprehensive-readonly-qa.json postdeploy-evidence/
+          elif [[ "$QA_SCOPE" == "trading_core" || "$QA_SCOPE" == "automation_research" ]]; then
+            cp stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json postdeploy-evidence/
+          elif [[ "$QA_SCOPE" == "auto_live" ]]; then
+            cp stock-analyzer/production-auto-live-artifacts/production-auto-live-qa.json postdeploy-evidence/
+          else
+            echo "Unsupported QA scope: $QA_SCOPE" >&2
+            exit 1
+          fi
+          cp stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json postdeploy-evidence/
+          cp stock-analyzer/production-live-credential-reuse-artifacts/production-live-credential-reuse-qa.json postdeploy-evidence/
+          evidence_scope="$QA_SCOPE"
+          if [[ "$QA_SCOPE" == "automation_research" ]]; then evidence_scope=trading_core; fi
+          node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID" "$evidence_scope"
+
+      - name: Upload immutable ACTIVATION_READY evidence
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-postdeploy-activation-ready-${{ env.TARGET_SHA }}
+          path: postdeploy-evidence/production-postdeploy-activation-ready-${{ env.TARGET_SHA }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deployment and post-deploy QA summary
         if: success()
         run: |
           {
@@ -370,6 +1223,33 @@ jobs:
             echo '- Environment: `production`'
             echo '- Release provenance: pre-merge Required CI 6/6 + exact merged-tree identity verified on current main'
             echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
-            echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
+            echo '- exact-SHA scoped/full Staging verdict: failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
+            echo "- QA scope: `$QA_SCOPE`"
+            if [[ "$QA_SCOPE" == "member" ]]; then
+              echo '- Member login/profile/tier/S-grade/AI Chart/trading analytics/AI review/admin-boundary/mobile account: `PASS`'
+              echo '- Account provider / Credential Reuse / Trading Core / Comprehensive: `NOT_RUN`'
+              echo '- ACTIVATION_READY: `NOT_EVALUATED`'
+            elif [[ "$QA_SCOPE" == "trading_core" ]]; then
+              echo '- Trading Core / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
+            elif [[ "$QA_SCOPE" == "auto_live" ]]; then
+              echo '- Automatic LIVE UI/API / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
+              echo '- Desktop / tablet / mobile responsive QA: `PASS`'
+              echo '- Paper Trading and Telegram: `OUT_OF_SCOPE`'
+            elif [[ "$QA_SCOPE" == "automation_research" ]]; then
+              echo '- Automatic Trading / Automatic Paper Trading / Research Center / Backtester pre-activation contract: `PASS`'
+              echo '- Four-provider Account / Credential Reuse / Trading Core safety: `PASS`'
+              echo '- Unrelated comprehensive UI QA: `NOT_RUN`'
+              echo '- Telegram connection and delivery: `OUT_OF_SCOPE`'
+              echo '- Protected Automatic Trading activation remains a separate exact-SHA approval.'
+            else
+              echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
+            fi
+            echo '- orders/cancels/amends/transfers/withdrawals: `0/0/0/0/0`'
+            echo '- liveTradingAuthorityGranted: `false`'
+            echo '- autoTradingAuthorityGranted: `false`'
+            echo '- active conflicting trading gates: `0`'
+            if [[ "$QA_SCOPE" == "full" || "$QA_SCOPE" == "trading_core" || "$QA_SCOPE" == "auto_live" || "$QA_SCOPE" == "automation_research" ]]; then
+              echo '- ACTIVATION_READY: `true`'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

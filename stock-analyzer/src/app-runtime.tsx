@@ -19,7 +19,7 @@ const ACCENTS: Record<string, string> = {
 	pink: '330 81% 60%',
 };
 
-const AI_CHART_SERVICE_WORKER_DELAY_MS = 6_000;
+const AI_CHART_SERVICE_WORKER_DELAY_MS = 15_000;
 const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
 
 function applyUiVnextPreviewMode() {

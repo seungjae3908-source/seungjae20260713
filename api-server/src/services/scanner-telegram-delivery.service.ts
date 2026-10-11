@@ -14,6 +14,7 @@ import type { ScannerAlertCandidate } from './scanner-signal.types';
 import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
+  telegramStockLaneForMarket,
   type TelegramMarketRoom,
 } from './telegram-market-room.service';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
@@ -110,12 +111,14 @@ export function scannerInAppNotificationInput(
   if (alert.assetClass === 'stock' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_spot' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_futures' && alert.direction !== 'LONG' && alert.direction !== 'SHORT') return null;
+  const stockLane = alert.assetClass === 'stock' ? telegramStockLaneForMarket(alert.market) : null;
+  if (alert.assetClass === 'stock' && !stockLane) return null;
 
   const lane = alert.assetClass === 'coin_futures'
     ? '코인선물'
     : alert.assetClass === 'coin_spot'
       ? '코인현물'
-      : alert.market.trim().toUpperCase() === 'US'
+      : stockLane === 'US_STOCK'
         ? '미국주식'
         : '국내주식';
   const reasons = alert.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 3);
@@ -165,16 +168,17 @@ async function runScannerInAppNotification(
 
 export function scannerTelegramRoomFor(
   alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market'>,
-): ScannerTelegramRoom {
+): ScannerTelegramRoom | null {
   if (alert.assetClass === 'coin_spot') return telegramMarketRoomForLane('CRYPTO_SPOT');
   if (alert.assetClass === 'coin_futures') return telegramMarketRoomForLane('CRYPTO_FUTURES');
-  return telegramMarketRoomForLane(
-    alert.market.trim().toUpperCase().includes('US') ? 'US_STOCK' : 'KR_STOCK',
-  );
+  if (alert.assetClass !== 'stock') return null;
+  const lane = telegramStockLaneForMarket(alert.market);
+  return lane ? telegramMarketRoomForLane(lane) : null;
 }
 
 export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
-  return telegramMarketRoomChatId(room, process.env, { allowLegacyFallback: true });
+  // Dedicated rooms are mandatory: never send a market signal to a shared legacy room.
+  return telegramMarketRoomChatId(room, process.env);
 }
 
 export function scannerTelegramInput(
@@ -183,7 +187,9 @@ export function scannerTelegramInput(
 ): TelegramAlertInput | null {
   if (alert.state !== 'APPROVAL_PENDING' && alert.state !== 'READY_FOR_APPROVAL') return null;
 
-  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert));
+  const room = scannerTelegramRoomFor(alert);
+  if (!room) return null;
+  const destinationChatId = resolveRoomChatId(room);
   if (!destinationChatId) return null;
 
   if (alert.assetClass === 'stock') {
@@ -238,6 +244,19 @@ function normalizeRichTradePlan(
   return { ...input, details: lines.join('\n') };
 }
 
+function removeStaleTelegramOrderButtons(buttons: TelegramAlertInput['buttons']): TelegramAlertInput['buttons'] {
+  if (!buttons) return buttons;
+  // Keep charts and news links, but never render a stale order-review button.
+  return buttons.map((row) => row.filter((button) => {
+    try {
+      const parsed = new URL(button.url);
+      return parsed.pathname.replace(/\/+$/u, '') !== '/telegram-order';
+    } catch {
+      return false;
+    }
+  })).filter((row) => row.length > 0);
+}
+
 function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
   if (freshness.status === 'FRESH') return null;
   if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
@@ -262,7 +281,14 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  return { ...input, details: lines.join('\n') };
+  const actionable = freshness.status === 'FRESH'
+    && (alert.state === 'APPROVAL_PENDING' || alert.state === 'READY_FOR_APPROVAL')
+    && !alert.orderSubmitted && !alert.exchangeRequestSent;
+  return {
+    ...input,
+    details: lines.join('\n'),
+    buttons: actionable ? input.buttons : removeStaleTelegramOrderButtons(input.buttons),
+  };
 }
 
 async function richInput(

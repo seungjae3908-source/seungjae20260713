@@ -33,6 +33,8 @@ export function serializeBitgetReadonlyDiagnostic(diagnostic: BitgetReadonlyDiag
 const CREDENTIAL_ACCESS_FAILURES = new Set([
   'AUTH_FAILED',
   'TOSS_AUTH_FAILED',
+  'TOSS_TOKEN_AUTH_FAILED',
+  'TOSS_ACCOUNT_API_AUTH_FAILED',
   'TOSS_IP_NOT_ALLOWED',
   'UPBIT_AUTH_FAILED',
   'UPBIT_IP_NOT_ALLOWED',

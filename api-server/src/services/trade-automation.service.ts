@@ -1,8 +1,11 @@
+import { isProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import {
   assertCancellationAllowed,
   buildRiskEnvelope,
@@ -80,7 +83,7 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
-    userId, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
   ].join(':')).digest('hex');
 }
 
@@ -131,6 +134,9 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
     ? futuresLiveExecutionAuthority() === 'FUTURES_LIVE_LIMITED'
     : liveExecutionAuthority() === 'SPOT_LIVE_LIMITED';
   return authorityEnabled
+    // Even malformed Paper-only values must not fall through to real automatic orders.
+    && (process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined
+      || process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false')
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
@@ -155,6 +161,16 @@ export class TradeAutomationService {
   }
 
   private async marketIntelligenceDecision(input: TradingPlanInput) {
+    if (input.reduceOnly === true && !isRiskReducingExitPlan(input)) {
+      return { allowed: false, blockCode: 'REDUCE_ONLY_SIDE_INVALID', warnings: [] };
+    }
+    if (isRiskReducingExitPlan(input)) {
+      return {
+        allowed: true,
+        blockCode: null,
+        warnings: ['RISK_REDUCING_EXIT_MARKET_INTELLIGENCE_ENTRY_GATE_SKIPPED'],
+      };
+    }
     const intelligence = await fetchTradingPlanMarketIntelligence(input);
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
@@ -189,6 +205,7 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
+      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
@@ -217,10 +234,17 @@ export class TradeAutomationService {
       throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
     }
 
-    const policy = await this.repository.getPolicy(userId);
+    const storedPolicy = await this.repository.getPolicy(userId);
+    if (plan.executionMode === 'automatic'
+      && (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled)) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    }
+    const policy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, storedPolicy,
+    );
     const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
+      emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -254,10 +278,14 @@ export class TradeAutomationService {
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
     const expectedVersion = planVersion(plan);
-    const policy = await this.repository.getPolicy(userId);
-    if (policy.mode !== 'automatic' || !policy.automaticEnabled) {
+    const storedPolicy = await this.repository.getPolicy(userId);
+    if (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled
+      || plan.executionMode !== 'automatic') {
       throw new Error('USER_APPROVAL_REQUIRED');
     }
+    const policy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, storedPolicy,
+    );
     const intelligence = await this.marketIntelligenceDecision(plan);
     if (!intelligence.allowed) {
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
@@ -265,8 +293,8 @@ export class TradeAutomationService {
       throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
     }
     const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
+      emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -335,6 +363,108 @@ export class TradeAutomationService {
     if (typeof metadata.exchangeOrderId === 'string') next.exchangeOrderId = metadata.exchangeOrderId;
     if (typeof metadata.filledQuantity === 'number') next.filledQuantity = metadata.filledQuantity;
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
+    if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
+    if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
+    // Synthetic cost/FX evidence is accepted only on the server's actual
+    // Paper FILLED transition. Ordinary Live, manual and mock executions
+    // cannot use this metadata to make an unverified Paper profit.
+    if (toState === 'FILLED' && reason === 'PAPER_BROKER_FILLED') {
+      // A caller may supply an old/corrupted serialized order. Never inherit
+      // a stored funding certificate on a new simulated fill. It must be
+      // reissued in-process, bound to this exact terminal exit.
+      next.paperFundingSettlementEvidence = null;
+      const paperPlan = await this.repository.getPlan(order.userId, order.planId);
+      if (paperPlan?.accountMode === 'paper' && paperPlan.exchange === order.exchange) {
+        const usMarket = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
+          String(paperPlan.market).toUpperCase(),
+        ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(paperPlan.stockExchange ?? '').toUpperCase());
+        const nativeCurrency = paperPlan.exchange === 'bitget' ? 'USDT'
+          : paperPlan.exchange === 'upbit' || !usMarket ? 'KRW' : 'USD';
+        const expectedFx = nativeCurrency === 'KRW' ? 'NATIVE_KRW'
+          : nativeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+        const receivedPolicy = metadata.trustedPaperCostPolicyId;
+        if (typeof receivedPolicy === 'string'
+          && /^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(receivedPolicy)
+          && metadata.taxCurrency === nativeCurrency
+          && typeof metadata.taxAmount === 'number'
+          && Number.isFinite(metadata.taxAmount) && metadata.taxAmount >= 0
+          && metadata.taxAmount <= (next.averageFillPrice ?? 0) * next.filledQuantity
+          && next.feeCurrency === nativeCurrency
+          && typeof next.feeAmount === 'number' && Number.isFinite(next.feeAmount)
+          && next.feeAmount >= 0) {
+          next.taxAmount = metadata.taxAmount;
+          next.taxCurrency = nativeCurrency;
+        }
+        // A JSON payload cannot create a funding certificate. Only a server
+        // in-process issuer bound to a real simulated reducing close can do so.
+        const funding = metadata.paperFundingSettlementEvidence;
+        const fillAtMs = typeof metadata.paperFillObservedAt === 'string'
+          ? Date.parse(metadata.paperFillObservedAt) : Number.NaN;
+        const persistedAtMs = Date.parse(next.updatedAt);
+        if (paperPlan.exchange === 'bitget'
+          && paperPlan.executionMode === 'automatic'
+          && paperPlan.reduceOnly === true
+          && isProtectedPaperFundingCertificate(funding)
+          && funding.exitBrokerOrderId === next.exchangeOrderId
+          && Number.isSafeInteger(funding.eventCount)
+          && funding.eventCount >= 0
+          && /^[0-9a-f]{64}$/u.test(funding.eventDigest)
+          // The server captured the economic fill timestamp BEFORE reading public history.
+          // Slow-but-bounded proof collection must not forge a different holding interval.
+          && Number.isFinite(fillAtMs) && Number.isFinite(persistedAtMs)
+          && new Date(fillAtMs).toISOString() === metadata.paperFillObservedAt
+          && fillAtMs >= Date.parse(order.updatedAt)
+          && fillAtMs <= persistedAtMs
+          && persistedAtMs - fillAtMs <= 120_000
+          && Math.abs(Date.parse(funding.coveredThroughAt) - fillAtMs) <= 1_000
+          && Date.parse(funding.attestedAt) >= fillAtMs
+          && Date.parse(funding.attestedAt) <= persistedAtMs + 5_000) {
+          const references = paperPlan.signalReasons.filter(
+            reason => reason.startsWith('AUTO_EXIT_ENTRY_ORDER:'));
+          if (references.length === 1) {
+            const entry = await this.repository.getOrder(
+              order.userId, references[0]!.slice('AUTO_EXIT_ENTRY_ORDER:'.length));
+            if (entry?.state === 'FILLED' && entry.exchange === 'bitget'
+              && entry.exchangeOrderId === funding.entryBrokerOrderId
+              && entry.userId === order.userId) {
+              next.updatedAt = new Date(fillAtMs).toISOString();
+              next.paperFundingSettlementEvidence = Object.freeze({ ...funding });
+            }
+          }
+        }
+        const quote = metadata.settlementFxEvidence;
+        if (quote && typeof quote === 'object' && !Array.isArray(quote)) {
+          const value = quote as Record<string, unknown>;
+          const rate = value.krwPerQuoteCurrency;
+          const quoteMs = typeof value.observedAt === 'string'
+            ? Date.parse(value.observedAt) : Number.NaN;
+          const nowMs = Date.parse(next.updatedAt);
+          const ageMax = nativeCurrency === 'USD' ? 86_400_000
+            : nativeCurrency === 'USDT' ? 600_000 : 300_000;
+          if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+            && (nativeCurrency !== 'KRW' || rate === 1)
+            && value.source === expectedFx
+            && Number.isFinite(quoteMs) && Number.isFinite(nowMs)
+            && quoteMs <= nowMs + 5_000 && nowMs - quoteMs <= ageMax) {
+            next.settlementFxEvidence = Object.freeze({
+              krwPerQuoteCurrency: rate,
+              source: expectedFx,
+              observedAt: new Date(quoteMs).toISOString(),
+            });
+          }
+        }
+      }
+    }
+    // A state of FILLED is not evidence of an execution. Never persist the
+    // terminal state with zero/missing quantity or price in any market.
+    // A provider acknowledgement alone cannot reconstruct an actual fill.
+    if (toState === 'FILLED' && (
+      !Number.isFinite(next.filledQuantity) || next.filledQuantity <= 0
+      || !Number.isFinite(next.averageFillPrice) || next.averageFillPrice == null
+      || next.averageFillPrice <= 0
+    )) {
+      throw new Error('TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED');
+    }
     if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
     if (typeof metadata.preSubmissionCheckedAt === 'string') next.preSubmissionCheckedAt = metadata.preSubmissionCheckedAt;
     if (metadata.preSubmissionDecision && typeof metadata.preSubmissionDecision === 'object') {

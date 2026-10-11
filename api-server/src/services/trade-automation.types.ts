@@ -6,7 +6,7 @@ export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
 export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
-export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated';
+export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 export type TradingAssetClass = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 
 export type TradingOrderState =
@@ -82,6 +82,22 @@ export type TradingProtectionOrder = {
   version: number;
 };
 
+export const PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW = 500_000 as const;
+export const PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW = 1_000_000 as const;
+// Formula+AI automatic LIVE begins with a smaller, role-scoped discovery cap.
+// This is an order ceiling, not a deposit and not a change to the four-market
+// capital allocation. Promotion may raise it later, but discovery can never
+// silently inherit the full role ceiling.
+export const PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000 as const;
+export const PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000 as const;
+export const PRODUCTION_LIVE_MARKET_COUNT = 4 as const;
+export const PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW =
+  PRODUCTION_LIVE_MARKET_COUNT * PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+export const PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW =
+  PRODUCTION_LIVE_MARKET_COUNT * PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW;
+export const PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3 as const;
+export const PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7 as const;
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -93,7 +109,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[], toss: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
-  maxOrderKrw: 1_000_000,
+  maxOrderKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   maxInstrumentKrw: 1_000_000,
   maxAssetClassKrw: {
     domestic_stock: 1_000_000,
@@ -101,13 +117,16 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
     crypto_spot: 1_000_000,
     crypto_futures: 1_000_000,
   } as Record<TradingAssetClass, number>,
-  dailyLossLimitPercent: 5,
+  dailyLossLimitPercent: 3,
   weeklyLossLimitPercent: 10,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
-  maxDailyOrders: 10,
+  // Zero means opportunity-driven entry with no ordinary business quota.
+  // Duplicate/idempotency, concurrent-position, loss and provider guards still
+  // fail closed independently.
+  maxDailyOrders: 0,
   maxConsecutiveLosses: 3,
-  bitgetLeverage: 2 as 2 | 3,
+  bitgetLeverage: 2 as 2 | 3 | 4 | 5 | 6 | 7,
   riskOptimizationEnabled: true,
   pilotStage: 'approval-20' as TradingPilotStage,
   riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25, toss: 0.25 },
@@ -142,7 +161,7 @@ export type TradingPolicy = {
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
-  bitgetLeverage: 2 | 3;
+  bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
   riskOptimizationEnabled: boolean;
   pilotStage: TradingPilotStage;
   riskPerTradePercent: Record<TradingExchange, number>;
@@ -216,6 +235,13 @@ export type TradingMarketSnapshot = {
   availableLiquidityKrw?: number | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
+  // Optional, prospective Paper-only source fields. A UI snapshot alone is
+  // never settlement authority; the durable server-owned order receipt must
+  // independently attest every component before capital can compound.
+  estimatedTaxPercent?: number | null;
+  settlementFxKrwPerQuoteCurrency?: number | null;
+  settlementFxSource?: string | null;
+  settlementFxObservedAt?: string | null;
   correlatedExposurePercent?: number | null;
   signalState?: TradingSignalState | null;
   signalObservedAt?: string | null;
@@ -290,6 +316,7 @@ export type TradingRiskEnvelope = {
 };
 
 export type TradingPlan = TradingPlanInput & {
+  executionMode?: 'manual' | 'automatic';
   id: string;
   userId: string;
   idempotencyKey: string;
@@ -329,6 +356,34 @@ export type TradingOrder = {
   fills?: TradingFill[];
   feeAmount?: number | null;
   feeCurrency?: string | null;
+  /** Optional durable, explicit simulated-paper tax. Missing is NOT zero. */
+  taxAmount?: number | null;
+  taxCurrency?: string | null;
+  /** Bound per-fill FX from a verified server quote, not UI market snapshots. */
+  settlementFxEvidence?: {
+    krwPerQuoteCurrency: number;
+    source: string;
+    observedAt: string;
+  } | null;
+  /**
+   * Server-certified completed funding ledger for a closed simulated USDT
+   * perpetual. Absence is unknown funding, never an assumed zero. Positive
+   * netFundingKrw is a paid funding cost; negative means received funding.
+   * No public order/HTTP API may independently issue this certificate.
+   */
+  paperFundingSettlementEvidence?: {
+    source: 'SERVER_PAPER_FUNDING_LEDGER_V1';
+    underlyingCurrency: 'USDT';
+    netFundingKrw: number;
+    entryBrokerOrderId: string;
+    exitBrokerOrderId: string;
+    coveredFromAt: string;
+    coveredThroughAt: string;
+    attestedAt: string;
+    complete: true;
+    eventCount: number;
+    eventDigest: string;
+  } | null;
   exchangeCreatedAt?: string | null;
   exchangeUpdatedAt?: string | null;
   cancelable?: boolean | null;

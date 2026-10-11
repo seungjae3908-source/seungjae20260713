@@ -12,8 +12,8 @@ const APPROVAL_TTL_MS = 10 * 60_000;
 const JOURNAL_LIMIT = 1000;
 
 type Direction = 'LONG' | 'SHORT';
-type PositionMode = 'one_way_mode' | 'hedge_mode';
-type MarginMode = 'isolated' | 'crossed';
+type PositionMode = 'one_way_mode';
+type MarginMode = 'isolated';
 type ApprovalKind = 'OPEN' | 'CLOSE' | 'CONFIGURE';
 
 type OpenPlan = {
@@ -196,10 +196,21 @@ function executionKeyValid(req: Request) {
 }
 
 function tradingEnabled() {
-  return (
-    String(process.env.CRYPTO_AUTO_TRADE_ENABLED ?? '').toLowerCase() === 'true' &&
-    String(process.env.BITGET_AUTO_TRADE_ENABLED ?? '').toLowerCase() === 'true'
-  );
+  const requiredTrue = [
+    'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED',
+    'CRYPTO_AUTO_TRADE_ENABLED',
+    'BITGET_AUTO_TRADE_ENABLED',
+    'LIVE_TRADING',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED',
+    'BITGET_FUTURES_LIVE_ORDER_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+  ];
+  return requiredTrue.every((key) => String(process.env[key] ?? '').toLowerCase() === 'true')
+    && String(process.env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? '') === 'FUTURES_LIVE_LIMITED'
+    && String(process.env.FUTURES_LIVE_MARGIN_MODE ?? '') === 'isolated';
 }
 
 function credentialsConfigured() {
@@ -466,7 +477,7 @@ router.post('/crypto/futures/auto/verify-key', requireMember, async (req, res) =
     return res.status(503).json({
       ok: false,
       verified: false,
-      message: 'Replit Secrets에 CRYPTO_AUTO_TRADE_KEY가 설정되지 않았습니다.',
+      message: 'Production secret scope에 CRYPTO_AUTO_TRADE_KEY가 설정되지 않았습니다.',
     });
   }
 
@@ -500,7 +511,7 @@ router.post('/crypto/futures/auto/plan', requireMember, async (req, res) => {
     const direction = String(req.body?.direction ?? '').toUpperCase() as Direction;
     const positionMode = String(req.body?.positionMode ?? 'one_way_mode') as PositionMode;
     const marginMode = String(req.body?.marginMode ?? 'isolated') as MarginMode;
-    const requestedLeverage = Math.floor(finiteNumber(req.body?.leverage, 2));
+    const requestedLeverage = finiteNumber(req.body?.leverage, 2);
     const marginAmountUSDT = finiteNumber(req.body?.marginAmountUSDT, 0);
     const score = clamp(finiteNumber(req.body?.score, 0), 0, 100);
     const oppositeScore = clamp(finiteNumber(req.body?.oppositeScore, 0), 0, 100);
@@ -517,11 +528,14 @@ router.post('/crypto/futures/auto/plan', requireMember, async (req, res) => {
     if (direction !== 'LONG' && direction !== 'SHORT') {
       return res.status(400).json({ ok: false, message: 'LONG 또는 SHORT 신호만 주문계획을 만들 수 있습니다.' });
     }
-    if (!['one_way_mode', 'hedge_mode'].includes(positionMode)) {
-      return res.status(400).json({ ok: false, message: '포지션 모드가 올바르지 않습니다.' });
+    if (positionMode !== 'one_way_mode') {
+      return res.status(400).json({ ok: false, message: '비트겟 선물은 단방향 모드만 허용됩니다.' });
     }
-    if (!['isolated', 'crossed'].includes(marginMode)) {
-      return res.status(400).json({ ok: false, message: '마진 모드가 올바르지 않습니다.' });
+    if (marginMode !== 'isolated') {
+      return res.status(400).json({ ok: false, message: '비트겟 선물은 격리 마진만 허용됩니다.' });
+    }
+    if (!Number.isInteger(requestedLeverage) || requestedLeverage < 2 || requestedLeverage > 7) {
+      return res.status(400).json({ ok: false, message: '레버리지는 2~7배 정수만 허용됩니다.' });
     }
     if (!(marginAmountUSDT > 0)) {
       return res.status(400).json({ ok: false, message: '1회 증거금(USDT)을 입력하세요.' });
@@ -557,8 +571,11 @@ router.post('/crypto/futures/auto/plan', requireMember, async (req, res) => {
       });
     }
 
-    const serverMaxLeverage = clamp(Math.floor(finiteNumber(process.env.CRYPTO_AUTO_TRADE_MAX_LEVERAGE, 5)), 1, config.maxLever);
-    const leverage = clamp(requestedLeverage, config.minLever, serverMaxLeverage);
+    const serverMaxLeverage = clamp(Math.floor(finiteNumber(process.env.CRYPTO_AUTO_TRADE_MAX_LEVERAGE, 7)), 2, 7);
+    if (requestedLeverage < config.minLever || requestedLeverage > config.maxLever || requestedLeverage > serverMaxLeverage) {
+      return res.status(400).json({ ok: false, message: `요청 레버리지 ${requestedLeverage}배를 그대로 적용할 수 없습니다.` });
+    }
+    const leverage = requestedLeverage;
     const maxMarginByServer = finiteNumber(process.env.CRYPTO_AUTO_TRADE_MAX_MARGIN_USDT, 500);
     if (marginAmountUSDT > maxMarginByServer) {
       return res.status(400).json({ ok: false, message: `서버 1회 증거금 상한 ${maxMarginByServer} USDT를 초과했습니다.` });
@@ -594,7 +611,6 @@ router.post('/crypto/futures/auto/plan', requireMember, async (req, res) => {
       symbol,
       direction,
       side: direction === 'LONG' ? 'buy' : 'sell',
-      tradeSide: positionMode === 'hedge_mode' ? 'open' : undefined,
       positionMode,
       marginMode,
       leverage,
@@ -631,7 +647,7 @@ router.post('/crypto/futures/auto/execute', requireMember, async (req, res) => {
   if (!tradingEnabled()) {
     return res.status(409).json({
       ok: false,
-      message: '서버 실주문 기능이 꺼져 있습니다. CRYPTO_AUTO_TRADE_ENABLED와 BITGET_AUTO_TRADE_ENABLED를 모두 true로 설정해야 합니다.',
+      message: '레거시 실주문 경로가 비활성화되어 있거나 최신 LIVE/AUTO Gate가 완전히 열리지 않았습니다.',
     });
   }
 
@@ -654,9 +670,6 @@ router.post('/crypto/futures/auto/execute', requireMember, async (req, res) => {
       marginCoin: MARGIN_COIN,
       leverage: String(plan.leverage),
     };
-    if (plan.positionMode === 'hedge_mode' && plan.marginMode === 'isolated') {
-      leverageBody.holdSide = plan.direction === 'LONG' ? 'long' : 'short';
-    }
     await bitgetPrivate('POST', '/api/v2/mix/account/set-leverage', '', leverageBody);
 
     const clientOid = `lsj119-${Date.now()}-${randomBytes(4).toString('hex')}`;
@@ -672,8 +685,7 @@ router.post('/crypto/futures/auto/execute', requireMember, async (req, res) => {
       presetStopSurplusPrice: String(plan.targetPrice),
       presetStopLossPrice: String(plan.stopPrice),
     };
-    if (plan.positionMode === 'hedge_mode') orderBody.tradeSide = 'open';
-    else orderBody.reduceOnly = 'NO';
+    orderBody.reduceOnly = 'NO';
 
     const result = await bitgetPrivate<{ orderId?: string; clientOid?: string }>(
       'POST',
@@ -721,25 +733,21 @@ router.post('/crypto/futures/auto/close-plan', requireMember, async (req, res) =
   try {
     const symbol = safeSymbol(req.body?.symbol);
     const positionMode = String(req.body?.positionMode ?? 'one_way_mode') as PositionMode;
-    const requestedHoldSide = String(req.body?.holdSide ?? '').toLowerCase();
     if (!symbol) return res.status(400).json({ ok: false, message: '종료할 코인 심볼이 필요합니다.' });
-    if (!['one_way_mode', 'hedge_mode'].includes(positionMode)) {
-      return res.status(400).json({ ok: false, message: '포지션 모드가 올바르지 않습니다.' });
+    if (positionMode !== 'one_way_mode') {
+      return res.status(400).json({ ok: false, message: '비트겟 선물은 단방향 모드만 허용됩니다.' });
     }
     const positions = await allPositions();
     const position = positions.find((row) => {
       if (row.symbol !== symbol) return false;
-      if (positionMode === 'one_way_mode') return true;
-      return row.holdSide === requestedHoldSide;
+      return true;
     });
     if (!position) return res.status(404).json({ ok: false, message: '종료할 포지션을 찾지 못했습니다.' });
 
     const plan: ClosePlan = {
       kind: 'CLOSE',
       symbol,
-      holdSide: positionMode === 'hedge_mode'
-        ? (position.holdSide === 'short' ? 'short' : 'long')
-        : null,
+      holdSide: null,
       positionMode,
       positionSize: Math.abs(position.total),
       markPrice: position.markPrice || null,
@@ -775,7 +783,6 @@ router.post('/crypto/futures/auto/close', requireMember, async (req, res) => {
       symbol: plan.symbol,
       productType: PRODUCT_TYPE,
     };
-    if (plan.positionMode === 'hedge_mode' && plan.holdSide) body.holdSide = plan.holdSide;
     const result = await bitgetPrivate<{
       successList?: Array<{ orderId?: string; clientOid?: string; symbol?: string }>;
       failureList?: Array<{ orderId?: string; clientOid?: string; symbol?: string; errorMsg?: string; errorCode?: string }>;
@@ -835,13 +842,16 @@ router.post('/crypto/futures/auto/configure-plan', requireMember, async (req, re
     const symbol = safeSymbol(req.body?.symbol);
     const positionMode = String(req.body?.positionMode ?? 'one_way_mode') as PositionMode;
     const marginMode = String(req.body?.marginMode ?? 'isolated') as MarginMode;
-    const leverage = clamp(Math.floor(finiteNumber(req.body?.leverage, 2)), 1, 125);
+    const leverage = finiteNumber(req.body?.leverage, 2);
     if (!symbol) return res.status(400).json({ ok: false, message: '코인 심볼이 필요합니다.' });
-    if (!['one_way_mode', 'hedge_mode'].includes(positionMode)) {
-      return res.status(400).json({ ok: false, message: '포지션 모드가 올바르지 않습니다.' });
+    if (positionMode !== 'one_way_mode') {
+      return res.status(400).json({ ok: false, message: '비트겟 선물은 단방향 모드만 허용됩니다.' });
     }
-    if (!['isolated', 'crossed'].includes(marginMode)) {
-      return res.status(400).json({ ok: false, message: '마진 모드가 올바르지 않습니다.' });
+    if (marginMode !== 'isolated') {
+      return res.status(400).json({ ok: false, message: '비트겟 선물은 격리 마진만 허용됩니다.' });
+    }
+    if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+      return res.status(400).json({ ok: false, message: '레버리지는 2~7배 정수만 허용됩니다.' });
     }
     const positions = await allPositions();
     if (positions.length) {
@@ -874,8 +884,12 @@ router.post('/crypto/futures/auto/configure', requireMember, async (req, res) =>
   try {
     plan = consumeApproval(req, 'CONFIGURE') as ConfigurePlan;
     const config = await contractConfig(plan.symbol);
-    const serverMaxLeverage = clamp(Math.floor(finiteNumber(process.env.CRYPTO_AUTO_TRADE_MAX_LEVERAGE, 5)), 1, config.maxLever);
-    const leverage = clamp(plan.leverage, config.minLever, serverMaxLeverage);
+    const serverMaxLeverage = clamp(Math.floor(finiteNumber(process.env.CRYPTO_AUTO_TRADE_MAX_LEVERAGE, 7)), 2, 7);
+    if (!Number.isInteger(plan.leverage) || plan.leverage < 2 || plan.leverage > 7
+      || plan.leverage < config.minLever || plan.leverage > config.maxLever || plan.leverage > serverMaxLeverage) {
+      throw new Error(`요청 레버리지 ${plan.leverage}배를 그대로 적용할 수 없습니다.`);
+    }
+    const leverage = plan.leverage;
     await bitgetPrivate('POST', '/api/v2/mix/account/set-position-mode', '', {
       productType: PRODUCT_TYPE,
       posMode: plan.positionMode,

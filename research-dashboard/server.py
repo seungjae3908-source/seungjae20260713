@@ -8,6 +8,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from v3_independence import read_v3_independence_summary
+from video_research_readback import read_video_research_readback
+from lightweight_market_watch_readback import read_active_research_sha, read_watch_status
+from lightweight_market_watch_cadence_readback import read_watch_cadence
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -28,6 +31,10 @@ TEMPORAL_CRYPTO_SUMMARY_SCHEMA = 'crypto-futures-temporal-public-collection-v1'
 TEMPORAL_COLLECTION_STATUSES = frozenset(('complete', 'partial_failure'))
 TEMPORAL_SYMBOL_STATUSES = frozenset(('success', 'failed'))
 FACTORY_RUNTIME_CONTRACT = 'research-factory-runtime-status/v1'
+FORMULA_QUEUE_SUMMARY_CONTRACT = 'research-formula-auto-backtest-summary/v1'
+FORMULA_PAPER_REGISTRY_CONTRACT = 'research-formula-paper-strategy-registry/v1'
+FORMULA_QUEUE_STATES = ('PASS', 'HOLD', 'RESERVE', 'EXCLUDE')
+FORMULA_QUEUE_MAX_BATCH = 50
 FACTORY_RUNTIME_STATUSES = frozenset((
     'BLOCKED_POLICY_MISSING',
     'BLOCKED_POLICY_INVALID',
@@ -42,6 +49,9 @@ DIGEST64_PATTERN = __import__('re').compile(r'^[0-9a-f]{64}$')
 TEMPORAL_SYMBOL_PATTERN = __import__('re').compile(r'^[A-Z0-9]{3,30}$')
 CANDIDATE_ID_PATTERN = __import__('re').compile(r'^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$')
 SAFE_ID_PATTERN = __import__('re').compile(r'^[A-Za-z0-9._:-]{1,160}$')
+RUNTIME_CYCLE_CADENCE_MS = 60 * 60 * 1000
+RUNTIME_STALE_AFTER_MS = 2 * RUNTIME_CYCLE_CADENCE_MS + 15 * 60 * 1000
+RUNTIME_CLOCK_SKEW_MS = 5 * 60 * 1000
 CANDIDATE_COUNT_KEYS = (
     'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
     'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
@@ -789,6 +799,144 @@ def read_factory_runtime_summary(root):
         return empty_factory_runtime_summary('INVALID', True)
 
 
+def missing_formula_queue_readback(status='MISSING', present=False):
+    return {
+        'present': present, 'status': status, 'inboxCount': None, 'scanned': None,
+        'counts': {name: None for name in FORMULA_QUEUE_STATES},
+        'paperRegisteredCount': None,
+        'producerBound': False, 'paperConsumerBound': False,
+        'validationComplete': False, 'oosComplete': False, 'fullCostReady': False,
+        'liveTrading': False, 'autoTrading': False, 'executionAuthority': 'NONE',
+        'firstBlocker': ('FORMULA_QUEUE_INPUT_MISSING' if status == 'MISSING'
+                         else 'FORMULA_QUEUE_READBACK_INVALID'),
+    }
+
+
+def summarize_formula_queue_readback(summary, registry):
+    if summary is None and registry is None:
+        return missing_formula_queue_readback()
+    invalid = lambda: missing_formula_queue_readback('INVALID', True)
+    if not isinstance(summary, dict) or not isinstance(registry, dict):
+        return invalid()
+    counts = summary.get('counts')
+    rows = summary.get('rows')
+    entries = registry.get('entries')
+    scanned = summary.get('scanned')
+    inbox_count = summary.get('inboxCount')
+    registered = registry.get('entryCount')
+    sample = summary.get('paperRegisteredCount')
+    if (summary.get('schemaVersion') != 1
+        or summary.get('contract') != FORMULA_QUEUE_SUMMARY_CONTRACT
+        or registry.get('schemaVersion') != 1
+        or registry.get('contract') != FORMULA_PAPER_REGISTRY_CONTRACT
+        or not isinstance(scanned, int) or isinstance(scanned, bool)
+        or not 0 <= scanned <= FORMULA_QUEUE_MAX_BATCH
+        or not isinstance(inbox_count, int) or isinstance(inbox_count, bool)
+        or not scanned <= inbox_count
+        or not isinstance(sample, int) or isinstance(sample, bool)
+        or not isinstance(registered, int) or isinstance(registered, bool)
+        or sample != registered or sample < 0
+        or not isinstance(rows, list) or len(rows) > scanned
+        or not isinstance(entries, list) or len(entries) != registered
+        or not isinstance(counts, dict)
+        or any(not isinstance(counts.get(k), int) or isinstance(counts[k], bool)
+               or counts[k] < 0 for k in FORMULA_QUEUE_STATES)
+        or sum(counts[k] for k in FORMULA_QUEUE_STATES) != len(rows)
+        or any(not isinstance(row, dict)
+               or row.get('state') not in FORMULA_QUEUE_STATES for row in rows)
+        or any(counts[k] != sum(row.get('state') == k for row in rows)
+               for k in FORMULA_QUEUE_STATES)
+        or summary.get('executionAuthority') != 'NONE'
+        or summary.get('liveTrading') is not False
+        or summary.get('autoTrading') is not False
+        or summary.get('realOrder') is not False
+        or registry.get('executionAuthority') != 'NONE'
+        or registry.get('liveTrading') is not False
+        or registry.get('autoTrading') is not False
+        or registry.get('realOrder') is not False
+        or registry.get('privateTradingApi') is not False
+        or registry.get('directTradeOnBacktestPass') is not False
+        or registry.get('futureSignalRequired') is not True
+        or registry.get('canonicalPaperAdmissionRequired') is not True):
+        return invalid()
+
+    # This TRAIN-only queue deliberately has no digest-bound OOS/Full Cost.
+    # A claimed PASS, Paper registration or Research profitability from these
+    # two state files is untrusted, regardless of any upstream label.
+    if counts['PASS'] or registered:
+        return missing_formula_queue_readback('INVALID', True)
+    if scanned == 0:
+        status = 'WAITING_INPUT'
+        blocker = 'FORMULA_QUEUE_INPUT_MISSING'
+    else:
+        status = 'TRAIN_ONLY'
+        blocker = 'FORMULA_QUEUE_PRODUCER_AND_OOS_UNATTESTED'
+    return {
+        'present': True, 'status': status, 'inboxCount': inbox_count,
+        'scanned': scanned, 'counts': {k: counts[k] for k in FORMULA_QUEUE_STATES},
+        'paperRegisteredCount': registered,
+        # Merely having a filename is NOT a provenance-bound producer/consumer.
+        'producerBound': False, 'paperConsumerBound': False,
+        'validationComplete': False, 'oosComplete': False, 'fullCostReady': False,
+        'liveTrading': False, 'autoTrading': False, 'executionAuthority': 'NONE',
+        'firstBlocker': blocker,
+    }
+
+
+def read_formula_queue_readback(root):
+    base = Path(root) / 'latest'
+    paths = [base / 'formula-backtest-queue.json',
+             base / 'formula-paper-strategy-registry.json']
+    try:
+        # Reject links to private runtime files and never reflect exception text.
+        if any(path.is_symlink() for path in paths):
+            return missing_formula_queue_readback('INVALID', True)
+        return summarize_formula_queue_readback(
+            read_json_optional(paths[0]), read_json_optional(paths[1]),
+        )
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+        return missing_formula_queue_readback('INVALID', True)
+
+
+def summarize_runtime_liveness(last_success_at, now_ms=None):
+    now_ms = int(__import__('time').time() * 1000) if now_ms is None else now_ms
+    if not isinstance(now_ms, int) or isinstance(now_ms, bool) or now_ms <= 0:
+        raise ValueError('runtime liveness now_ms must be a positive integer')
+    if last_success_at is None:
+        return {
+            'status': 'UNKNOWN', 'lastSuccessAt': None, 'expectedNextAt': None,
+            'ageMs': None, 'missedCycles': None, 'stale': False,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    if not isinstance(last_success_at, (int, float)) or isinstance(last_success_at, bool) or not math.isfinite(last_success_at) or last_success_at <= 0:
+        return {
+            'status': 'INVALID', 'lastSuccessAt': None, 'expectedNextAt': None,
+            'ageMs': None, 'missedCycles': None, 'stale': True,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    last_success_at = int(last_success_at)
+    if last_success_at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+        return {
+            'status': 'INVALID', 'lastSuccessAt': last_success_at,
+            'expectedNextAt': last_success_at + RUNTIME_CYCLE_CADENCE_MS,
+            'ageMs': 0, 'missedCycles': None, 'stale': True,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    age_ms = max(0, now_ms - last_success_at)
+    expected_next_at = last_success_at + RUNTIME_CYCLE_CADENCE_MS
+    missed_cycles = 0 if now_ms <= expected_next_at else int((now_ms - expected_next_at) // RUNTIME_CYCLE_CADENCE_MS) + 1
+    stale = age_ms > RUNTIME_STALE_AFTER_MS
+    return {
+        'status': 'STALE' if stale else 'LIVE',
+        'lastSuccessAt': last_success_at,
+        'expectedNextAt': expected_next_at,
+        'ageMs': age_ms,
+        'missedCycles': missed_cycles,
+        'stale': stale,
+        'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
@@ -802,6 +950,16 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     candidate_performance = read_candidate_performance(root)
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
+    formula_backtest = read_formula_queue_readback(root)
+    # A persisted SHA is untrusted until independently matched to the exact
+    # root-managed detached Research release currently installed on the host.
+    exact_research_sha = read_active_research_sha()
+    market_watch_status = read_watch_status(
+        root, expected_sha=exact_research_sha, require_exact_sha=True,
+    )
+    market_watch_cadence = read_watch_cadence(
+        root, expected_sha=exact_research_sha, require_exact_sha=True,
+    )
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -814,6 +972,13 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     )
     timestamps = [finite_number(cycle.get('generatedAt')) or 0 for cycle in cycles]
     latest_cycle_at = max(timestamps) if timestamps and max(timestamps) > 0 else None
+    successful_timestamps = [
+        finite_number(cycle.get('generatedAt')) or 0
+        for cycle in cycles
+        if cycle.get('present') and cycle.get('failedCount') == 0
+    ]
+    last_success_at = max(successful_timestamps) if successful_timestamps and max(successful_timestamps) > 0 else None
+    runtime_liveness = summarize_runtime_liveness(last_success_at)
     research_status = (
         'safety_block' if forbidden_authority_observed
         else 'safety_evidence_incomplete' if not authority_evidence_complete
@@ -822,6 +987,9 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             or candidate_performance.get('status') == 'INVALID'
             or temporal_crypto.get('status') in ('INVALID', 'partial_failure')
             or factory_runtime.get('status') in ('INVALID', 'BLOCKED_POLICY_INVALID')
+            or formula_backtest.get('status') == 'INVALID'
+            or runtime_liveness.get('status') == 'INVALID'
+            or runtime_liveness.get('stale') is True
         )
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
         else 'attention' if failed_tasks > 0
@@ -833,6 +1001,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'state': {
             'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present') or candidate_performance.get('present') or temporal_crypto.get('present') or factory_runtime.get('present'),
             'latestCycleAt': latest_cycle_at,
+            'runtimeLiveness': runtime_liveness,
         },
         'safety': {
             'readOnlyDashboard': True,
@@ -847,9 +1016,11 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'failedTasks': failed_tasks,
             'blockedDataTasks': blocked_data_tasks,
             'cycles': cycles,
+            'formulaBacktest': formula_backtest,
             'liquidityIndependence': liquidity_independence,
         },
-        'dataFactory': {'temporalCryptoFutures': temporal_crypto},
+        'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status,
+                        'lightweightMarketWatchCadence': market_watch_cadence},
         'factory': factory_runtime,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
@@ -942,6 +1113,8 @@ class ResearchDashboardHandler(BaseHTTPRequestHandler):
                 }, head_only)
             if pathname == '/api/research/overview':
                 return self._json(200, build_research_overview(self.server.state_root), head_only)
+            if pathname == '/api/research/video/evidence':
+                return self._json(200, read_video_research_readback(self.server.state_root), head_only)
             if pathname.startswith('/api/'):
                 return self._json(404, {'ok': False, 'error': 'not_found'}, head_only)
 

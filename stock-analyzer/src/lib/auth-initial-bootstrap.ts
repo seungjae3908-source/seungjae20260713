@@ -5,15 +5,17 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { hasCanonicalMemberAccessState } from '../../../packages/member-access/src/index.js';
 
 export type InitialMemberProfile = {
   id: string;
   login_name: string;
   display_name: string;
   role: string;
-  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
+  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'revoked' | 'withdrawn' | 'disabled' | 'inactive';
   membership_level?: 'pending' | 'associate' | 'regular' | 'admin' | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
@@ -50,7 +52,11 @@ export function primeInitialAuthBootstrap(): Promise<InitialAuthBootstrap> | nul
           .abortSignal(controller.signal)
           .maybeSingle();
         if (profileError) throw profileError;
-        return (profileData as InitialMemberProfile | null) ?? null;
+        const nextProfile = (profileData as InitialMemberProfile | null) ?? null;
+        if (nextProfile && !hasCanonicalMemberAccessState(nextProfile)) {
+          throw new Error('MEMBER_SCHEMA_NOT_READY');
+        }
+        return nextProfile;
       })(),
       AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
       'AUTH_PROFILE_TIMEOUT',

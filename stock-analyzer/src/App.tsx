@@ -28,6 +28,7 @@ import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
+import RecommendationsPage from '@/pages/recommendations';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -68,12 +69,12 @@ const AccountPage = lazy(loadAccountPage);
 const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
-const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const loadBacktestsPage = () => import('@/pages/backtests');
 const BacktestsPage = lazy(loadBacktestsPage);
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
 const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
+const AutoRehearsalPreviewPage = lazy(() => import('@/pages/auto-rehearsal-preview'));
 const UiBuilderLayoutControlPage = lazy(() => import('@/pages/ui-builder-layout-control'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
@@ -124,6 +125,7 @@ const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
+const prRehearsalPreviewEnabled = import.meta.env.VITE_PR_REHEARSAL_PREVIEW === 'true';
 const DIRECT_AI_CHART_PREWARM_STALE_MS = 8_000;
 const DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS = 15_000;
 
@@ -189,7 +191,7 @@ function DirectAiChartDataPrewarm() {
       !directAiChartPrewarmSelection
       || auth.loading
       || !auth.isApproved
-      || !auth.can('canAccessRiskPreview')
+      || !auth.can('canAccessAiChart')
     ) return;
 
     const { market, ticker, timeframe } = directAiChartPrewarmSelection;
@@ -316,13 +318,13 @@ function ScannerAccess() {
 function TelegramSignalOrderAccess() {
   return gated('canAccessBasicInfo', <TelegramSignalOrderPage />);
 }
-function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
+function AiChartAccess() { return gated('canAccessAiChart', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
-function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }
+function ResearchCenterAccess() { return gated('canAccessBasicInfo', <ResearchCenterPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (
@@ -454,6 +456,7 @@ function RootRouter() {
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase13-orderbook-e2e" component={Phase13OrderbookE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
+    {prRehearsalPreviewEnabled ? <Route path="/auto-rehearsal-preview" component={AutoRehearsalPreviewPage} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
     <Route component={AuthenticatedApp} />
@@ -502,7 +505,7 @@ function AuthenticatedApp() {
     }
   }, [auth.isApproved, auth.membershipLevel]);
   if (auth.loading) return <PageFallback />;
-  if (auth.bootstrapError) return <ErrorState code="UPSTREAM_ERROR" onRetry={auth.retryBootstrap} />;
+  if (auth.bootstrapError) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
   if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
   return <><AutoBackupSync /><ApprovedRouter /></>;
 }

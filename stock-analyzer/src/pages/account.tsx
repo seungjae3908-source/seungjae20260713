@@ -16,6 +16,8 @@ export default function AccountPage() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -28,19 +30,57 @@ export default function AccountPage() {
       if (register) {
         await auth.signUp(name, password);
         setNotice('가입 신청이 완료되었습니다. 관리자 승인 후 이용할 수 있습니다.');
+        setPassword('');
+        setConfirm('');
       } else {
         await auth.signIn(name, password);
         setNotice('로그인되었습니다.');
+        setPassword('');
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '계정 처리에 실패했습니다.');
     } finally { setBusy(false); }
   }
 
-  const stateMessage = auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
-    : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
+  const membershipExpiry = auth.profile?.membership_expires_at ?? null;
+  const membershipExpiryMs = membershipExpiry ? Date.parse(membershipExpiry) : null;
+  const membershipExpired = membershipExpiryMs != null
+    && (!Number.isFinite(membershipExpiryMs) || membershipExpiryMs <= Date.now());
+  const stateMessage = auth.bootstrapError ? ''
     : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
-    : auth.membershipLevel === 'pending' ? '관리자 승인 대기 중입니다.' : '';
+    : auth.profile?.status === 'revoked' ? '이용 권한이 회수된 계정입니다.'
+    : auth.profile?.status === 'disabled' || auth.profile?.status === 'inactive' ? '이용이 중지된 계정입니다.'
+    : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
+    // A pending application is normally is_active=false until approval.
+    // Give the explicit status precedence, never grant approved capabilities here.
+    : auth.profile?.status === 'pending' ? '관리자 승인 대기 중입니다.'
+    : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
+    : membershipExpired ? '회원 이용 기간이 만료되었습니다.' : '';
+
+  async function logout() {
+    setError(''); setNotice('');
+    try {
+      await auth.signOut();
+    } catch {
+      setError('로그아웃에 실패했습니다. 연결 상태를 확인한 뒤 다시 시도해 주세요.');
+    }
+  }
+
+  async function changePassword() {
+    setError(''); setNotice('');
+    if (newPassword !== newPasswordConfirm) { setError('새 비밀번호 확인이 일치하지 않습니다.'); return; }
+    setBusy(true);
+    try {
+      await auth.changePassword(newPassword);
+      setNewPassword('');
+      setNewPasswordConfirm('');
+      setNotice('비밀번호를 변경했습니다.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '비밀번호 변경에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const backButton = auth.isApproved ? (
     <button type="button" aria-label="뒤로 가기" onClick={() => navigate('/settings')} className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border bg-card">
@@ -60,9 +100,14 @@ export default function AccountPage() {
       ]}
     />
     <main className="mx-auto w-full max-w-3xl min-w-0 flex-1 px-3 pb-28 pt-4 sm:px-5 sm:pt-5">
+      {auth.bootstrapError && <section role="alert" data-testid="account-bootstrap-error" className="mb-4 rounded-2xl border border-warning/30 bg-warning/10 p-4">
+        <p className="text-sm font-bold text-warning">계정 상태를 불러오지 못했습니다.</p>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{auth.bootstrapError}</p>
+        <button type="button" onClick={() => auth.retryBootstrap()} className="mt-3 min-h-11 rounded-xl border border-warning/40 px-4 text-sm font-semibold text-warning">다시 확인</button>
+      </section>}
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
-      {!auth.loading && auth.user ? <Card>
+      {!auth.loading && auth.user && !auth.bootstrapError ? <Card>
         <div className="text-center">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><ShieldCheck className="h-6 w-6" /></span>
           <p className="mt-3 text-xs font-medium text-muted-foreground">로그인 중</p>
@@ -72,8 +117,14 @@ export default function AccountPage() {
         {stateMessage && <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-warning/10 p-4 text-center text-sm font-semibold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
         {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}
         {auth.isAdmin && <button type="button" onClick={() => navigate('/admin')} className="mt-4 min-h-11 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">회원 관리</button>}
-        <button type="button" onClick={() => void auth.signOut()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
-      </Card> : !auth.loading && auth.configured && <Card>
+        <div className="mt-4 space-y-3 rounded-2xl border border-card-border bg-background p-3">
+          <p className="text-sm font-semibold">비밀번호 변경</p>
+          <Field label="새 비밀번호"><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} maxLength={72} autoComplete="new-password" className="input" placeholder="8자 이상" /></Field>
+          <Field label="새 비밀번호 확인"><input type="password" value={newPasswordConfirm} onChange={(e) => setNewPasswordConfirm(e.target.value)} minLength={8} maxLength={72} autoComplete="new-password" className="input" placeholder="비밀번호 다시 입력" /></Field>
+          <button type="button" disabled={busy || newPassword.length < 8 || newPasswordConfirm.length < 8} onClick={() => void changePassword()} className="min-h-11 w-full rounded-xl border border-primary px-3 py-2 text-sm font-semibold text-primary disabled:opacity-40">비밀번호 변경</button>
+        </div>
+        <button type="button" onClick={() => void logout()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
+      </Card> : !auth.loading && auth.configured && !auth.user && <Card>
         <div className="flex rounded-2xl bg-secondary p-1"><button type="button" aria-label="로그인 탭" aria-pressed={!register} onClick={() => setRegister(false)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${!register ? 'bg-card shadow' : ''}`}>로그인</button><button type="button" aria-label="회원가입 탭" aria-pressed={register} onClick={() => setRegister(true)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${register ? 'bg-card shadow' : ''}`}>회원가입</button></div>
         <form onSubmit={submit} className="mt-5 space-y-4">
           <Field label="아이디"><input value={name} onChange={(e) => setName(e.target.value)} minLength={2} maxLength={20} required autoComplete="username" className="input" placeholder="한글·영문·숫자 2~20자" /></Field>
@@ -84,7 +135,7 @@ export default function AccountPage() {
       </Card>}
       {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <>
         <BrokerageAccountConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
-        <TradeExecutionConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
+        {auth.can('canPlaceOrders') ? <TradeExecutionConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} /> : null}
       </> : null}
       {!auth.loading && auth.user && auth.can('canConnectPersonalTelegram') ? <div className="mt-4"><UserBrokerTelegramPanel /></div> : null}
       {(notice || error) && <p role={error ? 'alert' : 'status'} className={`mt-3 break-words rounded-2xl p-4 text-center text-sm font-semibold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}

@@ -1,4 +1,5 @@
 name: Production Account Read-only Live QA
+run-name: Production Account Read-only Live QA ${{ inputs.sha || github.event.pull_request.head.sha }} ${{ inputs.providers || 'contract' }}
 
 on:
   pull_request:
@@ -10,8 +11,13 @@ on:
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
       - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-login.ts'
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
+      - '.github/workflows/production-postdeploy-qa.yml'
+      - '.github/scripts/verify-production-postdeploy-qa-contract.mjs'
+      - '.github/scripts/run-production-readonly-qa.sh'
+      - '.github/scripts/verify-production-qa-receipt.cjs'
   workflow_dispatch:
     inputs:
       sha:
@@ -24,6 +30,20 @@ on:
         type: string
       production_deploy_run_id:
         description: Exact latest successful official Production Deploy Run ID verified by the dispatch bridge
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify with real read-only account calls
+        required: true
+        type: string
+      providers:
+        description: Comma-separated read-only target providers
+        required: true
+        type: string
+      production_deploy_run_id:
+        description: Exact latest successful official Production Deploy Run ID
         required: true
         type: string
 
@@ -59,22 +79,34 @@ jobs:
           const workflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
           const bridge = fs.readFileSync('.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml', 'utf8');
           const spec = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
+          const login = fs.readFileSync('stock-analyzer/e2e/support/production-readonly-login.ts', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-account-readonly.config.ts', 'utf8');
           const live = workflow.split('\n  production-account-readonly-live-qa:\n')[1] ?? '';
           const requireText = (source, value, code) => {
             if (!source.includes(value)) throw new Error(code);
           };
-          requireText(live, "if: github.event_name == 'workflow_dispatch'", 'LIVE_QA_MUST_BE_DISPATCH_ONLY');
-          requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
+          requireText(workflow, 'run-name: Production Account Read-only Live QA', 'LIVE_QA_TARGETED_RUN_NAME_REQUIRED');
+          requireText(live, "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'", 'LIVE_QA_MUST_BE_DISPATCH_OR_ORCHESTRATOR_CALL_ONLY');
+          requireText(live, 'environment: production', 'LIVE_QA_PROTECTED_CREDENTIAL_SOURCE_REQUIRED');
+          if (live.includes('PROD_SSH_') || live.includes('PROD_DATABASE_URL')) throw new Error('LIVE_QA_DEPLOY_AUTHORITY_FORBIDDEN');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
           requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
           requireText(live, 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ' + '$' + '{{ inputs.providers }}', 'LIVE_QA_TARGET_PROVIDERS_REQUIRED');
           requireText(live, 'PRODUCTION_DEPLOY_RUN_ID: ' + '$' + '{{ inputs.production_deploy_run_id }}', 'LIVE_QA_DEPLOY_RUN_ID_INPUT_REQUIRED');
           requireText(live, 'getWorkflowRun', 'LIVE_QA_EXACT_DEPLOY_RUN_LOOKUP_REQUIRED');
           requireText(live, 'assertProductionDeployProvenance', 'LIVE_QA_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
+          requireText(workflow, "'stock-analyzer/e2e/support/production-readonly-login.ts'", 'LOGIN_HELPER_CHANGE_MUST_TRIGGER_CONTRACT');
+          requireText(live, 'Resolve exact workflow-generation QA harness safely', 'LIVE_QA_CURRENT_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'QA_HARNESS_SHA:', 'LIVE_QA_HARNESS_SHA_MUST_BE_PINNED');
+          requireText(live, 'stock-analyzer/e2e/support/production-readonly-login.ts', 'LIVE_QA_LOGIN_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY', 'LIVE_QA_PROVIDER_CODE_DRIFT_GATE_REQUIRED');
+          requireText(login, "new URL('/api/auth/profile'", 'LOGIN_AUTH_PROFILE_READ_PROOF_REQUIRED');
+          requireText(login, 'Do not submit credentials a second time', 'LOGIN_AUTH_RETRY_MUST_NOT_RESUBMIT_CREDENTIALS');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
+          requireText(spec, 'Do not immediately add a third', 'REDUNDANT_PROVIDER_REFRESH_GUARD_REQUIRED');
+          requireText(spec, 'requiredSnapshotsHealthy', 'HEALTHY_SNAPSHOT_RETRY_GATE_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
           requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
@@ -108,19 +140,22 @@ jobs:
 
   production-account-readonly-live-qa:
     name: Real Production account read-only provider QA
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
     env:
+      GH_TOKEN: ${{ github.token }}
       PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
       PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
+      PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/account
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
       PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
       PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
+      PRODUCTION_DEPLOY_MODE: completed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -183,6 +218,48 @@ jobs:
             exit 1
           }
 
+      - name: Resolve exact workflow-generation QA harness safely
+        env:
+          QA_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+          if ! git diff --quiet "$EXPECTED_DEPLOY_SHA" "$QA_HARNESS_SHA" -- \
+            api-server/src/features/account-readonly \
+            api-server/src/services/trade-exchange-adapters.service.ts \
+            stock-analyzer/src/components/brokerage-account-connections.tsx \
+            stock-analyzer/src/pages/account.tsx \
+            stock-analyzer/src/lib/auth-fetch.ts \
+            stock-analyzer/src/main.tsx
+          then
+            echo 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
+            exit 1
+          fi
+          if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts
+            test -s stock-analyzer/e2e/support/production-readonly-login.ts
+            test -s stock-analyzer/e2e/support/production-readonly-policy.ts
+            test -s stock-analyzer/playwright.production-account-readonly.config.ts
+            echo "QA harness already belongs to the exact deployed SHA; overlay not required."
+          else
+            git cat-file -e "$QA_HARNESS_SHA^{commit}"
+            for harness_path in \
+              stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
+              stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts \
+              stock-analyzer/e2e/support/production-readonly-login.ts \
+              stock-analyzer/e2e/support/production-readonly-policy.ts \
+              stock-analyzer/playwright.production-account-readonly.config.ts
+            do
+              tmp="/tmp/$(basename "$harness_path")"
+              git show "$QA_HARNESS_SHA:$harness_path" > "$tmp"
+              test -s "$tmp"
+              install -m 0644 "$tmp" "$harness_path"
+            done
+          fi
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -199,8 +276,7 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Run authenticated real-account read-only QA
-        working-directory: stock-analyzer
-        run: pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+        run: bash .github/scripts/run-production-readonly-qa.sh account
 
       - name: Verify sanitized immutable QA evidence
         shell: bash
@@ -208,9 +284,9 @@ jobs:
           set -Eeuo pipefail
           evidence="stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json"
           test -s "$evidence"
-          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" <<'NODE'
+          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" "$PRODUCTION_DEPLOY_RUN_ID" <<'NODE'
           const fs = require('node:fs');
-          const [file, expectedSha, rawTargetProviders] = process.argv.slice(2);
+          const [file, expectedSha, rawTargetProviders, productionDeployRunId] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
           const allowedTargets = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
           const requestedProviders = String(rawTargetProviders ?? '').split(',').filter(Boolean);
@@ -221,8 +297,15 @@ jobs:
             throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           }
           const providers = Array.isArray(value?.providers) ? value.providers : [];
-          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+          const zeroSafetyCounters = [
+            'openOrderCount', 'orphanOrderCount', 'activeLocalOrderCount', 'staleLocalOrderCount',
+            'duplicateClientOrderIdCount', 'stalePlanCount', 'oppositePositionDuplicateCount',
+            'nonIsolatedPositionCount', 'outOfPolicyLeveragePositionCount', 'liquidationRiskPositionCount',
+          ];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v3'
             || value?.targetSha !== expectedSha
+            || value?.productionDeployRunId !== Number(productionDeployRunId)
+            || !Number.isFinite(Date.parse(String(value?.generatedAt ?? '')))
             || !Array.isArray(value?.testedProviders)
             || JSON.stringify(value.testedProviders) !== JSON.stringify(expectedTestedProviders)
             || value?.officialProductionOrigin !== true
@@ -235,10 +318,13 @@ jobs:
             || value?.amendRequests !== 0
             || value?.transferRequests !== 0
             || value?.withdrawalRequests !== 0
+            || value?.realOrderSubmitted !== false
             || value?.blockedMutationRequests !== 0
             || value?.observedAppMutationRequests !== 0
             || value?.liveTradingAuthorityGranted !== false
-            || value?.autoTradingAuthorityGranted !== false) {
+            || value?.autoTradingAuthorityGranted !== false
+            || value?.bitgetPositionMode !== 'one_way_mode'
+            || zeroSafetyCounters.some((key) => value?.safetyCounters?.[key] !== 0)) {
             throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
           }
           if (!providers.some((item) => item?.provider === 'bitget')) {
@@ -249,7 +335,8 @@ jobs:
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
               || row.stale !== false || row.fresh !== true || row.errorCode !== null
               || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
-              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true) {
+              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true
+              || row.openOrderCount !== 0) {
               throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_FAILED_' + provider.toUpperCase());
             }
           }
@@ -273,6 +360,7 @@ jobs:
             '/api/v3/account/assets',
             '/api/v3/position/current-position',
             '/api/v3/trade/unfilled-orders',
+            '/api/v2/mix/account/account',
             '/api/v2/mix/account/accounts',
             '/api/v2/mix/position/all-position',
             '/api/v2/mix/order/orders-pending',
@@ -309,6 +397,10 @@ jobs:
                 'BITGET_TRANSPORT_CONNECT',
                 'BITGET_TRANSPORT_TIMEOUT',
                 'BITGET_TRANSPORT_NETWORK',
+                'BITGET_RESPONSE_SHAPE_INVALID',
+                'BITGET_RESPONSE_IDENTITY_INVALID',
+                'BITGET_RESPONSE_VALUE_INVALID',
+                'BITGET_RESPONSE_DUPLICATE_IDENTITY',
               ].includes(diagnostic.sanitizedClassification)
               || typeof diagnostic.fallbackAttempted !== 'boolean'
               || typeof diagnostic.timestampRejected !== 'boolean'
@@ -363,7 +455,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-account-readonly-live-${{ inputs.sha }}
-          path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
+          path: |
+            stock-analyzer/production-account-readonly-artifacts
+            stock-analyzer/production-login-diagnostics/account
           if-no-files-found: warn
           retention-days: 30
 

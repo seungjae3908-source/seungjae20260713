@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node ./test.mjs all",
     "test:unit": "node ./test.mjs unit",
+    "test:telegram": "node ./test.mjs telegram",
     "test:phase2": "node ./test.mjs phase2",
     "test:risk": "node ./test.mjs risk",
     "test:phase4": "node ./test.mjs phase4",

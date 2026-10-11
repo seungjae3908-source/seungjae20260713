@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type ExchangeConnection,
   type TradingExchange,
   type TradingOrder,
@@ -51,6 +52,8 @@ export interface TradingRepository {
   listOrders(userId: string): Promise<TradingOrder[]>;
   appendEvent(event: TradingOrderEvent): Promise<void>;
   listEvents(userId: string): Promise<TradingOrderEvent[]>;
+  /** Account-owned scoped replay, without a user-wide 1,000-event truncation. */
+  listEventsForOrder?(userId: string, orderId: string): Promise<TradingOrderEvent[]>;
 }
 
 function copy<T>(value: T): T {
@@ -76,6 +79,10 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     fills: copy(order.fills ?? []),
     feeAmount: order.feeAmount ?? null,
     feeCurrency: order.feeCurrency ?? null,
+    taxAmount: order.taxAmount ?? null,
+    taxCurrency: order.taxCurrency ?? null,
+    settlementFxEvidence: order.settlementFxEvidence ?? null,
+    paperFundingSettlementEvidence: order.paperFundingSettlementEvidence ?? null,
     exchangeCreatedAt: order.exchangeCreatedAt ?? null,
     exchangeUpdatedAt: order.exchangeUpdatedAt ?? null,
     cancelable: order.cancelable ?? null,
@@ -214,6 +221,9 @@ export class InMemoryTradingRepository implements TradingRepository {
   }
   async appendEvent(event: TradingOrderEvent) { this.events.push(copy(event)); }
   async listEvents(userId: string) { return this.events.filter((item) => item.userId === userId).map(copy); }
+  async listEventsForOrder(userId: string, orderId: string) {
+    return this.events.filter((item) => item.userId === userId && item.orderId === orderId).map(copy);
+  }
 }
 
 function databaseError() {
@@ -281,6 +291,7 @@ function createScopedTradingRepository(
   client: SupabaseClient,
   secureClient: () => SupabaseClient,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number,
 ): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
 
@@ -323,7 +334,10 @@ function createScopedTradingRepository(
       const { data, error } = await client.from('trade_automation_profiles').select('payload')
         .eq('user_id', userId).maybeSingle();
       if (error) throw databaseError();
-      return normalizeTradingPolicy((data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>);
+      return normalizeTradingPolicy(
+        (data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>,
+        maximumSingleEntryKrw,
+      );
     },
     async savePolicy(userId, policy) {
       owned(userId);
@@ -488,12 +502,24 @@ function createScopedTradingRepository(
       if (error) throw databaseError();
       return (data ?? []).map((row) => row.payload as TradingOrderEvent);
     },
+    async listEventsForOrder(userId, orderId) {
+      owned(userId);
+      if (!orderId) throw new Error('EXECUTION_SYNC_ORDER_ID_INVALID');
+      // Do not let other members or older, unrelated events consume this limit.
+      const { data, error } = await client.from('trade_order_events').select('payload')
+        .eq('user_id', userId).eq('order_id', orderId)
+        .order('created_at', { ascending: true }).limit(1_001);
+      if (error) throw databaseError();
+      if ((data ?? []).length > 1_000) throw new Error('EXECUTION_SYNC_ORDER_EVENT_LIMIT_REACHED');
+      return (data ?? []).map((row) => row.payload as TradingOrderEvent);
+    },
   };
 }
 
 export function createSupabaseTradingRepository(
   accessToken: string,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   const client = getUserSupabase(accessToken);
@@ -501,19 +527,20 @@ export function createSupabaseTradingRepository(
     if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
     return getSupabase();
   };
-  return createScopedTradingRepository(client, secureClient, authenticatedUserId);
+  return createScopedTradingRepository(client, secureClient, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 export function createServiceRoleTradingRepository(
   authenticatedUserId: string,
   injectedClient?: SupabaseClient,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   if (!injectedClient && !hasSupabaseServerKey()) {
     throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
   }
   const client = injectedClient ?? getSupabase();
-  return createScopedTradingRepository(client, () => client, authenticatedUserId);
+  return createScopedTradingRepository(client, () => client, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {
