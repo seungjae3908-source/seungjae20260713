@@ -1,0 +1,75 @@
+name: Prediction Lab Original Public Watch JSONL Intake QA V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/public-watch-jsonl-original-intake-v1.js
+      - market-prediction-lab/tests/public-watch-jsonl-original-intake-v1.test.js
+      - market-prediction-lab/scripts/report-public-watch-jsonl-intake-v1.mjs
+      - .github/workflows/prediction-lab-public-watch-jsonl-intake-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-watch-jsonl-intake-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-watch-export-intake:
+    name: Local original public watch export reader - research only
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure no private actions enabled
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Verify original watcher log hashes, cadence and local file safety
+        run: |
+          node --test market-prediction-lab/tests/public-watch-jsonl-original-intake-v1.test.js
+      - name: Record missing original Vultr export without inventing a scanner miss
+        run: |
+          node market-prediction-lab/scripts/report-public-watch-jsonl-intake-v1.mjs market-prediction-lab/docs/public-watch-jsonl-export-intake-v1.json
+      - name: Enforce that absent actual source leaves recall and PnL unknown
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/public-watch-jsonl-export-intake-v1.json","utf8"));
+          if(r.status!=="BLOCKED_DATA"
+             ||r.reason!=="ORIGINAL_WATCH_FILES_NOT_CONNECTED"
+             ||r.originalEventRows!==null
+             ||r.originalCadenceRows!==null
+             ||r.sourceLogCompletenessVerified!==false
+             ||r.fullWatchlistNegativeEvidenceVerified!==false
+             ||r.trueMarketWideRecall!==null
+             ||r.verifiedFalseNegativeCount!==null
+             ||r.nativeReconciliation!==null
+             ||r.originalSourceEventsIncluded!==false
+             ||r.originalCadenceRowsIncluded!==false
+             ||r.netProfitPct!==null
+             ||r.profitabilityProven!==false
+             ||r.executionAuthority!=="NONE"
+             ||r.realOrders!==false)process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-public-watch-jsonl-intake-gap-${{ github.sha }}
+          path: market-prediction-lab/docs/public-watch-jsonl-export-intake-v1.json
+          if-no-files-found: error
+          retention-days: 14

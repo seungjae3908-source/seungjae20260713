@@ -132,3 +132,37 @@ test("futures context combines values and preserves exact decimal strings", asyn
   assert.equal(context.fundingHistory[0].rateRaw, "0.000200");
   assert.equal(context.fundingHistory.length, 1);
 });
+
+
+test("Bitget USDT futures 1m history uses the existing historical public client", async () => {
+  const M=60_000;
+  const candles=Array.from({length:250},(_,i)=>[String(START+i*M),"100","101","99","100","50","5000"]);
+  const seen=[];
+  const client={get:async(path,params)=>{
+    seen.push({path,params});
+    return {code:"00000",data:candles.filter(r=>Number(r[0])<Number(params.endTime)).slice(-200)};
+  }};
+  const result=await collectBitgetCandles({
+    client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+    startTime:START,endTime:START+250*M,minCandles:2,
+  });
+  assert.equal(result.candles.length,250);
+  assert.equal(result.rawPageWindowTraversed,true);
+  assert.equal(result.historicalSignalAvailabilityProven,false);
+  assert.equal(result.historicPointInTimeContractUniverseComplete,false);
+  assert.ok(seen.length>=2);
+  assert.ok(seen.every(p=>p.path.endsWith("/mix/market/history-candles") &&
+    p.params.granularity==="1m" && p.params.productType==="usdt-futures"));
+});
+
+test("Bitget 1m truncation must not be reported as complete history", async () => {
+  const M=60_000;
+  const candles=Array.from({length:300},(_,i)=>[String(START+i*M),"100","101","99","100","50","5000"]);
+  const client={get:async(_path,params)=>({
+    code:"00000",data:candles.filter(r=>Number(r[0])<Number(params.endTime)).slice(-200)
+  })};
+  await assert.rejects(()=>collectBitgetCandles({
+    client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+    startTime:START,endTime:START+300*M,maxCandles:60,minCandles:2,
+  }),/BITGET_HISTORY_RANGE_INCOMPLETE/);
+});

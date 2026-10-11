@@ -1,14 +1,15 @@
 import { BITGET_ENDPOINTS } from "./bitget-public-client.js";
 
 const TIMEFRAME_MS = Object.freeze({
+  "1m": 60_000,
   "15m": 15 * 60 * 1000,
   "1h": 60 * 60 * 1000,
   "4h": 4 * 60 * 60 * 1000,
   "1d": 24 * 60 * 60 * 1000,
 });
 
-const FUTURES_GRANULARITY = Object.freeze({ "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D" });
-const SPOT_GRANULARITY = Object.freeze({ "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" });
+const FUTURES_GRANULARITY = Object.freeze({ "1m": "1m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D" });
+const SPOT_GRANULARITY = Object.freeze({ "1m": "1min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" });
 
 function assertSymbol(symbol) {
   if (typeof symbol !== "string" || !/^[A-Z0-9]{3,30}$/.test(symbol)) {
@@ -77,6 +78,8 @@ export async function collectBitgetCandles({
   startTime,
   endTime = Date.now(),
   maxCandles = 50_000,
+  minCandles = 60,
+  requireFullWindow = timeframe === "1m",
   productType = "usdt-futures",
   onPage,
 }) {
@@ -85,9 +88,12 @@ export async function collectBitgetCandles({
   assertTimeframe(timeframe);
   if (!Number.isInteger(startTime) || startTime <= 0) throw new TypeError("startTime must be a positive integer");
   if (!Number.isInteger(endTime) || endTime <= startTime) throw new TypeError("endTime must be greater than startTime");
-  if (!Number.isInteger(maxCandles) || maxCandles < 60 || maxCandles > 500_000) {
-    throw new TypeError("maxCandles must be between 60 and 500000");
-  }
+  if (!Number.isInteger(maxCandles) || maxCandles < 2 || maxCandles > 500_000)
+    throw new TypeError("maxCandles must be between 2 and 500000");
+  if (!Number.isInteger(minCandles) || minCandles < 2 || minCandles > maxCandles)
+    throw new TypeError("minCandles must be 2..maxCandles");
+  if (typeof requireFullWindow !== "boolean")
+    throw new TypeError("requireFullWindow must be boolean");
   if (!new Set(["CRYPTO_SPOT", "CRYPTO_FUTURES"]).has(market)) throw new TypeError("market must be CRYPTO_SPOT or CRYPTO_FUTURES");
 
   const intervalMs = TIMEFRAME_MS[timeframe];
@@ -101,6 +107,7 @@ export async function collectBitgetCandles({
   let cursorEnd = alignDown(endTime, intervalMs);
   let page = 0;
   let previousOldest = Number.POSITIVE_INFINITY;
+  let reachedRequestedStart = false;
 
   while (cursorEnd > startTime && all.length < maxCandles) {
     const params = {
@@ -121,6 +128,7 @@ export async function collectBitgetCandles({
     if (rawOldest >= previousOldest) {
       throw new Error("pagination did not move backward; collection stopped to prevent an infinite loop");
     }
+    if (rawOldest <= startTime) reachedRequestedStart = true;
 
     if (batch.length > 0) {
       all.push(...batch);
@@ -144,7 +152,9 @@ export async function collectBitgetCandles({
   const candles = sortAndDeduplicate(all)
     .filter((candle) => candle.timestamp >= startTime && candle.timestamp < alignDown(endTime, intervalMs))
     .slice(-maxCandles);
-  if (candles.length < 60) throw new Error(`not enough candles collected: ${candles.length}`);
+  if (requireFullWindow && (!reachedRequestedStart || all.length > maxCandles))
+    throw new Error("BITGET_HISTORY_RANGE_INCOMPLETE");
+  if (candles.length < minCandles) throw new Error(`not enough candles collected: ${candles.length}`);
   return Object.freeze({
     schemaVersion: 1,
     provider: "bitget-public-v2",
@@ -153,6 +163,14 @@ export async function collectBitgetCandles({
     symbol,
     timeframe,
     productType: isFutures ? productType : undefined,
+    requestedStartTime: startTime, requestedEndTime: endTime,
+    intervalMs,
+    reachedRequestedStart, rawPageWindowTraversed: reachedRequestedStart && all.length <= maxCandles,
+    historicalSignalAvailabilityProven: false,
+    historicPointInTimeContractUniverseComplete: false,
+    missingMinuteNoTradeProof: false,
+    exactFirstTradeTimestampProven: false,
+    actualFillProven: false,
     candles: Object.freeze(candles),
   });
 }

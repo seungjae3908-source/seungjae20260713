@@ -1,0 +1,309 @@
+name: Prediction Lab Four-Market Daily Opportunity Scanner 3Y V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
+      - market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
+      - market-prediction-lab/src/historical-intraday-opportunity-audit-v1.js
+      - market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/tests/bitget-collector.test.js
+      - market-prediction-lab/scripts/probe-native-minute-historical-v1.mjs
+      - market-prediction-lab/tests/native-minute-historical-source-smoke-v1.test.js
+      - market-prediction-lab/scripts/probe-native-utc-day-historical-v1.mjs
+      - market-prediction-lab/tests/native-utc-day-opportunity-audit-v1.test.js
+      - market-prediction-lab/src/historical-scanner-evidence-funnel-v1.js
+      - market-prediction-lab/tests/historical-scanner-evidence-funnel-v1.test.js
+      - market-prediction-lab/scripts/report-historical-scanner-readiness-v1.mjs
+      - market-prediction-lab/scripts/probe-native-selected-day-v1.mjs
+      - market-prediction-lab/tests/native-selected-day-v1.test.js
+      - market-prediction-lab/src/causal-price-warning-coverage-v1.js
+      - market-prediction-lab/tests/causal-price-warning-coverage-v1.test.js
+      - market-prediction-lab/scripts/report-causal-price-warning-coverage-v1.mjs
+      - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
+      - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+      - market-prediction-lab/scripts/report-historical-pit-universe-readiness-v1.mjs
+      - market-prediction-lab/src/krx-dated-roster-public-read-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+      - market-prediction-lab/scripts/report-krx-roster-provider-readiness-v1.mjs
+      - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
+      - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: four-market-daily-opportunity-scanner-3y-v1-r2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Four-market daily opportunity walk-forward
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      PYTHONHASHSEED: "42"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check --timeout 30 --retries 2 "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1" "huggingface_hub==0.36.0" "pyarrow==21.0.0"
+
+      - name: Verify research-only safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+
+      - name: Compile and self-test
+        run: |
+          python -m py_compile market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
+          python -m py_compile market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
+          python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --self-test
+
+      - name: Validate intraday opportunity causality (fixture contracts only)
+        run: |
+          node --version
+          node --test market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
+
+      - name: Verify native venue one-minute collector contracts
+        run: |
+          node --test market-prediction-lab/tests/upbit-spot-history.test.js market-prediction-lab/tests/bitget-collector.test.js
+
+      - name: Probe fixed historical native 1m samples (public read only)
+        timeout-minutes: 3
+        run: |
+          node --test market-prediction-lab/tests/native-minute-historical-source-smoke-v1.test.js
+          node market-prediction-lab/scripts/probe-native-minute-historical-v1.mjs market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json
+
+      - name: Assert sample truth boundary
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json","utf8"));
+          const markets=["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"];
+          if(markets.some(m=>!r.markets[m]) || r.executionAuthority!=="NONE" ||
+            r.profitabilityProven!==false || r.marketWideOpportunityDenominatorVerified!==false ||
+            r.actualFillEvidenceVerified!==false || r.realOrders!==false ||
+            Object.values(r.markets).some(x=>x.status==="OBSERVED_SAMPLE_ONLY" &&
+              (x.minuteOpportunityWindow?.status!=="OBSERVED_WINDOW_ONLY" ||
+               x.minuteOpportunityWindow?.trueMarketWideRecall!==null ||
+               x.minuteOpportunityWindow?.netProfitPct!==null))) process.exit(1);
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-one-minute-source-probe-${{ github.sha }}
+          path: market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Audit historical UTC day using prior-day venue close and full 1m
+        timeout-minutes: 5
+        run: |
+          node --test market-prediction-lab/tests/native-utc-day-opportunity-audit-v1.test.js
+          node market-prediction-lab/scripts/probe-native-utc-day-historical-v1.mjs market-prediction-lab/docs/native-utc-day-opportunity-v1.json market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
+
+      - name: Assert UTC-day historical truth boundary
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/native-utc-day-opportunity-v1.json"));
+          if(r.executionAuthority!=="NONE" || r.realOrders!==false ||
+             r.profitabilityProven!==false || r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.trueMarketWideRecall!==null || r.actualFillEvidenceVerified!==false)process.exit(1);
+          for(const market of ["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]){
+            const x=r.markets[market];
+            if(!x || (x.status!=="BLOCKED_DATA" && x.status!=="OBSERVED_DAY_ONLY"))process.exit(1);
+            if(x.status==="OBSERVED_DAY_ONLY" && (
+               x.observedMinuteCount!==1440 || x.priorHourObservedMinuteCount!==60 ||
+               x.baselineDefinition!=="PREVIOUS_UTC_DAY_FINAL_1M_CLOSE_SAME_VENUE" ||
+               x.actualFillCount!==null || x.trueMarketWideRecall!==null ||
+               x.historicalScannerAsOfAvailabilityVerified!==false))process.exit(1);
+          }
+          '
+
+      - name: Separate historical scanner missing evidence from actual missed opportunities
+        run: |
+          node --test market-prediction-lab/tests/historical-scanner-evidence-funnel-v1.test.js
+          node market-prediction-lab/scripts/report-historical-scanner-readiness-v1.mjs market-prediction-lab/docs/native-utc-day-opportunity-v1.json market-prediction-lab/docs/historical-scanner-funnel-readiness-v1.json
+
+      - name: Verify no missing-ledger evidence was counted as zero early recall
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/historical-scanner-funnel-readiness-v1.json","utf8"));
+          if(r.executionAuthority!=="NONE" || r.profitabilityProven!==false ||
+             r.trueMarketWideRecall!==null || r.realTradeCount!==null ||
+             r.marketWideOpportunityDenominatorVerified!==false) process.exit(1);
+          for(const market of Object.keys(r.markets)){
+            const x=r.markets[market];
+            if(x.earlyDetectedCount!==null || x.observedCohortEarlyRecall!==null ||
+               x.trueMarketWideRecall!==null || x.netProfitPct!==null)process.exit(1);
+          }
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-utc-day-prior-close-first-crossing-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-utc-day-opportunity-v1.json
+            market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
+            market-prediction-lab/docs/historical-scanner-funnel-readiness-v1.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Research fixed current-listed four-symbol native venues (post-hoc cohort)
+        timeout-minutes: 6
+        run: |
+          node --test market-prediction-lab/tests/native-selected-day-v1.test.js
+          node market-prediction-lab/scripts/probe-native-selected-day-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
+
+      - name: Assert selected-symbol cohort truth boundary
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/native-selected-historical-day-v1.json","utf8"));
+          if(x.executionAuthority!=="NONE" || x.profitabilityProven!==false ||
+             x.historicalPointInTimeUniverseVerified!==false || x.trueMarketWideRecall!==null ||
+             x.actualFillCount!==null || x.realOrders!==false || x.selectedSymbolCount!==8)
+            process.exit(1);
+          for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+            if(!Array.isArray(x.markets[market]) || x.markets[market].length!==4)process.exit(1);
+            if(x.markets[market].some(r=>!["BLOCKED_DATA","OBSERVED_SELECTED_SYMBOL_DAY"].includes(r.status)
+             || r.earlyDetectedCount!==null || r.trueMarketWideRecall!==null
+             || r.netProfitPct!==null)) process.exit(1);
+          }
+          '
+
+      - name: Causal price-only research baseline vs selected 5pct real price moves
+        run: |
+          node --test market-prediction-lab/tests/causal-price-warning-coverage-v1.test.js
+          node market-prediction-lab/scripts/report-causal-price-warning-coverage-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/native-selected-historical-day-raw-v1.json market-prediction-lab/docs/causal-price-warning-cohort-v1.json
+
+      - name: Guard counterfactual 1m warning truth boundaries
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/causal-price-warning-cohort-v1.json","utf8"));
+          if(r.executionAuthority!=="NONE"||r.profitabilityProven!==false||
+             r.realHistoricalScannerRecall!==null||r.actualFills!==null||
+             r.OOSPassCount!==0||r.decisionUsedFutureBarHighLow!==false||
+             r.fullMarketOpportunityDenominatorVerified!==false||
+             r.historicalPointInTimeUniverseVerified!==false)process.exit(1);
+          '
+
+      - name: Guard 4-market PIT listing and delisting evidence against survivor bias
+        run: |
+          node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+          node market-prediction-lab/scripts/report-historical-pit-universe-readiness-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/historical-pit-universe-readiness-v1.json
+
+      - name: Assert missing PIT roster remains BLOCKED instead of market-wide recall
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/historical-pit-universe-readiness-v1.json","utf8"));
+          if(r.executionAuthority!=="NONE"||r.profitabilityProven!==false||
+             r.totalHistoricActiveMarketSymbols!==null||r.fullMarketOpportunityDenominatorVerified!==false||
+             r.trueMarketWideRecall!==null||r.actualFillCount!==null||
+             Object.keys(r.markets).length!==4)process.exit(1);
+          for(const x of Object.values(r.markets)){
+            if(x.status!=="BLOCKED_PIT_UNIVERSE" ||
+               x.reason!=="DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED" ||
+               x.verifiedHistoricalMarketDenominator!==null || x.netProfitPct!==null) process.exit(1);
+          }
+          '
+
+      - name: KRX dated public market-data read-only adapter contracts (no credential)
+        run: |
+          node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+          node market-prediction-lab/scripts/report-krx-roster-provider-readiness-v1.mjs market-prediction-lab/docs/krx-dated-roster-readiness-v1.json
+
+      - name: Verify KRX key has not been used or PIT completeness fabricated
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/krx-dated-roster-readiness-v1.json","utf8"));
+          if(r.status!=="BLOCKED_DATA" || r.reason!=="KRX_READONLY_MARKET_DATA_AUTH_REQUIRED" ||
+             r.dateScopedSymbolCount!==null || r.delistedHistoryVerified!==false ||
+             r.trueMarketWideRecall!==null || r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.executionAuthority!=="NONE" || r.profitabilityProven!==false)process.exit(1);
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-selected-symbol-utc-day-pilot-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-selected-historical-day-v1.json
+            market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
+            market-prediction-lab/docs/causal-price-warning-cohort-v1.json
+            market-prediction-lab/docs/historical-pit-universe-readiness-v1.json
+            market-prediction-lab/docs/krx-dated-roster-readiness-v1.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run four-market three-year benchmark
+        run: python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --output market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
+
+      - name: Assert truth boundary and print summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          p="market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json"
+          r=json.load(open(p))
+          assert set(r["markets"]) == {"US_STOCK","KR_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"}
+          assert r["safety"]["profitabilityProven"] is False
+          assert r["safety"]["executionAuthority"] == "NONE"
+          assert r["safety"]["liveTrading"] is False
+          assert r["safety"]["autoTrading"] is False
+          assert r["truthBoundary"]["sameDayHighLowCloseVolumeUsedForSelection"] is False
+          assert r["truthBoundary"]["historicalMembershipAndDelistingComplete"] is False
+          assert r["truthBoundary"]["marketWideOpportunityDenominatorEstablished"] is False
+          assert r["truthBoundary"]["intradayFirstCrossingAndEarlyRecallEstablished"] is False
+          assert all("opportunityAudit" in x for x in r["markets"].values())
+          assert all(x["opportunityAudit"]["executionAuthority"] == "NONE" for x in r["markets"].values())
+          print(json.dumps({
+              "markets": {
+                  m: {
+                      "universe": v["universe"],
+                      "survivorCount": len(v["profitableSurvivorsOnly"]),
+                      "topObserved": [
+                          {"candidate": x["candidate"], "metrics": x["metrics"], "periods": x["periods"]}
+                          for x in v["results"][:3]
+                      ],
+                  } for m,v in r["markets"].items()
+              },
+              "combinedFixedFamily": r["combinedFixedFamily"],
+              "truthBoundary": r["truthBoundary"],
+          }, ensure_ascii=False, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-daily-opportunity-scanner-3y-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
+          if-no-files-found: error
+          retention-days: 14

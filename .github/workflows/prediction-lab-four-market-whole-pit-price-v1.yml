@@ -1,0 +1,247 @@
+name: Prediction Lab Four-Market Whole PIT Daily Coverage V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
+      - market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js
+      - market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
+      - market-prediction-lab/tests/stock-source-file-e2e-v1.test.mjs
+      - market-prediction-lab/scripts/prepare-stock-source-limited-daily-evidence-v1.mjs
+      - market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py
+      - market-prediction-lab/src/us-two-dated-all-stock-source-v1.js
+      - market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
+      - market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
+      - market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs
+      - market-prediction-lab/scripts/collect-stock-two-dated-source-v1.mjs
+      - market-prediction-lab/tests/stock-two-dated-source-cli-v1.test.js
+      - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
+      - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+      - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
+      - market-prediction-lab/src/research-selected-window-v1.js
+      - market-prediction-lab/tests/research-selected-window-v1.test.js
+      - market-prediction-lab/src/research-minute-to-multiframe-v1.js
+      - market-prediction-lab/tests/research-minute-to-multiframe-v1.test.js
+      - market-prediction-lab/scripts/build-research-multitimeframe-v1.mjs
+      - market-prediction-lab/tests/research-multitimeframe-cli-v1.test.js
+      - market-prediction-lab/src/research-minute-archive-v1.js
+      - market-prediction-lab/scripts/research-minute-archive-v1.mjs
+      - market-prediction-lab/tests/research-minute-archive-v1.test.js
+      - market-prediction-lab/src/research-minute-archive-window-v1.js
+      - market-prediction-lab/scripts/research-minute-archive-window-v1.mjs
+      - market-prediction-lab/tests/research-minute-archive-window-v1.test.js
+      - market-prediction-lab/src/timeframes.js
+      - market-prediction-lab/src/four-market-pit-daily-ledger-v1.js
+      - market-prediction-lab/scripts/audit-four-market-pit-receipt-ledger-v1.mjs
+      - market-prediction-lab/tests/four-market-pit-daily-ledger-v1.test.js
+      - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+      - market-prediction-lab/src/krx-dated-all-stock-ohlcv-v1.js
+      - market-prediction-lab/src/krx-two-dated-all-stock-sources-v1.js
+      - market-prediction-lab/tests/krx-two-dated-all-stock-sources-v1.test.js
+      - market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
+      - market-prediction-lab/src/krx-dated-roster-public-read-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+      - market-prediction-lab/src/venue-native-pit-daily-intake-v1.js
+      - market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+      - market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs
+      - market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
+      - market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
+      - .github/workflows/prediction-lab-four-market-whole-pit-price-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-four-market-whole-pit-price-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-only-whole-venue-pit-source-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Gate historic whole-market PIT and correct venue directions
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+          node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+          node --test market-prediction-lab/tests/four-market-pit-daily-ledger-v1.test.js
+          node --test market-prediction-lab/tests/research-selected-window-v1.test.js
+          node --test market-prediction-lab/tests/research-minute-to-multiframe-v1.test.js
+          node --test market-prediction-lab/tests/research-multitimeframe-cli-v1.test.js
+          node --test market-prediction-lab/tests/research-minute-archive-v1.test.js
+          node --test market-prediction-lab/tests/research-minute-archive-window-v1.test.js
+          node --test market-prediction-lab/tests/upbit-spot-history.test.js
+          node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+          node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+          node --test market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
+          node --test market-prediction-lab/tests/krx-two-dated-all-stock-sources-v1.test.js
+          node --test market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
+          node --test market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
+          node --test market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
+          node --test market-prediction-lab/tests/stock-two-dated-source-cli-v1.test.js
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run EXISTING Python daily-opportunity scorer on native PIT fixture without any synthetic bars
+        run: |
+          python -m pip install --disable-pip-version-check --timeout 30 --retries 2 \
+            "numpy==2.2.6" "pandas==2.2.3"
+          python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
+          python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py --self-test
+      - name: File-backed 25-symbol KR/US raw receipt to Node CLI to original Python scorer (fixture-only)
+        run: |
+          node --test market-prediction-lab/tests/stock-source-file-e2e-v1.test.mjs
+      - name: Cross-language stock all-asof-date source to existing Python price scorer (fixture-only)
+        run: |
+          node --input-type=module -e '
+            import {writeFileSync} from "node:fs";
+            import {createHash} from "node:crypto";
+            import {prepareStockSourceLimitedDailyEvidenceV1 as pack} from "./market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js";
+            const safety={executionAuthority:"NONE",profitabilityProven:false,
+              trueMarketWideRecall:null,actualMarketWideOpportunityCount:null,
+              fullMarketOpportunityDenominatorVerified:false};
+            const krRow={market:"KR_STOCK",venue:"KRX",symbol:"005930",
+              isin:"KR7005930003",marketBoard:"KOSPI",
+              currentTradingDateYmd:"20250210",priorCandidateTradingDateYmd:"20250207",
+              priorOpen:100,priorHigh:103,priorLow:99,priorClose:100,priorVolume:300,
+              open:103,high:122,low:102,close:110,volume:500,
+              sourceIdentity:"KRX_OFFICIAL_DATED_TRADING_INFO",
+              automaticCorporateActionAdjustmentApplied:false};
+            const kr={...safety,schemaVersion:"krx-authorized-two-session-all-stock-intake-v1",market:"KR_STOCK",venue:"KRX",
+              status:"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY",
+              requestedTradingDates:["20250207","20250210"],
+              recordSha256:"a".repeat(64),records:[krRow],
+              joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify([krRow])).digest("hex"),
+              observedCurrentSymbols:1,joinedPriorPriceSymbols:1,
+              missingPreviousPriceCount:0,officialAdjacentTradingSessionCalendarVerified:false,
+              corporateActionsAdjustedAndVerified:false,
+              fullMarketHistoricDelistedUniverseVerified:false};
+            const usRow={market:"US_STOCK",venue:"US_SIP",symbol:"A",
+              shareClassFIGI:"BBG001SCTQY4",asOfDate:"2025-02-03",
+              priorCandidateTradingDate:"2025-01-31",
+              primaryExchangeMIC:"XNYS",securityType:"CS",
+              priorBarSourceTimestampMs:Date.parse("2025-01-31T21:00:00Z"),
+              priorBarUSLocalDate:"2025-01-31",
+              priorOpen:100,priorHigh:103,priorLow:99,priorClose:100,priorVolume:300,
+              currentBarSourceTimestampMs:Date.parse("2025-02-03T21:00:00Z"),
+              currentBarUSLocalDate:"2025-02-03",
+              open:103,high:122,low:102,close:110,volume:500,
+              venueTimeZone:"America/New_York",sourceAdjustedForSplits:false,
+              corporateActionAdjustmentAuthenticated:false,
+              previousSessionCalendarAuthenticated:false};
+            const us={...safety,schemaVersion:"us-two-dated-asof-all-stocks-price-source-v1",market:"US_STOCK",venue:"US_SIP",
+              status:"SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY",
+              requestedTradingDates:["2025-01-31","2025-02-03"],
+              sourceRowsSha256:"b".repeat(64),rows:[usRow],
+              joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify([usRow])).digest("hex"),
+              observedCurrentAsOfTickerCount:1,joinedPriorDailyPriceCount:1,
+              missingPriorPriceOrIdentityCount:0,
+              adjacentStockTradingSessionsAuthenticated:false,
+              corporateActionsAndTickerChangesCanonicallyResolved:false,
+              fullThreeYearListedAndDelistedRosterVerified:false,
+              permanentShareClassIdentityComplete:false,
+              twoDatedSourceShareClassIdentityMatched:true};
+            for(const [market,source] of [["KR_STOCK",kr],["US_STOCK",us]]){
+              const result=pack({market,source,testFixtureOnly:true});
+              if(result.status!=="TEST_FIXTURE_TWO_DATED_STOCK_PRICE_BARS_ONLY")
+                process.exit(1);
+              writeFileSync(process.env.RUNNER_TEMP+"/"+market+"-stock-source.json",
+                JSON.stringify(result),{mode:0o600,flag:"wx"});
+            }
+          '
+          for market in KR_STOCK US_STOCK; do
+            python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py \
+              --input "$RUNNER_TEMP/$market-stock-source.json" \
+              --output "$RUNNER_TEMP/$market-stock-outcome.json"
+          done
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            for(const market of ["KR_STOCK","US_STOCK"]){
+              const x=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/"+market+"-stock-outcome.json","utf8"));
+              if(x.market!==market||
+                 x.status!=="TEST_FIXTURE_STOCK_DAILY_EVENT_LABEL_ONLY"||
+                 x.sourceAttestedNameCount!==1||
+                 x.sourceObservedDailyPriceEventCount!==3||
+                 [5,10,20].some(n=>x.directions.LONG[String(n)].sourceObservedPriceEventCount!==1)||
+                 x.fullMarketOpportunityDenominatorVerified!==false||
+                 x.actualMarketWideOpportunityCount!==null||
+                 x.trueMarketWideRecall!==null||
+                 x.profitabilityProven!==false||
+                 x.executionAuthority!=="NONE")process.exit(1);
+            }
+          '
+      - name: Verify US point-in-time whole-date source blocks if no approved provider key
+        run: |
+          node market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs \
+            --date 2025-02-03 --output "$RUNNER_TEMP/us-pit-source-blocked.json"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/us-pit-source-blocked.json","utf8"));
+            if(r.source.status!=="BLOCKED_DATA" ||
+               r.source.reason!=="US_PROVIDER_HISTORICAL_AUTH_NOT_CONNECTED" ||
+               r.source.providerReadOnlyGETs!==0 ||
+               r.source.asOfProviderTickerCount!==null ||
+               r.source.trueMarketWideRecall!==null ||
+               r.source.profitabilityProven!==false ||
+               r.source.executionAuthority!=="NONE")process.exit(1);
+          '
+      - name: Verify CLI no-PIT network fail-closed and no-orders policy
+        run: |
+          node market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs \
+            --mode plan --market CRYPTO_SPOT --day 2025-10-09 \
+            --output "$RUNNER_TEMP/pit-source-blocked.json"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/pit-source-blocked.json","utf8"));
+            if(r.result.status!=="BLOCKED_DATA" ||
+               r.result.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED" ||
+               r.result.trueMarketWideRecall!==null ||
+               r.result.executionAuthority!=="NONE")process.exit(1);
+          '
+      - name: Emit truthful missing-historical-source readiness
+        run: |
+          node market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync("market-prediction-lab/docs/four-market-whole-pit-price-readiness-v1.json","utf8"));
+            const names=["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"];
+            if(r.scope!=="ALL_HISTORIC_SYMBOLS_NOT_SIX_SELECTED_ALTS" ||
+               Object.keys(r.markets).length!==4||
+               names.some(m=>r.markets[m]?.status!=="BLOCKED_WHOLE_MARKET_COVERAGE" ||
+                 r.markets[m]?.actualMarketWideOpportunityCount!==null) ||
+               r.markets.KR_STOCK.requestedTradingDays!==null ||
+               r.markets.US_STOCK.requestedTradingDays!==null ||
+               r.markets.CRYPTO_SPOT.requestedTradingDays!==1096 ||
+               r.markets.CRYPTO_FUTURES.requestedTradingDays!==1096 ||
+               r.markets.CRYPTO_SPOT.days.some(x=>
+                 x.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED") ||
+               r.markets.CRYPTO_FUTURES.days.some(x=>
+                 x.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED") ||
+               r.markets.CRYPTO_SPOT.venue!=="UPBIT_KRW" ||
+               r.markets.CRYPTO_FUTURES.venue!=="BITGET_USDT_FUTURES" ||
+               JSON.stringify(r.markets.CRYPTO_FUTURES.allowedDirections)!=="[\"LONG\",\"SHORT\"]"||
+               r.historicalFullMarketOpportunityDenominatorVerified!==false ||
+               r.trueMarketWideRecall!==null || r.profitabilityProven!==false ||
+               r.executionAuthority!=="NONE")process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-all-pit-daily-source-blocker-${{ github.sha }}
+          path: market-prediction-lab/docs/four-market-whole-pit-price-readiness-v1.json
+          retention-days: 14
+          if-no-files-found: error
