@@ -17,6 +17,7 @@ const validCount=x=>Number.isSafeInteger(x)&&x>=0;
 const object=x=>x&&typeof x==='object'&&!Array.isArray(x);
 let active=Object.freeze({spot:new Map(),futures:new Map()});
 let matched={spot:0,futures:0};
+let verifiedInPage={spot:new Set(),futures:new Set()};
 
 export function emptyV3WatchHandoff(status='DISABLED'){
   const byMarket=Object.freeze(Object.fromEntries(MARKETS.map(m=>[m,Object.freeze({
@@ -174,6 +175,7 @@ export function installV3WithinPageWatchPriority(handoff){
   }
   active=Object.freeze(empty);
   matched={spot:0,futures:0};
+  verifiedInPage={spot:new Set(),futures:new Set()};
 }
 export function prioritizeV3CurrentCryptoPage(rows,market){
   if(!Array.isArray(rows)||!['spot','futures'].includes(market))
@@ -183,6 +185,8 @@ export function prioritizeV3CurrentCryptoPage(rows,market){
   const ranked=rows.map((row,i)=>({row,i,priority:priorities.get(row.symbol)??null}));
   // Reorder ONLY the fixed, already-selected cursor page; never inject an
   // out-of-window symbol, advance cursor, inflate or double-count coverage.
+  for(const row of ranked)if(row.priority!==null)
+    verifiedInPage[market].add(row.row.symbol);
   matched[market]+=ranked.filter(x=>x.priority!==null).length;
   ranked.sort((a,b)=>(b.priority??-1)-(a.priority??-1)||a.i-b.i);
   return ranked.map(x=>x.row);
@@ -194,4 +198,39 @@ export function v3WithinPagePriorityDiagnostic(){
     extraProviderRequests:0,cursorSkipped:0,
     outsideCursorPriorityScans:0,
     profitabilityCredit:0,executionAuthority:'NONE'});
+}
+
+
+/** Choose at most one per crypto market that is NOT in the current cursor
+ * pages scanned this cycle. No source query here and no cursor advancement.
+ * The resulting symbols are ephemeral inputs to a separately gated,
+ * zero-economic-authority public-data review (never normal V3 publication).
+ */
+export function selectV3OutOfCursorResearch(handoff){
+  const none=()=>Object.freeze([]);
+  if(!handoff||!['VALIDATED','PARTIAL_SOURCE'].includes(handoff.status)
+    ||!Array.isArray(handoff.priorities)||handoff.priorities.length>48)
+    return none();
+  const out=[],used=new Set();
+  for(const row of handoff.priorities){
+    const market=row?.market==='CRYPTO_SPOT'?'spot'
+      :row?.market==='CRYPTO_FUTURES'?'futures':null;
+    if(!market||used.has(market)||!SYMBOL.test(row.symbol??'')
+      ||row.status!=='RESEARCH_OBSERVATION_ONLY'
+      ||row.executionAuthority!=='NONE'
+      ||typeof row.score!=='number'||!Number.isFinite(row.score)
+      ||row.score<0.7||row.score>10000
+      ||typeof row.watchEventId!=='string'||!DIGEST.test(row.watchEventId)
+      ||(market==='spot'&&row.direction!=='UP')
+      ||(market==='futures'&&!['UP','DOWN'].includes(row.direction))
+      ||verifiedInPage[market].has(row.symbol))continue;
+    out.push(Object.freeze({
+      market:row.market,symbol:row.symbol,direction:row.direction,
+      watchEventId:row.watchEventId,status:'RESEARCH_ONLY',
+      executionAuthority:'NONE',
+    }));
+    used.add(market);
+    if(out.length===2)break;
+  }
+  return Object.freeze(out);
 }
