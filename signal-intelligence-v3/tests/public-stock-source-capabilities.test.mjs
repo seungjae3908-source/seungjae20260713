@@ -25,7 +25,7 @@ test('malformed or HTTP-denied public samples remain blocked while trace never p
   if(url.includes('AAPL'))return {ok:false,status:429,headers:{get:()=> 'application/json'}};
   return fake({noActualRows:true});
  }});
- assert.equal(calls,5);
+ assert.equal(calls,9);
  assert.equal(d.samples.filter(x=>x.status==='READABLE_SAMPLE_ONLY').length,1);
  assert.equal(d.samples.filter(x=>x.status==='BLOCKED_HTTP').length,2);
  assert.equal(d.licensedForPublicRedistribution,false);

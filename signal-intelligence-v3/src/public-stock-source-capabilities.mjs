@@ -5,10 +5,18 @@ export const PUBLIC_SOURCE_CAPABILITY_SCHEMA='public-stock-source-capabilities-v
 const TARGETS=Object.freeze([
   Object.freeze({id:'KR_ALPHA_PRICE',provider:'naver-public',timeframe:'QUOTE',
     url:'https://stock.naver.com/api/domestic/detail/0193W0/price'}),
-  Object.freeze({id:'KR_ALPHA_DAILY',provider:'naver-public',timeframe:'1D',
+  Object.freeze({id:'KR_ALPHA_DAILY',provider:'naver-public',timeframe:'DAY_VIEW',
     url:'https://stock.naver.com/api/securityService/chart/domestic/item/0193W0?periodType=day'}),
-  Object.freeze({id:'KR_NUMERIC_DAILY',provider:'naver-public',timeframe:'1D',
+  Object.freeze({id:'KR_NUMERIC_DAILY',provider:'naver-public',timeframe:'DAY_VIEW',
     url:'https://stock.naver.com/api/securityService/chart/domestic/item/005930?periodType=day'}),
+  Object.freeze({id:'KR_ALPHA_WEEK_VIEW',provider:'naver-public',timeframe:'WEEK_VIEW',
+    url:'https://stock.naver.com/api/securityService/chart/domestic/item/0193W0?periodType=week'}),
+  Object.freeze({id:'KR_ALPHA_MONTH_VIEW',provider:'naver-public',timeframe:'MONTH_VIEW',
+    url:'https://stock.naver.com/api/securityService/chart/domestic/item/0193W0?periodType=month'}),
+  Object.freeze({id:'KR_ALPHA_YEAR_VIEW',provider:'naver-public',timeframe:'YEAR_VIEW',
+    url:'https://stock.naver.com/api/securityService/chart/domestic/item/0193W0?periodType=year'}),
+  Object.freeze({id:'KR_ALPHA_DAILY_HISTORY',provider:'naver-public',timeframe:'HISTORICAL_DAILY',
+    url:'https://stock.naver.com/api/stockSecurity/items/v2/domestic/0193W0/daily-prices?size=80'}),
   Object.freeze({id:'US_AAPL_5M',provider:'yahoo-public',timeframe:'5m',
     url:'https://query2.finance.yahoo.com/v8/finance/chart/AAPL?range=1mo&interval=5m'}),
   Object.freeze({id:'US_AAPL_60M',provider:'yahoo-public',timeframe:'60m',
@@ -22,13 +30,16 @@ export function summarizePublicProbePayload(id,payload) {
   if(!TARGETS.some(x=>x.id===id))throw new Error('PUBLIC_SOURCE_PROBE_TARGET_UNLISTED');
   const obj=payload&&typeof payload==='object'&&!Array.isArray(payload)?payload:null;
   const quote=id==='KR_ALPHA_PRICE';
-  const chart=id==='KR_ALPHA_DAILY'||id==='KR_NUMERIC_DAILY';
+  const chart=['KR_ALPHA_DAILY','KR_NUMERIC_DAILY','KR_ALPHA_WEEK_VIEW','KR_ALPHA_MONTH_VIEW','KR_ALPHA_YEAR_VIEW'].includes(id);
   const yahoo=id.startsWith('US_');
   const infos=Array.isArray(obj?.priceInfos)?obj.priceInfos:null;
   const result=Array.isArray(obj?.chart?.result)?obj.chart.result[0]:null;
   const stamps=Array.isArray(result?.timestamp)?result.timestamp:[];
   const quotes=Array.isArray(result?.indicators?.quote)?result.indicators.quote[0]:null;
   const firstInfo=infos?.find(row=>row&&typeof row==='object'&&!Array.isArray(row))??null;
+  const distinctTradingDates=chart&&infos
+    ?new Set(infos.map(row=>String(row?.localDateTime??'').slice(0,8))
+      .filter(x=>/^[0-9]{8}$/u.test(x))).size:null;
   const closes=Array.isArray(quotes?.close)?quotes.close.filter(v=>Number.isFinite(v)&&v>0):[];
   const hasPrice=quote&&['nowPrice','closePrice','price'].some(k=>
     typeof obj?.[k]==='number'||(typeof obj?.[k]==='string'&&obj[k].length>0));
@@ -37,6 +48,7 @@ export function summarizePublicProbePayload(id,payload) {
   return Object.freeze({
     id, payloadJsonObject:obj!==null,rootKeys:probeKeys(obj),
     firstDailyRowKeys:chart?probeKeys(firstInfo):[],
+    distinctTradingDates,
     dailyTimestampFormat:chart?(typeof firstInfo?.localDateTime==='number'?'number'
       :typeof firstInfo?.localDateTime==='string'
         ? /^\d{8}$/u.test(firstInfo.localDateTime)?'yyyymmdd'
