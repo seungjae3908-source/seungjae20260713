@@ -1137,7 +1137,7 @@ test('live background lane requires every explicit live authority flag', () => {
   }
 });
 
-test('first live-enabled worker tick is a read/sync warmup and cannot create a live entry', async () => {
+test('first live-enabled worker tick is a read-only warmup and cannot create a live entry', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
     'AUTO_TRADING',
@@ -1177,7 +1177,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     assert.equal(result.liveOrders, 0);
     assert.equal(result.liveExitOrders, 0);
     assert.equal(liveReads, 0);
-    assert.ok(syncCalls.count >= 2);
+    assert.equal(syncCalls.count, 0, 'Live readiness must not depend on Paper journal/Telegram projection');
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -1658,7 +1658,7 @@ test('first live warmup suppresses automatic exits for existing live positions b
     assert.equal(quarantined.liveExitOrders, 0);
     assert.equal(quarantined.newEntriesFailClosed, true);
     assert.equal(quarantined.createdPlans, 0);
-    assert.equal(quarantined.failures, 1);
+    assert.equal(quarantined.failures, 0, 'missing Paper state is not a Live worker failure');
     assert.equal(liveReads, 0);
   } finally {
     for (const key of keys) {
@@ -1834,7 +1834,7 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
 });
 
 
-test('Telegram outage blocks armed live entry while preserving independent exit warmup', async () => {
+test('Live readiness and entry do not require Paper wallet or Telegram binding', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
     'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
@@ -1848,12 +1848,15 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
   const root = await mkdtemp(join(tmpdir(), 'auto-telegram-gate-'));
   const armPath = join(root, 'arm.json');
   const targetSha = 'c'.repeat(40);
-  let telegramReady = true;
   let liveReads = 0;
   const base = source(repository, nowMs, { tier: 'admin' });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
-    telegramDeliveryHealthy() { return telegramReady; },
+    telegramDeliveryHealthy() { return false; },
+    async memberTelegramConnected() { return false; },
+    paperJournalRepositoryFor() {
+      return { async listSnapshot() { return []; } } as unknown as PaperJournalRepository;
+    },
     async listEligibleMembers() {
       return [{
         userId: USER, policy: readyPolicy,
@@ -1862,7 +1865,7 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
     },
     async readLiveAccountSnapshot() {
       liveReads += 1;
-      throw new Error('TELEGRAM_OUTAGE_MUST_NOT_READ_PRIVATE_PROVIDER');
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
     },
   });
   try {
@@ -1878,15 +1881,13 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
       armedAt: new Date(nowMs + 100).toISOString(),
       activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
     }) + '\n', { mode: 0o600, flag: 'wx' });
-    telegramReady = false;
     const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
     assert.equal(blocked.liveEntryArmPresent, true);
     assert.equal(blocked.liveEntryWarmupComplete, true);
-    assert.equal(blocked.liveEntriesArmed, false);
-    assert.equal(blocked.newEntriesFailClosed, true);
-    assert.equal(blocked.liveEntriesSuppressedByTelegram, 1);
+    assert.equal(blocked.liveEntriesArmed, true);
+    assert.equal(blocked.liveEntriesSuppressedByTelegram, 0);
     assert.equal(blocked.liveOrders, 0);
-    assert.equal(liveReads, 0);
+    assert.equal(liveReads, 1, 'armed Live path must reach its own provider preflight');
     assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -2365,7 +2366,7 @@ test('blocked member evidence survives paginated warmup and cannot be erased by 
     }
   }
 });
-test('armed Live worker cannot bypass an unfilled Paper mirror to call a private provider', async () => {
+test('armed Live worker evaluates its provider path without requiring a filled Paper mirror', async () => {
   const flags = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
     'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
@@ -2392,7 +2393,7 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
     },
     async readLiveAccountSnapshot() {
       providerReads++;
-      throw new Error('LIVE_PROVIDER_READ_NOT_ALLOWED_WITHOUT_FILLED_PAPER');
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
     },
   });
   try {
@@ -2416,8 +2417,7 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
     assert.equal(blocked.liveEntriesArmed, true);
     assert.equal(blocked.filledOrders, 0);
     assert.equal(blocked.liveOrders, 0);
-    assert.equal(blocked.newEntriesFailClosed, true);
-    assert.equal(providerReads, 0);
+    assert.equal(providerReads, 1);
     assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -2750,7 +2750,5 @@ test('Cost missing is not an allowed zero-rate estimate in automatic Paper hando
     undefined, null, {}, {commissionRate:null}, {commissionRate:''},
     {commissionRate:NaN}, {commissionRate:Infinity}, {commissionRate:-0.1},
     {commissionRate:1.1},
-  ]) {
-    assert.equal(costPercent(shape(cost), 'commissionRate'), null);
-  }
+  ]) assert.equal(costPercent(shape(cost), 'commissionRate'), null);
 });
