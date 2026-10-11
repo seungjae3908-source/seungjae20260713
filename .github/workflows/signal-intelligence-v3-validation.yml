@@ -294,7 +294,10 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
             '### Public stock source capacity probe (NOT release approval)\n\n'
             +file.samples.map(s=>'- '+s.id+': '+s.status+' (HTTP '+(s.httpStatus??'?')+')\n').join('')+'\n');
-          console.log(file.samples.map(s=>s.id+'='+s.status).join(' '));
+          console.log(file.samples.map(s=>JSON.stringify({
+            id:s.id,status:s.status,count:s.discoveredCount??null,
+            rootKeys:s.rootKeys??[],firstDailyRowKeys:s.firstDailyRowKeys??[]
+          })).join('\n'));
           NODE
       - name: Upload bounded diagnostic metadata only
         uses: actions/upload-artifact@v4
