@@ -330,3 +330,79 @@ test('scoped Paper replay uses per-order repository query, not unbounded histori
   assert.equal(result.scanned, 1);
   assert.equal(result.scopedToOrder, true);
 });
+
+
+test('four-market Paper simulated entry→reducing exit→canonical Journal→Telegram mock SENT is owner-scoped', async () => {
+  const scenarios = [
+    { market: 'KR', exchange: 'kiwoom', entry: 'buy', exit: 'sell', broker: 'KR_STOCK' },
+    { market: 'US', exchange: 'kiwoom', entry: 'buy', exit: 'sell', broker: 'US_STOCK' },
+    { market: 'KRW', exchange: 'upbit', entry: 'buy', exit: 'sell', broker: 'CRYPTO_SPOT' },
+    { market: 'USDT-FUTURES', exchange: 'bitget', entry: 'long', exit: 'short', broker: 'CRYPTO_FUTURES' },
+  ] as const;
+  for (const [index, market] of scenarios.entries()) {
+    const trading = new InMemoryTradingRepository();
+    const base = planFixture();
+    const owner = 'user-a';
+    const entry: TradingPlan = {
+      ...base, id: 'paper-four-' + index + '-entry',
+      exchange: market.exchange,
+      accountMode: 'paper', executionMode: 'automatic',
+      signalId: 'signal-four-' + index, idempotencyKey: 'paper-four-entry-' + index,
+      symbol: market.exchange === 'bitget' ? 'BTCUSDT' : 'BTC',
+      market: market.market, side: market.entry, reduceOnly: false,
+    };
+    const close: TradingPlan = {
+      ...entry, id: 'paper-four-' + index + '-close',
+      side: market.exit, reduceOnly: true,
+      idempotencyKey: 'paper-four-exit-' + index,
+      signalId: 'signal-four-' + index + ':auto-exit',
+      signalReasons: [
+        'AUTO_EXIT', 'AUTO_EXIT_ENTRY_PLAN:' + entry.id,
+        'AUTO_EXIT_ENTRY_ORDER:four-entry-' + index,
+      ],
+    };
+    const entryOrder: TradingOrder = {
+      ...orderFixture(entry),
+      id:'four-entry-' + index, planId: entry.id,
+      clientOrderId:'four-entry-client-' + index,exchangeOrderId:'paper-four-entry-' + index,
+      filledQuantity:1,requestedQuantity:1,averageFillPrice:100,
+    };
+    const exitOrder: TradingOrder = {
+      ...entryOrder,id:'four-exit-' + index, planId: close.id,
+      clientOrderId:'four-exit-client-' + index,exchangeOrderId:'paper-four-exit-' + index,
+      updatedAt:'2026-08-12T00:00:04.000Z',averageFillPrice:104,
+    };
+    await trading.savePlan(entry);await trading.savePlan(close);
+    await trading.saveOrder(entryOrder);await trading.saveOrder(exitOrder);
+    await trading.appendEvent(eventFixture(entryOrder,
+      'four-entry-event-' + index,'ACCEPTED','FILLED','2026-08-12T00:00:02.000Z'));
+    await trading.appendEvent(eventFixture(exitOrder,
+      'four-exit-event-' + index,'ACCEPTED','FILLED','2026-08-12T00:00:04.000Z'));
+    const { service, integrationRepository, portfolio, transport } = await linkedService();
+    const bridge = new TradeExecutionEventBridgeService(trading,service);
+    const syncEntry = await bridge.syncAutomaticOrder(owner,'associate',entryOrder.id);
+    const syncClose = await bridge.syncAutomaticOrder(owner,'associate',exitOrder.id);
+    assert.equal(syncEntry.inserted,1,market.broker);
+    assert.equal(syncClose.inserted,1,market.broker);
+    assert.equal(syncEntry.deliveryQueued,1);
+    assert.equal(syncClose.deliveryQueued,1);
+    assert.equal(portfolio.events.length,2);
+    assert.equal(portfolio.events[0]?.executionMethod,'AUTO_POLICY');
+    assert.equal(portfolio.events[1]?.executionMethod,'AUTO_POLICY');
+    const queued=await integrationRepository.listDeliveries(owner);
+    assert.equal(queued.length,2);
+    for(const delivery of queued) {
+      const sent=await service.processDelivery(owner,delivery.id,new Date('2026-08-12T00:00:10.000Z'));
+      assert.equal(sent.processed,true);
+      assert.equal(sent.state,'SENT');
+    }
+    const stored=await integrationRepository.listDeliveries(owner);
+    assert.equal(stored.filter(x=>x.state==='SENT').length,2);
+    assert.equal(transport.sent.length,2);
+    assert.equal((await bridge.syncAutomaticOrder(owner,'associate',exitOrder.id)).inserted,0);
+    assert.equal((await integrationRepository.listDeliveries(owner)).length,2);
+    assert.equal((await trading.listOrders(owner)).length,2);
+    await assert.rejects(()=>bridge.syncAutomaticOrder('user-b','associate',exitOrder.id),
+      /EXECUTION_SYNC_TARGET_NOT_FOUND/);
+  }
+});
