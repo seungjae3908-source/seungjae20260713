@@ -176,7 +176,6 @@ test('AI Chart consumes selected scanner signalId and strategyMode without inven
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
   await page.goto(directSignalUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
   const overlay = page.getByTestId('ai-chart-v2-signal-overlay');
   await expect(overlay).toBeVisible();
   await expect(overlay).toContainText('scanner-signal-42');
@@ -196,7 +195,6 @@ test('AI Chart restores the canonical MID_LONG mode used by Scanner position str
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
   await page.goto(positionSignalUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
   await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('position-signal-9');
   await expect(page.getByTestId('strategy-mode-MID_LONG')).toHaveAttribute('aria-pressed', 'true');
   expect(privateTradingRequests).toEqual([]);
@@ -210,7 +208,6 @@ test('BITGET AI Chart shows one public futures snapshot without promoting it to 
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
   await page.goto(futuresUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
   const panel = page.getByTestId('futures-public-context');
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('61,234.5 USDT');
@@ -244,7 +241,6 @@ test('AI Chart 2.0 remains usable with no horizontal overflow at 320/360/390/412
 
     await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
     await expect(page.getByTestId('ai-chart-mobile-judgment')).toBeVisible();
-    await page.getByText('분석 근거 더 보기', { exact: true }).click();
     await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
     await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('scanner-signal-42');
     await expect(page.getByTestId('strategy-mode-SCALPING')).toBeVisible();
