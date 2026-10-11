@@ -126,3 +126,22 @@ market-state briefing, WEEKLY stays Monday KST. Stock-market official
 holidays/early closes remain subject to the existing N/A/NO_TRADE
 source-quality handling; no unsupported holiday calendar is invented.
 No actual Telegram message or schedule task was triggered here.
+
+## Draft: Telegram subscriber current-page source gate (no sends)
+
+Before forwarding V3 events to any of the four market rooms or member
+watchlist personal outbox, the Telegram subscriber now demands a fresh
+(<=15m), public-only twelve-lane shared UUIDv4 source epoch, and
+matches every NEW_CANDIDATE to its exact current-cycle source row,
+ticker, direction, cursor, timeframe and completed zero-error page.
+Blocked other lanes do not veto valid single-lane current candidates.
+Noncandidate events, stale/future publications, duplicated/replayed
+event IDs, mismatched rows/epochs and false-success source pages are
+blocked before any fanout. The subscriber disallows redirect-following
+away from its loopback GET and caps JSON response bodies at 8 MiB.
+A corrupt local dedupe ledger still fails closed.
+
+This runtime gate requires separately merged Signal V3 producer #1816
+to provide compatible sourceCycleId/provenance. It is Draft-only and
+does not activate a live source, send Telegram messages, issue orders,
+or change Production secrets/PM2/DB.
