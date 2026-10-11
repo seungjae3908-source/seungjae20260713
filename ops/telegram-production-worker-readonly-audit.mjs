@@ -454,6 +454,9 @@ export async function readSignalV3HealthOnce({
             || !['127.0.0.1', '::1', 'localhost'].includes(payload?.bindHost)
             || !sha || typeof payload.snapshotReady !== 'boolean'
             || typeof payload.snapshotFresh !== 'boolean'
+            || ![undefined,null,true,false].includes(payload.snapshotCurrentPageSourceReady)
+            || (payload.snapshotCurrentPageSourceReady===false
+              && payload.snapshotFresh===true)
             || (payload.snapshotReady === true
               && (!Number.isFinite(payload.snapshotAgeMs) || payload.snapshotAgeMs < 0))) {
             done(emptySignalHealth('INVALID_RESPONSE'));
@@ -463,8 +466,14 @@ export async function readSignalV3HealthOnce({
           const fresh = payload.snapshotFresh === true
             && Number.isFinite(payload.snapshotAgeMs)
             && payload.snapshotAgeMs <= 15 * 60_000;
+          // The V3 server's snapshotFresh=false can mean blocked current
+          // data coverage, not necessarily old snapshot or a stopped timer.
+          const ageRecent=Number.isFinite(payload.snapshotAgeMs)
+            && payload.snapshotAgeMs<=15*60_000;
           const status = !payload.snapshotReady ? 'SNAPSHOT_MISSING'
-            : fresh ? 'READY' : 'SNAPSHOT_STALE';
+            : !ageRecent ? 'SNAPSHOT_STALE'
+              : payload.snapshotCurrentPageSourceReady===false
+                ? 'SOURCE_DATA_BLOCKED' : fresh ? 'READY' : 'SNAPSHOT_STALE';
           done({ status, serviceSha: sha, snapshotReady: payload.snapshotReady,
             snapshotFresh: fresh, snapshotAgeBand: ageBand });
         });
@@ -532,6 +541,9 @@ export function v3StalenessHypothesis(health,cycle,file,units){
     return 'SHA_OR_READ_PATH_MISMATCH_SUSPECT';
   if(health?.status==='READY')
     return file.status==='RECENT_PUBLICATION'?'RECENT_HTTP_AND_FILE':'HTTP_FILE_AGE_DISAGREE';
+  if(health?.status==='SOURCE_DATA_BLOCKED')
+    return file.status==='RECENT_PUBLICATION'
+      ?'CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED':'HTTP_FILE_AGE_DISAGREE';
   if(health?.status==='SNAPSHOT_STALE'){
     if(file.status==='RECENT_PUBLICATION')return 'HTTP_FILE_AGE_DISAGREE';
     if(cycle?.lastResult==='FAILED')return 'CYCLE_FAILED_SUSPECT';
