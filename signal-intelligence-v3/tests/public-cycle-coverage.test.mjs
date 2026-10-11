@@ -8,6 +8,7 @@ import {
   summarizePublicV3Execution,
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
+  recoverShrunkPublicV3Cursor,
   parsePublicRetryAfterMs,
   publicUpbitGroupForUrl,
   createPublicUpbitGroupPacer,
@@ -511,4 +512,45 @@ test('one invalid-data item rotates research only, while incomplete and provider
     assert.equal(decision.nextCursor,0,'unsafe page must not rotate');
     assert.equal(decision.blockedObservationOnly,false);
   }
+});
+
+test('listed-universe shrink recovers persisted out-of-range cursor without approving a signal',()=>{
+  const examples=[
+    ['KR_STOCK',4010,3900,'krx-symbol-master'],
+    ['US_STOCK',12322,12000,'nasdaq-trader-public-directory'],
+    ['CRYPTO_SPOT',294,280,'upbit-public'],
+    ['CRYPTO_FUTURES',820,810,'bitget-public'],
+  ];
+  for(const [market,cursor,total,source] of examples){
+    const response={universe:{totalCount:total,cursor:total,
+      source,stale:false,partial:false,providerErrorCount:0},
+      execution:{requestedCount:0,startedCount:0,completedCount:0,
+        providerErrorCount:0,timeoutCount:0}};
+    const recovered=recoverShrunkPublicV3Cursor({market,cursor,response});
+    assert.deepEqual(recovered,{nextCursor:0,blockedObservationOnly:true,
+      reason:'ROSTER_SHRUNK_RESTART_RESEARCH_ONLY'});
+    for(const variant of [
+      {...response,universe:{...response.universe,stale:true}},
+      {...response,universe:{...response.universe,source:'last-good-cache'}},
+      {...response,universe:{...response.universe,totalCount:10}},
+      {...response,execution:{...response.execution,providerErrorCount:1}},
+      {...response,execution:{...response.execution,timeoutCount:1}},
+    ]){
+      assert.equal(recoverShrunkPublicV3Cursor({market,cursor,response:variant}),null);
+    }
+    assert.equal(recoverShrunkPublicV3Cursor({market,cursor:0,response}),null);
+  }
+});
+test('malformed provider evidence and fallback rosters never reset a cursor',()=>{
+  for(const bad of [null,{}, {universe:{totalCount:4010,
+    source:'krx-symbol-master',stale:false}}]){
+    assert.equal(recoverShrunkPublicV3Cursor({
+      market:'KR_STOCK',cursor:5000,response:bad,
+    }),null);
+  }
+  assert.equal(recoverShrunkPublicV3Cursor({
+    market:'CRYPTO_SPOT',cursor:999,
+    response:{universe:{totalCount:294,source:'bitget-public',stale:false},
+      execution:{providerErrorCount:0,timeoutCount:0}},
+  }),null);
 });

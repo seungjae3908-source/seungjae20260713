@@ -360,3 +360,31 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
   }
   return hold('BLOCKED_WITHOUT_PROVEN_ROSTER');
 }
+
+/** A market roster can shrink below a persisted research cursor after a
+ * delisting. A clamped zero-work scan otherwise repeats that stale cursor
+ * indefinitely. Only a fresh market-specific, plausible roster source may
+ * reset cursor to zero. This result is blocked recovery, NEVER trading proof.
+ */
+export function recoverShrunkPublicV3Cursor({
+  market,cursor,response,
+}={}){
+  const limit={KR_STOCK:1000,US_STOCK:1000,
+    CRYPTO_SPOT:50,CRYPTO_FUTURES:50}[market];
+  const allowed={
+    KR_STOCK:['krx-symbol-master'],
+    US_STOCK:['nasdaq-trader-public-directory','finnhub-symbol-master'],
+    CRYPTO_SPOT:['upbit-public'],CRYPTO_FUTURES:['bitget-public'],
+  }[market]??[];
+  const u=response?.universe,e=response?.execution;
+  if(!Number.isSafeInteger(limit)
+    ||!integer(cursor)||!integer(u?.totalCount)
+    ||u.totalCount<limit||cursor<u.totalCount
+    ||!allowed.includes(u.source)||u.stale!==false
+    ||(u.providerErrorCount??0)!==0
+    ||!e||!integer(e.providerErrorCount)||e.providerErrorCount>0
+    ||!integer(e.timeoutCount)||e.timeoutCount>0)
+    return null;
+  return Object.freeze({nextCursor:0,blockedObservationOnly:true,
+    reason:'ROSTER_SHRUNK_RESTART_RESEARCH_ONLY'});
+}
