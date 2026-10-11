@@ -64,12 +64,17 @@ function verifiedClosedPaperPnlKrw(
         || quoteAt > at + 5_000 || at - quoteAt > freshnessMs
         || order.feeCurrency?.toUpperCase() !== currency
         || order.taxCurrency?.toUpperCase() !== currency
-        || typeof order.feeAmount !== 'number' || order.feeAmount < 0
-        || typeof order.taxAmount !== 'number' || order.taxAmount < 0
+        || !Number.isFinite(order.feeAmount) || order.feeAmount < 0
+        || !Number.isFinite(order.taxAmount) || order.taxAmount < 0
         || !Number.isFinite(leg.price) || leg.price <= 0
         || !Number.isFinite(leg.quantity) || leg.quantity <= 0
         || typeof leg.fees !== 'number' || !Number.isFinite(leg.fees) || leg.fees < 0
-        || typeof leg.tax !== 'number' || !Number.isFinite(leg.tax) || leg.tax < 0) {
+        || typeof leg.tax !== 'number' || !Number.isFinite(leg.tax) || leg.tax < 0
+        // Journal projections are summaries, never independent cost evidence.
+        // The full-cost settlement must match the immutable canonical order
+        // values, not an understated fee/tax on a displayed trade leg.
+        || Math.abs(leg.fees - order.feeAmount) > 1e-7
+        || Math.abs(leg.tax - order.taxAmount) > 1e-7) {
         return blocked;
       }
       const notional = leg.price * leg.quantity;
