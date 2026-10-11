@@ -82,7 +82,12 @@ export async function recordPaperResearchRoundProposal(
   if(input.mode==='manual' && input.confirmation!==MANUAL_RESEARCH_ROUND_OWNER_CONFIRMATION) {
     return blank('BLOCKED',['MANUAL_PAPER_RESEARCH_OWNER_CONFIRMATION_REQUIRED']);
   }
-  const snapshot=await deps.readProtectedSnapshot(input);
+  let snapshot:PaperRoundSnapshot;
+  try {
+    snapshot=await deps.readProtectedSnapshot(input);
+  } catch {
+    return blank('BLOCKED',['PAPER_ROUND_PROTECTED_LEDGER_READ_FAILED']);
+  }
   if(snapshot.ownerId!==input.ownerId || snapshot.mode!==input.mode || snapshot.market!==input.market) {
     return blank('BLOCKED',['PAPER_ROUND_PROTECTED_LEDGER_SCOPE_MISMATCH']);
   }
