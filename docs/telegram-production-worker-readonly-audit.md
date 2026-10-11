@@ -155,3 +155,21 @@ successful cycle, resume missing snapshots, loosen 15-minute freshness,
 publish unsafe signals or certify Telegram delivery. The change is
 Draft-only, not to be merged before pinned rollout #1828 or the
 immutable Production application lineage would change.
+
+
+## 2026-10-11 bounded last-cycle and snapshot age diagnostics (Draft v5)
+The existing `systemctl show` result did not distinguish a successful but hours-old
+oneshot from one that completed recently. The read-only auditor now compares its
+fixed monotonic start value only to `/proc/uptime` from the same Linux host; the
+result is an allowed coarse age band (`UNDER_5M`, `UNDER_15M`, `UNDER_60M`,
+`OVER_60M`, `UNKNOWN`) rather than raw timestamps, `/proc` contents or service
+metadata. A successful but old cycle **does not** prove a fresh snapshot.
+The fixed local `/health` snapshot age is likewise classified into a safe band,
+and `snapshotFresh=true` with an age over 15 minutes can no longer be reported
+as READY. Missing/malformed age blocks the green claim; unrelated raw errors,
+logs, prices, symbols, room IDs and secrets remain excluded.
+
+These are Draft-only contract/observability improvements, not a diagnosis of
+live cycle failure until owner-protected Production read-only QA is separately
+approved and executed after a separately approved merge. No restart, forced
+rescan, Telegram sends, DB writes or trading actions occur in this Draft.

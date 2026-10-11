@@ -6,6 +6,7 @@ import {
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
   readSignalV3Units, readSignalV3HealthOnce, readSignalV3CycleResult,
+  safeSignalAgeBand,
   morningWindowProcessCoverage,
   sanitizeBriefWorkerHealth,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
@@ -41,9 +42,9 @@ const observed=()=>({
 });
 const safeSignalDiagnostics={
   signalHealth:async()=>({status:'READY',serviceSha:deployed,
-    snapshotReady:true,snapshotFresh:true}),
+    snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'}),
   signalUnits:()=>({server:'ACTIVE',timer:'ACTIVE',cycle:'INACTIVE'}),
-  signalCycle:()=>({unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true}),
+  signalCycle:()=>({unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true,startedAgeBand:'UNDER_5M'}),
 };
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
@@ -148,7 +149,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
   assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
-  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v4');
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v5');
   assert.equal(result.briefWorker.status,'NOT_AVAILABLE');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
@@ -401,6 +402,7 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
         res.emit('data',Buffer.from(JSON.stringify({
           ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
           bindHost:'127.0.0.1',snapshotReady:ready,snapshotFresh:fresh,
+          snapshotAgeMs:ready?60_000:null,
           executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
           snapshotError:'PRIVATE_DO_NOT_PUBLISH',secret:'PRIVATE_TOKEN',
         })));
@@ -410,7 +412,7 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
     return req;
   };
   const ready=await readSignalV3HealthOnce({getImpl:responseFor(200,true,true)});
-  assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true});
+  assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'});
   const stale=await readSignalV3HealthOnce({getImpl:responseFor(200,true,false)});
   assert.equal(stale.status,'SNAPSHOT_STALE');
   const missing=await readSignalV3HealthOnce({getImpl:responseFor(200,false,false)});
@@ -450,7 +452,7 @@ test('protected workflow is owner-only and never sends, deploys or restarts',()=
 });
 
 
-test('Signal V3 oneshot read-only result distinguishes inactive success, failed and no run',()=>{
+test('Signal V3 oneshot result includes privacy-safe monotonic age and distinguishes stale last success',()=>{
   const requested=[];
   const fake=output=>(command,args)=>{
     requested.push(args);
@@ -462,20 +464,62 @@ test('Signal V3 oneshot read-only result distinguishes inactive success, failed 
     ]);
     return output+'\nEnvironment=PRIVATE_SECRET_DO_NOT_LEAK\n';
   };
-  const ok=readSignalV3CycleResult({execImpl:fake(
-    'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=12345678')});
-  assert.deepEqual(ok,{unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true});
-  const bad=readSignalV3CycleResult({execImpl:fake(
-    'LoadState=loaded\nActiveState=failed\nResult=exit-code\nExecMainStatus=1\nExecMainStartTimestampMonotonic=12345678')});
-  assert.deepEqual(bad,{unitState:'FAILED',lastResult:'FAILED',exitCode:1,hasStarted:true});
+  const done='LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000';
+  const good=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> '150.00 0'});
+  assert.deepEqual(good,{unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,
+    hasStarted:true,startedAgeBand:'UNDER_5M'});
+  const stale=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> '5100.00 0'});
+  assert.equal(stale.lastResult,'SUCCEEDED');
+  assert.equal(stale.startedAgeBand,'OVER_60M');
+  const failure=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=failed\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000'),
+    uptimeReadImpl:()=> '130.0 0'});
+  assert.equal(failure.lastResult,'FAILED');
   const never=readSignalV3CycleResult({execImpl:fake(
     'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=0')});
-  assert.deepEqual(never,{unitState:'INACTIVE',lastResult:'NOT_OBSERVED',exitCode:null,hasStarted:false});
+  assert.equal(never.lastResult,'NOT_OBSERVED');
+  assert.equal(never.startedAgeBand,'UNKNOWN');
   const running=readSignalV3CycleResult({execImpl:fake(
-    'LoadState=loaded\nActiveState=active\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=12345678')});
+    'LoadState=loaded\nActiveState=active\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000'),uptimeReadImpl:()=> '130.0 0'});
   assert.equal(running.lastResult,'RUNNING');
-  assert.equal(requested.length,4);
-  assert.ok(!JSON.stringify([ok,bad,never,running]).includes('PRIVATE_SECRET'));
+  assert.equal(requested.length,5);
+  const unknown=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> {
+    throw Error('CONFIDENTIAL_LOCAL_UPTIME_PATH'); }});
+  assert.equal(unknown.startedAgeBand,'UNKNOWN');
+  assert.ok(!JSON.stringify([good,stale,failure,unknown]).includes('PRIVATE_SECRET'));
   assert.deepEqual(readSignalV3CycleResult({execImpl:()=>{throw Error('HIDDEN_PATH')}}),
-    {unitState:'UNAVAILABLE',lastResult:'UNKNOWN',exitCode:null,hasStarted:false});
+    {unitState:'UNAVAILABLE',lastResult:'UNKNOWN',exitCode:null,
+      hasStarted:false,startedAgeBand:'UNKNOWN'});
+  assert.equal(safeSignalAgeBand(60_000),'UNDER_5M');
+  assert.equal(safeSignalAgeBand(20*60_000),'UNDER_60M');
+  assert.equal(safeSignalAgeBand(61*60_000),'OVER_60M');
+  assert.equal(safeSignalAgeBand(-1),'UNKNOWN');
+});
+
+test('Signal V3 source /health refuses false-fresh metadata and unsafe age',async()=>{
+  const make=age=>readSignalV3HealthOnce({getImpl:(url,opts,respond)=>{
+    assert.equal(opts.method,'GET');
+    assert.equal(url.pathname,'/health');
+    const req=new EventEmitter();req.destroy=()=>{};
+    queueMicrotask(()=>{
+      const res=new EventEmitter();res.statusCode=200;
+      respond(res);
+      res.emit('data',Buffer.from(JSON.stringify({
+        ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
+        bindHost:'127.0.0.1',snapshotReady:true,snapshotFresh:true,
+        snapshotAgeMs:age,executionAuthority:'NONE',privateTradingApiAllowed:false,
+        realOrderAllowed:false,privateToken:'SECRET_NEVER_LOG',
+      })));
+      res.emit('end');
+    });
+    return req;
+  }});
+  const stale=await make(70*60_000);
+  assert.equal(stale.status,'SNAPSHOT_STALE');
+  assert.equal(stale.snapshotFresh,false);
+  assert.equal(stale.snapshotAgeBand,'OVER_60M');
+  const invalid=await make(null);
+  assert.equal(invalid.status,'INVALID_RESPONSE');
+  assert.ok(!JSON.stringify(stale).includes('SECRET_NEVER_LOG'));
+  assert.ok(!JSON.stringify(invalid).includes('SECRET_NEVER_LOG'));
 });
