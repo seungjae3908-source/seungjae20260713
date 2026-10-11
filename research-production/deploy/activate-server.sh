@@ -140,6 +140,17 @@ activate() {
   declare -a WATCH_SERVICES=(
     research-production-market-watch.service
   )
+  declare -a ONESHOT_SERVICES=(
+    research-production@fast-historical.service
+    research-production@long-history.service
+    research-production@forward.service
+    research-production-temporal-evidence.service
+    research-production-factory-status.service
+    research-production-maintenance.service
+    research-production-ai-review.service
+    research-production-video-discovery.service
+    research-production-approved-job-intake.service
+  )
   declare -A WAS_ENABLED=()
   for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
     if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
@@ -163,7 +174,7 @@ activate() {
       active_state="$("${SUDO[@]}" systemctl show "$timer" -p ActiveState --value 2>/dev/null || true)"
       unit_state="$("${SUDO[@]}" systemctl show "$timer" -p UnitFileState --value 2>/dev/null || true)"
       case "$active_state" in
-        active|activating|reloading)
+        active|activating|reloading|deactivating)
           echo "RESEARCH_TIMER_STILL_ACTIVE:$timer:$active_state" >&2
           return 1
           ;;
@@ -173,6 +184,24 @@ activate() {
           echo "RESEARCH_TIMER_STILL_ENABLED:$timer:$unit_state" >&2
           return 1
           ;;
+      esac
+    done
+  }
+
+  stop_oneshot_workloads() {
+    # Stopping a timer does not stop the service it already activated.
+    # Stop only the fixed Research unit list, before switching /current.
+    "${SUDO[@]}" systemctl stop "${ONESHOT_SERVICES[@]}" >/dev/null 2>&1 || true
+    local service active_state load_state
+    for service in "${ONESHOT_SERVICES[@]}"; do
+      active_state="$("${SUDO[@]}" systemctl show "$service" -p ActiveState --value 2>/dev/null || true)"
+      load_state="$("${SUDO[@]}" systemctl show "$service" -p LoadState --value 2>/dev/null || true)"
+      [[ "$load_state" == 'loaded' || "$load_state" == 'masked' || "$load_state" == 'not-found' ]] || {
+        echo "RESEARCH_WORKLOAD_STATE_UNKNOWN:$service" >&2; return 1
+      }
+      case "$active_state" in
+        inactive|failed) ;;
+        *) echo "RESEARCH_WORKLOAD_NOT_STOPPED:$service:$active_state" >&2; return 1 ;;
       esac
     done
   }
@@ -214,11 +243,19 @@ activate() {
     local status=$?
     if (( status != 0 )); then
       "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
-      restore_previous_runtime || true
-      echo "RESEARCH_PRODUCTION_ROLLBACK_ATTEMPTED=true" >&2
+      if stop_oneshot_workloads; then
+        restore_previous_runtime || true
+        echo "RESEARCH_PRODUCTION_ROLLBACK_ATTEMPTED=true" >&2
+      else
+        echo "RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true" >&2
+      fi
     fi
     cleanup_transient
-    "${SUDO[@]}" rm -f -- "$ROLLBACK_ENV" >/dev/null 2>&1 || true
+    if (( status != 0 )) && "${SUDO[@]}" test -f "$ROLLBACK_ENV"; then
+      echo "RESEARCH_PRODUCTION_ENV_BACKUP_RETAINED=true" >&2
+    else
+      "${SUDO[@]}" rm -f -- "$ROLLBACK_ENV" >/dev/null 2>&1 || true
+    fi
     return "$status"
   }
   trap fail_safe EXIT
@@ -255,6 +292,7 @@ activate() {
   # its old module/environment identity even after /current is switched.
   "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
   verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"
+  stop_oneshot_workloads
 
   if release_is_valid "$RELEASE"; then
     echo "RESEARCH_RELEASE_REUSED=true"
