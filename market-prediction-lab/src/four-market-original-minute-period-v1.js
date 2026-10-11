@@ -1,17 +1,21 @@
 import {createHash} from "node:crypto";
 import {isAbsolute,resolve} from "node:path";
+import {setImmediate as yieldImmediate} from "node:timers/promises";
 import {resolveSelectedResearchWindowV1} from "./research-selected-window-v1.js";
 import {listArchivedResearchMinuteSessionsV1} from "./research-minute-archive-v1.js";
-import {runFourMarketOriginalMinuteReplayV1} from "./four-market-original-minute-replay-v1.js";
+import {runFourMarketOriginalMinuteReplayV1,
+  resolveOriginalMinuteEvidenceScopeV1,validateOriginalMinuteExecutionControlV1,
+  originalMinuteReplayInterruptionReasonV1} from "./four-market-original-minute-replay-v1.js";
 
 /**
  * User-selected historical period -> immutable native 1m archive -> one
  * stateful per-symbol RESEARCH replay across ALL declared sessions.
  *
  * This intentionally does not concatenate independently reset daily
- * simulated PnLs. Position/equity state crosses sessions inside the existing
- * bounded-memory replay engine, while missing original minutes, unknown
- * exchange sessions and competing revisions fail CLOSED.
+ * simulated PnLs. EMA, equity and reserve state cross sessions inside the
+ * existing bounded-memory replay engine. Positions close at EACH native
+ * session end and pending entries are discarded there. Missing original
+ * minutes, unknown exchange sessions and competing revisions fail CLOSED.
  *
  * It reads only server-private original files. No licensed-source discovery,
  * public/private provider GET, trading/API calls, Paper/Journals/Telegram,
@@ -62,26 +66,42 @@ function parseInputs(input){
   const period=resolveSelectedResearchWindowV1(input.researchWindow);
   if(period.requestedUtcDayCount>MAX_DATE_DAYS)
     fail("PRIVATE_PERIOD_REPLAY_WINDOW_BUDGET_INVALID");
-  return period;
+  validateOriginalMinuteExecutionControlV1(input);
+  const evidence=resolveOriginalMinuteEvidenceScopeV1(input);
+  return {period,evidence};
 }
-function blocked(input,period,reason,extra={}){
+function blocked(input,period,evidence,reason,extra={}){
   return safety({
     market:input.market,symbol:input.symbol,
+    ...evidence,historicalPITRosterChecked:false,
+    historicalMemberLifespanSelfAttestedNotIndependentlyVerified:!evidence.sourceOnlyMode,
+    historicalTradingAvailabilityVerified:false,
+    sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
     selectedStartDate:period.startDate,selectedEndDate:period.endDate,
     mode:"backtest-only",orderSubmitted:false,
     reason,
     indexedPrivateSessions:null,verifiedNativeMinuteSessions:null,
     modeledTradeCount:null,modeledNetPnlKRW:null,
     modeledReturnPercent:null,sourceLineageSha256:null,
+    modeledCostKRW:null,modeledMaximumDrawdownPercent:null,
+    sourceDigestChainSha256:null,sourceModelDigestSha256:null,
     ...extra,
   });
 }
 export async function runFourMarketOriginalMinutePeriodV1(input={}){
-  const period=parseInputs(input);
+  const {period,evidence}=parseInputs(input);
+  const stop=(reason,extra={})=>blocked(input,period,evidence,reason,extra);
+  const interruptionReason=error=>originalMinuteReplayInterruptionReasonV1(input)
+    ??(["ORIGINAL_MINUTE_REPLAY_CANCELLED","ORIGINAL_MINUTE_REPLAY_TIME_BUDGET_EXCEEDED"]
+      .includes(error?.code??error?.message)?error.code??error.message:null);
+  let interrupted=interruptionReason();if(interrupted)return stop(interrupted);
   let cursor=null,previousStart=-1,pageCount=0;
   const sessions=[],digestChain=[];
   while(true){
-    if(pageCount>=MAX_PAGES)return blocked(input,period,
+    interrupted=interruptionReason();if(interrupted)return stop(interrupted);
+    await yieldImmediate();
+    interrupted=interruptionReason();if(interrupted)return stop(interrupted);
+    if(pageCount>=MAX_PAGES)return stop(
       "ORIGINAL_PERIOD_PRIVATE_SESSION_INDEX_PAGE_BUDGET_EXCEEDED",{
         partialSessionIndexPagesRead:pageCount,
         partialIndexedSourceSessions:sessions.length,
@@ -93,9 +113,10 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
         researchWindow:input.researchWindow,
         cursorStartMs:cursor,maxSessions:PAGE_SIZE,
       });
-    }catch{
-      return blocked(input,period,"ORIGINAL_PERIOD_PRIVATE_SESSION_INDEX_UNSAFE");
+    }catch(error){
+      return stop(interruptionReason(error)??"ORIGINAL_PERIOD_PRIVATE_SESSION_INDEX_UNSAFE");
     }
+    interrupted=interruptionReason();if(interrupted)return stop(interrupted);
     pageCount++;
     if(page.status!=="LOCAL_ORIGINAL_SESSION_INDEX_PAGE_ONLY"
       ||page.executionAuthority!=="NONE"
@@ -105,11 +126,12 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
       ||page.sessionCount!==page.sourceSessions.length
       ||page.sourceSessions.length<1
       ||page.sourceSessions.length>PAGE_SIZE)
-      return blocked(input,period, page.reason
+      return stop(page.reason
         ??"ORIGINAL_PERIOD_PRIVATE_SESSION_INDEX_UNAVAILABLE",{
           sessionIndexPagesRead:pageCount,
         });
     for(const row of page.sourceSessions){
+      interrupted=interruptionReason();if(interrupted)return stop(interrupted);
       if(row.market!==input.market||row.symbol!==input.symbol
         ||!Number.isSafeInteger(row.startMs)||row.startMs<=previousStart
         ||!Number.isSafeInteger(row.endMs)||row.endMs<=row.startMs
@@ -118,10 +140,10 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
         ||row.date<period.startDate||row.date>period.endDate
         ||!["PREMARKET","REGULAR","AFTERMARKET","UTC_24H"].includes(row.kind)
         ||!["UTC","Asia/Seoul","America/New_York"].includes(row.zone))
-        return blocked(input,period,"ORIGINAL_PERIOD_SOURCE_IDENTITY_OR_ORDER_INVALID");
+        return stop("ORIGINAL_PERIOD_SOURCE_IDENTITY_OR_ORDER_INVALID");
       previousStart=row.startMs;
       if(row.nativeMinuteSlotInventoryComplete!==true)
-        return blocked(input,period,"ORIGINAL_PERIOD_SOURCE_HAS_UNVERIFIED_MINUTE_GAPS",{
+        return stop("ORIGINAL_PERIOD_SOURCE_HAS_UNVERIFIED_MINUTE_GAPS",{
           blockedDate:row.date,blockedSessionStartMs:row.startMs,
         });
       sessions.push(Object.freeze({
@@ -130,7 +152,7 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
         sourceDigestSha256:row.sourceDigestSha256,
       }));
       digestChain.push([row.date,row.startMs,row.endMs,row.sourceDigestSha256]);
-      if(sessions.length>MAX_SESSIONS)return blocked(input,period,
+      if(sessions.length>MAX_SESSIONS)return stop(
         "ORIGINAL_PERIOD_PRIVATE_SESSION_COUNT_BUDGET_EXCEEDED",{
           partialSessionIndexPagesRead:pageCount,
           partialIndexedSourceSessions:sessions.length,
@@ -139,21 +161,25 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
     const next=page.nextCursorStartMs;
     if(next===null)break;
     if(!Number.isSafeInteger(next)||next<=previousStart)
-      return blocked(input,period,"ORIGINAL_PERIOD_NON_PROGRESSING_PAGE_CURSOR");
+      return stop("ORIGINAL_PERIOD_NON_PROGRESSING_PAGE_CURSOR");
     cursor=next;
   }
-  // Importantly, no source/index receipt is accepted as proof of a
-  // contemporaneous scanner or as automatic Paper admission.
+  // Neither an archive index nor an explicit current-roster cohort is
+  // proof of historical membership, scanner availability or Paper admission.
+  interrupted=interruptionReason();if(interrupted)return stop(interrupted);
   let replay;
   try{
     replay=await runFourMarketOriginalMinuteReplayV1({
       ...input,sessionSources:sessions,
     });
-  }catch{
-    return blocked(input,period,"ORIGINAL_PERIOD_REPLAY_INPUT_OR_SOURCE_INVALID",{
+  }catch(error){
+    return stop(interruptionReason(error)??"ORIGINAL_PERIOD_REPLAY_INPUT_OR_SOURCE_INVALID",{
       sessionIndexPagesRead:pageCount,indexedPrivateSessions:sessions.length,
     });
   }
+  interrupted=interruptionReason();if(interrupted)return stop(interrupted,{
+    sessionIndexPagesRead:pageCount,indexedPrivateSessions:sessions.length,
+  });
   if(replay.status!=="RETROSPECTIVE_SOURCE_ONLY_STRATEGY_DIAGNOSTIC"
     ||replay.executionAuthority!=="NONE"
     ||replay.profitabilityProven!==false
@@ -161,9 +187,20 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
     ||replay.actualFillCount!==null
     ||!Number.isSafeInteger(replay.sourceSessionsRead)
     ||replay.sourceSessionsRead!==sessions.length)
-    return blocked(input,period,replay.reason??"ORIGINAL_PERIOD_REPLAY_BLOCKED",{
+    return stop(replay.reason??"ORIGINAL_PERIOD_REPLAY_BLOCKED",{
       sessionIndexPagesRead:pageCount,indexedPrivateSessions:sessions.length,
       verifiedNativeMinuteSessions:null,
+      requestedUtcDayCount:period.requestedUtcDayCount,
+      missingSourceDays:Number.isSafeInteger(replay.missingSourceDays)
+        &&replay.missingSourceDays>=0?replay.missingSourceDays:null,
+      missingExpectedStockSessions:Number.isSafeInteger(replay.missingExpectedStockSessions)
+        &&replay.missingExpectedStockSessions>=0?replay.missingExpectedStockSessions:null,
+      blockedDatesPreview:Array.isArray(replay.blockedDatesPreview)
+        ?replay.blockedDatesPreview.filter(date=>typeof date==="string"
+          &&/^\d{4}-\d{2}-\d{2}$/u.test(date)).slice(0,30):[],
+      ...(typeof replay.blockedDate==="string"
+        &&/^\d{4}-\d{2}-\d{2}$/u.test(replay.blockedDate)
+        ?{blockedDate:replay.blockedDate}:{}),
     });
   return safety({
     ...replay,
@@ -185,7 +222,11 @@ export async function runFourMarketOriginalMinutePeriodV1(input={}){
     sessionIndexPagesRead:pageCount,
     indexedPrivateSessions:sessions.length,
     verifiedNativeMinuteSessions:sessions.length,
-    sourceSessionIndexDigestSha256:sha(digestChain),
+    sourceSessionIndexDigestSha256:sha(evidence.sourceOnlyMode?{
+      evidenceScope:evidence.evidenceScope,
+      currentRosterDigestSha256:evidence.currentRosterDigestSha256,
+      sessions:digestChain,
+    }:digestChain),
     selectedPeriodIncludesIndependentRealTimeEvidence:false,
     selectedPeriodBacktestResultsRemainModeledOnly:true,
   });

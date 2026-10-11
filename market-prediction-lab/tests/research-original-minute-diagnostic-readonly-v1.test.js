@@ -48,6 +48,32 @@ function save(root,body,name=market+".json"){
   chmodSync(file,0o600);
   return file;
 }
+test("current-provider Han PERIOD is labeled source-only and blocked null lineage remains unavailable",async()=>{
+ const folder=root(),nativeMarket="CRYPTO_FUTURES";
+ const raw={...period(),market:nativeMarket,symbol:"哈基米USDT",
+   evidenceScope:"CURRENT_PROVIDER_ROSTER_SOURCE_ONLY",sourceOnlyMode:true,
+   currentRosterDigestSha256:"a".repeat(64),currentRosterObservedAtMs:Date.parse("2026-10-11T00:00:00Z"),
+   historicalPITRosterChecked:false,historicalMemberLifespanSelfAttestedNotIndependentlyVerified:false,
+   historicalTradingAvailabilityVerified:false,sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
+   sourceModelDigestSha256:"b".repeat(64),sourceSessionIndexDigestSha256:"c".repeat(64)};
+ try{
+   save(folder,raw,nativeMarket+".json");
+   const r=await read({root:folder,market:nativeMarket});
+   assert.equal(r.available,true);assert.equal(r.report.symbol,raw.symbol);
+   assert.equal(r.report.evidenceScope,"CURRENT_PROVIDER_ROSTER_SOURCE_ONLY");
+   assert.equal(r.report.historicalPITRosterChecked,false);
+   assert.equal(r.report.canonicalPaperResearchReview.status,"RESEARCH_HOLD");
+   const blocked={...raw,status:"BLOCKED_DATA",reason:"CURRENT_SOURCE_SELECTED_UTC_DATES_MISSING",
+     sourceModelDigestSha256:null,modeledReturnPercent:null,modeledNetPnlKRW:null,modeledTradeCount:null};
+   save(folder,blocked,nativeMarket+".json");
+   assert.equal((await read({root:folder,market:nativeMarket})).report,null);
+   for(const patch of [{historicalPITRosterChecked:true},{currentRosterDigestSha256:"not-a-sha"},
+     {evidenceScope:"HISTORICAL_PIT_ROSTER"},{evidenceScope:undefined},{sourceOnlyMode:false}]){
+     save(folder,{...raw,...patch},nativeMarket+".json");
+     await assert.rejects(()=>read({root:folder,market:nativeMarket}),/NATIVE_DIAGNOSTIC_/);
+   }
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
 test("only period model summary is returned; secrets, original bars, paths and Paper authority never leak",async()=>{
   const folder=root();
   try{
