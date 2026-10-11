@@ -474,7 +474,7 @@ if(pitReadOnlyChanged){
   "import {\n  checkedPITSelection, collectPITMinuteCoveragePeriod, isValidPITCoverageResponse,\n  type PITSelection,\n} from '../src/lib/research-pit-minute-coverage-period';\n",'');
  const addedStart=currentE2e.indexOf("test('admin historical 1m coverage reads and aggregates");
  if(addedStart<0)throw new Error('PIT_READONLY_BROWSER_REGRESSIONS_MISSING');
- currentE2e=currentE2e.slice(0,addedStart).trimEnd()+'\n';
+ currentE2e=currentE2e.slice(0,addedStart).trimEnd();
  if(currentE2e!==git('show',MAIN+':'+e2e))
   throw new Error('PIT_READONLY_EXISTING_BROWSER_TESTS_MUTATED');
  const source=git('show','HEAD:market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js');
