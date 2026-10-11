@@ -20,6 +20,7 @@ import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-o
 import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
 import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
 import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
+import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs';
 import {
   classifyPublicCycleLaneStatus,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
@@ -242,6 +243,7 @@ async function withUpbitPacing(operation) {
 }
 
 async function withStockPublicOnly(lane, operation) {
+  const audit=createPublicStockSourceAudit();
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
   const originalUniverseGet = universe.get;
@@ -266,19 +268,28 @@ async function withStockPublicOnly(lane, operation) {
   // ScannerProviderHealthTracker reads getCandlesMeta, not getCandles. Route
   // BOTH entrypoints (and quote/roster) through the same public Yahoo source.
   // Never accidentally fall through to the app's private/cache providers.
-  return withReadOnlyStockProviderOverlay({
+  const observed=await withReadOnlyStockProviderOverlay({
     marketData, scannerUniverse: universe,
     scannerMarket: lane.scannerMarket, targetUniverse,
-    readPublicCandles: (ticker, timeframe, entry) => {
+    readPublicCandles: async (ticker, timeframe, entry) => {
       const symbols = yahooProviderCandidates(lane, ticker, entry);
-      return withProviderFallback(symbols, (symbol) => yahoo.getCandles(symbol, timeframe));
+      try{
+        const candles=await withProviderFallback(symbols, (symbol) => yahoo.getCandles(symbol, timeframe));
+        audit.recordCandles(timeframe,candles);
+        return candles;
+      }catch(error){audit.candleError(timeframe,error);throw error;}
     },
-    readPublicQuote: (ticker, entry) => {
+    readPublicQuote: async (ticker, entry) => {
       const symbols = yahooProviderCandidates(lane, ticker, entry);
-      return withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
+      try{
+        const quote=await withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
+        audit.recordQuote(quote);
+        return quote;
+      }catch(error){audit.quoteError(error);throw error;}
     },
     operation: () => operation(targetUniverse),
   });
+  return {...observed,publicStockSourceAudit:audit.snapshot()};
 }
 
 async function scanStock(lane, cursor) {
@@ -497,6 +508,7 @@ async function main() {
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
+        publicStockSourceAudit: response.publicStockSourceAudit ?? null,
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
         requestedCount: Number(response.execution.requestedCount ?? 0),

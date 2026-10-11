@@ -127,6 +127,17 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
         completedCount:count(row.completedCount)?row.completedCount:null,
         insufficientDataCount:count(row.insufficientDataCount)?row.insufficientDataCount:null,
         invalidDataFailureCount:count(row.invalidDataFailureCount)?row.invalidDataFailureCount:null,
+        publicStockSourceAudit:row.publicStockSourceAudit?.version==='public-stock-source-audit-v1'
+          && row.publicStockSourceAudit.symbolsRedacted===true
+          ?Object.freeze({
+            version:'public-stock-source-audit-v1',
+            quote:Object.freeze({...row.publicStockSourceAudit.quote}),
+            candles:Object.freeze(Object.fromEntries(Object.entries(row.publicStockSourceAudit.candles??{})
+              .filter(([tf])=>['1m','3m','5m','15m','60m','4H','1D'].includes(tf))
+              .map(([tf,v])=>[tf,Object.freeze({...v})]))),
+            sanitizedProviderFailures:Object.freeze({...row.publicStockSourceAudit.sanitizedProviderFailures}),
+            symbolsRedacted:true,fullMarketVerified:false,
+          }):null,
         batchDeadlineExceeded:row.batchDeadlineExceeded===true,
         partialExecution:row.partialExecution===true,
         publicProviderFailureSummary: row.publicProviderFailureSummary &&
