@@ -18,7 +18,9 @@ const WINDOW=/^\d{4}-\d{2}-\d{2}$/u;
 const STATUS=/^[A-Z][A-Z0-9_]{0,119}$/u;
 const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const NONE="NONE";
-const safe=(market,reason,report=null)=>Object.freeze({
+const SHA=/^[a-f0-9]{64}$/u;
+const MAX_PUBLICATION_AGE_MS=7*86_400_000;
+const safe=(market,reason,report=null,publication=null)=>Object.freeze({
   schemaVersion:SCHEMA,market,
   available:report!==null,status:report?.status??"BLOCKED_DATA",
   reason,report,
@@ -31,6 +33,11 @@ const safe=(market,reason,report=null)=>Object.freeze({
   independentOOSAndFullCostProven:false,profitabilityProven:false,
   executionAuthority:NONE,paperAdmissionAllowed:false,
   orderSubmitted:false,realOrders:false,
+  // Local file publication time is NOT independent evidence of a historical
+  // scanner, OOS, source-license rights, fills or venue data authenticity.
+  reportPublishedAtMs:publication?.atMs??null,
+  publicationAgeStatus:publication?.ageStatus??"UNKNOWN",
+  publicationTimeIndependentlyAttested:false,
 });
 const count=v=>Number.isSafeInteger(v)&&v>=0;
 const optionalCount=v=>v===null||count(v);
@@ -68,6 +75,14 @@ function verifyRaw(raw,market){
     ||raw.selectedStartDate>raw.selectedEndDate
     ||(raw.reason!=null&&!text(raw.reason)))
     throw new TypeError("NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID");
+  if(raw.reportPublishedAtMs!==undefined
+    ||raw.sourceResultDigestSha256!==undefined){
+    if(!Number.isSafeInteger(raw.reportPublishedAtMs)
+      ||raw.reportPublishedAtMs<946684800000
+      ||raw.reportPublishedAtMs>Date.now()+300_000
+      ||!SHA.test(raw.sourceResultDigestSha256??""))
+      throw new TypeError("NATIVE_DIAGNOSTIC_PUBLICATION_PROVENANCE_INVALID");
+  }
   const available=raw.status!=="BLOCKED_DATA";
   if(raw.schemaVersion===PERIOD){
     if(!SYMBOL.test(raw.symbol??"")
@@ -126,6 +141,12 @@ function verifyRaw(raw,market){
   }
   throw new TypeError("NATIVE_DIAGNOSTIC_UNKNOWN_REPORT_MODE");
 }
+/** Validate one entire private modeled source; allow ONLY sanitized fields out. */
+export function validateAndSanitizeOriginalMinuteDiagnosticV1(raw,market){
+  if(!MARKETS.has(market))
+    throw new TypeError("NATIVE_DIAGNOSTIC_MARKET_INVALID");
+  return verifyRaw(raw,market);
+}
 async function checkRoot(root){
   let cursor=root;
   while(true){
@@ -162,10 +183,16 @@ export async function readResearchOriginalMinuteDiagnosticV1({
       ||st.size<10||st.size>MAX_FILE_BYTES)
       throw new TypeError("NATIVE_DIAGNOSTIC_PRIVATE_FILE_INVALID");
     const raw=JSON.parse(await handle.readFile("utf8"));
-    const report=verifyRaw(raw,market);
+    const report=validateAndSanitizeOriginalMinuteDiagnosticV1(raw,market);
+    const published=raw.reportPublishedAtMs;
+    const publication=Number.isSafeInteger(published)?{
+      atMs:published,
+      ageStatus:Date.now()-published>MAX_PUBLICATION_AGE_MS
+        ?"OLDER_THAN_7_DAYS":"LOCAL_PUBLICATION_ONLY",
+    }:null;
     return safe(market,
       report?"RETROSPECTIVE_MODEL_ONLY_NOT_LIVE_OR_OOS":
-        "OFFLINE_MODEL_BLOCKED_OR_INCOMPLETE",report);
+        "OFFLINE_MODEL_BLOCKED_OR_INCOMPLETE",report,publication);
   }catch(error){
     if(error?.code==="ENOENT")return safe(market,"PRIVATE_MODEL_REPORT_NOT_FOUND");
     throw error;

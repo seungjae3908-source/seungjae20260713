@@ -39,6 +39,9 @@ type Response = {
   profitabilityProven: false; executionAuthority: 'NONE';
   paperAdmissionAllowed: false; orderSubmitted: false;
   realOrders: false;
+  reportPublishedAtMs: number | null;
+  publicationAgeStatus: 'UNKNOWN' | 'LOCAL_PUBLICATION_ONLY' | 'OLDER_THAN_7_DAYS';
+  publicationTimeIndependentlyAttested: false;
 };
 const MARKET_LABEL: Record<Market, string> = {
   KR_STOCK: '국내주식', US_STOCK: '미국주식',
@@ -68,7 +71,13 @@ function validResponse(value: unknown, requested: Market): value is Response {
     || value.fullMarketOpportunityDenominatorVerified !== false
     || value.actualMarketWideOpportunityCount !== null
     || value.trueMarketWideRecall !== null
-    || value.OOSPassCount !== 0)
+    || value.OOSPassCount !== 0
+    || value.publicationTimeIndependentlyAttested !== false
+    || !['UNKNOWN', 'LOCAL_PUBLICATION_ONLY', 'OLDER_THAN_7_DAYS']
+      .includes(String(value.publicationAgeStatus))
+    || (value.reportPublishedAtMs !== null
+      && (!Number.isSafeInteger(value.reportPublishedAtMs)
+        || Number(value.reportPublishedAtMs) <= 0)))
     return false;
   if (!value.available) return value.report === null;
   const r = value.report;
@@ -172,6 +181,18 @@ export function ResearchOriginalMinuteDiagnosticsPanel() {
               ? '종목별 연속 기간 연구 모델' : '과거 종목·날짜 전체 페이지의 원본 점검'}
             {' · '}{report.selectedStartDate} ~ {report.selectedEndDate}
           </p>
+          <p role="status" className="text-xs text-muted-foreground">
+            결과 발행 시각(서버 로컬 기록):{' '}
+            {value?.reportPublishedAtMs == null
+              ? '미확인'
+              : new Date(value.reportPublishedAtMs).toLocaleString('ko-KR')}
+            {' · '}독립적인 시장 원본·OOS 검증 증거 아님
+          </p>
+          {value?.publicationAgeStatus === 'OLDER_THAN_7_DAYS' ? (
+            <p role="alert" className="text-xs font-semibold text-destructive">
+              발행 후 7일 이상 지난 연구 결과입니다. 현재 시장 상태나 최신 수익률로 사용하지 마세요.
+            </p>
+          ) : null}
           {report.kind === 'PERIOD' ? (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {([

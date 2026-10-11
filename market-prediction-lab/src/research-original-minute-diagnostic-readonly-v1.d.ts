@@ -48,7 +48,15 @@ export type ResearchOriginalMinuteDiagnosticResponse={
   paperAdmissionAllowed:false;
   orderSubmitted:false;
   realOrders:false;
+  reportPublishedAtMs:number|null;
+  publicationAgeStatus:'UNKNOWN'|'LOCAL_PUBLICATION_ONLY'|'OLDER_THAN_7_DAYS';
+  publicationTimeIndependentlyAttested:false;
 };
 export function readResearchOriginalMinuteDiagnosticV1(input:{
   root:string;market:ResearchOriginalMinuteMarket;
 }):Promise<ResearchOriginalMinuteDiagnosticResponse>;
+
+export function validateAndSanitizeOriginalMinuteDiagnosticV1(
+  raw:Record<string,unknown>,
+  market:ResearchOriginalMinuteMarket,
+):ResearchOriginalMinuteDiagnosticSummary|null;

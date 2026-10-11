@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdtempSync,writeFileSync,readFileSync,statSync,chmodSync,
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,statSync,chmodSync,
   symlinkSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {createHash} from "node:crypto";
 import {persistResearchMinuteSessionV1} from "../src/research-minute-archive-v1.js";
+import {readResearchOriginalMinuteDiagnosticV1 as readAdminSummary}
+  from "../src/research-original-minute-diagnostic-readonly-v1.js";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
 import {parseOriginalReplayArgsV1 as parse,runOriginalReplayPrivateJobV1 as run}
   from "../scripts/run-four-market-original-minute-replay-v1.mjs";
@@ -267,5 +269,71 @@ test("private SWEEP CLI resumably traverses dated PIT identities without fabrica
   assert.equal(second.executionAuthority,"NONE");
   assert.equal(statSync(firstOut).mode&0o077,0);
   assert.equal(statSync(secondOut).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test("private PERIOD CLI receipt -> explicitly consented PUBLISH CLI -> admin readback, zero Paper authority",async()=>{
+ const root=dir(),sourceId="TEST_LOCAL_1M_MODEL_PUBLISH",
+   periodInput=join(root,"period-job.json"),
+   periodOutput=join(root,"period-job-result.json"),
+   adminRoot=join(root,"admin"),
+   publishInput=join(root,"publish-job.json"),
+   publishOutput=join(root,"publish-job-result.json");
+ try{
+   const rows=Array.from({length:1440},(_,i)=>{
+     const high=i===80?111:101;
+     const close=i===80?110:100;
+     return {market:"CRYPTO_SPOT",venue:"UPBIT_KRW",
+       symbol:"KRW-BTC",sourceId,
+       timestampMs:D+i*60_000,availableAtMs:D+(i+1)*60_000,
+       open:100,high,low:99,close,volume:1+i};
+   });
+   const source={
+     market:"CRYPTO_SPOT",venue:"UPBIT_KRW",
+     symbol:"KRW-BTC",sourceId,
+     session:{startMs:D,endMs:D+DAY,
+       kind:"UTC_24H",timeZone:"UTC",
+       calendarSourceId:"TEST_LOCAL_ORIGINAL_1M"},
+     minuteBars:rows,
+     sourceMinuteRowsSha256:createHash("sha256")
+       .update(JSON.stringify(rows)).digest("hex"),
+     asOfMs:D+DAY,
+   };
+   mkdirSync(adminRoot,{mode:0o700});
+   await persistResearchMinuteSessionV1({root,source});
+   writePrivate(periodInput,{mode:"PERIOD",root,market:"CRYPTO_SPOT",
+     symbol:"KRW-BTC",manifest:roster(),
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+     asOfMs:D+5*DAY,direction:"LONG",timeframe:"5m"});
+   const model=await run({input:periodInput,output:periodOutput});
+   assert.equal(model.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+   const before=await readAdminSummary({root:adminRoot,market:"CRYPTO_SPOT"});
+   assert.equal(before.available,false);
+   assert.equal(before.reason,"PRIVATE_MODEL_REPORT_NOT_FOUND");
+   writePrivate(publishInput,{mode:"PUBLISH",
+     sourceResultPath:periodOutput,reportRoot:adminRoot,
+     market:"CRYPTO_SPOT",
+     allowLocalReportPublish:true,allowReplaceExisting:false});
+   const publishing=await run({input:publishInput,output:publishOutput});
+   assert.equal(publishing.mode,"PUBLISH");
+   assert.equal(publishing.localOnlyWrite,true);
+   assert.equal(publishing.readOnly,false);
+   assert.equal(publishing.status,"LOCAL_SANITIZED_DIAGNOSTIC_PUBLISHED");
+   const admin=await readAdminSummary({root:adminRoot,market:"CRYPTO_SPOT"});
+   assert.equal(admin.available,true);
+   assert.equal(admin.report.kind,"PERIOD");
+   assert.equal(admin.report.symbol,"KRW-BTC");
+   assert.equal(admin.report.sourceSessionsVerified,1);
+   assert.equal(admin.report.independentOOSProven,false);
+   assert.equal(admin.report.paperCandidatePASS,false);
+   assert.equal(admin.actualFillCount,null);
+   assert.equal(admin.profitabilityProven,false);
+   assert.equal(admin.executionAuthority,"NONE");
+   assert.equal(admin.publicationAgeStatus,"LOCAL_PUBLICATION_ONLY");
+   assert.equal(statSync(join(adminRoot,"CRYPTO_SPOT.json")).mode&0o077,0);
+   assert.equal(statSync(publishOutput).mode&0o077,0);
+   const text=readFileSync(join(adminRoot,"CRYPTO_SPOT.json"),"utf8");
+   assert.doesNotMatch(text,/modeledTradePreview|minuteBars|privateStrategy|orderInstructions/);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
