@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -869,4 +869,27 @@ test('weekend exchange close/premarket Telegram plans never fire as regular sess
   assert.deepEqual(sundayMorning.map(x=>x.kind),['MORNING']);
   assert.ok(sundayMorning.every(x=>x.orderSubmitted===false &&
     x.liveTradingAuthority===false));
+});
+
+test('scheduled Telegram market-brief ledger refuses linked files and preserves the original', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-linked-'));
+  try {
+    const original = path.join(dir, 'real.json');
+    const linked = path.join(dir, 'linked.json');
+    const content = JSON.stringify({ version: 1, delivered: {
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock':
+        '2026-10-11T00:00:00.000Z',
+    } });
+    await writeFile(original, content, 'utf8');
+    await symlink(original, linked);
+    const store = new FileTelegramIntelligenceStateStore(linked);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(original, 'utf8'), content);
+    // Same fail-closed behavior on a genuine corrupt file is covered above.
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

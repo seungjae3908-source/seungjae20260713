@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants as fileConstants } from 'node:fs';
+import { lstat, mkdir, open, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {
   dueTelegramIntelligenceReports,
@@ -23,6 +24,7 @@ import {
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const MAX_STATE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_LEDGER_BYTES = 1_048_576;
 
 export interface TelegramIntelligenceStateStore {
   has(key: string): Promise<boolean>;
@@ -45,14 +47,41 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
     if (this.blocked) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     if (this.loaded) return;
     this.loaded = true;
+    let originalLedgerObserved = false;
     try {
       const details = await lstat(this.statePath);
-      if (!details.isFile() || details.isSymbolicLink() || details.size > 1_048_576) {
+      originalLedgerObserved = true;
+      if (!details.isFile() || details.isSymbolicLink()
+        || details.size > MAX_LEDGER_BYTES) {
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       }
-      const raw = await readFile(this.statePath, 'utf8');
-      if (Buffer.byteLength(raw, 'utf8') > 1_048_576) {
-        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const fd = await open(this.statePath,
+        fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW);
+      let raw: string;
+      try {
+        const actual = await fd.stat();
+        if (!actual.isFile() || actual.size > MAX_LEDGER_BYTES
+          || actual.dev !== details.dev || actual.ino !== details.ino) {
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        }
+        // Bounded fd-only read: never follow a swapped pathname and never
+        // load an unbounded file if it grows during the observation.
+        const buffer = Buffer.alloc(MAX_LEDGER_BYTES + 1);
+        let offset = 0;
+        while (offset < buffer.length) {
+          const { bytesRead } = await fd.read(buffer, offset,
+            buffer.length - offset, offset);
+          if (!Number.isSafeInteger(bytesRead) || bytesRead < 0
+            || bytesRead > buffer.length - offset)
+            throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+        if (offset > MAX_LEDGER_BYTES)
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        raw = buffer.subarray(0, offset).toString('utf8');
+      } finally {
+        await fd.close();
       }
       const parsed = JSON.parse(raw) as Partial<PersistedState>;
       if (parsed.version !== 1 || !parsed.delivered || typeof parsed.delivered !== 'object'
@@ -66,7 +95,11 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
       }
       for (const [key, value] of entries) this.delivered.set(key, value);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      // An initially absent ledger can legitimately start empty. But a
+      // ledger that disappears AFTER a successful lstat is a dangerous
+      // swap/race, not proof that no prior Telegram send occurred.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT'
+        && !originalLedgerObserved) return;
       this.blocked = true;
       this.delivered.clear();
       logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
@@ -99,7 +132,7 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
       if (next.size > 10000) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       const payload: PersistedState = { version: 1, delivered: Object.fromEntries(next) };
       const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-      if (Buffer.byteLength(serialized, 'utf8') > 1_048_576)
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_LEDGER_BYTES)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       await mkdir(path.dirname(this.statePath), { recursive: true });
       const temporary = `${this.statePath}.${process.pid}.tmp`;

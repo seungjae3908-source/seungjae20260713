@@ -319,9 +319,22 @@ export class SignalIntelligenceTelegramDeliveryState {
 
   async ready(): Promise<void> { await this.load(); }
 
-  async has(key: string): Promise<boolean> {
+  async has(key: string, now = new Date()): Promise<boolean> {
     await this.load();
-    return this.delivered.has(key);
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const at = this.delivered.get(key);
+    if (!at) return false;
+    const when = Date.parse(at);
+    // A future-dated receipt is unsafe clock/ledger evidence: never use it
+    // to suppress a real current event or to silently permit a replay.
+    if (!Number.isFinite(when) || when > now.getTime() + 5_000) {
+      this.blocked = true;
+      throw new Error(LEDGER_ERROR);
+    }
+    // The existing 14-day duplicateWindowMs must apply when checking,
+    // not only when a DIFFERENT key happens to be marked and pruned.
+    return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
   }
 
   async mark(key: string, now: Date): Promise<void> {
@@ -449,7 +462,7 @@ export class SignalIntelligenceTelegramSubscriber {
 
         const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
-        if (await this.store.has(alert.dedupeKey)) { result.deduped += 1; continue; }
+        if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
         result.attempted += 1;
         const sent = await this.deliver(alert);
         if (sent.ok || sent.skipped === 'DUPLICATE') {
