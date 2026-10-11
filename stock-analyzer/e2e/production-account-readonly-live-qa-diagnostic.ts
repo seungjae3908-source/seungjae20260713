@@ -19,6 +19,27 @@ export type SanitizedBitgetReadonlyDiagnostic = {
 
 type RecordValue = Record<string, unknown>;
 
+// Account connectivity is not proof that the automatic worker can own every
+// existing position. Retain only counts, never holdings, quantities or values.
+export function summarizeAutomaticWarmupPositions(snapshot: {
+  provider: string;
+  positions: Array<{ symbol: string; quantity: number | null }> | null;
+} | undefined) {
+  if (!Array.isArray(snapshot?.positions)) {
+    return { positionsPresent: false, nonCashPositionCount: null, unknownPositionQuantityCount: null };
+  }
+  const positions = snapshot.positions.filter((position) =>
+    !(snapshot.provider === 'upbit' && String(position.symbol).trim().toUpperCase() === 'KRW'));
+  return {
+    positionsPresent: true,
+    nonCashPositionCount: positions.filter((position) =>
+      typeof position.quantity === 'number' && Number.isFinite(position.quantity)
+      && Math.abs(position.quantity) > 0.00000001).length,
+    unknownPositionQuantityCount: positions.filter((position) =>
+      typeof position.quantity !== 'number' || !Number.isFinite(position.quantity)).length,
+  };
+}
+
 const requestPaths = new Set([
   '/api/v3/account/settings',
   '/api/v3/account/info',

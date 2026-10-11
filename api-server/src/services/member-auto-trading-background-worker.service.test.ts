@@ -45,12 +45,29 @@ import {
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { summarizeAutomaticWarmupPositions } from '../../../stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic';
 import {
   buildAdminFourMarketPaperBootstrap,
   ADMIN_MARKET_INITIAL_KRW,
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('automatic warmup diagnostic distinguishes settlement cash, held exposure and unknown quantities without recording account values', () => {
+  assert.deepEqual(summarizeAutomaticWarmupPositions(undefined), {
+    positionsPresent: false, nonCashPositionCount: null, unknownPositionQuantityCount: null,
+  });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'upbit', positions: [
+    { symbol: 'KRW', quantity: null }, { symbol: 'BTC', quantity: 0.2 },
+    { symbol: 'ETH', quantity: null }, { symbol: 'XRP', quantity: 0 },
+  ] }), { positionsPresent: true, nonCashPositionCount: 1, unknownPositionQuantityCount: 1 });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'bitget', positions: [
+    { symbol: 'BTCUSDT', quantity: -1 }, { symbol: 'ETHUSDT', quantity: NaN },
+  ] }), { positionsPresent: true, nonCashPositionCount: 1, unknownPositionQuantityCount: 1 });
+  assert.deepEqual(summarizeAutomaticWarmupPositions({ provider: 'toss', positions: [] }), {
+    positionsPresent: true, nonCashPositionCount: 0, unknownPositionQuantityCount: 0,
+  });
+});
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({
