@@ -90,3 +90,13 @@ The read-only Staging probe now keeps the same phase-specific timeout
 codes for both paths. No automatic retry or Telegram message send is
 authorized. Deterministic tests prove that error text and addresses are
 not included in reported receipts.
+
+## Draft: reject the complete special-purpose 192.0.0.0/24 space
+
+The earlier DNS guard rejected 192.0.0.0 and 192.0.2/24 but
+inadvertently accepted reserved protocol-assignment addresses
+like 192.0.0.1 and 192.0.0.8. A Telegram TLS DNS probe now blocks
+the entire 192.0.0.0/24 special-purpose range, without permitting a
+local or special-destination probe and without leaking addresses in
+normal reports. Tested with deterministic injected DNS/socket mocks;
+still does NOT demonstrate actual Staging connectivity.
