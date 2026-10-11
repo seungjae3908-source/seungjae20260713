@@ -135,6 +135,9 @@ test('same epoch check never silently accepts different capital, owner, digest o
     previous_locked_reserve_krw:'50000.00'};
   assert.ok(sameAutomaticPaperV3Epoch(expected,db));
   const cases=[
+    {previous_residual_operating_krw:null},
+    {previous_residual_operating_krw:''},
+    {previous_locked_reserve_krw:null},
     {epoch_id:'fake'},{proposal_id:'fake'},{user_id:'other'},
     {owner_role:'admin'},{market:'us_stock'},{mode:'manual'},
     {source_epoch_id:'other'},{next_round_number:3},{virtual_seed_krw:2_000_000},
