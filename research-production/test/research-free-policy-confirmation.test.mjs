@@ -19,3 +19,18 @@ test('consent cannot be replayed on a different release or relabeled with execut
   assert.equal(validResearchFreeConfirmation(value, 'b'.repeat(40)), false);
   for (const change of [{ paidFallback: true }, { executionAuthority: 'LIVE' }, { freeOnlyConfirmed: false }, { providers: ['groq'] }, { observedAt: Date.now() + 60000 }]) assert.equal(validResearchFreeConfirmation({ ...value, ...change }, 'a'.repeat(40)), false);
 });
+test('paired consent supports the unchanged app without relabeling the isolated Research release', () => {
+  const plan = buildConfirmedResearchPolicies({ ...input(), appSha: 'b'.repeat(40) });
+  assert.equal(plan.confirmation.targetSha, 'b'.repeat(40));
+  assert.equal(plan.confirmation.appSha, 'b'.repeat(40));
+  assert.equal(plan.confirmation.researchSha, 'a'.repeat(40));
+  assert.equal(validResearchFreeConfirmation(plan.confirmation, 'b'.repeat(40)), true);
+  assert.equal(validResearchFreeConfirmation(plan.confirmation, 'a'.repeat(40)), false);
+  assert.equal(validResearchFreeConfirmation(plan.confirmation, 'c'.repeat(40)), false);
+  for (const change of [{ appSha: 'main' }, { appSha: '' }]) {
+    assert.throws(() => buildConfirmedResearchPolicies({ ...input(), ...change }));
+  }
+  for (const change of [{ appSha: 'c'.repeat(40) }, { researchSha: 'main' }]) {
+    assert.equal(validResearchFreeConfirmation({ ...plan.confirmation, ...change }, 'b'.repeat(40)), false);
+  }
+});

@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { collectResearchActivationPreflight, readBoundedPrivateFile } from '../../ops/research-activation-preflight.mjs';
 
 const researchSha = 'a'.repeat(40), appSha = 'b'.repeat(40);
 const { PREFLIGHT_IDS } = createRequire(import.meta.url)('../../.github/scripts/research-production-readonly-contract.cjs');
 const state = '/var/lib/investment-research-production';
-function fixture({ missing = false, unsafe = false, conflict = false, mutation = false } = {}) {
+function fixture({ missing = false, unsafe = false, conflict = false, mutation = false, bundleRoot } = {}) {
   const files = new Map([
     ['/opt/stock-app/.deploy/current-sha', appSha],
     ['/etc/investment-research/research-production.env', [
@@ -16,7 +17,8 @@ function fixture({ missing = false, unsafe = false, conflict = false, mutation =
       'PRIVATE_TRADING_API_ALLOWED=false', 'ORDER_AUTHORITY=false', 'ORDER_SUBMISSION_ENABLED=false',
       ...(unsafe ? ['LIVE_TRADING=true'] : []),
     ].join('\n')],
-    ['/opt/stock-app/.env', 'GEMINI_API_KEY=test-only-public-provider-key\nGROQ_API_KEY=test-only-other-provider-key\nYOUTUBE_DATA_API_KEY=test-only-video-key'],
+    ['/opt/stock-app/.env', 'GEMINI_API_KEY=test-only-public-provider-key\nGROQ_API_KEY=test-only-other-provider-key\nYOUTUBE_DATA_API_KEY=test-only-video-key'
+      + (bundleRoot === undefined ? '' : '\nRESEARCH_BUNDLE_STATE_ROOT=' + bundleRoot)],
     ...(conflict ? [['/opt/stock-app/.env.production', 'GEMINI_API_KEY=conflicting-test-only-key']] : []),
   ]);
   const missingError = () => Object.assign(new Error('not recorded'), { code: 'ENOENT' });
@@ -71,6 +73,26 @@ test('duplicate safety flags and provider conflicts block without suppressing ot
   assert.ok(result.prerequisiteBlockers.includes('PROVIDER_GEMINI'));
   assert.ok(result.checks.some(row => row.id === 'STOCK_INPUT_US_STOCK'));
 });
+test('bundle store accepts canonical safe state roots without granting admission or relaxing path safety', () => {
+  const status = options => collectResearchActivationPreflight(options).checks
+    .find(row => row.id === 'APP_RESEARCH_BUNDLE_STORE_CONFIGURATION').status;
+  assert.equal(status(fixture()), 'MISSING');
+  for (const bundleRoot of [state, state + '/bundles']) {
+    assert.equal(status(fixture({ bundleRoot })), 'UNKNOWN');
+  }
+  for (const bundleRoot of ['/tmp/bundles', state + '-other/bundles', state + '/bundles/',
+    state + '/bundles/../elsewhere', 'relative/bundles']) {
+    assert.equal(status(fixture({ bundleRoot })), 'BLOCKED');
+  }
+  const symbolic = fixture({ bundleRoot: state + '/bundles' });
+  const realpath = symbolic.io.realpathSync;
+  symbolic.io.realpathSync = file => file === state + '/bundles' ? '/tmp/outside' : realpath(file);
+  assert.equal(status(symbolic), 'BLOCKED');
+  const writable = fixture({ bundleRoot: state + '/bundles' });
+  const lstat = writable.io.lstatSync;
+  writable.io.lstatSync = file => ({ ...lstat(file), mode: file === state + '/bundles' ? 0o770 : 0o750 });
+  assert.equal(status(writable), 'BLOCKED');
+});
 test('Node 20 before parseEnv availability, low resources and changed file are rejected', () => {
   const options = fixture();
   options.nodeVersion = '20.11.1';
@@ -87,7 +109,7 @@ test('probe has no mutation, arbitrary execution, PM2 bootstrap, or provider net
 });
 test('core cutover freezes and rolls back every research watcher before switching SHA, never shared app units', () => {
   const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n','\n');
-  assert.match(source, /declare -a WATCH_SERVICES=\(\s*research-production-market-watch\.service\s*\)/u);
+  assert.match(source, /declare -ga WATCH_SERVICES=\(\s*research-production-market-watch\.service\s*\)/u);
   for (const line of source.split('\n').filter(line=>line.includes('systemctl disable --now')&&line.includes('CORE_TIMERS'))) {
     assert.ok(line.includes('"${WATCH_SERVICES[@]}"'));
   }
@@ -97,4 +119,52 @@ test('core cutover freezes and rolls back every research watcher before switchin
   assert.match(source, /RUN_AS_RESEARCH=\("\$\{SUDO\[@\]\}" runuser/u);
   assert.match(source, /RESEARCH_NODE_ENV_PARSER_REQUIRED/u);
   assert.doesNotMatch(source, /systemctl (?:restart|stop|disable|start).*stock-app|pm2 (?:restart|stop|start)/u);
+});
+test('core cutover stops in-flight research one-shots before any release switch or rollback', () => {
+  const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
+  assert.match(source, /systemctl stop "\$\{ONESHOT_SERVICES\[@\]\}"/u);
+  assert.match(source, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  for (const name of ['CORE_TIMERS', 'AI_TIMERS', 'AI_DAEMONS', 'WATCH_SERVICES', 'ONESHOT_SERVICES']) {
+    assert.ok(source.includes('declare -ga ' + name + '=('), 'EXIT handler must retain ' + name);
+  }
+  assert.ok(source.includes('declare -gA WAS_ENABLED=()'), 'EXIT handler must retain previous enabled state');
+  const freeze = source.indexOf('verify_timers_stopped "${CORE_TIMERS[@]}"');
+  const stop = source.indexOf('stop_oneshot_workloads', freeze);
+  const cutover = source.indexOf('mv -Tf -- "$NEXT_CURRENT" "$CURRENT"');
+  assert.ok(freeze > 0 && stop > freeze && cutover > stop);
+  const rollback = source.slice(source.indexOf('fail_safe() {'), source.indexOf('trap fail_safe EXIT'));
+  assert.ok(rollback.indexOf('stop_oneshot_workloads') < rollback.indexOf('restore_previous_runtime'));
+  assert.match(rollback, /status != 0.*test -f "\$ROLLBACK_ENV"/u);
+  assert.match(rollback, /RESEARCH_PRODUCTION_ENV_BACKUP_RETAINED=true/u);
+  for (const profile of ['fast-historical', 'long-history', 'forward']) {
+    assert.ok(source.includes('research-production@' + profile + '.service'));
+  }
+});
+test('real shell freeze guards reject running and unknown workloads without switching releases', () => {
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const core = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const ai = readFileSync(new URL('../deploy/activate-ai-research.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const guards = [
+    [core.slice(core.indexOf('\n  stop_oneshot_workloads() {'), core.indexOf('\n  restore_previous_runtime() {')), 'stop_oneshot_workloads'],
+    [ai.slice(ai.indexOf('\ndisable_timers() {'), ai.indexOf('\nresearch_sha() {')), 'disable_timers'],
+  ];
+  for (const [helper, invoke] of guards) {
+    for (const [active, load, result] of [['inactive','loaded',0], ['failed','loaded',0],
+      ['inactive','not-found',0], ['active','not-found',1], ['active','loaded',1], ['activating','loaded',1],
+      ['deactivating','loaded',1], ['reloading','loaded',1], ['','',1]]) {
+    const script = `SUDO=(); ONESHOT_SERVICES=(research-production@forward.service); STOPPED=0
+timers=(research-production-ai-review.timer); daemon_services=(research-production-workspace-worker.service)
+services=(research-production-ai-review.service)
+systemctl() { if [[ "$1" == stop ]]; then STOPPED=1; return 0; fi
+  if [[ "$1" == disable ]]; then return 0; fi
+  if [[ "$1" == is-active || "$1" == is-enabled ]]; then return 1; fi
+  if [[ "$4" == ActiveState ]]; then printf '%s' '${active}'; else printf '%s' '${load}'; fi; }
+${helper}
+${invoke}; status=$?; printf 'RESULT=%s;STOPPED=%s' "$status" "$STOPPED"; exit "$status"`;
+    const run = spawnSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(run.status, result, `${active}/${load}: ${run.stderr || run.error || ''}`);
+    assert.match(run.stdout, /STOPPED=1/u);
+    if (result === 1) assert.match(run.stderr, /(?:AI_)?RESEARCH_WORKLOAD_(?:NOT_STOPPED|STATE_UNKNOWN)/u);
+    }
+  }
 });
