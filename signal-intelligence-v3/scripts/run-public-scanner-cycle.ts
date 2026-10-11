@@ -15,6 +15,8 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
+import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
+import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic} from '../src/public-watch-v3-priority.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
@@ -462,6 +464,14 @@ async function main() {
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
   const sourceCycleId = randomUUID(); // new each cycle, including wrapped cursors
+  // Explicit opt-in. Read ONLY the sealed local Research Watch public event
+  // receipts; absence, SHA mismatch or stale data preserves normal V3 scan.
+  const stageOneWatch = await readV3StageOneWatch({
+    enabled:process.env.SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED==='true',
+    expectedResearchSha:process.env.SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA,
+    nowMs,
+  });
+  installV3WithinPageWatchPriority(stageOneWatch);
   pruneRetained(state, nowMs);
 
   const coverage = [];
@@ -597,6 +607,8 @@ async function main() {
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     publicDataOnly: true,
     economicReadiness,
+    publicStageOneWatch:stageOneWatch.report,
+    publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     releaseStateReset: releaseChanged,
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
@@ -613,6 +625,8 @@ async function main() {
     profile: snapshot.profile,
     releaseStateReset: releaseChanged,
     economicReadiness,
+    publicStageOneWatch:stageOneWatch.report,
+    publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     coverage,
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     executionAuthority: 'NONE',
