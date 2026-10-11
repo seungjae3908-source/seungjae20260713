@@ -16,6 +16,9 @@ test('round table records audit-only proposed epochs without wallet writes or pr
   assert.match(sql,/reserve_transfer_allowed is false/);
   assert.match(sql,/historical_record_deletion_allowed is false/);
   assert.match(sql,/proposed_seed_krw = 1000000/);
+  assert.match(sql,/paper_round_close_evidence_consistent/);
+  assert.match(sql,/ending_cause = 'ZERO_EQUITY'/);
+  assert.match(sql,/ending_cause = 'BELOW_VERIFIED_MINIMUM'/);
   assert.doesNotMatch(sql,/\b(?:insert|update)\s+(?:into\s+)?public\.paper_accounts/i);
   for(const market of ['domestic_stock','us_stock','crypto_spot','crypto_futures'])
     assert.ok(sql.includes(market));
