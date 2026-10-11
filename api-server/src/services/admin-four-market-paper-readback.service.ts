@@ -10,6 +10,7 @@ import {
   projectMemberMarketCapital,
   type FourMarketPaperWalletRole,
   type AdminPaperMarket,
+  type VerifiedMarketSettlement,
 } from './admin-four-market-paper-capital.service';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal, type TradeLeg, type UnifiedTradeCycle } from './unified-trade-journal.service';
@@ -181,6 +182,11 @@ function fourMarketPaperCapitalReadback(input: {
   const prefix = role === 'admin' ? 'ADMIN' : 'MEMBER';
   const code = (suffix: string) => `${prefix}_PAPER_${suffix}`;
   const capital = {} as Record<AdminPaperMarket, MarketCapital>;
+  // Exact canonical verified closures, never a manually supplied PnL summary.
+  // null means no attested ledger, [] means a complete empty market epoch.
+  const verifiedSettlements = {} as Record<
+    AdminPaperMarket, readonly VerifiedMarketSettlement[] | null
+  >;
   const fullHistory = input.orders.length >= 500 || input.plans.length >= 200
     || input.records.length >= 500;
   const byPlan = new Map(input.plans.map(plan => [plan.id, plan]));
@@ -219,6 +225,7 @@ function fourMarketPaperCapitalReadback(input: {
     const wallet = wallets.marketWallets[market];
     const fallback = (error: string) => {
       capital[market] = quarantined(market, error, input.nowMs, role);
+      verifiedSettlements[market] = null;
     };
     if (!wallets.ready || wallet.openedAtMs == null) {
       fallback(code('WALLET_NOT_READY')); continue;
@@ -281,6 +288,10 @@ function fourMarketPaperCapitalReadback(input: {
       capital[market] = role === 'admin'
         ? projectAdminMarketCapital(market, settlements, input.nowMs)
         : projectMemberMarketCapital(market, settlements, input.nowMs);
+      // Only fully reconciled, complete immutable market-epoch KRW closes
+      // may feed the automatic Paper risk/5-loss supervisor.
+      verifiedSettlements[market] = capital[market].settlementReady
+        ? Object.freeze(settlements) : null;
     } catch {
       fallback(code('SETTLEMENT_READBACK_UNAVAILABLE'));
     }
@@ -309,6 +320,7 @@ function fourMarketPaperCapitalReadback(input: {
     walletReady: wallets.ready,
     marketReadback,
     capital,
+    verifiedSettlements: Object.freeze(verifiedSettlements),
     realOrdersPlaced: false as const,
     reserveTransferred: false as const,
   });

@@ -10,6 +10,7 @@ import {
 } from './admin-four-market-paper-readback.service';
 import type { StoredPaperJournalRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { automaticPaperRiskEvidenceFromCanonicalLedger } from './member-auto-trading-background-worker.service';
 
 const NOW = Date.UTC(2026,9,9,3,0,0);
 const opened = new Date(NOW - 120_000).toISOString();
@@ -445,4 +446,47 @@ test('negative signed funding represents a verified rebate, not a fictitious fee
   });
   assert.equal(status.marketReadback.crypto_futures.settlementReady,true);
   assert.equal(status.marketReadback.crypto_futures.reserveKrw,6800);
+});
+
+test('verified USD equity and USDT perpetual closures feed Paper 4-market risk only with exact owner/FX receipts', () => {
+  const us = certifiedAutoPaperPair({
+    id:'proof-us-risk', exchange:'kiwoom', market:'US', symbol:'AAPL',
+    entrySide:'buy', exitSide:'sell', entryPrice:100, exitPrice:110,
+    entryFx:1300, exitFx:1350, fxSource:'YAHOO:USDKRW=X',
+  });
+  const futures = certifiedAutoPaperPair({
+    id:'proof-futures-risk', exchange:'bitget', market:'USDT-FUTURES',
+    symbol:'BTCUSDT', entrySide:'long', exitSide:'short',
+    entryPrice:100, exitPrice:110,
+    entryFx:1300, exitFx:1350, fxSource:'UPBIT:KRW-USDT',
+  });
+  const readback = adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only', records:records(),
+    plans:[...us.plans,...futures.plans],
+    orders:[...us.orders,...futures.orders], nowMs:NOW,
+  });
+  for (const [market, pair] of [
+    ['us_stock',us],['crypto_futures',futures],
+  ] as const) {
+    const certified = readback.verifiedSettlements[market];
+    assert.ok(certified && certified.length===1);
+    const equity = readback.capital[market].operatingCapitalKrw;
+    const blockedWithout = automaticPaperRiskEvidenceFromCanonicalLedger(
+      'owner-only',pair.orders,pair.plans,NOW,equity,Date.parse(opened));
+    assert.equal(blockedWithout.ready,false,
+      'foreign market native PnL never becomes KRW without a verified readback');
+    assert.ok(blockedWithout.blockers.includes('BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED'));
+    const ready = automaticPaperRiskEvidenceFromCanonicalLedger(
+      'owner-only',pair.orders,pair.plans,NOW,equity,Date.parse(opened),certified);
+    assert.equal(ready.ready,true,JSON.stringify(ready.blockers));
+    assert.equal(ready.closedTrades,1);
+    assert.ok(ready.dailyPnlPercent>0);
+    const forged=[{...certified[0]!,netPnlKrw:999_999,fullCostsVerified:false}];
+    const bad = automaticPaperRiskEvidenceFromCanonicalLedger(
+      'owner-only',pair.orders,pair.plans,NOW,equity,Date.parse(opened),forged);
+    assert.equal(bad.ready,false);
+    const missing = automaticPaperRiskEvidenceFromCanonicalLedger(
+      'owner-only',pair.orders,pair.plans,NOW,equity,Date.parse(opened),[]);
+    assert.equal(missing.ready,false);
+  }
 });
