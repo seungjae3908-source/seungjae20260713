@@ -9,6 +9,9 @@ export type PaperResearchMode = 'automatic' | 'manual';
 export type PaperRoundDecision = Readonly<{
   status: 'ACTIVE' | 'EXHAUSTED' | 'BLOCKED_EVIDENCE' | 'OPEN_EXPOSURE';
   eligibleForNewRound: boolean;
+  // Zero equity is true bankruptcy; positive cash below the provider
+  // minimum is a different research-round ending and is not counted as ruin.
+  endingCause: 'ZERO_EQUITY' | 'BELOW_VERIFIED_MINIMUM' | null;
   nextAction: 'NONE' | 'AUTO_RESEARCH_ROUND_PROPOSAL' | 'MANUAL_OWNER_CONFIRMATION';
   proposedRoundId: string | null;
   nextSeedKrw: number | null;
@@ -85,7 +88,7 @@ export function assessPaperResearchRound(snapshot: PaperRoundSnapshot): PaperRou
 
   const defaultDecision = (status: PaperRoundDecision['status']): PaperRoundDecision =>
     Object.freeze({
-      status, eligibleForNewRound:false, nextAction:'NONE' as const,
+      status, eligibleForNewRound:false, endingCause:null, nextAction:'NONE' as const,
       proposedRoundId:null, nextSeedKrw:null, blockers:Object.freeze([...blockers]),
       executionAuthority:'NONE' as const, financialMutationAllowed:false as const,
       mayUsePriorReserve:false as const, previousHistoryPreserved:true as const,
@@ -134,6 +137,7 @@ export function assessPaperResearchRound(snapshot: PaperRoundSnapshot): PaperRou
   ].join('|');
   return Object.freeze({
     status:'EXHAUSTED' as const, eligibleForNewRound:true,
+    endingCause:empty ? 'ZERO_EQUITY' as const:'BELOW_VERIFIED_MINIMUM' as const,
     nextAction:snapshot.mode === 'automatic'
       ? 'AUTO_RESEARCH_ROUND_PROPOSAL' as const
       : 'MANUAL_OWNER_CONFIRMATION' as const,
@@ -151,6 +155,10 @@ export type PaperResearchRoundSummary = Readonly<{
   initialKrw: number;
   realizedNetPnlKrw: number;
   exhausted: boolean;
+  bankrupt: boolean;
+  // Prior rounds may still have a tiny positive balance below the verified
+  // minimum order. It is *not* a full 1m bankruptcy and must not disappear.
+  finalOperatingCapitalKrw: number;
 }>;
 
 export function summarizePaperResearchRounds(
@@ -164,22 +172,31 @@ export function summarizePaperResearchRounds(
   let totalSeedKrw = 0;
   let totalNetPnlKrw = 0;
   let bankruptcies = 0;
+  let exhaustedRounds = 0;
+  let retainedFinalCapitalKrw = 0;
   let count = 0;
   for (const row of rounds) {
     if (row.market !== market || row.mode !== mode) continue;
-    if (row.initialKrw !== INITIAL_KRW || !Number.isFinite(row.realizedNetPnlKrw)) {
+    if (row.initialKrw !== INITIAL_KRW || !Number.isFinite(row.realizedNetPnlKrw)
+      || !finiteNonnegative(row.finalOperatingCapitalKrw)
+      || typeof row.exhausted !== 'boolean' || typeof row.bankrupt !== 'boolean'
+      || (row.bankrupt && (!row.exhausted || row.finalOperatingCapitalKrw > 0))) {
       throw new Error('PAPER_ROUND_SUMMARY_INVALID');
     }
     totalSeedKrw += row.initialKrw;
     totalNetPnlKrw += row.realizedNetPnlKrw;
-    bankruptcies += Number(row.exhausted);
+    retainedFinalCapitalKrw += row.finalOperatingCapitalKrw;
+    bankruptcies += Number(row.bankrupt);
+    exhaustedRounds += Number(row.exhausted);
     count += 1;
   }
-  if (!Number.isSafeInteger(totalSeedKrw) || !Number.isFinite(totalNetPnlKrw)) {
+  if (!Number.isSafeInteger(totalSeedKrw) || !Number.isFinite(totalNetPnlKrw)
+    || !Number.isFinite(retainedFinalCapitalKrw)) {
     throw new Error('PAPER_ROUND_SUMMARY_OVERFLOW');
   }
   return Object.freeze({
-    mode, market, rounds:count, bankruptcies, totalSeedKrw,
+    mode, market, rounds:count, bankruptcies, exhaustedRounds,
+    retainedFinalCapitalKrw, totalSeedKrw,
     totalNetPnlKrw,
     netReturnOnAllIssuedSeedPercent:totalSeedKrw > 0 ? totalNetPnlKrw/totalSeedKrw*100 : null,
     // Reserves remain locked, never automatically used to refill a new round.
