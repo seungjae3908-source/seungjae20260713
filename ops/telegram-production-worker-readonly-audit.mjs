@@ -328,6 +328,52 @@ export function readSignalV3Units({ execImpl = execFileSync } = {}) {
     .map(([label, unit]) => [label, inspect(unit)]));
 }
 
+
+/** Read only fixed systemd cycle-unit metadata, without querying journals,
+ * restarting units or exposing raw paths, environment or stdout/stderr.
+ * An INACTIVE oneshot after success is normal and must not be a failure.
+ */
+export function readSignalV3CycleResult({ execImpl = execFileSync } = {}) {
+  const unknown = { unitState:'UNAVAILABLE', lastResult:'UNKNOWN', exitCode:null, hasStarted:false };
+  let raw;
+  try {
+    raw=execImpl('systemctl', [
+      'show','--no-pager',
+      '--property=LoadState,ActiveState,Result,ExecMainStatus,ExecMainStartTimestampMonotonic',
+      'investment-signal-intelligence-v3-cycle.service',
+    ], { encoding:'utf8',timeout:3500,maxBuffer:8192,stdio:['ignore','pipe','pipe'] });
+  } catch { return unknown; }
+  if (typeof raw!=='string' || raw.length>8192) return unknown;
+  const lines=raw.split(/\r?\n/u);
+  const property=key=>{
+    const values=lines.filter(line=>line.startsWith(key+'='));
+    return values.length===1 ? values[0].slice(key.length+1) : null;
+  };
+  const load=property('LoadState');
+  const active=property('ActiveState');
+  const unitState=load==='not-found' ? 'NOT_FOUND'
+    : load!=='loaded' ? 'UNKNOWN'
+      : active==='active' ? 'ACTIVE'
+        : active==='inactive' ? 'INACTIVE'
+          : active==='failed' ? 'FAILED' : 'UNKNOWN';
+  if (unitState==='UNKNOWN'||unitState==='NOT_FOUND')
+    return {unitState,lastResult:'UNKNOWN',exitCode:null,hasStarted:false};
+  const startedRaw=property('ExecMainStartTimestampMonotonic');
+  const hasStarted=typeof startedRaw==='string' && /^\d{1,16}$/u.test(startedRaw)
+    && Number.isSafeInteger(Number(startedRaw)) && Number(startedRaw)>0;
+  const exitRaw=property('ExecMainStatus');
+  const exitCode=hasStarted && typeof exitRaw==='string' && /^\d{1,3}$/u.test(exitRaw)
+    && Number(exitRaw)<=255 ? Number(exitRaw) : null;
+  const result=property('Result');
+  const failure=new Set(['exit-code','signal','core-dump','timeout','watchdog',
+    'resources','start-limit-hit','oom-kill','protocol']);
+  const lastResult=!hasStarted ? 'NOT_OBSERVED'
+    : unitState==='ACTIVE' ? 'RUNNING'
+      : result==='success' && exitCode===0 ? 'SUCCEEDED'
+        : failure.has(result)||(exitCode!==null&&exitCode>0) ? 'FAILED' : 'UNKNOWN';
+  return {unitState,lastResult,exitCode,hasStarted};
+}
+
 function emptySignalHealth(status) {
   return { status, serviceSha: null, snapshotReady: false, snapshotFresh: false };
 }
@@ -446,10 +492,11 @@ export async function observeProductionTelegram({
   signalSource = readSignalSourceOnce,
   signalHealth = readSignalV3HealthOnce,
   signalUnits = readSignalV3Units,
+  signalCycle = readSignalV3CycleResult,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v3',
+    schemaVersion: 'telegram-production-worker-readonly-v4',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
@@ -465,6 +512,7 @@ export async function observeProductionTelegram({
     signalSource: emptySource('NOT_CHECKED'),
     signalHealth: emptySignalHealth('NOT_CHECKED'),
     signalUnits: { server: 'NOT_CHECKED', timer: 'NOT_CHECKED', cycle: 'NOT_CHECKED' },
+    signalCycle: { unitState:'NOT_CHECKED',lastResult:'NOT_OBSERVED',exitCode:null,hasStarted:false },
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -545,6 +593,7 @@ export async function observeProductionTelegram({
     receipt.signalSource = await signalSource({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     receipt.signalHealth = await signalHealth({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     receipt.signalUnits = signalUnits();
+    receipt.signalCycle = signalCycle();
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
       || receipt.signalSubscriber.recordCount > 0 ? 'PERSISTED_LEDGER_ONLY' : 'NO_DELIVERY_PROOF';

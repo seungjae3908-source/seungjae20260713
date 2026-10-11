@@ -132,3 +132,26 @@ Replit and Replit Agent are prohibited. The audit requires separate code-review/
 and a protected production-environment approval for each invocation. No Staging/Production app
 deployment, LIVE/AUTO authority change, financial action, Telegram send, database write or PM2 restart
 is authorized by running this audit.
+
+
+## Cycle last-exit evidence — Draft diagnostic enhancement (no activation)
+Last Production Telegram read-only QA showed V3 server/timer ACTIVE,
+the oneshot cycle INACTIVE and a stale public snapshot. An INACTIVE
+oneshot **can mean successful completion** and does not distinguish a recent
+provider failure from a timer that has never fired.
+
+The owner-protected, exact-SHA read-only QA will additionally inspect
+only the fixed `investment-signal-intelligence-v3-cycle.service` using
+`systemctl show` with five selected properties: LoadState, ActiveState,
+Result, ExecMainStatus and ExecMainStartTimestampMonotonic. It never
+invokes systemctl start/restart/enable, journalctl, POST/rescan,
+Bot API sends or DB operations. The receipt includes only safe enum
+unitState/lastResult, a bounded exitCode or null, and hasStarted boolean.
+No raw stdout, commands, process env, private paths or provider data
+are printed. `NOT_OBSERVED` or `UNKNOWN` remains inconclusive.
+
+This narrows `SNAPSHOT_STALE` diagnosis but does NOT prove a recent
+successful cycle, resume missing snapshots, loosen 15-minute freshness,
+publish unsafe signals or certify Telegram delivery. The change is
+Draft-only, not to be merged before pinned rollout #1828 or the
+immutable Production application lineage would change.
