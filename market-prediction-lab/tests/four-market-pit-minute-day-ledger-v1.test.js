@@ -131,7 +131,8 @@ test("complete 1440m spot per symbol is local source-only, never canonical full 
     const ps=await pages(root,market,manifest);
     const report=aggregate(market,manifest,ps);
     assert.equal(report.status,"SOURCE_ATTESTED_DAY_MINUTE_INVENTORY_ONLY");
-    assert.equal(report.archiveSourceCompletenessEstablished,true);
+    assert.equal(report.archiveSourceCompletenessEstablished,false);
+    assert.equal(report.localArchiveRowsPresentForEverySelectedPITMember,true);
     assert.equal(report.sourceMinuteRows,1440);
     assert.equal(report.missingSourceSessionCount,0);
     assert.equal(report.sourceStatus,"TEST_FIXTURE_ONLY");
@@ -173,6 +174,16 @@ test("changed stock calendar, page status, member counters and missing plan neve
       "PIT_MINUTE_DAY_MEMBER_SOURCE_CONTRADICTION");
     assert.equal(alter(x=>x.missingSourcePlan[0].symbol="WRONG").reason,
       "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
+    assert.equal(alter(x=>x.missingSourcePlan[0].sessionStartMs+=MINUTE).reason,
+      "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
+    assert.equal(alter(x=>x.missingSourcePlan[0].sessionEndMs+=MINUTE).reason,
+      "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
+    assert.equal(alter(x=>x.missingSourcePlan[0].sessionKind="AFTERMARKET").reason,
+      "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
+    assert.equal(alter(x=>x.missingSourcePlan[0].tradingDateLocal="2026-09-17").reason,
+      "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
+    assert.equal(alter(x=>x.missingSourcePlan[0].dayUtc="2026-09-18").reason,
+      "PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
     assert.equal(alter(x=>x.executionAuthority="LIVE").reason,
       "PIT_MINUTE_DAY_PAGE_IDENTITY_OR_SEQUENCE_INVALID");
     assert.equal(alter(x=>x.nextOffset=1).reason,
@@ -185,6 +196,31 @@ test("changed stock calendar, page status, member counters and missing plan neve
     assert.equal(noCalendar.reason,"STOCK_DATED_SESSION_CALENDAR_REQUIRED");
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+test("equal-sized UTC and local-stock PIT cohorts with different names block before page audit",async()=>{
+  const root=temp(),market="KR_STOCK",m=make(market,3);
+  try{
+    m.memberships[0].removedAtMs=D-5*MINUTE; // active in local premarket, not UTC-day
+    m.memberships[1].listedAtMs=D+60*MINUTE; // active in UTC day, not local session
+    m.rawMembershipDigestSha256=digestPITMembershipRowsV1(m.memberships);
+    const cal={market,sessions:[
+      {tradingDateLocal:"2026-09-18",startMs:D-30*MINUTE,
+        endMs:D,kind:"PREMARKET",timeZone:"Asia/Seoul"},
+      {tradingDateLocal:"2026-09-18",startMs:D,
+        endMs:D+30*MINUTE,kind:"REGULAR",timeZone:"Asia/Seoul"},
+    ]};
+    const receipt=await chunk({root,market,day:"2026-09-18",
+      manifest:m,stockCalendar:cal,
+      expectedRosterDigestSha256:m.rawMembershipDigestSha256});
+    assert.equal(receipt.reason,
+      "PIT_LOCAL_SESSION_MEMBERSHIP_DIFFERS_FROM_DAY_GATE");
+    const summary=ledger({market,day:"2026-09-18",
+      manifest:m,stockCalendar:cal,pages:[]});
+    assert.equal(summary.reason,
+      "PIT_LOCAL_SESSION_MEMBERSHIP_DIFFERS_FROM_DAY_GATE");
+    assert.equal(summary.fullMarketOpportunityDenominatorVerified,false);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test("private CLI day ledger handles complete index, file privacy and immutable result",async()=>{
   const root=temp(),market="CRYPTO_SPOT",manifest=make(market,3);
   try{
