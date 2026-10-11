@@ -6,21 +6,21 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('trading shell exposes auto and paper as first-class modes while preserving navigation names', () => {
+test('trading shell separates Auto and Paper routes without duplicate in-page mode tabs', () => {
   const page = source('src/pages/auto-trading.tsx');
   const paper = source('src/pages/paper-trading.tsx');
   const workspace = source('src/pages/technical-workspace.tsx');
   const navigation = source('src/lib/app-navigation.ts');
 
   expect(page).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
-  expect(page).toContain('data-testid="trading-mode-tabs"');
-  expect(page).toContain('자동매매</SegmentedButton>');
-  expect(page).toContain('모의매매</SegmentedButton>');
+  expect(page).not.toContain('data-testid="trading-mode-tabs"');
+  expect(page).toContain('data-testid="trading-market-select"');
   expect(paper).toContain('<AutoTradingPage initialMode="paper" />');
   expect(workspace).toContain("{ value: 'trade', label: '자동매매' }");
   expect(workspace).toContain("trade: '자동매매'");
   expect(navigation).toContain("label: '자동매매'");
   expect(navigation).toContain("label: '모의매매'");
+  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(1);
   expect(navigation).not.toContain("label: '승인형 주문'");
 });
 
@@ -34,6 +34,7 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('위험검사');
   expect(page).toContain('data-testid="trading-market-tabs"');
   expect(page).toContain('data-testid="trading-section-tabs"');
+  expect(page).toContain('data-testid="auto-trading-rehearsal-settings"');
   expect(page).not.toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
   expect(page).toContain('title="매매일지"');
   expect(page).toContain('직접매매/자동매매/자동모의매매');
@@ -70,7 +71,7 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain("auth.can('canPlaceOrders')");
   expect(page).toContain('계정 주문 권한 없음');
   expect(page).toContain('autoTradingBackground');
-  expect(page).toContain('userTelegramDelivery');
+  expect(page).not.toContain('runtimeStatus?.userTelegramDelivery');
   expect(page).toContain('liveEntriesArmed');
   expect(page).toContain('안전대기 · Arm 준비 중');
   expect(page).toContain('자동 실거래 작동 준비됨');
@@ -79,14 +80,14 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('runtimeHealthFresh');
   expect(page).toContain('360_000');
   expect(page).toContain('자동 워커 상태 지연');
-  expect(page).toContain('Telegram 상태 지연');
+  expect(page).not.toContain('Telegram 상태 지연');
   expect(page).toContain('runtimeRefreshInFlight');
   expect(page).toContain('setRuntimeClockMs(Date.now())');
   expect(page).toContain('setRuntimeReadError(true)');
   expect(page).toContain('상태 조회 실패');
   expect(page).toContain("tone={providerVerified ? 'ok' : 'warn'}");
   expect(page).toContain("tone={effectiveEntryStopped ? 'warn' : 'ok'}");
-  expect(page).toContain("tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}");
+  expect(page).toContain("tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}");
   expect(page).toContain('시장 설정 ON');
   expect(page).toContain('AlertTriangle');
   expect(page).not.toContain('value="서버 Gate 필요"');
