@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   PUBLIC_CYCLE_COVERAGE_POLICY_VERSION,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
+  PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT,
+  publicV3CryptoBatchSize,
+  summarizePublicV3Execution,
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
   parsePublicRetryAfterMs,
@@ -381,4 +384,61 @@ test('Bitget V3 public candle batches keep starts under 10/sec; aborted callers 
   await assert.rejects(pacer.schedule(() => { sent += 1; }, aborted.signal), /scan stopped/u);
   assert.equal(sent,0);
   assert.throws(() => pacer.cooldown(Infinity), /COOLDOWN_INVALID/u);
+});
+
+test('V3 futures stays at ten public instruments per scan and never skips the other 810+',()=>{
+  assert.equal(PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT,10);
+  assert.equal(publicV3CryptoBatchSize('futures',20),10);
+  assert.equal(publicV3CryptoBatchSize('spot',20),5);
+  assert.equal(publicV3CryptoBatchSize('futures',7),7);
+  assert.equal(publicV3CryptoBatchSize('spot',5),5);
+  for(const market of ['invalid','CRYPTO_FUTURES'])assert.throws(
+    ()=>publicV3CryptoBatchSize(market,20),/MARKET_INVALID/);
+  for(const count of [0,4,41,1.5,NaN])assert.throws(
+    ()=>publicV3CryptoBatchSize('futures',count),/BATCH_INVALID/);
+  // Existing public cursor logic remains based on actual requested batch.
+  const evidence=result({
+    dataState:'complete',
+    universe:{totalCount:820,cursor:0,nextCursor:10,source:'bitget-public',
+      partial:false,stale:false},
+    execution:{requestedCount:10,startedCount:10,completedCount:10,
+      partial:false,timedOut:false,providerErrorCount:0,timeoutCount:0},
+    cards:[],failures:[],
+  });
+  assert.equal(classifyPublicCycleLaneStatus(evidence),'VALID_NO_TRADE');
+  assert.equal(decidePublicCycleCursor({
+    response:evidence,status:'VALID_NO_TRADE',cursor:0,
+  }).nextCursor,10);
+});
+
+test('incomplete futures scan is distinguished from provider errors without leaking details',()=>{
+  const base={execution:{requestedCount:20,startedCount:19,
+    completedCount:19,providerErrorCount:0,timeoutCount:0,
+    partial:true,timedOut:false},failures:[]};
+  let d=summarizePublicV3Execution(base);
+  assert.equal(d.state,'UNSTARTED_REQUESTS');
+  assert.equal(d.requested,20);
+  assert.equal(d.started,19);
+  assert.equal(d.completed,19);
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,startedCount:20}});
+  assert.equal(d.state,'INCOMPLETE_COMPLETION');
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,startedCount:20,completedCount:20}});
+  assert.equal(d.state,'UNEXPLAINED_PARTIAL');
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,timedOut:true}});
+  assert.equal(d.state,'DEADLINE_OR_ITEM_TIMEOUT');
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,providerErrorCount:1}});
+  assert.equal(d.state,'PROVIDER_ERROR_OR_TIMEOUT');
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,completedCount:21}});
+  assert.equal(d.state,'MALFORMED_EXECUTION_COUNTS');
+  d=summarizePublicV3Execution({...base,
+    execution:{...base.execution,startedCount:20,completedCount:20,partial:false},
+    failures:[{symbol:'DO_NOT_LOG',reason:'invalid_data',message:'SECRET_BODY'}]});
+  assert.equal(d.state,'REPORTED_ITEM_FAILURES');
+  assert.equal(JSON.stringify(d).includes('DO_NOT_LOG'),false);
+  assert.equal(JSON.stringify(d).includes('SECRET_BODY'),false);
 });

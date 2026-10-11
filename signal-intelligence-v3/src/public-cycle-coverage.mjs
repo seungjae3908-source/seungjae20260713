@@ -9,6 +9,49 @@ export const PUBLIC_CYCLE_COVERAGE_POLICY_VERSION = 'public-cycle-coverage-v1';
 // candle/context/book reads per symbol. This is the bounded stage-2 budget,
 // NOT the all-eligible-KRW ticker roster size (discovered independently).
 export const PUBLIC_V3_SPOT_STAGE_TWO_LIMIT = 5;
+// The futures context pair plus conservative shared-IP Bitget pacing can
+// exceed the existing scanner's 12s wall-time budget with 20 instruments.
+// Bound the V3-only research stage-2 batch; all futures symbols remain in
+// the full roster and the existing cursor advances by the actual 10 scanned.
+export const PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT = 10;
+export function publicV3CryptoBatchSize(market, requested) {
+  if(!Number.isSafeInteger(requested)||requested<5||requested>40)
+    throw new Error('PUBLIC_V3_STAGE_TWO_BATCH_INVALID');
+  if(market==='spot') return Math.min(requested,PUBLIC_V3_SPOT_STAGE_TWO_LIMIT);
+  if(market==='futures') return Math.min(requested,PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT);
+  throw new Error('PUBLIC_V3_STAGE_TWO_MARKET_INVALID');
+}
+const safeCount = value => Number.isSafeInteger(value)&&value>=0?value:null;
+/** Read-only, low-cardinality facts from one already-completed scan. */
+export function summarizePublicV3Execution(response) {
+  const e=response?.execution;
+  if(!e || typeof e!=='object') return Object.freeze({
+    state:'MISSING_EXECUTION_EVIDENCE',requested:null,started:null,
+    completed:null,partial:null,timedOut:null,providerErrors:null,
+    timeouts:null,failuresObserved:null,
+  });
+  const requested=safeCount(e.requestedCount),started=safeCount(e.startedCount),
+    completed=safeCount(e.completedCount);
+  const providerErrors=safeCount(e.providerErrorCount),
+    timeouts=safeCount(e.timeoutCount);
+  const partial=e.partial===true, timedOut=e.timedOut===true;
+  const failuresObserved=Array.isArray(response?.failures)
+    && response.failures.length<=200?safeCount(response.failures.length):null;
+  const invalidCounts=requested===null||requested===0
+    ||started===null||completed===null||providerErrors===null||timeouts===null
+    ||started>requested||completed>started||failuresObserved===null;
+  let state='PAGE_EXECUTION_COMPLETE';
+  if(invalidCounts)state='MALFORMED_EXECUTION_COUNTS';
+  else if(providerErrors>0||timeouts>0)state='PROVIDER_ERROR_OR_TIMEOUT';
+  else if(timedOut)state='DEADLINE_OR_ITEM_TIMEOUT';
+  else if(started<requested)state='UNSTARTED_REQUESTS';
+  else if(completed<requested)state='INCOMPLETE_COMPLETION';
+  else if(partial)state='UNEXPLAINED_PARTIAL';
+  else if(failuresObserved>0)state='REPORTED_ITEM_FAILURES';
+  return Object.freeze({state,requested,started,completed,partial,timedOut,
+    providerErrors,timeouts,failuresObserved});
+}
+
 const TRUSTED_ROSTER_SOURCES = new Set([
   'krx-symbol-master', 'finnhub-symbol-master',
   'nasdaq-trader-public-directory', 'upbit-public', 'bitget-public',
