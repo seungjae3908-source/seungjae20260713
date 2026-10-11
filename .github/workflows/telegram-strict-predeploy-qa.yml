@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ops/telegram-predeploy-readiness.mjs
+      - ops/telegram-predeploy-signal-health.mjs
+      - .github/tests/telegram-predeploy-signal-health.test.mjs
       - .github/tests/telegram-predeploy-readiness.test.mjs
       - .github/workflows/telegram-strict-predeploy-qa.yml
       - docs/telegram-strict-predeploy-qa.md
@@ -27,7 +29,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check ops/telegram-predeploy-readiness.mjs
-          node --test .github/tests/telegram-predeploy-readiness.test.mjs
+          node --check ops/telegram-predeploy-signal-health.mjs
+          node --test .github/tests/telegram-predeploy-readiness.test.mjs \
+            .github/tests/telegram-predeploy-signal-health.test.mjs
 
   telegram-mocked-integration:
     name: Execute Telegram and Signal V3 mock contract tests (no sends)

@@ -6,6 +6,8 @@ on:
       - .github/workflows/telegram-production-code-only-deploy.yml
       - .github/tests/telegram-production-code-only-deploy.test.mjs
       - ops/telegram-production-code-only-scope.mjs
+      - ops/telegram-predeploy-signal-health.mjs
+      - .github/tests/telegram-predeploy-signal-health.test.mjs
       - docs/telegram-production-code-only-deploy.md
   issue_comment:
     types: [created]
@@ -303,11 +305,13 @@ jobs:
               'docs/telegram-production-worker-readonly-audit.md':'9958f8c214c5bfebf6fa1127c24cd19f0de14d16',
               'ops/telegram-production-worker-readonly-audit.mjs':'9fbb173a41b15c561c34388e1c8b9d014163e2ea',
               'ops/deploy-production.sh':'d21093e3db372b0266aabbc2b0837e6e1c3eaa12',
+              'ops/telegram-predeploy-signal-health.mjs':'832b8883cacf39617f3a08cfd7dd765aaa2ff2cf',
             };
             for(const [path,sha] of Object.entries(pinnedFiles)){
               const result=await github.rest.repos.getContent({
                 owner:context.repo.owner,repo:context.repo.repo,
-                path,ref:path==='ops/deploy-production.sh'
+                path,ref:['ops/deploy-production.sh',
+                  'ops/telegram-predeploy-signal-health.mjs'].includes(path)
                   ?process.env.OPERATOR_SHA:process.env.EXPECTED_SHA,
               });
               if(Array.isArray(result.data)||result.data?.sha!==sha){
