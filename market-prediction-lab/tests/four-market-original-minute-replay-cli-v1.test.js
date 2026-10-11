@@ -110,3 +110,24 @@ test("symlink result destination cannot overwrite other private evidence",async(
   assert.deepEqual(JSON.parse(readFileSync(target,"utf8")),{guard:"NEVER_OVERWRITE"});
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("private OPPORTUNITIES mode does not infer price events from absent original 1m files",async()=>{
+ const root=dir(),input=join(root,"input.json"),output=join(root,"opportunities.json");
+ try{
+  writePrivate(input,{mode:"OPPORTUNITIES",root,market:"CRYPTO_SPOT",
+    symbol:"KRW-BTC",day:"2026-09-18",sessionStartMs:D,sessionEndMs:D+DAY,
+    sessionKind:"UTC_24H",sessionTimeZone:"UTC",manifest:roster(),
+    side:"LONG",asOfMs:D+5*DAY,thresholdPercents:[3,5,10]});
+  const runResult=await run({input,output});
+  assert.equal(runResult.status,"BLOCKED_DATA");
+  const evidence=JSON.parse(readFileSync(output,"utf8"));
+  assert.equal(evidence.reason,"NATIVE_ONE_MINUTE_SESSION_MISSING_OR_UNVERIFIED");
+  assert.equal(evidence.actualMarketWideOpportunityCount,null);
+  assert.equal(evidence.earlyDetectionRecall,null);
+  assert.equal(evidence.profitabilityProven,false);
+  assert.equal(evidence.executionAuthority,"NONE");
+  assert.equal(evidence.paperAdmissionAllowed,false);
+  assert.equal(statSync(output).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
