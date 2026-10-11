@@ -5,6 +5,9 @@ on:
     branches:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
+      - packages/strategy-hypothesis/src/original-minute-backtest.js
+      - packages/strategy-hypothesis/src/original-minute-backtest.d.ts
+      - market-prediction-lab/tests/four-market-original-minute-current-source-v1.test.js
       - market-prediction-lab/src/public-history-source-errors-v1.js
       - market-prediction-lab/src/public-native-crypto-roster-v1.js
       - market-prediction-lab/src/public-native-crypto-source-page-v1.js
@@ -165,6 +168,7 @@ jobs:
           node --test market-prediction-lab/tests/four-market-original-minute-candidate-review-v1.test.js
           node --test market-prediction-lab/tests/research-original-minute-diagnostic-publisher-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
+          node --test market-prediction-lab/tests/four-market-original-minute-current-source-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js
           node --test market-prediction-lab/tests/stock-native-minute-offline-intake-v1.test.js

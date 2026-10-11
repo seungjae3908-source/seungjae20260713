@@ -3,6 +3,8 @@ import {resolveCanonicalPaperAdmissionBridgeCandidate} from
   "./canonical-paper-admission-bridge-v1.js";
 import {evaluateUnifiedProfitabilityPromotion} from
   "./unified-profitability-promotion-gate-v1.js";
+import {isOriginalMinuteBacktestSymbolV1} from
+  "../../packages/strategy-hypothesis/src/original-minute-backtest.js";
 
 /**
  * PURE read-only connector from existing retrospective original-minute
@@ -35,6 +37,26 @@ const validDay=d=>typeof d==="string"&&/^\d{4}-\d{2}-\d{2}$/u.test(d)
   &&new Date(d+"T00:00:00Z").toISOString().slice(0,10)===d;
 const count=n=>Number.isSafeInteger(n)&&n>=0;
 const finite=n=>typeof n==="number"&&Number.isFinite(n);
+/** Readback metadata is content lineage, never independent source evidence. */
+export function validOriginalMinuteEvidenceScopeSummaryV1(raw){
+  if(raw?.evidenceScope===undefined)return raw?.sourceOnlyMode!==true
+    &&raw?.currentRosterDigestSha256==null&&raw?.currentRosterObservedAtMs==null;
+  if(raw.evidenceScope==="HISTORICAL_PIT_ROSTER")return raw.sourceOnlyMode===false
+    &&raw.currentRosterDigestSha256===null&&raw.currentRosterObservedAtMs===null
+    &&typeof raw.historicalPITRosterChecked==="boolean";
+  return raw.evidenceScope==="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY"
+    &&["CRYPTO_SPOT","CRYPTO_FUTURES"].includes(raw.market)
+    &&isOriginalMinuteBacktestSymbolV1(raw.market,raw.symbol)
+    &&raw.sourceOnlyMode===true&&raw.historicalPITRosterChecked===false
+    &&raw.historicalMemberLifespanSelfAttestedNotIndependentlyVerified===false
+    &&raw.historicalTradingAvailabilityVerified===false
+    &&raw.sessionClosePolicy==="CLOSE_EACH_SOURCE_SESSION"
+    &&SHA.test(raw.currentRosterDigestSha256??"")
+    &&Number.isSafeInteger(raw.currentRosterObservedAtMs)&&raw.currentRosterObservedAtMs>0
+    &&raw.currentRosterObservedAtMs<=Date.now()+300_000
+    &&(raw.status==="BLOCKED_DATA"?raw.sourceModelDigestSha256==null
+      :SHA.test(raw.sourceModelDigestSha256??""));
+}
 function assertRetrospectiveSafe(o){
   return o?.executionAuthority==="NONE"
     &&o.profitabilityProven===false
@@ -54,13 +76,18 @@ function validSelection(o,market){
     &&validDay(o.selectedStartDate)
     &&validDay(o.selectedEndDate)
     &&o.selectedStartDate<=o.selectedEndDate
-    &&assertRetrospectiveSafe(o);
+    &&assertRetrospectiveSafe(o)&&validOriginalMinuteEvidenceScopeSummaryV1(o);
 }
 function status({reason,blockers,market,symbol,period,sweep,nowMs}){
   const root={
     market,symbol,period:[period?.selectedStartDate??null,
       period?.selectedEndDate??null],
     periodSourceDigest:period?.sourceSessionIndexDigestSha256??null,
+    ...(period?.evidenceScope===undefined?{}:{
+      periodModelDigest:period.sourceModelDigestSha256??null,
+      evidenceScope:period.evidenceScope,
+      currentRosterDigestSha256:period.currentRosterDigestSha256??null,
+    }),
     sweepDigest:sweep?.pageChainSha256??null,
     // The fingerprint is only a local research reference, not a canonical
     // approved formula ID, an order key, or independently verified source.
@@ -123,10 +150,14 @@ export function reviewOriginalMinuteForCanonicalPaperV1({
   market,symbol,periodResult=null,sweepResult=null,
   nowMs=Date.now(),
 }={}){
-  if(!MARKETS.has(market)||!SYMBOL.test(symbol??"")
+  const current=periodResult?.evidenceScope==="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
+  if(!MARKETS.has(market)||!(current
+    ?validOriginalMinuteEvidenceScopeSummaryV1(periodResult)
+      &&isOriginalMinuteBacktestSymbolV1(market,symbol):SYMBOL.test(symbol??""))
     ||!Number.isSafeInteger(nowMs)||nowMs<1)
     fail("ORIGINAL_MODEL_PAPER_REVIEW_SCOPE_INVALID");
   const blockers=[...REQUIRED];
+  if(current)blockers.push("CURRENT_PROVIDER_ROSTER_IS_NOT_HISTORICAL_PIT_EVIDENCE");
   let period=null,sweep=null;
   if(periodResult!==null){
     if(!validSelection(periodResult,market)

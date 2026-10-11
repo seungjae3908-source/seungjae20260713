@@ -1,9 +1,11 @@
 import {createHash} from "node:crypto";
 import {isAbsolute,resolve} from "node:path";
+import {setImmediate as yieldImmediate} from "node:timers/promises";
 import {resolveSelectedResearchWindowV1,UTC_DAY_MS_V1 as DAY} from "./research-selected-window-v1.js";
 import {deriveArchivedResearchTimeframesV1} from "./research-minute-archive-v1.js";
 import {validateResearchStockSessionsForDateV1} from "./research-minute-archive-window-v1.js";
 import {auditHistoricalPITVenueUniverseV1,digestPITMembershipRowsV1} from "./historical-pit-venue-universe-gate-v1.js";
+import {validatePublicNativeCryptoRosterCaptureV1} from "./public-native-crypto-roster-v1.js";
 
 /**
  * Bounded-memory, OFFLINE historical source -> diagnostic strategy replay.
@@ -29,6 +31,12 @@ const HORIZONS=Object.freeze([
 const DATES=/^\d{4}-\d{2}-\d{2}$/;
 const SHA=/^[a-f0-9]{64}$/;
 const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
+const CURRENT_SCOPE="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
+const PIT_SCOPE="HISTORICAL_PIT_ROSTER";
+const CURRENT_SOURCE_IDS=Object.freeze({
+  CRYPTO_SPOT:"UPBIT_PUBLIC_REST_RETROSPECTIVE_1M",
+  CRYPTO_FUTURES:"BITGET_PUBLIC_V2_RETROSPECTIVE_1M",
+});
 const FRAMES=new Set(["1m","3m","5m","15m","30m","1h","4h","1d"]);
 const STATUS=Object.freeze({
   blocked:"BLOCKED_DATA",source:"RETROSPECTIVE_SOURCE_ONLY_STRATEGY_DIAGNOSTIC",
@@ -54,8 +62,59 @@ const safe=extra=>Object.freeze({
 });
 const nonNegRate=x=>typeof x==="number"&&Number.isFinite(x)&&x>=0&&x<0.2;
 const integer=(x,min,max)=>Number.isSafeInteger(x)&&x>=min&&x<=max;
+
+/** Server-owned execution controls, shared with the private session index. */
+export function validateOriginalMinuteExecutionControlV1(input={}){
+  if((input.signal!=null&&!(input.signal instanceof AbortSignal))
+    ||(input.deadlineMs!=null&&!integer(input.deadlineMs,1,8_640_000_000_000_000)))
+    fail("PRIVATE_REPLAY_EXECUTION_CONTROL_INVALID");
+}
+export function originalMinuteReplayInterruptionReasonV1(input={}){
+  if(input.signal?.aborted)return "ORIGINAL_MINUTE_REPLAY_CANCELLED";
+  if(input.deadlineMs!=null&&Date.now()>=input.deadlineMs)
+    return "ORIGINAL_MINUTE_REPLAY_TIME_BUDGET_EXCEEDED";
+  return null;
+}
+/**
+ * Current membership selects a source-only research cohort. It is never
+ * transformed into historical listings, delistings, halts or PIT evidence.
+ * A missing scope retains the original historical-PIT input contract.
+ */
+export function resolveOriginalMinuteEvidenceScopeV1(input={}){
+  const evidenceScope=input.evidenceScope===undefined?PIT_SCOPE:input.evidenceScope;
+  if(![PIT_SCOPE,CURRENT_SCOPE].includes(evidenceScope))
+    fail("PRIVATE_REPLAY_EVIDENCE_SCOPE_INVALID");
+  if(evidenceScope===PIT_SCOPE){
+    if(input.currentRosterCapture!=null||input.expectedCurrentRosterDigestSha256!=null)
+      fail("PRIVATE_REPLAY_CURRENT_ROSTER_REQUIRES_EXPLICIT_SOURCE_SCOPE");
+    return Object.freeze({evidenceScope,sourceOnlyMode:false,
+      currentRosterDigestSha256:null,currentRosterObservedAtMs:null});
+  }
+  if(!Object.hasOwn(CURRENT_SOURCE_IDS,input.market)
+    ||input.manifest!=null||input.stockCalendar!=null
+    ||typeof input.symbol!=="string"
+    ||!(input.market==="CRYPTO_SPOT"
+      ?/^KRW-[A-Z0-9]{1,32}$/u.test(input.symbol)
+      :/^[A-Z0-9\p{Script=Han}]{1,36}USDT$/u.test(input.symbol))
+    ||!SHA.test(input.expectedCurrentRosterDigestSha256??""))
+    fail("PRIVATE_REPLAY_CURRENT_SOURCE_SCOPE_INVALID");
+  const checked=validatePublicNativeCryptoRosterCaptureV1(
+    input.currentRosterCapture,input.expectedCurrentRosterDigestSha256);
+  const roster=input.currentRosterCapture?.roster;
+  if(checked.ok!==true||roster.market!==input.market
+    ||roster.venue!==VENUES[input.market]||!roster.symbols.includes(input.symbol)
+    ||!integer(input.asOfMs,1,8_000_000_000_000)
+    ||roster.observedAtMs>input.asOfMs)
+    fail("PRIVATE_REPLAY_CURRENT_ROSTER_CAPTURE_OR_MEMBER_INVALID");
+  return Object.freeze({evidenceScope,sourceOnlyMode:true,
+    currentRosterDigestSha256:checked.rosterDigestSha256,
+    currentRosterObservedAtMs:roster.observedAtMs});
+}
+
 function normalize(input){
   if(!input||typeof input!=="object"||Array.isArray(input))fail("PRIVATE_REPLAY_ARGS_REQUIRED");
+  validateOriginalMinuteExecutionControlV1(input);
+  const evidence=resolveOriginalMinuteEvidenceScopeV1(input);
   const {root,market,symbol,stockCalendar=null,manifest,sessionSources=[],
     researchWindow,timeframe="5m",direction="LONG",asOfMs,
     strategy={},costModel={},initialCapitalKRW=1_000_000,
@@ -63,13 +122,13 @@ function normalize(input){
     fxRateKRWPerQuote=null} = input;
   if(typeof root!=="string"||!isAbsolute(root)||resolve(root)!==root
     ||!Object.hasOwn(VENUES,market)||typeof symbol!=="string"
-    ||!SYMBOL.test(symbol)||!FRAMES.has(timeframe)
+    ||(!evidence.sourceOnlyMode&&!SYMBOL.test(symbol))||!FRAMES.has(timeframe)
     ||(timeframe==="1d"&&market.endsWith("STOCK"))
     ||!["LONG","SHORT"].includes(direction)
     ||(market!=="CRYPTO_FUTURES"&&direction!=="LONG")
     ||!integer(leverage,1,market==="CRYPTO_FUTURES"?7:1)
     ||typeof initialCapitalKRW!=="number"||!Number.isFinite(initialCapitalKRW)
-    ||initialCapitalKRW<=0||typeof riskFraction!=="number"||riskFraction<=0
+    ||initialCapitalKRW<=0||typeof riskFraction!=="number"||!Number.isFinite(riskFraction)||riskFraction<=0
     ||riskFraction>0.1||!integer(asOfMs,1,8_000_000_000_000))
     fail("PRIVATE_REPLAY_MARKET_OR_RISK_POLICY_INVALID");
   if(!Array.isArray(sessionSources)||sessionSources.length>40000)
@@ -89,17 +148,18 @@ function normalize(input){
     ||(market!=="CRYPTO_FUTURES"&&(costModel.fundingRatePerSession??0)!==0))
     fail("PRIVATE_REPLAY_COST_RATES_INVALID");
   const costs=Object.fromEntries(costKeys.map(k=>[k,costModel[k]??0]));
-  if(!manifest||typeof manifest!=="object"||Array.isArray(manifest)
+  if(!evidence.sourceOnlyMode&&(!manifest||typeof manifest!=="object"||Array.isArray(manifest)
     ||manifest.schemaVersion!=="historical-venue-pit-roster-v1"
     ||manifest.market!==market||manifest.venue!==VENUES[market]
     ||!["TEST_FIXTURE","EXCHANGE_DATED_ARCHIVE","LICENSED_PIT_HISTORICAL_VENDOR"].includes(manifest.sourceClass)
     ||!Array.isArray(manifest.memberships)
     ||!SHA.test(manifest.rawMembershipDigestSha256??"")
-    ||digestPITMembershipRowsV1(manifest.memberships)!==manifest.rawMembershipDigestSha256)
+    ||digestPITMembershipRowsV1(manifest.memberships)!==manifest.rawMembershipDigestSha256))
     fail("PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED");
   const period=resolveSelectedResearchWindowV1(researchWindow);
-  const calendar=validateSessions(market,symbol,manifest,period,
-    stockCalendar,sessionSources);
+  const calendar=evidence.sourceOnlyMode
+    ?validateCurrentSourceSessions(period,sessionSources)
+    :validateSessions(market,symbol,manifest,period,stockCalendar,sessionSources);
   const quote=QUOTE_CURRENCY[market];
   const needsFX=quote!=="KRW";
   if(fxRateKRWPerQuote!=null
@@ -109,9 +169,37 @@ function normalize(input){
     fail("PRIVATE_REPLAY_MODELED_FX_RATE_INVALID");
   const fx=needsFX?fxRateKRWPerQuote:1;
   return {root,market,symbol,manifest,period,calendar,timeframe,direction,asOfMs,
+    ...evidence,signal:input.signal??null,deadlineMs:input.deadlineMs??null,
     strategy:{kind:"EMA_TREND",fast,slow,stopPercent,targetPercent},
     costs,leverage,riskFraction,initialCapitalKRW,quote,
     fxMissing:needsFX&&fx==null,fxRateKRWPerQuote:fx};
+}
+function validateCurrentSourceSessions(period,sources){
+  // Require every selected UTC date. No invented lifecycle can excuse a
+  // missing day, and a current listing never attests historical tradability.
+  const required=Array.from({length:period.requestedUtcDayCount},
+    (_,i)=>utc(period.startMs+i*DAY));
+  let previousStart=-1;
+  const events=[];
+  for(const row of sources){
+    if(!row||typeof row!=="object"||Array.isArray(row)
+      ||typeof row.date!=="string"||!DATES.test(row.date)
+      ||!Number.isSafeInteger(row.startMs)||row.startMs<=previousStart
+      ||row.startMs%DAY!==0||row.startMs!==Date.parse(row.date+"T00:00:00Z")
+      ||utc(row.startMs)!==row.date||row.endMs!==row.startMs+DAY
+      ||row.kind!=="UTC_24H"||row.zone!=="UTC"
+      ||!SHA.test(row.sourceDigestSha256??""))
+      fail("PRIVATE_REPLAY_CURRENT_SOURCE_SESSION_INVALID");
+    previousStart=row.startMs;
+    if(row.date>=period.startDate&&row.date<=period.endDate)events.push(row);
+  }
+  const found=new Set(events.map(row=>row.date));
+  return {required,events,missing:required.filter(date=>!found.has(date)),
+    missingSessions:0,requestedSessionCount:required.length,
+    historicalLifecycleExcludedTradingDates:null,
+    // Internal selection eligibility only; output never calls this a
+    // historically active or PIT-verified symbol.
+    symbolActiveInSelectedPeriod:true};
 }
 function validateSessions(market,symbol,manifest,period,stockCalendar,sources){
   const stock=market.endsWith("STOCK");
@@ -399,21 +487,43 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
   const response={market:cfg.market,symbol:cfg.symbol,timeframe:cfg.timeframe,
     direction:cfg.direction,selectedStartDate:cfg.period.startDate,
     selectedEndDate:cfg.period.endDate,
+    evidenceScope:cfg.evidenceScope,sourceOnlyMode:cfg.sourceOnlyMode,
+    currentRosterDigestSha256:cfg.currentRosterDigestSha256,
+    currentRosterObservedAtMs:cfg.currentRosterObservedAtMs,
+    historicalPITRosterChecked:false,
+    sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
+    historicalTradingAvailabilityVerified:false,
     quoteCurrency:cfg.quote,modeledFxRateKRWPerQuote:cfg.fxRateKRWPerQuote,
     fxEvidenceStatus:"STATIC_FX_MODEL_ONLY_NOT_HISTORICAL",
-    requestedTradingDays:cfg.calendar.required.length,
+    requestedTradingDays:cfg.sourceOnlyMode?null:cfg.calendar.required.length,
+    requestedUtcDayCount:cfg.period.requestedUtcDayCount,
     historicalLifecycleExcludedTradingDates:
       cfg.calendar.historicalLifecycleExcludedTradingDates,
-    historicalMemberLifespanSelfAttestedNotIndependentlyVerified:true,
+    historicalMemberLifespanSelfAttestedNotIndependentlyVerified:!cfg.sourceOnlyMode,
     expectedSessions:cfg.calendar.requestedSessionCount,
     providedSessions:cfg.calendar.events.length,
     missingExpectedStockSessions:cfg.calendar.missingSessions,
     tradingCalendarIndependentProof:false,
     modeledReplayOnly:true,modeledCostsNotVerified:true,
     originalSourceAvailabilityNotVerified:true,
-    sourceDaysRead:0,sourceSessionsRead:0,retrospectiveUnavailableRows:0,
+    sourceDaysRead:0,sourceSessionsRead:0,sourceMinuteRowsRead:0,
+    derivedBarsRead:0,retrospectiveUnavailableRows:0,
     missingSourceDays:cfg.calendar.missing.length,
-    ignoredOutOfWindowSourceDays:input.sessionSources.length-cfg.calendar.events.length};
+    ignoredOutOfWindowSourceDays:(input.sessionSources??[]).length-cfg.calendar.events.length};
+  const interrupted=()=>{
+    const reason=originalMinuteReplayInterruptionReasonV1(cfg);
+    return reason?safe({...response,reason,
+      modeledTradeCount:null,modeledWinCount:null,modeledLossCount:null,
+      modeledNetPnlKRW:null,modeledReturnPercent:null,modeledCostKRW:null,
+      modeledMaximumDrawdownPercent:null,modeledTradePreview:null,
+      modeledTrainValidationTestDiagnostics:null,
+      paperReserveModeledKRW:null,paperCapitalModeledKRW:null,
+      sourceDigestChainSha256:null,sourceLineageSha256:null,
+      sourceModelDigestSha256:null}):null;
+  };
+  let stopped=interrupted();if(stopped)return stopped;
+  await yieldImmediate();
+  stopped=interrupted();if(stopped)return stopped;
   if(!cfg.calendar.symbolActiveInSelectedPeriod)
     return safe({...response,
       reason:"HISTORIC_SYMBOL_NOT_ACTIVE_IN_SELECTED_PERIOD",
@@ -428,43 +538,63 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
       modeledTradeCount:null,modeledReturnPercent:null,
       modeledNetPnlKRW:null,missingExpectedStockSessions:cfg.calendar.missingSessions});
   if(cfg.calendar.missing.length||!cfg.calendar.events.length)
-    return safe({...response,reason:"PIT_SESSION_OR_CALENDAR_DATES_MISSING",
+    return safe({...response,reason:cfg.sourceOnlyMode
+      ?"CURRENT_SOURCE_SELECTED_UTC_DATES_MISSING":"PIT_SESSION_OR_CALENDAR_DATES_MISSING",
       modeledTradeCount:null,modeledReturnPercent:null,
       modeledNetPnlKRW:null,blockedDatesPreview:cfg.calendar.missing.slice(0,30)});
   const state=createReplay(cfg.initialCapitalKRW);
   let fixtureOnly=false,prevDate="",last=null,sourceDigestChain=[];
   for(const session of cfg.calendar.events){
+    stopped=interrupted();if(stopped)return stopped;
+    await yieldImmediate();
+    stopped=interrupted();if(stopped)return stopped;
     cfg.sessionDate=session.date;
     if(session.date!==prevDate){
       response.sourceDaysRead++;
       prevDate=session.date;
     }
-    const pit=historicPITDay({
-      manifest:cfg.manifest,market:cfg.market,symbol:cfg.symbol,date:session.date,
-      startMs:session.startMs,endMs:session.endMs,
-    });
-    if(!pit.ok)return safe({...response,reason:pit.reason,modeledTradeCount:null,
-      modeledReturnPercent:null,modeledNetPnlKRW:null});
-    fixtureOnly ||=pit.fixture;
+    if(!cfg.sourceOnlyMode){
+      const pit=historicPITDay({
+        manifest:cfg.manifest,market:cfg.market,symbol:cfg.symbol,date:session.date,
+        startMs:session.startMs,endMs:session.endMs,
+      });
+      response.historicalPITRosterChecked=true;
+      if(!pit.ok)return safe({...response,reason:pit.reason,modeledTradeCount:null,
+        modeledReturnPercent:null,modeledNetPnlKRW:null});
+      fixtureOnly ||=pit.fixture;
+    }
+    stopped=interrupted();if(stopped)return stopped;
     const data=await deriveArchivedResearchTimeframesV1({
       root:cfg.root,market:cfg.market,symbol:cfg.symbol,
       sessionStartMs:session.startMs,sourceDigestSha256:session.sourceDigestSha256??null,
       asOfMs:cfg.asOfMs,timeframes:[cfg.timeframe],
     });
+    stopped=interrupted();if(stopped)return stopped;
     if(data.status==="BLOCKED_DATA"||data.sourceMinuteIntegrityVerified!==true
       ||data.archiveSessionEndMs!==session.endMs
       ||data.sessionTimeZone!==session.zone||data.sessionKind!==session.kind)
       return safe({...response,reason:"PRIVATE_ARCHIVE_MISSING_TAMPERED_OR_MISMATCHED",
         archiveReason:String(data.reason??data.status).slice(0,120),
         modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
+    if(cfg.sourceOnlyMode&&(data.market!==cfg.market||data.symbol!==cfg.symbol
+      ||data.venue!==VENUES[cfg.market]
+      ||data.sourceId!==CURRENT_SOURCE_IDS[cfg.market]))
+      return safe({...response,reason:"CURRENT_SOURCE_NATIVE_PROVIDER_OR_VENUE_MISMATCH",
+        modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
     const frame=data.intervalData?.[cfg.timeframe];
-    if(!frame||!frame.sourceSessionCoverageComplete||frame.completeBarCount<1)
+    if(!frame||!frame.sourceSessionCoverageComplete||frame.completeBarCount<1
+      ||(cfg.sourceOnlyMode&&data.sourceMinuteRows!==1440))
       return safe({...response,reason:"ORIGINAL_ONE_MINUTE_SESSION_PARTIAL_OR_UNAVAILABLE",
         modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
     // Convert quote amounts for the KRW-denominated model using an explicitly
     // supplied STATIC FX assumption. This is NOT time-series official FX proof.
     const bars=frame.bars;
-    for(const b of bars){
+    response.sourceMinuteRowsRead+=data.sourceMinuteRows;
+    for(const [index,b] of bars.entries()){
+      // Yield inside a long session so request cancellation and deadline
+      // timers can fire; never race an HTTP timeout against ongoing work.
+      if(index>0&&index%256===0)await yieldImmediate();
+      stopped=interrupted();if(stopped)return stopped;
       if(b.availableAtMs>b.endMs)response.retrospectiveUnavailableRows++;
       const value=cfg.fxRateKRWPerQuote===1?b:{
         ...b,open:b.open*cfg.fxRateKRWPerQuote,
@@ -473,17 +603,38 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
         close:b.close*cfg.fxRateKRWPerQuote,
       };
       consumeBar(state,value,cfg);
+      response.derivedBarsRead++;
       last=value;
     }
+    stopped=interrupted();if(stopped)return stopped;
     endSession(state,last,cfg);
     response.sourceSessionsRead++;
     sourceDigestChain.push([session.date,session.startMs,data.archiveSourceDigestSha256]);
   }
+  stopped=interrupted();if(stopped)return stopped;
+  // Preserve the original PIT-chain format, but bind the explicitly new
+  // current-cohort scope and snapshot SHA to its different source lineage.
+  const sourceDigestChainSha256=checksum(cfg.sourceOnlyMode?{
+    evidenceScope:cfg.evidenceScope,currentRosterDigestSha256:cfg.currentRosterDigestSha256,
+    sessions:sourceDigestChain,
+  }:sourceDigestChain);
+  const sourceModelDigestSha256=checksum({
+    schemaVersion:"original-minute-ema-model-v1",evidenceScope:cfg.evidenceScope,
+    currentRosterDigestSha256:cfg.currentRosterDigestSha256,
+    historicalRosterDigestSha256:cfg.manifest?.rawMembershipDigestSha256??null,
+    sourceDigestChainSha256,market:cfg.market,symbol:cfg.symbol,
+    selectedPeriod:[cfg.period.startDate,cfg.period.endDate],asOfMs:cfg.asOfMs,
+    timeframe:cfg.timeframe,direction:cfg.direction,strategy:cfg.strategy,
+    costs:cfg.costs,fxRateKRWPerQuote:cfg.fxRateKRWPerQuote,
+    initialCapitalKRW:cfg.initialCapitalKRW,leverage:cfg.leverage,riskFraction:cfg.riskFraction,
+    sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
+  });
   // No OOS certification: the archive only checks local file consistency,
   // self-attested calendar/PIT and retrospective source publication times.
   return safe({...response,status:STATUS.source,reason:
       "LOCAL_ORIGINAL_MINUTE_REPLAY_NOT_CAUSAL_SCANNER_OR_OOS_PROOF",
-    fixtureOnly,sourceDigestChainSha256:checksum(sourceDigestChain),
+    fixtureOnly,sourceDigestChainSha256,sourceLineageSha256:sourceDigestChainSha256,
+    sourceModelDigestSha256,
     modeledTradeCount:state.trades,modeledWinCount:state.wins,
     modeledLossCount:state.losses,modeledCostKRW:state.modeledCostKRW,
     modeledNetPnlKRW:state.modeledNetPnlKRW,

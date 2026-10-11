@@ -39,6 +39,27 @@ const sweep=market=>({
   executionAuthority:"NONE",orderSubmitted:false,
   realOrders:false,liveTrading:false,autoTrading:false,
 });
+test("current Han source research retains its roster/model lineage and can never be a historic PIT approval",()=>{
+ const market="CRYPTO_FUTURES",symbol="龙虾USDT";
+ const current={...period(market,symbol),evidenceScope:"CURRENT_PROVIDER_ROSTER_SOURCE_ONLY",
+   sourceOnlyMode:true,currentRosterDigestSha256:"c".repeat(64),
+   currentRosterObservedAtMs:NOW,historicalPITRosterChecked:false,
+   historicalMemberLifespanSelfAttestedNotIndependentlyVerified:false,
+   historicalTradingAvailabilityVerified:false,sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
+   sourceModelDigestSha256:"d".repeat(64)};
+ const verdict=review({market,symbol,periodResult:current,nowMs:NOW});
+ assert.equal(verdict.status,"RESEARCH_HOLD");
+ assert.ok(verdict.blockers.includes("CURRENT_PROVIDER_ROSTER_IS_NOT_HISTORICAL_PIT_EVIDENCE"));
+ assert.equal(verdict.paperAdmissionAllowed,false);
+ assert.notEqual(verdict.diagnosticFingerprint,review({market,symbol,nowMs:NOW,
+   periodResult:{...current,currentRosterDigestSha256:"e".repeat(64)},
+ }).diagnosticFingerprint);
+ for(const patch of [{evidenceScope:undefined},{historicalPITRosterChecked:true},
+   {historicalMemberLifespanSelfAttestedNotIndependentlyVerified:true},
+   {historicalTradingAvailabilityVerified:true},{currentRosterDigestSha256:"invalid"},
+   {sourceModelDigestSha256:null}])assert.throws(()=>review({market,symbol,nowMs:NOW,
+     periodResult:{...current,...patch}}),/ORIGINAL_MODEL_PAPER_REVIEW/);
+});
 test("four-market native minute model and full local sweep reach REAL canonical gates but never Paper",()=>{
  for(const [market,symbol] of Object.entries(markets)){
   const args={market,symbol,nowMs:NOW,

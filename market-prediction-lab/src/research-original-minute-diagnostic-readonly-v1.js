@@ -1,8 +1,10 @@
 import {constants} from "node:fs";
 import {lstat,open} from "node:fs/promises";
 import {dirname,isAbsolute,join,resolve} from "node:path";
-import {reviewOriginalMinuteForCanonicalPaperV1} from
+import {reviewOriginalMinuteForCanonicalPaperV1,validOriginalMinuteEvidenceScopeSummaryV1} from
   "./four-market-original-minute-candidate-review-v1.js";
+import {isOriginalMinuteBacktestSymbolV1} from
+  "../../packages/strategy-hypothesis/src/original-minute-backtest.js";
 
 /**
  * Admin-only source of SANITIZED local research-diagnostic readback.
@@ -78,7 +80,7 @@ function verifyRaw(raw,market,sweepResult=null){
     ||raw.historicalPITAndCalendarIndependentProof===true
     ||raw.historicalPITAndMinuteDataIndependentlyVerified===true
     ||raw.fullMarketOpportunityDenominatorVerified===true
-    ||(raw.sourceModelDigestSha256!==undefined
+    ||(raw.sourceModelDigestSha256!=null
       &&!SHA.test(raw.sourceModelDigestSha256))
     ||(raw.sourceSessionIndexDigestSha256!=null
       &&!SHA.test(raw.sourceSessionIndexDigestSha256))
@@ -91,6 +93,8 @@ function verifyRaw(raw,market,sweepResult=null){
     ||raw.selectedStartDate>raw.selectedEndDate
     ||(raw.reason!=null&&!text(raw.reason)))
     throw new TypeError("NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID");
+  if(!validOriginalMinuteEvidenceScopeSummaryV1(raw))
+    throw new TypeError("NATIVE_DIAGNOSTIC_EVIDENCE_SCOPE_INVALID");
   if(raw.reportPublishedAtMs!==undefined
     ||raw.sourceResultDigestSha256!==undefined){
     if(!Number.isSafeInteger(raw.reportPublishedAtMs)
@@ -103,7 +107,8 @@ function verifyRaw(raw,market,sweepResult=null){
   if(raw.schemaVersion===PERIOD){
     if(available&&raw.status!=="SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY")
       throw new TypeError("NATIVE_DIAGNOSTIC_PERIOD_STATUS_SCHEMA_MISMATCH");
-    if(!SYMBOL.test(raw.symbol??"")
+    const current=raw.evidenceScope==="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
+    if(!(current?isOriginalMinuteBacktestSymbolV1(market,raw.symbol):SYMBOL.test(raw.symbol??""))
       ||(available&&(!count(raw.indexedPrivateSessions)
         ||!count(raw.verifiedNativeMinuteSessions)
         ||raw.verifiedNativeMinuteSessions!==raw.indexedPrivateSessions
@@ -118,6 +123,13 @@ function verifyRaw(raw,market,sweepResult=null){
       selectedStartDate:raw.selectedStartDate,
       selectedEndDate:raw.selectedEndDate,
       symbol:raw.symbol,
+      evidenceScope:raw.evidenceScope??"HISTORICAL_PIT_ROSTER",
+      sourceOnlyMode:current,
+      historicalPITRosterChecked:raw.historicalPITRosterChecked===true,
+      currentRosterDigestSha256:current?raw.currentRosterDigestSha256:null,
+      currentRosterObservedAtMs:current?raw.currentRosterObservedAtMs:null,
+      sessionClosePolicy:raw.sessionClosePolicy==="CLOSE_EACH_SOURCE_SESSION"
+        ?raw.sessionClosePolicy:null,
       timeframe:typeof raw.timeframe==="string"
         &&raw.timeframe.length<=5?raw.timeframe:null,
       modeledTradeCount:available?raw.modeledTradeCount:null,
