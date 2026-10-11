@@ -9,6 +9,7 @@ import {
   MANUAL_FOUR_MARKET_INITIAL_KRW, MANUAL_FOUR_MARKET_TOTAL_KRW,
   buildManualFourMarketWalletSeeds, inspectManualFourMarketWallets,
   manualPaperWalletId, manualWalletCreationReadiness,isManualPaperWalletId,
+  isReservedManualPaperWalletNamespace,
 } from './manual-four-market-paper-wallets.service';
 const NOW=new Date('2026-10-11T03:00:00Z');
 function snapshot(role:'admin'|'member',offset=0):StoredPaperJournalRecord[] {
@@ -64,4 +65,18 @@ test('manual wallet identity must be exact, never open an unsupported market or 
   assert.equal(isManualPaperWalletId('automatic-paper-member-v2:crypto_spot'),false);
   assert.throws(()=>manualPaperWalletId('member','fake' as never),/IDENTITY_INVALID/);
   assert.throws(()=>buildManualFourMarketWalletSeeds('member',new Date('invalid')),/INPUT_INVALID/);
+});
+
+test('reserved manual market namespace blocks forged noncanonical IDs in generic journal sync',()=>{
+  assert.equal(isManualPaperWalletId('manual-paper-member-v1:unknown'),false);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-member-v1:unknown'),true);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-admin-v1:crypto_futures'),true);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-something-else'),false);
+  assert.equal(isReservedManualPaperWalletNamespace('automatic-paper-member-v2:crypto_spot'),false);
+  const forged=snapshot('member');
+  const extra={...forged[0],id:'manual-paper-member-v1:unknown'};
+  const status=manualWalletCreationReadiness('member',[extra],NOW.getTime());
+  assert.equal(status.canCreate,false);
+  assert.ok(status.blockers.includes('MANUAL_PAPER_PARTIAL_OR_ROLE_CONFLICT'));
+  assert.equal(inspectManualFourMarketWallets('member',[...forged,extra],NOW.getTime()).ready,false);
 });
