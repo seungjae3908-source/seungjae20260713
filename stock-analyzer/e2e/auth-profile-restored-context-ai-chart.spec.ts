@@ -352,7 +352,8 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
     await expect(restoredPage.getByTestId('page-fallback')).toHaveCount(0);
     await expect(restoredPage.getByTestId('capability-denied')).toHaveCount(0);
     await expect(restoredPage.getByTestId('unified-chart-canvas')).toBeVisible();
-    await expect(restoredPage.getByText('restored-context-stock-fixture', { exact: false })).toBeVisible();
+    await expect(restoredPage.getByTestId('chart-data-provider')).toBeVisible();
+    await expect(restoredPage.getByTestId('chart-data-provider')).toContainText('restored-context-stock-fixture');
     expect(Date.now() - coldStartedAt).toBeLessThanOrEqual(5_000);
 
     expect(restoredCounters.sameOriginProfile).toBeGreaterThan(0);

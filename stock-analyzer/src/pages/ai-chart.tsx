@@ -391,7 +391,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const hasSelection = Boolean(String(selection.symbol || selection.ticker || '').trim());
-  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [liveSnapshot, setLiveSnapshot] = useState<ChartLiveSnapshot | null>(null);
   const handleLiveSnapshotChange = useCallback((snapshot: ChartLiveSnapshot) => setLiveSnapshot(snapshot), []);
@@ -736,18 +735,29 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const details = hasSelection ? (
     <div className="space-y-3">
+      {!desktop && !embedded && !externalMode && <MobileSummary selection={selection} analysis={analysis} />}
       <DecisionCard analysis={analysis} />
       <AiChartDrawingSummary snapshot={visibleLiveSnapshot} />
-      <details className="rounded-2xl border border-card-border bg-card p-4" onToggle={event => setEvidenceOpen(event.currentTarget.open)}>
-        <summary className="cursor-pointer text-xs font-bold text-muted-foreground">분석 근거 더 보기</summary>
-        <div className="mt-3 space-y-3">{evidenceOpen && <>{intelligencePanel}<Suspense fallback={null}><LazyFuturesPublicContextPanel selection={selection} /></Suspense><ContextCard selection={selection} analysis={analysis} /></>}</div>
-      </details>
+      <ContextCard selection={selection} analysis={analysis} />
+      {deferNonCriticalEvidence ? (
+        <p role="status" data-testid="ai-chart-cold-evidence-deferred" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">
+          차트를 먼저 준비한 뒤 AI 분석 근거와 공개 시장 근거를 불러옵니다.
+        </p>
+      ) : (
+        <>
+          {intelligencePanel}
+          <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
+            <LazyFuturesPublicContextPanel selection={selection} />
+          </Suspense>
+        </>
+      )}
+      <SafetyNote />
     </div>
   ) : null;
   const mobile = !desktop && !externalMode && !embedded;
 
   return (
-    <ChartCurrencyProvider market={selection.market}><div className="flex h-full min-h-0 flex-col"><div data-testid="ai-chart-route-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-background pb-4">
+    <ChartCurrencyProvider market={selection.market}><div className="flex h-full min-h-0 flex-col"><div data-testid="ai-chart-route-scroll" className="h-full min-w-0 overflow-y-auto overscroll-contain bg-background min-h-0 flex-1 pb-4">
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
