@@ -6,6 +6,8 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {persistResearchMinuteSessionV1} from "../src/research-minute-archive-v1.js";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
+import {runFourMarketOriginalMinuteReplayV1 as rawReplay}
+  from "../src/four-market-original-minute-replay-v1.js";
 import {runFourMarketOriginalMinuteBatchV1 as batch}
   from "../src/four-market-original-minute-batch-v1.js";
 import {runFourMarketOriginalMinutePeriodV1 as period}
@@ -372,5 +374,81 @@ test("missing independent roster stops a bounded sweep rather than spinning on o
    assert.equal(result.profitabilityProven,false);
    await assert.rejects(()=>sweep({...base,pageBudget:9}),
      /ORIGINAL_SWEEP_PAGE_RESOURCE_BUDGET_INVALID/);
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test("historic delisted crypto member needs native minutes ONLY while listed, not every subsequent selected day",async()=>{
+ const folder=temp(),market="CRYPTO_SPOT",cfg=input(market,folder);
+ const symbol=MARKETS[market].symbols[0];
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   await persistResearchMinuteSessionV1({
+     root:folder,source:session(market,symbol)});
+   const memberships=cfg.manifest.memberships.map(row=>
+     row.symbol===symbol?{...row,removedAtMs:D+DAY}:row);
+   const manifest={...cfg.manifest,memberships,
+     rawMembershipDigestSha256:digestPITMembershipRowsV1(memberships)};
+   const args={...base,manifest,symbol,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-19"}};
+   const result=await period(args);
+   assert.equal(result.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+   assert.equal(result.indexedPrivateSessions,1);
+   assert.equal(result.sourceSessionsRead,1);
+   assert.equal(result.requestedTradingDays,1);
+   assert.equal(result.historicalLifecycleExcludedTradingDates,1);
+   assert.equal(result.historicalMemberLifespanSelfAttestedNotIndependentlyVerified,true);
+   assert.equal(result.profitabilityProven,false);
+   assert.equal(result.actualFillCount,null);
+   assert.equal(result.paperAdmissionAllowed,false);
+   assert.equal(result.executionAuthority,"NONE");
+   const reused=[...memberships,{...memberships[0],
+     listedAtMs:D+3*DAY,removedAtMs:null}];
+   const reusedManifest={...manifest,memberships:reused,
+     rawMembershipDigestSha256:digestPITMembershipRowsV1(reused)};
+   await assert.rejects(()=>rawReplay({...cfg,market,symbol,
+     manifest:reusedManifest,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+     sessionSources:cfg.sourceSessions.filter(x=>x.symbol===symbol)}),
+     /PRIVATE_REPLAY_SYMBOL_LIFECYCLE_MISSING_OR_AMBIGUOUS/);
+   const halted=memberships.map(row=>row.symbol===symbol?{
+     ...row,halts:[{startMs:D+60*MIN,endMs:D+80*MIN}],
+   }:row);
+   const haltedManifest={...manifest,memberships:halted,
+     rawMembershipDigestSha256:digestPITMembershipRowsV1(halted)};
+   await assert.rejects(()=>rawReplay({...cfg,symbol,
+     manifest:haltedManifest,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+     sessionSources:cfg.sourceSessions.filter(x=>x.symbol===symbol)}),
+     /PRIVATE_REPLAY_HALT_INTERVAL_SOURCE_REQUIRED/);
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("newly listed crypto requires source only AFTER listing; an unproven first day stays excluded",async()=>{
+ const folder=temp(),market="CRYPTO_SPOT",cfg=input(market,folder);
+ const symbol=MARKETS[market].symbols[0];
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   const next=session(market,symbol);
+   next.session.startMs+=DAY;
+   next.session.endMs+=DAY;
+   next.asOfMs+=DAY;
+   next.minuteBars=next.minuteBars.map(x=>({
+     ...x,timestampMs:x.timestampMs+DAY,
+     availableAtMs:x.availableAtMs+DAY,
+   }));
+   next.sourceMinuteRowsSha256=sha(next.minuteBars);
+   await persistResearchMinuteSessionV1({root:folder,source:next});
+   const memberships=cfg.manifest.memberships.map(row=>row.symbol===symbol
+     ?{...row,listedAtMs:D+DAY}:row);
+   const manifest={...cfg.manifest,memberships,
+     rawMembershipDigestSha256:digestPITMembershipRowsV1(memberships)};
+   const r=await period({...base,manifest,symbol,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-19"}});
+   assert.equal(r.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+   assert.equal(r.indexedPrivateSessions,1);
+   assert.equal(r.sourceSessionsRead,1);
+   assert.equal(r.historicalLifecycleExcludedTradingDates,1);
+   assert.equal(r.profitabilityProven,false);
+   assert.equal(r.executionAuthority,"NONE");
  }finally{rmSync(folder,{recursive:true,force:true});}
 });
