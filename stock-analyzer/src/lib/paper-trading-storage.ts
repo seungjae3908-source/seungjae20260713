@@ -203,19 +203,34 @@ function readManualPaperRounds(storage: StorageLike): ManualPaperRoundRecord[] {
   });
 }
 
-export function getManualPaperRoundSummary(storage: StorageLike) {
+export function getManualPaperRoundSummary(storage: StorageLike, activeState?: PaperTradingState) {
   const rounds = readManualPaperRounds(storage);
   const totalIssued = rounds.reduce((sum, row) => sum + row.initialCapital, 0);
   const totalNet = rounds.reduce((sum, row) => sum + row.netPnl, 0);
   if (!Number.isFinite(totalIssued) || !Number.isFinite(totalNet)) {
     throw new Error('수동모의 전체 회차 손익이 올바르지 않습니다.');
   }
+  // Running PnL belongs in the total score as a separate open campaign:
+  // a second round at +20% cannot conceal the first -100% bankruptcy.
+  const activeValid=activeState === undefined ? false : validatePaperState(activeState)
+    && !rounds.some(row => row.previousAccountId === activeState.account.id)
+    && (rounds.length === 0 || rounds.at(-1)!.nextAccountId === activeState.account.id);
+  const activeSeed=activeValid ? activeState!.account.initialBalance : 0;
+  const activeNet=activeValid ? activeState!.account.equity-activeSeed : 0;
+  const issuedIncludingActive=totalIssued+activeSeed;
+  const netIncludingActive=totalNet+activeNet;
   return {
     completedRounds:rounds.length,
     bankruptcies:rounds.filter(row => row.bankrupt).length,
     totalIssued,
     totalNet,
     issuedCapitalReturnPercent:totalIssued > 0 ? totalNet / totalIssued * 100 : null,
+    cumulativeIncludingActive: {
+      rounds:rounds.length + Number(activeValid),
+      totalIssued:issuedIncludingActive,
+      totalNet:netIncludingActive,
+      totalReturnPercent:issuedIncludingActive>0 ? netIncludingActive/issuedIncludingActive*100 : null,
+    },
     // Historical rounds are immutable browser snapshots; no withdrawal/transfer.
     records:rounds.map(({archived, ...summary}) => summary),
   };
@@ -240,6 +255,9 @@ export function startNextLocalManualPaperRound(
   if (state.positions.some(row => row.status !== 'closed' && row.remainingQuantity > 0)
       || state.orders.some(row => row.status === 'pending')) {
     throw new Error('열린 포지션과 미체결 주문이 있으면 새 회차를 시작할 수 없습니다.');
+  }
+  if (state.account.equity > 0.01) {
+    throw new Error('운용 가능한 자본이 남아 있어 새 회차를 시작하지 않습니다. 먼저 현재 회차를 유지하세요.');
   }
   if (Math.abs(state.account.equity - state.account.cashBalance) > 0.01
       || state.account.usedMargin > 0.01 || state.account.unrealizedPnl !== 0) {
