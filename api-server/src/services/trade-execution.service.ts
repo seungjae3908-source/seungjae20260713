@@ -455,6 +455,25 @@ function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
   return { averageFillPrice, filledQuantity };
 }
 
+/**
+ * Cost evidence may be zero only if the prospective signed Paper policy
+ * explicitly sets a numeric 0% rate. Never coerce null/undefined or empty
+ * provider data into zero via Number(null).
+ * No broker calls or activation authority are granted.
+ */
+export function paperSimulatedCostAmount(
+  price: number | null | undefined,
+  quantity: number | null | undefined,
+  ratePercent: number | null | undefined,
+): number | null {
+  if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0
+    || typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0
+    || typeof ratePercent !== 'number' || !Number.isFinite(ratePercent)
+    || ratePercent < 0 || ratePercent > 100) return null;
+  const amount = price * quantity * ratePercent / 100;
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
@@ -915,11 +934,10 @@ export class TradeExecutionService {
         const metadata = this.riskMetadata(risk, false);
         const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        const feePercent = Number(risk.snapshot.estimatedFeePercent);
-        const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
-          && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0
-          ? averageFillPrice! * filledQuantity * feePercent / 100
-          : null;
+        // Missing quote or risk-policy cost is NOT a proven zero fee.
+        const feeAmount = paperSimulatedCostAmount(
+          averageFillPrice, filledQuantity, risk.snapshot.estimatedFeePercent,
+        );
         const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
           ? 'KRW'
           : plan.exchange === 'bitget' ? 'USDT' : 'USD';

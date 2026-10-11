@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { paperSimulatedCostAmount, TradeExecutionService } from './trade-execution.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -532,4 +532,15 @@ test('member cap tightening after preflight is enforced again before provider mu
     if (previousStop == null) delete process.env.TRADING_EMERGENCY_STOP;
     else process.env.TRADING_EMERGENCY_STOP = previousStop;
   }
+});
+
+test('Paper simulated costs require explicit finite fee policy; missing never becomes zero', () => {
+  assert.equal(paperSimulatedCostAmount(100, 2, 0), 0);
+  assert.equal(paperSimulatedCostAmount(100, 2, 0.05), 0.1);
+  for (const missing of [null, undefined, NaN, Infinity, -0.01, 100.01]) {
+    assert.equal(paperSimulatedCostAmount(100, 2, missing), null);
+  }
+  assert.equal(paperSimulatedCostAmount(100, 0, 0), null);
+  assert.equal(paperSimulatedCostAmount(0, 2, 0), null);
+  assert.equal(paperSimulatedCostAmount(Number.MAX_VALUE, 2, 100), null);
 });
