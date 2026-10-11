@@ -39,6 +39,8 @@ test('only an exact upstream scanner source can be transformed; Paper source sta
   assert.ok(isolated.includes("request.memberId === 'signal-intelligence-v3-public-only'"));
   assert.ok(!source.includes('stablePublicV3CryptoRows'));
   assert.ok(isolated.includes('normalizeV3UpbitCandles(rows, {'));
+  assert.ok(isolated.includes('prioritizeV3CurrentCryptoPage(publicV3Rows.slice('));
+  assert.ok(!source.includes('prioritizeV3CurrentCryptoPage'));
   assert.ok(!source.includes('normalizeV3UpbitCandles'));
   assert.ok(isolated.includes('const DEADLINE_MS = 16_000;'));
   assert.ok(isolated.includes('const ITEM_TIMEOUT_MS = 5_000;'));
