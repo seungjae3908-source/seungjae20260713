@@ -422,6 +422,7 @@ const allowed=new Set([
  ...formulaAiDriftReviewed,
  ...automaticTradingDriftReviewed,
  ...memberTelegramReviewed,
+ ...researchPITReadOnlyReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const pitReadOnlyChanged=changed.some((p)=>researchPITReadOnlyReviewed.includes(p));
