@@ -57,6 +57,8 @@ on:
       - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js
       - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.d.ts
       - market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+      - market-prediction-lab/src/four-market-original-minute-replay-v1.js
+      - market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
       - api-server/src/routes/research-workspace.ts
       - api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts
       - api-server/test.mjs
@@ -123,6 +125,7 @@ jobs:
           node --test market-prediction-lab/tests/four-market-pit-minute-selected-window-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-minute-compact-selected-window-v1.test.js
           node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+          node --test market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
           node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
