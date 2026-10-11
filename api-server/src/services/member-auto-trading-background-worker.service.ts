@@ -597,10 +597,13 @@ function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
   return { stop, targets };
 }
 
-function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
+export function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
-  const rate = Number(cost?.[key]);
-  return finite(rate) && rate >= 0 ? rate * 100 : null;
+  // Number(null) and Number('') are zero: neither is proof of a zero-cost
+  // strategy. Only an explicit finite policy rate may be used by Paper.
+  if (cost?.[key] == null || cost[key] === '') return null;
+  const rate = Number(cost[key]);
+  return finite(rate) && rate >= 0 && rate <= 1 ? rate * 100 : null;
 }
 
 // Only canonical, signal-bound upstream AI evidence may authorize the formula
