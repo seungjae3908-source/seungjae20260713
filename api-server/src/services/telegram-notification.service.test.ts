@@ -237,6 +237,55 @@ test('editing a Telegram signal explicitly clears a stale order keyboard', async
   assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
 });
 
+test('ambiguous Telegram edit never replays an obsolete order keyboard', async () => {
+  setFakeConfig();
+  const input = {
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT' as const, text: '이전 주문 버튼 상태',
+    buttons: [[{ text: '오래된 주문 링크', url: 'https://example.org/old-order' }]],
+  };
+  const uncertain = { ok: false, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+  for (const behavior of ['http_502', 'network_error', 'malformed_200'] as const) {
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      calls++;
+      assert.match(String(init?.body), /old-order/u);
+      if (behavior === 'http_502') return new Response('upstream failed', { status: 502 });
+      if (behavior === 'network_error') throw new Error('connection reset after remote edit');
+      return new Response('{not json', { status: 200 });
+    };
+    assert.deepEqual(await editTelegramMessage(input), uncertain);
+    assert.equal(calls, 1, `ambiguous ${behavior} must never replay the old button`);
+  }
+});
+
+test('Telegram edit retries an explicit HTTP 429 once but no other rejected request', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response('retry later', { status: 429, headers: { 'retry-after': '0' } })
+      : okResponse();
+  };
+  assert.deepEqual(await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT', text: '안전한 재시도',
+  }), { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } });
+  };
+  assert.deepEqual(await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT', text: '과도한 요청',
+  }), { ok: false, attempts: 2, skipped: 'DELIVERY_FAILED' });
+  assert.equal(calls, 2);
+});
+
 test('long signal updates preserve Telegram HTML tags, entities, and stale-button revocation', async () => {
   setFakeConfig();
   const calls: Array<Record<string, unknown>> = [];
