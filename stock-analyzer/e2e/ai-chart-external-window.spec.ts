@@ -447,7 +447,6 @@ test('deferred intelligence reports loading while keeping the chart available', 
   try {
     await page.goto(initialUrl);
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
-    await page.getByText('분석 근거 더 보기', { exact: true }).click();
     await expect(page.getByRole('status', { name: 'AI 분석 근거 불러오는 중' })).toBeVisible();
     await expect(page.getByRole('button', { name: '15분', exact: true })).toBeEnabled();
   } finally {

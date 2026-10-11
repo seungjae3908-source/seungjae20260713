@@ -56,7 +56,9 @@ test('live judgment exposes provenance, conditions and source time without inven
   await expect(feed.locator('[data-event-kind="analysis"]')).toContainText('확인 조건');
   await expect(feed.locator('[data-event-kind="analysis"]')).toContainText('무효화 조건');
   await expect(feed.locator('[data-event-kind="bar"]')).toHaveCount(0);
-  const sourceTime = new Date(fixture.end * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  // Browser ICU data can differ from Node ICU data on Windows/Linux. Compare
+  // the same source timestamp and Korean timezone using the display runtime.
+  const sourceTime = await page.evaluate(end => new Date(end * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }), fixture.end);
   await expect(feed.getByTestId('chart-live-data-asof')).toContainText(sourceTime);
   await refresh(page, fixture);
   await expect(feed.locator('[data-event-kind="analysis"]')).toHaveCount(1);
