@@ -82,6 +82,10 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
       schemaVersion: 1,
       recordType: 'unified_trade_order',
       source: sourceForPlan(plan),
+      // Owner-scoped, read-only join key for the durable execution mirror.
+      // The broker order ID is retained for provider/cost lineage; only the
+      // server-owned canonical order ID may deduplicate a Paper mirror.
+      canonicalOrderId: plan.accountMode === 'paper' ? order.id : null,
       broker,
       accountIdMasked: maskBrokerAccountReference(broker, userId),
       market,
@@ -99,8 +103,14 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
       filledQuantity,
       remainingQuantity,
       averageFillPrice,
-      fees: feeForOrder(order),
-      tax: null,
+      // A numeric charge without a quote-currency receipt is not
+      // independently comparable to the actual execution cost.
+      fees: order.feeCurrency?.toUpperCase() === currencyForPlan(plan)
+        ? feeForOrder(order) : null,
+      tax: order.taxCurrency?.toUpperCase() === currencyForPlan(plan)
+        && typeof order.taxAmount === 'number'
+        && Number.isFinite(order.taxAmount) && order.taxAmount >= 0
+        ? order.taxAmount : null,
       currency: currencyForPlan(plan),
       status: statusForOrder(order),
       strategy: plan.strategyId,

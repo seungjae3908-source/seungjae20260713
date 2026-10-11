@@ -235,6 +235,13 @@ export type TradingMarketSnapshot = {
   availableLiquidityKrw?: number | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
+  // Optional, prospective Paper-only source fields. A UI snapshot alone is
+  // never settlement authority; the durable server-owned order receipt must
+  // independently attest every component before capital can compound.
+  estimatedTaxPercent?: number | null;
+  settlementFxKrwPerQuoteCurrency?: number | null;
+  settlementFxSource?: string | null;
+  settlementFxObservedAt?: string | null;
   correlatedExposurePercent?: number | null;
   signalState?: TradingSignalState | null;
   signalObservedAt?: string | null;
@@ -349,6 +356,34 @@ export type TradingOrder = {
   fills?: TradingFill[];
   feeAmount?: number | null;
   feeCurrency?: string | null;
+  /** Optional durable, explicit simulated-paper tax. Missing is NOT zero. */
+  taxAmount?: number | null;
+  taxCurrency?: string | null;
+  /** Bound per-fill FX from a verified server quote, not UI market snapshots. */
+  settlementFxEvidence?: {
+    krwPerQuoteCurrency: number;
+    source: string;
+    observedAt: string;
+  } | null;
+  /**
+   * Server-certified completed funding ledger for a closed simulated USDT
+   * perpetual. Absence is unknown funding, never an assumed zero. Positive
+   * netFundingKrw is a paid funding cost; negative means received funding.
+   * No public order/HTTP API may independently issue this certificate.
+   */
+  paperFundingSettlementEvidence?: {
+    source: 'SERVER_PAPER_FUNDING_LEDGER_V1';
+    underlyingCurrency: 'USDT';
+    netFundingKrw: number;
+    entryBrokerOrderId: string;
+    exitBrokerOrderId: string;
+    coveredFromAt: string;
+    coveredThroughAt: string;
+    attestedAt: string;
+    complete: true;
+    eventCount: number;
+    eventDigest: string;
+  } | null;
   exchangeCreatedAt?: string | null;
   exchangeUpdatedAt?: string | null;
   cancelable?: boolean | null;
