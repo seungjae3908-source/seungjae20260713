@@ -262,6 +262,28 @@ test('tampered cached results cannot forge PASS, change identity or acquire exec
   assert.equal(repeated.counts.HOLD, 1);
 });
 
+test('symlinked cached result is refused before reading or promoting stale PASS', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-queue-link-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  const { mkdir, unlink, symlink } = await import('node:fs/promises');
+  await mkdir(inbox, { recursive: true });
+  await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()), { mode: 0o600 });
+  const researchCodeSha = 'a'.repeat(40);
+  await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  const rootResults = join(root, 'formula-backtest', 'results');
+  const file = (await readdir(rootResults)).find(name => name.endsWith('.json'));
+  assert.ok(file);
+  const resultPath = join(rootResults, file);
+  await unlink(resultPath);
+  await symlink(join(root, 'latest', 'formula-paper-strategy-registry.json'), resultPath);
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+    /FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE/,
+  );
+  const registry = JSON.parse(await readFile(join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
+  assert.equal(registry.entryCount, 0);
+});
+
 test('bounded queue rotates across older files without starvation and preserves durable results', async () => {
   const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-rotation-'));
   const inbox = join(root, 'formula-backtest', 'inbox');
