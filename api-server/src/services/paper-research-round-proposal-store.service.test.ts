@@ -55,6 +55,7 @@ test('exhausted automatic Paper market appends one proposal without altering res
   assert.equal(records.size,1);
   const row=[...records.values()][0];
   assert.equal(row.previous_operating_capital_krw,0);
+  assert.equal(row.ending_cause,'ZERO_EQUITY');
   assert.equal(row.previous_locked_reserve_krw,80_000);
   assert.equal(row.proposed_seed_krw,1_000_000);
   assert.equal(row.execution_authority,'NONE');
