@@ -17,6 +17,7 @@ import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
+  parsePublicRetryAfterMs,
 } from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -218,14 +219,11 @@ async function withUpbitPacing(operation) {
         lastResponse = response;
         if (response.status !== 429) return response;
         if (attempt < 4) {
-          const retryAfter = Number(response.headers.get('retry-after'));
-          // Never retry before the provider's own Retry-After. If it is
-          // longer than this bounded cycle, return the original 429 and
-          // preserve the scanner's provider-error/blocked outcome.
-          const providerDelay = Number.isFinite(retryAfter) && retryAfter > 0
-            ? retryAfter * 1_000 : 0;
-          if (providerDelay > 10_000) return response;
-          const backoff = Math.max(providerDelay, 750 * attempt);
+          // Respect HTTP-date as well as numeric Retry-After. Malformed or
+          // >10s cooldowns return the real 429 without guessing or retrying.
+          const providerDelay = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+          if (providerDelay !== null && providerDelay > 10_000) return response;
+          const backoff = Math.max(providerDelay ?? 0, 750 * attempt);
           await sleep(backoff);
         }
       } catch (error) {

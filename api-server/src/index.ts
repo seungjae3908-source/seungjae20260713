@@ -15,7 +15,10 @@ import {
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
 } from './services/member-auto-trading-background-worker.service';
-import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
+import {
+  readTelegramIntelligenceWorkerHealth,
+  startTelegramIntelligenceWorker,
+} from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
 import {
@@ -60,6 +63,7 @@ function healthPayload(route: '/health' | '/api/health') {
     backgroundWorkersEnabled,
     autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
     userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
+    telegramIntelligenceWorker: readTelegramIntelligenceWorkerHealth(),
     time: new Date().toISOString(),
   };
 }
