@@ -127,7 +127,7 @@ jobs:
             'morningWindowCoverage',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
             'roomBindingsValid','personal','briefWorker','marketBrief','signalSubscriber','signalSource',
-            'signalHealth','signalUnits','signalCycle',
+            'signalHealth','signalUnits','signalCycle','signalFile','staleCause',
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
@@ -166,7 +166,7 @@ jobs:
             &&(b.lastDueCode===null||briefCodes.includes(b.lastDueCode))
             &&(b.status!=='PRESENT'||(b.state!==null&&b.lastDueCode!==null));
           if(Object.keys(r).sort().join()!==keys.sort().join()
-            ||r.schemaVersion!=='telegram-production-worker-readonly-v5'
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v6'
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
@@ -205,6 +205,22 @@ jobs:
             ||!(r.signalCycle.exitCode===null ||
               (Number.isInteger(r.signalCycle.exitCode)&&r.signalCycle.exitCode>=0
                 &&r.signalCycle.exitCode<=255))
+            ||!r.signalFile
+            ||Object.keys(r.signalFile).sort().join()!=='fileAgeBand,generatedAgeBand,serviceSha,status'
+            ||!['NOT_CHECKED','ABSENT','UNSAFE_PATH','INVALID_CLOCK','UNSAFE_FILE',
+              'INVALID_SIZE','UNREADABLE','INVALID_JSON','INVALID_ENVELOPE',
+              'INVALID_TIMESTAMP','FUTURE_TIMESTAMP','STALE_PUBLICATION',
+              'RECENT_PUBLICATION'].includes(r.signalFile.status)
+            ||!safeSha(r.signalFile.serviceSha)
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalFile.generatedAgeBand)
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalFile.fileAgeBand)
+            ||!['NOT_CHECKED','DEFAULT_FILE_ABSENT','FILE_NOT_VERIFIABLE',
+              'SHA_OR_READ_PATH_MISMATCH_SUSPECT','RECENT_HTTP_AND_FILE',
+              'HTTP_FILE_AGE_DISAGREE','CYCLE_FAILED_SUSPECT',
+              'TIMER_NOT_RECENT_SUSPECT','RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT',
+              'STALE_PUBLICATION_UNEXPLAINED','UNRESOLVED'].includes(r.staleCause)
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
             ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
@@ -273,6 +289,10 @@ jobs:
                    r.signalHealth.snapshotFresh,r.signalHealth.serviceSha||'none'].join(' / '),
                 '- Signal V3 snapshot age band: '+r.signalHealth.snapshotAgeBand,
                 '- Signal V3 last cycle started age band: '+r.signalCycle.startedAgeBand,
+                '- Signal V3 default file publication/ages: '+
+                  [r.signalFile.status,r.signalFile.generatedAgeBand,
+                    r.signalFile.fileAgeBand].join(' / '),
+                '- Signal V3 stale cause hypothesis: '+r.staleCause,
                 '- Signal V3 fixed oneshot cycle unit/result/exit/started: '+
                   [r.signalCycle.unitState,r.signalCycle.lastResult,
                     r.signalCycle.exitCode===null?'unknown':r.signalCycle.exitCode,

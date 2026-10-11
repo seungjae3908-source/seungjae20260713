@@ -173,3 +173,16 @@ These are Draft-only contract/observability improvements, not a diagnosis of
 live cycle failure until owner-protected Production read-only QA is separately
 approved and executed after a separately approved merge. No restart, forced
 rescan, Telegram sends, DB writes or trading actions occur in this Draft.
+
+## Draft v6: fixed-path V3 publication health and systemd cycle correlation
+
+Owner-protected Production read-only QA additionally reads only the
+default public state file, with a fixed canonical path, `O_NOFOLLOW`,
+file-descriptor based check, and a 4 MiB cap. It emits only whitelisted
+age bands, source SHA and safe failure labels; no symbols, OHLCV, tokens,
+users, or file paths are returned. It distinguishes timer-old,
+producer-failed, recent-cycle-but-stale-file, and HTTP/file disagreement.
+An absent default path does NOT prove no custom state directory exists.
+This is a Draft diagnostic, not real remediation; a new exact-head
+owner-approved protected Production QA is needed after a separately
+approved merge. No operations on PM2, DB, systemd, Telegram or trades.
