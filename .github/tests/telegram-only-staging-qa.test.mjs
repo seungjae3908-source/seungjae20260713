@@ -325,3 +325,33 @@ test('Staging TLS certificate failure is distinct from TCP disconnect and never 
   assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_TCP_DETAIL'),
     {code:'ECONNRESET'})),'IPV4_TLS_CONNECT_FAILED');
 });
+
+test('native ETIMEDOUT errors preserve TCP/TLS phase instead of generic connect failure', async()=>{
+  for(const afterTcp of [false,true]){
+    let lookups=0,connects=0;
+    const verdict=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>{
+        lookups++;cb(null,'149.154.166.110',4);
+      },
+      connectImpl:()=>{
+        connects++;
+        const socket=new EventEmitter();
+        socket.destroyed=false;
+        socket.destroy=()=>{socket.destroyed=true;};
+        queueMicrotask(()=>{
+          if(afterTcp)socket.emit('connect');
+          socket.emit('error',Object.assign(
+            new Error('DO_NOT_LOG_PROVIDER_PRIVATE_ROUTING'),
+            {code:'ETIMEDOUT'},
+          ));
+        });
+        return socket;
+      },
+    });
+    assert.equal(lookups,1);
+    assert.equal(connects,1);
+    assert.equal(verdict,afterTcp?'IPV4_TLS_TIMEOUT':'IPV4_TCP_TIMEOUT');
+    assert.ok(SAFE_NETWORK_STATUSES.includes(verdict));
+    assert.equal(JSON.stringify(verdict).includes('PRIVATE_ROUTING'),false);
+  }
+});

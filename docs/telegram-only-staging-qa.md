@@ -81,3 +81,12 @@ Telegram hostname SNI and the CA chain; hostname mismatches, missing CA
 issuers and expired/invalid certificates have an explicit bounded
 `IPV4_TLS_CERT_FAILED` classification rather than a generic network error.
 This does not change actual Production egress or prove real connectivity.
+
+## Native socket timeout error classification (Draft)
+
+Node networking may report an actual TCP/TLS timeout through the socket
+`error` event (for example `ETIMEDOUT`) rather than the timer event.
+The read-only Staging probe now keeps the same phase-specific timeout
+codes for both paths. No automatic retry or Telegram message send is
+authorized. Deterministic tests prove that error text and addresses are
+not included in reported receipts.
