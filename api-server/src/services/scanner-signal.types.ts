@@ -23,6 +23,24 @@ export type ScannerSignalState =
   | 'WATCHING'
   | 'READY_FOR_APPROVAL'
   | 'WEAKENED';
+
+export type ScannerDecisionOutcome =
+  | 'LONG_REVIEW'
+  | 'SHORT_REVIEW'
+  | 'WATCH'
+  | 'BLOCKED'
+  | 'NO_TRADE';
+
+export interface ScannerDecisionHistoryEntry {
+  sequence: number;
+  state: ScannerSignalState;
+  direction: ScannerSignalDirection;
+  action: ScannerTradeAction | null;
+  decision: ScannerDecisionOutcome;
+  eligible: boolean;
+  observedAt: string;
+  reasons: string[];
+}
 export type ScannerEvidenceStatus = 'matched' | 'not_matched' | 'unverified';
 export type ScannerDataState =
   | 'complete'
@@ -123,6 +141,11 @@ export interface ScannerBacktestQualitySummary {
   survivorshipGuarded?: boolean;
   oos?: boolean;
   walkForward?: boolean;
+  fullCostVerified?: boolean;
+  forwardVerified?: boolean;
+  forwardSampleCount?: number | null;
+  paperVerified?: boolean;
+  paperSampleCount?: number | null;
   source?: string | null;
 }
 
@@ -143,6 +166,37 @@ export interface ScannerCandidateRankingSummary {
   hardFilterReasons: string[];
 }
 
+export interface ScannerThemeSwingBreakdown {
+  themeMomentum: number;
+  leaderStrength: number;
+  trendStructure: number;
+  volumeParticipation: number;
+  catalystEvidence: number;
+  liquidityQuality: number;
+  riskQuality: number;
+}
+
+export interface ScannerThemeSwingSummary {
+  contract: 'ScannerThemeSwingV1';
+  version: 'theme-swing-v1';
+  state: 'ELIGIBLE' | 'WATCH' | 'REJECT' | 'UNCLASSIFIED';
+  score: number;
+  themeKey: string | null;
+  themeLabel: string | null;
+  classificationSource: 'CATALOG' | 'CURATED_CRYPTO' | 'UNCLASSIFIED';
+  memberCount: number;
+  positiveBreadthPercent: number | null;
+  leaderRank: number | null;
+  leader: boolean;
+  trigger: 'BREAKOUT' | 'PULLBACK' | 'TREND_CONTINUATION' | 'UNCONFIRMED';
+  breakdown: ScannerThemeSwingBreakdown;
+  reasons: string[];
+  blockers: string[];
+  executionAuthority: 'NONE';
+  orderSubmitted: false;
+  exchangeRequestSent: false;
+}
+
 export interface ScannerSignalCard {
   signalId: string;
   assetClass: ScannerAssetClass;
@@ -158,6 +212,7 @@ export interface ScannerSignalCard {
   direction: ScannerSignalDirection;
   action?: ScannerTradeAction;
   signalState: ScannerSignalState;
+  decisionHistory?: ScannerDecisionHistoryEntry[];
   score: number;
   confidence: number;
   dataCompleteness: number;
@@ -186,6 +241,7 @@ export interface ScannerSignalCard {
   aiValidation?: ScannerAiValidationSummary;
   backtestQuality?: ScannerBacktestQualitySummary;
   candidateRanking?: ScannerCandidateRankingSummary;
+  themeSwing?: ScannerThemeSwingSummary;
 }
 
 export interface ScannerDiscoveryCard {
