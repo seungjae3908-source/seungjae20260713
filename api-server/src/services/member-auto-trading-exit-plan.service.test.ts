@@ -49,7 +49,8 @@ test('exit plan is reduce-only and bound to entry identity',()=>{
     reason:'TAKE_PROFIT',
   });
   assert.equal(input.reduceOnly,true);
-  assert.equal(input.side,'long');
+  // A LONG futures entry is closed with reduce-only SHORT; do not reverse the position.
+  assert.equal(input.side,'short');
   assert.equal(input.accountMode,'paper');
   assert.ok(input.signalReasons.includes(`AUTO_EXIT_ENTRY_PLAN:${entry.id}`));
   assert.equal(input.targetPrices.length,0);
@@ -119,5 +120,8 @@ test('automatic exit cannot exceed existing fill or cross owner/entry identity',
     /BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED/);
   assert.throws(()=>buildAutomaticExitPlanInput({...base,entryOrder:{...ord,state:'REJECTED'}}),
     /BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED/);
-  assert.equal(buildAutomaticExitPlanInput({...base,remainingQuantity:0.25}).quantity,0.25);
+  const reducingShort = buildAutomaticExitPlanInput({...base,remainingQuantity:0.25});
+  assert.equal(reducingShort.quantity,0.25);
+  assert.equal(reducingShort.side,'long');
+  assert.equal(reducingShort.reduceOnly,true);
 });
