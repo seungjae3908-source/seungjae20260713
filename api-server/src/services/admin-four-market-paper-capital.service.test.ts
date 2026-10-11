@@ -3,6 +3,8 @@ import test from 'node:test';
 // Paper-only deterministic research campaign lifecycle; never a LIVE or wallet writer.
 import './paper-research-round-lifecycle.service.test';
 import './paper-research-trade-attribution.service.test';
+import './paper-research-round-proposal-store.service.test';
+import './paper-research-round-proposal-migration.test';
 import type { StoredPaperJournalRecord, PaperJournalSyncRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
