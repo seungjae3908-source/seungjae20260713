@@ -6,7 +6,7 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('trading shell separates Auto and Paper routes and removes the duplicate Paper menu entry', () => {
+test('trading shell separates Auto and Paper routes without duplicate in-page mode tabs', () => {
   const page = source('src/pages/auto-trading.tsx');
   const paper = source('src/pages/paper-trading.tsx');
   const workspace = source('src/pages/technical-workspace.tsx');
@@ -19,7 +19,8 @@ test('trading shell separates Auto and Paper routes and removes the duplicate Pa
   expect(workspace).toContain("{ value: 'trade', label: '자동매매' }");
   expect(workspace).toContain("trade: '자동매매'");
   expect(navigation).toContain("label: '자동매매'");
-  expect(navigation.match(/id: 'paper-trading'/g) ?? []).toHaveLength(1);
+  expect(navigation).toContain("label: '모의매매'");
+  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(1);
   expect(navigation).not.toContain("label: '승인형 주문'");
 });
 
