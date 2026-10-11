@@ -32,3 +32,36 @@ export function bindPublicStockCandleSource(service, fetchCandles, { now = Date.
     service.getCandlesMeta = previousMeta;
   };
 }
+
+/** A curated eligible public-only roster may exclude verified listed codes.
+ * Search of the eligible page cannot certify the EXCLUDED roster as scanned.
+ * Keep the existing zero-authority V3 batch research cycle rotating, but
+ * explicitly mark the entire market lane as incomplete until coverage exists.
+ */
+export function enforcePublicStockRosterCoverage(response, roster) {
+  const raw=roster?.rawTotalCount;
+  const eligible=roster?.totalCount;
+  const excluded=roster?.explainedExcludedCount;
+  const knownExcluded=Number.isSafeInteger(excluded)&&excluded>0;
+  const knownGap=Number.isSafeInteger(raw)
+    && Number.isSafeInteger(eligible)&&raw>eligible;
+  if(!knownExcluded&&!knownGap)return response;
+  if(!response||typeof response!=='object'||!response.universe
+    ||!response.execution||!Number.isSafeInteger(eligible)||eligible<1
+    ||!Number.isSafeInteger(raw)||raw<eligible
+    ||!Number.isSafeInteger(excluded)||excluded<0) {
+    throw new Error('PUBLIC_STOCK_ROSTER_EVIDENCE_INCONSISTENT');
+  }
+  return {
+    ...response,
+    universe:{...response.universe,partial:true},
+    execution:{...response.execution,partial:true},
+    dataState:response.dataState==='complete'?'partial':response.dataState,
+    publicRosterCoverage:Object.freeze({
+      eligibleTotalCount:eligible,
+      rawTotalCount:raw,
+      explainedExcludedCount:excluded,
+      fullRosterProven:false,
+    }),
+  };
+}

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindPublicStockCandleSource } from '../src/public-stock-candle-binding.mjs';
+import { bindPublicStockCandleSource, enforcePublicStockRosterCoverage } from '../src/public-stock-candle-binding.mjs';
+import { classifyPublicCycleLaneStatus } from '../src/public-cycle-coverage.mjs';
 
 const at=Date.parse('2026-10-11T05:00:00.000Z');
 test('Signal V3 public binding covers the actual stock-scanner metadata path',async()=>{
@@ -45,4 +46,33 @@ test('binding rejects malformed providers without leaving a partial override',()
   const getCandles=async()=>[],service={getCandles,getCandlesMeta:async()=>({candles:[]})};
   assert.throws(()=>bindPublicStockCandleSource(service,null),/PUBLIC_STOCK_BINDING_INVALID/);
   assert.equal(service.getCandles,getCandles);
+});
+
+test('known KRX public-roster exclusions cannot silently become complete coverage',()=>{
+  const response={
+    universe:{source:'krx-symbol-master',totalCount:4010,cursor:0,
+      nextCursor:20,partial:false,stale:false,providerErrorCount:0},
+    execution:{requestedCount:20,startedCount:20,completedCount:20,
+      providerErrorCount:0,timeoutCount:0,partial:false,
+      timedOut:false,cancelled:false,duplicate:false},
+    cards:[],dataState:'complete',outcome:'VALID_ZERO_SIGNAL',
+  };
+  assert.equal(classifyPublicCycleLaneStatus(response),'VALID_NO_TRADE');
+  const incomplete=enforcePublicStockRosterCoverage(response,{
+    totalCount:4010,rawTotalCount:6847,explainedExcludedCount:2837,
+  });
+  assert.equal(incomplete.universe.partial,true);
+  assert.equal(incomplete.execution.partial,true);
+  assert.equal(incomplete.dataState,'partial');
+  assert.equal(incomplete.publicRosterCoverage.fullRosterProven,false);
+  assert.equal(incomplete.publicRosterCoverage.explainedExcludedCount,2837);
+  assert.equal(classifyPublicCycleLaneStatus(incomplete),'BLOCKED_DATA');
+  assert.equal(response.universe.partial,false);
+  const complete=enforcePublicStockRosterCoverage(response,{
+    totalCount:4010,rawTotalCount:4010,explainedExcludedCount:0,
+  });
+  assert.equal(complete,response);
+  assert.throws(()=>enforcePublicStockRosterCoverage(response,{
+    totalCount:4010,rawTotalCount:3999,explainedExcludedCount:1,
+  }),/EVIDENCE_INCONSISTENT/);
 });
