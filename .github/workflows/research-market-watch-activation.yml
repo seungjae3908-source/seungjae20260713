@@ -134,6 +134,7 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: production
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
