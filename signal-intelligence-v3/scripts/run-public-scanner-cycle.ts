@@ -24,6 +24,7 @@ import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs
 import {createPublicKrAlphaHistoricalDailyFeed} from '../src/public-kr-alpha-historical-daily.mjs';
 import {publicKrAlphaDailyQuote} from '../src/public-kr-alpha-daily.mjs';
 import {includeProvisionalKrAlphanumericRoster} from '../src/public-kr-provisional-roster.mjs';
+import {suppressProvisionalKrResearchSignals} from '../src/public-kr-provisional-filter.mjs';
 import {
   classifyPublicCycleLaneStatus,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
@@ -332,21 +333,20 @@ async function scanStock(lane, cursor) {
       batchSize: lane.batchSize,
       strategyMode: lane.strategyMode,
     });
+    // Strip provisional symbols from BOTH cards and alert identities before
+    // handing the research result to canonical V3 adapter. A public candle
+    // sample is not evidence of live listing/permission to trade.
+    const safe = suppressProvisionalKrResearchSignals(scanned,targetUniverse);
     return withScannerCanonicalActions({
-      ...scanned,
+      ...safe,
       universe: {
-        ...scanned.universe,
+        ...safe.universe,
         rosterDigest: hashPublicStockSourceRoster(lane.market,targetUniverse.source,targetUniverse.entries,createHash),
       },
-      cards: scanned.cards
-        // An UNKNOWN listing with one public historical sample is NOT a
-        // signal candidate. Keep it visible in coverage/audit evidence only.
-        .filter((card) => !targetUniverse.entries.some((entry) =>
-          entry.ticker === card.symbol && entry.publicResearchProvisional === true))
-        .map((card) => ({
-          ...card,
-          dataSources: [...new Set([...card.dataSources, 'yahoo-public'])],
-        })),
+      cards: safe.cards.map((card) => ({
+        ...card,
+        dataSources: [...new Set([...card.dataSources, 'yahoo-public'])],
+      })),
     });
   });
 }
