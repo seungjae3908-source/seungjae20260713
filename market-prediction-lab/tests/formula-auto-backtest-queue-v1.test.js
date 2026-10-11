@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -228,6 +228,59 @@ test('queue persists immutable audit results and repeated processing is idempote
   assert.equal(second.scanned, 1);
   const repeatedFiles = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
   assert.deepEqual(repeatedFiles, resultFiles);
+});
+
+test('unsafe symlink or oversized TRAIN queue inputs are rejected before evaluation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-unsafe-input-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  await mkdir(inbox, { recursive: true });
+  const source = join(root, 'original.json');
+  const candidate = join(inbox, 'candidate.json');
+  await writeFile(source, JSON.stringify(queueItem()), { mode: 0o600 });
+  await symlink(source, candidate);
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'e'.repeat(40) }),
+    /FORMULA_QUEUE_INPUT_UNSAFE_FILE/,
+  );
+  await unlink(candidate);
+  await writeFile(candidate, JSON.stringify(queueItem()), { mode: 0o600 });
+  await truncate(candidate, 64 * 1024 * 1024 + 1);
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'e'.repeat(40) }),
+    /FORMULA_QUEUE_INPUT_UNSAFE_FILE/,
+  );
+});
+
+test('linked and oversized cached results cannot re-enter the Paper registry', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-unsafe-cache-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  await mkdir(inbox, { recursive: true });
+  await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()), { mode: 0o600 });
+  const researchCodeSha = 'e'.repeat(40);
+  const first = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(first.paperRegisteredCount, 0);
+  const outputs = join(root, 'formula-backtest', 'results');
+  const names = await readdir(outputs);
+  assert.equal(names.length, 1);
+  const resultPath = join(outputs, names[0]);
+  const safeBackup = join(root, 'cached-backup.json');
+  await rename(resultPath, safeBackup);
+  await symlink(safeBackup, resultPath);
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+    /FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE/,
+  );
+  await unlink(resultPath);
+  await rename(safeBackup, resultPath);
+  await truncate(resultPath, 64 * 1024 * 1024 + 1);
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+    /FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE/,
+  );
+  const registry = JSON.parse(await readFile(
+    join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
+  assert.equal(registry.entryCount, 0);
+  assert.equal(registry.executionAuthority, 'NONE');
 });
 
 test('bounded queue rotates across older files without starvation and preserves durable results', async () => {
