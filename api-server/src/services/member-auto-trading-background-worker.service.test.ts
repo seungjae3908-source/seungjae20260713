@@ -1,4 +1,6 @@
 import test from 'node:test';
+// Run canonical exit identity regressions in the already registered phase12 lane.
+import './member-auto-trading-exit-plan.service.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';

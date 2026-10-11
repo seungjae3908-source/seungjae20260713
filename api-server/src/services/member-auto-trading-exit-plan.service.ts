@@ -45,13 +45,39 @@ export function buildAutomaticExitPlanInput(input: {
   remainingQuantity?: number;
 }): TradingPlanInput {
   const { entryPlan, entryOrder, mark, fx, reason } = input;
+  // This is a simulated/live *reducing exit*, never authority to close a
+  // different owner's, plan's or exchange's position.
+  if (entryPlan.reduceOnly || entryOrder.planId !== entryPlan.id
+    || entryOrder.userId !== entryPlan.userId
+    || entryOrder.exchange !== entryPlan.exchange
+    || !['FILLED', 'PARTIALLY_FILLED'].includes(entryOrder.state)
+    || !positive(entryOrder.filledQuantity)) {
+    throw new Error('BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED');
+  }
   const quantity = input.remainingQuantity ?? entryOrder.filledQuantity;
   if (!positive(quantity)) throw new Error('BACKGROUND_EXIT_FILLED_QUANTITY_REQUIRED');
-  if (!positive(mark.price) || mark.market !== (
-    entryPlan.exchange === 'upbit' ? 'CRYPTO_SPOT'
-      : entryPlan.exchange === 'bitget' ? 'CRYPTO_FUTURES'
-        : entryPlan.market === 'US' ? 'US_STOCK' : 'KR_STOCK'
-  )) throw new Error('BACKGROUND_EXIT_MARK_IDENTITY_MISMATCH');
+  if (quantity > entryOrder.filledQuantity + Math.max(1e-9, entryOrder.filledQuantity * 1e-8)) {
+    throw new Error('BACKGROUND_EXIT_OVERFILLED_QUANTITY_FORBIDDEN');
+  }
+  const expectedMarket = entryPlan.exchange === 'upbit' ? 'CRYPTO_SPOT'
+    : entryPlan.exchange === 'bitget' ? 'CRYPTO_FUTURES'
+      : entryPlan.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
+  if (!positive(mark.price) || mark.market !== expectedMarket) {
+    throw new Error('BACKGROUND_EXIT_MARK_IDENTITY_MISMATCH');
+  }
+  const normalizedSymbol = (value: string) => value.trim().toUpperCase().replace(/^KRW-/u, '');
+  if (!normalizedSymbol(mark.symbol) || normalizedSymbol(mark.symbol) !== normalizedSymbol(entryPlan.symbol)) {
+    throw new Error('BACKGROUND_EXIT_MARK_SYMBOL_MISMATCH');
+  }
+  if (typeof mark.source !== 'string' || !mark.source.trim()) {
+    throw new Error('BACKGROUND_EXIT_MARK_SOURCE_REQUIRED');
+  }
+  if (fx.market !== expectedMarket || fx.stale !== false
+    || !positive(fx.krwPerQuoteCurrency)
+    || typeof fx.source !== 'string' || !fx.source.trim()
+    || !Number.isFinite(Date.parse(fx.observedAt))) {
+    throw new Error('BACKGROUND_EXIT_FX_IDENTITY_MISMATCH');
+  }
   const estimatedKrw = quantity * mark.price * fx.krwPerQuoteCurrency;
   if (!positive(estimatedKrw)) throw new Error('BACKGROUND_EXIT_ORDER_KRW_INVALID');
   const observedMs = Date.parse(mark.observedAt);
