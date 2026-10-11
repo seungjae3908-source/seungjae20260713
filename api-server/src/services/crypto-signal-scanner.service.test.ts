@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createCryptoSignalScannerService,
+  cryptoScannerTraversalUniverse,
+  SIGNAL_V3_PUBLIC_CRYPTO_MEMBER,
   type CryptoCandle,
   type CryptoScannerProviders,
   type CryptoTicker,
@@ -294,4 +296,65 @@ test('Williams futures permits SHORT while spot keeps SHORT disabled', () => {
   assert.equal(spot.status, 'NO_ENTRY');
   assert.equal(spot.direction, null);
   assert.ok(spot.reasons.includes('spot_short_disabled'));
+});
+
+test('V3 public cursor covers six stable crypto symbols despite shifting 24h turnover ranks', async()=>{
+  const instruments=['ALPHA','BETA','CHI','DELTA','EPSILON','ZETA'];
+  for(const market of ['spot','futures'] as const){
+    let cycles=0;
+    const scanned:string[]=[];
+    const v3=providers({
+      getUniverse:async()=> {
+        cycles+=1;
+        const order=cycles===1?[...instruments].reverse():[...instruments];
+        return universe(order.map((symbol,index)=>({
+          ...ticker(symbol),tradingValue:(6-index)*100000,
+        })),market==='spot'?'upbit-public':'bitget-public');
+      },
+      getSpread:async (_market,row)=>{
+        scanned.push(row.symbol);
+        return {bid:row.bid,ask:row.ask};
+      },
+    });
+    const instance=createCryptoSignalScannerService(v3);
+    const shared={...request(market),memberId:SIGNAL_V3_PUBLIC_CRYPTO_MEMBER,
+      batchSize:5};
+    const first=await instance.scan({...shared,cursor:0});
+    const second=await instance.scan({...shared,cursor:5});
+    assert.equal(first.universe.totalCount,6);
+    assert.equal(first.universe.cursor,0);
+    assert.equal(first.universe.nextCursor,5);
+    assert.equal(second.universe.cursor,5);
+    assert.equal(second.universe.nextCursor,null);
+    assert.deepEqual(scanned,instruments,
+      market+': each eligible symbol should appear exactly once in stable cursor order');
+    assert.equal(first.orderSubmitted,false);
+    assert.equal(second.orderSubmitted,false);
+  }
+});
+test('normal member ticker priority and Forward behavior do not inherit V3-only sorting',async()=>{
+  const ordered=[ticker('ZETA'),ticker('ALPHA'),ticker('DELTA'),
+    ticker('BETA'),ticker('CHI'),ticker('EPSILON')];
+  const base=universe(ordered);
+  assert.equal(cryptoScannerTraversalUniverse(base,'member-1'),base);
+  assert.equal(cryptoScannerTraversalUniverse(base,'forward-observer-public-only'),base);
+  assert.deepEqual(cryptoScannerTraversalUniverse(base,SIGNAL_V3_PUBLIC_CRYPTO_MEMBER)
+    .rows.map(r=>r.symbol),['ALPHA','BETA','CHI','DELTA','EPSILON','ZETA']);
+  assert.deepEqual(base.rows.map(r=>r.symbol),ordered.map(r=>r.symbol),
+    'the provider and all other consumers retain their original 24h-rank order');
+});
+test('invalid or duplicated V3 crypto symbol identities fail closed before any candles',async()=>{
+  for(const broken of [
+    [ticker('BTC'),ticker('BTC')],
+    [ticker('BTC'),ticker('')],[ticker('BTC'),ticker('ETH@SECRET')],
+  ]){
+    const adapter=providers({
+      getUniverse:async()=>universe(broken),
+      getCandles:async()=>{throw Error('CANDLES_MUST_NOT_BE_REQUESTED');},
+    });
+    const scanner=createCryptoSignalScannerService(adapter);
+    await assert.rejects(scanner.scan({
+      ...request('spot'),memberId:SIGNAL_V3_PUBLIC_CRYPTO_MEMBER,
+    }),/V3_PUBLIC_ROSTER_(?:DUPLICATE_SYMBOL|SYMBOL_INVALID)/);
+  }
 });
