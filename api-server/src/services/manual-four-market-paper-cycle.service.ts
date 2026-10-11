@@ -39,8 +39,10 @@ export type ManualPaperFourCostEvidence=Readonly<{
   signedFundingKrw:number;
   entryFxKrwPerQuote:number;
   exitFxKrwPerQuote:number;
-  fxSourceId:string;
-  fxObservedAtMs:number;
+  entryFxSourceId:string;
+  entryFxObservedAtMs:number;
+  exitFxSourceId:string;
+  exitFxObservedAtMs:number;
 }>;
 export type ManualPaperFourMarketSelection=Readonly<{
   ownerId:string;
@@ -120,7 +122,7 @@ const sha=(v:string)=>createHash('sha256').update(v).digest('hex');
 function blocked(input:ManualPaperFourMarketCycleInput,blockers:string[]):ManualPaperFourMarketCycle{
   return Object.freeze({
     status:'BLOCKED',blockers:Object.freeze([...new Set(blockers)]),
-    market:input?.selected?.market,side:input?.selected?.side,
+    market:input?.selected?.market??null,side:input?.selected?.side??null,
     mode:'manual' as const,closedCycleId:null,grossPnlKrw:null,netPnlKrw:null,
     verifiedCostsKrw:null,entryPrice:null,exitPrice:null,quantity:null,
     updatedOperatingCapitalKrw:null,updatedLockedReserveKrw:null,
@@ -141,6 +143,8 @@ export function evaluateManualFourMarketPaperClosedCycle(
 ):ManualPaperFourMarketCycle {
   const blockers:string[]=[];
   const add=(code:string)=>{if(!blockers.includes(code))blockers.push(code);};
+  if(!input||typeof input!=='object')
+    return blocked(input,['PAPER_CYCLE_EVIDENCE_MISSING']);
   const {selected:s,verifiedOwner:o,entryQuote:e,exitQuote:x,costs:c,nowMs}=input;
   if(!Number.isSafeInteger(nowMs)||nowMs<=0)add('PAPER_CYCLE_CLOCK_INVALID');
   if(!s||!o||!e||!x||!c)return blocked(input,['PAPER_CYCLE_EVIDENCE_MISSING']);
@@ -199,12 +203,18 @@ export function evaluateManualFourMarketPaperClosedCycle(
     ||x.sourceId===e.sourceId
   ))add('PAPER_CYCLE_UNVERIFIED_OR_FUTURE_TIMELINE');
   if(c.status!=='SERVER_COST_EVIDENCE_READY'||!idPattern.test(c.sourceId)
-    ||!idPattern.test(c.fxSourceId)
+    ||!idPattern.test(c.entryFxSourceId)||!idPattern.test(c.exitFxSourceId)
     ||!Number.isSafeInteger(c.observedAtMs)||c.observedAtMs<x.observedAtMs
     ||c.observedAtMs>nowMs
-    ||!Number.isSafeInteger(c.fxObservedAtMs)
-    ||c.fxObservedAtMs<=0||c.fxObservedAtMs>nowMs
-    ||nowMs-c.fxObservedAtMs>FRESH
+    // Entry FX must have been known *before* entry, and close-time FX before
+    // exit. Future observations cannot backfill a winning simulation.
+    ||!Number.isSafeInteger(c.entryFxObservedAtMs)
+    ||!Number.isSafeInteger(c.exitFxObservedAtMs)
+    ||c.entryFxObservedAtMs>e.observedAtMs
+    ||c.exitFxObservedAtMs>x.observedAtMs
+    ||e.observedAtMs-c.entryFxObservedAtMs>FRESH
+    ||x.observedAtMs-c.exitFxObservedAtMs>FRESH
+    ||c.entryFxObservedAtMs<=0||c.exitFxObservedAtMs<=0
     ||![c.entryCommissionRate,c.exitCommissionRate].every(
       n=>riskAllowed(n)&&n<=0.05)
     ||!riskAllowed(c.spreadAndSlippageKrw)||!riskAllowed(c.taxKrw)
@@ -266,7 +276,10 @@ export function evaluateManualFourMarketPaperClosedCycle(
     entryObservedAtMs:e.observedAtMs,exitObservedAtMs:x.observedAtMs,
     entryPrice,exitPrice,quantity:qty,
     quoteCurrency:e.currency,entrySourceId:e.sourceId,exitSourceId:x.sourceId,
-    costsSourceId:c.sourceId,fxSourceId:c.fxSourceId,
+    costsSourceId:c.sourceId,
+    entryFxSourceId:c.entryFxSourceId,exitFxSourceId:c.exitFxSourceId,
+    entryFxObservedAtMs:c.entryFxObservedAtMs,
+    exitFxObservedAtMs:c.exitFxObservedAtMs,
     grossPnlKrw:cents(grossKrw),commissionKrw:cents(commissionKrw),
     slippageKrw:cents(c.spreadAndSlippageKrw),
     taxKrw:cents(c.taxKrw),fundingCostKrw:cents(c.signedFundingKrw),
