@@ -18,6 +18,8 @@ import {
   decidePublicCycleCursor,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
   parsePublicRetryAfterMs,
+  publicUpbitGroupForUrl,
+  createPublicUpbitGroupPacer,
 } from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -96,22 +98,6 @@ function fallbackExpiry(lane, nowMs) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function createStartScheduler(minIntervalMs) {
-  let tail = Promise.resolve();
-  let nextStartAt = 0;
-  return async (operation) => {
-    let release;
-    const previous = tail;
-    tail = new Promise((resolve) => { release = resolve; });
-    await previous;
-    const delayMs = Math.max(0, nextStartAt - Date.now());
-    if (delayMs > 0) await sleep(delayMs);
-    nextStartAt = Date.now() + minIntervalMs;
-    release();
-    return operation();
-  };
 }
 
 async function fetchText(url) {
@@ -201,34 +187,38 @@ async function withProviderFallback(candidates, operation) {
 
 async function withUpbitPacing(operation) {
   const originalFetch = globalThis.fetch;
-  // Each Research V3 Spot lane consumes multiple candle/context/orderbook
-  // groups per symbol. 130ms bursts were observed receiving Upbit HTTP 429.
-  // Pacing remains public/read-only; rejected responses never become signals.
-  const schedule = createStartScheduler(350);
+  // Official public Quotation rate limits are separated by IP/group.
+  // Only Research V3 uses this pacing: shared member, Forward, futures,
+  // Paper worker timeouts and trading authority are unchanged.
+  const pacer = createPublicUpbitGroupPacer();
   globalThis.fetch = async (input, init = {}) => {
     const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : String(input?.url ?? '');
-    let parsed;
-    try { parsed = new URL(rawUrl); } catch { return originalFetch(input, init); }
-    if (parsed.hostname !== 'api.upbit.com') return originalFetch(input, init);
+    const group = publicUpbitGroupForUrl(rawUrl);
+    if (group === null) return originalFetch(input, init);
+    const signal = init?.signal ?? (typeof input === 'object' ? input?.signal : undefined);
 
     let lastError;
     let lastResponse;
     for (let attempt = 1; attempt <= 4; attempt += 1) {
+      if (signal?.aborted) throw signal.reason ?? new Error('UPBIT_PUBLIC_V3_ABORTED');
       try {
-        const response = await schedule(() => originalFetch(input, init));
+        const response = await pacer.schedule(group, () => originalFetch(input, init), signal);
         lastResponse = response;
-        if (response.status !== 429) return response;
-        if (attempt < 4) {
-          // Respect HTTP-date as well as numeric Retry-After. Malformed or
-          // >10s cooldowns return the real 429 without guessing or retrying.
-          const providerDelay = parsePublicRetryAfterMs(response.headers.get('retry-after'));
-          if (providerDelay !== null && providerDelay > 10_000) return response;
-          const backoff = Math.max(providerDelay ?? 0, 750 * attempt);
-          await sleep(backoff);
+        if (response.status === 418) {
+          // Public IP ban: block this group's queued calls; never retry 418.
+          pacer.cooldown(group, 10_000);
+          return response;
         }
+        if (response.status !== 429) return response;
+        // Provider cooldown applies to the whole public group, not just
+        // the individual caller; unknown/long cooldowns fail closed.
+        const providerDelay = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+        const backoff = Math.max(providerDelay ?? 0, 750 * attempt);
+        pacer.cooldown(group, Math.min(backoff, 10_000));
+        if (providerDelay !== null && providerDelay > 10_000) return response;
       } catch (error) {
         lastError = error;
-        if (init?.signal?.aborted) throw error;
+        if (signal?.aborted) throw error;
         if (attempt < 4) await sleep(250 * attempt);
       }
     }

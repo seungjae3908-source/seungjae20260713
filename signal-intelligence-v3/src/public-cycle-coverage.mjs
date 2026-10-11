@@ -37,6 +37,87 @@ export function parsePublicRetryAfterMs(value, nowMs = Date.now()) {
   return Number.isFinite(date) ? Math.max(0, date - nowMs) : Number.POSITIVE_INFINITY;
 }
 
+
+// Upbit public quotation quotas are independent per endpoint/IP group.
+// These conservative limits only apply to the isolated V3 Research worker.
+export const PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS = Object.freeze({
+  market: 350, ticker: 350, candle: 250, orderbook: 350,
+});
+
+export function publicUpbitGroupForUrl(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { return null; }
+  if (url.hostname !== 'api.upbit.com') return null;
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || url.hash)
+    throw new Error('PUBLIC_V3_UPBIT_UNSAFE_ENDPOINT');
+  const path = url.pathname;
+  if (/^\/v1\/candles\/(?:days|minutes\/[0-9]+)$/u.test(path)) return 'candle';
+  if (path === '/v1/orderbook' || path === '/v1/orderbook/instruments') return 'orderbook';
+  if (path === '/v1/ticker') return 'ticker';
+  if (path === '/v1/market/all') return 'market';
+  throw new Error('PUBLIC_V3_UPBIT_UNSAFE_ENDPOINT');
+}
+
+function abortReason(signal) {
+  return signal?.reason instanceof Error
+    ? signal.reason : new Error('PUBLIC_V3_UPBIT_REQUEST_ABORTED');
+}
+
+function abortableGroupWait(ms, signal) {
+  if (signal?.aborted) return Promise.reject(abortReason(signal));
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => { cleanup(); reject(abortReason(signal)); };
+    timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+export function createPublicUpbitGroupPacer({
+  now = Date.now,
+  wait = abortableGroupWait,
+} = {}) {
+  const states = new Map(Object.keys(PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS).map(group =>
+    [group, { nextAt: 0, tail: Promise.resolve() }]));
+  const getState = group => {
+    if (!states.has(group)) throw new Error('PUBLIC_V3_UPBIT_GROUP_UNSUPPORTED');
+    return states.get(group);
+  };
+  return Object.freeze({
+    async schedule(group, operation, signal) {
+      const state = getState(group);
+      const previous = state.tail;
+      let unlock;
+      state.tail = new Promise(resolve => { unlock = resolve; });
+      await previous;
+      try {
+        if (signal?.aborted) throw abortReason(signal);
+        while (now() < state.nextAt) {
+          await wait(state.nextAt - now(), signal);
+          if (signal?.aborted) throw abortReason(signal);
+        }
+        state.nextAt = now() + PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS[group];
+      } finally {
+        // Rate-limit request STARTS; in-flight public transfers can overlap.
+        unlock();
+      }
+      return operation();
+    },
+    cooldown(group, delayMs) {
+      const state = getState(group);
+      if (!Number.isFinite(delayMs) || delayMs < 0)
+        throw new Error('PUBLIC_V3_UPBIT_COOLDOWN_INVALID');
+      state.nextAt = Math.max(state.nextAt, now() + Math.ceil(delayMs));
+    },
+  });
+}
+
 // A full/no-trade classification requires proof that the requested source
 // page was actually completed. A page that silently skips instruments must
 // not be advertised as a completed zero-opportunity scan.

@@ -6,6 +6,9 @@ import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
   parsePublicRetryAfterMs,
+  publicUpbitGroupForUrl,
+  createPublicUpbitGroupPacer,
+  PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS,
 } from '../src/public-cycle-coverage.mjs';
 
 function result(changes={}) {
@@ -287,4 +290,52 @@ test('synthetic four-market paginated research windows visit every eligible inde
   }
   // These are synthetic index-rotation tests, not proof of authentic whole-
   // market quotes, provider uptime, OOS, Paper fills, or profitability.
+});
+
+test('synthetic independent Upbit pacing classifies only permitted public endpoint groups', () => {
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/candles/days?market=KRW-BTC'), 'candle');
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/candles/minutes/240?market=KRW-BTC'), 'candle');
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/orderbook?markets=KRW-BTC'), 'orderbook');
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/orderbook/instruments?markets=KRW-BTC'), 'orderbook');
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/ticker?markets=KRW-BTC'), 'ticker');
+  assert.equal(publicUpbitGroupForUrl('https://api.upbit.com/v1/market/all?isDetails=true'), 'market');
+  assert.equal(publicUpbitGroupForUrl('https://api.bitget.com/api/v2/mix/market/tickers'), null);
+  for (const url of [
+    'https://api.upbit.com/v1/accounts',
+    'https://api.upbit.com/v1/orders',
+    'http://api.upbit.com/v1/orderbook',
+    'https://user:password@api.upbit.com/v1/orderbook',
+    'https://api.upbit.com/v1/orderbook#fragment',
+  ]) assert.throws(() => publicUpbitGroupForUrl(url), /UNSAFE_ENDPOINT/u);
+  assert.equal(PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS.candle, 250);
+  // 5 spot symbols × 2 candle requests = 10 group calls; 9 gaps × 250ms.
+  assert.ok(9 * PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS.candle < 3500);
+  assert.ok(PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS.orderbook >= 100);
+});
+
+test('Upbit V3 separate rate-group queues honor cooldown and cancellation', async () => {
+  let at = 0;
+  const starts = [];
+  const pacer = createPublicUpbitGroupPacer({
+    now: () => at,
+    wait: async ms => { at += ms; },
+  });
+  await Promise.all(Array.from({ length: 10 }, () => pacer.schedule('candle', () => {
+    starts.push(at);
+  })));
+  assert.deepEqual(starts, Array.from({ length: 10 }, (_, i) => i * 250));
+  const before = at;
+  await pacer.schedule('orderbook', () => assert.equal(at, before));
+  pacer.cooldown('orderbook', 1000);
+  await pacer.schedule('orderbook', () => assert.ok(at >= before + 1000));
+  const aborted = new AbortController();
+  aborted.abort(new Error('mock caller stopped'));
+  let unwanted = 0;
+  await assert.rejects(
+    pacer.schedule('candle', () => { unwanted += 1; }, aborted.signal),
+    /mock caller stopped/u,
+  );
+  assert.equal(unwanted, 0);
+  assert.throws(() => pacer.cooldown('candle', Infinity), /COOLDOWN_INVALID/u);
+  await assert.rejects(pacer.schedule('orders', () => {}), /GROUP_UNSUPPORTED/u);
 });
