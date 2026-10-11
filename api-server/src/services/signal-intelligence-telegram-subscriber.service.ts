@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { constants as fileConstants } from 'node:fs';
-import { lstat, open, mkdir, rename, writeFile } from 'node:fs/promises';
+import { lstat, open, mkdir, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {boundedTelegramV3Json,validTelegramV3CurrentSource,
  verifiedTelegramV3PageCount}
@@ -349,9 +349,22 @@ export class SignalIntelligenceTelegramDeliveryState {
     try {
       await mkdir(path.dirname(this.file), { recursive: true });
       const temp = `${this.file}.${process.pid}.tmp`;
-      await writeFile(temp,
-        `${JSON.stringify({ version: 1, delivered: Object.fromEntries(next) }, null, 2)}\n`,
-        { encoding: 'utf8', mode: 0o600 });
+      // Never follow a pre-created link at the predictable temp pathname.
+      // E_EXCL blocks a stale/untrusted temp instead of overwriting a
+      // different file. After Bot API success, any write ambiguity
+      // must stop future sends until the ledger is inspected.
+      const fd = await open(temp,
+        fileConstants.O_WRONLY | fileConstants.O_CREAT
+          | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
+      try {
+        await fd.writeFile(
+          `${JSON.stringify({ version: 1, delivered: Object.fromEntries(next) }, null, 2)}\n`,
+          { encoding: 'utf8' },
+        );
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
       await rename(temp, this.file);
       this.delivered = next;
     } catch {

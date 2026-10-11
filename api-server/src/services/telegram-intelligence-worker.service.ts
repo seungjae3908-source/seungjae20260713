@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { constants as fileConstants } from 'node:fs';
-import { lstat, mkdir, open, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {
   dueTelegramIntelligenceReports,
@@ -136,7 +136,17 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       await mkdir(path.dirname(this.statePath), { recursive: true });
       const temporary = `${this.statePath}.${process.pid}.tmp`;
-      await writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
+      // Pre-existing temp names (including symlinks) are never trusted.
+      // fsync the new fd before atomic rename; stop on any ambiguity.
+      const fd = await open(temporary,
+        fileConstants.O_WRONLY | fileConstants.O_CREAT
+          | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
+      try {
+        await fd.writeFile(serialized,{encoding:'utf8'});
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
       await rename(temporary, this.statePath);
       this.delivered = next;
     } catch {
@@ -168,6 +178,13 @@ function reportLabel(kind: TelegramIntelligenceReportKind): string {
     case 'US_PREMARKET': return '미국장 프리마켓 브리핑';
     case 'WEEKLY': return '주간 브리핑';
   }
+}
+
+export function safeTelegramBriefFailureCode(error: unknown):
+  'TELEGRAM_BRIEF_TIMEOUT' | 'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE' {
+  // Never expose provider exception strings (may include tokens/URLs).
+  return error instanceof Error && error.name === 'AbortError'
+    ? 'TELEGRAM_BRIEF_TIMEOUT' : 'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE';
 }
 
 function reportDetails(kind: TelegramIntelligenceReportKind, localDate: string): string {
@@ -240,7 +257,7 @@ export class TelegramIntelligenceWorker {
           briefSnapshot = await this.collectBrief();
         } catch (error) {
           logger.warn(
-            { error: error instanceof Error ? error.message : 'unknown' },
+            { code: safeTelegramBriefFailureCode(error) },
             'telegram rich market brief unavailable; using safety fallback',
           );
         }
