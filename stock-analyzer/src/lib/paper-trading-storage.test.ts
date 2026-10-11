@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './manual-four-market-paper-status.test';
 import assert from 'node:assert/strict';
 import './paper-flat-recovery-backend.test';
 import { applyPaperTradingAction, createPaperTradingState } from '../../../api-server/src/services/paper-trading-engine.service';
