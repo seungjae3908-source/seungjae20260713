@@ -146,7 +146,7 @@ for (const width of [320, 390, 430, 768, 820, 1440]) {
     const { pageErrors, orderWrites } = await setup(page);
     await page.goto(chartUrl);
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
-    if (width < 768) await page.getByRole('tab', { name: 'AI 생중계', exact: true }).click();
+    if (width < 1024) await page.getByRole('tab', { name: 'AI 생중계', exact: true }).click();
     const feed = page.getByTestId('ai-chart-live-feed');
     await expect(feed).toBeVisible();
     await expect(feed.locator('[data-event-kind="analysis"]')).toHaveCount(1);
