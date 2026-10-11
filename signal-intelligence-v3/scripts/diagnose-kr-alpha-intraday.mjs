@@ -20,4 +20,5 @@ console.log(JSON.stringify({
  publicOnly:true,executionAuthority:'NONE',productionActivated:false,
  noOrderApis:true,fullEligibleRosterVerified:false,
  noRedistributionLicenseVerified:true,firstSessionProbe:result,
+ safeSourceShape:feed.readLastShape(),
 },null,2));

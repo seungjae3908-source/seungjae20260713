@@ -24,6 +24,38 @@ function parseMinute(raw){
  return {at:Date.UTC(year,month-1,day,hour-9,minute),slot,
    session:year+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0')};
 }
+export function inspectPublicKrAlphaSessionShape(payload){
+ const rows=Array.isArray(payload?.priceInfos)?payload.priceInfos:[];
+ const classes={invalidLength:0,invalidDate:0,invalidClock:0,nonzeroSeconds:0,outsideSession:0,validMinute:0};
+ const sessions=new Set(),slots=new Set();
+ let earliest=null,latest=null;
+ for(const row of rows){
+  const raw=String(row?.localDateTime??'');
+  const match=/^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$/u.exec(raw);
+  if(!match){classes.invalidLength++;continue;}
+  const [year,month,day,hour,minute,second]=match.slice(1).map(Number);
+  const check=new Date(Date.UTC(year,month-1,day));
+  if(check.getUTCFullYear()!==year||check.getUTCMonth()!==month-1||check.getUTCDate()!==day){classes.invalidDate++;continue;}
+  if(hour>23||minute>59){classes.invalidClock++;continue;}
+  if(second!==0){classes.nonzeroSeconds++;continue;}
+  const slot=hour*60+minute;
+  if(slot<OPEN_MIN||slot>CLOSE_MIN){classes.outsideSession++;continue;}
+  classes.validMinute++;sessions.add(raw.slice(0,8));slots.add(slot);
+  earliest=earliest===null?slot:Math.min(earliest,slot);
+  latest=latest===null?slot:Math.max(latest,slot);
+ }
+ let missing=0;
+ for(let i=OPEN_MIN;i<CLOSE_MIN;i++)if(!slots.has(i))missing++;
+ const toClock=n=>n===null?null:String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+ return Object.freeze({
+  totalRows:rows.length,classifications:Object.freeze({...classes}),
+  distinctSourceSessions:sessions.size,uniqueMinuteSlots:slots.size,
+  firstClock:toClock(earliest),lastClock:toClock(latest),
+  missingRegularMinutes:missing,
+  sourcePricesRedacted:true,fullMarketSupported:false,executionAuthority:'NONE',
+ });
+}
+
 export function parsePublicKrAlphaOneSession(payload,requestedCode,now=Date.now()){
  const code=krAlphaDailyCode(requestedCode);
  if(!payload||typeof payload!=='object'||Array.isArray(payload)
@@ -107,6 +139,7 @@ export function createPublicKrAlphaOneSessionFeed({
  if(typeof fetchImpl!=='function'||typeof now!=='function'||!Number.isInteger(timeoutMs)
   ||timeoutMs<500||timeoutMs>12000)throw Error('KR_ALPHA_MINUTE_FEED_OPTIONS_INVALID');
  const gate={nextAt:0,tail:Promise.resolve()};
+ let lastShape=null;
  async function read(code){
   const identifier=krAlphaDailyCode(code);
   const wait=gate.tail;
@@ -126,11 +159,14 @@ export function createPublicKrAlphaOneSessionFeed({
    if(!response?.ok)throw Error('KR_ALPHA_MINUTE_HTTP_'+String(response?.status??'UNKNOWN'));
    if(!String(response.headers?.get?.('content-type')??'').toLowerCase().includes('json'))
     throw Error('KR_ALPHA_MINUTE_NONJSON');
-   return parsePublicKrAlphaOneSession(await response.json(),identifier,now());
+   const payload=await response.json();
+   lastShape=inspectPublicKrAlphaSessionShape(payload);
+   return parsePublicKrAlphaOneSession(payload,identifier,now());
   }finally{clearTimeout(timer);}
  }
  return Object.freeze({
   getOneSession:read,
+  readLastShape:()=>lastShape,
   async getCandles(code,timeframe){
    if(!['1m','5m'].includes(timeframe))throw Error('KR_ALPHA_MINUTE_TIMEFRAME_UNSUPPORTED');
    const result=await read(code);

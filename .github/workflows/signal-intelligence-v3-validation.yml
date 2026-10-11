@@ -336,6 +336,9 @@ jobs:
             ||o.fullEligibleRosterVerified!==false||o.noOrderApis!==true)
             process.exit(1);
           console.log('KR_ALPHA_1M5M_PROBE '+JSON.stringify(o.firstSessionProbe));
+          if(o.safeSourceShape?.executionAuthority!=='NONE'||o.safeSourceShape?.sourcePricesRedacted!==true
+            ||o.safeSourceShape?.fullMarketSupported!==false)process.exit(1);
+          console.log('KR_ALPHA_1M5M_SANITIZED_SHAPE '+JSON.stringify(o.safeSourceShape));
           NODE
       - name: Validate true historical daily source normalization
         run: node --test signal-intelligence-v3/tests/public-kr-alpha-historical-daily.test.mjs
