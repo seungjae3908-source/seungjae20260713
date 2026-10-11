@@ -334,9 +334,10 @@ test('automatic policy fields restrict eligibility and standing activation remov
   assert.ok((submitted as TradingPlanInput & { riskEnvelope?: unknown }).riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
-test('risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
+test('LIVE risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
   const decision = evaluateTradingPlan(plan({
+    accountMode: 'live',
     marketSnapshot: { ...plan().marketSnapshot, dataDelayMs: 6_000, oneMinuteMovePercent: -7,
       spreadPercent: 2, orderbookGapPercent: 3, availableBalance: 100, dailyPnlPercent: -5 },
   }), policy, { emergencyStopped: true, serverLiveEnabled: false });
