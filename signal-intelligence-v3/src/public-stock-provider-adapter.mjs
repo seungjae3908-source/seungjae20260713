@@ -8,7 +8,7 @@ export async function withPublicStockProvider({ marketData, yahoo, entries, mark
     if (!clean) throw new Error('PUBLIC_STOCK_SYMBOL_EMPTY');
     if (market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
       const exchange = String(entryByTicker.get(clean)?.exchange ?? '').toUpperCase();
-      if (!/KOSPI|KOSDAQ|코스피|코스닥/u.test(exchange)) throw new Error('PUBLIC_KR_EXCHANGE_MAPPING_UNAVAILABLE');
+      if (!/^(?:KOSPI|KOSDAQ|코스피|코스닥|유가증권)$/u.test(exchange)) throw new Error('PUBLIC_KR_EXCHANGE_MAPPING_UNAVAILABLE');
       return `${clean}.${/KOSDAQ|코스닥/u.test(exchange) ? 'KQ' : 'KS'}`;
     }
     return market === 'US_STOCK' && /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;

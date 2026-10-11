@@ -91,7 +91,7 @@ function yahooSymbol(ticker: string, options: YahooChartRequestOptions = {}) {
   if (isKrTicker(clean)) {
     const exchange = String(options.exchange ?? '').toUpperCase();
     if (/KOSDAQ|코스닥/u.test(exchange)) return `${clean}.KQ`;
-    if (options.purpose === 'scanner' && !/KOSPI|코스피/u.test(exchange)) {
+    if (options.purpose === 'scanner' && !/^(?:KOSPI|코스피|유가증권)$/u.test(exchange)) {
       throw new Error('YAHOO_PROVIDER_KR_EXCHANGE_MAPPING_UNAVAILABLE');
     }
     return `${clean}.KS`;
