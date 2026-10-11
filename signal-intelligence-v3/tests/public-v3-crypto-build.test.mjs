@@ -40,6 +40,10 @@ test('only an exact upstream scanner source can be transformed; Paper source sta
   assert.ok(!source.includes('stablePublicV3CryptoRows'));
   assert.ok(isolated.includes('normalizeV3UpbitCandles(rows, {'));
   assert.ok(!source.includes('normalizeV3UpbitCandles'));
+  assert.ok(isolated.includes('const DEADLINE_MS = 16_000;'));
+  assert.ok(isolated.includes('const ITEM_TIMEOUT_MS = 5_000;'));
+  assert.ok(source.includes('const DEADLINE_MS = 12_000;'));
+  assert.ok(source.includes('const ITEM_TIMEOUT_MS = 3_500;'));
   assert.ok(source.includes('time: finite(row.timestamp)'), 'member and Paper code is untouched');
   assert.throws(()=>patchV3CryptoScannerSource(isolated),/BUILD_CONTRACT_INVALID/);
   assert.throws(()=>patchV3CryptoScannerSource('broken'),/BUILD_CONTRACT_INVALID/);
