@@ -39,8 +39,18 @@ assert(
   'Yahoo hedge success must preserve Kiwoom fallback provenance',
 );
 assert(
-  /if \(isBoundedKrIntradayRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrIntradayCandlesMeta\(ticker, timeframe\);\s*\}/.test(marketDataSource),
+  /if \(isBoundedKrIntradayRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrIntradayCandlesMeta\(ticker, timeframe, options\);\s*\}/.test(marketDataSource),
   'bounded KR intraday requests must never re-enter deep Kiwoom history',
+);
+assert(
+  /async function getBoundedKrIntradayCandlesMeta\([\s\S]*?\): Promise<MarketDataCandlesMeta> \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe, options\);\s*\}/.test(marketDataSource),
+  'bounded KR intraday requests must forward scanner options to the same bounded interactive provider',
+);
+assert(
+  marketDataSource.includes("options.signal?.addEventListener('abort', onParentAbort, { once: true });")
+    && marketDataSource.includes("options.signal?.removeEventListener('abort', onParentAbort);")
+    && /getYahooCandles\(String\(ticker\)\.trim\(\), String\(timeframe\), \{ \.\.\.options, signal: controller\.signal \}\)/.test(marketDataSource),
+  'bounded KR providers must retain parent cancellation, cleanup and the bounded Yahoo signal',
 );
 
 console.log('Production stock chart candle priority contract verified.');
