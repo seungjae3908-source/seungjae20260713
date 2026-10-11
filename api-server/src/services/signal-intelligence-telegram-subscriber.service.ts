@@ -2,7 +2,8 @@ import path from 'node:path';
 import { constants as fileConstants } from 'node:fs';
 import { lstat, open, mkdir, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
-import {boundedTelegramV3Json,validTelegramV3CurrentSource}
+import {boundedTelegramV3Json,validTelegramV3CurrentSource,
+ verifiedTelegramV3PageCount}
  from './telegram-v3-current-source.service';
 import {
   telegramMarketRoomChatId,
@@ -41,6 +42,7 @@ type V3Event = {
 
 type V3Snapshot = {
   serviceSha: string;
+  generatedAt: string;
   safety: {
     executionAuthority: 'NONE';
     privateTradingApiAllowed: false;
@@ -55,7 +57,8 @@ type WatchlistDeliverer = typeof deliverMemberWatchlistTelegramForSignal;
 
 export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
   | 'HTTP_ERROR' | 'INVALID_RESPONSE' | 'UNREACHABLE' | 'TIMEOUT'
-  | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED' | 'OVERLAP';
+  | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED'
+  | 'SOURCE_DATA_BLOCKED' | 'OVERLAP';
 export type SignalTelegramRunResult = {
   attempted: number; delivered: number; queued: number;
   publicDelivered: number; personalDelivered: number; personalQueued: number;
@@ -395,7 +398,10 @@ export class SignalIntelligenceTelegramSubscriber {
       }
       let envelope: V3Envelope;
       try { envelope = await boundedTelegramV3Json(response) as V3Envelope; }
-      catch { result.sourceStatus = 'INVALID_RESPONSE'; return result; }
+      catch {
+        result.sourceStatus = controller.signal.aborted ? 'TIMEOUT' : 'INVALID_RESPONSE';
+        return result;
+      }
       const snapshot = envelope?.snapshot;
       if (envelope?.ok !== true || envelope.executionAuthority !== 'NONE'
         || envelope.serviceSha !== snapshot?.serviceSha
@@ -415,6 +421,10 @@ export class SignalIntelligenceTelegramSubscriber {
         return result;
       }
       sourceReady = true;
+      if (verifiedTelegramV3PageCount(snapshot)===0) {
+        result.sourceStatus = 'SOURCE_DATA_BLOCKED';
+        return result;
+      }
       result.sourceStatus = 'READY';
       for (const event of snapshot.events) {
         try {
@@ -428,7 +438,9 @@ export class SignalIntelligenceTelegramSubscriber {
             timeframe: event.timeframe,
             direction: event.direction,
             validationTier: event.validationTier,
-            occurredAt: now.toISOString(),
+            // Use the verified publication timestamp, not the polling
+            // clock, for personal event-policy/freshness evidence.
+            occurredAt: snapshot.generatedAt,
           });
           mergePersonalResult(result, personal);
         } catch {
