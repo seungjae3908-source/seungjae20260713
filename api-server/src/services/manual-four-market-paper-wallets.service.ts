@@ -33,6 +33,16 @@ export function isManualPaperWalletId(id: unknown): id is string {
     ADMIN_FOUR_PAPER_MARKETS.some(market => id === manualPaperWalletId(role, market)));
 }
 
+/** Reject even forged, future and misspelled market identities in our
+ * protected namespace. Exact-ID checks alone allowed a client to upsert
+ * `manual-paper-member-v1:fake-market` via the generic journal API.
+ */
+export function isReservedManualPaperWalletNamespace(id: unknown): id is string {
+  return typeof id === 'string'
+    && (id.startsWith('manual-paper-admin-v1:')
+      || id.startsWith('manual-paper-member-v1:'));
+}
+
 /** Immutable manual-only virtual seed; never an actual broker account or
  *  proof of settled/available trading cash. 4 markets are a separate mode
  *  and never share automatic Paper capital.
