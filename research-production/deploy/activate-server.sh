@@ -50,6 +50,10 @@ require_base_tools() {
     echo "Node >=20 required; found $(node --version)" >&2
     exit 70
   }
+  node -e 'const [major,minor]=process.versions.node.split(".").map(Number);if(major<20||(major===20&&minor<12)||typeof require("node:util").parseEnv!=="function")process.exit(1)' || {
+    echo 'RESEARCH_NODE_ENV_PARSER_REQUIRED: Node >=20.12 with parseEnv' >&2
+    exit 70
+  }
 }
 
 read_app_sha() {
@@ -133,8 +137,11 @@ activate() {
   declare -a AI_DAEMONS=(
     research-production-workspace-worker.service
   )
+  declare -a WATCH_SERVICES=(
+    research-production-market-watch.service
+  )
   declare -A WAS_ENABLED=()
-  for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"; do
+  for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
     if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
       WAS_ENABLED["$timer"]=1
     else
@@ -196,7 +203,7 @@ activate() {
       "${SUDO[@]}" systemctl daemon-reload
     fi
     local timer
-    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"; do
+    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
       if [[ "${WAS_ENABLED[$timer]:-0}" == "1" ]]; then
         "${SUDO[@]}" systemctl enable --now "$timer" >/dev/null 2>&1 || true
       fi
@@ -206,7 +213,7 @@ activate() {
   fail_safe() {
     local status=$?
     if (( status != 0 )); then
-      "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" >/dev/null 2>&1 || true
+      "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
       restore_previous_runtime || true
       echo "RESEARCH_PRODUCTION_ROLLBACK_ATTEMPTED=true" >&2
     fi
@@ -243,9 +250,11 @@ activate() {
   "${SUDO[@]}" install -d -o root -g investment-research -m 0750 "$ENV_DIR"
 
   # Freeze every Research scheduler before changing /current or its SHA-bound environment.
-  # AI/Video stays disabled after a successful core cutover until the exact-SHA AI gate runs.
-  "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" >/dev/null 2>&1 || true
-  verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"
+  # AI/Video and public Watch stay disabled after a successful core cutover
+  # until their own protected exact-SHA gates run. An old watch process keeps
+  # its old module/environment identity even after /current is switched.
+  "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
+  verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"
 
   if release_is_valid "$RELEASE"; then
     echo "RESEARCH_RELEASE_REUSED=true"
@@ -388,7 +397,7 @@ ENV
 
   local -a RUN_AS_RESEARCH
   if command -v runuser >/dev/null 2>&1; then
-    RUN_AS_RESEARCH=(runuser -u investment-research --)
+    RUN_AS_RESEARCH=("${SUDO[@]}" runuser -u investment-research --)
   else
     RUN_AS_RESEARCH=(sudo -n -u investment-research)
   fi
@@ -440,7 +449,7 @@ ENV
     "ORDER_AUTHORITY=false"
 
   "${SUDO[@]}" systemctl list-timers --all "${CORE_TIMERS[@]}" --no-pager
-  printf '%s\n' "AI_REVIEW_TIMER_ENABLED=false" "VIDEO_DISCOVERY_TIMER_ENABLED=false" "APPROVED_JOB_INTAKE_TIMER_ENABLED=false" "WORKSPACE_WORKER_ENABLED=false"
+  printf '%s\n' "AI_REVIEW_TIMER_ENABLED=false" "VIDEO_DISCOVERY_TIMER_ENABLED=false" "APPROVED_JOB_INTAKE_TIMER_ENABLED=false" "WORKSPACE_WORKER_ENABLED=false" "MARKET_WATCH_SERVICE_ENABLED=false"
 }
 
 case "$MODE" in
