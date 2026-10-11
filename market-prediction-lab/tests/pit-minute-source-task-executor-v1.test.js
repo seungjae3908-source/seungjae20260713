@@ -16,8 +16,11 @@ import { planPITNativeMinuteSourceGapsV1 as plan } from
 import { runPlannedPITMinuteSourceTaskV1 as execute } from
   "../src/pit-minute-source-task-executor-v1.js";
 import { persistResearchMinuteSessionV1 as persist,
-  deriveArchivedResearchTimeframesV1 as derive } from
+  deriveArchivedResearchTimeframesV1 as derive,
+  listArchivedResearchMinuteSessionsV1 as listArchive } from
   "../src/research-minute-archive-v1.js";
+import {runFourMarketOriginalMinuteBatchV1 as batch}
+  from "../src/four-market-original-minute-batch-v1.js";
 import { parsePITMinuteTaskArgsV1 as parse,
   runPITMinuteTaskCliV1 as cli } from
   "../scripts/run-pit-minute-gap-task-v1.mjs";
@@ -333,4 +336,52 @@ test("CLI private receipts, fixed SHA, dry-run, opt-in and duplicate output safe
     await assert.rejects(()=>cli(parse(privateErr)),
       /PIT_MINUTE_TASK_CLI_PRIVATE_FILE_REQUIRED/);
   }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+
+
+test("public-GET fixture -> immutable archive index -> offline 4-market batch refuses partial Upbit/Bitget 1m",async()=>{
+  for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+    const t=await setup(market,2),calls=[];
+    try{
+      const fetchOptions=market==="CRYPTO_SPOT"
+        ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+      // No provider call may occur without an explicit per-task opt-in.
+      const noConsent=await execute(request(t,fetchOptions));
+      assert.equal(noConsent.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+      assert.equal(calls.length,0);
+      const collected=await execute(request(t,{
+        ...fetchOptions,allowPublicReadOnlyFetch:true,
+      }));
+      assert.equal(collected.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+      assert.equal(calls.length,1);
+      const symbol=t.planning.candidateTasks[0].symbol;
+      const index=await listArchive({root:t.root,market,symbol,
+        researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+      });
+      assert.equal(index.status,"LOCAL_ORIGINAL_SESSION_INDEX_PAGE_ONLY");
+      assert.equal(index.sessionCount,1);
+      assert.equal(index.sourceSessions[0].nativeMinuteSlotInventoryComplete,false);
+      assert.equal(index.trueMarketWideRecall,null);
+      const replayPage=await batch({
+        root:t.root,market,manifest:t.manifest,
+        researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+        sourceSessions:[],discoverArchivedSessions:true,asOfMs:NOW,
+        direction:"LONG",timeframe:"5m",leverage:1,
+        fxRateKRWPerQuote:market==="CRYPTO_FUTURES"?1300:null,
+      });
+      assert.equal(replayPage.status,"BLOCKED_DATA");
+      assert.equal(replayPage.sourceTasksRequested,2);
+      assert.equal(replayPage.blockedSourceTasks,2);
+      assert.equal(replayPage.sourceOnlyModeledTradeCount,null);
+      assert.equal(replayPage.sourceOnlyEventLabels,null);
+      assert.equal(replayPage.actualMarketWideOpportunityCount,null);
+      assert.equal(replayPage.profitabilityProven,false);
+      assert.equal(replayPage.paperAdmissionAllowed,false);
+      assert.equal(replayPage.executionAuthority,"NONE");
+      assert.equal(replayPage.providerGETCount,0);
+      // The BATCH readback itself must never perform another provider GET.
+      assert.equal(calls.length,1);
+    }finally{rmSync(t.root,{recursive:true,force:true});}
+  }
 });
