@@ -113,10 +113,17 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     }
 
     if (target1Hit && !position.target1Executed && position.remainingQuantity > EPSILON) {
-      const targetQuantity = Math.min(
-        position.remainingQuantity,
-        floorQuantityToRules(position.quantity * position.targetClosePercent1 / 100, null, 8),
+      const firstAllocation = floorQuantityToRules(
+        position.quantity * position.targetClosePercent1 / 100, null, 8,
       );
+      // Either target may arrive first. When TP2 has already executed and
+      // the declared allocations total 100%, TP1 must absorb rounding dust.
+      // A sub-100% plan must never close its unallocated remainder.
+      const allTargetsAccountedFor = position.target2Executed
+        && position.targetClosePercent1 + position.targetClosePercent2 >= 100 - EPSILON;
+      const targetQuantity = allTargetsAccountedFor
+        ? position.remainingQuantity
+        : Math.min(position.remainingQuantity, firstAllocation);
       if (targetQuantity > EPSILON) {
         fills.push(closePositionInternal(
           state,
