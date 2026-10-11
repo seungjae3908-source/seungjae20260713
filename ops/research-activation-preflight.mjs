@@ -4,13 +4,14 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import * as util from 'node:util';
 import { createHash } from 'node:crypto';
-import { resolve, isAbsolute } from 'node:path';
+import { posix } from 'node:path';
 
 const STATE = '/var/lib/investment-research-production';
 const ROOT = '/opt/investment-research';
 const ENV_ROOT = '/etc/investment-research';
 const APP = '/opt/stock-app';
 const parseEnv = util.parseEnv;
+const { resolve, isAbsolute } = posix;
 const SHA = /^[a-f0-9]{40}$/u;
 const KEY = /^[A-Za-z0-9_.-]{8,512}$/u;
 const GUARDS = ['LIVE_TRADING', 'LIVE_TRADING_ENABLED', 'REAL_ORDER_ENABLED',
@@ -167,7 +168,8 @@ export function collectResearchActivationPreflight({ researchSha, appSha, io = f
     }
     const roots = [...new Set(values)];
     if (roots.length === 0) return 'MISSING';
-    return roots.length === 1 && insideState(roots[0] + '/') && safeDirectory(roots[0]) ? 'UNKNOWN' : 'BLOCKED';
+    return roots.length === 1 && (roots[0] === STATE || insideState(roots[0]))
+      && safeDirectory(roots[0]) ? 'UNKNOWN' : 'BLOCKED';
   });
   for (const key of INPUTS) check(key, 'functionality', () => {
     const file = env?.[key];
