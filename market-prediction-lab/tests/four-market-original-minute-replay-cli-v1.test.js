@@ -315,6 +315,16 @@ test("private PERIOD CLI receipt -> explicitly consented PUBLISH CLI -> admin re
      sourceResultPath:periodOutput,reportRoot:adminRoot,
      market:"CRYPTO_SPOT",
      allowLocalReportPublish:true,allowReplaceExisting:false});
+   // A prior CLI output is checked BEFORE the publisher changes anything.
+   writePrivate(publishOutput,{status:"PREEXISTING_PRIVATE_AUDIT"});
+   await assert.rejects(()=>run({input:publishInput,output:publishOutput}),
+     /EEXIST/);
+   assert.equal(readFileSync(publishOutput,"utf8")
+     .includes("PREEXISTING_PRIVATE_AUDIT"),true);
+   const unpublished=await readAdminSummary({
+     root:adminRoot,market:"CRYPTO_SPOT"});
+   assert.equal(unpublished.available,false);
+   rmSync(publishOutput);
    const publishing=await run({input:publishInput,output:publishOutput});
    assert.equal(publishing.mode,"PUBLISH");
    assert.equal(publishing.localOnlyWrite,true);
