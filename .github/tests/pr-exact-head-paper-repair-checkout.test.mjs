@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { PAPER_FORWARD_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 
 const workflowPath = ".github/workflows/paper-canonical-seven-blocker-repair.yml";
 const workflow = await readFile(workflowPath, "utf8");
@@ -26,5 +27,6 @@ test("Paper repair checks out the exact command SHA before loading local provena
 
 test("Paper validation owns the checkout regression test path", () => {
   const testPath = ".github/tests/pr-exact-head-paper-repair-checkout.test.mjs";
-  assert.equal(validation.split(testPath).length - 1, 2);
+  assert.equal(validation.split(testPath).length - 1, 1, 'PR trigger must still cover the test');
+  assert.ok(PAPER_FORWARD_REVIEWED_PATHS.includes(testPath), 'bounded diff must still own the test');
 });

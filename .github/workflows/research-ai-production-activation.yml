@@ -16,6 +16,9 @@ on:
       - research-production/deploy/research-production-workspace-worker.service
       - research-production/bin/research-approved-job-intake.mjs
       - research-production/bin/research-provider-bootstrap.mjs
+      - research-production/bin/confirm-research-free-policy.mjs
+      - research-production/src/research-free-policy-confirmation.mjs
+      - research-production/test/research-free-policy-confirmation.test.mjs
       - research-production/bin/research-ai-review.mjs
       - research-production/bin/research-ai-diagnostic.mjs
       - research-production/bin/research-forward-runtime-diagnostic.mjs
@@ -70,6 +73,7 @@ jobs:
           systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
           node --test \
             research-production/test/research-ai-activation-contract.test.mjs \
+            research-production/test/research-free-policy-confirmation.test.mjs \
             research-production/test/research-ai-diagnostic.test.mjs \
             research-production/test/research-forward-runtime-diagnostic.test.mjs \
             research-production/test/research-ai-review-worker.test.mjs \
@@ -94,6 +98,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       required_ci_run_id: ${{ steps.gate.outputs.required_ci_run_id }}
+      free_only_owner_comment_id: ${{ steps.gate.outputs.free_only_owner_comment_id }}
       hub_issue: ${{ steps.hub.outputs.active_issue }}
     steps:
       - uses: actions/checkout@v4
@@ -119,9 +124,9 @@ jobs:
         with:
           script: |
             const body = String(context.payload.comment?.body ?? '').trim();
-            const match = /^\/activate-research-ai ([0-9a-f]{40})$/u.exec(body);
+            const match = /^\/activate-research-ai ([0-9a-f]{40})( --confirm-free-only)?$/u.exec(body);
             if (!match) {
-              core.setFailed('Expected /activate-research-ai <40-char-current-main-sha>');
+              core.setFailed('Expected /activate-research-ai <40-char-current-main-sha> [--confirm-free-only]');
               return;
             }
             const target = match[1].toLowerCase();
@@ -209,6 +214,7 @@ jobs:
             }
             core.setOutput('target_sha', target);
             core.setOutput('required_ci_run_id', String(runId));
+            core.setOutput('free_only_owner_comment_id', match[2] ? String(context.payload.comment.id) : '');
 
   activate:
     needs: authorize
@@ -218,6 +224,7 @@ jobs:
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       REQUIRED_CI_RUN_ID: ${{ needs.authorize.outputs.required_ci_run_id }}
+      RESEARCH_FREE_ONLY_OWNER_COMMENT_ID: ${{ needs.authorize.outputs.free_only_owner_comment_id }}
       HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -252,6 +259,17 @@ jobs:
           set -Eeuo pipefail
           actual="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
           test "$actual" = "$TARGET_SHA"
+
+      - name: Record explicit owner free-only and public video consent
+        if: needs.authorize.outputs.free_only_owner_comment_id != ''
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RESEARCH_FREE_ONLY_OWNER_COMMENT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+          remote_env="$(printf 'TARGET_SHA=%q RESEARCH_FREE_ONLY_OWNER_COMMENT_ID=%q' "$TARGET_SHA" "$RESEARCH_FREE_ONLY_OWNER_COMMENT_ID")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- confirm-free-only" \
+            < research-production/deploy/activate-ai-research.sh
 
       - name: Read-only AI Research preflight
         shell: bash
