@@ -43,6 +43,8 @@ export type FundingCertificateRequest = Readonly<{
 // certificate is issued in the server process by validated public collectors;
 // a plain JSON object with matching keys is deliberately *not* trusted.
 const issued = new WeakSet<object>();
+// Public proof may need multiple bounded historical requests after simulated fill.
+const MAX_FUNDING_CERTIFICATION_LAG_MS = 120_000;
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -118,7 +120,7 @@ export async function issueProtectedPaperFundingCertificate(
   if (!entryId || !exitId || entryId === exitId || !time(exitAtMs)
     || !time(nowMs) || !Number.isFinite(entryAtMs)
     || entryAtMs >= exitAtMs || exitAtMs > nowMs
-    || nowMs - exitAtMs > 5_000
+    || nowMs - exitAtMs > MAX_FUNDING_CERTIFICATION_LAG_MS
     || entryOrder.state !== 'FILLED' || exitOrder.state !== 'FILLED'
     || entryPlan.accountMode !== 'paper' || exitPlan.accountMode !== 'paper'
     || entryPlan.executionMode !== 'automatic' || exitPlan.executionMode !== 'automatic'
@@ -198,7 +200,7 @@ export async function issueProtectedPaperFundingCertificate(
   }
   if (Math.abs(payments - history.totalFundingCost) > 1e-6
     || Math.abs(credits - history.excludedFundingCredit) > 1e-6
-    || Date.now() - exitAtMs > 5_000) return null;
+    || Date.now() - exitAtMs > MAX_FUNDING_CERTIFICATION_LAG_MS) return null;
   const eventDigest = createHash('sha256').update(JSON.stringify({
     version: PAPER_FUNDING_CERTIFICATE_VERSION,
     ownerId: entryOrder.userId, symbol, entryId, exitId, entryAtMs,

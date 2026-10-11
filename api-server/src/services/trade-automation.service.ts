@@ -398,6 +398,9 @@ export class TradeAutomationService {
         // A JSON payload cannot create a funding certificate. Only a server
         // in-process issuer bound to a real simulated reducing close can do so.
         const funding = metadata.paperFundingSettlementEvidence;
+        const fillAtMs = typeof metadata.paperFillObservedAt === 'string'
+          ? Date.parse(metadata.paperFillObservedAt) : Number.NaN;
+        const persistedAtMs = Date.parse(next.updatedAt);
         if (paperPlan.exchange === 'bitget'
           && paperPlan.executionMode === 'automatic'
           && paperPlan.reduceOnly === true
@@ -406,8 +409,16 @@ export class TradeAutomationService {
           && Number.isSafeInteger(funding.eventCount)
           && funding.eventCount >= 0
           && /^[0-9a-f]{64}$/u.test(funding.eventDigest)
-          && Math.abs(Date.parse(funding.coveredThroughAt) - Date.parse(next.updatedAt)) <= 5_000
-          && Date.parse(funding.attestedAt) <= Date.parse(next.updatedAt) + 5_000) {
+          // The server captured the economic fill timestamp BEFORE reading public history.
+          // Slow-but-bounded proof collection must not forge a different holding interval.
+          && Number.isFinite(fillAtMs) && Number.isFinite(persistedAtMs)
+          && new Date(fillAtMs).toISOString() === metadata.paperFillObservedAt
+          && fillAtMs >= Date.parse(order.updatedAt)
+          && fillAtMs <= persistedAtMs
+          && persistedAtMs - fillAtMs <= 120_000
+          && Math.abs(Date.parse(funding.coveredThroughAt) - fillAtMs) <= 1_000
+          && Date.parse(funding.attestedAt) >= fillAtMs
+          && Date.parse(funding.attestedAt) <= persistedAtMs + 5_000) {
           const references = paperPlan.signalReasons.filter(
             reason => reason.startsWith('AUTO_EXIT_ENTRY_ORDER:'));
           if (references.length === 1) {
@@ -416,6 +427,7 @@ export class TradeAutomationService {
             if (entry?.state === 'FILLED' && entry.exchange === 'bitget'
               && entry.exchangeOrderId === funding.entryBrokerOrderId
               && entry.userId === order.userId) {
+              next.updatedAt = new Date(fillAtMs).toISOString();
               next.paperFundingSettlementEvidence = Object.freeze({ ...funding });
             }
           }

@@ -1149,6 +1149,9 @@ export class TradeExecutionService {
               : paperQuoteMarket(plan) === 'CRYPTO_FUTURES' ? 'USDT' : 'KRW',
             taxAmount: null, taxCurrency: null,
             trustedPaperCostPolicyId: null, settlementFxEvidence: null };
+        // Economic simulated fill time precedes bounded public evidence collection.
+        // Never move an exit's price timestamp forward merely due to slow APIs.
+        const paperFundingExitAtMs = Date.now();
         let fundingReceipt: PaperFundingCertificate | null = null;
         if (plan.accountMode === 'paper' && plan.executionMode === 'automatic'
           && plan.exchange === 'bitget' && plan.reduceOnly === true
@@ -1168,7 +1171,7 @@ export class TradeExecutionService {
                     ...order, state: 'FILLED', filledQuantity, averageFillPrice,
                     exchangeOrderId: 'paper-' + order.clientOrderId,
                   },
-                  exitPlan: plan, exitAtMs: Date.now(),
+                  exitPlan: plan, exitAtMs: paperFundingExitAtMs,
                 });
               } catch {
                 // Unknown funding must never mutate or invalidate a safe exit.
@@ -1178,7 +1181,10 @@ export class TradeExecutionService {
         }
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
-          ...(fundingReceipt ? { paperFundingSettlementEvidence: fundingReceipt } : {}),
+          ...(fundingReceipt ? {
+            paperFundingSettlementEvidence: fundingReceipt,
+            paperFillObservedAt: new Date(paperFundingExitAtMs).toISOString(),
+          } : {}),
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,
