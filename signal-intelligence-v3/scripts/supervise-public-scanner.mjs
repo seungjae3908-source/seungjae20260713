@@ -4,9 +4,10 @@
 // bundled producer; no private brokerage connection, orders or Telegram.
 // Production/Staging activation requires an independent explicit approval.
 import {spawn} from 'node:child_process';
-import {mkdir,open,readFile,rename,unlink,writeFile} from 'node:fs/promises';
+import {appendFile,mkdir,open,readFile,rename,unlink,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {createPublicOnlyCycleController} from '../src/public-cycle-supervisor.mjs';
+import {createPublicReadOnlyRuntimeReceipt} from '../src/public-runtime-receipt-window.mjs';
 
 const env=process.env;
 const sha=String(env.SIGNAL_INTELLIGENCE_SERVICE_SHA??'').trim().toLowerCase();
@@ -15,6 +16,7 @@ const producer=String(env.SIGNAL_INTELLIGENCE_PRODUCER_PATH??'');
 const interval=Number(env.SIGNAL_INTELLIGENCE_PUBLIC_MIN_INTERVAL_MS??120000);
 const lockFile=path.join(stateDir,'.public-readonly-supervisor.lock');
 const healthFile=path.join(stateDir,'public-readonly-supervisor-health.json');
+const receiptFile=path.join(stateDir,'public-readonly-runtime-receipts.jsonl');
 const snapshotFile=path.join(stateDir,'latest-snapshot.json');
 if(env.SIGNAL_INTELLIGENCE_PUBLIC_SUPERVISOR_ACK!=='READ_ONLY_DRIFT'
  || !/^[0-9a-f]{40}$/u.test(sha) || !path.isAbsolute(stateDir)
@@ -100,7 +102,15 @@ try{
        evidence=null;
      }
    }
-   scheduler.finish({snapshot:evidence,error:result.error});
+   const finished=scheduler.finish({snapshot:evidence,error:result.error});
+   const receipt=createPublicReadOnlyRuntimeReceipt({
+     serviceSha:sha,startedAtMs:claim.startedAt,finishedAtMs:Date.now(),
+     producerSucceeded:finished.ok,snapshot:finished.ok?evidence:null,
+   });
+   // Sanitized append-only observations; never claim signed runtime attestation.
+   await appendFile(receiptFile,JSON.stringify(receipt)+'\n',{
+     encoding:'utf8',mode:0o600,flag:'a',
+   });
    await saveHealth();
    run++;
    // Never share raw source data in stdout/stderr.
