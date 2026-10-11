@@ -64,7 +64,9 @@ function verifiedClosedPaperPnlKrw(
         || quoteAt > at + 5_000 || at - quoteAt > freshnessMs
         || order.feeCurrency?.toUpperCase() !== currency
         || order.taxCurrency?.toUpperCase() !== currency
+        || typeof order.feeAmount !== 'number'
         || !Number.isFinite(order.feeAmount) || order.feeAmount < 0
+        || typeof order.taxAmount !== 'number'
         || !Number.isFinite(order.taxAmount) || order.taxAmount < 0
         || !Number.isFinite(leg.price) || leg.price <= 0
         || !Number.isFinite(leg.quantity) || leg.quantity <= 0
