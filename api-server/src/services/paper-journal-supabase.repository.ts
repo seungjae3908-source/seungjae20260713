@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isReservedManualPaperWalletNamespace } from './manual-four-market-paper-wallets.service';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   PaperJournalError,
@@ -83,7 +84,8 @@ function createScopedPaperJournalRepository(
       };
       if (record.kind === 'account'
         && (record.id.startsWith('automatic-paper-admin-v2:')
-          || record.id.startsWith('automatic-paper-member-v2:'))) {
+          || record.id.startsWith('automatic-paper-member-v2:')
+          || isReservedManualPaperWalletNamespace(record.id))) {
         throw new PaperJournalError('PAPER_FOUR_MARKET_WALLET_SERVER_ONLY',
           '시장별 자동모의계좌는 일반 동기화로 변경할 수 없습니다.', 403);
       }
@@ -174,7 +176,7 @@ function createScopedPaperJournalRepository(
       assertOwner(userId);
       const { data: reserved, error: checkError } = await client.from('paper_accounts')
         .select('id').eq('user_id', authenticatedUserId)
-        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%')
+        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%,id.like.manual-paper-%')
         .limit(1);
       if (checkError) throw databaseFailure();
       if (reserved?.length) {
