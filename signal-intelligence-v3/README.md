@@ -410,3 +410,35 @@ market-symbol mapping, trading rank and order authority remain intact.
 The next real public validation must show futures pages are no longer
 blocked by `PUBLIC_V3_CRYPTO_ROSTER_INVALID`; mock tests alone do not
 close that real provider requirement.
+
+## Draft: Research Watch → Signal V3 private read-only access preflight
+
+The 120-second Research Watch and Signal V3 are distinct services.
+Research Watch runs as investment-research with a 0750 research root;
+Watch owns private 0700 subdirectories and 0600 snapshot files.
+Signal V3 uses a separate configurable service user, which may not be
+allowed to traverse or read those files. A healthy Watch is therefore
+not proof that Signal V3 can use its signals.
+
+All Watch intake and extra off-page research are disabled by default.
+The independently approved operating variables are:
+
+    SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=true
+    SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=<verified-Watch-SHA40>
+    SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=true
+
+Only in a separately authorized read-only environment QA, under the
+**actual Signal V3 service user**, run:
+
+    SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=<verified-Watch-SHA40> \
+      node signal-intelligence-v3/scripts/preflight-watch-bridge-readonly.mjs
+
+The script returns sanitized source status only; permission-denied,
+missing Watch publication, unsafe file, invalid JSON, stale/invalid
+release and verified source are not conflated. It never starts the
+Watcher, queries live exchanges, changes ACLs or sends Telegram.
+Do not change service UIDs, group membership or open the Research root
+without separate owner approval and a least-privilege design.
+
+Source observations are never profitability OOS PASS, Paper approval,
+full-market historical coverage or real Telegram receipt. Replit banned.

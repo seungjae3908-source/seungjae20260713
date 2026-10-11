@@ -44,6 +44,18 @@ async function safeBoundedFile(path,{maxBytes,tailBytes=null}={}){
     return content;
   }finally{await handle.close();}
 }
+/** Only sanitized OS errors can reach the V3 Watch status. No raw paths or secrets. */
+export function classifyV3WatchReadError(error){
+  if(error?.code==='EACCES'||error?.code==='EPERM')
+    return 'WATCH_PERMISSION_DENIED';
+  if(error?.code==='ENOENT')return 'WATCH_NOT_PUBLISHED';
+  if(['PUBLIC_WATCH_PATH_UNSAFE','PUBLIC_WATCH_FILE_UNSAFE',
+    'PUBLIC_WATCH_FILE_CHANGED','PUBLIC_WATCH_FILE_SHORT_READ',
+    'PUBLIC_WATCH_EVENT_LOG_TRUNCATED'].includes(error?.message))
+    return 'WATCH_INPUT_UNSAFE';
+  if(error instanceof SyntaxError)return 'WATCH_INPUT_INVALID_JSON';
+  return 'SOURCE_UNAVAILABLE';
+}
 export async function readV3StageOneWatch({
   enabled=false,expectedResearchSha,nowMs=Date.now(),root=ROOT,
 }={}){
@@ -78,7 +90,7 @@ export async function readV3StageOneWatch({
       return emptyV3WatchHandoff('EVENT_LOG_INVALID');
     const events=lines.map(s=>JSON.parse(s));
     return verifyV3WatchHandoff(raw,events,{nowMs,expectedResearchSha});
-  }catch{
-    return emptyV3WatchHandoff('SOURCE_UNAVAILABLE');
+  }catch(error){
+    return emptyV3WatchHandoff(classifyV3WatchReadError(error));
   }
 }

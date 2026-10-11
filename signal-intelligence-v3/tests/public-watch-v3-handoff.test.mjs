@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,symlink,link,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
+import {readV3StageOneWatch,classifyV3WatchReadError} from '../src/public-watch-v3-readonly.mjs';
 import {verifyV3WatchHandoff,installV3WithinPageWatchPriority,
   prioritizeV3CurrentCryptoPage,v3WithinPagePriorityDiagnostic}
   from '../src/public-watch-v3-priority.mjs';
@@ -147,10 +147,23 @@ test('read-only file handoff enforces private files, exact SHA, and no activatio
     await rm(eventPath);
     await symlink(statusPath,eventPath);
     assert.equal((await readV3StageOneWatch({enabled:true,root,nowMs:NOW,
-      expectedResearchSha:SHA})).status,'SOURCE_UNAVAILABLE');
+      expectedResearchSha:SHA})).status,'WATCH_INPUT_UNSAFE');
     await rm(eventPath);
     await link(statusPath,eventPath);
     assert.equal((await readV3StageOneWatch({enabled:true,root,nowMs:NOW,
-      expectedResearchSha:SHA})).status,'SOURCE_UNAVAILABLE');
+      expectedResearchSha:SHA})).status,'WATCH_INPUT_UNSAFE');
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('watch read-only failures distinguish missing inputs and V3 service permission denial',()=>{
+ for(const code of ['EACCES','EPERM'])
+   assert.equal(classifyV3WatchReadError({code,message:'secret-private-path'}),
+     'WATCH_PERMISSION_DENIED');
+ assert.equal(classifyV3WatchReadError({code:'ENOENT'}),'WATCH_NOT_PUBLISHED');
+ for(const message of ['PUBLIC_WATCH_PATH_UNSAFE','PUBLIC_WATCH_FILE_UNSAFE',
+   'PUBLIC_WATCH_FILE_CHANGED','PUBLIC_WATCH_EVENT_LOG_TRUNCATED'])
+   assert.equal(classifyV3WatchReadError({message}),'WATCH_INPUT_UNSAFE');
+ assert.equal(classifyV3WatchReadError(new SyntaxError('PRIVATE_PAYLOAD')),'WATCH_INPUT_INVALID_JSON');
+ assert.equal(classifyV3WatchReadError(new Error('secret db hostname')),'SOURCE_UNAVAILABLE');
+ assert.ok(!JSON.stringify(classifyV3WatchReadError({code:'EPERM',message:'secrets'})).includes('secret'));
 });
