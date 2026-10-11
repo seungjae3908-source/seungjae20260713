@@ -65,7 +65,15 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
     ||row.state!=='CANDIDATE'||row.dataStatus!=='READY'
     ||row.market!==market||row.symbol!==event.symbol
     ||row.strategy!==event.strategy||row.timeframe!==event.timeframe
-    ||row.direction!==dir||origin.sourceCycleId!==epoch
+    ||row.direction!==dir
+    ||!['RESEARCH_CANDIDATE','FORWARD_VALIDATED','CHAMPION']
+      .includes(row.validationTier)
+    ||event.validationTier!==row.validationTier
+    ||typeof row.utilityR!=='number'||!Number.isFinite(row.utilityR)
+    ||row.utilityR<=0||event.utilityR!==row.utilityR
+    ||event.utilityMode!==row.utilityMode
+    ||JSON.stringify(event.leverage??null)!==JSON.stringify(row.leverage??null)
+    ||origin.sourceCycleId!==epoch
     ||origin.cursor!==lane.cursorBefore
     ||lane.market!==market||lane.timeframe!==event.timeframe
     ||!SOURCE[market].includes(lane.universeSource)

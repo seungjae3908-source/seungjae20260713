@@ -46,10 +46,13 @@ function fixture(){
    rows:[{id:ID,market:'US_STOCK',symbol:'AAPL',
      strategy:'SWING',timeframe:'60m',direction:'BUY',
      state:'CANDIDATE',dataStatus:'READY',
+     validationTier:'RESEARCH_CANDIDATE',
+     utilityR:1.2,utilityMode:'FULL_EXPECTED_UTILITY',leverage:null,
      provenance:{laneId:'US_SWING_60M',cursor:0,sourceCycleId:EPOCH}}],
    events:[{id:ID,type:'NEW_CANDIDATE',market:'US_STOCK',
      symbol:'AAPL',strategy:'SWING',timeframe:'60m',
-     direction:'BUY',state:'CANDIDATE',validationTier:'RESEARCH_CANDIDATE'}],
+     direction:'BUY',state:'CANDIDATE',validationTier:'RESEARCH_CANDIDATE',
+     utilityR:1.2,utilityMode:'FULL_EXPECTED_UTILITY',leverage:null}],
  };
 }
 test('current 12-lane V3 current-page proof permits only a valid market candidate',()=>{
@@ -68,6 +71,10 @@ test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 pro
  assert.equal(mutate(x=>{x.rows[0].provenance.cursor=5;}),false);
  assert.equal(mutate(x=>{x.events[0].direction='SHORT';}),false);
  assert.equal(mutate(x=>{x.events[0].type='STATE_CHANGED';}),false);
+ assert.equal(mutate(x=>{x.events[0].validationTier='CHAMPION';}),false);
+ assert.equal(mutate(x=>{x.events[0].utilityR=999;}),false);
+ assert.equal(mutate(x=>{x.events[0].utilityMode='FAKE_PASS';}),false);
+ assert.equal(mutate(x=>{x.events[0].leverage={status:'INDICATIVE_ONLY',hardMaximum:125};}),false);
  assert.equal(mutate(x=>{x.rows[0].dataStatus='BLOCKED';}),false);
  assert.equal(mutate(x=>{x.coverage[4].publicExecutionDiagnostic.completed=19;}),false);
  assert.equal(mutate(x=>{x.events.push({...x.events[0]});}),false);

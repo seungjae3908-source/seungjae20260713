@@ -145,3 +145,13 @@ This runtime gate requires separately merged Signal V3 producer #1816
 to provide compatible sourceCycleId/provenance. It is Draft-only and
 does not activate a live source, send Telegram messages, issue orders,
 or change Production secrets/PM2/DB.
+
+## Signal text accuracy against source row
+
+Telegram subscriber candidate receipts now also verify that the
+human-visible validation tier, risk-adjusted utility R/mode and
+indicative leverage metadata match the same current-cycle source row.
+An altered research candidate cannot be advertised as CHAMPION or
+claim 999R / 125x leverage solely by tampering with an event object.
+This remains source-integrity validation, not an independent economic
+OOS/realized-return PASS.
