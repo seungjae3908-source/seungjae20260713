@@ -31,7 +31,7 @@ import RecommendationsPage from '@/pages/recommendations';
 // Market rankings are independent of the AI Chart cold-start graph. Keep the
 // existing recommendations route eager and load only rankings on demand.
 const loadMarketRankingsPage = () => import('@/pages/search');
-const MarketRankingsPage = lazy(loadMarketRankingsPage);
+const SearchPage = lazy(loadMarketRankingsPage);
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -383,7 +383,7 @@ function ApprovedRouter() {
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={SettingsAccess} />
     <Route path="/search" component={UnifiedAssetSearchAccess} />
-    <Route path="/market-rankings" component={MarketRankingsPage} />
+    <Route path="/market-rankings" component={SearchPage} />
     <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/telegram-order" component={TelegramSignalOrderAccess} />
