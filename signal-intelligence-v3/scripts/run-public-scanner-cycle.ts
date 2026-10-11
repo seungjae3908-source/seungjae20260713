@@ -15,9 +15,10 @@ import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { getPublicScannerProfileSet } from '../src/public-scanner-profiles.mjs';
+import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-overlay.mjs';
+import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
 import {
   classifyPublicCycleLaneStatus,
-  decidePublicCycleCursor,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
   parsePublicRetryAfterMs,
   publicUpbitGroupForUrl,
@@ -58,6 +59,8 @@ function freshState() {
     serviceSha: SERVICE_SHA,
     profileMode: PUBLIC_PROFILE_MODE,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
+    dataRetry: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
+    coverageProgress: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
     retained: {},
     updatedAt: new Date(0).toISOString(),
   };
@@ -237,8 +240,6 @@ async function withUpbitPacing(operation) {
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
-  const originalCandles = marketData.getCandles;
-  const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
 
   let targetUniverse;
@@ -258,34 +259,22 @@ async function withStockPublicOnly(lane, operation) {
     targetUniverse = await originalUniverseGet.call(universe, 'KR');
   }
 
-  const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
-  marketData.getCandles = async (ticker, timeframe = '1D') => {
-    const entry = entryByTicker.get(String(ticker).toUpperCase());
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-  };
-  marketData.getQuote = async (ticker) => {
-    const originalTicker = String(ticker).toUpperCase();
-    const entry = entryByTicker.get(originalTicker);
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    const quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol));
-    return {
-      ...quote,
-      ticker: originalTicker,
-      symbol: originalTicker,
-      name: entry?.name ?? quote?.name ?? originalTicker,
-    };
-  };
-  universe.get = async (market, signal, deadlineMs) => {
-    if (market === lane.scannerMarket) return targetUniverse;
-    return originalUniverseGet.call(universe, market, signal, deadlineMs);
-  };
-
-  try { return await operation(); } finally {
-    marketData.getCandles = originalCandles;
-    marketData.getQuote = originalQuote;
-    universe.get = originalUniverseGet;
-  }
+  // ScannerProviderHealthTracker reads getCandlesMeta, not getCandles. Route
+  // BOTH entrypoints (and quote/roster) through the same public Yahoo source.
+  // Never accidentally fall through to the app's private/cache providers.
+  return withReadOnlyStockProviderOverlay({
+    marketData, scannerUniverse: universe,
+    scannerMarket: lane.scannerMarket, targetUniverse,
+    readPublicCandles: (ticker, timeframe, entry) => {
+      const symbols = yahooProviderCandidates(lane, ticker, entry);
+      return withProviderFallback(symbols, (symbol) => yahoo.getCandles(symbol, timeframe));
+    },
+    readPublicQuote: (ticker, entry) => {
+      const symbols = yahooProviderCandidates(lane, ticker, entry);
+      return withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
+    },
+    operation,
+  });
 }
 
 async function scanStock(lane, cursor) {
@@ -382,6 +371,8 @@ async function main() {
   const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2
     || persistedState?.profileMode !== PUBLIC_PROFILE_MODE;
   const state = releaseChanged ? freshState() : persistedState;
+  state.dataRetry ??= {};
+  state.coverageProgress ??= {};
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
@@ -395,6 +386,10 @@ async function main() {
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
       const status = laneStatus(response);
+      const recovery = resolvePublicResearchDataRetry({
+        response, status, cursor, priorRetry: state.dataRetry[lane.id] ?? null,
+      });
+      state.dataRetry[lane.id] = recovery.retry;
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
@@ -421,7 +416,12 @@ async function main() {
           };
         }
       }
-      const rotation = decidePublicCycleCursor({ response, status, cursor });
+      const rotation = recovery.decision;
+      const indexProgress = advancePublicResearchIndexProgress(
+        state.coverageProgress[lane.id] ?? null,
+        { response, status, decision: rotation, observedAt: new Date().toISOString() },
+      );
+      state.coverageProgress[lane.id] = indexProgress.state;
       // Rotation may advance a completed, zero-error PARTIAL/UNTRUSTED batch
       // for research coverage only. These rows NEVER enter the candidate
       // adapter or grant Paper/Live entry authority.
@@ -429,6 +429,10 @@ async function main() {
       coverage.push({
         cursorRotatedBlockedOnly: rotation.blockedObservationOnly,
         cursorRotationReason: rotation.reason,
+        // A deferred data-only page stays observation-only, is not adapted to
+        // signals and is revisited when the whole eligible index wraps.
+        deferredDataRetry: rotation.deferredDataRetry === true,
+        eligibleIndexProgress: indexProgress.summary,
         laneId: lane.id,
         market: lane.market,
         strategy: lane.label,
@@ -461,6 +465,8 @@ async function main() {
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
     } catch (error) {
+      // An HTTP/runtime failure must not build an insufficient-data retry streak.
+      state.dataRetry[lane.id] = null;
       coverage.push({
         laneId: lane.id,
         market: lane.market,
