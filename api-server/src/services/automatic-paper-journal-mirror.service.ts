@@ -129,17 +129,22 @@ const LIVE_HISTORY_SOURCES = new Set([
   'APP_AUTO', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',
 ]);
 // The current APP_AUTO order adapter hashes uppercase BROKER:userId; the
-// read-only Upbit/Kiwoom vault provider hashes lowercase provider:userId.
-// Neither string is a real broker account number. Normalize ONLY when both
-// exact role-specific masks are independently verifiable for this owner.
-// TOSS account references and non-vault sources must remain independent.
+// read-only Upbit vault provider hashes lowercase provider:userId.
+// Neither is a real broker account number. Upbit order UUIDs uniquely bind
+// a specific execution, so the verified owner/UUID bridge can be reconciled.
+// KIWOOM/TOSS order numbers can repeat across *separate brokerage accounts*;
+// their per-user vault masks cannot prove which account traded. Never alias
+// such account masks until account-specific provenance exists.
 function verifiedOwnerAccountScope(payload: Payload, ownerId?: string): string | null {
   if (!nonempty(payload.accountIdMasked)
     || !payload.accountIdMasked.includes('****')
     || payload.accountIdMasked.includes('UNAVAILABLE')) return null;
   const broker=String(payload.broker ?? '').toUpperCase();
   const source=String(payload.source ?? '');
-  if (nonempty(ownerId) && ['UPBIT','KIWOOM'].includes(broker)) {
+  const isVerifiedUpbitOrderUuid = broker==='UPBIT'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+      .test(String(payload.brokerOrderId ?? ''));
+  if (nonempty(ownerId) && isVerifiedUpbitOrderUuid) {
     const prefix=broker + '-****-';
     const hash=(identity: string) =>
       createHash('sha256').update(identity).digest('hex').slice(0,10);
