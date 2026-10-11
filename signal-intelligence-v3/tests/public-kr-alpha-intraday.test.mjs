@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parsePublicKrAlphaOneSession,createPublicKrAlphaOneSessionFeed} from '../src/public-kr-alpha-intraday.mjs';
+import {parsePublicKrAlphaOneSession,createPublicKrAlphaOneSessionFeed,inspectPublicKrAlphaSessionShape} from '../src/public-kr-alpha-intraday.mjs';
 const NOW=Date.parse('2026-10-11T05:00:00Z');
 function oneDay(){
  const list=[];
@@ -51,4 +51,21 @@ test('standalone public source cannot query unsupported timeframes or trade endp
  assert.equal(minute.length,78);
  assert.equal(calls,1);
  assert.equal(feed.fullMarketReady,false);
+});
+
+test('sanitized minute feed inspection classifies timestamps without exposing quotes or identifiers',()=>{
+ const original=oneDay();
+ const corrupted=[...original.priceInfos];
+ corrupted[0]={...corrupted[0],localDateTime:'20261009090035'};
+ corrupted[1]={...corrupted[1],localDateTime:'20261009083000'};
+ corrupted[2]={...corrupted[2],localDateTime:'bad'};
+ const evidence=inspectPublicKrAlphaSessionShape({priceInfos:corrupted});
+ assert.equal(evidence.classifications.nonzeroSeconds,1);
+ assert.equal(evidence.classifications.outsideSession,1);
+ assert.equal(evidence.classifications.invalidLength,1);
+ assert.equal(evidence.missingRegularMinutes,3);
+ assert.equal(evidence.executionAuthority,'NONE');
+ assert.equal(evidence.fullMarketSupported,false);
+ assert.equal(evidence.sourcePricesRedacted,true);
+ assert.equal(JSON.stringify(evidence).includes('accumulatedTradingVolume'),false);
 });
