@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
@@ -416,6 +417,7 @@ async function main() {
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
+  const sourceCycleId = randomUUID(); // new each cycle, including wrapped cursors
   pruneRetained(state, nowMs);
 
   const coverage = [];
@@ -445,7 +447,7 @@ async function main() {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
-            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
+            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId } },
             expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
             laneId: lane.id,
             cursor,
@@ -461,6 +463,7 @@ async function main() {
         cursorRotatedBlockedOnly: rotation.blockedObservationOnly,
         cursorRotationReason: rotation.reason,
         laneId: lane.id,
+        sourceCycleId,
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -497,6 +500,7 @@ async function main() {
     } catch (error) {
       coverage.push({
         laneId: lane.id,
+        sourceCycleId,
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
