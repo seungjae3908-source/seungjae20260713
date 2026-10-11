@@ -127,6 +127,9 @@ async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResul
   const first = validChart(urls[0], controllers[0].signal);
   const second = (async () => {
     await sleep(YAHOO_HEDGE_DELAY_MS);
+    // A fast primary response has already cancelled this delayed read. Do not
+    // start a redundant provider request after its owning request has ended.
+    controllers[1].signal.throwIfAborted();
     return validChart(urls[1], controllers[1].signal);
   })();
 

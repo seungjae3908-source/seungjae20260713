@@ -206,7 +206,7 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
-      executionMode: !options.manualApprovalOnly && policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
+      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
       // Overwrite any spoofed runtime field carried by /plans' legacy payload.
       manualOrderAuthority: undefined,
       id: randomUUID(), userId, idempotencyKey,
@@ -215,7 +215,10 @@ export class TradeAutomationService {
       approvalExpiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
-    if (options.manualApprovalOnly) plan.manualOrderAuthority = signManualOrderAuthority(plan);
+    if (options.manualApprovalOnly) {
+      plan.executionMode = 'manual';
+      plan.manualOrderAuthority = signManualOrderAuthority(plan);
+    }
     const inserted = await this.repository.insertPlan(plan);
     return { plan: inserted.plan, duplicate: !inserted.inserted, decision };
   }
