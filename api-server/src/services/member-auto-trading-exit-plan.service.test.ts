@@ -79,3 +79,45 @@ test('fresh mark identity allows a safe retry only after a prior automatic exit 
   assert.ok(first.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
   assert.ok(retry.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
 });
+
+test('automatic exit cannot use another symbol, market, or unrelated FX market',()=>{
+  const entry=plan('buy','upbit');
+  const ord=order(entry);
+  const base={
+    entryPlan:entry,entryOrder:ord,
+    mark:{market:'CRYPTO_SPOT' as const,symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+    fx:{market:'CRYPTO_SPOT' as const,krwPerQuoteCurrency:1,source:'NATIVE_KRW',observedAt:NOW,stale:false as const},
+    reason:'STOP_LOSS' as const,
+  };
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,mark:{...base.mark,symbol:'ETH'}}),
+    /BACKGROUND_EXIT_MARK_SYMBOL_MISMATCH/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,mark:{...base.mark,market:'US_STOCK' as const}}),
+    /BACKGROUND_EXIT_MARK_IDENTITY_MISMATCH/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,fx:{...base.fx,market:'US_STOCK' as const}}),
+    /BACKGROUND_EXIT_FX_IDENTITY_MISMATCH/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,fx:{...base.fx,stale:true as false}}),
+    /BACKGROUND_EXIT_FX_IDENTITY_MISMATCH/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,mark:{...base.mark,source:''}}),
+    /BACKGROUND_EXIT_MARK_SOURCE_REQUIRED/);
+  assert.equal(buildAutomaticExitPlanInput({...base,mark:{...base.mark,symbol:'KRW-BTC'}}).side,'sell');
+});
+
+test('automatic exit cannot exceed existing fill or cross owner/entry identity',()=>{
+  const entry=plan('short','bitget');
+  const ord=order(entry);
+  const base={
+    entryPlan:entry,entryOrder:ord,
+    mark:{market:'CRYPTO_FUTURES' as const,symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+    fx:{market:'CRYPTO_FUTURES' as const,krwPerQuoteCurrency:1400,source:'UPBIT:KRW-USDT',observedAt:NOW,stale:false as const},
+    reason:'TAKE_PROFIT' as const,
+  };
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,remainingQuantity:1.5}),
+    /BACKGROUND_EXIT_OVERFILLED_QUANTITY_FORBIDDEN/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,entryOrder:{...ord,userId:'other'}}),
+    /BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,entryOrder:{...ord,planId:'another'}}),
+    /BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED/);
+  assert.throws(()=>buildAutomaticExitPlanInput({...base,entryOrder:{...ord,state:'REJECTED'}}),
+    /BACKGROUND_EXIT_CANONICAL_ENTRY_IDENTITY_REQUIRED/);
+  assert.equal(buildAutomaticExitPlanInput({...base,remainingQuantity:0.25}).quantity,0.25);
+});
