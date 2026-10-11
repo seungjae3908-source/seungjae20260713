@@ -28,5 +28,6 @@ test('Watch state and Telegram/private authority cannot be enabled by this deplo
  assert.match(source,/Environment=PRIVATE_API_ENABLED=false/u);
  assert.match(source,/Environment=ORDER_AUTHORITY=false/u);
  assert.ok(source.includes('test -x /usr/bin/flock || fail "FLOCK_REQUIRED"'));
- assert.ok(source.includes('ExecStart=/usr/bin/flock -n -E 75 $STATE_DIR/public-cycle.lock /usr/bin/env node'));
+ assert.ok(source.includes('ExecStart=/usr/bin/flock -n -E 75 $STATE_DIR /usr/bin/env node'));
+ assert.ok(source.includes('/usr/bin/flock -n -E 75 "$STATE_DIR" /usr/bin/env \\'));
 });
