@@ -14,6 +14,7 @@ import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/pu
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
@@ -527,6 +528,7 @@ async function main() {
   pruneRetained(state, nowMs);
   const inputs = Object.values(state.retained).map((row) => row.input);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
+  const economicReadiness = summarizeV3EconomicReadiness(baseSnapshot.rows);
   // Retained earlier research rows remain inspectable in rows/stateById,
   // but only the exact verified current source page can publish fresh lists
   // or Telegram candidate events. An invalid receipt returns empty outputs.
@@ -540,6 +542,7 @@ async function main() {
     coverage,
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     publicDataOnly: true,
+    economicReadiness,
     releaseStateReset: releaseChanged,
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
@@ -555,6 +558,7 @@ async function main() {
     events: snapshot.events.length,
     profile: snapshot.profile,
     releaseStateReset: releaseChanged,
+    economicReadiness,
     coverage,
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     executionAuthority: 'NONE',
