@@ -13,7 +13,10 @@ export function FourMarketPaperStatusPanel(){
   const auth=useAuth();
   const userId=auth.user?.id ?? auth.profile?.id ?? '';
   const authorized=Boolean(userId && auth.can('canAccessJournalSync'));
-  // Scope cached status to the authenticated owner to avoid a previous account's\n  // wallet evidence flashing during a sign-out or account switch.\n  const [readback,setReadback]=useState<{ownerId:string;value:FourPaperReadOnlyStatus}|null>(null);\n  const status=authorized && readback?.ownerId===userId ? readback.value : null;
+  // Scope cached status to the authenticated owner to avoid a previous account's
+  // wallet evidence flashing during a sign-out or account switch.
+  const [readback,setReadback]=useState<{ownerId:string;value:FourPaperReadOnlyStatus}|null>(null);
+  const status=authorized && readback?.ownerId===userId ? readback.value : null;
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState(false);
   const [revision,setRevision]=useState(0);
