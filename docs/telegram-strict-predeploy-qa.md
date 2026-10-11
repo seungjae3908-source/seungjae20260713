@@ -216,3 +216,27 @@ unavailable evidence and lets other room data proceed. Provider
 exception messages are reduced to fixed safe codes, never raw token/
 URL/PII material. Offline tests use a deliberate never-resolving
 promise and throwing source, not network calls or actual Bot API sends.
+
+## Draft — prevent V3 false-permanent dedupe and harden scheduled-brief ledger
+
+The Signal V3 Telegram dedupe ledger's existing 14-day TTL was applied
+ONLY during `mark`, so an unchanged delivered key could be suppressed
+indefinitely by `has` if no other successful message caused cleanup.
+`has(key,now)` now evaluates the exact 14-day window and fails closed
+on future receipt timestamps. Polling passes its observed clock for
+deterministic checks. Expired receipts remain on disk until a later
+normal safe commit; an expiry check never erases/replays old alerts.
+All candidates must independently meet the same fresh source-cycle
+gate before dispatch, so a stale archived signal cannot reappear
+merely because dedupe expired.
+
+The scheduled market-brief `FileTelegramIntelligenceStateStore`
+previously used `lstat(path)` followed by `readFile(path)`, which can
+follow a swapped symlink after the initial check. It now opens the
+descriptor with `O_NOFOLLOW`, verifies regular-file device/inode
+identity and size, reads at most 1 MiB+1 byte via the same descriptor
+and closes it. A ledger that existed before `open` but disappears
+during a race is a hard failure; a genuinely absent initial ledger
+remains valid. Existing at-most-once after-commit failure semantics
+and all production dedupe state files remain intact. Tests are
+offline mocks/temp files; no Bot API, DB or runtime changes.
