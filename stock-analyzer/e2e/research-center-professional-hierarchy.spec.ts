@@ -250,3 +250,106 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
   await copilot.click();
   await expect(page.getByTestId('research-general-view')).toHaveCount(0);
 });
+
+
+test('admin historical 1m coverage read carries session auth and paginates an arbitrary multi-year selection', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installRuntime(page);
+  const reads: Array<{ method: string; token: string; market: string | null; start: string | null; end: string | null; cursor: string | null; hasPath: boolean }> = [];
+  await page.route('**/api/research/video/evidence/workspace/pit-minute-coverage?*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    reads.push({
+      method: request.method(),
+      token: request.headers().authorization ?? '',
+      market: url.searchParams.get('market'),
+      start: url.searchParams.get('startDate'),
+      end: url.searchParams.get('endDate'),
+      cursor: url.searchParams.get('cursorDate'),
+      hasPath: [...url.searchParams.keys()].some(key => /path|root|file|token|secret|provider/i.test(key)),
+    });
+    const second = url.searchParams.get('cursorDate') != null;
+    const firstDate = second ? '2016-01-08' : '2016-01-01';
+    await fulfill(route, {
+      schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+      available: true,
+      status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      reason: 'MISSING_HISTORICAL_MINUTE_DATE_RECEIPT',
+      executionAuthority: 'NONE',
+      profitabilityProven: false,
+      report: {
+        status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+        reason: 'MISSING_HISTORICAL_MINUTE_DATE_RECEIPT',
+        inspectedStartDate: firstDate,
+        inspectedEndDate: second ? '2016-01-14' : '2016-01-07',
+        nextCursorDate: second ? null : '2016-01-08',
+        expectedHistoricalTradingDays: 5,
+        missingSourceDays: 4,
+        partialSourceDays: 1,
+        locallyCompleteMinuteSourceDays: 0,
+        retrospectiveMinuteRows: 120,
+        sourceMinuteRows: 120,
+        dailyReadiness: [
+          { date: firstDate, status: 'BLOCKED_DATA', originalMinuteRows: null },
+          { date: second ? '2016-01-11' : '2016-01-04',
+            status: 'INCOMPLETE_SOURCE_ATTESTED_DAY_MINUTE_INVENTORY',
+            originalMinuteRows: 120 },
+        ],
+        originalScannerAsOfEvidenceVerified: false,
+        fullMarketOpportunityDenominatorVerified: false,
+        profitabilityProven: false,
+        executionAuthority: 'NONE',
+      },
+    });
+  });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  const panel = page.getByTestId('research-pit-minute-coverage');
+  await expect(panel).toBeVisible();
+  await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
+  await panel.getByLabel('과거 데이터 시작일').fill('2016-01-01');
+  await panel.getByLabel('과거 데이터 종료일').fill('2026-10-01');
+  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await expect(panel).toContainText('2016-01-01 ~ 2016-01-07');
+  await expect(panel).toContainText('누락된 날짜');
+  await expect(panel).toContainText('사후 수집 분봉');
+  await expect(panel).toContainText('최초 신호 탐지·OOS·실체결·수익성 미검증');
+  await panel.getByRole('button', { name: /다음 기간 조회/ }).click();
+  await expect(panel).toContainText('2016-01-08 ~ 2016-01-14');
+  expect(reads).toHaveLength(2);
+  expect(reads.map(r => [r.method, r.market, r.start, r.end, r.cursor, r.hasPath])).toEqual([
+    ['GET', 'US_STOCK', '2016-01-01', '2026-10-01', null, false],
+    ['GET', 'US_STOCK', '2016-01-01', '2026-10-01', '2016-01-08', false],
+  ]);
+  expect(reads.every(r => r.token.startsWith('Bearer '))).toBe(true);
+});
+
+test('historical 1m coverage UI fails closed after 403 or an unsafe response, without showing source totals', async ({ page }) => {
+  await installRuntime(page);
+  let mockKind: 'denied' | 'unsafe' = 'denied';
+  await page.route('**/api/research/video/evidence/workspace/pit-minute-coverage?*', async route => {
+    if (mockKind === 'denied') {
+      return fulfill(route, { error: 'CAPABILITY_REQUIRED' }, 403);
+    }
+    return fulfill(route, {
+      schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+      available: true, status: 'SOURCE_ATTESTED',
+      executionAuthority: 'LIVE',
+      profitabilityProven: true,
+      report: { executionAuthority: 'LIVE', profitabilityProven: true },
+    });
+  });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  const panel = page.getByTestId('research-pit-minute-coverage');
+  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
+  await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
+  mockKind = 'unsafe';
+  await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
+  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await expect(panel.getByRole('alert')).toContainText('검증되지 않은 응답은 표시하지 않습니다.');
+  await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
+});
