@@ -80,6 +80,7 @@ on:
       - ops/verify-production-admin-four-paper-rls.mjs
       - .github/tests/production-admin-four-paper-rls.test.mjs
       - api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql
+      - api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
       - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
       - api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
       - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
@@ -587,7 +588,8 @@ jobs:
           trap cleanup_admin_paper EXIT
           tar -czf "$archive" \
             ops/apply-production-admin-four-paper-rls.mjs \
-            api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql
+            api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql \
+            api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
           cmd="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-admin-four-paper-rls.mjs' \
