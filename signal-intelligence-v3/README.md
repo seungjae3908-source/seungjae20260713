@@ -257,3 +257,21 @@ U.S. class-share alternate symbols remain bounded. No external
 private provider or order authority is used. Unit tests cover empty,
 error, known-exchange and ambiguous-venue cases; source confidence,
 stale/partial classification and Telegram gates are unchanged.
+
+## Official KRX ETP subtype integration prepared (disabled by default)
+
+Official KRX service categories are distinct `etf_bydd_trd`,
+`etn_bydd_trd`, `elw_bydd_trd` through the KRX Data Marketplace.
+The new `readApprovedKrxEtpSubtypes` helper is not called by
+the production scanner. Its default is disabled, has no KRX key
+in GitHub and performs ZERO requests without explicit enable and a
+service-authorized `AUTH_KEY`. It only sends three GET requests to a
+fixed official KRX host for one pinned trading date, never calls broker
+accounts, and does not log tokens or full response records. Tests use
+injected offline mock responses exclusively.
+
+A dated row can explain ETF/ETN/ELW subtype, but cannot prove every
+listed security is actively tradable, provide 15m/60m intraday candles,
+or grant a market-wide V3 PASS / Paper / LIVE permission. Any
+nonmatch/conflict stays UNKNOWN/CONFLICT. Do not enable without a
+separately approved KRX service application and read-only key source.
