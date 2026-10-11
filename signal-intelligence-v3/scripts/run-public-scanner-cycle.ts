@@ -357,6 +357,7 @@ const V3_CRYPTO_PROVIDERS = createPublicV3CryptoProviders();
 const V3_CRYPTO_SCANNER = createCryptoSignalScannerService(V3_CRYPTO_PROVIDERS);
 async function scanCryptoRaw(lane, cursor) {
   V3_CRYPTO_PROVIDERS.clearLastRosterDigest(lane.scannerMarket);
+  V3_CRYPTO_PROVIDERS.resetCandleQuality(lane.scannerMarket);
   const scanned = await V3_CRYPTO_SCANNER.scan({
     memberId: MEMBER_ID,
     market: lane.scannerMarket,
@@ -367,6 +368,7 @@ async function scanCryptoRaw(lane, cursor) {
     batchSize: lane.batchSize,
   });
   const observedRosterDigest = V3_CRYPTO_PROVIDERS.readLastRosterDigest(lane.scannerMarket);
+  const observedCandleQuality = V3_CRYPTO_PROVIDERS.readCandleQuality(lane.scannerMarket);
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
   const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
   const cards = ranking.cards
@@ -379,6 +381,7 @@ async function scanCryptoRaw(lane, cursor) {
     // V3-only source roster identity. It is never a verified live quote,
     // Paper authority, or permission for automatic trading.
     universe: {...aligned.universe, rosterDigest: observedRosterDigest},
+    publicCryptoCandleQuality: observedCandleQuality,
     cards,
     execution: {
       ...aligned.execution,
@@ -546,6 +549,7 @@ async function main() {
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
         publicStockSourceAudit: response.publicStockSourceAudit ?? null,
+        publicCryptoCandleQuality: response.publicCryptoCandleQuality ?? null,
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
         requestedCount: Number(response.execution.requestedCount ?? 0),
