@@ -2,6 +2,7 @@ import { open, lstat, readdir, statfs, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { planPITNativeMinuteSourceGapsV1 } from "./four-market-pit-minute-gap-queue-v1.js";
 import { collectPITNativeCryptoMinuteSourceV1 } from "./pit-native-crypto-minute-backfill-v1.js";
+import { inspectArchivedResearchMinuteSessionV1 } from "./research-minute-archive-v1.js";
 
 /**
  * Opt-in single proposed PIT crypto 1m source task -> existing native collector.
@@ -152,8 +153,7 @@ function validate({root,market,day,pages,taskPageIndex,taskIndex,
     ||typeof allowPublicReadOnlyFetch!=="boolean"
     ||typeof retryPartialSource!=="boolean"
     ||(retryPartialSource
-      ? !allowPublicReadOnlyFetch
-        ||!SHA.test(expectedExistingSourceDigestSha256??"")
+      ? !SHA.test(expectedExistingSourceDigestSha256??"")
       :expectedExistingSourceDigestSha256!=null)
     ||!Number.isSafeInteger(maxLocalBytes)
     ||maxLocalBytes<MAX_SINGLE_SOURCE_BYTES||maxLocalBytes>16*1024*MIB
@@ -229,14 +229,72 @@ export async function runPlannedPITMinuteSourceTaskV1({
   }))return blocked(id,"SELECTED_TASK_NOT_ELIGIBLE");
   const selectedTaskKind=retryPartialSource
     ?"PARTIAL_SOURCE_REVIEW":"MISSING_SOURCE";
+  // Genuine zero-network preflight: recheck the CURRENT immutable source,
+  // not just a previously issued 20-member PIT receipt. Do this before
+  // explicit public-read consent, before a writer lock, and before ANY GET.
+  // The native collector performs another check under the writer lock.
+  await assertPrivateRoot(root);
+  let retained;
+  try {
+    retained=await inspectArchivedResearchMinuteSessionV1({
+      root,market,symbol:task.symbol,sessionStartMs:task.sessionStartMs,
+    });
+  }catch{
+    return blocked(id,"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW",{
+      plannedSymbol:task.symbol,selectedTaskKind,providerGETCount:0,
+    });
+  }
+  if(retryPartialSource) {
+    if(retained.status==="BLOCKED_DATA")return blocked(id,
+      retained.reason==="ARCHIVED_SESSION_NOT_FOUND"
+        ?"RETRY_EXISTING_PARTIAL_ARCHIVE_REQUIRED"
+        :"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW",{
+        plannedSymbol:task.symbol,selectedTaskKind,
+        archiveReason:retained.reason,providerGETCount:0,
+      });
+    if(retained.archiveSourceDigestSha256
+      !==expectedExistingSourceDigestSha256)
+      return blocked(id,"RETRY_SOURCE_REVISION_DIGEST_MISMATCH",{
+        plannedSymbol:task.symbol,selectedTaskKind,
+        currentSourceDigestSha256:retained.archiveSourceDigestSha256,
+        providerGETCount:0,
+      });
+    if(retained.archivedRevisionCount!==1
+      ||retained.nativeMinuteSlotInventoryComplete===true)
+      return blocked(id,
+        retained.nativeMinuteSlotInventoryComplete===true
+          ?"ALREADY_RETAINED_COMPLETE_1M_SOURCE"
+          :"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW",{
+          plannedSymbol:task.symbol,selectedTaskKind,providerGETCount:0,
+        });
+    if(retained.sourceMinuteRows!==task.priorOriginalMinuteRows
+      ||retained.missingUnverifiedSourceMinuteSlots
+        !==task.missingUnverifiedMinuteSlots)
+      return blocked(id,"RETRY_SOURCE_PLAN_OUTDATED",{
+        plannedSymbol:task.symbol,selectedTaskKind,providerGETCount:0,
+      });
+  }else if(retained.status!=="BLOCKED_DATA"
+    ||retained.reason!=="ARCHIVED_SESSION_NOT_FOUND") {
+    const existing=retained.status==="BLOCKED_DATA"
+      ?"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW"
+      :retained.nativeMinuteSlotInventoryComplete===true
+        ?"ALREADY_RETAINED_COMPLETE_1M_SOURCE"
+        :"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY";
+    return blocked(id,existing,{
+      plannedSymbol:task.symbol,selectedTaskKind,providerGETCount:0,
+    });
+  }
   if (!allowPublicReadOnlyFetch)
     return blocked(id,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED",{
-      plannedSymbol:task.symbol,expectedTaskDigestSha256,
-      selectedTaskKind,
+      plannedSymbol:task.symbol,expectedTaskDigestSha256,selectedTaskKind,
       permittedProvider:task.proposedProvider,
+      reviewedExistingSourceDigestSha256:retryPartialSource
+        ?retained.archiveSourceDigestSha256:null,
+      reviewedExistingNativeMinuteCount:retryPartialSource
+        ?retained.sourceMinuteRows:null,
+      reviewSourceOnly:true,providerGETCount:0,
+      publicGETAttempted:false,
     });
-  // Fail closed if private archive was not explicitly initialized.
-  await assertPrivateRoot(root);
   const lockPath=join(root,".pit-native-minute-task.lock");
   let lock;
   try {
