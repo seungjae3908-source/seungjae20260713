@@ -16,6 +16,8 @@
  *   historical GET still requires --read-public explicitly.
  *   A retry never overwrites the prior original, requires the exact reviewed
  *   prior digest and only stores an unchanged-price superseding 1m inventory.
+ *   Use --retain-source-limited to explicitly save ONE or more observed 1m
+ *   bars when original history is incomplete; no OOS/Paper promotion.
  *   Multiple revisions require explicit read selection; no auto promotion.
  *   Replit/DB/Production/Paper/LIVE/order paths are absent.
  */
@@ -54,10 +56,11 @@ function noSymlinkAncestors(path) {
   }
 }
 export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
-  if(!Array.isArray(args)||args.length<14||args.length>18)
+  if(!Array.isArray(args)||args.length<14||args.length>19)
     throw new TypeError("PIT_NATIVE_MINUTE_CLI_ARGUMENTS_INVALID");
   const fields={};
   let allowPublicReadOnlyFetch=false,retryPartialSource=false;
+  let allowSourceLimitedArchive=false;
   for(let i=0;i<args.length;i++){
     if(args[i]==="--read-public"){
       if(allowPublicReadOnlyFetch)throw new TypeError("PIT_NATIVE_MINUTE_CLI_DUPLICATE_FLAG");
@@ -66,6 +69,11 @@ export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
     if(args[i]==="--retry-partial"){
       if(retryPartialSource)throw new TypeError("PIT_NATIVE_MINUTE_CLI_DUPLICATE_FLAG");
       retryPartialSource=true;continue;
+    }
+    if(args[i]==="--retain-source-limited"){
+      if(allowSourceLimitedArchive)
+        throw new TypeError("PIT_NATIVE_MINUTE_CLI_DUPLICATE_FLAG");
+      allowSourceLimitedArchive=true;continue;
     }
     const key=args[i],value=args[++i];
     if(!FLAGS.has(key)||Object.hasOwn(fields,key)
@@ -91,7 +99,7 @@ export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
     manifestPath:fields["--manifest"],
     expectedRosterDigestSha256:fields["--expected-roster-sha"],
     outputPath:fields["--output"],
-    allowPublicReadOnlyFetch,retryPartialSource,
+    allowPublicReadOnlyFetch,retryPartialSource,allowSourceLimitedArchive,
     expectedExistingSourceDigestSha256:fields["--expected-existing-sha"]??null,
   });
 }
@@ -113,6 +121,7 @@ export async function runPITNativeMinuteBackfillCliV1(
     expectedRosterDigestSha256:config.expectedRosterDigestSha256,
     manifest,allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
     retryPartialSource:config.retryPartialSource,
+    allowSourceLimitedArchive:config.allowSourceLimitedArchive??false,
     expectedExistingSourceDigestSha256:
       config.expectedExistingSourceDigestSha256??null,
     ...(dependencies.nowImpl?{nowImpl:dependencies.nowImpl}:{}),
@@ -129,6 +138,11 @@ export async function runPITNativeMinuteBackfillCliV1(
     sourceMinuteCount:result.sourceMinuteCount??null,
     archiveSourceDigestSha256:result.archiveSourceDigestSha256??null,
     priorSourceDigestSha256:result.priorSourceDigestSha256??null,
+    providerRequestWindowVerified:result.providerRequestWindowVerified??null,
+    sourcePartialReason:result.sourcePartialReason??null,
+    missingUnverifiedMinuteSlots:result.missingUnverifiedMinuteSlots??null,
+    requestedProviderPages:result.requestedProviderPages??null,
+    sourceLimitedOnly:result.sourceLimitedOnly??null,
     sourceRevisionAutoSelected:false,
     historicalFullMarketPITUniverseVerified:false,
     actualMarketWideOpportunityCount:null,trueMarketWideRecall:null,
