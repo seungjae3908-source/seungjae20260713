@@ -260,3 +260,42 @@ node market-prediction-lab/scripts/audit-research-minute-revisions-v1.mjs \
 방향 정책은 그대로이고 이 코드에서 매매 신호 또는 주문은
 발생하지 않는다. `providerGETCount=0`, `executionAuthority=NONE`,
 `profitabilityProven=false`와 Draft 범위가 유지된다.
+
+
+### 2026-10-12 — SHA 서명된 부분 재수집 검토 목록을 단건 실행기로 연결
+
+이전 \`runPlannedPITMinuteSourceTaskV1\`는
+\`--retry-partial --expected-existing-sha\`를 해석하면서도
+항상 \`candidateTasks\`(원본 **미보관** 세션)만 골랐다.
+따라서 부분 저장된 원본의 SHA를 정확히 지정해도 대상 종목을
+올바르게 선택하지 못했다.
+
+수정 후 **처음부터 없던 원본**은 \`candidateTasks\`와
+\`candidateTaskDigestSha256\`을 쓰고, **부분 저장된 원본**은
+\`partialRetryReviewTasks\`와 \`partialRetryReviewDigestSha256\`을
+별도로 사용한다. 두 해시는 교환 불가능하고 각 목록은 기존
+전체 PIT 명부/20종목 페이지 영수증으로 다시 확인한다.
+
+부분 재수집의 실제 공개 소스 호출은 승인받은 단건 요청에서
+\`--read-public --retry-partial --expected-existing-sha <사전 검토된 원본 SHA>\`
+세 조건을 함께 명시해야 한다. --expected-task-digest에는
+해당 검토 페이지의 \`partialRetryReviewDigestSha256\`을 넣는다.
+
+각 호출은 단일 코인현물/코인선물 시장·종목·UTC 하루 한 건,
+전용 개인 root·용량 제한·배타적 원본 작성 잠금이 적용된다.
+기존 원본 SHA가 이미 바뀌었거나, 기존 OHLCV 1분봉이
+사라지거나 가격이 모순되면 저장을 차단한다. 새 분봉이
+추가된 경우에는 과거 버전을 건드리지 않고 새로운 원본
+수정본으로만 저장하며, 이후 기본 백테스터 경로는 여전히
+명시적인 수정본 선택 없이 진행할 수 없다.
+
+현금 주식 시장은 원본 분봉 공급권이 확보되지 않았으므로
+이 코인 전용 공개 수집 경로를 사용하지 않는다. 원본
+1분봉에 없는 체결·호가·OI/펀딩 정보가 복구되는 것으로
+해석하지 않으며, 독립 OOS/워크포워드/전체 비용/당시
+검색 가능성/과거 PIT 명부 증빙이 없으면 여전히 수익성
+PASS는 0건이다.
+
+이번 작업에서는 **코드와 격리된 공급원 mock QA만 실행**하며
+실제 거래소 GET, 운영 서버의 과거 데이터 다운로드·보관,
+텔레그램·Paper·실주문을 실행하지 않았다.
