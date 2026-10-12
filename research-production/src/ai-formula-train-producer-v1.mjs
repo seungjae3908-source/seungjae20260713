@@ -41,7 +41,7 @@ function equalKeys(value, fields) {
 }
 
 function positiveTimestamp(ms, now) {
-  return Number.isSafeInteger(ms) && ms > 0 && ms <= now + 5 * 60_000;
+  return Number.isSafeInteger(ms) && ms > 0 && ms <= now;
 }
 
 function validateAiArtifact(review, researchSha, now) {
@@ -53,6 +53,8 @@ function validateAiArtifact(review, researchSha, now) {
     || !['gemini', 'groq'].includes(review.provider)
     || typeof review.model !== 'string' || !review.model
     || !['CRITIC', 'PROPOSER'].includes(review.role)
+    || (review.role === 'CRITIC' && review.profile !== 'forward')
+    || (review.role === 'PROPOSER' && !['fast-historical', 'long-history'].includes(review.profile))
     || review.evidenceCredit !== 0
     || review.profitabilityProven !== false || review.champion !== null
     || review.safety?.executionAuthority !== 'NONE'
@@ -282,7 +284,7 @@ export async function prepareAiFormulaTrainProposalsV1({
     staged,
     held: reports.length - planned.length,
     proposals: Object.freeze(reports.map((r) => Object.freeze(r))),
-    sourceCallbackVerifiedOnly: true,
+    requiresReviewedSourceCallback: true,
     externalSourceIndependentlyAttested: false,
     independentOosVerified: false,
     fullCostVerified: false,
@@ -304,9 +306,11 @@ export function buildAiFormulaTrainFeedbackV1({ researchSha, queueSummary } = {}
     || queueSummary.paperOrderAuthorityGranted !== false
     || queueSummary.canonicalFutureSignalVerified !== false
     || queueSummary.oosAndSettlementVerified !== false
-    || !Array.isArray(queueSummary.rows)) fail('AI_FORMULA_FEEDBACK_UNTRUSTED');
+    || !Array.isArray(queueSummary.rows)
+    || queueSummary.paperRegisteredCount !== 0
+    || queueSummary.counts?.PASS !== 0) fail('AI_FORMULA_FEEDBACK_UNTRUSTED');
   const rows = queueSummary.rows.slice(0, 4).map((r) => {
-    if (!['PASS', 'HOLD', 'RESERVE', 'EXCLUDE'].includes(r?.state)
+    if (!['HOLD', 'RESERVE', 'EXCLUDE'].includes(r?.state)
       || !SHA64.test(String(r?.itemDigest ?? ''))
       || !Array.isArray(r.blockers)) fail('AI_FORMULA_FEEDBACK_ROW_INVALID');
     const allowedCode = (v) => typeof v === 'string' && /^[A-Z0-9_]{1,120}$/u.test(v);
