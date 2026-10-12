@@ -709,6 +709,9 @@ export class TradeExecutionService {
     ),
     private tossTokens: Pick<TossTokenManager, 'token'> = processTossTokenManager(),
     private readonly paperCostEvidenceProviders: ServerPaperCostEvidenceProviders = {},
+    // Server-only revocation fence. It can only remove execution permission;
+    // it never substitutes for policy, account, budget or exact-SHA arm gates.
+    private readonly executionGenerationIsActive: (() => boolean) | null = null,
   ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
@@ -1050,6 +1053,7 @@ export class TradeExecutionService {
   }
 
   async execute(userId: string, plan: TradingPlan, candidate: TradingOrder) {
+    this.assertExecutionGenerationActive();
     let order = await this.repository.getOrder(userId, candidate.id);
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     if (order.state === 'RECOVERY_REQUIRED') return this.recovery.reconcile(userId, plan, order);
@@ -1318,6 +1322,7 @@ export class TradeExecutionService {
   }
 
   private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
+    this.assertExecutionGenerationActive();
     if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
       || isRiskReducingExitPlan(plan)) return;
     await this.assertAutomaticLiveEntryControls(userId, plan);
@@ -1325,6 +1330,13 @@ export class TradeExecutionService {
     // Private reads can take time. Recheck revocable authority and member caps
     // AFTER them, rather than trusting a pre-read arm/policy decision.
     await this.assertAutomaticLiveEntryControls(userId, plan);
+    this.assertExecutionGenerationActive();
+  }
+
+  private assertExecutionGenerationActive() {
+    if (this.executionGenerationIsActive && this.executionGenerationIsActive() !== true) {
+      throw new Error('AUTOMATIC_WORKER_GENERATION_STOPPED');
+    }
   }
 
   private async assertAutomaticLiveEntryControls(userId: string, plan: TradingPlan) {
@@ -1392,6 +1404,7 @@ export class TradeExecutionService {
       submissionAttemptId,
       executionClaimId: expectedClaimId,
     });
+    this.assertExecutionGenerationActive();
     return order.state === 'SUBMITTED'
       && order.submissionAttemptId === submissionAttemptId
       && order.executionClaimId === expectedClaimId
@@ -1445,6 +1458,7 @@ export class TradeExecutionService {
     });
     if (!plan.reduceOnly && canChangeMarginMode) {
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
+      this.assertExecutionGenerationActive();
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
@@ -1452,12 +1466,14 @@ export class TradeExecutionService {
       const leverage = Number(plan.leverage);
       if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
+      this.assertExecutionGenerationActive();
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
+    this.assertExecutionGenerationActive();
     let exchangeOrderId = bitgetAcknowledgedOrderId(await sendExchangeRequest(BASE_URLS.bitget,
       prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId, plan.reduceOnly === true);
     let reconciliationRequired = false;
@@ -1511,11 +1527,13 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('upbit'),
     });
+    this.assertExecutionGenerationActive();
     assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
       prepareUpbitOrderTest(credentials, risk.plan, order.clientOrderId), PREFLIGHT_TIMEOUT_MS));
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
+    this.assertExecutionGenerationActive();
     const accepted = assertUpbitOrderAccepted(await sendExchangeRequest(BASE_URLS.upbit,
       prepareUpbitOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
     let reconciliationRequired = false;
@@ -1597,6 +1615,7 @@ export class TradeExecutionService {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
 
+    this.assertExecutionGenerationActive();
     const orderId = assertKiwoomOrderAccepted(await sendExchangeRequest(
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
 
@@ -1658,6 +1677,7 @@ export class TradeExecutionService {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
 
+    this.assertExecutionGenerationActive();
     const orderId = assertTossOrderAccepted(
       await sendExchangeRequest(BASE_URLS.toss, prepareTossOrder(authenticated, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS),
       order.clientOrderId,
