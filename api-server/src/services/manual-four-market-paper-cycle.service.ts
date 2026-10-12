@@ -102,6 +102,7 @@ export type ManualPaperFourMarketCycle=Readonly<{
   updatedLockedReserveKrw:number|null;
   newCompoundedProfitKrw:number|null;
   newReserveProfitKrw:number|null;
+  updatedHighWaterMarkKrw:number|null;
   journal:Readonly<Record<string,unknown>>|null;
   executionAuthority:'NONE';
   liveOrderSubmitted:false;
@@ -127,7 +128,8 @@ function blocked(input:ManualPaperFourMarketCycleInput,blockers:string[]):Manual
     mode:'manual' as const,closedCycleId:null,grossPnlKrw:null,netPnlKrw:null,
     verifiedCostsKrw:null,entryPrice:null,exitPrice:null,quantity:null,
     updatedOperatingCapitalKrw:null,updatedLockedReserveKrw:null,
-    newCompoundedProfitKrw:null,newReserveProfitKrw:null,journal:null,
+    newCompoundedProfitKrw:null,newReserveProfitKrw:null,
+    updatedHighWaterMarkKrw:null,journal:null,
     executionAuthority:'NONE' as const,liveOrderSubmitted:false as const,
     exchangeRequestSent:false as const,dataSource:'SERVER_READBACK_ONLY' as const,
     oosProfitabilityProven:false as const,actualPaperLedgerWritten:false as const,
@@ -249,13 +251,18 @@ export function evaluateManualFourMarketPaperClosedCycle(
   const qty=s.requestedNotionalKrw/(entryPrice*c.entryFxKrwPerQuote);
   const entryValueKrw=qty*entryPrice*c.entryFxKrwPerQuote;
   const closeValueKrw=qty*exitPrice*c.exitFxKrwPerQuote;
-  const grossKrw=s.side==='SHORT'?entryValueKrw-closeValueKrw:closeValueKrw-entryValueKrw;
-  // Decompose observed price and as-of FX arithmetic; neither effect proves
-  // that the selected signal *caused* a win or loss.
+  // A cash USD stock owns FX exposure on the whole principal. Isolated
+  // USDT-margined futures own only the native price-difference PnL: applying
+  // changed FX to the full futures notional manufactures a profit on flat price.
   const direction=s.side==='SHORT'?-1:1;
+  const grossKrw=s.market==='crypto_futures'
+    ? direction*qty*(exitPrice-entryPrice)*c.exitFxKrwPerQuote
+    : direction*(closeValueKrw-entryValueKrw);
+  // Both contributions must reconcile to the same verified gross KRW PnL.
   const priceMovementKrw=direction*qty*(exitPrice-entryPrice)*c.entryFxKrwPerQuote;
-  const fxTranslationKrw=direction*qty*exitPrice*
-    (c.exitFxKrwPerQuote-c.entryFxKrwPerQuote);
+  const fxTranslationKrw=s.market==='crypto_futures'
+    ? direction*qty*(exitPrice-entryPrice)*(c.exitFxKrwPerQuote-c.entryFxKrwPerQuote)
+    : direction*qty*exitPrice*(c.exitFxKrwPerQuote-c.entryFxKrwPerQuote);
   const commissionKrw=entryValueKrw*c.entryCommissionRate
     +closeValueKrw*c.exitCommissionRate;
   const costKrw=commissionKrw+c.spreadAndSlippageKrw+c.taxKrw+c.signedFundingKrw;
@@ -281,6 +288,9 @@ export function evaluateManualFourMarketPaperClosedCycle(
   const previousTotal=o.operatingCapitalKrw+o.lockedReserveKrw;
   const highWater= o.highWaterMarkKrw;
   const newlyAboveHighWater=Math.max(0,previousTotal+netKrw-highWater);
+  // Store this receipt in the next protected snapshot: otherwise a later
+  // losing trade can accidentally earn another 50% reserve distribution.
+  const nextHighWaterKrw=Math.max(highWater,previousTotal+netKrw);
   const recovered=netKrw-newlyAboveHighWater;
   const newReserve=newlyAboveHighWater*0.5;
   const newCompound=newlyAboveHighWater*0.5;
@@ -308,6 +318,7 @@ export function evaluateManualFourMarketPaperClosedCycle(
     slippageKrw:cents(c.spreadAndSlippageKrw),
     taxKrw:cents(c.taxKrw),fundingCostKrw:cents(c.signedFundingKrw),
     netPnlKrw:cents(netKrw),
+    nextHighWaterMarkKrw:cents(nextHighWaterKrw),
     exitReason:'PRICE_BASED_RESEARCH_SIMULATION_ONLY',
     causalImpactProven:false,actualPaperLedgerWritten:false,
     externalAiCalled:false,realOrderSubmitted:false,
@@ -320,6 +331,7 @@ export function evaluateManualFourMarketPaperClosedCycle(
     updatedOperatingCapitalKrw:cents(Math.max(0,operatingKrw)),
     updatedLockedReserveKrw:cents(o.lockedReserveKrw+newReserve),
     newCompoundedProfitKrw:cents(newCompound),newReserveProfitKrw:cents(newReserve),
+    updatedHighWaterMarkKrw:cents(nextHighWaterKrw),
     journal,executionAuthority:'NONE',liveOrderSubmitted:false,
     exchangeRequestSent:false,dataSource:'SERVER_READBACK_ONLY',
     oosProfitabilityProven:false,actualPaperLedgerWritten:false,
