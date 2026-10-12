@@ -51,6 +51,7 @@ function verifiedCurrentLane(lane){
     ||page.failuresObserved!==0
     ||!isCount(page.requested)||page.requested===0
     ||page.started!==page.requested||page.completed!==page.requested
+    ||lane.scannedCards>page.requested
     ||!isCount(lane.cursorBefore)||!isCount(lane.cursorAfter)
     ||!isCount(lane.totalUniverse)||lane.totalUniverse===0)return false;
   const end=lane.cursorBefore+page.requested;
@@ -110,14 +111,15 @@ export function currentPublicV3CycleReady(coverage){
 /** Conservative fresh publication view. Prior research rows are kept only in
  * snapshot.rows/stateById; lists and notifications require exact current page.
  */
-export function currentPagePublication(snapshot,coverage){
+export function currentPagePublication(snapshot,coverage,nowMs=Date.now()){
   const empty=Object.freeze({allowedIds:Object.freeze([]),
     lists:Object.freeze({krBuy:Object.freeze([]),usBuy:Object.freeze([]),
       spotBuy:Object.freeze([]),futuresLong:Object.freeze([]),
       futuresShort:Object.freeze([])}),events:Object.freeze([]),
     fullCoverageProven:false,executionAuthority:'NONE'});
   const lanes=verifiedLanes(coverage);
-  if(!lanes||!snapshot||!Array.isArray(snapshot.rows)
+  if(!lanes||!Number.isSafeInteger(nowMs)||nowMs<=0
+    ||!snapshot||!Array.isArray(snapshot.rows)
     ||!Array.isArray(snapshot.events)||!snapshot.lists)return empty;
 
   // All visible candidates must come from a unique immutable normalized
@@ -133,9 +135,22 @@ export function currentPagePublication(snapshot,coverage){
       ||!verifiedCurrentPublicV3Page(lane)
       ||origin?.sourceCycleId!==lane.sourceCycleId
       ||origin?.cursor!==lane.cursorBefore
-      ||!verifiedV3CurrentPublicationRow(row,lane))
+      ||!verifiedV3CurrentPublicationRow(row,lane,nowMs))
       continue;
     permitted.set(row.id,row);
+  }
+  // A single completed source page cannot issue more distinct eligible
+  // candidates than its own recorded retained-card count. A malformed lane
+  // is suppressed without starving independent healthy markets.
+  const countByLane=new Map();
+  for(const row of permitted.values()){
+    const id=row.provenance.laneId;
+    countByLane.set(id,(countByLane.get(id)??0)+1);
+  }
+  for(const [id,row] of permitted){
+    const lane=lanes.get(row.provenance.laneId);
+    if((countByLane.get(lane.laneId)??0)>lane.retainedFromBatch)
+      permitted.delete(id);
   }
 
   const expected=Object.freeze({
