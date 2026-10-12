@@ -1,4 +1,5 @@
 'use strict';
+const { createHash } = require('node:crypto');
 // Shared with GitHub receipt checks. This file must live in ops because the
 // deployed runtime deliberately excludes the .github directory.
 
@@ -67,7 +68,58 @@ async function verifyProductionAutoLivePrearmHandoff(value, targetSha, nowMs = D
   return Object.freeze({ ...identity, entryCount: validated.entryCount });
 }
 
+
+// Read-only operational schedule inspection: a tagged comment, wrong command,
+// different cadence or stale activation receipt is not an active source.
+// Even a valid schedule does not prove scanner or AI issuer execution.
+function inspectManagedPaperForwardSchedule(crontabText, activation, targetSha, activatedAtMs, nowMs = Date.now()) {
+  if (typeof crontabText !== 'string' || !/^[a-f0-9]{40}$/u.test(targetSha ?? '')
+    || !Number.isSafeInteger(activatedAtMs) || activatedAtMs <= 0
+    || !Number.isFinite(nowMs) || nowMs < activatedAtMs) {
+    throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ARGUMENT_INVALID');
+  }
+  const tag = '# stock-app-paper-forward-v1';
+  const wrapperPath = '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+  const prefix = '*/15 * * * * ';
+  const suffix = ' -n /opt/stock-app-data/paper-forward-v1/cron.lock ' + wrapperPath + ' ' + tag;
+  const lines = crontabText.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  // A duplicate untagged invocation is also unsafe; tagged comments alone
+  // cannot certify that cron will run a real executable.
+  const managed = lines.filter((line) => line.includes(tag) || line.includes(wrapperPath));
+  if (managed.length !== 1) throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID');
+  const line = managed[0];
+  const executable = line.startsWith(prefix) && line.endsWith(suffix)
+    ? line.slice(prefix.length, -suffix.length) : '';
+  if (!/^\/(?:[A-Za-z0-9._+-]+\/)*flock$/u.test(executable)) {
+    throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ENTRY_NOT_EXECUTABLE');
+  }
+  const hash = createHash('sha256').update(line).digest('hex');
+  if (activation?.schemaVersion !== 'paper-forward-schedule-activation-v2'
+    || activation?.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+    || activation?.targetSha !== targetSha || activation?.deployedSha !== targetSha
+    || activation?.activationAtMs !== activatedAtMs
+    || Date.parse(String(activation?.installedAt ?? '')) !== activatedAtMs
+    || activation?.scheduleActive !== true
+    || activation?.pollCadence !== 'EVERY_15_MINUTES'
+    || activation?.canonicalCycleIntervalMs !== 900_000
+    || activation?.autoLivePublicSignalRefreshEnabled !== true
+    || !/^[a-f0-9]{64}$/u.test(String(activation?.runtimeDigest ?? ''))
+    || activation?.cronHash !== hash
+    || activation?.paperTradeOutcomeAccumulationEnabled !== false
+    || activation?.simulatedFinancialAdaptersEnabled !== false
+    || activation?.externalFinancialMutationAllowed !== false
+    || activation?.publicDataOnly !== true
+    || activation?.liveTrading !== false
+    || activation?.privateAccountAccess !== false
+    || activation?.orderAuthority !== false) {
+    throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID');
+  }
+  return Object.freeze({ exactActiveCommand: true, activationBound: true,
+    entryCount: 1, publicOnly: true, refreshIntervalMs: 900_000 });
+}
+
 module.exports = {
+  inspectManagedPaperForwardSchedule,
   inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff,
 };
