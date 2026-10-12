@@ -19,7 +19,9 @@ import {
   automaticPaperWalletBootstrapReadiness,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   memberAutoTradingWorkerMode,
+  SupabaseMemberAutoTradingBackgroundSource,
 } from '../services/member-auto-trading-background-worker.service';
+import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { getUserSupabase } from '../lib/supabase';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
@@ -275,6 +277,7 @@ function sanitizedAutomaticRuntimeHealth() {
     lastTickAt: health.lastTickAt,
     tickOk: health.tickOk,
     handoffReady: health.handoffReady,
+    handoffErrorCode: health.handoffErrorCode,
     newEntriesFailClosed: health.newEntriesFailClosed,
     liveEntryArmPresent: health.liveEntryArmPresent,
     liveEntriesArmed: health.liveEntriesArmed,
@@ -1183,6 +1186,17 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
       exchangeRequestSent: false,
     });
   }
+});
+
+router.get('/live-preactivation-readiness', async (req: AuthenticatedRequest, res) => {
+  if (!requireLiveOrderCapability(req, res)) return;
+  try {
+    const { userId, repository } = context(req);
+    const audit = await auditAutomaticLivePreactivation({ userId, repository, profile: req.member!,
+      source: new SupabaseMemberAutoTradingBackgroundSource(), targetSha: String(process.env.DEPLOY_SHA ?? '') });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true, ...audit });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/status', async (req: AuthenticatedRequest, res) => {

@@ -1,3 +1,4 @@
+import { automaticLiveUnrealizedPnlKrw } from './automatic-live-unrealized-risk.service';
 import { issueProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -383,6 +384,8 @@ export interface MemberAutoTradingBackgroundSource {
 
 export type MemberAutoTradingBackgroundRunResult = {
   handoffStatus: 'MISSING' | 'BLOCKED_DATA' | 'READY';
+  /** Sanitized code only; never include file paths, credentials or candidate payloads. */
+  handoffErrorCode: string | null;
   handoffReady: boolean;
   newEntriesFailClosed: boolean;
   liveEntriesArmed: boolean;
@@ -433,6 +436,7 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   lastTickAt: string | null;
   tickOk: boolean | null;
   handoffStatus: MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  handoffErrorCode: string | null;
   handoffReady: boolean;
   newEntriesFailClosed: boolean;
   liveEntryArmPresent: boolean;
@@ -464,6 +468,7 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   lastTickAt: null,
   tickOk: null,
   handoffStatus: 'MISSING',
+  handoffErrorCode: null,
   handoffReady: false,
   newEntriesFailClosed: true,
   liveEntryArmPresent: false,
@@ -1590,20 +1595,14 @@ async function liveJournalRiskState(
   // holdings only to canonically filled/partially-filled entry quantities,
   // and fail closed until ambiguous fills are reconciled.
   const owned = canonicalAutomaticLivePositions(runtime.plans, runtime.orders);
-  const { automaticOwned } = assertCanonicalLiveProviderPositions(snapshot, owned);
-  const livePlans = owned.map((row) => row.plan);
-  const liveBySymbol = new Map(livePlans.filter((plan) => plan.exchange === snapshot.provider)
-    .map((plan) => [normalizedSymbol(plan.symbol), plan]));
-  let unrealizedKrw = 0;
-  for (const position of automaticOwned) {
-    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
-    if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
-    const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
-    if (!finite(position.unrealizedPnl)) continue;
-    const fx = await fxFor(tradeMarketForPlan(matched));
-    unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
-  }
+  const unrealizedKrw = await automaticLiveUnrealizedPnlKrw({
+    owned, maximumLeverage: policy.bitgetLeverage,
+    orders: runtime.orders, nowMs,
+    readMark: (plan) => source.readMarketMark(tradeMarketForPlan(plan), plan.symbol),
+    snapshotFor: async (provider) => provider === snapshot.provider ? snapshot
+      : source.readLiveAccountSnapshot(userId, provider),
+    krwPerQuoteFor: async (plan) => (await fxFor(tradeMarketForPlan(plan))).krwPerQuoteCurrency,
+  });
   const dailyKrw = await pnlKrw(nowMs - 24 * 60 * 60_000) + unrealizedKrw;
   const weeklyKrw = await pnlKrw(nowMs - 7 * 24 * 60 * 60_000) + unrealizedKrw;
   const equityBase = Math.max(1, policy.totalCapitalKrw);
@@ -1860,13 +1859,18 @@ export class MemberAutoTradingBackgroundWorker {
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
     const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
+    // An exact-SHA human-issued arm is still required for reducing exits.
+    // New-entry signal outages/restarts must not disable protection of an
+    // already owned position. Each exit independently rechecks policy,
+    // ownership, current provider exposure and reduceOnly at execution time.
     const liveExitsArmedThisTick = liveModeRequested
-      && this.liveEntryWarmupComplete
       && liveEntryArmPresentThisTick;
     const liveEntriesArmedThisTick = liveExitsArmedThisTick
+      && this.liveEntryWarmupComplete
       && !this.liveCycleHardWarmupBlocked;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
       newEntriesFailClosed: false,
       liveEntriesArmed: liveEntriesArmedThisTick,
@@ -1927,10 +1931,16 @@ export class MemberAutoTradingBackgroundWorker {
             || nowMs - handoff.evaluatedAtMs > MAX_READY_HANDOFF_AGE_MS)) {
           throw new Error('BACKGROUND_PAPER_HANDOFF_STALE');
         }
-        if (handoff) result.handoffStatus = handoff.status;
-      } catch {
+        if (handoff) {
+          result.handoffStatus = handoff.status;
+          if (handoff.status === 'BLOCKED_DATA') {
+            result.handoffErrorCode = errorCode(new Error(String(handoff.blockers[0] ?? 'BACKGROUND_HANDOFF_BLOCKED')));
+          }
+        } else result.handoffErrorCode = 'BACKGROUND_HANDOFF_MISSING';
+      } catch (error) {
         handoff = null;
         result.handoffStatus = 'BLOCKED_DATA';
+        result.handoffErrorCode = errorCode(error);
         result.failures += 1;
       }
       result.handoffReady = handoff?.status === 'READY';
@@ -2319,7 +2329,7 @@ export class MemberAutoTradingBackgroundWorker {
             }
 
             if (liveModeRequested && hasCapability(member.profile, 'canPlaceOrders')) {
-              if (!liveExitsArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
+              if (!liveEntriesArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
@@ -2776,6 +2786,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       lastTickAt: null,
       tickOk: null,
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
       newEntriesFailClosed: true,
       liveEntryArmPresent: false,
@@ -2811,6 +2822,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       lastTickAt: null,
       tickOk: false,
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
       newEntriesFailClosed: true,
       liveEntryArmPresent: false,
@@ -2845,6 +2857,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     lastTickAt: null,
     tickOk: null,
     handoffStatus: 'MISSING',
+    handoffErrorCode: null,
     handoffReady: false,
     newEntriesFailClosed: true,
     liveEntryArmPresent: false,
@@ -2883,6 +2896,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         tickOk: result.failures === 0 && result.executionSyncFailures === 0
           && result.executionSyncMissingReferences === 0,
         handoffStatus: result.handoffStatus,
+        handoffErrorCode: result.handoffErrorCode,
         handoffReady: result.handoffReady,
         newEntriesFailClosed: result.newEntriesFailClosed,
         liveEntryArmPresent: result.liveEntryArmPresent,
@@ -2911,9 +2925,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveCyclePolicyReady: result.liveCyclePolicyReady,
         liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
-        errorCode: result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
+        errorCode: result.handoffErrorCode ?? (result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
           : result.executionSyncFailures > 0 || result.executionSyncMissingReferences > 0
-            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null,
+            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null),
       });
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0

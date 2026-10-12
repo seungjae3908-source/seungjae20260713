@@ -12,6 +12,7 @@ import {
   type TradingPolicy,
 } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { readCompleteTradingHistory } from './trade-history-completeness.service';
 
 export type AtomicOrderResult = {
   order: TradingOrder;
@@ -294,6 +295,27 @@ function createScopedTradingRepository(
   maximumSingleEntryKrw: number,
 ): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
+  const completeHistory = async <T>(table: 'trade_order_plans' | 'trade_orders', userId: string,
+    project: (value: unknown) => T) => {
+    owned(userId);
+    return readCompleteTradingHistory<T>({
+      async snapshot() {
+        const { data, error, count } = await client.from(table).select('updated_at', { count: 'exact' })
+          .eq('user_id', userId).order('updated_at', { ascending: false }).limit(1);
+        if (error || count == null) throw databaseError();
+        return { count, lastUpdatedAt: data?.[0]?.updated_at ?? null };
+      },
+      async page(afterId, pageSize) {
+        let query = client.from(table).select('id,updated_at,payload').eq('user_id', userId)
+          .order('id', { ascending: true }).limit(pageSize);
+        if (afterId != null) query = query.gt('id', afterId);
+        const { data, error } = await query;
+        if (error) throw databaseError();
+        return data ?? [];
+      },
+      project,
+    });
+  };
 
   const selectPlanByIdempotency = async (userId: string, key: string) => {
     owned(userId);
@@ -387,11 +409,7 @@ function createScopedTradingRepository(
       return data?.payload as TradingPlan | null;
     },
     async listPlans(userId) {
-      owned(userId);
-      const { data, error } = await client.from('trade_order_plans').select('payload')
-        .eq('user_id', userId).order('updated_at', { ascending: false }).limit(200);
-      if (error) throw databaseError();
-      return (data ?? []).map((row) => row.payload as TradingPlan);
+      return completeHistory('trade_order_plans', userId, (value) => value as TradingPlan);
     },
     async insertPlan(plan) {
       owned(plan.userId);
@@ -481,11 +499,7 @@ function createScopedTradingRepository(
       if (error) throw databaseError();
     },
     async listOrders(userId) {
-      owned(userId);
-      const { data, error } = await client.from('trade_orders').select('payload')
-        .eq('user_id', userId).order('updated_at', { ascending: false }).limit(500);
-      if (error) throw databaseError();
-      return (data ?? []).map((row) => normalizedOrder(row.payload as TradingOrder));
+      return completeHistory('trade_orders', userId, (value) => normalizedOrder(value as TradingOrder));
     },
     async appendEvent(event) {
       owned(event.userId);
