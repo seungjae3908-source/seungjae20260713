@@ -376,6 +376,20 @@ test('malformed pinned JSON errors stay sanitized and descriptors are closed', (
   assert.equal(closes,1);
 });
 
+test('independent collector refuses unreadable final crontab before any cron mutation', () => {
+  const script=buildIndependentAutoLivePublicInstallScript();
+  const finalRead=script.indexOf('CURRENT_CRON="$(LC_ALL=C crontab -l 2>&1)" || cron_final_rc=$?');
+  const noCrontab=script.indexOf('[[ "$CURRENT_CRON" == no\ crontab\ for\ * ]]');
+  const reject=script.indexOf("abort 'final crontab unreadable'");
+  const compare=script.indexOf('[[ "$CURRENT_CRON" == "$OLD_CRON" ]] || abort');
+  const rollbackArmed=script.indexOf('CRON_MUTATED=1',compare);
+  const write=script.indexOf('| crontab -',compare);
+  assert.ok(finalRead>0 && noCrontab>finalRead && reject>noCrontab);
+  assert.ok(compare>reject && rollbackArmed>compare && write>rollbackArmed,
+    'crontab must be read, verified and rollback-armed before mutation');
+  assert.doesNotMatch(script.slice(finalRead,write),/crontab -l 2>\/dev\/null \|\| true/u);
+});
+
 test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
   const script = buildIndependentAutoLivePublicInstallScript();
