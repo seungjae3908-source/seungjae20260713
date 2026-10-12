@@ -33,7 +33,7 @@ test('stock detail analysis stays on stock-info and mounts the existing rich det
   ]);
 
   expect(app).toContain("const loadDetailPage = () => import('@/pages/detail');");
-  expect(app).toContain('const DetailPage = lazy(loadDetailPage);');
+  expect(app).toContain("const DetailPage = lazyWithChunkRecovery('stock-analysis', loadDetailPage);");
   expect(app).toContain("location.split('?')[0] === '/stock-info/analysis'");
   expect(app).toContain('<Route path="/stock-info/analysis" component={StockInfoAccess} />');
   expect(stockInfo).toContain('navigate(`/stock-info/analysis?${params.toString()}`);');

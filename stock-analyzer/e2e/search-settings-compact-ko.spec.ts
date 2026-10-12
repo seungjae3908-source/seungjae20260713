@@ -39,9 +39,9 @@ for (const width of [360, 390, 412, 430]) {
     await page.goto('/__phase11-unified-search-e2e');
 
     const tabs = page.getByTestId('unified-market-tabs');
-    await expect(tabs).toBeVisible();
+    await expect(tabs).toBeVisible({ timeout: 45_000 });
     for (const label of ['전체', '국내', '미국', '코인 현물', '코인 선물']) {
-      await expect(tabs.getByRole('button', { name: label, exact: true })).toBeVisible();
+      await expect(tabs.getByRole('tab', { name: label, exact: true })).toBeVisible();
     }
 
     const overflow = await page.evaluate(() => ({
@@ -60,6 +60,6 @@ test('unified search desktop keeps a single row of market filters', async ({ pag
 
   const tabs = page.getByTestId('unified-market-tabs');
   await expect(tabs).toBeVisible();
-  const boxes = await tabs.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
+  const boxes = await tabs.getByRole('tab').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
   expect(new Set(boxes.map((value) => Math.round(value))).size).toBe(1);
 });

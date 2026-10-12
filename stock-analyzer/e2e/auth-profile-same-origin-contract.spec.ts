@@ -32,7 +32,8 @@ test('auth bootstrap self-profile read is same-origin, exact-identity, and devic
   expect(supabaseSource).toContain("parsed.pathname.replace(/\\/+$/u, '') !== '/rest/v1/profiles'");
   expect(supabaseSource).toContain("parsed.searchParams.get('select') !== '*'");
   expect(supabaseSource).toContain("parsed.searchParams.get('id') !== `eq.${subject}`");
-  expect(supabaseSource).toContain("await fetch('/api/auth/profile'");
+  expect(supabaseSource).toContain("const appApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\\/$/, '') || '/api';");
+  expect(supabaseSource).toContain('await fetch(`${appApiBase}/auth/profile`');
   expect(supabaseSource).toContain("method: 'GET'");
   expect(supabaseSource).toContain("proxyHeaders.set('Authorization', authorization!)");
   expect(supabaseSource).toContain("import { deviceTrustRequestHeaders } from '@/lib/device-trust';");
