@@ -144,9 +144,11 @@ export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWor
     // normal in-flight send is never stolen by another worker instance.
     const { error: recoveryError } = await client.from('notification_deliveries')
       .update({
-        state: 'RETRY_SCHEDULED',
-        next_retry_at: now,
-        last_error_code: 'STALE_SENDING_RECOVERED',
+        // A crashed SENDING worker may have already reached Telegram;
+        // retrying without a response receipt can duplicate real messages.
+        state: 'DEAD_LETTER',
+        next_retry_at: null,
+        last_error_code: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
         updated_at: now,
       })
       .eq('state', 'SENDING')

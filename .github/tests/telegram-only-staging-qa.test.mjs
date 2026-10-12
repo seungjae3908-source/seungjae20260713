@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import {
   SAFE_NETWORK_STATUSES,
+  isPublicTelegramIpv4,
   STAGING_REQUIRED_STATUS,
   probeStagingTelegramNetwork,
   readStagingLoopbackHealth,
@@ -94,10 +95,10 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     lookupImpl: (host, opts, done) => {
       assert.equal(host, 'api.telegram.org');
       assert.equal(opts.family, 4);
-      done(null, '192.0.2.123', 4);
+      done(null, '149.154.166.110', 4);
     },
     connectImpl: config => {
-      assert.equal(config.host, 'api.telegram.org');
+      assert.equal(config.host, '149.154.166.110');
       assert.equal(config.servername, 'api.telegram.org');
       assert.equal(config.port, 443);
       assert.equal(config.family, 4);
@@ -111,7 +112,7 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     },
   });
   assert.equal(success, 'IPV4_TLS_READY');
-  assert.equal(success.includes('192.0.2'), false);
+  assert.equal(success.includes('149.154'), false);
   assert.ok(SAFE_NETWORK_STATUSES.includes(success));
 
   const rejected = await probeStagingTelegramNetwork({
@@ -237,4 +238,133 @@ test('Staging QA reports health runtime SHA separately from supervisor environme
   assert.ok(workflow.includes("Actual running Staging app SHA: "));
   assert.ok(workflow.includes("TELEGRAM_STAGING_SCOPE_NOT_READY"));
   assert.ok(!source.includes("http://0.0.0.0"));
+});
+
+
+test('Staging TLS probe uses one DNS lookup, never logs addresses, and classifies phase timeouts', async () => {
+  const cases = [
+    { events: ['timeout'], expected: 'IPV4_TCP_TIMEOUT' },
+    { events: ['connect', 'timeout'], expected: 'IPV4_TLS_TIMEOUT' },
+    { events: ['connect', 'secureConnect'], expected: 'IPV4_TLS_CERT_FAILED' },
+  ];
+  for (const item of cases) {
+    let lookups = 0;
+    let connects = 0;
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (host, opts, done) => {
+        assert.equal(host, 'api.telegram.org');
+        assert.equal(opts.family, 4);
+        lookups++;
+        done(null, '149.154.166.111', 4);
+      },
+      connectImpl: config => {
+        connects++;
+        assert.equal(config.host, '149.154.166.111');
+        assert.equal(config.servername, 'api.telegram.org');
+        assert.equal(config.rejectUnauthorized, true);
+        assert.equal(config.autoSelectFamily, false);
+        const socket = new EventEmitter();
+        socket.authorized = false;
+        socket.destroyed = false;
+        socket.destroy = () => { socket.destroyed = true; };
+        queueMicrotask(() => item.events.forEach(event => socket.emit(event)));
+        return socket;
+      },
+    });
+    assert.equal(lookups, 1);
+    assert.equal(connects, 1);
+    assert.equal(result, item.expected);
+    assert.ok(SAFE_NETWORK_STATUSES.includes(result));
+    assert.ok(!JSON.stringify({ result }).includes('149.154.166.111'));
+  }
+});
+
+test('Staging probe fails closed on malformed IPv4 DNS without opening a socket', async () => {
+  for (const address of ['host.example', '127.0.0.1.2', '::1', '']) {
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (_host, _opts, done) => done(null, address, 4),
+      connectImpl: () => { throw Error('MUST_NOT_CONNECT'); },
+    });
+    assert.equal(result, 'IPV4_DNS_FAILED');
+  }
+});
+
+
+test('Staging rejects private, loopback, CGNAT, documentation and multicast DNS replies',async()=>{
+  for (const ip of [
+    '10.0.0.1','172.16.8.9','192.168.1.10','127.0.0.1',
+    '169.254.12.23','100.64.0.1','192.0.2.123','198.51.100.7',
+    '203.0.113.7','198.18.0.9','224.0.0.5','255.255.255.255',
+  ]) {
+    assert.equal(isPublicTelegramIpv4(ip),false);
+    let connects=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connects++;throw Error('MUST_NOT_CONNECT_INTERNAL');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connects,0);
+    assert.ok(!JSON.stringify(result).includes(ip));
+  }
+  // Previously 192.0.0.1 and 192.0.0.9 escaped the partial
+  // special-purpose exclusion despite not being Telegram edge IPs.
+  for(const ip of ['192.0.0.1','192.0.0.8','192.0.0.9','192.0.0.10',
+    '192.0.0.254','192.0.2.250']){
+    assert.equal(isPublicTelegramIpv4(ip),false,ip);
+    let connected=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_h,_o,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connected++;throw Error('MUST_NOT_CONNECT');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connected,0);
+  }
+  assert.equal(isPublicTelegramIpv4('149.154.166.110'),true);
+});
+
+test('Staging TLS certificate failure is distinct from TCP disconnect and never logs exception',async()=>{
+  const classify=error=>probeStagingTelegramNetwork({
+    lookupImpl:(_host,_opts,callback)=>callback(null,'149.154.166.111',4),
+    connectImpl:(_config)=>{
+      const socket=new EventEmitter();
+      socket.destroyed=false;
+      socket.destroy=()=>{socket.destroyed=true;};
+      queueMicrotask(()=>socket.emit('error',error));
+      return socket;
+    },
+  });
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_DNS_DETAIL'),
+    {code:'ERR_TLS_CERT_ALTNAME_INVALID'})),'IPV4_TLS_CERT_FAILED');
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_TCP_DETAIL'),
+    {code:'ECONNRESET'})),'IPV4_TLS_CONNECT_FAILED');
+});
+
+test('native ETIMEDOUT errors preserve TCP/TLS phase instead of generic connect failure', async()=>{
+  for(const afterTcp of [false,true]){
+    let lookups=0,connects=0;
+    const verdict=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>{
+        lookups++;cb(null,'149.154.166.110',4);
+      },
+      connectImpl:()=>{
+        connects++;
+        const socket=new EventEmitter();
+        socket.destroyed=false;
+        socket.destroy=()=>{socket.destroyed=true;};
+        queueMicrotask(()=>{
+          if(afterTcp)socket.emit('connect');
+          socket.emit('error',Object.assign(
+            new Error('DO_NOT_LOG_PROVIDER_PRIVATE_ROUTING'),
+            {code:'ETIMEDOUT'},
+          ));
+        });
+        return socket;
+      },
+    });
+    assert.equal(lookups,1);
+    assert.equal(connects,1);
+    assert.equal(verdict,afterTcp?'IPV4_TLS_TIMEOUT':'IPV4_TCP_TIMEOUT');
+    assert.ok(SAFE_NETWORK_STATUSES.includes(verdict));
+    assert.equal(JSON.stringify(verdict).includes('PRIVATE_ROUTING'),false);
+  }
 });
