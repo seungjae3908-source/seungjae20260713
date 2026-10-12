@@ -11,8 +11,10 @@
  *   --output /private/receipts/pit-task-0.json
  *
  * To explicitly permit only public historical native 1m GET, add
- * --read-public. One symbol / one UTC day. No automatic scheduling,
- * VPS deployment, database, trading secrets, Paper or LIVE/real orders.
+ * --read-public. To retry a PARTIAL existing immutable archive, use
+ * --retry-partial --expected-existing-sha <reviewed-archive-sha256>.
+ * A safe superset is stored as a NEW revision requiring explicit selection;
+ * no automatic deployment, promotion, scheduling, Paper or LIVE/orders.
  */
 import { lstatSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve, dirname } from "node:path";
@@ -22,7 +24,8 @@ import { runPlannedPITMinuteSourceTaskV1 } from
 
 const OPTIONS=new Set(["--market","--day","--manifest","--page-index",
   "--root","--task-page-index","--task-index","--expected-task-digest",
-  "--output","--max-local-mib","--min-free-mib"]);
+  "--output","--max-local-mib","--min-free-mib",
+  "--expected-existing-sha"]);
 const REQUIRED=["--market","--day","--manifest","--page-index","--root",
   "--task-page-index","--task-index","--expected-task-digest","--output"];
 const abs = path => typeof path==="string" && isAbsolute(path)
@@ -48,13 +51,17 @@ function readPrivateJson(path,maxBytes) {
   return JSON.parse(readFileSync(path,"utf8"));
 }
 export function parsePITMinuteTaskArgsV1(args=[]) {
-  if(!Array.isArray(args)||args.length<18||args.length>23)
+  if(!Array.isArray(args)||args.length<18||args.length>26)
     throw new TypeError("PIT_MINUTE_TASK_CLI_ARGUMENTS_INVALID");
-  const o={};let readPublic=false;
+  const o={};let readPublic=false,retryPartial=false;
   for(let i=0;i<args.length;i++){
     if(args[i]==="--read-public"){
       if(readPublic)throw new TypeError("PIT_MINUTE_TASK_CLI_DUPLICATE_READ_FLAG");
       readPublic=true;continue;
+    }
+    if(args[i]==="--retry-partial"){
+      if(retryPartial)throw new TypeError("PIT_MINUTE_TASK_CLI_DUPLICATE_RETRY_FLAG");
+      retryPartial=true;continue;
     }
     const key=args[i], val=args[++i];
     if(!OPTIONS.has(key)||Object.hasOwn(o,key)
@@ -70,6 +77,9 @@ export function parsePITMinuteTaskArgsV1(args=[]) {
     ||!/^(0|[1-9][0-9]{0,3})$/u.test(o["--task-page-index"])
     ||!/^(?:[0-9]|1[0-9])$/u.test(o["--task-index"])
     ||!/^[0-9a-f]{64}$/u.test(o["--expected-task-digest"]??"")
+    ||(retryPartial
+      ?!readPublic||!/^[0-9a-f]{64}$/u.test(o["--expected-existing-sha"]??"")
+      :Object.hasOwn(o,"--expected-existing-sha"))
     ||!/^(?:[3-9]|[1-9][0-9]{1,4})$/u.test(o["--max-local-mib"]??"2048")
     ||!/^(?:0|[1-9][0-9]{0,5})$/u.test(o["--min-free-mib"]??"2048")) {
     throw new TypeError("PIT_MINUTE_TASK_CLI_SCOPE_INVALID");
@@ -84,6 +94,8 @@ export function parsePITMinuteTaskArgsV1(args=[]) {
     maxLocalBytes:Number(o["--max-local-mib"]??2048)*1024*1024,
     minFreeBytes:Number(o["--min-free-mib"]??2048)*1024*1024,
     allowPublicReadOnlyFetch:readPublic,
+    retryPartialSource:retryPartial,
+    expectedExistingSourceDigestSha256:o["--expected-existing-sha"]??null,
   });
 }
 export async function runPITMinuteTaskCliV1(config,dependencies={}) {
@@ -117,6 +129,9 @@ export async function runPITMinuteTaskCliV1(config,dependencies={}) {
     taskPageIndex:config.taskPageIndex,taskIndex:config.taskIndex,
     expectedTaskDigestSha256:config.expectedTaskDigestSha256,
     allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
+    retryPartialSource:config.retryPartialSource??false,
+    expectedExistingSourceDigestSha256:
+      config.expectedExistingSourceDigestSha256??null,
     maxLocalBytes:config.maxLocalBytes,minFreeBytes:config.minFreeBytes,
     ...(dependencies.nowImpl?{nowImpl:dependencies.nowImpl}:{}),
     ...(dependencies.statfsImpl?{statfsImpl:dependencies.statfsImpl}:{}),
@@ -132,6 +147,9 @@ export async function runPITMinuteTaskCliV1(config,dependencies={}) {
     market:config.market,day:config.day,
     taskPageIndex:config.taskPageIndex,taskIndex:config.taskIndex,
     sourceMinuteCount:result.retainedMinuteRows??null,
+    proposedNewSourceDigestSha256:result.retainedSourceDigestSha256??null,
+    priorSourceDigestSha256:result.priorSourceDigestSha256??null,
+    sourceRevisionAutoSelected:false,
     readPublicExplicitlyRequested:config.allowPublicReadOnlyFetch,
     fullMarketOpportunityDenominatorVerified:false,
     trueMarketWideRecall:null,profitabilityProven:false,
