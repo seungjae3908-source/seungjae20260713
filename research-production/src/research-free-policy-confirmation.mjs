@@ -1,5 +1,6 @@
 import { parseEnv } from 'node:util';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { resolveResearchVideoDiscoveryQueries } from './research-video-discovery-policy.mjs';
 
 export const CONFIRMATION_PATH = '/etc/investment-research/research-free-confirmation.json';
 const AI_KEYS = ['RESEARCH_AI_FREE_TIER_CONFIRMED', 'AI_CHAT_PROVIDER', 'RESEARCH_AI_MAX_CALLS_PER_SCAN'];
@@ -23,8 +24,9 @@ export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, a
   if (ai.GROQ_MODEL && ai.GROQ_MODEL !== 'openai/gpt-oss-20b') throw new Error('RESEARCH_CONFIRMATION_PAID_MODEL_FORBIDDEN');
   if (ai.GEMINI_MODEL && ai.GEMINI_MODEL !== 'gemini-3.1-flash-lite') throw new Error('RESEARCH_CONFIRMATION_PAID_MODEL_FORBIDDEN');
   for (const key of Object.keys(video)) if (!VIDEO_KEYS.includes(key)) throw new Error('RESEARCH_CONFIRMATION_UNSUPPORTED_VIDEO_KEY');
-  const queries = JSON.parse(video.RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON ?? '[]');
-  if (!Array.isArray(queries) || queries.length < 1 || queries.length > 8 || new Set(queries).size !== queries.length || queries.some(q => typeof q !== 'string' || !q.trim() || q.length > 120 || /[\r\n]/.test(q))) throw new Error('RESEARCH_CONFIRMATION_VIDEO_QUERIES_INVALID');
+  let queries;
+  try { queries = resolveResearchVideoDiscoveryQueries(video); }
+  catch { throw new Error('RESEARCH_CONFIRMATION_VIDEO_QUERIES_INVALID'); }
   const region = String(video.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim();
   const language = String(video.RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE ?? '').trim();
   if (region && !/^[A-Z]{2}$/.test(region)) throw new Error('RESEARCH_CONFIRMATION_REGION_INVALID');
@@ -33,7 +35,9 @@ export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, a
   const videoPolicy = {
     RESEARCH_VIDEO_DISCOVERY_APPROVED: 'true',
     RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS: String(boundedInteger(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS, 3, 1, 3)),
-    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: JSON.stringify(queries),
+    // Both Node parseEnv and systemd EnvironmentFile preserve a single-quoted
+    // value verbatim. Escape embedded apostrophes in JSON, not as shell text.
+    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: "'" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'",
     RESEARCH_VIDEO_DISCOVERY_REGION_CODE: region,
     RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE: language,
     RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS: String(boundedInteger(video.RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS, 720, 1, 2160)),
