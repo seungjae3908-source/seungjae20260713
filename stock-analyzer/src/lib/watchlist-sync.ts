@@ -451,7 +451,10 @@ async function transitionIdentity(nextValue: string | null): Promise<void> {
   activeMemberId = nextMemberId;
 
   replaceWorkingItems([]);
-  if (!nextMemberId) return;
+  if (!nextMemberId) {
+    window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
+    return;
+  }
 
   replaceWorkingItems(restoreMemberCache(nextMemberId));
   const generation = identityGeneration;
@@ -479,6 +482,8 @@ function queueIdentity(nextValue: string | null): void {
     pushInFlight = false;
     pushPending = false;
     identityHydrated = false;
+    // Drop a previous member's review immediately, even during slow logout.
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
   }
 
   transitionChain = transitionChain

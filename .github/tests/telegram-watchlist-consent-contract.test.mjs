@@ -11,6 +11,9 @@ test('import is opt-in; old device data is never silently member-owned', () => {
   assert.ok(sync.includes('importConfirmedLegacyWatchlist'));
   assert.ok(page.includes('watchlist-legacy-consent-review'));
   assert.ok(page.includes('disabled={!legacyConsent || legacyBusy}'));
+  assert.ok(page.includes('setLegacyNotice(null)'));
+  assert.ok(sync.includes('Drop a previous member\'s review immediately'));
+  assert.ok(sync.includes('if (!nextMemberId) {\n    window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));'));
   assert.ok(page.includes('onClick={() => void confirmLegacyImport()}'));
   assert.ok(sync.includes('LEGACY_WATCHLIST_IMPORT_MARKET_CONFLICT'));
 });

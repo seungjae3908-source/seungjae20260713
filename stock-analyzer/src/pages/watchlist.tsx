@@ -132,7 +132,7 @@ export default function WatchlistPage() {
   }, []);
 
   useEffect(() => {
-    const refresh = () => { setLegacyReview(reviewQuarantinedLegacyWatchlist()); setLegacyConsent(false); };
+    const refresh = () => { setLegacyReview(reviewQuarantinedLegacyWatchlist()); setLegacyConsent(false); setLegacyNotice(null); };
     window.addEventListener(LEGACY_WATCHLIST_REVIEW_EVENT, refresh);
     return () => window.removeEventListener(LEGACY_WATCHLIST_REVIEW_EVENT, refresh);
   }, []);
