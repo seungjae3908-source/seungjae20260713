@@ -305,7 +305,7 @@ test('authorized formula+AI Paper candidate bypasses only research economics, pr
   assert.equal(evaluateFormulaAiPaperException(spotPlan()).allowed, false);
 });
 
-test('formula+AI Paper exception cannot bypass spread, daily loss, stop, or liquidity gates', () => {
+test('formula+AI Paper exception preserves spread/stop/liquidity guards and observes losses without stopping', () => {
   const prepared = normalizeTradingPolicy({ ...policy(), pilotStage: 'formula-ai-exception' });
   const paper = { ...spotPlan(), accountMode: 'paper' as const, economics: null };
   const badCost = { ...paper, averageSpreadPercent: null };
@@ -315,9 +315,17 @@ test('formula+AI Paper exception cannot bypass spread, daily loss, stop, or liqu
   const stopped = { ...paper,
     marketSnapshot: { ...paper.marketSnapshot, dailyPnlPercent: -5.1 },
   };
-  assert.ok(evaluateTradingPlan(stopped, prepared, {
+  const paperLoss = evaluateTradingPlan(stopped, prepared, {
     emergencyStopped: false, serverLiveEnabled: false,
-  }).blockCodes.includes('DAILY_LOSS_LIMIT'));
+  });
+  assert.equal(paperLoss.blockCodes.includes('DAILY_LOSS_LIMIT'),false);
+  assert.ok(paperLoss.warnings.includes('PAPER_RESEARCH_DAILY_DRAWDOWN_5PCT_OBSERVED'));
+  // Exactly the same economics in LIVE still stop at the configured daily
+  // drawdown limit: research-only relaxation cannot leak across accountMode.
+  const liveLoss = evaluateTradingPlan({
+    ...stopped, accountMode:'live' as const,
+  },prepared,{emergencyStopped:false,serverLiveEnabled:false});
+  assert.ok(liveLoss.blockCodes.includes('DAILY_LOSS_LIMIT'));
   const noStop = { ...paper, stopPrice: 0 };
   assert.ok(evaluateTradingPlan(noStop, prepared, {
     emergencyStopped: false, serverLiveEnabled: false,
