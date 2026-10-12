@@ -627,18 +627,22 @@ activate() {
   "${SUDO[@]}" systemctl start research-production-approved-job-intake.service || true
 
   local service
+  local one_shot_failed=false
   for service in "${services[@]}"; do
     local result status
-    result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"
-    status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"
+    if ! result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"; then result=UNKNOWN; fi
+    if ! status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"; then status=UNKNOWN; fi
+    echo "AI_RESEARCH_ONE_SHOT_RESULT:$service:result=$result:status=$status"
     [[ "$result" == "success" && "$status" == "0" ]] || {
       if [[ "$service" == "research-production-ai-review.service" ]]; then
         print_ai_diagnostic
       fi
       echo "AI_RESEARCH_ONE_SHOT_FAILED:$service:result=$result:status=$status" >&2
-      exit 70
+      one_shot_failed=true
     }
   done
+  # All already-started components are reported before the single fail-closed exit.
+  [[ "$one_shot_failed" == false ]] || exit 70
 
   verify_one_shot_evidence "$one_shot_started_ms"
 
