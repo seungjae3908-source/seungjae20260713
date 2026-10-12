@@ -26,7 +26,8 @@ import {runV3OutOfCursorResearch} from '../src/public-watch-v3-offpage-research.
 import {validV3PublicPriorityRequest} from '../src/public-v3-priority-public-route.mjs';
 import { summarizePublicProviderFailureReasons, createV3PublicYahooTerminalFailureCounter } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
-import { validV3PublicYahooCandlePage } from '../src/public-v3-stock-candle-integrity.mjs';
+import { inspectV3PublicYahooCandlePage } from '../src/public-v3-stock-candle-integrity.mjs';
+import { selectClosedV3PublicStockBars } from '../src/public-v3-stock-closed-bars.mjs';
 import {commitPublicV3CycleCheckpoint,recoverPublicV3CycleCheckpoint} from '../src/public-cycle-checkpoint.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
 import {
@@ -304,9 +305,18 @@ async function withStockPublicOnly(lane, operation) {
       // recent window, so never reject the latest page for an out-of-scope
       // historical row or feed those older rows into the scanner.
       const relevant = Array.isArray(rows) ? rows.slice(-qualityWindow) : rows;
-      if (Array.isArray(relevant) && relevant.length>0) successfulSymbol = providerSymbol;
-      return relevant;
-    },{validValue:rows=>validV3PublicYahooCandlePage(rows,{nowMs:Date.now()})});
+      // Strip only an observed trailing in-progress bar before source QA.
+      // In particular, the current KR/US daily bar is NOT closed mid-session.
+      const closed=selectClosedV3PublicStockBars(relevant,{
+        market:lane.market,timeframe,nowMs:Date.now(),
+      });
+      if (Array.isArray(closed)&&closed.length>0) successfulSymbol=providerSymbol;
+      return closed;
+    },{validValue:rows=>{
+      const check=inspectV3PublicYahooCandlePage(rows,{nowMs:Date.now()});
+      if(!check.valid)terminalYahoo.observeStructural(check.reason);
+      return check.valid;
+    }});
     } catch (error) { terminalYahoo.observe(error); throw error; }
     let candles = native;
     // Only a BLOCKING missing-candle defect triggers one bounded public

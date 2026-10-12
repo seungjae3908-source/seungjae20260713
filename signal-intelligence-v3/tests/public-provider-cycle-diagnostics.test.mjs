@@ -155,3 +155,35 @@ test('the public-only provider diagnostic surfaces Yahoo category counts but nev
   assert.equal(inspectExactPublicProviderCycle(missing,SHA,NOW)
     .rows[0].lanes[0].publicStockTerminalFailureSummary,null);
 });
+
+test('only allowlisted structural reason counts survive the public reporter',()=>{
+ const q=createV3PublicYahooTerminalFailureCounter();
+ q.observeStructural('OHLC_INCONSISTENT');
+ q.observeStructural('TIMESTAMP_DUPLICATE');
+ q.observeStructural('SENSITIVE_PRIVATE_TICKER_005930');
+ const state=q.snapshot();
+ assert.equal(state.structuralCandleRejections.total,3);
+ assert.equal(state.structuralCandleRejections.reasons.OHLC_INCONSISTENT,1);
+ assert.equal(state.structuralCandleRejections.reasons.TIMESTAMP_DUPLICATE,1);
+ assert.equal(state.structuralCandleRejections.reasons.NOT_ARRAY,1,
+   'unknown code falls to a known sanitized class');
+ assert.equal(JSON.stringify(state).includes('SENSITIVE_PRIVATE_TICKER'),false);
+ assert.equal(state.addedProviderRequests,0);
+});
+test('structural problems remain observable on exactly the failed public current page',()=>{
+ const report=createV3PublicYahooTerminalFailureCounter();
+ report.observeStructural('PRICE_INVALID');
+ report.observe(new Error('PUBLIC_STOCK_INVALID_PROVIDER_RESPONSE hidden-private-symbol'));
+ const current=snapshot();
+ current.coverage[0].status='SEARCH_FAILURE';
+ current.coverage[0].providerErrors=1;
+ current.coverage[0].publicStockTerminalFailureSummary=report.snapshot();
+ const proj=inspectExactPublicProviderCycle(current,SHA,NOW);
+ const detail=proj.rows[0].lanes[0].publicStockTerminalFailureSummary;
+ assert.equal(detail.terminalFailedFetches,1);
+ assert.equal(detail.structuralCandleRejections.total,1);
+ assert.equal(detail.structuralCandleRejections.reasons.PRICE_INVALID,1);
+ assert.equal(detail.structuralCandleRejections.reasons.VOLUME_INVALID,0);
+ assert.equal(JSON.stringify(detail).includes('hidden-private-symbol'),false);
+ assert.equal(proj.rows[0].status,'PROVIDER_BLOCKED');
+});
