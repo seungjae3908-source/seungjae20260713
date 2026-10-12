@@ -59,7 +59,7 @@ test('stock AI refuses missing, future or internally inconsistent collection evi
     { data: { ...good().data, asOf: null } },
     { data: { ...good().data, asOf: dayAhead } },
     { data: { ...good().data, status: 'partial', missing: [] } },
-    { data: { ...good().data, status: 'complete', missing: [] } },
+    { data: { ...good().data, status: 'complete', missing: ['미수집 근거'] } },
   ];
   for (const candidate of invalid) {
     // Full time-frame OHLCV is not supplied by this stock-detail endpoint.
