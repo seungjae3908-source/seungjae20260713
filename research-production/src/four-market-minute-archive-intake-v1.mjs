@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 export const MINUTE_MS = 60_000;
 export const MINUTE_ARCHIVE_CONTRACT = 'four-market-original-minute-public-intake/v1';
 export const MINUTE_ARCHIVE_LIMITS = Object.freeze({
-  maxTasks: 16, maxWindowMinutes: 120, maxResponseBytes: 512 * 1024,
+  maxTasks: 16, maxWindowMinutes: 180, maxResponseBytes: 512 * 1024,
   maxArchiveBytes: 512 * 1024, minFreeBytes: 5 * 1024 ** 3,
   networkTimeoutMs: 8_000, minRequestIntervalMs: 300,
 });
@@ -186,7 +186,7 @@ export function normalizePublicMinuteResponse(task, body) {
       low: row[3], close: row[4], volume: row[5], quoteVolume: row[6] };
   });
   // Bitget can return an extra interval at a rounded boundary; older Upbit
-  // candles outside the selected 120-minute window are also not imported.
+  // candles outside the selected <=180-minute window are also not imported.
   for (const row of candles) {
     const t = Number(row.timestamp);
     if (!integer(t) || t % MINUTE_MS) fail('MINUTE_SOURCE_TIMESTAMP_INVALID');

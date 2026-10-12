@@ -84,5 +84,25 @@ test('capacity-only CLI reads protected scope and performs zero provider calls/w
     assert.equal(payload.filesWritten,0);
     assert.equal(payload.executionAuthority,'NONE');
     assert.equal((await readFile(path,'utf8')).length>0,true);
+    // Explicit new 180-minute scope changes arithmetic and inode forecast,
+    // but still never enables the timer or a single provider request.
+    const optIn=JSON.parse(await readFile(path,'utf8'));
+    optIn.pageWindowMinutes=180;
+    await writeFile(path,JSON.stringify(optIn),{mode:0o600});
+    const alternative=spawnSync(process.execPath,[
+      url('../bin/four-market-minute-backfill.mjs').pathname,'--capacity',
+    ],{encoding:'utf8',timeout:8000,env:{
+      PATH:process.env.PATH,RESEARCH_MINUTE_QUEUE_MANIFEST:path,
+    }});
+    assert.equal(alternative.status,0,alternative.stderr);
+    const next=JSON.parse(alternative.stdout);
+    assert.equal(next.capacity.windowMinutes,180);
+    assert.equal(next.capacity.dailyRequired,3200);
+    assert.equal(next.pacingPreflight.activeManifestPageMinutes,180);
+    assert.equal(next.storageEstimate.assumedPageWindowMinutes,180);
+    assert.equal(next.storageEstimate.projectedPageFiles,400*8*365);
+    assert.equal(next.providerCalls,0);
+    assert.equal(next.filesWritten,0);
+    assert.equal(next.executionAuthority,'NONE');
   }finally{await rm(root,{recursive:true,force:true});}
 });
