@@ -37,7 +37,7 @@ import {
   isAutomaticPaperAccountId,
 } from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
-import { reconcileCanonicalPaperJournalMirrors, reconcileScopedExternalJournalHistory } from '../services/automatic-paper-journal-mirror.service';
+import { auditAutomaticPaperExecutionHistory, reconcileCanonicalPaperJournalMirrors, reconcileScopedExternalJournalHistory } from '../services/automatic-paper-journal-mirror.service';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,
@@ -604,6 +604,12 @@ export function createPaperJournalRouter(
         adminPolicyReader(request, scope.userId),
         fourMarketRlsGuardReader(request),
       ]);
+      const paperExecutionHistoryAudit = auditAutomaticPaperExecutionHistory({
+        ownerId: scope.userId,
+        plans: history.plans,
+        orders: history.orders,
+        storedRows: records,
+      });
       const assessment = fourMarketWalletCreationDecision(
         scope.role, records, history.orders, history.plans, policy, now().getTime(),
       );
@@ -635,6 +641,7 @@ export function createPaperJournalRouter(
         totalInitialKrw: 4 * (scope.role === 'admin'
           ? ADMIN_MARKET_INITIAL_KRW : MEMBER_MARKET_INITIAL_KRW),
         marketCapital: capitalReadback.marketReadback,
+        automaticPaperExecutionAudit: paperExecutionHistoryAudit,
         financialMutationCount: 0,
         privateProviderRequests: 0,
         orderSubmitted: false,

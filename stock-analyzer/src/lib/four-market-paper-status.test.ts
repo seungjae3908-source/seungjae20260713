@@ -98,3 +98,49 @@ test('malformed Paper admission is rejected even if individual fields look valid
   }};
   assert.throws(() => parseFourPaperReadOnlyStatus(misleadingBlocker));
 });
+
+
+test('historical Paper audit renders bounded 17/15/2 status without inventing realized profit',()=>{
+  const zero=()=>({
+    paperOrders:0,filledOrders:0,partialOrders:0,
+    invalidFilledOrders:0,aggregateOnlyFilledOrders:0,
+    confirmedJournalMirrors:0,missingJournalMirrors:0,
+    conflictingJournalMirrors:0,missingFullCostEvidence:0,
+  });
+  const lanes=Object.fromEntries(PAPER_FOUR_MARKET_KEYS.map(({key})=>[key,zero()]));
+  const spot={
+    ...zero(),paperOrders:17,filledOrders:17,invalidFilledOrders:2,
+    aggregateOnlyFilledOrders:15,confirmedJournalMirrors:15,
+    missingFullCostEvidence:15,
+  };
+  lanes.crypto_spot=spot;
+  const a={
+    version:'automatic-paper-history-audit-v1',
+    readOnlyProbe:true,ownerScope:'SELF',
+    status:'INCOMPLETE_EXECUTION_EVIDENCE',
+    totals:{...spot},markets:lanes,
+    actualSettlementProven:false,profitabilityProven:false,
+    financialMutationCount:0,privateProviderRequests:0,executionAuthority:'NONE',
+  };
+  const parsed=parseFourPaperReadOnlyStatus({...fixture(),automaticPaperExecutionAudit:a});
+  assert.equal(parsed.automaticPaperExecutionAudit?.totals.invalidFilledOrders,2);
+  assert.equal(parsed.automaticPaperExecutionAudit?.totals.confirmedJournalMirrors,15);
+  assert.equal(parsed.automaticPaperExecutionAudit?.actualSettlementProven,false);
+  const tamper=[
+    {...a,profitabilityProven:true},
+    {...a,executionAuthority:'LIVE'},
+    {...a,privateProviderRequests:1},
+    {...a,ownerScope:'OTHER'},
+    {...a,totals:{...spot,invalidFilledOrders:0}},
+    {...a,markets:{...lanes,us_stock:{...zero(),paperOrders:1}}},
+    {...a,status:'NO_HISTORY'},
+  ];
+  for(const candidate of tamper){
+    assert.throws(()=>parseFourPaperReadOnlyStatus({
+      ...fixture(),automaticPaperExecutionAudit:candidate,
+    }),/PAPER_EXECUTION_HISTORY/);
+  }
+  // Older Production Paper-only status JSON remains readable during a safe,
+  // source-controlled rollout; absent audit never implies zero anomalies.
+  assert.equal(parseFourPaperReadOnlyStatus(fixture()).automaticPaperExecutionAudit,undefined);
+});
