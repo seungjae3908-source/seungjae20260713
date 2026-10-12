@@ -32,6 +32,15 @@ function validText(value: unknown): value is string {
 function validList(value: unknown): value is string[] {
   return Array.isArray(value) && value.length <= 40 && value.every(validText);
 }
+// The server supplies a collection timestamp, not an exchange tick timestamp.
+// Reject absent or impossibly future collection evidence for displayed opinions;
+// tolerate small user-device clock differences without claiming quote freshness.
+const COLLECTION_CLOCK_SKEW_MS = 5 * 60_000;
+function validCollectionTime(value: unknown, now = Date.now()): boolean {
+  if (!validText(value)) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && time > 0 && time <= now + COLLECTION_CLOCK_SKEW_MS;
+}
 export function parseStockAnalysisReply(payload: unknown, target: StockAnalysisTarget): StockAnalysisReply {
   if (!isRecord(payload) || payload.ok !== true || payload.kind !== 'answer' || !validText(payload.answer)) {
     throw new Error('AI_STOCK_ANALYSIS_RESPONSE_INVALID');
@@ -46,10 +55,12 @@ export function parseStockAnalysisReply(payload: unknown, target: StockAnalysisT
   if (!isRecord(data) || !['complete', 'partial', 'unavailable'].includes(String(data.status))
     || data.basis !== 'server_collection_time'
     || !validList(data.sources) || !validList(data.missing)
-    || (data.asOf !== null && (!validText(data.asOf) || !Number.isFinite(Date.parse(data.asOf))))) {
+    || (data.asOf !== null && !validCollectionTime(data.asOf))
+    || (data.status !== 'unavailable' && !validCollectionTime(data.asOf))) {
     throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
   }
   if (data.status === 'complete' && data.missing.length > 0) throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
+  if (data.status === 'partial' && data.missing.length === 0) throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
   if (data.status !== 'unavailable' && data.sources.length === 0) throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
   const provider = payload.provider;
   if (!['google-gemini', 'groq', 'openai-compatible'].includes(String(provider))

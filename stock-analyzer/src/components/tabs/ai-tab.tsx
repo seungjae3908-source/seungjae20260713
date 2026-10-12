@@ -17,8 +17,20 @@ function responseError(response: AiStockError | null): string {
   if (code === 'AI_CHAT_RATE_LIMITED') return 'AI 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.';
   if (code === 'AI_CHAT_TIMEOUT') return 'AI 분석 응답 시간이 초과되었습니다. 다시 시도해 주세요.';
   if (code === 'AI_CHAT_NOT_CONFIGURED') return 'AI 공급자가 아직 서버에 연결되지 않았습니다.';
+  if (code === 'AI_TEMPORARILY_UNAVAILABLE' || code === 'AI_CHAT_PROVIDER_ERROR') return 'AI 공급자가 일시적으로 응답하지 않습니다. 다시 요청해 주세요.';
   if (code === 'AI_CHAT_INVALID_CONTEXT') return '시장 또는 종목 정보가 일치하지 않아 분석을 차단했습니다.';
+  if (code === 'AI_CHAT_UNSAFE_RESPONSE') return '안전하지 않거나 확인되지 않은 AI 응답을 차단했습니다.';
   return response?.message || 'AI 분석 자료를 확인할 수 없습니다.';
+}
+const EXPLANATION_ERRORS: Record<string, string> = {
+  AI_STOCK_ANALYSIS_RESPONSE_INVALID: 'AI 응답이 불완전하거나 거절되어 분석을 표시할 수 없습니다.',
+  AI_STOCK_ANALYSIS_IDENTITY_MISMATCH: 'AI 응답의 시장·종목·시간봉이 선택 내용과 달라 분석을 차단했습니다.',
+  AI_STOCK_ANALYSIS_EVIDENCE_INVALID: 'AI 응답의 자료 출처·수집 시각·누락 근거를 확인할 수 없어 분석을 차단했습니다.',
+  AI_STOCK_ANALYSIS_PROVIDER_UNVERIFIED: '실제 AI 공급자·모델을 확인할 수 없어 분석을 차단했습니다.',
+};
+function analysisFailureText(cause: unknown): string {
+  if (!(cause instanceof Error)) return 'AI 분석에 실패했습니다.';
+  return EXPLANATION_ERRORS[cause.message] ?? cause.message;
 }
 function sourceTime(value: string | null): string {
   if (!value) return '수집 시각 미확인';
@@ -56,7 +68,7 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
   async function requestAnalysis() {
     if (!active || !symbol || busy || controllerRef.current) return;
     if ((market === 'KR' && !/^\d{6}$/.test(symbol))
-      || (market === 'US' && !/^[A-Z][A-Z0-9.-]{0,23}$/.test(symbol))) {
+      || (market === 'US' && !/^[A-Z][A-Z0-9.-]{0,11}$/.test(symbol))) {
       setError('지원하지 않는 종목 코드입니다.');
       return;
     }
@@ -84,7 +96,7 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
       setResult(parsed);
     } catch (cause) {
       if (controller.signal.aborted || generation.current !== owner) return;
-      setError(cause instanceof Error ? cause.message : 'AI 분석에 실패했습니다.');
+      setError(analysisFailureText(cause));
     } finally {
       if (generation.current === owner) {
         controllerRef.current = null;
