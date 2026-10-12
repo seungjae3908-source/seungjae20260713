@@ -14,8 +14,11 @@ const OBSERVED_AT = '2026-08-14T00:59:59.000Z';
 const SHA = '5bd461ade78a9adde84aa9dd49c31219fda87523';
 
 function providerEvidence(market: FourMarketAutoMarket): FourMarketAutoProviderEvidence {
-  if (market === 'KR_STOCK' || market === 'US_STOCK') {
+  if (market === 'KR_STOCK') {
     return { kind: 'TOSS', sessionOpen: true, halted: false, tickSize: 1, sellableQuantity: 10 };
+  }
+  if (market === 'US_STOCK') {
+    return { kind: 'KIWOOM', sessionOpen: true, halted: false, tickSize: 0.01, sellableQuantity: 10 };
   }
   if (market === 'CRYPTO_SPOT') {
     return { kind: 'UPBIT', tickSize: 1, minOrderKrw: 5_000, availableQuantity: 10 };
@@ -94,7 +97,7 @@ function inputFor(
 test('four fixed markets accept only their canonical provider and market-specific directions', () => {
   const valid = [
     inputFor('KR_STOCK', 'TOSS', 'BUY'),
-    inputFor('US_STOCK', 'TOSS', 'SELL_EXIT', true),
+    inputFor('US_STOCK', 'KIWOOM', 'SELL_EXIT', true),
     inputFor('CRYPTO_SPOT', 'UPBIT', 'BUY'),
     inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG'),
   ];
@@ -108,6 +111,22 @@ test('four fixed markets accept only their canonical provider and market-specifi
     assert.equal(result.privateTradingRequestAllowed, false);
     assert.equal(result.liveActivationAllowed, false);
   }
+});
+
+test('domestic stocks allow Toss or Kiwoom while US stocks fail closed outside Kiwoom', () => {
+  const domesticKiwoom = inputFor('KR_STOCK', 'KIWOOM', 'BUY');
+  domesticKiwoom.providerEvidence = {
+    kind: 'KIWOOM', sessionOpen: true, halted: false, tickSize: 1, sellableQuantity: 10,
+  };
+  assert.equal(evaluateFourMarketAutoPredeployReadiness(domesticKiwoom, NOW).status, 'AUTO_PREDEPLOY_READY');
+
+  const usToss = inputFor('US_STOCK', 'TOSS', 'BUY');
+  usToss.providerEvidence = {
+    kind: 'TOSS', sessionOpen: true, halted: false, tickSize: 0.01, sellableQuantity: 10,
+  };
+  const result = evaluateFourMarketAutoPredeployReadiness(usToss, NOW);
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.reasons.includes('PROVIDER_AUTHORITY_MISMATCH'));
 });
 
 test('cash markets reject new short semantics and require reducing SELL_EXIT', () => {
@@ -150,9 +169,22 @@ test('unknown cost, stale data, incomplete stage gates, and missing recovery evi
   }
 });
 
-test('Bitget futures requires mark/funding/OI/precision/leverage/margin/liquidation evidence while accepting explicit zero funding', () => {
+test('Bitget futures requires 2x-7x isolated evidence while preserving 7x in the frozen plan', () => {
   const zeroFunding = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
-  assert.equal(evaluateFourMarketAutoPredeployReadiness(zeroFunding, NOW).status, 'AUTO_PREDEPLOY_READY');
+  zeroFunding.providerEvidence = { ...zeroFunding.providerEvidence as Extract<FourMarketAutoProviderEvidence, { kind: 'BITGET' }>, leverage: 7 };
+  const ready = evaluateFourMarketAutoPredeployReadiness(zeroFunding, NOW);
+  assert.equal(ready.status, 'AUTO_PREDEPLOY_READY');
+  assert.equal(ready.frozenOrderPlan?.leverage, 7);
+  assert.equal(ready.frozenOrderPlan?.marginMode, 'isolated');
+
+  for (const providerEvidence of [
+    { ...(zeroFunding.providerEvidence as Extract<FourMarketAutoProviderEvidence, { kind: 'BITGET' }>), leverage: 8 },
+    { ...(zeroFunding.providerEvidence as Extract<FourMarketAutoProviderEvidence, { kind: 'BITGET' }>), marginMode: 'crossed' as const },
+  ]) {
+    const blocked = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
+    blocked.providerEvidence = providerEvidence;
+    assert.ok(evaluateFourMarketAutoPredeployReadiness(blocked, NOW).reasons.includes('BITGET_LEVERAGE_OR_MARGIN_INVALID'));
+  }
 
   const missing = inputFor('CRYPTO_FUTURES', 'BITGET', 'SHORT');
   missing.providerEvidence = {

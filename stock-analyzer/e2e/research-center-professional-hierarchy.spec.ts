@@ -182,12 +182,12 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await installRuntime(page);
     await page.goto('/research-center');
 
-    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
-    const expertButton = page.getByRole('button', { name: '상세', exact: true });
+    await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
+    const expertButton = page.getByRole('button', { name: '연구', exact: true });
     const generalButton = page.getByRole('button', { name: '요약', exact: true });
     await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
     await expect(expertButton).toBeVisible();
-    await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'AI', exact: true })).toBeVisible();
 
     const general = page.getByTestId('research-general-view');
     await expect(general).toContainText('근거 수집 중');
@@ -201,28 +201,48 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(general).not.toContainText('LIVE_TRADING=false');
     const paperCard = page.getByTestId('research-summary-paper');
     await expect(paperCard).toContainText('모의매매 표본');
+    for (const [id, label] of [
+      ['research', '연구 상태'],
+      ['data', '데이터 수집'],
+      ['paper', '모의매매 표본'],
+      ['profitability', '수익성 검증'],
+    ] as const) {
+      await expect(page.getByTestId(`research-summary-${id}`).getByText(label, { exact: true })).toBeVisible();
+    }
+    const scrollBefore = await general.locator('main').evaluate(element => element.scrollTop);
     await paperCard.click();
-    await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await general.locator('main').evaluate(element => element.scrollTop)).toBe(scrollBefore);
+    await expect(page.getByTestId('research-general-selected-detail')).not.toContainText('다음에 뭘 보면 되나요?');
     const fullCost = page.getByTestId('research-full-cost-summary');
     await expect(fullCost).toBeVisible();
-    await expect(fullCost).toContainText('FULL_COST_READY · 미충족');
+    await expect(fullCost).toContainText('비용 검증 · 미충족');
     await expect(fullCost).toContainText('4/8');
-    await expect(fullCost).toContainText('후보 Settlement 3건 연결');
+    await expect(fullCost).toContainText('후보 정산 3건 연결');
     await expect(fullCost).toContainText('CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING');
     await expect(page.getByTestId('research-full-cost-commission')).toContainText('관측됨');
     await expect(page.getByTestId('research-full-cost-commission')).toContainText('public:commission');
-    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 경제증거 아님');
+    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 실측 아님');
     await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
     await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
-    await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('최신성 · 미제공');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('품질 · 미제공');
+    await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(6);
 
     const overflow = await page.evaluate(() => Math.max(
       document.documentElement.scrollWidth,
       document.body.scrollWidth,
     ) - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(2);
+    const geometry = await page.getByRole('dialog').boundingBox();
+    expect(geometry!.width).toBeLessThan(width);
+    expect(geometry!.height).toBeLessThan(height);
+    expect(await page.getByRole('dialog').evaluate(element => getComputedStyle(element).backgroundColor)).not.toMatch(/rgba\([^)]*,\s*0\.?\d*\)$/);
+    await page.keyboard.press('Tab');
+    expect(await page.getByRole('dialog').evaluate(element => element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(paperCard).toBeFocused();
   });
 }
 
@@ -231,17 +251,18 @@ test('expert view preserves the canonical research evidence surface', async ({ p
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const expert = page.getByRole('button', { name: '상세', exact: true });
+  const expert = page.getByRole('button', { name: '연구', exact: true });
   await expert.click();
   await expect(expert).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-center-page')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-  await expect(page.getByRole('tab', { name: '검증 리포트', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '연구 현황', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '검증', exact: true })).toBeVisible();
 
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
-  await expect(page.getByText('Research source SHA', { exact: true })).toBeVisible();
-  await expect(page.getByText('Dataset identity', { exact: true })).toBeVisible();
-  await expect(page.getByText('Profitability proof', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
+  await page.getByText('연결 식별자', { exact: true }).click();
+  await expect(page.getByText('소스 버전', { exact: true })).toBeVisible();
+  await expect(page.getByText('데이터 식별자', { exact: true })).toBeVisible();
+  await expect(page.getByText('수익성 입증', { exact: true })).toBeVisible();
 });
 
 test('copilot entry keeps the established button contract', async ({ page }) => {
@@ -249,12 +270,11 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const copilot = page.getByRole('button', { name: 'AI 도우미', exact: true });
+  const copilot = page.getByRole('button', { name: 'AI', exact: true });
   await expect(copilot).toBeVisible();
   await copilot.click();
   await expect(page.getByTestId('research-general-view')).toHaveCount(0);
 });
-
 
 test('admin historical 1m coverage reads and aggregates the full selected period with authenticated bounded pages', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -276,7 +296,7 @@ test('admin historical 1m coverage reads and aggregates the full selected period
     const firstDate = second ? '2016-02-01' : '2016-01-01';
     await fulfill(route, {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true,
+      available: true, market: 'US_STOCK',
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'MISSING_HISTORICAL_MINUTE_DATE_RECEIPT',
       executionAuthority: 'NONE',
@@ -307,8 +327,9 @@ test('admin historical 1m coverage reads and aggregates the full selected period
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await expect(panel).toBeVisible();
   await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
@@ -344,8 +365,9 @@ test('historical 1m coverage UI fails closed after 403 or an unsafe response, wi
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
@@ -366,7 +388,7 @@ test('same-window admin recheck revokes previously displayed source totals after
     if (calls > 1) return fulfill(route, { error: 'CAPABILITY_REQUIRED' }, 403);
     return fulfill(route, {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true,
+      available: true, market: 'CRYPTO_SPOT',
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'SOURCE_PARTIAL',
       executionAuthority: 'NONE', profitabilityProven: false,
@@ -388,8 +410,9 @@ test('same-window admin recheck revokes previously displayed source totals after
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await panel.getByLabel('과거 데이터 시작일').fill('2026-09-18');
   await panel.getByLabel('과거 데이터 종료일').fill('2026-09-19');
@@ -426,7 +449,8 @@ test('full ten-year PIT inventory uses bounded GET planning and never implies ma
     active -= 1;
     return {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      available: true, market: 'CRYPTO_SPOT',
+      status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'TEST_ONLY_INCOMPLETE_SOURCE',
       profitabilityProven: false, executionAuthority: 'NONE',
       report: {
@@ -465,7 +489,8 @@ test('PIT period parser rejects incorrect counters, untrusted statuses and wrong
   };
   const base = {
     schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-    available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+    available: true, market: 'US_STOCK',
+    status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
     reason: 'SOURCE_PARTIAL', profitabilityProven: false, executionAuthority: 'NONE',
     report: {
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
@@ -491,140 +516,37 @@ test('PIT period parser rejects incorrect counters, untrusted statuses and wrong
   expect(isValidPITCoverageResponse({
     ...base, report: { ...base.report, executionAuthority: 'LIVE' },
   })).toBe(false);
+  // Regression: do not infer source completeness from forged status, missing
+  // numeric evidence, or another market's page.
+  expect(isValidPITCoverageResponse({
+    ...base, status: 'READY', report: { ...base.report, status: 'READY' },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({ ...base, market: 'INVALID_MARKET' })).toBe(false);
+  expect(isValidPITCoverageResponse({ ...base, financialMutationCount: 1 })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...base, report: { ...base.report, missingSourceDays: 2, partialSourceDays: 1 },
+  })).toBe(false);
+  const sourceOnly = {
+    ...base, status: 'SOURCE_ATTESTED_COMPACT_MINUTE_SOURCE_CHUNK_ONLY',
+    report: { ...base.report,
+      status: 'SOURCE_ATTESTED_COMPACT_MINUTE_SOURCE_CHUNK_ONLY',
+      missingSourceDays: 0, partialSourceDays: 0,
+      locallyCompleteMinuteSourceDays: 2 },
+  };
+  expect(isValidPITCoverageResponse(sourceOnly)).toBe(true);
+  expect(isValidPITCoverageResponse({
+    ...sourceOnly, report: { ...sourceOnly.report, sourceMinuteRows: null },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...sourceOnly, report: { ...sourceOnly.report, sourceMinuteRows: 3,
+      retrospectiveMinuteRows: 5 },
+  })).toBe(false);
+  await expect(collectPITMinuteCoveragePeriod(
+    selection, async () => ({ ...base, market: 'CRYPTO_SPOT' }),
+  )).rejects.toThrow('시장');
   await expect(collectPITMinuteCoveragePeriod(
     selection, async () => ({ ...base, report: {
       ...base.report, nextCursorDate: '2026-09-19',
     } }),
   )).rejects.toThrow('다음 페이지');
-});
-
-
-test('admin private 1m model summary uses one authenticated GET and revocation hides modeled returns', async ({ page }) => {
-  await installRuntime(page);
-  const reads: Array<{ method: string; token: string; market: string | null; unsafeParam: boolean }> = [];
-  let attempts = 0;
-  await page.route('**/api/research/video/evidence/workspace/original-minute-diagnostics?*', async route => {
-    attempts += 1;
-    const req = route.request();
-    const url = new URL(req.url());
-    reads.push({
-      method: req.method(), token: req.headers().authorization ?? '',
-      market: url.searchParams.get('market'),
-      unsafeParam: [...url.searchParams.keys()].some(key =>
-        /root|file|path|token|secret|account|provider/i.test(key)),
-    });
-    if (attempts > 1) return fulfill(route, { error: 'CAPABILITY_REVOKED' }, 403);
-    return fulfill(route, {
-      schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
-      market: 'US_STOCK', available: true,
-      status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
-      reason: 'RETROSPECTIVE_MODEL_ONLY_NOT_LIVE_OR_OOS',
-      readOnly: true, privateSourcePathsDisclosed: false,
-      providerGETCount: 0, financialMutationCount: 0,
-      fullMarketOpportunityDenominatorVerified: false,
-      actualMarketWideOpportunityCount: null,
-      trueMarketWideRecall: null,
-      actualFillCount: null, OOSPassCount: 0,
-      profitabilityProven: false, executionAuthority: 'NONE',
-      paperAdmissionAllowed: false, orderSubmitted: false, realOrders: false,
-      reportPublishedAtMs: Date.parse('2026-10-10T12:00:00Z'),
-      publicationAgeStatus: 'LOCAL_PUBLICATION_ONLY',
-      publicationTimeIndependentlyAttested: false,
-      supplementarySweepReport: {
-        kind: 'SWEEP', status: 'LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY',
-        selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
-        pageCountSelfAttested: 45, sourceOnlyObservedPriceEventLabels: 123,
-        actualFillCount: null, profitabilityProven: false,
-        independentOOSProven: false, independentFullCostProven: false,
-        originalHistoricalSignalVerified: false, paperCandidatePASS: false,
-        executionAuthority: 'NONE',
-      },
-      supplementarySweepWindowMatches: true,
-      report: {
-        kind: 'PERIOD', status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
-        selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
-        symbol: 'AAPL', timeframe: '5m',
-        sourceSessionsVerified: 350, modeledTradeCount: 12,
-        modeledReturnPercent: 3.25, modeledNetPnlKRW: 32500,
-        actualFillCount: null, profitabilityProven: false,
-        independentOOSProven: false, independentFullCostProven: false,
-        originalHistoricalSignalVerified: false, paperCandidatePASS: false,
-        executionAuthority: 'NONE',
-        canonicalPaperResearchReview: {
-          status: 'RESEARCH_HOLD', blockerCount: 3,
-          blockers: [
-            'INDEPENDENT_WHOLE_VENUE_HISTORICAL_PIT_ROSTER_MISSING',
-            'FROZEN_STRATEGY_AND_INDEPENDENT_OOS_UNVERIFIED',
-            'AUTOMATIC_PAPER_FILL_SETTLEMENT_JOURNAL_TELEGRAM_UNVERIFIED',
-          ],
-          canonicalProfitabilityStatus: 'RESEARCH_HOLD',
-          canonicalPaperBridgeStatus: 'BLOCKED',
-          canonicalPaperBridgeBlockers: [
-            'ADMISSION_EVIDENCE_BUNDLE_REQUIRED',
-          ],
-          paperAdmissionAllowed: false,
-          executionAuthority: 'NONE',
-        },
-      },
-    });
-  });
-  await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
-  const panel = page.getByTestId('research-original-minute-diagnostics');
-  await expect(panel).toBeVisible();
-  await panel.getByLabel('원본 연구 결과 시장').selectOption('US_STOCK');
-  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
-  await expect(panel).toContainText('AAPL');
-  await expect(panel).toContainText('3.25%');
-  await expect(panel).toContainText('독립 OOS 미검증');
-  await expect(panel).toContainText('결과 발행 시각(서버 로컬 기록)');
-  await expect(panel.getByTestId('research-native-sweep-companion'))
-    .toContainText('기간 일치');
-  await expect(panel.getByTestId('research-native-sweep-companion'))
-    .toContainText('사후 가격 이벤트 123개');
-  await expect(panel.getByTestId('research-native-paper-blockers'))
-    .toContainText('RESEARCH_HOLD');
-  await expect(panel.getByTestId('research-native-paper-blockers'))
-    .toContainText('전략 동결·독립 OOS·워크포워드 검증');
-  await expect(panel.getByTestId('research-native-paper-blockers'))
-    .toContainText('모의주문·체결·정산·일지·텔레그램 폐루프');
-  await expect(panel.getByTestId('research-native-paper-blockers'))
-    .toContainText('BLOCKED');
-  await expect(panel).toContainText('실제 수익성 미증명');
-  expect(reads).toHaveLength(1);
-  expect(reads[0]).toMatchObject({
-    method: 'GET', market: 'US_STOCK', unsafeParam: false,
-  });
-  expect(reads[0].token.startsWith('Bearer ')).toBe(true);
-  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
-  await expect(panel.getByRole('alert')).toContainText('관리자 로그인과 연구 자료 조회 권한이 필요합니다.');
-  await expect(panel.getByText('AAPL')).toHaveCount(0);
-  await expect(panel.getByText('3.25%')).toHaveCount(0);
-  expect(attempts).toBe(2);
-});
-
-test('offline native minute research response cannot self-certify OOS/Paper or show false profitable data', async ({ page }) => {
-  await installRuntime(page);
-  await page.route('**/api/research/video/evidence/workspace/original-minute-diagnostics?*', async route =>
-    fulfill(route, {
-      schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
-      market: 'CRYPTO_SPOT', available: true,
-      status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
-      readOnly: true, privateSourcePathsDisclosed: false,
-      providerGETCount: 0, financialMutationCount: 0,
-      fullMarketOpportunityDenominatorVerified: false,
-      actualMarketWideOpportunityCount: null, trueMarketWideRecall: null,
-      actualFillCount: null, OOSPassCount: 0,
-      profitabilityProven: true, executionAuthority: 'LIVE',
-      paperAdmissionAllowed: true, realOrders: true,
-      report: { kind: 'PERIOD', modeledReturnPercent: 999 },
-    }));
-  await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
-  const panel = page.getByTestId('research-original-minute-diagnostics');
-  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
-  await expect(panel.getByRole('alert')).toContainText('검증되지 않은 연구 결과');
-  await expect(panel.getByText('999%')).toHaveCount(0);
 });

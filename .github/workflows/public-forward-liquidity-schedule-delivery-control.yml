@@ -43,8 +43,9 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
       !github.event.issue.pull_request &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/diagnose-public-forward-liquidity-schedule-delivery ')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -71,8 +72,10 @@ jobs:
               core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+            const issueTitle = String(context.payload.issue?.title ?? '');
+            const releaseControl = issueTitle === 'Staging Readiness Control'
+              || issueTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !releaseControl) {
               core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
               return;
             }
@@ -147,8 +150,9 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
       !github.event.issue.pull_request &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/enable-public-forward-liquidity-schedule-delivery ')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -176,8 +180,10 @@ jobs:
               core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+            const issueTitle = String(context.payload.issue?.title ?? '');
+            const releaseControl = issueTitle === 'Staging Readiness Control'
+              || issueTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !releaseControl) {
               core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
               return;
             }
@@ -265,8 +271,9 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
       !github.event.issue.pull_request &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/refresh-public-forward-liquidity-schedule-delivery ')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -294,8 +301,10 @@ jobs:
               core.setFailed('SCHEDULE_DELIVERY_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+            const issueTitle = String(context.payload.issue?.title ?? '');
+            const releaseControl = issueTitle === 'Staging Readiness Control'
+              || issueTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !releaseControl) {
               core.setFailed('SCHEDULE_DELIVERY_RELEASE_CONTROL_INVALID');
               return;
             }

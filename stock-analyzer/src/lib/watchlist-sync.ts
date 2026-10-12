@@ -17,6 +17,7 @@ const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api'
 const MEMBER_CACHE_PREFIX = 'seungjae_member_watchlist_v1:';
 const LEGACY_DETAIL_KEY = 'watchlist:tickers';
 const LEGACY_QUARANTINE_KEY = 'seungjae_watchlist_legacy_quarantine_v1';
+export const LEGACY_WATCHLIST_REVIEW_EVENT = 'seungjae-legacy-watchlist-review';
 const MAX_ITEMS = 200;
 
 type CanonicalMarket =
@@ -56,6 +57,7 @@ let warnedOnce = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let pushInFlight = false;
 let pushPending = false;
+let legacyImportInFlight = false;
 let applyingServerState = false;
 
 function cleanMemberId(value: unknown): string | null {
@@ -238,6 +240,27 @@ function quarantineUnownedLegacyState(): void {
   }
 }
 
+
+/** Device-only items are unowned. Review never imports or assigns ownership. */
+function quarantinedLegacyItems(): ServerWatchlistItem[] {
+  if (typeof window === 'undefined' || !activeMemberId || !identityHydrated) return [];
+  try {
+    const raw = window.localStorage.getItem(LEGACY_QUARANTINE_KEY);
+    if (!raw || raw.length > 160_000) return [];
+    const q = JSON.parse(raw);
+    if (!q || typeof q !== 'object' || Array.isArray(q)
+      || q.importedIntoMember !== false || !Number.isFinite(Date.parse(q.quarantinedAt)))
+      return [];
+    return validateServerItems(q.watchlist) ?? [];
+  } catch { return []; }
+}
+
+export function reviewQuarantinedLegacyWatchlist(): Array<
+  Pick<ServerWatchlistItem, 'ticker' | 'name' | 'market'>
+> {
+  return quarantinedLegacyItems().map(({ ticker, name, market }) => ({ ticker, name, market }));
+}
+
 function mergeServerIntoMemberCache(serverItems: ServerWatchlistItem[]): WatchlistItem[] | null {
   const localRows = readWatchlistItems();
   const byTicker = new Map(localRows.map((item) => [String(item.ticker).toUpperCase(), item]));
@@ -311,6 +334,7 @@ async function pullMemberState(memberId: string, generation: number): Promise<vo
 }
 
 async function flushPush(memberId = activeMemberId, generation = identityGeneration): Promise<void> {
+  if (legacyImportInFlight) { pushPending = true; return; }
   if (!memberId || serverDisabled || activeMemberId !== memberId || generation !== identityGeneration) return;
   if (pushInFlight) {
     pushPending = true;
@@ -340,6 +364,7 @@ async function flushPush(memberId = activeMemberId, generation = identityGenerat
 }
 
 function schedulePush(): void {
+  if (legacyImportInFlight) { pushPending = true; return; }
   if (serverDisabled || applyingServerState || !activeMemberId) return;
   persistMemberCache(activeMemberId);
   if (pushTimer !== null) clearTimeout(pushTimer);
@@ -349,6 +374,60 @@ function schedulePush(): void {
     pushTimer = null;
     void flushPush(memberId, generation);
   }, 800);
+}
+
+/** Consent is supplied only by a human UI click, never by auth or an effect.
+ * The server derives ownership from its authenticated request, not device ID.
+ * The source quarantine is retained until an exact server read-back succeeds.
+ */
+export async function importConfirmedLegacyWatchlist(): Promise<{ imported: number; alreadyPresent: number }> {
+  if (typeof window === 'undefined' || !activeMemberId || !identityHydrated
+    || explicitIdentityOverrideActive || serverDisabled || pushInFlight || legacyImportInFlight)
+    throw new Error('LEGACY_WATCHLIST_IMPORT_UNAVAILABLE');
+  const memberId = activeMemberId;
+  const version = identityGeneration;
+  const oldQuarantine = window.localStorage.getItem(LEGACY_QUARANTINE_KEY);
+  const candidates = quarantinedLegacyItems();
+  if (!oldQuarantine || !candidates.length) throw new Error('LEGACY_WATCHLIST_IMPORT_UNAVAILABLE');
+  legacyImportInFlight = true;
+  try {
+    if (await authenticatedMemberId() !== memberId || activeMemberId !== memberId
+      || version !== identityGeneration || identityAbort?.signal.aborted)
+      throw new Error('LEGACY_WATCHLIST_IMPORT_IDENTITY_CHANGED');
+    const fetched = validateEnvelope(await request('/member-watchlist', { method: 'GET' }, memberId, version));
+    if (!fetched) throw new Error('LEGACY_WATCHLIST_IMPORT_READ_NOT_VERIFIED');
+    const merged = mergeServerIntoMemberCache(fetched.items);
+    if (!merged) throw new Error('LEGACY_WATCHLIST_IMPORT_MARKET_CONFLICT');
+    const byTicker = new Map(canonicalServerItems(merged).map(row => [row.ticker, row]));
+    let imported = 0, alreadyPresent = 0;
+    for (const row of candidates) {
+      const existing = byTicker.get(row.ticker);
+      if (existing && existing.market !== row.market)
+        throw new Error('LEGACY_WATCHLIST_IMPORT_MARKET_CONFLICT');
+      if (existing) alreadyPresent += 1;
+      else { byTicker.set(row.ticker, row); imported += 1; }
+    }
+    if (byTicker.size > MAX_ITEMS) throw new Error('LEGACY_WATCHLIST_IMPORT_TOO_LARGE');
+    const desired = Array.from(byTicker.values());
+    const saved = validateEnvelope(await request('/member-watchlist/sync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: desired }),
+    }, memberId, version));
+    if (!saved || !sameServerState(saved.items, desired))
+      throw new Error('LEGACY_WATCHLIST_IMPORT_NOT_CONFIRMED');
+    if (activeMemberId !== memberId || identityGeneration !== version
+      || identityAbort?.signal.aborted
+      || window.localStorage.getItem(LEGACY_QUARANTINE_KEY) !== oldQuarantine)
+      throw new Error('LEGACY_WATCHLIST_IMPORT_IDENTITY_CHANGED');
+    replaceWorkingItems(saved.items.map(toLocalItem));
+    persistMemberCache(memberId);
+    window.localStorage.removeItem(LEGACY_QUARANTINE_KEY);
+    window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
+    return { imported, alreadyPresent };
+  } finally {
+    legacyImportInFlight = false;
+    if (pushPending && activeMemberId) { pushPending = false; schedulePush(); }
+  }
 }
 
 async function transitionIdentity(nextValue: string | null): Promise<void> {
@@ -372,13 +451,19 @@ async function transitionIdentity(nextValue: string | null): Promise<void> {
   activeMemberId = nextMemberId;
 
   replaceWorkingItems([]);
-  if (!nextMemberId) return;
+  if (!nextMemberId) {
+    window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
+    return;
+  }
 
   replaceWorkingItems(restoreMemberCache(nextMemberId));
   const generation = identityGeneration;
   identityAbort = new AbortController();
   await pullMemberState(nextMemberId, generation);
-  if (activeMemberId === nextMemberId && generation === identityGeneration) identityHydrated = true;
+  if (activeMemberId === nextMemberId && generation === identityGeneration) {
+    identityHydrated = true;
+    window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
+  }
 }
 
 function queueIdentity(nextValue: string | null): void {
@@ -397,6 +482,8 @@ function queueIdentity(nextValue: string | null): void {
     pushInFlight = false;
     pushPending = false;
     identityHydrated = false;
+    // Drop a previous member's review immediately, even during slow logout.
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
   }
 
   transitionChain = transitionChain
@@ -473,4 +560,6 @@ export function stopWatchlistSync(): void {
   explicitIdentityOverrideActive = false;
   pushInFlight = false;
   pushPending = false;
+  legacyImportInFlight = false;
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
 }

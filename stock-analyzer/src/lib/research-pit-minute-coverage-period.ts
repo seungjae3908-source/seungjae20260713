@@ -33,7 +33,8 @@ export type PITReport = {
 export type PITResponse = {
   schemaVersion: 'research-pit-minute-coverage-readonly-v1';
   available: boolean; status: string; reason: string | null;
-  report?: PITReport | null; executionAuthority: 'NONE'; profitabilityProven: false;
+  report?: PITReport | null; market?: PITMarket;
+  executionAuthority: 'NONE'; profitabilityProven: false;
 };
 export type PITPageReader =
   (selection: PITSelection, signal?: AbortSignal) => Promise<unknown>;
@@ -45,6 +46,13 @@ const FIRST = Date.parse('1970-01-02T00:00:00Z');
 const LIMIT = Date.parse('2100-01-01T00:00:00Z');
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUS = /^[A-Z][A-Z0-9_]{0,119}$/;
+const PAGE_STATUSES = new Set([
+  'BLOCKED_DATA',
+  'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+  'TEST_FIXTURE_COMPACT_SOURCE_CHUNK_ONLY',
+  'SOURCE_LINEAGE_OR_SELECTED_SPAN_UNATTESTED',
+  'SOURCE_ATTESTED_COMPACT_MINUTE_SOURCE_CHUNK_ONLY',
+]);
 const markets = new Set<PITMarket>([
   'KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES',
 ]);
@@ -70,6 +78,9 @@ function countOrNull(x: unknown): boolean {
 function optionalCount(x: unknown): boolean {
   return x === undefined || countOrNull(x);
 }
+function concreteCount(x: unknown): x is number {
+  return typeof x === 'number' && Number.isSafeInteger(x) && x >= 0;
+}
 function reasonOrNull(x: unknown): boolean {
   return x == null || (typeof x === 'string' && x.length > 0 && x.length <= 200);
 }
@@ -79,10 +90,19 @@ export function isValidPITCoverageResponse(value: unknown): value is PITResponse
   if (!record(value) || value.schemaVersion !== 'research-pit-minute-coverage-readonly-v1'
     || typeof value.available !== 'boolean'
     || value.executionAuthority !== 'NONE' || value.profitabilityProven !== false
-    || value.realOrders === true || value.liveTrading === true || value.autoTrading === true
+    || (value.realOrders !== undefined && value.realOrders !== false)
+    || (value.liveTrading !== undefined && value.liveTrading !== false)
+    || (value.autoTrading !== undefined && value.autoTrading !== false)
+    || (value.providerGETCount !== undefined && value.providerGETCount !== 0)
+    || (value.financialMutationCount !== undefined && value.financialMutationCount !== 0)
     || !reasonOrNull(value.reason) || typeof value.status !== 'string'
-    || !STATUS.test(value.status)) return false;
-  if (!value.available) return value.report == null && typeof value.reason === 'string';
+    || !STATUS.test(value.status) || !PAGE_STATUSES.has(value.status)
+    || (value.market !== undefined && !markets.has(value.market as PITMarket)))
+    return false;
+  if (!value.available) return value.status === 'BLOCKED_DATA'
+    && value.report == null && typeof value.reason === 'string';
+  // A claimed source inventory must identify the market being reported.
+  if (!markets.has(value.market as PITMarket)) return false;
   const r = value.report;
   if (!record(r)
     || r.executionAuthority !== 'NONE' || r.profitabilityProven !== false
@@ -96,8 +116,17 @@ export function isValidPITCoverageResponse(value: unknown): value is PITResponse
     || r.inspectedStartDate > r.inspectedEndDate
     || (r.nextCursorDate !== null && ms(r.nextCursorDate) == null)
     || keys.some(key => !optionalCount(r[key]))
-    || (r.status !== 'BLOCKED_DATA' && keys.some(key => !countOrNull(r[key]))))
+    || !PAGE_STATUSES.has(r.status))
     return false;
+  // Only BLOCKED_DATA may contain unknown source totals. All other pages
+  // must reconcile every observed trading day to complete/partial/missing.
+  if (r.status !== 'BLOCKED_DATA' && (
+    keys.some(key => !concreteCount(r[key]))
+    || Number(r.missingSourceDays) + Number(r.partialSourceDays)
+       + Number(r.locallyCompleteMinuteSourceDays)
+       !== Number(r.expectedHistoricalTradingDays)
+    || Number(r.retrospectiveMinuteRows) > Number(r.sourceMinuteRows)
+  )) return false;
   const rows = r.dailyReadiness;
   if (rows != null) {
     if (!Array.isArray(rows) || rows.length > CHUNK) return false;
@@ -165,13 +194,15 @@ export async function collectPITMinuteCoveragePeriod(
       const value = await reader(task.request, signal);
       if (!isValidPITCoverageResponse(value))
         throw new Error('검증되지 않은 응답은 표시하지 않습니다.');
+      if (value.available && value.market !== selection.market)
+        throw new Error('조회 시장과 원본 자료의 시장이 일치하지 않습니다.');
       return { task, response: value };
     }));
     for (const { task, response } of responses) {
       if (!response.available || !response.report) {
         return {
           schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-          available: false, status: 'BLOCKED_DATA',
+          market: selection.market, available: false, status: 'BLOCKED_DATA',
           reason: response.reason ?? 'SELECTED_PERIOD_SOURCE_UNAVAILABLE',
           report: null, executionAuthority: 'NONE', profitabilityProven: false,
         };
@@ -223,7 +254,7 @@ export async function collectPITMinuteCoveragePeriod(
   };
   return {
     schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-    available: true, status, reason: report.reason, report,
+    market: selection.market, available: true, status, reason: report.reason, report,
     executionAuthority: 'NONE', profitabilityProven: false,
   };
 }

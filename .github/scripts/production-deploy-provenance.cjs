@@ -58,6 +58,36 @@ function assertProductionDeployProvenance(run, { targetSha, productionDeployRunI
   if (run.conclusion !== 'success') throw new Error('PRODUCTION_DEPLOY_PROVENANCE_CONCLUSION_MISMATCH');
 }
 
+function assertProductionDeployExecutionProvenance(run, {
+  targetSha,
+  productionDeployRunId,
+  mode = 'completed',
+  currentRunId = null,
+}) {
+  const expectedSha = normalizedSha(targetSha);
+  const expectedRunId = normalizedRunId(productionDeployRunId);
+  if (!expectedSha) throw new Error('PRODUCTION_DEPLOY_EXECUTION_TARGET_SHA_INVALID');
+  if (!expectedRunId) throw new Error('PRODUCTION_DEPLOY_EXECUTION_RUN_ID_INVALID');
+  if (!run || String(run.id) !== expectedRunId) throw new Error('PRODUCTION_DEPLOY_EXECUTION_RUN_ID_MISMATCH');
+  if (run.name !== OFFICIAL_PRODUCTION_DEPLOY.name) throw new Error('PRODUCTION_DEPLOY_EXECUTION_WORKFLOW_NAME_MISMATCH');
+  if (run.path !== OFFICIAL_PRODUCTION_DEPLOY.path) throw new Error('PRODUCTION_DEPLOY_EXECUTION_WORKFLOW_PATH_MISMATCH');
+  if (run.event !== OFFICIAL_PRODUCTION_DEPLOY.event) throw new Error('PRODUCTION_DEPLOY_EXECUTION_EVENT_MISMATCH');
+  if (run.head_branch !== OFFICIAL_PRODUCTION_DEPLOY.headBranch) throw new Error('PRODUCTION_DEPLOY_EXECUTION_HEAD_BRANCH_MISMATCH');
+  if (normalizedSha(run.head_sha) !== expectedSha) throw new Error('PRODUCTION_DEPLOY_EXECUTION_HEAD_SHA_MISMATCH');
+  if (mode === 'completed') {
+    assertProductionDeployProvenance(run, { targetSha: expectedSha, productionDeployRunId: expectedRunId });
+    return;
+  }
+  if (mode !== 'inline') throw new Error('PRODUCTION_DEPLOY_EXECUTION_MODE_INVALID');
+  const normalizedCurrentRunId = normalizedRunId(currentRunId);
+  if (!normalizedCurrentRunId || normalizedCurrentRunId !== expectedRunId) {
+    throw new Error('PRODUCTION_DEPLOY_EXECUTION_INLINE_RUN_ID_MISMATCH');
+  }
+  if (run.status !== 'in_progress' || run.conclusion !== null) {
+    throw new Error('PRODUCTION_DEPLOY_EXECUTION_INLINE_STATUS_MISMATCH');
+  }
+}
+
 function assertProductionRuntimeIdentity(health, targetSha) {
   const expectedSha = normalizedSha(targetSha);
   if (!expectedSha
@@ -73,6 +103,7 @@ function assertProductionRuntimeIdentity(health, targetSha) {
 
 module.exports = {
   CANONICAL_PRODUCTION_ACCOUNT_PROVIDERS,
+  assertProductionDeployExecutionProvenance,
   assertProductionDeployProvenance,
   assertProductionRuntimeIdentity,
   canonicalizeProductionAccountProviders,

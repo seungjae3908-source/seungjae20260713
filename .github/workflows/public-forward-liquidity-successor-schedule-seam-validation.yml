@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
       - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+      - '.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs'
       - '.github/workflows/market-intelligence-sidecar-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
@@ -137,6 +140,9 @@ jobs:
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
           runtime_workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
           validation_workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+          authority_workflow='.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml'
+          authority_model='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs'
+          authority_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs'
           ingest_workflow='.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
           runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
           reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
@@ -145,6 +151,65 @@ jobs:
           multi_lane_policy='market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
+
+          # Integration Draft only: keep the strict V3 five-file scope intact.
+          # Other precisely enumerated paths are checked by their own CI lanes.
+          # Reject any unknown path; never relax admission or sample credit.
+          if [[ "${GITHUB_HEAD_REF:-}" == 'drift/research-paper-four-market-integrated-20261009' ]]; then
+            cat > /tmp/integrated-non-v3-files <<'EOF'
+          .github/workflows/paper-forward-schedule-validation.yml
+          .github/workflows/research-ai-production-activation.yml
+          .github/workflows/research-center-predeploy-validation.yml
+          .github/workflows/research-production-validation.yml
+          api-server/src/routes/backtests.ts
+          api-server/src/routes/paper-trading.ts
+          api-server/src/services/backtest-data.service.ts
+          api-server/src/services/backtest-engine.service.test.ts
+          api-server/src/services/backtest-engine.service.ts
+          api-server/src/services/backtest-paper-handoff.service.test.ts
+          api-server/src/services/backtest-paper-handoff.service.ts
+          api-server/src/services/futures-market-data.service.ts
+          api-server/src/services/paper-trading.types.ts
+          market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+          market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          market-prediction-lab/src/formula-paper-registry-readback-v1.js
+          market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
+          market-prediction-lab/scripts/run-paper-forward-schedule.js
+          market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+          market-prediction-lab/tests/research-bundle-formula-fixture.js
+          packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
+          packages/strategy-hypothesis/src/backtest-paper-handoff.js
+          research-production/bin/research-approved-job-intake.mjs
+          research-production/src/engine.mjs
+          research-production/test/historical-pipelines.test.mjs
+          research-production/test/paper-risk-policy-transport.test.mjs
+          research-production/test/research-ai-activation-contract.test.mjs
+          research-production/test/research-approved-job-intake.test.mjs
+          research-production/test/research-engine.test.mjs
+          stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
+          stock-analyzer/e2e/phase5-backtest.spec.ts
+          stock-analyzer/src/components/backtest-research-panel.tsx
+          stock-analyzer/src/lib/backtest.ts
+          stock-analyzer/src/lib/excel-export.ts
+          stock-analyzer/src/pages/phase5-backtest-e2e.tsx
+          EOF
+            scoped_changed=''
+            while IFS= read -r candidate; do
+              [[ -n "$candidate" ]] || continue
+              case "$candidate" in
+                .github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml|.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml|.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml|market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs|market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs)
+                  scoped_changed="${scoped_changed}${candidate}"$'\n'
+                  ;;
+                *)
+                  if ! grep -Fxq "$candidate" /tmp/integrated-non-v3-files; then
+                    echo "UNEXPECTED_RESEARCH_V3_INTEGRATION_PATH:$candidate" >&2
+                    exit 1
+                  fi
+                  ;;
+              esac
+            done <<< "$changed"
+            changed="$(printf '%s' "$scoped_changed" | sed '/^$/d')"
+          fi
 
           if printf '%s\n' "$changed" | grep -Fqx "$activation"; then
             cat > /tmp/allowed-files <<'EOF'
@@ -210,6 +275,21 @@ jobs:
           EOF
             expected_count=4
             scope_name='V3 post-merge activation decoupling hotfix + browser latency measurement repair'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" -e "$authority_workflow" -e "$authority_model" -e "$authority_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$runtime_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$authority_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$authority_model" \
+            && printf '%s\n' "$changed" | grep -Fqx "$authority_test"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          .github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs
+          EOF
+            expected_count=5
+            scope_name='V3 current Release-Control authority and scheduled-consumer routing'
           elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
@@ -267,6 +347,20 @@ jobs:
           test "$(grep -Fc 'phase2Credit: 0' "$runner")" -eq 1
           test "$(grep -Fc 'successorV3AuthorityChanged: false' "$runner")" -eq 1
           test "$(grep -Fc 'PHASE2_FIRST_POLICY_CI_UNVERIFIED:' "$runner")" -eq 1
+      - name: Verify current authority issue, immutable legacy registry, and no activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          authority=.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml
+          grep -Fq 'github.event.issue.number == 1555' "$authority"
+          grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$authority"
+          grep -Fq "issueNumber: 1555" "$authority"
+          grep -Fq "issue_number: context.issue.number" "$authority"
+          grep -Fq 'release-control-predecessor:23' "$authority"
+          ! grep -Eq 'github\\.event\\.issue\\.number == 23\\b' "$authority"
+          ! grep -Eq '^[[:space:]]{2}(schedule|workflow_dispatch):' "$authority"
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs
+
       - name: Verify scheduled workflow is V3 frozen and explicit receipt-gated
         shell: bash
         run: |
@@ -284,6 +378,9 @@ jobs:
           test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
+          grep -Fq 'issue_number: 1555' "$workflow"
+          grep -Fq "release.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          ! grep -Eq 'issue_number:[[:space:]]*23\b' "$workflow"
           test "$(grep -Fc '  issues: read' "$workflow")" -eq 1
           test "$(grep -Fc '  statuses: read' "$workflow")" -eq 1
           ! grep -Fq '  issues: write' "$workflow"

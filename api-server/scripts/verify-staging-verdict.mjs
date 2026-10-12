@@ -99,6 +99,7 @@ const requiredCheckNames = [
   'runtime: PM2 process online',
   'runtime: PM2 restart count stable',
   'database migration and rollback assessment',
+  'administrator four-market Paper V2 RLS staging proof',
 ];
 const checkNames = new Set(verdict.checks.map((check) => check?.name));
 for (const requiredName of requiredCheckNames) {

@@ -67,7 +67,9 @@ function classifyPayloadFailure(payload: Row) {
     ? topLevel
     : embedded ?? topLevel;
   if (KIWOOM_RATE_LIMIT_CODES.has(effective)) return new AccountReadonlyError('RATE_LIMITED', true);
-  if (KIWOOM_AUTH_CODES.has(effective)) return new AccountReadonlyError('KIWOOM_AUTH_OR_IP_REJECTED');
+  if (KIWOOM_AUTH_CODES.has(effective)) {
+    return new AccountReadonlyError(`KIWOOM_AUTH_OR_IP_REJECTED_CODE_${effective}`);
+  }
   return new AccountReadonlyError('KIWOOM_REQUEST_REJECTED');
 }
 
@@ -79,7 +81,7 @@ function safeJson(response: Response, code: string) {
 
 function classifyHttpFailure(response: Response) {
   if (response.status === 401 || response.status === 403) {
-    return new AccountReadonlyError('KIWOOM_AUTH_OR_IP_REJECTED');
+    return new AccountReadonlyError(`KIWOOM_AUTH_OR_IP_REJECTED_HTTP_${response.status}`);
   }
   if (response.status === 429) return new AccountReadonlyError('RATE_LIMITED', true);
   if (response.status >= 500) return new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
@@ -370,6 +372,7 @@ export class KiwoomReadonlyProvider {
       return {
         market: 'KR',
         symbol: normalizeDomesticSymbol(row.stk_cd),
+        displayName: typeof row.stk_nm === 'string' ? row.stk_nm.trim().slice(0, 120) : null,
         quantity,
         availableQuantity,
         averageEntryPrice: absoluteNumberOrNull(row.pur_pric),
@@ -409,6 +412,7 @@ export class KiwoomReadonlyProvider {
     const usPositions = usHoldings.rows.map((row) => ({
       market: 'US',
       symbol: normalizeUsSymbol(row.stk_cd),
+      displayName: typeof row.stk_nm === 'string' ? row.stk_nm.trim().slice(0, 120) : null,
       quantity: nonNegative(row.poss_qty, 'KIWOOM_US_POSITION_QUANTITY_INVALID'),
       availableQuantity: nonNegativeOrNull(row.sell_alowq, 'KIWOOM_US_POSITION_AVAILABLE_QUANTITY_INVALID'),
       averageEntryPrice: absoluteNumberOrNull(row.frgn_stk_book_uv),

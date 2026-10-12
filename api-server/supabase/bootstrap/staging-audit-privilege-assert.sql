@@ -3,13 +3,14 @@
 
 do $staging_audit_privilege_assert$
 begin
-  if not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT')
-     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT') then
-    raise exception 'authenticated lacks required member_permission_audit SELECT/INSERT privileges';
+  if not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT') then
+    raise exception 'authenticated lacks required member_permission_audit SELECT privilege';
   end if;
-  if has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
-     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE') then
-    raise exception 'authenticated unexpectedly has member_permission_audit UPDATE/DELETE privileges';
+  if has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'TRUNCATE') then
+    raise exception 'authenticated unexpectedly has member_permission_audit mutation privileges';
   end if;
   if has_table_privilege('anon', 'public.member_permission_audit', 'SELECT')
      or has_table_privilege('anon', 'public.member_permission_audit', 'INSERT')
@@ -40,14 +41,19 @@ begin
       and tablename = 'member_permission_audit'
       and policyname = 'member audit admins select'
       and cmd = 'SELECT'
-  ) or not exists (
+  ) then
+    raise exception 'member_permission_audit admin select policy is missing';
+  end if;
+  if exists (
     select 1 from pg_policies
     where schemaname = 'public'
       and tablename = 'member_permission_audit'
-      and policyname = 'member audit admins insert'
       and cmd = 'INSERT'
   ) then
-    raise exception 'member_permission_audit admin policies are incomplete';
+    raise exception 'member_permission_audit direct insert policy is present';
+  end if;
+  if to_regprocedure('public.record_member_password_reset_authorization(uuid,text)') is null then
+    raise exception 'member password reset audit RPC is missing';
   end if;
 end
 $staging_audit_privilege_assert$;

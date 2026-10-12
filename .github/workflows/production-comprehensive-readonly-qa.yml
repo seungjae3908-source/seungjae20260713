@@ -12,6 +12,12 @@ on:
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
+      - api-server/scripts/build-production-comprehensive-readonly-receipt.mjs
+      - api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs
+      - .github/workflows/production-postdeploy-qa.yml
+      - .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/verify-production-qa-receipt.cjs
   workflow_dispatch:
     inputs:
       sha:
@@ -23,8 +29,28 @@ on:
         required: false
         type: boolean
         default: false
+      production_deploy_run_id:
+        description: Exact latest successful official Production Deploy Run ID
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify
+        required: true
+        type: string
+      include_telegram:
+        description: Include Telegram runtime readiness in comprehensive QA
+        required: false
+        type: boolean
+        default: false
+      production_deploy_run_id:
+        description: Exact latest successful official Production Deploy Run ID
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -50,11 +76,14 @@ jobs:
           const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
           const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
 
-          if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
-            throw new Error('Live comprehensive QA must remain explicit-dispatch only');
+          if (!liveJob.includes("github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'")) {
+            throw new Error('Live comprehensive QA must remain explicit dispatch or orchestrator-call only');
           }
           if (!liveJob.includes('environment: production')) {
-            throw new Error('Live comprehensive QA must remain protected by the production environment');
+            throw new Error('Standalone comprehensive QA must retain protected Production credential access');
+          }
+          if (liveJob.includes('PROD_SSH_') || liveJob.includes('PROD_DATABASE_URL')) {
+            throw new Error('Live comprehensive QA must not receive deploy or Production database authority');
           }
           if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
             throw new Error('Live comprehensive QA must target the official Production hostname');
@@ -87,7 +116,7 @@ jobs:
             throw new Error('Comprehensive QA must isolate Telegram readiness behind the explicit opt-in');
           }
           if (!researchSpec.includes("getByTestId('capability-denied')")
-            || !researchSpec.includes('ADMIN_RESEARCH_CENTER_NOT_EVALUATED')) {
+            || !researchSpec.includes('RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canAccessBasicInfo')) {
             throw new Error('Research Center QA must distinguish membership-policy denial from product failure');
           }
           if (!config.includes("trace: 'off'")) {
@@ -95,6 +124,9 @@ jobs:
           }
           if (!config.includes("screenshot: 'off'")) {
             throw new Error('Authenticated Production QA must not retain raw screenshots');
+          }
+          if (/\bpage\.screenshot\s*\(/u.test(comprehensiveSpec + researchSpec)) {
+            throw new Error('Explicit authenticated screenshots bypass the structured-only evidence policy');
           }
           if (!uploadStep.includes('stock-analyzer/production-comprehensive-artifacts')) {
             throw new Error('Structured Production QA evidence must remain uploaded');
@@ -106,17 +138,20 @@ jobs:
 
   production-comprehensive-readonly:
     name: Real Production PC/mobile comprehensive read-only QA
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 80
     environment: production
     env:
+      GH_TOKEN: ${{ github.token }}
       PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_READONLY_E2E: "true"
       PRODUCTION_QA_INCLUDE_TELEGRAM: ${{ inputs.include_telegram && 'true' || 'false' }}
-      EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
+      EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+      PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+      PRODUCTION_DEPLOY_MODE: completed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -127,6 +162,33 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+
+      - name: Require exact official Production Deploy provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+        with:
+          script: |
+            const { assertProductionDeployProvenance } = require('./.github/scripts/production-deploy-provenance.cjs');
+            const productionDeployRunId = String(process.env.PRODUCTION_DEPLOY_RUN_ID ?? '').trim();
+            if (!/^[1-9][0-9]*$/.test(productionDeployRunId)) {
+              core.setFailed('PRODUCTION_DEPLOY_PROVENANCE_RUN_ID_INVALID');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(productionDeployRunId),
+            })).data;
+            try {
+              assertProductionDeployProvenance(run, {
+                targetSha: process.env.TARGET_SHA,
+                productionDeployRunId,
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? 'PRODUCTION_DEPLOY_PROVENANCE_INVALID'));
+            }
 
       - name: Resolve exact workflow-generation QA harness safely
         env:
@@ -152,6 +214,11 @@ jobs:
             test -s /tmp/production-research-center-readonly-qa.spec.ts
             install -m 0644 /tmp/production-research-center-readonly-qa.spec.ts \
               stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
+            git show "$QA_HARNESS_SHA:api-server/scripts/build-production-comprehensive-readonly-receipt.mjs" \
+              > /tmp/build-production-comprehensive-readonly-receipt.mjs
+            test -s /tmp/build-production-comprehensive-readonly-receipt.mjs
+            install -m 0644 /tmp/build-production-comprehensive-readonly-receipt.mjs \
+              api-server/scripts/build-production-comprehensive-readonly-receipt.mjs
           fi
 
       - uses: pnpm/action-setup@v4
@@ -203,8 +270,7 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Run real Production comprehensive read-only QA
-        working-directory: stock-analyzer
-        run: pnpm exec playwright test --config=playwright.production-comprehensive.config.ts
+        run: bash .github/scripts/run-production-readonly-qa.sh comprehensive
 
       - name: Safety summary
         if: always()

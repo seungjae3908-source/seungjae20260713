@@ -49,26 +49,44 @@ test('fast CI covers commit changes for Draft and Ready PRs without rerunning on
   assert.match(document, /Application Fast CI is a development accelerator only/u);
 });
 
-test('ready dispatcher sequences commit-change full CI strictly after successful exact-head Fast CI', async () => {
-  const document = await readFile('.github/workflows/application-full-ci-ready-dispatch.yml', 'utf8');
-  assert.match(document, /workflow_run:/u);
-  assert.match(document, /Application Fast CI/u);
-  assert.match(document, /github\.event\.workflow_run\.conclusion == 'success'/u);
-  assert.match(document, /run\.head_sha/u);
-  assert.match(document, /pr\.draft/u);
-  assert.match(document, /target_sha: targetSha/u);
-  assert.match(document, /createWorkflowDispatch/u);
-  assert.match(document, /Failed, skipped, cancelled, missing, stale, or Draft Fast CI cannot dispatch/u);
+test('critical browser Fast CI is four-way sharded without reducing coverage', async () => {
+  const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
+  assert.match(document, /^  browser-critical:/mu);
+  assert.match(document, /shard: \[1, 2, 3, 4\]/u);
+  assert.match(document, /--shard=\$\{\{ matrix\.shard \}\}\/4/u);
+  assert.match(document, /matrix\.shard == 1/u);
+  assert.match(document, /All four shards must succeed/u);
+  assert.match(document, /needs\.browser-critical\.result == 'success'/u);
 });
 
-test('canonical full CI keeps direct Ready transition and independently requires green Fast CI', async () => {
+test('Fast CI directly dispatches canonical full CI only after both lanes succeed', async () => {
+  const document = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
+  assert.match(document, /^  dispatch-full-ci:/mu);
+  assert.match(document, /needs: \[fast, browser-critical\]/u);
+  assert.match(document, /needs\.fast\.result == 'success'/u);
+  assert.match(document, /needs\.browser-critical\.result == 'success'/u);
+  assert.match(document, /actions: write/u);
+  assert.match(document, /workflowId = 'futures-public-network-smoke\.yml'/u);
+  assert.match(document, /createWorkflowDispatch/u);
+  assert.match(document, /target_sha: targetSha/u);
+  assert.match(document, /checkout_ref: targetSha/u);
+  assert.match(document, /PREMERGE_HEAD_MOVED/u);
+  assert.match(document, /Canonical Full CI already exists/u);
+});
+
+test('canonical full CI is pre-merge/manual only and independently requires green Fast CI', async () => {
   const document = await readFile('.github/workflows/futures-public-network-smoke.yml', 'utf8');
   const triggerSection = document.slice(0, document.indexOf('\npermissions:'));
-  assert.match(triggerSection, /pull_request:/u);
-  assert.match(triggerSection, /ready_for_review/u);
+  assert.match(triggerSection, /workflow_dispatch:/u);
+  assert.doesNotMatch(triggerSection, /pull_request:/u);
+  assert.doesNotMatch(triggerSection, /push:/u);
   assert.match(document, /READY_FAST_CI_NOT_GREEN/u);
+  assert.match(document, /bounded wait attempt/u);
+  assert.match(document, /setTimeout\(resolve, 2000\)/u);
+  assert.match(document, /terminalFailure/u);
   assert.match(document, /latestFast\.conclusion !== 'success'/u);
   assert.match(document, /^  ready-gate:/mu);
+  assert.match(document, /Pre-merge current-base virtual merge gate/u);
   assert.match(document, /^  application-tests:/mu);
   assert.match(document, /matrix:/u);
   assert.match(document, /phase2, risk, phase4, phase5, phase6, phase7, phase8, phase9, phase12, smoke/u);
@@ -93,8 +111,8 @@ test('canonical full CI keeps direct Ready transition and independently requires
 test('V3 does not grant deployment or trading authority', async () => {
   for (const file of [
     '.github/workflows/application-fast-ci.yml',
-    '.github/workflows/application-full-ci-ready-dispatch.yml',
     '.github/workflows/futures-public-network-smoke.yml',
+    '.github/workflows/post-merge-release-provenance.yml',
   ]) {
     const document = await readFile(file, 'utf8');
     assert.doesNotMatch(document, /REAL_ORDER_ENABLED\s*:\s*true/u);

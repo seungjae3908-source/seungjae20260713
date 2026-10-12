@@ -73,7 +73,9 @@ for (const marker of [
   assert(spec.includes(marker), `browser evidence marker missing: ${marker}`);
 }
 assert(spec.includes("getByTestId('page-fallback')"), 'browser smoke must prove global loading terminates');
-assert(spec.includes("getByTestId('open-journal-sync')"), 'browser smoke must prove the real paper workspace becomes ready');
+assert(spec.includes("getByTestId('paper-trading-shell')"), 'browser smoke must prove the real paper workspace shell becomes ready');
+assert(!spec.includes("getByTestId('trading-mode-paper').click()"), 'browser smoke must use the dedicated Paper route, not a duplicate mode switch');
+assert(spec.includes("getByTestId('paper-trading-dashboard')"), 'browser smoke must prove the Paper dashboard becomes ready');
 assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser smoke must prove the paper skeleton terminates');
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
 assert(spec.includes('isIgnorableProductionRequestFailure'), 'browser smoke must use the narrowly tested request-failure classifier');
@@ -121,5 +123,7 @@ assert(deployScript.includes('DEPLOY_SHA="$TARGET_SHA"'), 'canary/live process m
 for (const marker of ['processDeploySha', 'deployMarkerSha', 'identityMatch', 'identityStatus']) {
   assert(server.includes(marker), `health identity contract missing ${marker}`);
 }
+const healthRoutes = server.slice(server.indexOf("app.get('/health'"), server.indexOf("app.use('/api/paper-journal'"));
+assert(healthRoutes.includes("res.setHeader('Cache-Control', 'no-store, max-age=0')"), 'deployment identity health routes must not be cached');
 
 console.log('[production-browser-contract] static contract passed');

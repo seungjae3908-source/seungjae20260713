@@ -1,11 +1,15 @@
 import path from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants as fileConstants } from 'node:fs';
+import { lstat, open, mkdir, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
+import {boundedTelegramV3Json,validTelegramV3CurrentSource,
+ verifiedTelegramV3PageCount,verifiedTelegramV3EpisodeKey}
+ from './telegram-v3-current-source.service';
 import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
 } from './telegram-market-room.service';
-import { sendTelegramAlert, type TelegramAlertInput } from './telegram-notification.service';
+import { sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
   type MemberWatchlistTelegramProducerResult,
@@ -38,17 +42,51 @@ type V3Event = {
 
 type V3Snapshot = {
   serviceSha: string;
+  generatedAt: string;
   safety: {
     executionAuthority: 'NONE';
     privateTradingApiAllowed: false;
     realOrderAllowed: false;
   };
   events: V3Event[];
+  rows?: Array<Record<string, any>>;
 };
 
 type V3Envelope = { ok: true; serviceSha: string; snapshot: V3Snapshot; executionAuthority: 'NONE' };
-type Persisted = { version: 1; delivered: Record<string, string> };
+type Persisted = { version: 1; delivered: Record<string, string>; unconfirmed?: Record<string, string> };
 type WatchlistDeliverer = typeof deliverMemberWatchlistTelegramForSignal;
+
+export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
+  | 'HTTP_ERROR' | 'INVALID_RESPONSE' | 'UNREACHABLE' | 'TIMEOUT'
+  | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED'
+  | 'SOURCE_DATA_BLOCKED' | 'OVERLAP';
+/** A local dedupe skip is not evidence of Bot API acceptance. An unresolved
+ * pre-send reservation must survive any duplicate/ambiguous transport result
+ * instead of being mislabeled as a confirmed SENT receipt. */
+export function classifyTelegramSubscriberSend(result: TelegramAlertResult):
+  'ACCEPTED' | 'KNOWN_NO_SEND' | 'UNCONFIRMED' {
+  if (result.ok) return 'ACCEPTED';
+  if (result.skipped === 'DUPLICATE'
+    || result.skipped === 'OUTCOME_UNCONFIRMED'
+    || result.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED')
+    return 'UNCONFIRMED';
+  if (result.attempts === 0
+    && (result.skipped === 'NOT_CONFIGURED' || result.skipped === 'COOLDOWN'))
+    return 'KNOWN_NO_SEND';
+  if (result.skipped === 'DELIVERY_FAILED'
+    && (result.errorCode === 'TELEGRAM_API_REJECTED'
+      || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
+        .test(result.errorCode ?? '')))
+    return 'KNOWN_NO_SEND';
+  return 'UNCONFIRMED';
+}
+
+export type SignalTelegramRunResult = {
+  attempted: number; delivered: number; queued: number;
+  publicDelivered: number; personalDelivered: number; personalQueued: number;
+  deduped: number; skipped: number; failed: number;
+  sourceStatus: SignalTelegramSourceStatus;
+};
 
 function boundedInterval(value: unknown): number {
   const parsed = Number(value);
@@ -56,20 +94,23 @@ function boundedInterval(value: unknown): number {
   return Math.max(30_000, Math.min(300_000, Math.trunc(parsed)));
 }
 
-function endpoint(): string {
-  const value = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || DEFAULT_URL;
-  const parsed = new URL(value);
-  if (parsed.protocol !== 'http:' || !['127.0.0.1', '[::1]', '::1', 'localhost'].includes(parsed.hostname)) {
+/** Only loopback public GET /v1/signals, never an arbitrary local endpoint. */
+export function resolveSignalIntelligenceTelegramEndpoint(configured?: string | null): string {
+  let url: URL;
+  try { url = new URL(configured?.trim() || DEFAULT_URL); }
+  catch { throw new Error('SIGNAL_INTELLIGENCE_SUBSCRIBER_ENDPOINT_INVALID'); }
+  if (url.protocol !== 'http:' || !['127.0.0.1','[::1]','localhost'].includes(url.hostname)
+    || url.pathname !== '/v1/signals' || url.search || url.hash
+    || url.username || url.password) {
     throw new Error('SIGNAL_INTELLIGENCE_SUBSCRIBER_LOOPBACK_ONLY');
   }
-  return parsed.toString();
+  return url.toString();
 }
 
 function chatIdForMarket(market: V3Event['market']): string | null {
   return telegramMarketRoomChatId(
     telegramMarketRoomForLane(market),
     process.env,
-    { allowLegacyFallback: true },
   );
 }
 
@@ -235,6 +276,7 @@ export function buildSignalIntelligenceTelegramInput(
   event: V3Event,
   serviceSha: string,
   now = new Date(),
+  episodeKey?: string,
 ): TelegramAlertInput | null {
   const type = alertType(event);
   const destinationChatId = chatIdForMarket(event.market);
@@ -246,52 +288,232 @@ export function buildSignalIntelligenceTelegramInput(
     market: event.market,
     details: details(event, now),
     destinationChatId,
-    dedupeKey: `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
+    dedupeKey: episodeKey ?? `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
     duplicateWindowMs: 14 * 24 * 60 * 60 * 1000,
     cooldownMs: 0,
   };
 }
 
-class DeliveryState {
+const LEDGER_ERROR = 'SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE';
+const MAX_LEDGER_BYTES = 1_048_576;
+const MAX_LEDGER_ENTRIES = 10_000;
+
+/** Persisted dedupe state must be trustworthy before any market/member send. */
+export class SignalIntelligenceTelegramDeliveryState {
   private loaded = false;
+  private blocked = false;
+  private loading: Promise<void> | null = null;
   private delivered = new Map<string, string>();
+  private unconfirmed = new Map<string, string>();
   constructor(private readonly file: string) {}
 
   private async load(): Promise<void> {
+    if (this.blocked) throw new Error(LEDGER_ERROR);
     if (this.loaded) return;
-    this.loaded = true;
+    if (this.loading) return this.loading;
+    this.loading = this.initializeLedger();
     try {
-      const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<Persisted>;
-      if (parsed.version !== 1 || !parsed.delivered) return;
-      for (const [key, value] of Object.entries(parsed.delivered)) if (typeof value === 'string') this.delivered.set(key, value);
+      await this.loading;
+      this.loaded = true;
+    } finally { this.loading = null; }
+  }
+
+  private async initializeLedger(): Promise<void> {
+    let originalLedgerObserved = false;
+    try {
+      const before = await lstat(this.file);
+      originalLedgerObserved = true;
+      if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_LEDGER_BYTES)
+        throw new Error(LEDGER_ERROR);
+      const fd = await open(this.file, fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW);
+      let raw: string;
+      try {
+        const after = await fd.stat();
+        if (!after.isFile() || after.size > MAX_LEDGER_BYTES
+          || after.dev !== before.dev || after.ino !== before.ino) throw new Error(LEDGER_ERROR);
+        raw = await fd.readFile({ encoding: 'utf8' });
+      } finally { await fd.close(); }
+      if (Buffer.byteLength(raw, 'utf8') > MAX_LEDGER_BYTES) throw new Error(LEDGER_ERROR);
+      const data = JSON.parse(raw) as Partial<Persisted>;
+      if (data?.version !== 1 || !data.delivered || typeof data.delivered !== 'object'
+        || Array.isArray(data.delivered)) throw new Error(LEDGER_ERROR);
+      const entries = Object.entries(data.delivered);
+      if (entries.length > MAX_LEDGER_ENTRIES || entries.some(([key, at]) =>
+        !key.startsWith('signal-intelligence-v3:') || key.length > 1024
+        || typeof at !== 'string' || !Number.isFinite(Date.parse(at))))
+        throw new Error(LEDGER_ERROR);
+      const uncertain = data.unconfirmed === undefined ? {} : data.unconfirmed;
+      if (!uncertain || typeof uncertain !== 'object' || Array.isArray(uncertain))
+        throw new Error(LEDGER_ERROR);
+      const ambiguousEntries = Object.entries(uncertain);
+      if (entries.length + ambiguousEntries.length > MAX_LEDGER_ENTRIES
+        || ambiguousEntries.some(([key, at]) =>
+          !key.startsWith('signal-intelligence-v3:') || key.length > 1024
+          || typeof at !== 'string' || !Number.isFinite(Date.parse(at))
+          || Object.prototype.hasOwnProperty.call(data.delivered, key)))
+        throw new Error(LEDGER_ERROR);
+      this.delivered = new Map(entries as Array<[string,string]>);
+      this.unconfirmed = new Map(ambiguousEntries as Array<[string,string]>);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') logger.warn('signal intelligence Telegram state read failed');
+      // Only initially missing state is empty; disappearance after lstat
+      // must block future sends to prevent replays from a lost receipt.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT'
+        && !originalLedgerObserved) return;
+      this.blocked = true;
+      this.delivered.clear();
+      this.unconfirmed.clear();
+      logger.warn({ code: LEDGER_ERROR }, 'signal Telegram dedupe ledger unavailable; suppressing sends');
+      throw new Error(LEDGER_ERROR);
     }
   }
 
-  async has(key: string): Promise<boolean> {
+  async ready(): Promise<void> { await this.load(); }
+
+  async has(key: string, now = new Date()): Promise<boolean> {
     await this.load();
-    return this.delivered.has(key);
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const at = this.delivered.get(key);
+    if (!at) return false;
+    const when = Date.parse(at);
+    // A future-dated receipt is unsafe clock/ledger evidence: never use it
+    // to suppress a real current event or to silently permit a replay.
+    if (!Number.isFinite(when) || when > now.getTime() + 5_000) {
+      this.blocked = true;
+      throw new Error(LEDGER_ERROR);
+    }
+    // The existing 14-day duplicateWindowMs must apply when checking,
+    // not only when a DIFFERENT key happens to be marked and pruned.
+    return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
+  }
+
+  async hasUnconfirmed(key: string, now = new Date()): Promise<boolean> {
+    await this.load();
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const at = this.unconfirmed.get(key);
+    if (!at) return false;
+    const when = Date.parse(at);
+    if (!Number.isFinite(when) || when > now.getTime() + 5_000) {
+      this.blocked = true;
+      throw new Error(LEDGER_ERROR);
+    }
+    // An unknown Bot API POST result must never become safe for replay just
+    // because the 14-day confirmed-send dedupe window elapsed. Manual
+    // reconciliation is required: this prioritizes at-most-once safety.
+    return true;
+  }
+
+  // Migration safety: a pre-v2 confirmed/uncertain Telegram POST must not be
+  // replayed just because the current source service was redeployed. Legacy
+  // receipts retain their existing conservative 14-day/no-auto-replay policy.
+  async hasLegacyCandidate(id: string, now = new Date(), sourceAsOf?: string): Promise<boolean> {
+    await this.load();
+    const observed = Date.parse(sourceAsOf ?? '');
+    if (typeof id !== 'string' || id.length === 0 || id.length > 400
+      || typeof sourceAsOf !== 'string'
+      || !Number.isFinite(now.getTime()) || !Number.isFinite(observed)
+      || observed > now.getTime() + 5_000
+      || new Date(observed).toISOString() !== sourceAsOf)
+      throw new Error(LEDGER_ERROR);
+    const suffix = ':NEW_CANDIDATE:' + id + '::CANDIDATE';
+    const legacy = /^signal-intelligence-v3:[0-9a-f]{40}:NEW_CANDIDATE:/u;
+    for (const [key, timestamp] of [...this.delivered, ...this.unconfirmed]) {
+      if (!legacy.test(key) || !key.endsWith(suffix)) continue;
+      const at = Date.parse(timestamp);
+      if (!Number.isFinite(at) || at > now.getTime() + 5_000) {
+        this.blocked = true; throw new Error(LEDGER_ERROR);
+      }
+      // Unknown v1 POST outcomes are always blocked pending reconciliation.
+      // A confirmed v1 send may block only its original source UTC day;
+      // otherwise new opportunities disappear for fourteen days after deploy.
+      if(this.unconfirmed.has(key))return true;
+      if(at >= now.getTime() - MAX_DELIVERED_AGE_MS
+        && sourceAsOf.slice(0,10) <= new Date(at).toISOString().slice(0,10))
+        return true;
+    }
+    return false;
   }
 
   async mark(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, true);
+  }
+  async markUnconfirmed(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, false);
+  }
+  /** Sender proves no accepted Bot API message (local skip/explicit rejection). */
+  async releaseExplicitNoSend(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, null);
+  }
+  private async persist(key: string, now: Date, delivered: boolean | null): Promise<void> {
     await this.load();
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const next = new Map(this.delivered);
+    const uncertain = new Map(this.unconfirmed);
     const cutoff = now.getTime() - MAX_DELIVERED_AGE_MS;
-    for (const [candidate, at] of this.delivered) if (Date.parse(at) < cutoff) this.delivered.delete(candidate);
-    this.delivered.set(key, now.toISOString());
-    await mkdir(path.dirname(this.file), { recursive: true });
-    const temporary = `${this.file}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ version: 1, delivered: Object.fromEntries(this.delivered) }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(temporary, this.file);
+    // Only confirmed deliveries expire after 14 days. Unknown outcomes are
+    // permanent tombstones pending explicit reconciliation, not normal TTLs.
+    for (const [id, timestamp] of next)
+      if (Date.parse(timestamp) < cutoff) next.delete(id);
+    if (delivered === true) {
+      uncertain.delete(key);
+      next.set(key, now.toISOString());
+    } else if (delivered === false) {
+      if (next.has(key)) {
+        this.blocked = true; throw new Error(LEDGER_ERROR);
+      }
+      uncertain.set(key, now.toISOString());
+    } else {
+      if(next.has(key)||!uncertain.has(key)){
+        this.blocked=true;throw new Error(LEDGER_ERROR);
+      }
+      uncertain.delete(key);
+    }
+    if (next.size + uncertain.size > MAX_LEDGER_ENTRIES) {
+      this.blocked = true; throw new Error(LEDGER_ERROR);
+    }
+    try {
+      await mkdir(path.dirname(this.file), { recursive: true });
+      const temp = `${this.file}.${process.pid}.tmp`;
+      const fd = await open(temp,
+        fileConstants.O_WRONLY | fileConstants.O_CREAT
+          | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
+      try {
+        const payload = `${JSON.stringify({ version: 1,
+          delivered: Object.fromEntries(next),
+          unconfirmed: Object.fromEntries(uncertain) }, null, 2)}\n`;
+        if (Buffer.byteLength(payload, 'utf8') > MAX_LEDGER_BYTES)
+          throw new Error(LEDGER_ERROR);
+        await fd.writeFile(payload, { encoding: 'utf8' });
+        await fd.sync();
+      } finally { await fd.close(); }
+      await rename(temp, this.file);
+      // Preserve pending/sent ledger rename across a host crash.
+      const dir=await open(path.dirname(this.file),fileConstants.O_RDONLY);
+      try{await dir.sync();}finally{await dir.close();}
+      this.delivered = next;
+      this.unconfirmed = uncertain;
+    } catch {
+      // Never infer success from a failed or interrupted ledger write.
+      this.blocked = true;
+      logger.warn({ code: LEDGER_ERROR }, 'signal Telegram ledger persistence failed; worker blocked');
+      throw new Error(LEDGER_ERROR);
+    }
   }
 }
 
 function mergePersonalResult(
-  result: { attempted: number; delivered: number; deduped: number; skipped: number; failed: number },
+  result: SignalTelegramRunResult,
   personal: MemberWatchlistTelegramProducerResult,
 ): void {
   result.attempted += personal.attempted;
+  // Durable outbox admission is NOT an accepted Telegram Bot API message.
+  // Keep queued, accepted market sends and personal direct sends distinct.
+  result.queued += personal.queued;
+  result.personalQueued += personal.queued;
   result.delivered += personal.delivered;
+  result.personalDelivered += personal.delivered;
   result.skipped += personal.skipped;
   result.failed += personal.failed;
 }
@@ -299,63 +521,132 @@ function mergePersonalResult(
 export class SignalIntelligenceTelegramSubscriber {
   private running = false;
   constructor(
-    private readonly store: DeliveryState,
+    private readonly store: SignalIntelligenceTelegramDeliveryState,
     private readonly deliver: typeof sendTelegramAlert = sendTelegramAlert,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly deliverWatchlist: WatchlistDeliverer = deliverMemberWatchlistTelegramForSignal,
   ) {}
 
-  async runOnce(now = new Date()): Promise<{ attempted: number; delivered: number; deduped: number; skipped: number; failed: number }> {
-    const result = { attempted: 0, delivered: 0, deduped: 0, skipped: 0, failed: 0 };
-    if (this.running) return result;
+  async runOnce(now = new Date()): Promise<SignalTelegramRunResult> {
+    const result: SignalTelegramRunResult = {
+      attempted: 0, delivered: 0, queued: 0,
+      publicDelivered: 0, personalDelivered: 0, personalQueued: 0,
+      deduped: 0, skipped: 0, failed: 0,
+      sourceStatus: 'NOT_CHECKED',
+    };
+    if (this.running) { result.sourceStatus = 'OVERLAP'; return result; }
     this.running = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3_000);
+    let sourceReady = false;
     try {
-      const response = await this.fetchImpl(endpoint(), { method: 'GET', signal: controller.signal, headers: { accept: 'application/json' } });
-      if (!response.ok) return result;
-      const envelope = await response.json() as V3Envelope;
-      const snapshot = envelope.snapshot;
-      if (envelope.ok !== true || envelope.executionAuthority !== 'NONE'
+      const response = await this.fetchImpl(
+        resolveSignalIntelligenceTelegramEndpoint(process.env.SIGNAL_INTELLIGENCE_URL),
+        { method: 'GET', redirect: 'error', signal: controller.signal,
+          headers: { accept: 'application/json' } });
+      if (!response.ok) {
+        result.sourceStatus = response.status === 503 ? 'HTTP_503' : 'HTTP_ERROR';
+        return result;
+      }
+      let envelope: V3Envelope;
+      try { envelope = await boundedTelegramV3Json(response) as V3Envelope; }
+      catch {
+        result.sourceStatus = controller.signal.aborted ? 'TIMEOUT' : 'INVALID_RESPONSE';
+        return result;
+      }
+      const snapshot = envelope?.snapshot;
+      if (envelope?.ok !== true || envelope.executionAuthority !== 'NONE'
+        || envelope.serviceSha !== snapshot?.serviceSha
         || snapshot?.safety?.executionAuthority !== 'NONE'
         || snapshot?.safety?.privateTradingApiAllowed !== false
         || snapshot?.safety?.realOrderAllowed !== false
         || !/^[0-9a-f]{40}$/u.test(snapshot?.serviceSha ?? '')
-        || !Array.isArray(snapshot?.events)) return result;
-
+        || !Array.isArray(snapshot?.events) || snapshot.events.length > 10_000) {
+        result.sourceStatus = 'INVALID_RESPONSE'; return result;
+      }
+      // Preflight must precede member watchlist fan-out as well as public sends.
+      await this.store.ready();
+      // Strict current-page evidence before ANY member watchlist or public
+      // Telegram fanout; do not interpret HTTP 200 as a verified source.
+      if (!validTelegramV3CurrentSource(snapshot, now.getTime())) {
+        result.sourceStatus = 'INVALID_RESPONSE';
+        return result;
+      }
+      sourceReady = true;
+      if (verifiedTelegramV3PageCount(snapshot)===0) {
+        result.sourceStatus = 'SOURCE_DATA_BLOCKED';
+        return result;
+      }
+      result.sourceStatus = 'READY';
       for (const event of snapshot.events) {
+        // The V3 producer also emits STATE_CHANGED and RESCAN_REQUESTED.
+        // They are validated above but must not be sent as entry candidates.
+        if (event.type !== 'NEW_CANDIDATE') continue;
+        const row = snapshot.rows?.find(candidate => candidate?.id===event.id);
+        const episodeKey = verifiedTelegramV3EpisodeKey(row,now.getTime());
+        if (!episodeKey) { result.failed += 1; continue; }
+        if (await this.store.hasLegacyCandidate(event.id,now,row?.sourceAsOf)) {
+          result.deduped += 1; continue;
+        }
         try {
           const personal = await this.deliverWatchlist({
             type: event.type,
             id: event.id,
             serviceSha: snapshot.serviceSha,
+            occurrenceKey: episodeKey,
             market: event.market,
             symbol: event.symbol,
             strategy: event.strategy,
             timeframe: event.timeframe,
             direction: event.direction,
             validationTier: event.validationTier,
-            occurredAt: now.toISOString(),
+            // Use the verified publication timestamp, not the polling
+            // clock, for personal event-policy/freshness evidence.
+            occurredAt: snapshot.generatedAt,
           });
           mergePersonalResult(result, personal);
         } catch {
           result.failed += 1;
         }
 
-        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
+        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now, episodeKey);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
-        if (await this.store.has(alert.dedupeKey)) { result.deduped += 1; continue; }
+        if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
+        if (await this.store.hasUnconfirmed(alert.dedupeKey, now)) {
+          result.failed += 1; continue;
+        }
+        // Reserve an UNKNOWN outcome BEFORE the remote POST. If the worker
+        // crashes between Telegram accepting a message and the next ledger
+        // checkpoint, the restart must not automatically send it again.
+        await this.store.markUnconfirmed(alert.dedupeKey,now);
         result.attempted += 1;
         const sent = await this.deliver(alert);
-        if (sent.ok || sent.skipped === 'DUPLICATE') {
+        const classification = classifyTelegramSubscriberSend(sent);
+        if (classification === 'ACCEPTED') {
           await this.store.mark(alert.dedupeKey, now);
-          if (sent.ok) result.delivered += 1; else result.deduped += 1;
-        } else if (sent.skipped === 'NOT_CONFIGURED') result.skipped += 1;
-        else result.failed += 1;
+          result.delivered += 1;
+          result.publicDelivered += 1;
+        } else if (classification === 'KNOWN_NO_SEND') {
+          // Only a proven rejection or local non-attempt releases the durable
+          // reservation. In-flight DUPLICATE remains unresolved, never SENT.
+          await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
+          if (!sent.ok && (sent.skipped === 'NOT_CONFIGURED' || sent.skipped === 'COOLDOWN'))
+            result.skipped += 1;
+          else result.failed += 1;
+        } else {
+          // Ambiguous Bot API POST and duplicate-in-flight both retain the
+          // persistent unconfirmed tombstone. Never retransmit automatically.
+          result.failed += 1;
+        }
       }
       return result;
     } catch (error) {
-      if ((error as Error)?.name !== 'AbortError') logger.debug('signal intelligence Telegram subscriber unavailable');
+      const err = error as Error;
+      result.sourceStatus = err?.message === LEDGER_ERROR ? 'LEDGER_UNREADABLE'
+        : ['SIGNAL_INTELLIGENCE_SUBSCRIBER_LOOPBACK_ONLY',
+           'SIGNAL_INTELLIGENCE_SUBSCRIBER_ENDPOINT_INVALID'].includes(err?.message)
+          ? 'UNSAFE_ENDPOINT' : err?.name === 'AbortError' ? 'TIMEOUT'
+            : sourceReady ? 'PROCESSING_FAILED' : 'UNREACHABLE';
       return result;
     } finally {
       clearTimeout(timeout);
@@ -369,10 +660,23 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
   if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) return null;
   const statePath = process.env.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH?.trim()
     || path.resolve(process.cwd(), '.runtime/signal-intelligence-telegram-state.json');
-  const subscriber = new SignalIntelligenceTelegramSubscriber(new DeliveryState(statePath));
+  const subscriber = new SignalIntelligenceTelegramSubscriber(new SignalIntelligenceTelegramDeliveryState(statePath));
+  let previousStatus: SignalTelegramSourceStatus | null = null;
   const tick = async () => {
     const result = await subscriber.runOnce(new Date());
-    if (result.delivered > 0 || result.failed > 0) logger.info({ result }, 'signal intelligence Telegram subscriber tick');
+    if (result.sourceStatus !== 'OVERLAP'
+      && (result.sourceStatus !== previousStatus || result.delivered > 0
+        || result.queued > 0 || result.failed > 0)) {
+      logger.info({
+        status: result.sourceStatus, attempted: result.attempted,
+        delivered: result.delivered, publicDelivered: result.publicDelivered,
+        personalDelivered: result.personalDelivered,
+        queued: result.queued, personalQueued: result.personalQueued,
+        deduped: result.deduped, skipped: result.skipped,
+        failed: result.failed,
+      }, 'signal intelligence Telegram subscriber tick');
+    }
+    if (result.sourceStatus !== 'OVERLAP') previousStatus = result.sourceStatus;
   };
   void tick();
   const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.SIGNAL_INTELLIGENCE_TELEGRAM_INTERVAL_MS));
