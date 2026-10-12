@@ -54,12 +54,22 @@ switch (name) {
   case 'runuser':
     if (!args.includes('preflight') || args.includes('run')) throw Error('unexpected cycle execution');
     break;
-  case 'df': case 'systemctl': case 'systemd-analyze': break;
+  case 'systemctl':
+    if (args[0] === 'show') {
+      const property = args[args.indexOf('-p') + 1];
+      if (property === 'LoadState') console.log('loaded');
+      else if (property === 'ActiveState') console.log(args[1] === 'research-production@fast-historical.service'
+        ? (process.env.HARNESS_WORKLOAD_STATE ?? 'inactive') : 'inactive');
+      else if (property === 'UnitFileState') console.log('disabled');
+      else throw Error('unexpected unit property');
+    }
+    break;
+  case 'df': case 'systemd-analyze': break;
   default: throw Error('unexpected host operation: ' + name);
 }
 `;
 
-function activate(value, { mode = 'activate', legacy, supplemental, decision } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental, decision, workloadState } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
@@ -93,6 +103,8 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision } =
     const env = { ...process.env, PATH: `${bin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH}`,
       TARGET_SHA: SHA, HARNESS_ROOT: shellRoot, HARNESS_ROOT_NATIVE: root, REAL_NODE: shellPath(process.execPath),
       MSYS2_ENV_CONV_EXCL: '*' };
+    if (workloadState !== undefined) env.HARNESS_WORKLOAD_STATE = workloadState;
+    else delete env.HARNESS_WORKLOAD_STATE;
     delete env[KEY];
     delete env[DECISION_KEY];
     delete env[COST_KEY];
@@ -126,6 +138,19 @@ test('missing, empty and legacy-only paths remain absent in the installed Enviro
       assert.match(result.environment, new RegExp(`^${key}=false$`, 'm'));
     }
   }
+});
+
+test('full activation harness blocks a still-running workload before installing the new environment', () => {
+  const result = activate(undefined, { workloadState: 'active' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  assert.match(result.stderr, /RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true/u);
+  assert.equal(result.environment, null);
+  assert.ok(result.events.some(event => event[0] === 'systemctl' && event[1] === 'stop'));
+  assert.ok(result.events.filter(event => event[0] === 'systemctl' && event[1] === 'stop')
+    .every(event => event.includes('research-production@fast-historical.service')));
+  assert.equal(result.events.some(event => ['ln', 'mv'].includes(event[0])), false);
+  assert.equal(result.events.some(event => event[0] === 'install' && event.at(-1).endsWith('/research-production.env')), false);
 });
 
 test('explicit paths are escaped as systemd quoted data, never evaluated or used as files', () => {
