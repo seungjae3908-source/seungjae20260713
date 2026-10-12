@@ -138,6 +138,7 @@ export async function withResearchMinuteArchiveBudgetV1({
 }
 function validate({root,market,day,pages,taskPageIndex,taskIndex,
   expectedTaskDigestSha256,allowPublicReadOnlyFetch,
+  retryPartialSource,expectedExistingSourceDigestSha256,
   maxLocalBytes,minFreeBytes,nowImpl,statfsImpl}) {
   if(!isAbsolute(root??"") || resolve(root)!==root
     ||!Object.hasOwn(EXPECTED,market)
@@ -149,6 +150,11 @@ function validate({root,market,day,pages,taskPageIndex,taskIndex,
     ||!Number.isSafeInteger(taskIndex)||taskIndex<0||taskIndex>=20
     ||!SHA.test(expectedTaskDigestSha256??"")
     ||typeof allowPublicReadOnlyFetch!=="boolean"
+    ||typeof retryPartialSource!=="boolean"
+    ||(retryPartialSource
+      ? !allowPublicReadOnlyFetch
+        ||!SHA.test(expectedExistingSourceDigestSha256??"")
+      :expectedExistingSourceDigestSha256!=null)
     ||!Number.isSafeInteger(maxLocalBytes)
     ||maxLocalBytes<MAX_SINGLE_SOURCE_BYTES||maxLocalBytes>16*1024*MIB
     ||!Number.isSafeInteger(minFreeBytes)
@@ -175,12 +181,14 @@ function verifyTask(task,market,day) {
 export async function runPlannedPITMinuteSourceTaskV1({
   root,market,day,manifest=null,pages=[],taskPageIndex=0,taskIndex=0,
   expectedTaskDigestSha256=null,allowPublicReadOnlyFetch=false,
+  retryPartialSource=false,expectedExistingSourceDigestSha256=null,
   maxLocalBytes=DEFAULT_MAX_LOCAL_BYTES,minFreeBytes=DEFAULT_MIN_FREE_BYTES,
   nowImpl=()=>Date.now(),statfsImpl=statfs,
   upbitFetchImpl=null,bitgetClient=null,
 }={}) {
   validate({root,market,day,pages,taskPageIndex,taskIndex,
     expectedTaskDigestSha256,allowPublicReadOnlyFetch,
+    retryPartialSource,expectedExistingSourceDigestSha256,
     maxLocalBytes,minFreeBytes,nowImpl,statfsImpl});
   const id={market,day,taskPageIndex,taskIndex};
   const plan=planPITNativeMinuteSourceGapsV1({
@@ -239,7 +247,8 @@ export async function runPlannedPITMinuteSourceTaskV1({
       root,market,symbol:task.symbol,
       dayStartMs:task.sessionStartMs,
       manifest,expectedRosterDigestSha256:plan.pitRosterDigestSha256,
-      allowPublicReadOnlyFetch:true,retryPartialSource:false,
+      allowPublicReadOnlyFetch:true,retryPartialSource,
+      expectedExistingSourceDigestSha256,
       nowImpl,upbitFetchImpl,bitgetClient,
     });
     return Object.freeze({
@@ -254,7 +263,11 @@ export async function runPlannedPITMinuteSourceTaskV1({
       }),
       status:retrieved.status==="RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY"
         ?"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET"
-        :"BLOCKED_DATA",
+        :retrieved.status==="RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW"
+          ?"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW"
+          :"BLOCKED_DATA",
+      sourceRevisionAutoSelected:false,
+      priorSourceDigestSha256:retrieved.priorSourceDigestSha256??null,
       reason:retrieved.reason??null,
       providerReadAuthorized:true,
     });
