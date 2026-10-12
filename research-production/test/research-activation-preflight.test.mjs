@@ -4,11 +4,13 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { collectResearchActivationPreflight, readBoundedPrivateFile } from '../../ops/research-activation-preflight.mjs';
+import { resolveResearchVideoDiscoveryQueries } from '../src/research-video-discovery-policy.mjs';
+import { parseEnv } from 'node:util';
 
 const researchSha = 'a'.repeat(40), appSha = 'b'.repeat(40);
 const { PREFLIGHT_IDS } = createRequire(import.meta.url)('../../.github/scripts/research-production-readonly-contract.cjs');
 const state = '/var/lib/investment-research-production';
-function fixture({ missing = false, unsafe = false, conflict = false, mutation = false, bundleRoot } = {}) {
+function fixture({ missing = false, unsafe = false, conflict = false, mutation = false, bundleRoot, aiText, videoText } = {}) {
   const files = new Map([
     ['/opt/stock-app/.deploy/current-sha', appSha],
     ['/etc/investment-research/research-production.env', [
@@ -20,6 +22,8 @@ function fixture({ missing = false, unsafe = false, conflict = false, mutation =
     ['/opt/stock-app/.env', 'GEMINI_API_KEY=test-only-public-provider-key\nGROQ_API_KEY=test-only-other-provider-key\nYOUTUBE_DATA_API_KEY=test-only-video-key'
       + (bundleRoot === undefined ? '' : '\nRESEARCH_BUNDLE_STATE_ROOT=' + bundleRoot)],
     ...(conflict ? [['/opt/stock-app/.env.production', 'GEMINI_API_KEY=conflicting-test-only-key']] : []),
+    ...(aiText === undefined ? [] : [['/etc/investment-research/research-ai.env', aiText]]),
+    ...(videoText === undefined ? [] : [['/etc/investment-research/research-video.env', videoText]]),
   ]);
   const missingError = () => Object.assign(new Error('not recorded'), { code: 'ENOENT' });
   let statTicks = 0;
@@ -72,6 +76,46 @@ test('duplicate safety flags and provider conflicts block without suppressing ot
   assert.ok(result.prerequisiteBlockers.includes('RESEARCH_SAFE_ENV'));
   assert.ok(result.prerequisiteBlockers.includes('PROVIDER_GEMINI'));
   assert.ok(result.checks.some(row => row.id === 'STOCK_INPUT_US_STOCK'));
+});
+
+test('every AI/video config blocker is collected before activation without fabricating consent or calls', () => {
+  const result = collectResearchActivationPreflight(fixture({
+    aiText: 'AI_CHAT_PROVIDER=groq\nRESEARCH_AI_MAX_CALLS_PER_SCAN=4\n',
+    videoText: 'RESEARCH_VIDEO_DISCOVERY_APPROVED=true\nRESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=[]\n',
+  }));
+  assert.ok(result.prerequisiteBlockers.includes('AI_POLICY_CONFIGURATION'));
+  assert.ok(result.prerequisiteBlockers.includes('VIDEO_POLICY_CONFIGURATION'));
+  assert.ok(result.checks.some(row => row.id === 'PAPER_LOOP_FUNCTIONAL_EVIDENCE'));
+  assert.equal(result.prerequisitesReady, false);
+  assert.equal(result.providerCalls, 0);
+  assert.equal(result.policyMutations, 0);
+  const optional = collectResearchActivationPreflight(fixture({ videoText: 'RESEARCH_VIDEO_DISCOVERY_APPROVED=false\n' }));
+  assert.equal(optional.checks.find(row => row.id === 'VIDEO_POLICY_CONFIGURATION').status, 'PASS');
+  assert.equal(optional.checks.find(row => row.id === 'VIDEO_POLICY').status, 'PENDING');
+});
+
+test('standalone SSH audit matches worker query admission and rejects every later bounded setting', () => {
+  for (const raw of ['', '[]', '{}', '["valid"]', '["same"," same "]', '["Ａ","A"]',
+    '["password=TEST_ONLY_VALUE"]', '["bad\\u0000query"]', 'invalid-json']) {
+    const videoText = 'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=' + raw + '\n';
+    let valid = true;
+    try { resolveResearchVideoDiscoveryQueries(parseEnv(videoText)); } catch { valid = false; }
+    const row = collectResearchActivationPreflight(fixture({ videoText })).checks
+      .find(row => row.id === 'VIDEO_POLICY_CONFIGURATION');
+    assert.equal(row.status === 'PASS', valid);
+  }
+  for (const videoText of ['RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS=4', 'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS=1.5',
+    'RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS=2161', 'RESEARCH_VIDEO_DISCOVERY_REGION_CODE=UNKNOWN',
+    'RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE=invalid-language', 'PRIVATE_API_ENABLED=true',
+    'YOUTUBE_DATA_API_KEY=TEST_ONLY_NOT_A_KEY']) {
+    const result = collectResearchActivationPreflight(fixture({ videoText }));
+    assert.ok(result.prerequisiteBlockers.includes('VIDEO_POLICY_CONFIGURATION'));
+    assert.equal(JSON.stringify(result).includes('TEST_ONLY_NOT_A_KEY'), false);
+  }
+  for (const aiText of ['RESEARCH_AI_MAX_CALLS_PER_SCAN=1.5', 'AI_CHAT_PROVIDER=paid',
+    'GEMINI_MODEL=paid-model', 'GROQ_API_KEY=TEST_ONLY_NOT_A_KEY']) {
+    assert.ok(collectResearchActivationPreflight(fixture({ aiText })).prerequisiteBlockers.includes('AI_POLICY_CONFIGURATION'));
+  }
 });
 test('bundle store accepts canonical safe state roots without granting admission or relaxing path safety', () => {
   const status = options => collectResearchActivationPreflight(options).checks
