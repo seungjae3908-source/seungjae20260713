@@ -436,6 +436,28 @@ test('isolated deployed public collector imports its pinned source graph without
   }
 });
 
+test('separately approved standalone installer verifies sealed main source and keeps Paper/PM2 out of scope', () => {
+  const script = buildIndependentAutoLivePublicInstallScript();
+  const seal = script.indexOf('if [[ -n "${AUTO_LIVE_INDEPENDENT_SOURCE_SEAL_DIR:-}" ]]; then');
+  const verify = script.indexOf('sha256sum --status -c SHA256SUMS');
+  const cron = script.indexOf('CRON_OUTPUT="$(LC_ALL=C crontab -l 2>&1)"');
+  const copy = script.indexOf('rsync -a --delete');
+  assert.ok(seal > 0 && verify > seal && verify < cron && copy > cron);
+  for (const required of [
+    '/opt/stock-app-data/\\.auto-live-public-seal\\.',
+    'sealed public source path invalid',
+    'sealed public source SHA mismatch',
+    'sealed public source manifest mismatch',
+    'sealed public source file digest mismatch',
+    'sealed helper source content mismatch',
+    'sealed public source symlink not allowed',
+    'bin/production-auto-live-signal-identity.cjs',
+    'PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=\'false\'',
+    'PRIVATE_TRADING_API_ALLOWED=\'false\'',
+  ]) assert.ok(script.includes(required), 'sealed source proof missing: '+required);
+  assert.doesNotMatch(script, /(?:pm2|psql|supabase)\s+(?:start|restart|exec|db|migration|run|sql)/u);
+});
+
 test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
   const script = buildIndependentAutoLivePublicInstallScript();
