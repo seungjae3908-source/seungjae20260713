@@ -4,12 +4,24 @@ import {useAuth} from '@/lib/auth';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
   manualPaperBootstrapAuthorized,parseManualFourMarketResearchHistory,
+  parseManualSequentialOrderReadback,
   type ManualFourMarketStatus,type ManualResearchHistoryReadback,
+  type ManualSequentialOrderReadback,
 } from '@/lib/manual-four-market-paper-status';
 
 const API='/api/paper-trading/manual-four-market';
 const CONFIRM='START_MANUAL_FOUR_1M_PAPER_WALLETS_PRESERVE_HISTORY';
 const money=(value:number)=>value.toLocaleString('ko-KR')+'원';
+const SEQ_ORDER_ID=/^manual-paper-seq-order-v1:[a-f0-9]{64}$/u;
+const sequenceStatusLabel:Record<ManualSequentialOrderReadback['projection']['status'],string>={
+  ENTRY_PENDING:'진입 주문 대기',
+  ENTRY_PARTIAL:'일부 진입 가정 체결',
+  OPEN:'가상 포지션 유지',
+  EXIT_PENDING:'청산 요청 대기',
+  PARTIALLY_CLOSED:'일부 청산 가정',
+  ENTRY_CANCELLED:'진입 취소 · 가상 체결 없음',
+  CLOSED_PROJECTION:'연구용 가정 청산 완료',
+};
 /** Four-market manual Paper initial SEED readiness, never current cash or an
  * order form. Autonomous strategy selection/execution is intentionally OFF.
  */
@@ -20,6 +32,13 @@ export function ManualFourMarketWalletPanel(){
   const [state,setState]=useState<{owner:string;value:ManualFourMarketStatus}|null>(null);
   const [history,setHistory]=useState<{owner:string;value:ManualResearchHistoryReadback}|null>(null);
   const [historyUnavailable,setHistoryUnavailable]=useState(false);
+  const [sequenceId,setSequenceId]=useState('');
+  const [sequenceResult,setSequenceResult]=useState<{
+    owner:string;orderId:string;value:ManualSequentialOrderReadback
+  }|null>(null);
+  const [sequenceLoading,setSequenceLoading]=useState(false);
+  const [sequenceError,setSequenceError]=useState('');
+  const sequenceAbort=useRef<AbortController|null>(null);
   const [revision,setRevision]=useState(0);
   const [loading,setLoading]=useState(false);
   const [saving,setSaving]=useState(false);
@@ -29,12 +48,20 @@ export function ManualFourMarketWalletPanel(){
   const [error,setError]=useState('');
   const status=authorized&&state?.owner===userId?state.value:null;
   const ownHistory=authorized&&history?.owner===userId?history.value:null;
+  const ownSequence=authorized&&sequenceResult?.owner===userId
+    &&sequenceResult.orderId===sequenceId
+      ?sequenceResult.value:null;
   const canConfirm=authorized && manualPaperBootstrapAuthorized(userId,confirmOwner,status);
   useEffect(()=>{
     // A pending seed creation dialog is NOT portable across authenticated
     // identities. A former user's async response cannot clear the next
     // user's errors or signal falsely that their wallet was created.
     setConfirmOwner(null);
+    sequenceAbort.current?.abort();
+    setSequenceId('');
+    setSequenceResult(null);
+    setSequenceError('');
+    setSequenceLoading(false);
   },[userId,authorized]);
   useEffect(()=>{
     if(!authorized){
@@ -44,6 +71,8 @@ export function ManualFourMarketWalletPanel(){
     const controller=new AbortController();
     let active=true;
     setState(null);setHistory(null);setHistoryUnavailable(false);
+    sequenceAbort.current?.abort();
+    setSequenceResult(null);setSequenceLoading(false);
     setLoading(true);setError('');
     void (async()=>{
       try{
@@ -72,6 +101,40 @@ export function ManualFourMarketWalletPanel(){
     })();
     return()=>{active=false;controller.abort();};
   },[userId,authorized,revision]);
+
+  const inspectSequentialOrder=async()=>{
+    if(!authorized||sequenceLoading)return;
+    if(!SEQ_ORDER_ID.test(sequenceId)){
+      setSequenceError('모의주문 ID 형식을 확인하세요.');
+      setSequenceResult(null);
+      return;
+    }
+    const initiatingOwner=userId,requestedId=sequenceId;
+    sequenceAbort.current?.abort();
+    const controller=new AbortController();
+    sequenceAbort.current=controller;
+    setSequenceLoading(true);setSequenceError('');setSequenceResult(null);
+    try{
+      // GET-only, exact owner/RLS readback; browser cannot mint Paper fills.
+      const response=await authorizedFetch(
+        API+'/sequential-order/'+encodeURIComponent(requestedId),
+        {signal:controller.signal});
+      const raw:unknown=await response.json().catch(()=>null);
+      if(!response.ok)throw new Error('PAPER_SEQ_ORDER_UNAVAILABLE');
+      const checked=parseManualSequentialOrderReadback(raw,requestedId);
+      if(!controller.signal.aborted&&initiatingOwner===ownerRef.current)
+        setSequenceResult({owner:initiatingOwner,orderId:requestedId,value:checked});
+    }catch{
+      if(!controller.signal.aborted&&initiatingOwner===ownerRef.current){
+        setSequenceResult(null);
+        setSequenceError('본인 주문 증거를 검증할 수 없습니다. 서버 원장·권한·주문 ID를 확인하세요.');
+      }
+    }finally{
+      if(sequenceAbort.current===controller)sequenceAbort.current=null;
+      if(!controller.signal.aborted&&initiatingOwner===ownerRef.current)
+        setSequenceLoading(false);
+    }
+  };
 
   const createOnce=async()=>{
     if(!canConfirm||saving)return;
@@ -167,6 +230,66 @@ export function ManualFourMarketWalletPanel(){
         연구용 가상 손익은 실제 모의주문 체결, 현금 잔고, 검증된 순수익 또는 수익성 PASS가 아닙니다.
         계좌·거래 데이터는 이 화면에서 변경하지 않습니다.
       </p>
+    </details>
+    <details className="mt-1" data-testid="manual-paper-sequential-order-inspector">
+      <summary className="cursor-pointer py-1 text-muted-foreground">
+        순차 모의주문 · 부분체결·청산 이력 조회 전용
+      </summary>
+      <div className="space-y-2 pt-2">
+        <p className="text-muted-foreground">
+          서버에서 발급된 주문 ID로 본인의 가상 주문 진행상태를 조회합니다.
+          주문을 새로 생성하거나 체결시키지 않습니다.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="manual-paper-seq-order-id">모의주문 ID</label>
+          <input id="manual-paper-seq-order-id" type="text" value={sequenceId}
+            maxLength={120} autoComplete="off"
+            placeholder="manual-paper-seq-order-v1:..."
+            aria-label="본인 순차 모의주문 ID"
+            disabled={!authorized||sequenceLoading}
+            className="min-w-0 flex-1 rounded-lg border border-card-border bg-background px-2 py-1.5"
+            onChange={event=>{
+              sequenceAbort.current?.abort();
+              setSequenceId(event.target.value.trim());
+              setSequenceResult(null);
+              setSequenceError('');
+              setSequenceLoading(false);
+            }}/>
+          <button type="button" data-testid="manual-paper-seq-readonly-lookup"
+            className="rounded-lg border border-card-border px-3 py-1.5"
+            disabled={!authorized||sequenceLoading||!SEQ_ORDER_ID.test(sequenceId)}
+            onClick={()=>void inspectSequentialOrder()}>
+            {sequenceLoading?'확인 중':'주문 이력 조회'}
+          </button>
+        </div>
+        {sequenceError?<p role="alert" className="text-destructive">{sequenceError}</p>:null}
+        {ownSequence?<div className="space-y-2 rounded-lg border border-card-border p-2"
+          data-testid="manual-paper-seq-owner-history">
+          <strong>{MANUAL_FOUR_MARKETS.find(m=>m.key===ownSequence.projection.market)?.label}
+            {' · '}{sequenceStatusLabel[ownSequence.projection.status]}</strong>
+          <p>가상 진입 수량 {ownSequence.projection.entryQuantity.toLocaleString('ko-KR')}
+            {' · '}가상 청산 수량 {ownSequence.projection.exitQuantity.toLocaleString('ko-KR')}
+            {' · '}남은 가상 수량 {ownSequence.projection.openQuantity.toLocaleString('ko-KR')}</p>
+          <p>서버 이벤트 {ownSequence.eventHistory.length}건 ·
+            미체결 진입 잔량 취소 {ownSequence.projection.entryRemainderCancelled?'확인':'아니오'}</p>
+          {ownSequence.projection.status==='CLOSED_PROJECTION'
+            &&ownSequence.projection.hypotheticalNetPnlKrw!==null
+            ?<p>연구 가정 순손익 {money(ownSequence.projection.hypotheticalNetPnlKrw)}
+              {' · '}실제 자본·예비금에 반영되지 않음</p>
+            :<p>완전 청산 증거 없음 · 확정 손익/예비금 없음</p>}
+          <ol className="list-inside list-decimal space-y-1">
+            {ownSequence.eventHistory.slice(0,30).map(event=>
+              <li key={event.eventId}>
+                {event.kind} · {new Date(event.observedAtMs).toLocaleString('ko-KR')}
+              </li>)}
+          </ol>
+          {ownSequence.eventHistory.length>30?
+            <p className="text-muted-foreground">첫 30건만 표시. 전체 이벤트 {ownSequence.eventHistory.length}건이 검증되었습니다.</p>:null}
+          <p className="text-muted-foreground">
+            서버 공개시세를 활용한 모의체결 가정입니다. 실제 거래소 체결·실현수익·수익성 검증이 아닙니다.
+          </p>
+        </div>:null}
+      </div>
     </details>
     {error?<p role="alert" className="pt-2 text-destructive">{error}</p>:null}
     {canConfirm?<div className="mt-2 rounded-lg border border-card-border bg-background p-3" role="dialog"

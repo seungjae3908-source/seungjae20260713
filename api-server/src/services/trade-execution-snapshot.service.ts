@@ -401,7 +401,9 @@ export function buildKiwoomExecutionSnapshot(input: {
   const providerTimestamp = finite(input.orderbook.timestamp ?? input.orderbook.ts);
   const observedAtMs = timestampMs([providerTimestamp]) ?? input.observedAt?.getTime() ?? null;
   const availableBalance = positive(
-    input.orderable.ord_alow_amt
+    input.orderable.profa_100ord_alow_amt
+      ?? input.orderable.ord_alowa
+      ?? input.orderable.ord_alow_amt
       ?? input.orderable.ord_psbl_cash
       ?? input.orderable.ord_psbl_amt
       ?? input.orderable.cash,
@@ -438,11 +440,13 @@ export function buildKiwoomUsExecutionSnapshot(input: {
     ?? (input.plan.side === 'buy' ? book.asks[0]?.price ?? null : book.bids[0]?.price ?? null);
   if (currentPrice == null) throw new Error('KIWOOM_US_CURRENT_PRICE_UNAVAILABLE');
 
+  if (input.orderable.crnc_code != null && input.orderable.crnc_code !== 'USD') {
+    throw new Error('KIWOOM_US_ORDERABLE_CURRENCY_MISMATCH');
+  }
   const orderableCash = positive(
-    input.orderable.ord_alowa
+    input.orderable.ord_alowa_100
       ?? input.orderable.min_ord_alowa
-      ?? input.orderable.ord_alowa_100
-      ?? input.orderable.krw_ord_alowa_100,
+      ?? input.orderable.ord_alowa,
   ) ?? 0;
   const requestedQuantity = Number(input.plan.quantity ?? 0);
   const providerNotional = requestedQuantity > 0 ? requestedQuantity * currentPrice : 0;
