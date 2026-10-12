@@ -3,7 +3,7 @@ import { constants as fileConstants } from 'node:fs';
 import { lstat, open, mkdir, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {boundedTelegramV3Json,validTelegramV3CurrentSource,
- verifiedTelegramV3PageCount}
+ verifiedTelegramV3PageCount,verifiedTelegramV3EpisodeKey}
  from './telegram-v3-current-source.service';
 import {
   telegramMarketRoomChatId,
@@ -49,6 +49,7 @@ type V3Snapshot = {
     realOrderAllowed: false;
   };
   events: V3Event[];
+  rows?: Array<Record<string, any>>;
 };
 
 type V3Envelope = { ok: true; serviceSha: string; snapshot: V3Snapshot; executionAuthority: 'NONE' };
@@ -254,6 +255,7 @@ export function buildSignalIntelligenceTelegramInput(
   event: V3Event,
   serviceSha: string,
   now = new Date(),
+  episodeKey?: string,
 ): TelegramAlertInput | null {
   const type = alertType(event);
   const destinationChatId = chatIdForMarket(event.market);
@@ -265,7 +267,7 @@ export function buildSignalIntelligenceTelegramInput(
     market: event.market,
     details: details(event, now),
     destinationChatId,
-    dedupeKey: `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
+    dedupeKey: episodeKey ?? `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
     duplicateWindowMs: 14 * 24 * 60 * 60 * 1000,
     cooldownMs: 0,
   };
@@ -379,6 +381,27 @@ export class SignalIntelligenceTelegramDeliveryState {
     // because the 14-day confirmed-send dedupe window elapsed. Manual
     // reconciliation is required: this prioritizes at-most-once safety.
     return true;
+  }
+
+  // Migration safety: a pre-v2 confirmed/uncertain Telegram POST must not be
+  // replayed just because the current source service was redeployed. Legacy
+  // receipts retain their existing conservative 14-day/no-auto-replay policy.
+  async hasLegacyCandidate(id: string, now = new Date()): Promise<boolean> {
+    await this.load();
+    if (typeof id !== 'string' || id.length === 0 || id.length > 400
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const suffix = ':NEW_CANDIDATE:' + id + '::CANDIDATE';
+    const legacy = /^signal-intelligence-v3:[0-9a-f]{40}:NEW_CANDIDATE:/u;
+    for (const [key, timestamp] of [...this.delivered, ...this.unconfirmed]) {
+      if (!legacy.test(key) || !key.endsWith(suffix)) continue;
+      const at = Date.parse(timestamp);
+      if (!Number.isFinite(at) || at > now.getTime() + 5_000) {
+        this.blocked = true; throw new Error(LEDGER_ERROR);
+      }
+      if (this.unconfirmed.has(key) || at >= now.getTime() - MAX_DELIVERED_AGE_MS)
+        return true;
+    }
+    return false;
   }
 
   async mark(key: string, now: Date): Promise<void> {
@@ -517,11 +540,18 @@ export class SignalIntelligenceTelegramSubscriber {
         // The V3 producer also emits STATE_CHANGED and RESCAN_REQUESTED.
         // They are validated above but must not be sent as entry candidates.
         if (event.type !== 'NEW_CANDIDATE') continue;
+        const row = snapshot.rows?.find(candidate => candidate?.id===event.id);
+        const episodeKey = verifiedTelegramV3EpisodeKey(row,now.getTime());
+        if (!episodeKey) { result.failed += 1; continue; }
+        if (await this.store.hasLegacyCandidate(event.id,now)) {
+          result.deduped += 1; continue;
+        }
         try {
           const personal = await this.deliverWatchlist({
             type: event.type,
             id: event.id,
             serviceSha: snapshot.serviceSha,
+            occurrenceKey: episodeKey,
             market: event.market,
             symbol: event.symbol,
             strategy: event.strategy,
@@ -537,7 +567,7 @@ export class SignalIntelligenceTelegramSubscriber {
           result.failed += 1;
         }
 
-        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
+        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now, episodeKey);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
         if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
         if (await this.store.hasUnconfirmed(alert.dedupeKey, now)) {
