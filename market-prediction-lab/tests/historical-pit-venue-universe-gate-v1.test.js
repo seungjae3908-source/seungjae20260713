@@ -179,3 +179,35 @@ test("an archival roster cannot be certified complete through a date in its futu
  assert.equal(r.reason,"PIT_ARCHIVE_SOURCE_ATTESTATION_INVALID");
  assert.equal(r.trueMarketWideRecall,null);
 });
+
+
+test("Bitget Han USDT contract survives exact dated roster while other markets stay ASCII-scoped",()=>{
+ const memberRows=[
+  {symbol:"龙虾USDT",listedAtMs:START-200*UTC,
+   removedAtMs:null,halts:[],sourceId:"han-archive",evidenceSha256:SHA},
+  {symbol:"OLDUSDT",listedAtMs:START-500*UTC,
+   removedAtMs:START-20*UTC,halts:[],sourceId:"han-archive",evidenceSha256:SHA},
+ ];
+ const manifest=fixture(memberRows,{market:"CRYPTO_FUTURES",
+   venue:"BITGET_USDT_FUTURES",
+   rawMembershipDigestSha256:digestPITMembershipRowsV1(memberRows)});
+ const observed=[{market:"CRYPTO_FUTURES",venue:"BITGET_USDT_FUTURES",
+   symbol:"龙虾USDT",status:"OBSERVED_SELECTED_SYMBOL_DAY",observedDayCrossingCount:1}];
+ const result=audit({market:"CRYPTO_FUTURES",dayStartMs:START,
+   dayEndMs:END,manifest,selectedRows:observed});
+ assert.equal(result.status,"TEST_FIXTURE_ONLY");
+ assert.equal(result.observedSelectedRosterMatched,1);
+ assert.equal(result.dayActiveArchivedMembers,1);
+ assert.equal(result.fullMarketOpportunityDenominatorVerified,false);
+ assert.equal(result.trueMarketWideRecall,null);
+ assert.equal(result.executionAuthority,"NONE");
+ for(const bad of ["龙虾/USDT","龙虾 USDT","龙虾🚀USDT","龙虾usdt","龙虾_USDT"]){
+  const invalid=audit({market:"CRYPTO_FUTURES",dayStartMs:START,
+    dayEndMs:END,manifest,selectedRows:[{...observed[0],symbol:bad}]});
+  assert.equal(invalid.status,"BLOCKED_PIT_UNIVERSE");
+ }
+ const cross=audit({market:"CRYPTO_SPOT",dayStartMs:START,
+   dayEndMs:END,selectedRows:[{market:"CRYPTO_SPOT",venue:"UPBIT_KRW",
+     symbol:"龙虾USDT",status:"OBSERVED_SELECTED_SYMBOL_DAY"}]});
+ assert.equal(cross.reason,"SELECTED_SOURCE_COHORT_CONTRACT_INVALID");
+});
