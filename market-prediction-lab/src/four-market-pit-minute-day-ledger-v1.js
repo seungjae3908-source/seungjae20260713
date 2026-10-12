@@ -82,7 +82,7 @@ function inspectMember(member, expectedSymbol, sessionCount) {
       .includes(member.reason) || member.sourceMinuteRows !== null)
       return null;
     counts.lifecycleBlockedMembers = 1;
-    return { counts, expectedMissing: 0 };
+    return { counts, expectedMissing: 0, expectedPartial: 0 };
   }
   const keys = ["sourceSessionCount", "archivedSessionCount",
     "missingSessionCount", "sourceLimitedSessionCount",
@@ -128,7 +128,8 @@ function inspectMember(member, expectedSymbol, sessionCount) {
     Number(member.retrospectiveSourceSessionCount > 0);
   counts.retrospectiveMinuteRows =
     member.retrospectiveUnavailableOneMinuteRows;
-  return { counts, expectedMissing: member.missingSessionCount };
+  return { counts, expectedMissing: member.missingSessionCount,
+    expectedPartial: member.sourceLimitedSessionCount };
 }
 function inspectPlan(plan, membership, expectedCountsBySymbol, market, date, sessions) {
   const expectedCount=[...expectedCountsBySymbol.values()].reduce((a,b)=>a+b,0);
@@ -157,6 +158,53 @@ function inspectPlan(plan, membership, expectedCountsBySymbol, market, date, ses
   }
   return membership.every(symbol=>
     (actualCounts.get(symbol)??0)===(expectedCountsBySymbol.get(symbol)??0));
+}
+
+/** Validate every SHA-leased source-limited 1m session against its
+ * certified member-level COUNT and current day/session identity.
+ * This is a self-attested page receipt, not an independent exchange signature.
+ */
+function inspectPartialSourcePlan(plan, members, expected, market, day, sessions) {
+  const total=[...expected.values()].reduce((a,b)=>a+b,0);
+  if(!Array.isArray(plan)||plan.length!==total
+    ||plan.length>members.length*16)return false;
+  const byStart=new Map(sessions.map(s=>[s.startMs,s]));
+  const countBySymbol=new Map(), seen=new Set();
+  const provider={KR_STOCK:null,US_STOCK:null,
+    CRYPTO_SPOT:"UPBIT_PUBLIC_REST",CRYPTO_FUTURES:"BITGET_PUBLIC_V2"};
+  for(const item of plan) {
+    const session=byStart.get(item?.sessionStartMs);
+    if(!session||!members.includes(item.symbol)
+      ||item.market!==market||item.venue!==VENUES[market]
+      ||item.selectionDate!==day
+      ||item.sessionEndMs!==session.endMs||item.sessionKind!==session.kind
+      ||(STOCKS.has(market)
+        ?item.tradingDateLocal!==day||Object.hasOwn(item,"dayUtc")
+        :item.dayUtc!==day||Object.hasOwn(item,"tradingDateLocal"))
+      ||item.action!=="REVIEW_PARTIAL_NATIVE_MINUTE_RETRY"
+      ||item.reason!=="UNVERIFIED_MISSING_NATIVE_MINUTE_SLOTS"
+      ||!SHA.test(item.expectedExistingSourceDigestSha256??"")
+      ||!number(item.priorOriginalMinuteRows)
+      ||item.priorOriginalMinuteRows===0
+      ||!number(item.missingUnverifiedMinuteSlots)
+      ||item.missingUnverifiedMinuteSlots===0
+      ||item.priorOriginalMinuteRows+item.missingUnverifiedMinuteSlots
+        !==(session.endMs-session.startMs)/60_000
+      ||typeof item.captureIsRetrospective!=="boolean"
+      ||item.proposedProvider!==provider[market]
+      ||item.sourceReadRequiresExplicitConsent!==true
+      ||item.independentPITRosterRequired!==true
+      ||item.sourceNoTradeGapEvidenceVerified!==false
+      ||item.sourceRevisionAutoSelected!==false
+      ||item.providerGETCount!==0||item.autoExecuteAllowed!==false)
+      return false;
+    const key=item.symbol+":"+item.sessionStartMs;
+    if(seen.has(key))return false;
+    seen.add(key);
+    countBySymbol.set(item.symbol,(countBySymbol.get(item.symbol)??0)+1);
+  }
+  return members.every(name=>
+    (countBySymbol.get(name)??0)===(expected.get(name)??0));
 }
 
 export function summarizeHistoricalPITMinuteDayPagesV1({
@@ -202,7 +250,8 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
   const dateBasis = stock ? "EXCHANGE_LOCAL_TRADING_DATE" : "UTC_CRYPTO_DAY";
   const summed = Object.fromEntries(COUNTERS.map(k=>[k,0]));
   const statusCounts = Object.create(null), monthlyMissingPreview = [];
-  let offset=0, missingPlanTotal=0, complete=true;
+  const monthlyPartialPreview = [];
+  let offset=0, missingPlanTotal=0, partialPlanTotal=0, complete=true;
   const pageDigestInputs = [];
   for (const page of pages) {
     if (!page || !validPageSafety(page)
@@ -232,6 +281,7 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
       return blocked(market,day,"PIT_MINUTE_DAY_PAGE_IDENTITY_OR_SEQUENCE_INVALID");
     const local = Object.fromEntries(COUNTERS.map(k=>[k,0]));
     const expectedMissingBySymbol=new Map();
+    const expectedPartialBySymbol=new Map();
     const memberNames=[];
     for (const member of page.memberSourceStatuses) {
       const expectedSymbol=cohort[offset+memberNames.length];
@@ -239,6 +289,7 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
       if (!inspected)
         return blocked(market,day,"PIT_MINUTE_DAY_MEMBER_SOURCE_CONTRADICTION");
       expectedMissingBySymbol.set(expectedSymbol,inspected.expectedMissing);
+      expectedPartialBySymbol.set(expectedSymbol,inspected.expectedPartial);
       memberNames.push(expectedSymbol);
       statusCounts[member.status]=(statusCounts[member.status]??0)+1;
       for (const counter of COUNTERS) local[counter]+=inspected.counts[counter];
@@ -254,6 +305,22 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
         });
     }
     missingPlanTotal+=missing.length;
+    const partial=page.partialSourcePlan;
+    if(!inspectPartialSourcePlan(partial,memberNames,expectedPartialBySymbol,
+      market,day,sessions)
+      ||!SHA.test(page.partialSourcePlanDigestSha256??"")
+      ||hash(partial)!==page.partialSourcePlanDigestSha256)
+      return blocked(market,day,"PIT_MINUTE_DAY_PARTIAL_SOURCE_PLAN_INVALID");
+    partialPlanTotal+=partial.length;
+    for(const item of partial) {
+      if(monthlyPartialPreview.length<100)
+        monthlyPartialPreview.push({
+          symbol:item.symbol,selectionDate:item.selectionDate,
+          sessionStartMs:item.sessionStartMs,
+          expectedExistingSourceDigestSha256:item.expectedExistingSourceDigestSha256,
+          missingUnverifiedMinuteSlots:item.missingUnverifiedMinuteSlots,
+        });
+    }
     for (const k of COUNTERS) {
       if (!number(page[k])||page[k]!==local[k])
         return blocked(market,day,"PIT_MINUTE_DAY_PAGE_COUNTER_CONTRADICTION");
@@ -305,6 +372,10 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
     missingSourceSessionCount:missingPlanTotal,
     missingSourcePlanPreview:monthlyMissingPreview,
     omittedMissingSourcePlanItems:Math.max(0,missingPlanTotal-100),
+    partialSourceSessionReviewCount:partialPlanTotal,
+    partialSourceReviewPreview:monthlyPartialPreview,
+    omittedPartialSourceReviewItems:Math.max(0,partialPlanTotal-100),
+    partialSourceReviewCannotAuthorizeProviderGET:true,
     memberSourceStatusCounts:{...statusCounts},
     ...summed,
     checkedArchiveSourcesOnly:true,
