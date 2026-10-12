@@ -371,6 +371,13 @@ test('public HTTP cannot forge AUTO Live origin for any provider, before reposit
         { signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
         { signalReasons: ['AUTO_EXIT_ENTRY_PLAN:foreign'] },
         { signalReasons: ['PILOT_DYNAMIC_CAP_V1:forged'] },
+        { signalReasons: ['CANONICAL_PAPER_HANDOFF'] },
+        { signalReasons: ['STRATEGY_RULE_PACK:TREND_PULLBACK_REACCEL_V1'] },
+        { signalReasons: ['STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'] },
+        { signalReasons: ['AI_REVIEW_DECISION:PASS'] },
+        { signalReasons: ['AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'] },
+        { signalReasons: ['AI_REVIEW_EVIDENCE:' + 'a'.repeat(64)] },
+        { signalReasons: ['AI_REVIEW_EXPIRES:2099-01-01T00:00:00Z'] },
       ]) {
         const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -380,6 +387,15 @@ test('public HTTP cannot forge AUTO Live origin for any provider, before reposit
         assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN');
         assert.equal(body.orderSubmitted, false);
       }
+    }
+    for (const accountMode of [null, 'LIVE', ' live ', 'unknown', 0, {}]) {
+      const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountMode, exchange: 'upbit', signalReasons: [] }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+      assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_TRADING_ACCOUNT_MODE_INVALID');
+      assert.equal(body.orderSubmitted, false);
     }
     assert.equal(repositoryCalls, 0); assert.equal(outbound, 0);
   } finally {

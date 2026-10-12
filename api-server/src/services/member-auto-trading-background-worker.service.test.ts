@@ -2271,7 +2271,7 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
   const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
     ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
   assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
-  const order = { planId: plan.id, userId: plan.userId, exchange: plan.exchange,
+  const order = { id: 'entry-fill', planId: plan.id, userId: plan.userId, exchange: plan.exchange,
     state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
   assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
   const filled = { ...order, state: 'FILLED' as const, filledQuantity: 1 };
@@ -2282,7 +2282,7 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
     signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
   for (const filledQuantity of [0.5, 1]) {
     const wrongExit = { ...exit, side: 'buy' as const };
-    const wrongOrder = { ...filled, planId: exit.id, filledQuantity };
+    const wrongOrder = { ...filled, id: 'exit-fill', planId: exit.id, filledQuantity };
     assert.throws(() => canonicalAutomaticLivePositions([plan, wrongExit], [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
     assert.throws(() => canonicalAutomaticLivePositions([plan,
       { ...exit, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto', 'AUTO_EXIT_ENTRY_PLAN:foreign'] }],
@@ -2293,7 +2293,7 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, signalReasons: [] }), /EXIT_OWNERSHIP_REQUIRED/);
   assert.throws(() => canonicalAutomaticLivePositions([plan], [filled, { ...filled, id: 'duplicate' }]), /OWNERSHIP_AMBIGUOUS/);
-  const closedOrder = { ...filled, planId: exit.id };
+  const closedOrder = { ...filled, id: 'exit-fill', planId: exit.id };
   assert.deepEqual(canonicalAutomaticLivePositions([plan, exit], [filled, closedOrder]), []);
   assert.equal(automaticLiveIsolationReceipt(withAuto, [], 3).manualProtectedPositionCount, 3,
     'assets without a proven remaining fill stay manual/protected, including a later manual reacquisition');
