@@ -28,6 +28,7 @@ test('shared Paper repair is accepted only from the pinned immutable snapshot', 
 
 test('activation lifecycle additions are exactly reviewed validators and tests, not execution exemptions', () => {
   for (const file of ['.github/scripts/research-ai-activation-result.cjs',
+    '.github/workflows/research-production-validation.yml',
     'research-production/test/research-ai-activation-lifecycle.test.mjs',
     'research-production/test/research-ai-activation-result.test.mjs']) {
     assert.ok(RESEARCH_CENTER_BATCH_PATHS.includes(file));
@@ -40,6 +41,10 @@ test('activation lifecycle additions are exactly reviewed validators and tests, 
     assert.equal(isPreservedPaperIntegrationPath(file, () => blob), false);
   }
   assert.ok(read('.github/scripts/research-ai-activation-result.cjs').includes('grantsExecutionAuthority: false'));
+  const batch = read('.github/workflows/research-production-validation.yml');
+  assert.match(batch, /^  contents: read$/mu);
+  assert.doesNotMatch(batch, /^\s+environment:\s*(?:production|staging)\s*$/mu);
+  assert.equal(batch.includes('${{ secrets.'), false);
 });
 
 test('a one-byte equivalent blob identity change restores the automatic-trading gate', () => {
