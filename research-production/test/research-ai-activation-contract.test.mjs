@@ -18,6 +18,22 @@ test('AI Research activation is fail-closed and exact-SHA bound', async () => {
   assert.match(script, /systemctl disable --now/);
 });
 
+test('AI cutover stops active one-shots, not just their timers', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const freeze = script.slice(script.indexOf('disable_timers()'), script.indexOf('research_sha()'));
+  assert.match(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
+  assert.match(freeze, /AI_RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.ok(activation.indexOf('disable_timers') < activation.indexOf('install-ai-research-units.sh'));
+});
+
+test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
+  const source = await readFile(new URL('../bin/confirm-research-free-policy.mjs', import.meta.url), 'utf8');
+  assert.match(source, /appSha: readBoundedPrivateFile\('\/opt\/stock-app\/\.deploy\/current-sha'\)\.trim\(\)/u);
+  assert.doesNotMatch(source, /pm2|systemctl|API_KEY|\.env\.production/u);
+  assert.match(source, /atomicWrite\('research-free-confirmation\.json'/u);
+});
+
 test('provider readiness is proven before timer activation and secrets are not printed', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   const preflight = script.indexOf('provider_preflight');
