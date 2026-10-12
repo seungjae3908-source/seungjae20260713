@@ -21,8 +21,11 @@ const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 // The exact market-bound identifier is needed for archived listed/delisted
 // membership, not just current public source-page candles.
 const FUTURES_HAN=/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u;
-const acceptedSymbol=(symbol,market)=>
+const acceptedSymbol=(symbol,market,rawSymbol=symbol)=>
   typeof symbol==="string"&&symbol===symbol.normalize("NFC")
+  // Han-named Bitget instruments must use their EXACT original contract code,
+  // never an auto-trimmed or case-normalized guess from a PIT data provider.
+  &&(!/[\p{Script=Han}]/u.test(symbol)||rawSymbol===symbol)
   &&(SYMBOL.test(symbol)||
     (market==="CRYPTO_FUTURES"&&FUTURES_HAN.test(symbol)));
 const SOURCE_CLASSES=new Set(["EXCHANGE_DATED_ARCHIVE","LICENSED_PIT_HISTORICAL_VENDOR","TEST_FIXTURE"]);
@@ -63,7 +66,7 @@ function inspectMemberships(rows,start,end,market){
     endedBeforeDay=new Set(),endedHistorical=new Set(),allSymbols=new Set();
   for(const [index,row] of rows.entries()){
     const sym=norm(row?.symbol);
-    if(!acceptedSymbol(sym,market)||!validTime(row?.listedAtMs)
+    if(!acceptedSymbol(sym,market,row?.symbol)||!validTime(row?.listedAtMs)
       ||row.removedAtMs!=null&&(!validTime(row.removedAtMs)||row.removedAtMs<=row.listedAtMs)
       ||!Array.isArray(row.halts)
       ||typeof row.sourceId!=="string"||!row.sourceId.trim()
@@ -117,7 +120,7 @@ export function auditHistoricalPITVenueUniverseV1({
   const selected=new Set(),observed=new Set();
   for(const row of selectedRows){
     const sym=norm(row?.symbol);
-    if(!acceptedSymbol(sym,market)||selected.has(sym)
+    if(!acceptedSymbol(sym,market,row?.symbol)||selected.has(sym)
       ||!["OBSERVED_SELECTED_SYMBOL_DAY","BLOCKED_DATA"].includes(row?.status)
       ||(row.market!=null&&row.market!==market)
       ||(row.venue!=null&&row.venue!==venue)){
