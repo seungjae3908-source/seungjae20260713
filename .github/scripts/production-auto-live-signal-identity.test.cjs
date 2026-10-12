@@ -204,7 +204,12 @@ test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owne
   assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/paper-forward-v1')"));
   assert.ok(preflight.includes('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE'));
   assert.ok(preflight.includes("process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true'"));
-  assert.doesNotMatch(preflight, /\b(?:execFileSync|spawnSync)\(\s*['"](?:pm2|psql|bash|sh)['"]/iu);
+  // Read-only preflight must not invoke a shell or any financial runtime.
+  // Separately operator-approved installation has its own explicit Bash path.
+  const readOnlyPreflight = preflight.split('const INDEPENDENT_AUTO_PUBLIC_INSTALL_SCRIPT =')[0];
+  assert.doesNotMatch(readOnlyPreflight, /\b(?:execFileSync|spawnSync)\(\s*['"](?:pm2|psql|bash|sh)['"]/iu);
+  assert.ok(preflight.includes("process.env.AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL === 'true'"));
+  assert.ok(preflight.includes("process.env.AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED !== 'true'"));
 });
 
 
