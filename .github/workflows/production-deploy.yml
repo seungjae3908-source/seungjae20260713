@@ -72,8 +72,6 @@ on:
       - ops/production-auto-live-signal-source-audit.mjs
       - ops/production-auto-live-signal-identity.cjs
       - .github/scripts/production-auto-live-signal-identity.test.cjs
-      - ops/install-auto-live-public-signal-schedule.sh
-      - .github/tests/auto-live-public-signal-schedule-contract.test.mjs
       - .github/scripts/verify-staging-automation-research-verdict.mjs
       - .github/scripts/verify-production-automation-research-core-receipt.mjs
       - .github/tests/production-automation-research-core-qa-contract.test.mjs
@@ -186,7 +184,6 @@ jobs:
         run: |
           node --check ops/production-auto-live-signal-source-audit.mjs
           node --test .github/scripts/production-auto-live-signal-identity.test.cjs
-          node --test .github/tests/auto-live-public-signal-schedule-contract.test.mjs
           node api-server/scripts/verify-staging-deploy-script-contract.mjs
           node --test .github/tests/production-auto-live-only-release-contract.test.mjs
       - name: Verify one-approval 1M Production trading-policy migration contract

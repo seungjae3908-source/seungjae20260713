@@ -2,7 +2,7 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
@@ -243,4 +243,34 @@ test('disabled schedule sentinels fail closed even when dangling symlinks', () =
   assert.throws(() => assertAutoLiveSignalNotDisabled(
     '/tmp/not-a-production-root', statFixture(),
   ), /AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE/u);
+});
+
+test('a dedicated Auto LIVE public source plan never replaces existing Paper or grants AI authority', () => {
+  const paperCron='*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock ' +
+    '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule # stock-app-paper-forward-v1';
+  const args={targetSha:SHA,deployedSha:SHA,crontabText:paperCron,isolatedRootPresent:false};
+  const plan=inspectIndependentAutoLivePublicSourcePlan(args);
+  assert.equal(plan.status,'DRAFT_PLAN_NOT_INSTALLED');
+  assert.equal(plan.ownerInstallApprovalRequired,true);
+  assert.equal(plan.paperRootMutated,false);
+  assert.equal(plan.paperCronReplaced,false);
+  assert.equal(plan.privateApiAllowed,false);
+  assert.equal(plan.financialMutationAllowed,false);
+  assert.equal(plan.producerInvocationVerified,false);
+  assert.equal(plan.aiIssuerVerified,false);
+  assert.equal(plan.autoTradingActivationReady,false);
+  assert.ok(plan.handoffPath.startsWith('/opt/stock-app-data/auto-live-signal-v1/runtime-state/'));
+  assert.ok(!plan.handoffPath.includes('/paper-forward-v1/'));
+  assert.ok(plan.cronLine.startsWith('*/15 * * * * /usr/bin/flock -n '));
+  assert.equal(plan.cronHash,createHash('sha256').update(plan.cronLine).digest('hex'));
+  assert.ok(Object.isFrozen(plan));
+  for(const altered of [
+    {targetSha:'invalid'}, {deployedSha:'b'.repeat(40)},
+    {crontabText:null}, {isolatedRootPresent:null},
+  ]) assert.throws(()=>inspectIndependentAutoLivePublicSourcePlan({...args,...altered}),
+    /AUTO_LIVE_INDEPENDENT_SOURCE_ARGUMENT_INVALID/u);
+  assert.throws(()=>inspectIndependentAutoLivePublicSourcePlan({...args,crontabText:plan.cronLine}),
+    /AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED/u);
+  assert.throws(()=>inspectIndependentAutoLivePublicSourcePlan({...args,isolatedRootPresent:true}),
+    /AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED/u);
 });

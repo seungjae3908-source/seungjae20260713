@@ -203,7 +203,49 @@ function runAutoLiveSharedPaperForwardPreflight() {
   });
 }
 
+
+// Pure preflight design only. This does not install cron, write Paper state,
+// contact a provider, mint AI approval, or grant automatic LIVE authority.
+// A separately approved publisher may later implement these fixed boundaries.
+function inspectIndependentAutoLivePublicSourcePlan({
+  targetSha, deployedSha, crontabText, isolatedRootPresent,
+}) {
+  if (!/^[a-f0-9]{40}$/u.test(targetSha ?? '')
+    || deployedSha !== targetSha || typeof crontabText !== 'string'
+    || typeof isolatedRootPresent !== 'boolean') {
+    throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_ARGUMENT_INVALID');
+  }
+  const root = '/opt/stock-app-data/auto-live-signal-v1';
+  const wrapper = root + '/bin/run-auto-live-public-signal';
+  const tag = '# stock-app-auto-live-public-signal-v1';
+  // Existing Paper Forward schedules are unrelated and must be preserved.
+  if (crontabText.split(/\r?\n/u).some(line =>
+    line.includes(tag) || line.includes(wrapper))) {
+    throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED');
+  }
+  if (isolatedRootPresent) {
+    throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED');
+  }
+  const cronLine = '*/15 * * * * /usr/bin/flock -n '
+    + root + '/cron.lock ' + wrapper + ' ' + tag;
+  return Object.freeze({
+    schemaVersion: 'auto-live-independent-public-source-plan-v1',
+    status: 'DRAFT_PLAN_NOT_INSTALLED',
+    targetSha, isolatedRoot: root,
+    runtimeStateRoot: root + '/runtime-state',
+    handoffPath: root + '/runtime-state/handoff/member-auto-trading-latest.json',
+    cronLine, cronHash: createHash('sha256').update(cronLine).digest('hex'),
+    pollIntervalMs: 900000,
+    paperRootMutated: false, paperCronReplaced: false,
+    publicDataOnly: true, paperOutcomeAccumulationEnabled: false,
+    financialMutationAllowed: false, privateApiAllowed: false,
+    producerInvocationVerified: false, aiIssuerVerified: false,
+    autoTradingActivationReady: false, ownerInstallApprovalRequired: true,
+  });
+}
+
 module.exports = {
+  inspectIndependentAutoLivePublicSourcePlan,
   assertAutoLiveSignalNotDisabled,
   inspectAutoLiveSharedPaperForwardOwnership,
   inspectManagedPaperForwardSchedule,
