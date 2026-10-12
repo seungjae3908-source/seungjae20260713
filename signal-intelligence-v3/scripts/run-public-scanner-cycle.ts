@@ -25,6 +25,7 @@ import {runV3OutOfCursorResearch} from '../src/public-watch-v3-offpage-research.
 import {validV3PublicPriorityRequest} from '../src/public-v3-priority-public-route.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
+import { validV3PublicYahooCandlePage } from '../src/public-v3-stock-candle-integrity.mjs';
 import {commitPublicV3CycleCheckpoint,recoverPublicV3CycleCheckpoint} from '../src/public-cycle-checkpoint.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
 import {
@@ -297,7 +298,7 @@ async function withStockPublicOnly(lane, operation) {
       const rows = await yahoo.getCandles(providerSymbol, timeframe);
       if (Array.isArray(rows) && rows.length>0) successfulSymbol = providerSymbol;
       return rows;
-    },{validValue:Array.isArray});
+    },{validValue:rows=>validV3PublicYahooCandlePage(rows,{nowMs:Date.now()})});
     let candles = native;
     // Only a BLOCKING missing-candle defect triggers one bounded public
     // shorter-interval Yahoo query. Verified complete lower bars may fill
