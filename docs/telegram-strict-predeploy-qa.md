@@ -308,3 +308,15 @@ and repeats the same guard. Telegram activation preserves the existing
 non-Telegram environment without rewriting trading flags. If trading is active,
 Telegram must be deployed as a separately reviewed isolated service; never
 turn trading off merely to make Telegram release pass. No Replit is involved.
+
+
+## 2026-10-12 — Canonical trading authority and PM2 owner preservation
+
+The Telegram gate now agrees with the existing Production deploy safety list,
+including futures/individual broker provider enablement and spot capability/
+market allowlists. Both the early read-only preflight and the final PM2 re-read
+reject an active trading runtime. The validated PM2-owned lower-case
+`executionAuthority` is preserved when the Telegram worker is restarted,
+without taking values from an ambient process or disabling any non-Telegram
+worker. Dynamic regression tests include provider flags, spot allowlists, and
+races between preflight and activation. Replit is prohibited.
