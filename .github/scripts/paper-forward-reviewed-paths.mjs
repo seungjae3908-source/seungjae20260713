@@ -325,8 +325,33 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/production-auto-live-signal-source-audit.mjs",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
 ]);
+// Separately owner-approved on 2026-10-12: these 19 paths were already
+// Research-reviewed but missing from Paper's independent bounded scope.
+// Neither this list nor the original 50 grants deployment/trading authority.
+export const PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS = Object.freeze([
+  ".github/scripts/production-postdeploy-qa-evidence.cjs",
+  ".github/scripts/production-postdeploy-qa-evidence.test.cjs",
+  ".github/scripts/verify-production-preactivation-evidence.cjs",
+  ".github/tests/production-auto-live-only-release-contract.test.mjs",
+  ".github/workflows/production-automatic-trading-gate.yml",
+  "api-server/scripts/apply-staging-supabase-bootstrap.mjs",
+  "api-server/scripts/verify-phase8-db.sh",
+  "api-server/scripts/verify-production-automatic-trading-gate.mjs",
+  "api-server/src/index.ts",
+  "api-server/src/routes/trade-automation.smoke.test.ts",
+  "api-server/src/routes/trade-automation.ts",
+  "api-server/src/services/automatic-live-position-isolation.service.ts",
+  "api-server/src/services/member-auto-trading-ai-review-evidence.service.ts",
+  "api-server/src/services/trade-automation-integration.test.ts",
+  "api-server/src/services/trade-exchange-adapters.service.ts",
+  "api-server/src/services/trade-rule-pack-pilot-capital.service.ts",
+  "api-server/supabase/bootstrap/staging-bootstrap.sql",
+  "api-server/test.mjs",
+  "stock-analyzer/e2e/production-auto-live-only-qa.spec.ts",
+]);
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('/paper-forward-reviewed-paths.mjs')) {
   const paths = process.argv.includes('--list-auto-live-safety')
-    ? AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS : PAPER_FORWARD_REVIEWED_PATHS;
+    ? AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS : process.argv.includes('--list-auto-live-supplement')
+      ? PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS : PAPER_FORWARD_REVIEWED_PATHS;
   console.log(paths.join('\n'));
 }

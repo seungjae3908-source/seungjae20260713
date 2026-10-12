@@ -51,6 +51,25 @@ on:
       - stock-analyzer/*research-workspace.config.ts
       - .github/scripts/verify-research-workspace-sync-v3.mjs
       - .github/scripts/paper-forward-reviewed-paths.mjs
+      # Additional Paper-reviewed paths still run the Research preservation gate.
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.test.cjs
+      - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/tests/production-auto-live-only-release-contract.test.mjs
+      - .github/workflows/production-automatic-trading-gate.yml
+      - api-server/scripts/apply-staging-supabase-bootstrap.mjs
+      - api-server/scripts/verify-phase8-db.sh
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/index.ts
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/automatic-live-position-isolation.service.ts
+      - api-server/src/services/member-auto-trading-ai-review-evidence.service.ts
+      - api-server/src/services/trade-automation-integration.test.ts
+      - api-server/src/services/trade-exchange-adapters.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
+      - api-server/supabase/bootstrap/staging-bootstrap.sql
+      - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
       # The exact owner-approved AUTO safety scope still runs preservation.
       - .github/config/automatic-live-preactivation-checklist.json
       - .github/scripts/automatic-live-preactivation-audit.cjs
