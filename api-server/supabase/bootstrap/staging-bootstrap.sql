@@ -20,5 +20,6 @@
 \ir ../migrations/2026100601_member_access_s_ai_hardening.sql
 \ir ../migrations/2026100801_member_security_definer_lockdown.sql
 \ir ../migrations/2026100901_admin_four_paper_wallet_rls_guard.sql
+\ir ../migrations/20261012010706_automatic_live_atomic_budget.sql
 \ir staging-bootstrap-assert.sql
 \ir staging-audit-privilege-assert.sql

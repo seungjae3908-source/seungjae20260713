@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS } from './evidence-backed-auto-strategy-catalog.service';
 import type { MemberAutoTradingPaperHandoffEntry } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 
 export type CanonicalSignalAiReviewProof = Readonly<{
@@ -65,7 +66,8 @@ export function canonicalAiReviewEvidenceValid(
     && v.reviewedAtMs > 0
     && v.reviewedAtMs <= evaluatedAtMs
     && v.expiresAtMs > v.reviewedAtMs
-    && v.expiresAtMs - v.reviewedAtMs <= 24 * 60 * 60_000
+    && v.expiresAtMs > evaluatedAtMs
+    && v.expiresAtMs - v.reviewedAtMs <= STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS
     && typeof reviewDigest === 'string'
     && /^[a-f0-9]{64}$/.test(reviewDigest)
     && reviewDigest === createHash('sha256').update(canonical(body)).digest('hex');
