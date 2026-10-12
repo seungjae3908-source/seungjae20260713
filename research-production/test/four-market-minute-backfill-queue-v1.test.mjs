@@ -80,6 +80,58 @@ test('progress cursor round-robins markets and refuses forged or completed range
   assert.throws(()=>verifyBackfillQueue({...next,economicEvidenceCredit:1},scope),/STATE_INVALID/);
   assert.throws(()=>verifyBackfillQueue({...next,stateDigest:'0'.repeat(64)},scope),/STATE_INVALID/);
 });
+
+test('legacy 120m scope digest stays stable; opt-in 180m has independent queue',async()=>{
+  const legacy=manifest([SPOT]);
+  const first=validateBackfillScope(legacy);
+  const same=validateBackfillScope({...legacy,pageWindowMinutes:120});
+  assert.equal(first.scopeDigest,same.scopeDigest);
+  assert.equal(first.pageWindowMinutes,120);
+  const pilot=validateBackfillScope({...legacy,pageWindowMinutes:180});
+  assert.equal(pilot.pageWindowMinutes,180);
+  assert.notEqual(pilot.scopeDigest,first.scopeDigest);
+  for(const pageWindowMinutes of [0,121,181,200,-1,'180']) {
+    assert.throws(()=>validateBackfillScope({...legacy,pageWindowMinutes}),
+      /MINUTE_QUEUE_PAGE_WINDOW_INVALID/);
+  }
+  await workspace(async({queue})=>{
+    const q=createBackfillQueue({scope:first,researchSha:SHA1,atMs:NOW});
+    await writeBackfillQueue(queue,first,q);
+    await assert.rejects(readBackfillQueue(queue,pilot),/MINUTE_QUEUE_STATE_INVALID/);
+    assert.equal((await readBackfillQueue(queue,first)).stateDigest,q.stateDigest);
+  });
+});
+test('180m opt-in queue seals and archives two 180-minute pages without trading',async()=>{
+  await workspace(async({queue,archive})=>{
+    const m={...manifest([{...SPOT,endMs:START+360*MINUTE_MS}]),
+      pageWindowMinutes:180};
+    const scope=validateBackfillScope(m);
+    const q=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
+    assert.equal(q.pageWindowMinutes,180);
+    assert.equal(verifyBackfillQueue(q,scope),q);
+    const first=pickBackfillWindow(q,NOW);
+    assert.equal(first.task.windowEndMs,START+180*MINUTE_MS);
+    const counter={calls:0};
+    const options={enabled:true,queueRoot:queue,archiveRoot:archive,
+      manifest:m,researchSha:SHA1,now:()=>NOW,
+      fetchImpl:fakeFetch(counter),sleep:async()=>{},
+      freeBytes:6*1024**3,maxActions:2};
+    const result=await runDurableMinuteBackfillCycle(options);
+    assert.equal(result.providerCalls,2);
+    assert.equal(result.completeCount,1);
+    assert.equal(result.status,'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED');
+    assert.equal(result.unverifiedMissingMinuteSlots,358);
+    assert.equal(result.executionAuthority,'NONE');
+    const stored=await readBackfillQueue(queue,scope);
+    assert.equal(stored.ranges[0].completedPages,2);
+    assert.equal(stored.ranges[0].cursorMs,START+360*MINUTE_MS);
+    assert.equal(stored.pageWindowMinutes,180);
+    assert.equal(counter.calls,2);
+    await assert.rejects(readBackfillQueue(queue,
+      validateBackfillScope(manifest(m.ranges))),/MINUTE_QUEUE_STATE_INVALID/);
+  });
+});
+
 test('rate-limit pauses with backoff and never marks failed input complete',()=>{
   const scope=validateBackfillScope(manifest([SPOT]));
   let state=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
