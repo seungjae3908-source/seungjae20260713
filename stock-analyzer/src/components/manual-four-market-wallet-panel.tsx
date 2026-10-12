@@ -4,9 +4,9 @@ import {useAuth} from '@/lib/auth';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
   manualPaperBootstrapAuthorized,parseManualFourMarketResearchHistory,
-  parseManualSequentialOrderReadback,
+  parseManualSequentialOrderReadback,parseManualSequentialOrderList,
   type ManualFourMarketStatus,type ManualResearchHistoryReadback,
-  type ManualSequentialOrderReadback,
+  type ManualSequentialOrderReadback,type ManualSequentialOrderList,
 } from '@/lib/manual-four-market-paper-status';
 
 const API='/api/paper-trading/manual-four-market';
@@ -32,6 +32,10 @@ export function ManualFourMarketWalletPanel(){
   const [state,setState]=useState<{owner:string;value:ManualFourMarketStatus}|null>(null);
   const [history,setHistory]=useState<{owner:string;value:ManualResearchHistoryReadback}|null>(null);
   const [historyUnavailable,setHistoryUnavailable]=useState(false);
+  const [recentOrders,setRecentOrders]=useState<{
+    owner:string;value:ManualSequentialOrderList
+  }|null>(null);
+  const [recentOrdersUnavailable,setRecentOrdersUnavailable]=useState(false);
   const [sequenceId,setSequenceId]=useState('');
   const [sequenceResult,setSequenceResult]=useState<{
     owner:string;orderId:string;value:ManualSequentialOrderReadback
@@ -48,6 +52,8 @@ export function ManualFourMarketWalletPanel(){
   const [error,setError]=useState('');
   const status=authorized&&state?.owner===userId?state.value:null;
   const ownHistory=authorized&&history?.owner===userId?history.value:null;
+  const ownRecentOrders=authorized&&recentOrders?.owner===userId
+    ?recentOrders.value:null;
   const ownSequence=authorized&&sequenceResult?.owner===userId
     &&sequenceResult.orderId===sequenceId
       ?sequenceResult.value:null;
@@ -58,6 +64,8 @@ export function ManualFourMarketWalletPanel(){
     // user's errors or signal falsely that their wallet was created.
     setConfirmOwner(null);
     sequenceAbort.current?.abort();
+    setRecentOrders(null);
+    setRecentOrdersUnavailable(false);
     setSequenceId('');
     setSequenceResult(null);
     setSequenceError('');
@@ -71,6 +79,7 @@ export function ManualFourMarketWalletPanel(){
     const controller=new AbortController();
     let active=true;
     setState(null);setHistory(null);setHistoryUnavailable(false);
+    setRecentOrders(null);setRecentOrdersUnavailable(false);
     sequenceAbort.current?.abort();
     setSequenceResult(null);setSequenceLoading(false);
     setLoading(true);setError('');
@@ -99,17 +108,33 @@ export function ManualFourMarketWalletPanel(){
         if(active){setHistory(null);setHistoryUnavailable(true);}
       }
     })();
+    // Owner-only listing of immutable OPEN event identities, not positions.
+    // If RLS/migration is unavailable, report UNKNOWN instead of zero orders.
+    void (async()=>{
+      try{
+        const response=await authorizedFetch(API+'/sequential-orders',
+          {signal:controller.signal});
+        const raw:unknown=await response.json().catch(()=>null);
+        if(!response.ok)throw new Error('MANUAL_PAPER_SEQ_LIST_NOT_READY');
+        const checked=parseManualSequentialOrderList(raw);
+        if(active)setRecentOrders({owner:userId,value:checked});
+      }catch{
+        if(active){setRecentOrders(null);setRecentOrdersUnavailable(true);}
+      }
+    })();
     return()=>{active=false;controller.abort();};
   },[userId,authorized,revision]);
 
-  const inspectSequentialOrder=async()=>{
+  const inspectSequentialOrder=async(orderIdOverride?:string)=>{
     if(!authorized||sequenceLoading)return;
-    if(!SEQ_ORDER_ID.test(sequenceId)){
+    const targetId=orderIdOverride??sequenceId;
+    if(!SEQ_ORDER_ID.test(targetId)){
       setSequenceError('모의주문 ID 형식을 확인하세요.');
       setSequenceResult(null);
       return;
     }
-    const initiatingOwner=userId,requestedId=sequenceId;
+    const initiatingOwner=userId,requestedId=targetId;
+    setSequenceId(targetId);
     sequenceAbort.current?.abort();
     const controller=new AbortController();
     sequenceAbort.current=controller;
@@ -229,6 +254,39 @@ export function ManualFourMarketWalletPanel(){
       <p className="pt-2 text-muted-foreground">
         연구용 가상 손익은 실제 모의주문 체결, 현금 잔고, 검증된 순수익 또는 수익성 PASS가 아닙니다.
         계좌·거래 데이터는 이 화면에서 변경하지 않습니다.
+      </p>
+    </details>
+    <details className="mt-1" data-testid="manual-paper-sequential-order-list">
+      <summary className="cursor-pointer py-1 text-muted-foreground">
+        최근 서버 순차 모의주문 목록 · 본인 주문만
+      </summary>
+      {ownRecentOrders?<div className="space-y-2 pt-2">
+        <p>최근 모의주문 생성 기록 {ownRecentOrders.orders.length}건
+          {ownRecentOrders.hasMoreThan25?' · 최대 25건 표시':''}</p>
+        {ownRecentOrders.orders.length===0?
+          <p className="text-muted-foreground">
+            서버 조회는 정상이지만 생성된 모의주문 기록이 없습니다.
+          </p>:<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {ownRecentOrders.orders.map(item=><button key={item.orderId}
+              type="button" className="rounded-lg border border-card-border p-2 text-left"
+              disabled={!authorized||sequenceLoading}
+              onClick={()=>void inspectSequentialOrder(item.orderId)}>
+              <strong>{MANUAL_FOUR_MARKETS.find(m=>m.key===item.market)?.label}
+                {' · '}{item.symbol}</strong>
+              <p>{item.side} · 레버리지 {item.leverage}배 ·
+                {new Date(item.createdAtMs).toLocaleString('ko-KR')}</p>
+              <p className="text-muted-foreground">
+                주문 생성 기록만 확인됨 · 현재 상태는 선택해 검증
+              </p>
+            </button>)}
+          </div>}
+      </div>:<p className="pt-2 text-muted-foreground">
+        {recentOrdersUnavailable
+          ?'모의주문 목록의 서버 원장·회원별 권한을 확인할 수 없습니다.'
+          :'본인 모의주문 목록 확인 중입니다.'}
+      </p>}
+      <p className="pt-2 text-muted-foreground">
+        목록은 체결, 확정 손익 또는 실제 자본의 증거가 아닙니다.
       </p>
     </details>
     <details className="mt-1" data-testid="manual-paper-sequential-order-inspector">
