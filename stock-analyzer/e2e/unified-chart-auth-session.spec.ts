@@ -336,12 +336,11 @@ test.describe('production auth session and AI chart route', () => {
   test.beforeAll(async () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
-    const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    const viteCli = path.resolve(analyzerDirectory(), 'node_modules/vite/bin/vite.js');
     isolatedVite = spawn(
-      pnpm,
+      process.execPath,
       [
-        'exec',
-        'vite',
+        viteCli,
         '--config',
         'vite.config.ts',
         '--host',
@@ -467,7 +466,8 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
-    await expect(page.getByText('auth-stock-fixture', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toContainText('auth-stock-fixture');
 
     await navigateSpa(page, '/account');
     await expect(page.getByRole('main').getByText(USERS[0].displayName, { exact: true })).toBeVisible();
@@ -516,7 +516,8 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
     await page.getByTestId('market-UPBIT').click();
     await expect(page).toHaveURL(/market=UPBIT/);
-    await expect(page.getByText('auth-upbit-fixture', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toContainText('auth-upbit-fixture');
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
 
     expect(tokenCalls).toBe(2);
