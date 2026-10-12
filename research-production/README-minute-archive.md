@@ -180,3 +180,77 @@ CLI(공급원 HTTP, 저장, timer 조작 없이 0600 스코프 파일 분석):
 테스트는 원본 120분 페이지 12개와 1440개 1분봉을 사용한 일일 변환, UTC 자정 교차, 1분 누락, 중복·서로 다른 OHLC 충돌, 실제 소스 수신시각, 미래 asOf, 파일 조작/시너지 링크 및 비정상 stock 세션 입력을 검사합니다.
 
 현재 앱 관리자 HTTP/backtester에 이 파일을 직접 연결하지 않습니다. 실제 Vultr 24시간 수집, 주식 원본/API 사용권, 4시장 역사 PIT, 전시장 비용/OOS·Paper 폐쇄루프는 별도 작업/운영 승인 후 검증해야 합니다.
+
+## Draft v5 — Data-gap audit, Backtester prewire, storage footprint (2026-10-12)
+
+This section is an **unactivated Draft** with no production-server write/daemon,
+no Replit and no order/Paper authorization.
+
+### 1. Distinguish an archived page from complete one-minute observation
+- New auditOriginalMinuteWindowSlotsV1 checks a bounded 120-minute source
+  window for observed timestamps, missing slots and contiguous missing runs.
+- Upbit may omit no-trade minutes. Missing is **unverified**, not automatically
+  attributed to provider outages and never filled with fictitious candles.
+- Persisted backfill cursor now records sourceGapPages,
+  unverifiedMissingMinuteSlots and historicalMissingBeforeAudit. A finished
+  request window containing gaps reports PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED.
+- Old v1 cursors without these diagnostics are marked legacy-unknown, never
+  silently promoted into a zero-gap coverage certificate. Existing immutable
+  raw source files and original ingestion/retrieval times remain unchanged.
+- Full coverage/PIT/OOS/returns/Paper admission is not established.
+
+### 2. Private read-only compatibility with the existing strategy model
+- four-market-minute-backtester-prewire-v1.mjs takes exactly one complete
+  crypto UTC day of original 1m source. It verifies 1440 slots, SHA digests,
+  venue, cutoff and actual source retrieval availability, then creates a
+  PRIVATE IN-MEMORY model input with exact native-minute fields expected by
+  the original research strategy model in Draft #1534.
+- It rechecks 1m and 5m source consistency. A day with one missing minute or
+  any minute obtained after the requested historical cutoff is BLOCKED_DATA
+  with modelInput=null.
+- This is retrospective **offline research input only**, NOT proof those bars
+  were available at the actual signal time, NOT verified historical PIT, fill,
+  OOS or profitability evidence. No HTTP Backtester strategy is invoked here.
+- inspectSealedMinuteBacktesterPeriodV1 supports user-chosen historical dates
+  up to about 10 years using <=7-day pages, a nextCursorDate and safe status,
+  counts and checksums rather than raw OHLCV in responses.
+- KR/US stock sources stay BLOCKED until independently licensed source,
+  exchange sessions/DST/holiday and corporate actions are verified. Existing
+  #1534/#1832 functionality is not merged or reimplemented in production.
+
+### 3. Archive storage/inode forecast, not verified server capacity
+- forecastPublicMinuteArchiveFootprintV1 calculates a transparent planning
+  estimate. At the old **example** roster count 294 spot + 466 futures,
+  1440 minutes/day, 120m per JSON page, 180 bytes/row, 700 bytes/page:
+  ~1,094,400 rows and 9,120 immutable page files DAILY;
+  ~399,456,000 rows, 3,328,800 files and ~69 GiB per 365 days.
+- The earlier 16 requests every 5 minutes = 4,608 requests/day, well below
+  9,120 requests/day in a dense-minute 760-symbol scenario.
+- These figures exclude true provider throughput, compression, backup, file
+  metadata and actual Vultr disk/inodes. No storage purchase or deletion,
+  quota change or increased provider request rate is implemented.
+- Production retention requires hashed source receipts, lossless compressed
+  daily/monthly segments, verification, immutable backups and an approved
+  bounded resource cap before enabling any all-symbol 24h service.
+
+### 4. Safe command (default disabled)
+
+    node research-production/bin/four-market-minute-backtester-source-status.mjs --dry-run
+
+An owner-approved read-only inspection would separately require an exact
+RESEARCH_CODE_SHA checkout, a private RESEARCH_MINUTE_ARCHIVE_ROOT and
+RESEARCH_MINUTE_SOURCE_READONLY_ENABLED=true. It examines 7 dates at a time:
+
+    node research-production/bin/four-market-minute-backtester-source-status.mjs --inspect --market=CRYPTO_SPOT --symbol=BTC --startDate=2026-10-09 --endDate=2026-10-12
+
+The command is NOT activated and does not send provider GETs, expose raw prices,
+mutate files, change DB/systemd/PM2, publish member/Telegram data, or place
+orders. The main app's Backtester HTTP route remains untouched.
+
+### Next blockers
+4-market historical active and delisted PIT rosters; real KR/US authorized
+minute feeds and trading-calendar provenance; 24-hour Vultr disk/CPU/RAM/IP
+verification; selective source-gap reconciliation distinguishing no-trade from
+outages; 4-market source rights and retention costs; integration of verified
+native original-minute evidence with Research/Backtester UI, followed by
+independent OOS/full-cost/WF and only later controlled Paper testing.

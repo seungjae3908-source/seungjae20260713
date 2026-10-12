@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -156,7 +157,10 @@ test('all chosen windows are retained incrementally; restart consumes durable cu
     const phase2=await runDurableMinuteBackfillCycle({
       ...options,researchSha:SHA2,maxActions:2,
     });
-    assert.equal(phase2.status,'PLANNED_WINDOWS_ARCHIVED');
+    assert.equal(phase2.status,'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED');
+    assert.equal(phase2.gapAffectedPageCount,4);
+    assert.equal(phase2.unverifiedMissingMinuteSlots,476);
+    assert.equal(phase2.sourceSlotEvidenceStatus,'UNVERIFIED_GAPS_PRESENT');
     assert.equal(phase2.completeCount,2);
     assert.equal(phase2.providerCalls,2);
     const phase3=await runDurableMinuteBackfillCycle({
@@ -326,4 +330,87 @@ test('stock continuous collection is not promoted without a stock calendar capac
   assert.equal(r.status,'HOLD_CAPACITY');
   assert.equal(r.capacity.status,'STOCK_SESSION_NOT_MODELLED');
   assert.equal(r.providerCalls,0);
+});
+
+
+test('a persisted archive page is not proof of all original minute slots',async()=>{
+  await workspace(async({queue,archive})=>{
+    const only={...SPOT,endMs:START+120*MINUTE_MS};
+    const counter={calls:0};
+    const params={
+      enabled:true,queueRoot:queue,archiveRoot:archive,
+      manifest:manifest([only]),researchSha:SHA1,
+      now:()=>NOW,fetchImpl:fakeFetch(counter),sleep:async()=>{},
+      freeBytes:6*1024**3,
+    };
+    const report=await runDurableMinuteBackfillCycle({...params,maxActions:1});
+    assert.equal(report.status,'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED');
+    assert.equal(report.completeCount,1); // scoped request-window cursor, NOT market coverage
+    assert.equal(report.unverifiedMissingMinuteSlots,119);
+    assert.equal(report.gapAffectedPageCount,1);
+    assert.equal(report.sourceSlotEvidenceStatus,'UNVERIFIED_GAPS_PRESENT');
+    const saved=await readBackfillQueue(queue,validateBackfillScope(manifest([only])));
+    assert.equal(saved.ranges[0].cursorMs,only.endMs);
+    assert.equal(saved.ranges[0].unverifiedMissingMinuteSlots,119);
+    assert.equal(saved.ranges[0].sourceGapPages,1);
+    assert.equal(saved.ranges[0].historicalMissingBeforeAudit,false);
+    const resumed=await runDurableMinuteBackfillCycle({...params,maxActions:1});
+    assert.equal(resumed.providerCalls,0);
+    assert.equal(resumed.gapAffectedPageCount,1);
+    assert.equal(counter.calls,1);
+    assert.equal(resumed.status,'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED');
+  });
+});
+test('forged completed-page slot audit blocks cursor change',()=>{
+  const scope=validateBackfillScope(manifest([{...SPOT,endMs:START+120*MINUTE_MS}]));
+  const current=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
+  const selection=pickBackfillWindow(current,NOW);
+  assert.throws(()=>applyBackfillOutcome(current,selection,{
+    market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',
+    candleCount:1,minuteSlotAudit:{
+      contract:'research-minute-source-window-slot-audit/v1',
+      sourceWindowMinuteSlots:120,observedOneMinuteSlots:1,
+      unverifiedMissingMinuteSlots:0,allAbsencesClassified:false,
+      sourceTimelineIndependentlyAttested:false,
+    },
+  },NOW,SHA1),/MINUTE_QUEUE_SLOT_AUDIT_CONFLICT/);
+  const clean=applyBackfillOutcome(current,selection,{
+    market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',
+    candleCount:120,minuteSlotAudit:{
+      contract:'research-minute-source-window-slot-audit/v1',
+      sourceWindowMinuteSlots:120,observedOneMinuteSlots:120,
+      unverifiedMissingMinuteSlots:0,allAbsencesClassified:false,
+      sourceTimelineIndependentlyAttested:false,
+    },
+  },NOW,SHA1);
+  assert.equal(clean.ranges[0].unverifiedMissingMinuteSlots,0);
+  assert.equal(clean.ranges[0].sourceGapPages,0);
+  assert.equal(clean.ranges[0].status,'COMPLETE');
+});
+test('legacy queue cursor cannot fake having previously audited gaps',()=>{
+  const scope=validateBackfillScope(manifest([SPOT]));
+  const q=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
+  const selection=pickBackfillWindow(q,NOW);
+  const q1=applyBackfillOutcome(q,selection,{
+    market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',candleCount:1,
+  },NOW,SHA1);
+  const legacy={...q1.ranges[0]};
+  delete legacy.sourceGapAuditVersion;
+  delete legacy.sourceGapPages;
+  delete legacy.unverifiedMissingMinuteSlots;
+  delete legacy.historicalMissingBeforeAudit;
+  const unsealed={...q1,ranges:[legacy]};
+  // A non-tampered historical v1 queue really can lack modern gap fields.
+  // Its previously recorded windows must remain marked UNKNOWN, never
+  // silently migrated to an audited-0 counter.
+  const {stateDigest:discarded,...unsigned}=unsealed;
+  // Keep SHA-256 sealing identical to the repository v1 cursor contract.
+  const oldFormat={...unsigned,stateDigest:createHash('sha256')
+    .update(JSON.stringify(unsigned)).digest('hex')};
+  assert.equal(verifyBackfillQueue(oldFormat,scope),oldFormat);
+  const choice=pickBackfillWindow(oldFormat,NOW);
+  const resumed=applyBackfillOutcome(oldFormat,choice,{
+    market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',candleCount:120,
+  },NOW,SHA2);
+  assert.equal(resumed.ranges[0].historicalMissingBeforeAudit,true);
 });

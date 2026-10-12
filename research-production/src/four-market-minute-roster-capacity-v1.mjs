@@ -295,3 +295,57 @@ export async function probePublicCurrentCryptoRosters({
     tradingAuthority:'NONE',
   });
 }
+
+
+/**
+ * Mechanical storage and inode forecast, NOT observed Vultr disk usage.
+ * Every 120m immutable JSON source page is a separate inode. Long unbounded
+ * retention on 2vCPU/4GiB may exhaust disk/inodes even when HTTP rate is fine.
+ * KR/US stock sessions require independent local calendar/source estimates.
+ */
+export function forecastPublicMinuteArchiveFootprintV1({
+  cryptoSpotSymbols=0,cryptoFuturesSymbols=0,days=365,
+  bytesPerObservedMinuteRow=180,pageMetadataBytes=700,
+  minutesPerDay=1440,pageWindowMinutes=120,
+}={}){
+  for(const [name,value,max] of [
+    ['CRYPTO_SPOT',cryptoSpotSymbols,4096],
+    ['CRYPTO_FUTURES',cryptoFuturesSymbols,4096],
+    ['DAYS',days,3660],
+    ['BYTES_PER_MINUTE',bytesPerObservedMinuteRow,4096],
+    ['PAGE_METADATA',pageMetadataBytes,65536],
+    ['MINUTES_PER_DAY',minutesPerDay,1440],
+    ['PAGE_WINDOW_MINUTES',pageWindowMinutes,120],
+  ]){
+    if(!Number.isSafeInteger(value)||value<0||value>max)
+      fail('MINUTE_FOOTPRINT_'+name+'_INVALID');
+  }
+  if(days===0||minutesPerDay===0||pageWindowMinutes===0
+    ||minutesPerDay%pageWindowMinutes!==0
+    ||bytesPerObservedMinuteRow===0)
+    fail('MINUTE_FOOTPRINT_INTERVAL_INVALID');
+  const symbols=cryptoSpotSymbols+cryptoFuturesSymbols;
+  const pagesPerSymbolDay=minutesPerDay/pageWindowMinutes;
+  const grossRows=symbols*minutesPerDay*days;
+  const projectedPageFiles=symbols*pagesPerSymbolDay*days;
+  const projectedBytes=grossRows*bytesPerObservedMinuteRow
+    +projectedPageFiles*pageMetadataBytes;
+  if(!Number.isSafeInteger(projectedBytes)||!Number.isSafeInteger(projectedPageFiles))
+    fail('MINUTE_FOOTPRINT_OVERFLOW');
+  return Object.freeze({
+    contract:'research-minute-archive-footprint-forecast/v1',
+    status:'UNVERIFIED_CAPACITY_ESTIMATE_ONLY',
+    cryptoSpotSymbols,cryptoFuturesSymbols,days,
+    assumedBytesPerObservedMinuteRow:bytesPerObservedMinuteRow,
+    assumedPageMetadataBytes:pageMetadataBytes,
+    assumedMinutesPerSymbolDay:minutesPerDay,
+    assumedPageWindowMinutes:pageWindowMinutes,
+    projectedRawMinuteRows:grossRows,
+    projectedPageFiles,
+    projectedBytes,projectedGiB:projectedBytes/(1024**3),
+    totalFilesystemInodesVerified:false,
+    independentBackupsVerified:false,hostDiskSpaceRead:false,
+    compressibilityVerified:false,providerRateBudgetVerified:false,
+    fourMarketCoverageProven:false,executionAuthority:'NONE',
+  });
+}

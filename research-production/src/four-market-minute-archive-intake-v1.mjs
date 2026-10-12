@@ -65,6 +65,53 @@ function normRow(raw) {
     fail('MINUTE_OHLCV_INVALID');
   return Object.freeze(row);
 }
+// Observation coverage is separate from durable-page success. Upbit can
+// omit minutes with zero trades, while a provider/transport gap can look
+// identical. Neither absence nor inferred zero-volume bars can be certified.
+export function auditOriginalMinuteWindowSlotsV1(task, originalCandles) {
+  const scope=validateMinuteTask(task);
+  if(!Array.isArray(originalCandles)||originalCandles.length>200)
+    fail('MINUTE_SLOTS_INPUT_INVALID');
+  const times=new Set();
+  for(const raw of originalCandles){
+    const ts=raw?.timestamp;
+    if(!integer(ts)||ts%MINUTE_MS!==0
+      ||ts<scope.windowStartMs||ts>=scope.windowEndMs||times.has(ts))
+      fail('MINUTE_SLOTS_INPUT_INVALID');
+    times.add(ts);
+  }
+  const expected=(scope.windowEndMs-scope.windowStartMs)/MINUTE_MS;
+  const gaps=[];
+  let begin=null,count=0;
+  for(let ts=scope.windowStartMs;ts<scope.windowEndMs;ts+=MINUTE_MS){
+    if(times.has(ts)){
+      if(begin!==null){gaps.push({firstMissingMs:begin,endExclusiveMs:ts,missingMinutes:count});begin=null;count=0;}
+    }else{
+      if(begin===null)begin=ts;
+      count++;
+    }
+  }
+  if(begin!==null)gaps.push({
+    firstMissingMs:begin,endExclusiveMs:scope.windowEndMs,missingMinutes:count,
+  });
+  const missing=expected-times.size;
+  if(missing<0||gaps.reduce((sum,x)=>sum+x.missingMinutes,0)!==missing)
+    fail('MINUTE_SLOTS_INTEGRITY_INVALID');
+  return Object.freeze({
+    contract:'research-minute-source-window-slot-audit/v1',
+    sourceWindowMinuteSlots:expected,observedOneMinuteSlots:times.size,
+    unverifiedMissingMinuteSlots:missing,
+    unverifiedGapRunCount:gaps.length,
+    missingPreview:Object.freeze(gaps.slice(0,8).map(g=>Object.freeze(g))),
+    localSlotCountComplete:missing===0,
+    allAbsencesClassified:false,
+    missingMinutesMayBeNoTrade:scope.market==='CRYPTO_SPOT',
+    providerGapIndependentlyExcluded:false,
+    sourceTimelineIndependentlyAttested:false,
+    executionAuthority:'NONE',
+  });
+}
+
 export function validateMinuteCandles(task, rawRows, collectedAtMs) {
   if (!Array.isArray(rawRows) || rawRows.length > 200 || !integer(collectedAtMs))
     fail('MINUTE_SOURCE_SHAPE_INVALID');
@@ -287,7 +334,8 @@ export async function readOriginalMinutePage(root, task, researchSha) {
     || row.paperCredit !== 0 || row.profitabilityProven !== false)
     fail('MINUTE_ARCHIVE_CORRUPT');
   validateMinuteCandles(task, row.candles, Date.parse(row.retrievedAt));
-  return Object.freeze(row);
+  const minuteSlotAudit=auditOriginalMinuteWindowSlotsV1(task,row.candles);
+  return Object.freeze({...row,minuteSlotAudit});
 }
 async function fsyncDirectory(path) {
   const dir = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -306,6 +354,7 @@ export async function persistOriginalMinutePage({
   await unlinkedAncestors(base);
   await privateDirectory(base);
   const candles = validateMinuteCandles(scope, rows, retrievedAtMs);
+  const minuteSlotAudit=auditOriginalMinuteWindowSlotsV1(scope,candles);
   if (!candles.length) return Object.freeze({ status: 'BLOCKED_EMPTY_RESPONSE', archived: false });
   const dirs = [join(base, scope.market), join(base, scope.market, scope.symbol),
     join(base, scope.market, scope.symbol, new Date(scope.windowStartMs).toISOString().slice(0,10))];
@@ -326,7 +375,8 @@ export async function persistOriginalMinutePage({
   if (existing) {
     if (existing.candleDigest !== record.candleDigest) fail('MINUTE_ARCHIVE_SOURCE_CONFLICT');
     return Object.freeze({ status: 'REUSED_IDENTICAL', archived: true,
-      candleCount: existing.candleCount, contentDigest: existing.contentDigest });
+      candleCount: existing.candleCount, contentDigest: existing.contentDigest,
+      minuteSlotAudit:existing.minuteSlotAudit });
   }
   const temporary = join(dirs.at(-1), '.minute-tmp-' + randomUUID());
   let linked = false;
@@ -358,7 +408,8 @@ export async function persistOriginalMinutePage({
   if (!readback || readback.candleDigest !== record.candleDigest)
     fail('MINUTE_ARCHIVE_READBACK_FAILED');
   return Object.freeze({ status: linked ? 'ARCHIVED' : 'REUSED_IDENTICAL',
-    archived: true, candleCount: readback.candleCount, contentDigest: readback.contentDigest });
+    archived: true, candleCount: readback.candleCount, contentDigest: readback.contentDigest,
+    minuteSlotAudit:readback.minuteSlotAudit });
 }
 
 export async function runMinuteArchiveIntakeV1({
@@ -392,7 +443,8 @@ export async function runMinuteArchiveIntakeV1({
       const existing = await readOriginalMinutePage(resolve(root), task, researchSha);
       if (existing) {
         results.push({ market: task.market, symbol: task.symbol,
-          status: 'REUSED_IDENTICAL', candleCount: existing.candleCount });
+          status: 'REUSED_IDENTICAL', candleCount: existing.candleCount,
+          minuteSlotAudit:existing.minuteSlotAudit });
         continue;
       }
       const observedAt = now();
@@ -405,7 +457,8 @@ export async function runMinuteArchiveIntakeV1({
       });
       if (receipt.status === 'ARCHIVED') filesWritten++;
       results.push({ market: task.market, symbol: task.symbol, status: receipt.status,
-        candleCount: receipt.candleCount ?? 0 });
+        candleCount: receipt.candleCount ?? 0,
+        minuteSlotAudit:receipt.minuteSlotAudit ?? null });
     } catch (e) {
       // Safe stable errors only; do not log URLs, provider payload, tokens or paths.
       const code = String(e?.message ?? '').match(/^MINUTE_[A-Z0-9_]{1,80}$/u)?.[0]

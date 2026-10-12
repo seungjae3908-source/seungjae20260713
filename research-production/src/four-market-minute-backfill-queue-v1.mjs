@@ -78,6 +78,8 @@ export function createBackfillQueue({ scope, researchSha, atMs }) {
       ...r, cursorMs:r.startMs, completedPages:0, observedCandles:0,
       attempts:0, status:'PENDING', retryAtMs:0, lastFailure:null,
       lastSuccessAtMs:0,
+      sourceGapAuditVersion:1,sourceGapPages:0,
+      unverifiedMissingMinuteSlots:0,historicalMissingBeforeAudit:false,
     })),
     economicEvidenceCredit:0, oosCredit:0, paperCredit:0,
     profitabilityProven:false, fullUniverseProven:false,
@@ -112,6 +114,14 @@ export function verifyBackfillQueue(state, scope) {
       || r.cursorMs % MINUTE_MS
       || !nonnegative(r.completedPages)
       || !nonnegative(r.observedCandles)
+      || ((r.sourceGapAuditVersion!=null||r.sourceGapPages!=null
+           ||r.unverifiedMissingMinuteSlots!=null
+           ||r.historicalMissingBeforeAudit!=null)
+        && (r.sourceGapAuditVersion!==1
+          ||!nonnegative(r.sourceGapPages)
+          ||r.sourceGapPages>r.completedPages
+          ||!nonnegative(r.unverifiedMissingMinuteSlots)
+          ||typeof r.historicalMissingBeforeAudit!=='boolean'))
       || !nonnegative(r.attempts)
       || r.attempts > QUEUE_LIMITS.maxAttemptsPerWindow
       || !STATUS.has(r.status)
@@ -165,11 +175,28 @@ export function applyBackfillOutcome(state, selection, result, atMs, researchSha
     fail('MINUTE_QUEUE_RESULT_SCOPE_MISMATCH');
   let next;
   if (result.status === 'ARCHIVED' || result.status === 'REUSED_IDENTICAL') {
-    if (!nonnegative(result.candleCount) || result.candleCount > 200)
+    const expectedSlots=(selection.task.windowEndMs-selection.task.windowStartMs)/MINUTE_MS;
+    if (!nonnegative(result.candleCount) || result.candleCount > expectedSlots
+      || expectedSlots>120)
       fail('MINUTE_QUEUE_RESULT_CANDLES_INVALID');
+    const missingSlots=expectedSlots-result.candleCount;
+    const slotAudit=result.minuteSlotAudit;
+    if(slotAudit!=null
+      &&(slotAudit.contract!=='research-minute-source-window-slot-audit/v1'
+        ||slotAudit.sourceWindowMinuteSlots!==expectedSlots
+        ||slotAudit.observedOneMinuteSlots!==result.candleCount
+        ||slotAudit.unverifiedMissingMinuteSlots!==missingSlots
+        ||slotAudit.allAbsencesClassified!==false
+        ||slotAudit.sourceTimelineIndependentlyAttested!==false))
+      fail('MINUTE_QUEUE_SLOT_AUDIT_CONFLICT');
     const cursorMs = selection.task.windowEndMs;
     next = { ...r, cursorMs, completedPages:r.completedPages+1,
       observedCandles:r.observedCandles + result.candleCount,
+      sourceGapAuditVersion:1,
+      sourceGapPages:(r.sourceGapPages??0)+(missingSlots>0?1:0),
+      unverifiedMissingMinuteSlots:(r.unverifiedMissingMinuteSlots??0)+missingSlots,
+      historicalMissingBeforeAudit:r.historicalMissingBeforeAudit===true
+        || r.sourceGapAuditVersion==null && r.completedPages>0,
       status:r.mode==='BACKFILL' && cursorMs === r.endMs ? 'COMPLETE' : 'PENDING',
       attempts:0, retryAtMs:0, lastFailure:null, lastSuccessAtMs:atMs };
   } else {
@@ -319,13 +346,26 @@ export async function runDurableMinuteBackfillCycle({
   const rollingCount=state.ranges.filter(r=>r.mode==='CONTINUOUS').length;
   const reviewCount=state.ranges.filter(r=>r.status==='NEEDS_REVIEW').length;
   const backoffCount=state.ranges.filter(r=>r.status==='BACKOFF').length;
+  const unverifiedMissingMinuteSlots=state.ranges.reduce((sum,r)=>
+    sum+(r.unverifiedMissingMinuteSlots??0),0);
+  const gapAffectedPageCount=state.ranges.reduce((sum,r)=>
+    sum+(r.sourceGapPages??0),0);
+  const legacyGapAuditUnverified=state.ranges.some(r=>
+    r.sourceGapAuditVersion==null||r.historicalMissingBeforeAudit===true);
+  const gapsUnresolved=unverifiedMissingMinuteSlots>0||legacyGapAuditUnverified;
   return Object.freeze({
     contract:QUEUE_CONTRACT,status:heldDisk?'HOLD_DISK':reviewCount?'NEEDS_REVIEW'
-      :completeCount===state.ranges.length?'PLANNED_WINDOWS_ARCHIVED'
+      :completeCount===state.ranges.length?(gapsUnresolved
+        ?'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED':'PLANNED_WINDOWS_ARCHIVED')
         :attempts?'PROGRESS_RECORDED':'WAIT_OR_NO_ELIGIBLE_WINDOW',
     scopeDigest:scope.scopeDigest,rangeCount:state.ranges.length,
     completeCount,rollingCount,reviewCount,backoffCount,
     attempts,providerCalls,filesWritten,outcomes,capacity,
+    gapAffectedPageCount,unverifiedMissingMinuteSlots,
+    legacyGapAuditUnverified,
+    sourceSlotEvidenceStatus:legacyGapAuditUnverified
+      ?'LEGACY_GAP_AUDIT_UNVERIFIED':unverifiedMissingMinuteSlots>0
+        ?'UNVERIFIED_GAPS_PRESENT':'LOCALLY_OBSERVED_SLOTS_ONLY',
     // These are *not* source gap closure, full population, or historic PIT proof.
     missingMinuteClassificationComplete:false,fullUniverseProven:false,
     independentOosProven:false,profitabilityProven:false,

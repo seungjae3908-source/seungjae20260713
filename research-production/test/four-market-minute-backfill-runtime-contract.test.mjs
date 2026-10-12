@@ -68,6 +68,8 @@ test('capacity-only CLI reads protected scope and performs zero provider calls/w
     assert.equal(payload.capacity.status,'CAPACITY_MODEL_INSUFFICIENT');
     assert.equal(payload.capacity.minActionsPerCycleNoHeadroom,17);
     assert.equal(payload.providerCalls,0);
+    assert.equal(payload.storageEstimate.projectedPageFiles,400*12*365);
+    assert.equal(payload.storageEstimate.hostDiskSpaceRead,false);
     assert.equal(payload.filesWritten,0);
     assert.equal(payload.executionAuthority,'NONE');
     assert.equal((await readFile(path,'utf8')).length>0,true);
