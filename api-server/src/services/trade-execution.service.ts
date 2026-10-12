@@ -21,6 +21,7 @@ import {
   readAutomaticLiveExecutionAccount,
 } from './automatic-live-position-isolation.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
+import { automaticLiveBudgetRequired } from './automatic-live-budget.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
@@ -1140,7 +1141,17 @@ export class TradeExecutionService {
     }
 
     const claimId = randomUUID();
-    const claimed = await this.repository.claimOrderExecution(order, orderVersion(order), claimId);
+    let claimed: TradingOrder | null;
+    if (automaticLiveBudgetRequired(plan)) {
+      try {
+        if (!this.repository.claimAutomaticLiveEntry) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');
+        claimed = await this.repository.claimAutomaticLiveEntry(order, orderVersion(order), claimId);
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : '';
+        const errorCode = /^AUTOMATIC_[A-Z0-9_]+$/u.test(raw) ? raw : 'AUTOMATIC_LIVE_BUDGET_NOT_READY';
+        return this.automation.transition(order, 'REJECTED', errorCode, { errorCode, orderSubmissionAttempted: false });
+      }
+    } else claimed = await this.repository.claimOrderExecution(order, orderVersion(order), claimId);
     if (!claimed) return await this.repository.getOrder(userId, order.id) ?? order;
     order = claimed;
 
@@ -1345,6 +1356,8 @@ export class TradeExecutionService {
     if (!await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
+    if (!this.repository.assertAutomaticLiveEntryBudget) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');
+    await this.repository.assertAutomaticLiveEntryBudget(plan);
   }
 
   private async assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan) {

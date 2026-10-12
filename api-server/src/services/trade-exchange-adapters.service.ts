@@ -817,14 +817,16 @@ export function prepareKiwoomUsHoldings(
 export function prepareKiwoomUsUnfilled(
   credentials: KiwoomCredentials,
   plan: TradingPlanInput,
+  orderDate = '',
 ): PreparedExchangeRequest {
+  if (orderDate && !/^\d{8}$/.test(orderDate)) throw new Error('KIWOOM_ORDER_DATE_INVALID');
   return {
     method: 'POST',
     path: '/api/us/acnt',
     query: '',
     headers: kiwoomOrderHeaders(credentials, 'ust21050'),
     body: jsonBody({
-      ord_dt: '',
+      ord_dt: orderDate,
       slby_tp: '0',
       stex_tp: kiwoomUsExchange(plan),
       stk_cd: plan.symbol.trim().toUpperCase(),
@@ -978,10 +980,9 @@ export function prepareKiwoomDomesticOrderHistory(
     method: 'POST',
     path: '/api/dostk/acnt',
     query: '',
-    headers: kiwoomOrderHeaders(credentials, 'kt00009'),
+    headers: kiwoomOrderHeaders(credentials, 'kt00007'),
     body: jsonBody({
       stk_bond_tp: '1',
-      mrkt_tp: '0',
       sell_tp: '0',
       qry_tp: '1',
       dmst_stex_tp: '%',

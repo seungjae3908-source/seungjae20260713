@@ -1,4 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
+import { kiwoomRecoveryOrderIdentityValid, kiwoomReadonlyRecoverySnapshot, readCompleteKiwoomOrderRows } from './kiwoom-readonly-order-recovery.service';
 import { TradeAutomationService, liveCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { isTransientTradingProviderError, tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
@@ -69,7 +70,7 @@ function invalidResponseCode(baseUrl: string) {
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
-async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
+async function sendRecoveryResponse(baseUrl: string, request: PreparedExchangeRequest) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
@@ -90,7 +91,8 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
       throw new Error(invalidResponseCode(baseUrl));
     }
     if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
-    return payload;
+    return { payload, apiId: response.headers.get('api-id'),
+      contYn: response.headers.get('cont-yn'), nextKey: response.headers.get('next-key') };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
     if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
@@ -100,11 +102,15 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
   }
 }
 
+async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
+  return (await sendRecoveryResponse(baseUrl, request)).payload;
+}
+
 function bitgetData(payload: ExchangePayload, expectedClientOid: string) {
   const code = text(payload.code);
   if (!code) throw new Error('BITGET_INVALID_RESPONSE');
   if (code !== '00000') throw new Error(`BITGET_${code}`);
-  const candidate = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+  const candidate = payload.data;
   if (!isRecord(candidate)) throw new Error('BITGET_INVALID_RESPONSE');
   if (text(candidate.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
   return candidate;
@@ -298,13 +304,6 @@ function kiwoomToken(payload: ExchangePayload) {
   return token;
 }
 
-function kiwoomRows(payload: ExchangePayload, key: string) {
-  const value = payload[key];
-  if (value == null) return [];
-  if (!Array.isArray(value) || !value.every(isRecord)) throw new Error('KIWOOM_INVALID_RESPONSE');
-  return value;
-}
-
 function kiwoomOrderDate(value: string) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) throw new Error('KIWOOM_ORDER_DATE_INVALID');
@@ -313,170 +312,6 @@ function kiwoomOrderDate(value: string) {
   }).formatToParts(date);
   const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${map.year}${map.month}${map.day}`;
-}
-
-function kiwoomDomesticOpenSnapshot(
-  payload: ExchangePayload,
-  plan: TradingPlan,
-  order: TradingOrder,
-): TradingExchangeOrderSnapshot | null {
-  assertKiwoom(payload);
-  const row = kiwoomRows(payload, 'oso')
-    .find((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
-  if (!row) return null;
-  if (text(row.stk_cd)?.replace(/^A/, '').toUpperCase() !== plan.symbol.replace(/^A/, '').toUpperCase()) {
-    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
-  }
-  const requestedQuantity = finiteNumber(row.ord_qty) ?? order.requestedQuantity;
-  const remainingQuantity = finiteNumber(row.oso_qty);
-  if (requestedQuantity == null || remainingQuantity == null || remainingQuantity < 0
-    || remainingQuantity > requestedQuantity + QUANTITY_EPSILON) {
-    throw new Error('KIWOOM_ORDER_QUANTITY_INVALID');
-  }
-  const filledQuantity = Math.max(0, requestedQuantity - remainingQuantity);
-  return {
-    exchangeOrderId: order.exchangeOrderId,
-    state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED',
-    requestedQuantity,
-    filledQuantity,
-    remainingQuantity,
-    averageFillPrice: filledQuantity > 0
-      ? finiteNumber(row.cntr_tot_amt) != null ? Number(row.cntr_tot_amt) / filledQuantity : finiteNumber(row.cntr_pric)
-      : null,
-    fills: [],
-    feeAmount: null,
-    feeCurrency: null,
-    exchangeCreatedAt: null,
-    exchangeUpdatedAt: null,
-    cancelable: true,
-    providerStatusCode: text(row.ord_stt),
-  };
-}
-
-function kiwoomDomesticHistorySnapshot(
-  payload: ExchangePayload,
-  plan: TradingPlan,
-  order: TradingOrder,
-): TradingExchangeOrderSnapshot {
-  assertKiwoom(payload);
-  const matches = kiwoomRows(payload, 'acnt_ord_cntr_prst_array')
-    .filter((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
-  if (!matches.length) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
-  if (matches.some((row) => text(row.stk_cd)?.replace(/^A/, '').toUpperCase()
-      !== plan.symbol.replace(/^A/, '').toUpperCase())) {
-    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
-  }
-  const requestedQuantity = Math.max(...matches.map((row) => finiteNumber(row.ord_qty) ?? 0))
-    || order.requestedQuantity;
-  const uniqueFills = new Map<string, { quantity: number; price: number }>();
-  for (const row of matches) {
-    const quantity = finiteNumber(row.cntr_qty);
-    const price = finiteNumber(row.cntr_uv);
-    if (quantity != null && quantity > 0 && price != null && price > 0) {
-      uniqueFills.set(text(row.cntr_no) ?? `${quantity}:${price}:${text(row.cntr_tm) ?? ''}`, { quantity, price });
-    }
-  }
-  const filledQuantity = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity, 0);
-  const weighted = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity * fill.price, 0);
-  const state = requestedQuantity != null && filledQuantity + QUANTITY_EPSILON >= requestedQuantity
-    ? 'FILLED' : 'CANCELED';
-  return {
-    exchangeOrderId: order.exchangeOrderId,
-    state,
-    requestedQuantity,
-    filledQuantity,
-    remainingQuantity: state === 'FILLED' ? 0 : Math.max(0, Number(requestedQuantity ?? 0) - filledQuantity),
-    averageFillPrice: filledQuantity > 0 ? weighted / filledQuantity : null,
-    fills: [],
-    feeAmount: null,
-    feeCurrency: null,
-    exchangeCreatedAt: null,
-    exchangeUpdatedAt: null,
-    cancelable: false,
-    providerStatusCode: state.toLowerCase(),
-  };
-}
-
-function kiwoomUsOpenSnapshot(
-  payload: ExchangePayload,
-  plan: TradingPlan,
-  order: TradingOrder,
-): TradingExchangeOrderSnapshot | null {
-  assertKiwoom(payload);
-  const row = kiwoomRows(payload, 'result_list')
-    .find((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
-  if (!row) return null;
-  if (text(row.stk_cd)?.toUpperCase() !== plan.symbol.toUpperCase()) throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
-  const requestedQuantity = finiteNumber(row.ord_qty) ?? order.requestedQuantity;
-  const filledQuantity = finiteNumber(row.cntr_qty) ?? 0;
-  const remainingQuantity = finiteNumber(row.ord_remnq)
-    ?? (requestedQuantity == null ? null : Math.max(0, requestedQuantity - filledQuantity));
-  return {
-    exchangeOrderId: order.exchangeOrderId,
-    state: filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED',
-    requestedQuantity,
-    filledQuantity,
-    remainingQuantity,
-    averageFillPrice: finiteNumber(row.cntr_uv),
-    fills: [],
-    feeAmount: null,
-    feeCurrency: null,
-    exchangeCreatedAt: null,
-    exchangeUpdatedAt: null,
-    cancelable: true,
-    providerStatusCode: text(row.ord_stat ?? row.ord_stat_nm),
-  };
-}
-
-function kiwoomUsHistorySnapshot(
-  payload: ExchangePayload,
-  plan: TradingPlan,
-  order: TradingOrder,
-): TradingExchangeOrderSnapshot {
-  assertKiwoom(payload);
-  const matches = kiwoomRows(payload, 'result_list')
-    .filter((item) => text(item.ord_no ?? item.order_no) === order.exchangeOrderId);
-  if (!matches.length) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
-  if (matches.some((row) => text(row.stk_cd)?.toUpperCase() !== plan.symbol.toUpperCase())) {
-    throw new Error('KIWOOM_ORDER_IDENTITY_MISMATCH');
-  }
-  const requestedQuantity = Math.max(...matches.map((row) => finiteNumber(row.ord_qty) ?? 0))
-    || order.requestedQuantity;
-  const uniqueFills = new Map<string, { quantity: number; price: number }>();
-  for (const row of matches) {
-    const quantity = finiteNumber(row.cntr_qty);
-    const price = finiteNumber(row.cntr_uv);
-    if (quantity != null && quantity > 0 && price != null && price > 0) {
-      uniqueFills.set(`${text(row.cntr_time) ?? ''}:${quantity}:${price}`, { quantity, price });
-    }
-  }
-  const filledQuantity = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity, 0);
-  const weighted = [...uniqueFills.values()].reduce((sum, fill) => sum + fill.quantity * fill.price, 0);
-  const remainingValues = matches.map((row) => finiteNumber(row.ord_remnq)).filter((value): value is number => value != null);
-  const remainingQuantity = remainingValues.length ? Math.min(...remainingValues)
-    : requestedQuantity == null ? null : Math.max(0, requestedQuantity - filledQuantity);
-  const statusText = matches.map((row) => String(row.ord_stat_nm ?? row.ord_stat ?? '')).join(' ');
-  let state: TradingExchangeOrderSnapshot['state'] | null = null;
-  if (/거부|실패/i.test(statusText)) state = 'REJECTED';
-  else if (/취소/i.test(statusText)) state = 'CANCELED';
-  else if (requestedQuantity != null && filledQuantity + QUANTITY_EPSILON >= requestedQuantity) state = 'FILLED';
-  else if (remainingQuantity === 0) state = 'CANCELED';
-  if (!state) throw new Error('KIWOOM_ORDER_STATUS_UNKNOWN');
-  return {
-    exchangeOrderId: order.exchangeOrderId,
-    state,
-    requestedQuantity,
-    filledQuantity,
-    remainingQuantity,
-    averageFillPrice: filledQuantity > 0 ? weighted / filledQuantity : null,
-    fills: [],
-    feeAmount: null,
-    feeCurrency: null,
-    exchangeCreatedAt: null,
-    exchangeUpdatedAt: null,
-    cancelable: false,
-    providerStatusCode: statusText || state.toLowerCase(),
-  };
 }
 
 function quantitiesMatch(left: number, right: number) {
@@ -587,10 +422,10 @@ export class TradeOrderRecoveryService {
         true,
       );
     }
-    if (plan.exchange === 'kiwoom') {
+    if (plan.exchange === 'kiwoom' && !kiwoomRecoveryOrderIdentityValid(plan, order)) {
       return this.pending(
         order,
-        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
+        'KIWOOM_RECOVERY_ORDER_ID_INVALID',
         true,
       );
     }
@@ -633,20 +468,22 @@ export class TradeOrderRecoveryService {
         const tokenPayload = assertKiwoom(await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomToken(kiwoomCredentials)));
         const authenticated = { ...kiwoomCredentials, accessToken: kiwoomToken(tokenPayload) };
         const date = kiwoomOrderDate(order.createdAt);
+        const readRows = (request: PreparedExchangeRequest) => readCompleteKiwoomOrderRows(request,
+          (next) => sendRecoveryResponse(BASE_URLS.kiwoom, next));
         if (plan.market.toUpperCase() === 'US') {
-          const open = await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomUsUnfilled(authenticated, plan));
-          snapshot = kiwoomUsOpenSnapshot(open, plan, order)
-            ?? kiwoomUsHistorySnapshot(await sendRecoveryRequest(
-              BASE_URLS.kiwoom,
-              prepareKiwoomUsOrderHistory(authenticated, plan, order.exchangeOrderId, date),
-            ), plan, order);
+          const open = await readRows(prepareKiwoomUsUnfilled(authenticated, plan, date));
+          const result = kiwoomReadonlyRecoverySnapshot(open, plan, order, 'ust21050')
+            ?? kiwoomReadonlyRecoverySnapshot(await readRows(
+              prepareKiwoomUsOrderHistory(authenticated, plan, order.exchangeOrderId, date)), plan, order, 'ust21150');
+          if (!result) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+          snapshot = result;
         } else {
-          const open = await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated));
-          snapshot = kiwoomDomesticOpenSnapshot(open, plan, order)
-            ?? kiwoomDomesticHistorySnapshot(await sendRecoveryRequest(
-              BASE_URLS.kiwoom,
-              prepareKiwoomDomesticOrderHistory(authenticated, plan, order.exchangeOrderId, date),
-            ), plan, order);
+          const open = await readRows(prepareKiwoomUnfilled(authenticated));
+          const result = kiwoomReadonlyRecoverySnapshot(open, plan, order, 'ka10075')
+            ?? kiwoomReadonlyRecoverySnapshot(await readRows(
+              prepareKiwoomDomesticOrderHistory(authenticated, plan, order.exchangeOrderId, date)), plan, order, 'kt00007');
+          if (!result) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+          snapshot = result;
         }
       }
 

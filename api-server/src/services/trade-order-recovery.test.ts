@@ -262,7 +262,7 @@ test('lookup failure schedules bounded retries and never replays the order POST'
   }
 });
 
-test('Kiwoom live recovery remains fail-closed until the official status contract is verified', async () => {
+test('Kiwoom recovery rejects an unverified broker order identity with zero requests', async () => {
   const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
     appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
   });
@@ -282,13 +282,96 @@ test('Kiwoom live recovery remains fail-closed until the official status contrac
     assert.equal(recovered.manualReviewRequired, true);
     assert.equal(
       recovered.lastErrorCode,
-      'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
+      'KIWOOM_RECOVERY_ORDER_ID_INVALID',
     );
     assert.equal(recovered.nextRetryAt, null);
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
   }
+});
+
+test('verified Kiwoom KR/US recovery uses only token and complete readonly contracts', async () => {
+  for (const us of [false, true]) {
+    const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
+      appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
+    });
+    planValue.market = us ? 'US' : 'KR';
+    planValue.symbol = us ? 'AAPL' : '005930';
+    planValue.stockExchange = us ? 'NASDAQ' : 'KRX';
+    orderValue.exchangeOrderId = us ? '000000252' : '0000050';
+    await repository.savePlan(planValue);
+    await repository.saveOrder(orderValue);
+    const nativeFetch = globalThis.fetch;
+    const calls: string[] = [];
+    let openPages = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const api = headers.get('api-id') ?? 'token';
+      calls.push(api);
+      assert.equal(init?.method, 'POST');
+      assert.doesNotMatch(url, /\/ordr|cancel|amend|transfer|withdraw/u);
+      if (url.endsWith('/oauth2/token')) return new Response(JSON.stringify({ return_code: 0, token: 'fake-query-only' }));
+      assert.ok(['ka10075', 'kt00007', 'ust21050', 'ust21150'].includes(api));
+      if (['ka10075', 'ust21050'].includes(api)) {
+        openPages++;
+        if (us) assert.match(String(init?.body), /"ord_dt":"\d{8}"/u);
+        if (openPages === 1) return new Response(JSON.stringify({ return_code: 0,
+          [us ? 'result_list' : 'oso']: [{ ord_no: us ? '000000251' : '0000049' }] }),
+        { headers: { 'api-id': api, 'cont-yn': 'Y', 'next-key': 'next-2' } });
+        assert.equal(headers.get('cont-yn'), 'Y');
+        assert.equal(headers.get('next-key'), 'next-2');
+        return new Response(JSON.stringify({ return_code: 0, [us ? 'result_list' : 'oso']: [] }),
+          { headers: { 'api-id': api, 'cont-yn': 'N' } });
+      }
+      const row = { ord_no: orderValue.exchangeOrderId, stk_cd: us ? 'AAPL' : 'A005930',
+        ord_qty: '1', cntr_qty: '1', ord_remnq: '0', cntr_uv: us ? '201.3147' : '50000',
+        io_tp_nm: '현금매수', acpt_tp: '접수', mdfy_cncl: '', crnc_code: 'USD', slby_tp_nm: '매수',
+        cncl_qty: '0', mdfy_qty: '0', ord_stat_nm: '체결완료' };
+      return new Response(JSON.stringify({ return_code: 0,
+        [us ? 'result_list' : 'acnt_ord_cntr_prps_dtl']: [row] }), { headers: { 'api-id': api } });
+    }) as typeof fetch;
+    try {
+      const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+      assert.equal(recovered.state, 'FILLED', JSON.stringify({ market: planValue.market,
+        lastErrorCode: recovered.lastErrorCode, calls }));
+      assert.equal(recovered.filledQuantity, 1);
+      assert.equal(recovered.exchangeOrderId, us ? '000000252' : '0000050');
+      assert.equal(recovered.manualReviewRequired, false);
+      assert.equal(recovered.feeAmount, null);
+      assert.deepEqual(recovered.fills, []);
+      assert.deepEqual(calls, ['token', us ? 'ust21050' : 'ka10075', us ? 'ust21050' : 'ka10075',
+        us ? 'ust21150' : 'kt00007']);
+      const events = await repository.listEvents(USER_ID);
+      assert.equal(events.at(-1)?.metadata.orderResubmitted, false);
+    } finally { globalThis.fetch = nativeFetch; }
+  }
+});
+
+test('Kiwoom incomplete pages fail closed before history fallback or any financial request', async () => {
+  const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
+    appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
+  });
+  orderValue.exchangeOrderId = '0000050';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  let outbound = 0;
+  globalThis.fetch = (async (input) => {
+    outbound++;
+    assert.doesNotMatch(String(input), /\/ordr/u);
+    return String(input).endsWith('/oauth2/token')
+      ? new Response(JSON.stringify({ return_code: 0, token: 'fake-query-only' }))
+      : new Response(JSON.stringify({ return_code: 0, oso: [] }), { headers: { 'cont-yn': 'Y' } });
+  }) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECOVERY_CONTINUATION_INVALID');
+    assert.equal(outbound, 2);
+    assert.equal(recovered.filledQuantity, 0);
+  } finally { globalThis.fetch = nativeFetch; }
 });
 
 test('Kiwoom mock recovery without an exchange order id remains manual-review only with zero outbound requests', async () => {
