@@ -272,18 +272,28 @@ run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supa
   echo '[phase8-db] budget owner fixture requires disposable loopback CI' >&2; exit 1;
 }
 "${PSQL[@]}" <<'SQL'
-do $owner_fixture$ declare relation text; begin
+do $owner_fixture$ declare relation text; routine text; begin
   if not exists(select 1 from pg_roles where rolname='phase8_budget_owner') then
     create role phase8_budget_owner nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls;
   end if;
   foreach relation in array array['trade_automation_profiles','trade_system_controls','trade_order_plans',
-    'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders'] loop
+    'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders','trade_live_budget_reservations'] loop
+    if to_regclass('public.'||relation) is null then continue; end if;
     execute format('alter table public.%I owner to phase8_budget_owner',relation);
+  end loop;
+  -- The bootstrap can already have installed the budget once as the CI admin.
+  -- Transfer every canonical routine too, so the restricted-owner reapply is
+  -- a real ownership-compatible upgrade, not only an empty-schema install.
+  for routine in select p.oid::regprocedure::text from pg_proc p
+    join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in (
+      'claim_trade_order_execution','read_automatic_live_budget_snapshot','reserve_automatic_live_entry_budget',
+      'is_automatic_live_ledger_payload','automatic_live_budget_schema_fingerprint','read_automatic_live_budget_guard',
+      'automatic_live_budget_expected_schema_fingerprint') loop
+    execute format('alter function %s owner to phase8_budget_owner',routine);
   end loop;
 end $owner_fixture$;
 grant usage, create on schema public to phase8_budget_owner;
 grant usage on schema auth to phase8_budget_owner;
-alter function public.claim_trade_order_execution(uuid,uuid,bigint,uuid,integer) owner to phase8_budget_owner;
 SQL
 run_budget_owner_sql "apply AUTO LIVE atomic budget guard as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
 run_budget_owner_sql "reapply AUTO LIVE atomic budget guard idempotently as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
