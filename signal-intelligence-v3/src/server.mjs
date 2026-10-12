@@ -166,6 +166,12 @@ const server = createServer(async (req, res) => {
 
   if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
 
+  // Unknown routes are 404 even before a first snapshot is published;
+  // do not create false 503 alerts for typos or browser favicon probes.
+  const listName = routes.get(url.pathname);
+  if (url.pathname !== '/health' && url.pathname !== '/v1/signals' && !listName)
+    return json(res, 404, { ok: false, error: 'NOT_FOUND' });
+
   if (url.pathname === '/health') {
     const state = await loadSnapshot();
     const ageMs = state.snapshot ? snapshotAgeMs(state.snapshot) : null;
@@ -213,7 +219,6 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, snapshot: state.snapshot, executionAuthority: 'NONE' });
   }
 
-  const listName = routes.get(url.pathname);
   if (listName) {
     return json(res, 200, {
       ok: true,
