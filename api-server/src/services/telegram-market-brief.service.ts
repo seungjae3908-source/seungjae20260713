@@ -81,8 +81,33 @@ function percent(value: number | null): string {
 }
 
 function safeError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}:${error.message}`.replace(/https?:\/\/\S+/giu, '<provider>').slice(0, 160);
-  return 'UNKNOWN_PROVIDER_ERROR';
+  // Never forward raw provider exception text into a Telegram digest.
+  // Exceptions can contain URL query strings, account refs, or secrets.
+  return error instanceof Error && error.name === 'AbortError'
+    ? 'PUBLIC_PROVIDER_TIMEOUT' : 'PUBLIC_PROVIDER_UNAVAILABLE';
+}
+
+/** Hard bound for OPTIONAL public market/theme sources.
+ * Abort is passed to market-room fetches where supported; sources without
+ * AbortSignal (sector rankings) cannot hold up the scheduled report.
+ * Late results are discarded, never promoted as current Telegram evidence.
+ */
+export async function boundedTelegramBriefRead<T>(
+  read: () => Promise<T>,
+  timeoutMs = BRIEF_TIMEOUT_MS,
+): Promise<T | null> {
+  if (typeof read !== 'function' || !Number.isSafeInteger(timeoutMs)
+    || timeoutMs < 1 || timeoutMs > BRIEF_TIMEOUT_MS)
+    return null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T | null>([
+      Promise.resolve().then(read).catch(() => null),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefSnapshot> {
@@ -91,15 +116,17 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
   try {
     const roomPromises = ROOMS.map(async (room): Promise<BriefRoom> => {
       try {
-        return { room, response: await MarketInformationService.getRoom(room, controller.signal), error: null };
+        const response = await boundedTelegramBriefRead(
+          () => MarketInformationService.getRoom(room, controller.signal));
+        return { room, response, error: response ? null : 'PUBLIC_PROVIDER_TIMEOUT_OR_UNAVAILABLE' };
       } catch (error) {
         return { room, response: null, error: safeError(error) };
       }
     });
     const [rooms, krThemeResult, usThemeResult] = await Promise.all([
       Promise.all(roomPromises),
-      SectorPopularService.getSectorPopular('KR').catch(() => null),
-      SectorPopularService.getSectorPopular('US').catch(() => null),
+      boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('KR')),
+      boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('US')),
     ]);
     const warnings = rooms.flatMap((item) => item.error ? [`${item.room}:${item.error}`] : []);
     if (!krThemeResult) warnings.push('KR_THEME_UNAVAILABLE');
