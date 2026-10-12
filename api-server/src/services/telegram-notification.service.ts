@@ -60,7 +60,7 @@ export type TelegramAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
       errorCode?: string | null;
     };
 
@@ -77,7 +77,7 @@ export type TelegramTrackedAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
       errorCode?: string | null;
     };
 
@@ -91,6 +91,8 @@ type TelegramSendResponse = {
 const deliveredAtByHash = new Map<string, number>();
 const deliveredAtByCooldownKey = new Map<string, number>();
 const inFlightHashes = new Set<string>();
+// A possibly accepted POST must not be retransmitted during this process.
+const unconfirmedAtByHash = new Map<string, number>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -262,21 +264,57 @@ function prune(now: number): void {
   for (const [key, value] of deliveredAtByCooldownKey) {
     if (value < oldest) deliveredAtByCooldownKey.delete(key);
   }
+  const uncertainOldest = now - 14 * 24 * 60 * 60_000;
+  for (const [key, value] of unconfirmedAtByHash) {
+    if (value < uncertainOldest) unconfirmedAtByHash.delete(key);
+  }
 }
 
 export function clearTelegramAlertState(): void {
   deliveredAtByHash.clear();
   deliveredAtByCooldownKey.clear();
   inFlightHashes.clear();
+  unconfirmedAtByHash.clear();
 }
 
-function retryDelay(response: Response, attempt: number): number {
-  const retryAfter = response.headers.get('retry-after');
-  const seconds = retryAfter == null ? Number.NaN : Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(MAX_RETRY_DELAY_MS, Math.round(seconds * 1000));
+/** A Telegram HTTP 429 is an explicit rejection. Respect BOTH the HTTP
+ * Retry-After header and Bot API ResponseParameters.retry_after. If the
+ * server requires longer than the bounded retry budget, return control to
+ * the caller without an early replay or a long-held worker slot.
+ */
+async function retryDelay(response: Response, attempt: number): Promise<number | null> {
+  const hints: number[] = [];
+  const rawHeader = response.headers.get('retry-after');
+  if (rawHeader !== null) {
+    const header = rawHeader.trim();
+    const seconds = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(header)
+      ? Number(header) : Number.NaN;
+    const fromDate = /GMT$/iu.test(header) ? Date.parse(header) : Number.NaN;
+    hints.push(Number.isFinite(seconds) && seconds >= 0
+      ? Math.ceil(seconds * 1000)
+      : Number.isFinite(fromDate) ? Math.max(0, fromDate - Date.now()) : Number.POSITIVE_INFINITY);
   }
-  return Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  const length = response.headers.get('content-length');
+  // An oversized/untrusted error body cannot authorize an immediate retry.
+  const bounded = length === null || (/^\d+$/u.test(length) && Number(length) <= 4096);
+  if (bounded) {
+    try {
+      const payload: unknown = await response.clone().json();
+      const params = payload && typeof payload === 'object'
+        ? (payload as { parameters?: { retry_after?: unknown } }).parameters : undefined;
+      if (params && typeof params === 'object' && 'retry_after' in params) {
+        const seconds = params.retry_after;
+        hints.push(typeof seconds === 'number' && Number.isSafeInteger(seconds) && seconds >= 0
+          ? seconds * 1000 : Number.POSITIVE_INFINITY);
+      }
+    } catch { /* Absent/unreadable optional error JSON is not a success signal. */ }
+  } else {
+    hints.push(Number.POSITIVE_INFINITY);
+  }
+  const delay = hints.length > 0
+    ? Math.max(...hints) : Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  return Number.isFinite(delay) && delay >= 0 && delay <= MAX_RETRY_DELAY_MS
+    ? Math.ceil(delay) : null;
 }
 
 function safePhoto(input: TelegramPhotoAttachment | undefined): TelegramPhotoAttachment | null {
@@ -353,12 +391,15 @@ async function sendOnce(
       { method: 'POST', headers, body, signal: controller.signal },
     );
 
-    const retryable = response.status === 429 || response.status >= 500;
-    if (retryable && attempt < MAX_RETRIES) {
-      const delay = retryDelay(response, attempt);
-      clearTimeout(timeout);
-      await sleep(delay);
-      return sendOnce(botToken, destination, text, input, attempt + 1);
+    // HTTP 429 means rejected; a 5xx can occur after Telegram accepts a POST.
+    // Never retry a possibly accepted non-idempotent sendMessage.
+    if (response.status === 429 && attempt < MAX_RETRIES) {
+      const delay = await retryDelay(response, attempt);
+      if (delay !== null) {
+        clearTimeout(timeout);
+        await sleep(delay);
+        return sendOnce(botToken, destination, text, input, attempt + 1);
+      }
     }
     if (!response.ok) {
       return {
@@ -367,7 +408,8 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
-        errorCode: `TELEGRAM_HTTP_${response.status}`,
+        errorCode: response.status >= 500
+          ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : `TELEGRAM_HTTP_${response.status}`, 
       };
     }
 
@@ -381,7 +423,7 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
-        errorCode: 'TELEGRAM_RESPONSE_INVALID',
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
       };
     }
     const rawMessageId = result.result?.message_id;
@@ -389,26 +431,24 @@ async function sendOnce(
       ? rawMessageId
       : null;
     return {
-      delivered: result.ok === true,
+      delivered: result.ok === true && messageId !== null,
       attempts: attempt + 1,
       messageId,
       messageKind,
       renderedText,
-      errorCode: result.ok === true ? null : 'TELEGRAM_API_REJECTED',
+      errorCode: result.ok === true
+        ? (messageId === null ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : null)
+        : 'TELEGRAM_API_REJECTED',
     };
   } catch {
-    if (attempt < MAX_RETRIES) {
-      clearTimeout(timeout);
-      await sleep(300 * (attempt + 1));
-      return sendOnce(botToken, destination, text, input, attempt + 1);
-    }
+    // A network abort can occur AFTER the remote Bot API has accepted POST.
     return {
       delivered: false,
       attempts: attempt + 1,
       messageId: null,
       messageKind: text.length <= TELEGRAM_CAPTION_LIMIT && safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
       renderedText: text,
-      errorCode: 'TELEGRAM_NETWORK_ERROR',
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
     };
   } finally {
     clearTimeout(timeout);
@@ -435,6 +475,11 @@ export async function sendTelegramAlertWithReceipt(
     DEFAULT_DUPLICATE_WINDOW_MS,
   );
   const cooldownMs = normalizeWindow(input.cooldownMs, DEFAULT_COOLDOWN_MS);
+  const uncertainAt = unconfirmedAtByHash.get(hash);
+  if (uncertainAt != null && now - uncertainAt <= 14 * 24 * 60 * 60_000) {
+    return { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+  }
   const lastDuplicate = deliveredAtByHash.get(hash);
   if (
     inFlightHashes.has(hash)
@@ -452,14 +497,17 @@ export async function sendTelegramAlertWithReceipt(
   try {
     const result = await sendOnce(botToken, destination, rendered, input, 0);
     if (!result.delivered) {
+      const uncertain = result.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+      if (uncertain) unconfirmedAtByHash.set(hash, Date.now());
       logger.warn(
-        { alertType: input.type, attempts: result.attempts },
+        { alertType: input.type, attempts: result.attempts,
+          code: uncertain ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : 'TELEGRAM_DELIVERY_REJECTED' },
         'telegram alert delivery failed',
       );
       return {
         ok: false,
         attempts: result.attempts,
-        skipped: 'DELIVERY_FAILED',
+        skipped: uncertain ? 'OUTCOME_UNCONFIRMED' : 'DELIVERY_FAILED',
         errorCode: result.errorCode,
       };
     }
@@ -569,31 +617,40 @@ export async function editTelegramMessage(input: {
         },
       );
 
-      const retryable = response.status === 429 || response.status >= 500;
-      if (retryable && attempt < MAX_RETRIES) {
-        const delay = retryDelay(response, attempt);
-        clearTimeout(timeout);
-        await sleep(delay);
-        return run(attempt + 1);
+      // Edits may race a newer keyboard revocation or signal-state change.
+      // An ambiguous POST can already have applied remotely; delayed replay
+      // could restore a stale order button. Retry only explicit HTTP 429.
+      if (response.status === 429 && attempt < MAX_RETRIES) {
+        const delay = await retryDelay(response, attempt);
+        if (delay !== null) {
+          clearTimeout(timeout);
+          await sleep(delay);
+          return run(attempt + 1);
+        }
       }
-      if (!response.ok) return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      if (!response.ok) {
+        return response.status >= 500
+          ? { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+            errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' }
+          : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      }
 
       let result: TelegramSendResponse;
       try {
         result = (await response.json()) as TelegramSendResponse;
       } catch {
-        return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+        // A malformed HTTP 200 does not prove the edit was rejected.
+        return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
       }
       return result.ok === true
         ? { ok: true, attempts: attempt + 1 }
         : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
     } catch {
-      if (attempt < MAX_RETRIES) {
-        clearTimeout(timeout);
-        await sleep(300 * (attempt + 1));
-        return run(attempt + 1);
-      }
-      return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      // A network abort can happen after the remote message was modified.
+      // Never reapply an old keyboard over a newer revocation.
+      return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
     } finally {
       clearTimeout(timeout);
     }
