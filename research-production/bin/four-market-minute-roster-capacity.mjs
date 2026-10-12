@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Public current crypto roster diagnostic only. Not a timer or data publisher.
 // Default is strictly OFF; explicit public GET probe requires owner review.
-import { probePublicCurrentCryptoRosters } from
+import { probePublicCurrentCryptoRosters,
+  forecastPublicMinuteArchiveFootprintV1 } from
   '../src/four-market-minute-roster-capacity-v1.mjs';
 
 const emit=x=>process.stdout.write(JSON.stringify(x)+'\n');
@@ -26,6 +27,10 @@ async function main(){
     bitget:{market:r.bitget.market,symbolCount:r.bitget.symbols.length,
       warningCount:r.bitget.restrictedSymbols.length,digest:r.bitget.digest},
     capacity:r.capacity,
+    storageEstimate:forecastPublicMinuteArchiveFootprintV1({
+      cryptoSpotSymbols:r.capacity.cryptoSpotSymbols,
+      cryptoFuturesSymbols:r.capacity.cryptoFuturesSymbols,
+    }),
     dataStored:false,automaticallyEnabled:false,
     historicalPITProven:false,executionAuthority:'NONE',
   });

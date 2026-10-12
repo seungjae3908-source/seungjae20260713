@@ -7,7 +7,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { QUEUE_LIMITS, runDurableMinuteBackfillCycle,
   validateBackfillScope } from '../src/four-market-minute-backfill-queue-v1.mjs';
-import { assessMinuteManifestCapacity } from
+import { assessMinuteManifestCapacity,
+  forecastPublicMinuteArchiveFootprintV1 } from
   '../src/four-market-minute-roster-capacity-v1.mjs';
 const script=fileURLToPath(import.meta.url);
 const emit=v=>process.stdout.write(JSON.stringify(v)+'\n');
@@ -44,10 +45,14 @@ async function main() {
     // Read a private operator scope only; absolutely no network, queue
     // state, API credentials, disk writes or trading authority.
     const manifest=await privateManifest(process.env.RESEARCH_MINUTE_QUEUE_MANIFEST);
+    const capacity=assessMinuteManifestCapacity(manifest,{
+      actionsPerCycle:QUEUE_LIMITS.maxActionsPerCycle,
+    });
     return emit({
-      status:'CAPACITY_AUDIT_ONLY',
-      capacity:assessMinuteManifestCapacity(manifest,{
-        actionsPerCycle:QUEUE_LIMITS.maxActionsPerCycle,
+      status:'CAPACITY_AUDIT_ONLY',capacity,
+      storageEstimate:forecastPublicMinuteArchiveFootprintV1({
+        cryptoSpotSymbols:capacity.cryptoSpotSymbols,
+        cryptoFuturesSymbols:capacity.cryptoFuturesSymbols,
       }),
       providerCalls:0,filesWritten:0,
       archiveTimerActivated:false,executionAuthority:'NONE',
