@@ -79,7 +79,7 @@ async function main() {
     body,
     String.raw`do $after$ begin
       if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true
-        or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v2'
+        or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v3'
       then raise exception 'BUDGET_GUARD_NOT_READY'; end if;
       if current_setting('app.trading_fingerprint_before')<>(${fingerprint}) then raise exception 'USER_TRADING_ROWS_MUTATED'; end if;
       if current_setting('app.budget_fingerprint_before')<>(select md5(coalesce(string_agg(row_to_json(r)::text,',' order by user_id,order_id),''))
