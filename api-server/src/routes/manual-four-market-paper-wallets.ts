@@ -66,6 +66,8 @@ type ManualFourMarketDeps = {
     selected:ManualPaperPreviewSelection,nowMs:number)=>Promise<boolean>;
   listSequentialRows:(request:AuthenticatedRequest,ownerId:string,orderId:string)
     =>Promise<ManualPaperSequentialEventRow[]>;
+  readSequentialByRequestKey:(request:AuthenticatedRequest,ownerId:string,requestKey:string)
+    =>Promise<ManualPaperSequentialEventRow|null>;
   appendSequentialRow:(request:AuthenticatedRequest,row:ManualPaperSequentialEventRow)
     =>Promise<'INSERTED'|'DUPLICATE'>;
   issueSequentialEvent:(input:Readonly<{
@@ -260,6 +262,17 @@ export function createManualFourMarketWalletRouter(
     if(error||!Array.isArray(data)||data.length>1000)
       throw new Error('MANUAL_PAPER_SEQ_READ_INCOMPLETE');
     return data as ManualPaperSequentialEventRow[];
+  });
+  const readSequentialByRequestKey=deps.readSequentialByRequestKey??(async(
+    req,ownerId,requestKey)=>{
+    if(!req.accessToken||req.member?.id!==ownerId)
+      throw new Error('MANUAL_PAPER_GLOBAL_REQUEST_OWNER_REQUIRED');
+    const {data,error}=await getUserSupabase(req.accessToken)
+      .from(SEQUENTIAL_LEDGER_TABLE)
+      .select('user_id,wallet_id,order_id,event_id,request_key,sequence_number,market,owner_role,event_sha256,event')
+      .eq('user_id',ownerId).eq('request_key',requestKey).maybeSingle();
+    if(error)throw new Error('MANUAL_PAPER_GLOBAL_REQUEST_READ_FAILED');
+    return (data??null) as ManualPaperSequentialEventRow|null;
   });
   const appendSequentialRow=deps.appendSequentialRow??(async(req,row)=>{
     if(!req.accessToken||req.member?.id!==row.user_id
@@ -625,6 +638,34 @@ export function createManualFourMarketWalletRouter(
         const selected=action==='OPEN_ORDER'
           ?p.selection as ManualPaperPreviewSelection:null;
         const orderId=action==='OPEN_ORDER'?null:p.orderId as string;
+        // A stable requestKey is unique per authenticated owner across every
+        // market/order. On retry, return the ORIGINAL event after verifying its
+        // immutable receipt and matching selection -- never mint a new order
+        // when the same key encounters a newer strategy/quote.
+        const globalReplay=await readSequentialByRequestKey(req,owner.id,p.requestKey);
+        if(globalReplay){
+          const immutable=manualPaperSequentialRow(globalReplay.event);
+          if(!sameManualPaperSequentialRow(immutable,globalReplay)
+            ||immutable.user_id!==owner.id
+            ||immutable.event.kind!==action
+            ||(orderId!==null&&immutable.order_id!==orderId)
+            ||(selected!==null&&(!immutable.event.session
+              ||Object.entries(selected).some(([k,v])=>
+                (immutable.event.session as unknown as Record<string,unknown>)[k]!==v)))){
+            return res.status(409).json(fail('MANUAL_PAPER_SEQ_GLOBAL_REQUEST_CONFLICT',
+              '같은 재시도 ID가 다른 모의주문·경제증거에 사용됐습니다.'));
+          }
+          return res.json(harmless({
+            ok:true,ownerScope:'SELF',mode:'PAPER_SEQUENTIAL_SIMULATION_ONLY',
+            duplicate:true,orderId:immutable.order_id,
+            recordedEventId:immutable.event_id,
+            recordedSequence:immutable.sequence_number,
+            eventInsertionsByThisRequest:0,
+            actualBrokerFill:false,actualPaperLedgerWritten:false,
+            actualWalletMutation:false,financialMutationCount:0,
+            profitabilityProven:false,
+          }));
+        }
         // The per-order event CAS does NOT guard the owner's market-wide
         // collateral. Until a true backend atomic market-slot reservation
         // is proven, never allow two Paper orders to spend the same 1m seed.
