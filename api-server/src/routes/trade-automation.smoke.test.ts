@@ -355,6 +355,84 @@ test.beforeEach(async () => {
   await repository.setGlobalEmergencyStop(false, USER);
 });
 
+test('public HTTP cannot forge AUTO Live origin for any provider, before repository or external access', async () => {
+  let repositoryCalls = 0; let outbound = 0;
+  setTradeAutomationRepositoryFactoryForTests(() => { repositoryCalls += 1; throw new Error('REPOSITORY_MUST_NOT_BE_REACHED'); });
+  const { server, baseUrl } = await startServer(true, 'admin');
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith(baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
+    return nativeFetch(input, init);
+  };
+  try {
+    for (const exchange of ['kiwoom', 'toss', 'upbit', 'bitget']) {
+      for (const forged of [
+        { executionMode: 'automatic', signalReasons: [] },
+        { signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+        { signalReasons: ['AUTO_EXIT_ENTRY_PLAN:foreign'] },
+        { signalReasons: ['PILOT_DYNAMIC_CAP_V1:forged'] },
+        { signalReasons: ['CANONICAL_PAPER_HANDOFF'] },
+        { signalReasons: ['STRATEGY_RULE_PACK:TREND_PULLBACK_REACCEL_V1'] },
+        { signalReasons: ['STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'] },
+        { signalReasons: ['AI_REVIEW_DECISION:PASS'] },
+        { signalReasons: ['AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'] },
+        { signalReasons: ['AI_REVIEW_EVIDENCE:' + 'a'.repeat(64)] },
+        { signalReasons: ['AI_REVIEW_EXPIRES:2099-01-01T00:00:00Z'] },
+      ]) {
+        const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ accountMode: 'live', exchange, ...forged }),
+        });
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN');
+        assert.equal(body.orderSubmitted, false);
+      }
+    }
+    for (const accountMode of [null, 'LIVE', ' live ', 'unknown', 0, {}]) {
+      const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountMode, exchange: 'upbit', signalReasons: [] }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+      assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_TRADING_ACCOUNT_MODE_INVALID');
+      assert.equal(body.orderSubmitted, false);
+    }
+    assert.equal(repositoryCalls, 0); assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('public approval cannot execute a stored background AUTO Live plan or mutate its canonical state', async () => {
+  const local = new InMemoryTradingRepository();
+  const plan = { id: 'http-auto-origin', userId: USER, state: 'APPROVAL_PENDING', version: 0,
+    executionMode: 'automatic', accountMode: 'live', exchange: 'upbit', signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as any;
+  await local.savePlan(plan);
+  setTradeAutomationRepositoryFactoryForTests(() => local);
+  const { server, baseUrl } = await startServer(true, 'admin');
+  const nativeFetch = globalThis.fetch; let outbound = 0;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith(baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
+    return nativeFetch(input, init);
+  };
+  try {
+    const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans/http-auto-origin/approve', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+    });
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(response.status, 400); assert.equal(body.error, 'AUTOMATIC_LIVE_BACKGROUND_EXECUTION_REQUIRED');
+    assert.equal(body.orderSubmitted, false); assert.equal(outbound, 0);
+    assert.equal((await local.getPlan(USER, plan.id))?.state, 'APPROVAL_PENDING');
+    assert.equal((await local.listOrders(USER)).length, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
 test('manual/AUTO isolation endpoint is owner-scoped, zero-mutation and exposes counts only', async () => {
   const local = new InMemoryTradingRepository();
   await local.saveConnection({ userId: USER, exchange: 'upbit', accountMode: 'live', configured: true,

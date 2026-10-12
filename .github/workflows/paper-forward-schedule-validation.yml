@@ -5,6 +5,77 @@ on:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
       - .github/scripts/paper-forward-reviewed-paths.mjs
+      # Separately approved Paper scope supplement: exactly 19 paths.
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.test.cjs
+      - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/tests/production-auto-live-only-release-contract.test.mjs
+      - .github/workflows/production-automatic-trading-gate.yml
+      - api-server/scripts/apply-staging-supabase-bootstrap.mjs
+      - api-server/scripts/verify-phase8-db.sh
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/index.ts
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/automatic-live-position-isolation.service.ts
+      - api-server/src/services/member-auto-trading-ai-review-evidence.service.ts
+      - api-server/src/services/trade-automation-integration.test.ts
+      - api-server/src/services/trade-exchange-adapters.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
+      - api-server/supabase/bootstrap/staging-bootstrap.sql
+      - api-server/test.mjs
+      - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
+      # Owner-approved exact AUTO safety paths; no directory-wide trigger.
+      - .github/config/automatic-live-preactivation-checklist.json
+      - .github/scripts/automatic-live-preactivation-audit.cjs
+      - .github/scripts/automatic-live-preactivation-audit.test.cjs
+      - .github/scripts/production-auto-live-signal-identity.test.cjs
+      - .github/scripts/production-manual-live-receipts.cjs
+      - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/tests/kiwoom-readonly-recovery-security-contract.test.mjs
+      - .github/tests/production-auto-live-budget-contract.test.mjs
+      - .github/workflows/application-fast-ci.yml
+      - api-server/package.json
+      - api-server/scripts/automatic-live-preflight-stages.mjs
+      - api-server/scripts/automatic-live-preflight-stages.test.mjs
+      - api-server/scripts/kiwoom-readonly-recovery-security-contract.mjs
+      - api-server/scripts/run-automatic-live-preflight-tests.mjs
+      - api-server/scripts/verify-automatic-live-budget-concurrency.sh
+      - api-server/scripts/verify-phase8-security.mjs
+      - api-server/src/services/automatic-live-budget.service.test.ts
+      - api-server/src/services/automatic-live-budget.service.ts
+      - api-server/src/services/automatic-live-owner-policy.service.test.ts
+      - api-server/src/services/automatic-live-owner-policy.service.ts
+      - api-server/src/services/automatic-live-position-isolation.service.test.ts
+      - api-server/src/services/automatic-live-preactivation-audit.service.test.ts
+      - api-server/src/services/automatic-live-preactivation-audit.service.ts
+      - api-server/src/services/automatic-live-unrealized-risk.service.test.ts
+      - api-server/src/services/automatic-live-unrealized-risk.service.ts
+      - api-server/src/services/bitget-native-protection-readonly.service.test.ts
+      - api-server/src/services/bitget-native-protection-readonly.service.ts
+      - api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts
+      - api-server/src/services/kiwoom-readonly-order-recovery.service.ts
+      - api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts
+      - api-server/src/services/public-live-plan-origin.service.test.ts
+      - api-server/src/services/public-live-plan-origin.service.ts
+      - api-server/src/services/trade-automation-repository-compatibility.test.ts
+      - api-server/src/services/trade-execution-snapshot.service.ts
+      - api-server/src/services/trade-history-completeness.service.test.ts
+      - api-server/src/services/trade-history-completeness.service.ts
+      - api-server/src/services/trade-kiwoom-readonly-contract.test.ts
+      - api-server/src/services/trade-order-recovery.service.ts
+      - api-server/src/services/trade-order-recovery.test.ts
+      - api-server/src/services/trade-recovery-worker.service.ts
+      - api-server/src/services/trade-recovery-worker.test.ts
+      - api-server/src/services/trading-provider-response.service.test.ts
+      - api-server/src/services/trading-provider-response.service.ts
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql
+      - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
+      - ops/apply-production-auto-live-budget.mjs
+      - ops/production-auto-live-signal-identity.cjs
+      - ops/production-auto-live-signal-source-audit.mjs
+      - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
       - .github/scripts/research-center-batch-scope.mjs
       - .github/tests/research-center-batch-scope.test.mjs
       - market-prediction-lab/src/paper-public-provider-authority-v1.js
@@ -333,11 +404,21 @@ jobs:
           allowed = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs'], text=True
           ).splitlines()
+          auto_safety = subprocess.check_output(
+              ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
+          ).splitlines()
+          if len(auto_safety) != 50 or len(set(auto_safety)) != 50:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_50')
+          auto_supplement = subprocess.check_output(
+              ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
+          ).splitlines()
+          if len(auto_supplement) != 19 or len(set(auto_supplement)) != 19:
+              raise SystemExit('AUTO_LIVE_SUPPLEMENT_MUST_BE_EXACTLY_19')
           if len(trigger) != len(set(trigger)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_DUPLICATE_PATH')
           if len(allowed) != len(set(allowed)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_ALLOWLIST_DUPLICATE_PATH')
-          missing = sorted(set(allowed) - set(trigger))
+          missing = sorted(set(allowed + auto_safety + auto_supplement) - set(trigger))
           if missing:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
@@ -354,6 +435,12 @@ jobs:
           git cat-file -e "$base^{commit}"
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
+          mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
+          test "${#auto_safety[@]}" -eq 50
+          allowed+=("${auto_safety[@]}")
+          mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
+          test "${#auto_supplement[@]}" -eq 19
+          allowed+=("${auto_supplement[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
           node --test .github/tests/research-center-batch-scope.test.mjs
@@ -376,10 +463,12 @@ jobs:
               case "$path" in
                 stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
                 *)
-                  printf '%s\n' "${research_batch[@]}" | grep -Fx "$path" >/dev/null || {
+                  if ! printf '%s\n' "${research_batch[@]}" | grep -Fx "$path" >/dev/null \
+                    && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \
+                    && ! printf '%s\n' "${auto_supplement[@]}" | grep -Fx "$path" >/dev/null; then
                     echo "Unexpected Paper-facing UI change: $path" >&2
                     exit 1
-                  }
+                  fi
                   ;;
               esac
             fi
