@@ -26,6 +26,7 @@ on:
       - research-production/bin/research-video-approved-job.mjs
       - research-production/src/research-ai-review-worker.mjs
       - research-production/src/research-video-discovery-worker.mjs
+      - research-production/src/research-video-discovery-policy.mjs
       - research-production/test/research-ai-activation-contract.test.mjs
       - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-forward-runtime-diagnostic.test.mjs
@@ -261,15 +262,31 @@ jobs:
           test "$actual" = "$TARGET_SHA"
 
       - name: Record explicit owner free-only and public video consent
+        id: confirm_policy
         if: needs.authorize.outputs.free_only_owner_comment_id != ''
         shell: bash
         run: |
           set -Eeuo pipefail
           [[ "$RESEARCH_FREE_ONLY_OWNER_COMMENT_ID" =~ ^[1-9][0-9]{0,19}$ ]]
           remote_env="$(printf 'TARGET_SHA=%q RESEARCH_FREE_ONLY_OWNER_COMMENT_ID=%q' "$TARGET_SHA" "$RESEARCH_FREE_ONLY_OWNER_COMMENT_ID")"
+          set +e
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- confirm-free-only" \
-            < research-production/deploy/activate-ai-research.sh
+            < research-production/deploy/activate-ai-research.sh \
+            2>&1 | tee "$RUNNER_TEMP/ai-research-consent.txt"
+          consent_pipeline_status=("${PIPESTATUS[@]}")
+          remote_status=${consent_pipeline_status[0]}
+          set -e
+          if (( remote_status != 0 )); then
+            failure_reason="$(grep -Eo 'RESEARCH_(CONFIRMATION_[A-Z_]+|OWNER_CONFIRMATION_REQUIRED|APP_CONFIRMATION_IDENTITY_REQUIRED)' "$RUNNER_TEMP/ai-research-consent.txt" | tail -1 || true)"
+            failure_reason="${failure_reason:-AI_RESEARCH_CONSENT_WORKFLOW_FAILED}"
+            printf 'failure_reason=%s\n' "$failure_reason" >> "$GITHUB_OUTPUT"
+            exit "$remote_status"
+          fi
+          if (( consent_pipeline_status[1] != 0 )); then
+            printf 'failure_reason=%s\n' 'AI_RESEARCH_CONSENT_DIAGNOSTIC_CAPTURE_FAILED' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
       - name: Read-only AI Research preflight
         shell: bash
@@ -317,6 +334,7 @@ jobs:
         with:
           name: research-ai-activation-${{ github.run_id }}
           path: |
+            ${{ runner.temp }}/ai-research-consent.txt
             ${{ runner.temp }}/ai-research-preflight.txt
             ${{ runner.temp }}/ai-research-activation.txt
           if-no-files-found: ignore
@@ -326,7 +344,7 @@ jobs:
         if: failure()
         uses: actions/github-script@v7
         env:
-          FAILURE_REASON: ${{ steps.activate_ai.outputs.failure_reason || 'AI_RESEARCH_ACTIVATION_WORKFLOW_FAILED' }}
+          FAILURE_REASON: ${{ steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason || 'AI_RESEARCH_ACTIVATION_WORKFLOW_FAILED' }}
         with:
           script: |
             await github.rest.issues.createComment({
