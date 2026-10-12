@@ -112,6 +112,7 @@ type Props = {
   onSelectionChange: (selection: AnalysisSelection) => void;
   onAnalysisChange?: (analysis: ChartAnalysis | null) => void;
   onLiveSnapshotChange?: (snapshot: ChartLiveSnapshot) => void;
+  onFirstPaint?: () => void;
 };
 
 type AiChartRealtimeHealth = {
@@ -445,7 +446,7 @@ function buildCurrentAnalysis(input: {
   });
 }
 
-export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisChange, onLiveSnapshotChange }: Props) {
+export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisChange, onLiveSnapshotChange, onFirstPaint }: Props) {
   const { format: formatPrice } = useChartCurrency();
   const formatPlanPrice = formatPrice;
   const [autoPatterns, setAutoPatterns] = useState(true);
@@ -536,6 +537,21 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       return true;
     },
   });
+
+  useEffect(() => {
+    if (!onFirstPaint || chartQuery.isLoading) return;
+    // Let the committed canvas (or terminal empty/error state) paint before
+    // the parent starts optional evidence chunks. A null initial analysis is
+    // not evidence that the critical chart is ready.
+    let nextFrame: number | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      nextFrame = window.requestAnimationFrame(onFirstPaint);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (nextFrame != null) window.cancelAnimationFrame(nextFrame);
+    };
+  }, [chartQuery.isLoading, onFirstPaint]);
 
   useEffect(() => {
     const generation = streamGenerationRef.current + 1;
