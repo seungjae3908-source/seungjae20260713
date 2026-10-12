@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
 import { currentPublicV3CycleReady } from './public-v3-current-page-gate.mjs';
 import {v3PublicCycleLockCommand,V3_PUBLIC_CYCLE_CONFLICT_EXIT} from './public-cycle-singleflight.mjs';
+import { readV3StableSnapshot } from './public-snapshot-safe-read.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
@@ -22,15 +22,12 @@ if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mj
 
 const EMPTY_STAT = Object.freeze({mtimeMs:-1,ctimeMs:-1,ino:null,size:null});
 let cache = {...EMPTY_STAT,snapshot:null,loadedAt:null,error:'SNAPSHOT_NOT_READY'};
-function sameSnapshotStat(a,b){
-  return a?.mtimeMs===b?.mtimeMs && a?.ctimeMs===b?.ctimeMs
-    && a?.ino===b?.ino && a?.size===b?.size;
-}
 function safeSnapshotError(error){
   if(error?.code==='ENOENT')return 'SNAPSHOT_NOT_READY';
   if(error?.code==='EACCES'||error?.code==='EPERM')
     return 'SNAPSHOT_READ_PERMISSION_DENIED';
-  if(error?.code==='EISDIR')return 'SNAPSHOT_NOT_A_FILE';
+  if(error?.code==='EISDIR'||error?.message==='SNAPSHOT_NOT_A_FILE')return 'SNAPSHOT_NOT_A_FILE';
+  if(error?.message==='SNAPSHOT_SIZE_OUT_OF_BOUNDS')return 'SNAPSHOT_SIZE_OUT_OF_BOUNDS';
   if(error instanceof SyntaxError)return 'SNAPSHOT_INVALID_JSON';
   if(error?.message==='SNAPSHOT_SERVICE_SHA_MISMATCH')
     return 'SNAPSHOT_SERVICE_SHA_MISMATCH';
@@ -46,14 +43,12 @@ let lastRescanOutcome = null;
 
 async function loadSnapshot() {
   try {
-    const metadata = await stat(STATE_FILE);
-    if(cache.snapshot && sameSnapshotStat(cache,metadata))return cache;
-    const body=await readFile(STATE_FILE,'utf8');
-    const verified=await stat(STATE_FILE);
-    // Atomic producer rename must not silently swap snapshot in flight.
-    if(!sameSnapshotStat(metadata,verified))
-      throw new Error('SNAPSHOT_FILE_CHANGED_DURING_READ');
-    const parsed=JSON.parse(body);
+    // Atomic publication may overlap one stat/read pair. The helper retries
+    // only once against fresh metadata, never returning the old snapshot.
+    const read = await readV3StableSnapshot(STATE_FILE,{cached:cache});
+    if(read.cached)return cache;
+    const verified=read.metadata;
+    const parsed=JSON.parse(read.content);
     assertSignalIntelligenceV3Snapshot(parsed);
     // Never present a previous release's snapshot under this service SHA.
     // The current public producer stamps every snapshot with its exact head.
