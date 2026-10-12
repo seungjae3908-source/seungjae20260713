@@ -419,13 +419,14 @@ test('isolated deployed public collector imports its pinned source graph without
     const program = [
       "const { pathToFileURL } = require('node:url');",
       "globalThis.fetch = () => { throw new Error('OFFLINE_IMPORT_NETWORK_FORBIDDEN'); };",
-      "import(pathToFileURL(process.argv[1]).href).then(() => {",
+      "import(pathToFileURL(process.env.COLLECTOR_IMPORT_ENTRY).href).then(() => {",
       "  process.stdout.write('ISOLATED_AUTO_LIVE_PUBLIC_IMPORT_OK\\n');",
       "}).catch((e) => { process.stderr.write(String(e)); process.exitCode = 1; });",
     ].join('\n');
-    const probe = spawnSync(process.execPath, ['-e', program, entry], {
+    const probe = spawnSync(process.execPath, ['-e', program], {
       cwd: root, encoding: 'utf8', timeout: 25000,
-      env: { NODE_ENV: 'production', HOME: root, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      env: { NODE_ENV: 'production', HOME: root, PATH: process.env.PATH ?? '/usr/bin:/bin',
+        COLLECTOR_IMPORT_ENTRY: entry },
     });
     assert.equal(probe.status, 0, (probe.stderr ?? '').slice(0, 2000));
     assert.match(probe.stdout, /ISOLATED_AUTO_LIVE_PUBLIC_IMPORT_OK/u);
