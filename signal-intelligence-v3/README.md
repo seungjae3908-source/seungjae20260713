@@ -461,3 +461,17 @@ There are no additional requests for previously complete source pages or
 any source-quality threshold exceptions. Neither the 2496 excluded KRX
 product codes nor genuine Yahoo/Upbit candle gaps are claimed resolved.
 No fabricated no-trade candles, backtest PASS, Telegram sends or orders.
+ 
+## Draft: V3 Yahoo candle integrity and quota-preserving fallback
+
+The standalone V3 Yahoo binding verifies every already-returned public candle's
+strictly increasing timestamp, finite positive OHLC, consistent high/low
+bounds and nonnegative volume before accepting the first candidate source.
+An invalid first symbol can fall back to the existing approved Yahoo venue.
+It never interpolates missing bars or bypasses session/data-quality gates.
+Explicit paired HTTP 404/410/422/400 errors skip fruitless same-alias
+retries; a 429 blocks the entire public provider attempt immediately rather
+than spending quota on an alias. Mixed errors can still retry conservatively.
+The scanner/public source is still not proven for the entire KR/US roster.
+V3 journal cleanup now fsyncs its parent directory to prevent stale replay
+of a completed checkpoint after a power loss.

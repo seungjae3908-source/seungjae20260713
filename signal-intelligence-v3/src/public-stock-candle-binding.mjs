@@ -148,6 +148,19 @@ export async function withPublicStockProviderFallback(
         return value;
       }catch(error){
         lastError=error;
+        const message=error instanceof Error ? error.message : '';
+        // Public Yahoo 429 applies to the same request group; never
+        // hammer another symbol or re-send a limited request immediately.
+        if(/YAHOO_CHART_HTTP_429\b/u.test(message))
+          throw new Error('PUBLIC_STOCK_RATE_LIMITED');
+        const statuses=[...message.matchAll(/YAHOO_CHART_HTTP_(\d{3})\b/gu)]
+          .map(match=>match[1]);
+        const definitiveClientError=statuses.length>0
+          &&statuses.every(code=>['400','404','410','422'].includes(code))
+          &&(statuses.length>=2||/^YAHOO_CHART_HTTP_/u.test(message));
+        if(message.startsWith('YAHOO_UNSUPPORTED_TIMEFRAME:')
+          ||definitiveClientError)
+          break; // Try the alternate permitted symbol, not this failing alias.
         if(attempt<retryCount)await pause(150*attempt);
       }
     }
