@@ -321,6 +321,92 @@ export async function deriveArchivedResearchTimeframesV1({
 
 
 
+
+/**
+ * Read-only, content-authenticated audit of immutable revisions of ONE
+ * instrument/session. This never repairs gaps or silently chooses a release
+ * winner. A strict native OHLCV superset is only a candidate for a separately
+ * reviewed sourceDigestSha256 selection, NOT an OOS or PIT proof.
+ */
+export async function auditResearchMinuteSessionRevisionsV1({
+  root, market, symbol, sessionStartMs, maxRevisions=16,
+}={}) {
+  if(!Number.isSafeInteger(maxRevisions)||maxRevisions<1||maxRevisions>32)
+    throw new TypeError("MINUTE_REVISION_AUDIT_BOUNDS_INVALID");
+  const directory=await sessionDirectory(root,{market,symbol,sessionStartMs},false);
+  const meta={
+    market,symbol,sessionStartMs,providerGETCount:0,rawMinutePricesExposed:false,
+    sourceRevisionAutoSelected:false,independentPITAndSourceAuthentication:false,
+    fullMarketOpportunityDenominatorVerified:false,
+    historicalScannerAvailabilityIndependentlyVerified:false,
+    explicitSourceRevisionReviewRequired:true,
+  };
+  if(!directory)return safety({...meta,status:"BLOCKED_DATA",
+    reason:"ARCHIVED_SESSION_NOT_FOUND",archiveRevisionCount:0,
+    revisionCandidates:[],suggestedReviewDigestSha256:null});
+  const names=(await readdir(directory)).filter(n=>n.endsWith(".json.gz"));
+  if(names.some(n=>!/^[0-9a-f]{64}\.json\.gz$/u.test(n)))
+    throw new TypeError("MINUTE_REVISION_AUDIT_FILENAME_INVALID");
+  const digests=names.map(n=>n.slice(0,64)).sort();
+  if(!digests.length)return safety({...meta,status:"BLOCKED_DATA",
+    reason:"ARCHIVED_REVISION_NOT_FOUND",archiveRevisionCount:0,
+    revisionCandidates:[],suggestedReviewDigestSha256:null});
+  if(digests.length>maxRevisions)return safety({...meta,status:"BLOCKED_DATA",
+    reason:"ARCHIVE_REVISION_REVIEW_BUDGET_EXCEEDED",
+    archiveRevisionCount:digests.length,revisionCandidates:[],
+    suggestedReviewDigestSha256:null});
+  const copies=[];
+  for(const digest of digests){
+    const source=await loadRecord(join(directory,digest+".json.gz"),digest);
+    if(source.market!==market||source.symbol!==symbol
+      ||source.session.startMs!==sessionStartMs)
+      throw new TypeError("MINUTE_REVISION_AUDIT_PATH_IDENTITY_INVALID");
+    copies.push({digest,source,
+      bars:new Map(source.minuteBars.map(bar=>[bar.timestampMs,bar]))});
+  }
+  const scope=copies[0].source;
+  const sameScope=copies.every(x=>x.source.venue===scope.venue
+    &&x.source.sourceId===scope.sourceId
+    &&JSON.stringify(x.source.session)===JSON.stringify(scope.session));
+  const candidates=Object.freeze(copies.map(x=>Object.freeze({
+    sourceDigestSha256:x.digest,originalOneMinuteRows:x.source.minuteBars.length,
+    capturedAsOfMs:x.source.asOfMs,
+    // This is a local SHA-verified original, not source-rights authentication.
+    immutableLocalIntegrityVerified:true,
+    historicalScannerPublicationVerified:false,
+  })));
+  const response=(status,reason,digest=null)=>safety({...meta,
+    status,reason,archiveRevisionCount:copies.length,
+    revisionCandidates:candidates,suggestedReviewDigestSha256:digest,
+    originalNoTradeGapsIndependentlyAuthenticated:false,
+    profitabilityProven:false,executionAuthority:"NONE"});
+  if(!sameScope)return response("BLOCKED_DATA",
+    "ARCHIVE_REVISIONS_HAVE_DIFFERENT_SOURCE_OR_SESSION");
+  if(copies.length===1)return response("SINGLE_LOCAL_ORIGINAL_REVISION_ONLY",
+    "SOURCE_ONLY_NOT_INDEPENDENT_PIT_OR_ECONOMIC_PROOF",copies[0].digest);
+  const samePrice=(a,b)=>["open","high","low","close","volume"]
+    .every(k=>a[k]===b[k]);
+  for(let i=0;i<copies.length;i++)for(let j=i+1;j<copies.length;j++){
+    const left=copies[i],right=copies[j];
+    for(const [ts,bar] of left.bars){
+      const peer=right.bars.get(ts);
+      if(peer&&!samePrice(bar,peer))return response("BLOCKED_DATA",
+        "ARCHIVE_REVISIONS_CONFLICT_ON_ORIGINAL_OHLCV");
+    }
+  }
+  const dominates=(candidate,other)=>
+    [...other.bars].every(([ts,bar])=>{
+      const match=candidate.bars.get(ts);
+      return match&&samePrice(bar,match);
+    });
+  const leaders=copies.filter(x=>copies.every(y=>dominates(x,y)));
+  if(leaders.length!==1)return response("BLOCKED_DATA",
+    leaders.length===0?"ARCHIVE_REVISIONS_HAVE_NO_COMPLETE_SUPERSET"
+      :"ARCHIVE_REVISIONS_DIFFER_ONLY_IN_CAPTURE_TIME");
+  return response("STRICT_NATIVE_MINUTE_SUPERSET_REQUIRES_REVIEW",
+    "EXPLICIT_SOURCE_REVISION_SELECTION_REQUIRED",leaders[0].digest);
+}
+
 /**
  * Enumerate a bounded page of sessions ALREADY stored under an immutable
  * PRIVATE 1m archive. A caller never supplies a pathname for a session.
