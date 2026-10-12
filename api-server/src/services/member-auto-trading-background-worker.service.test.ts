@@ -65,6 +65,31 @@ import {
 
 const USER = '11111111-1111-1111-1111-111111111111';
 
+test('worker stopped during an awaited member read cannot create plans or resume on a later tick', async () => {
+  const repository = new InMemoryTradingRepository();
+  const nowMs = Date.now();
+  let unblock!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async listEligibleMembers() { started(); await blocked; return await base.listEligibleMembers(); },
+  });
+  const first = withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  await entered;
+  worker.stop(); unblock();
+  const stoppedTick = await first;
+  assert.equal(stoppedTick.newEntriesFailClosed, true);
+  assert.equal(stoppedTick.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(stoppedTick.liveOrders + stoppedTick.paperExitOrders + stoppedTick.privateTradingRequests, 0);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  const later = await worker.runOnce(new Date(nowMs + 1_000));
+  assert.equal(later.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(later.liveEntryWarmupComplete, false); assert.equal(later.liveEntriesArmed, false);
+  assert.equal(later.newEntriesFailClosed, true);
+});
+
 test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
   const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
     direction: 'BUY', timeframe: '5m', regime: 'TREND' },
