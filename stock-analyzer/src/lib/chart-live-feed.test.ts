@@ -152,3 +152,36 @@ test('provider / transport switch resets the live bar baseline without removing 
   }), now);
   assert.deepEqual(rising.map((event) => event.kind), ['bar', 'bar']);
 });
+
+test('a provider recovery keeps historical patterns and waves out of new real-time event claims', () => {
+  const pattern: AutoPattern = {
+    id: 'recovered-pattern', name: '이중바닥', direction: 'up', status: 'confirmed',
+    detectedAt: barTime - 300, eventAt: barTime,
+    confirmation: 110, invalidation: 95, target: [120, 125], segments: [],
+  };
+  const wave: WaveCandidate = {
+    id: 'recovered-wave', name: '상승 후보',
+    points: [{
+      label: '5', time: barTime, confirmedAt: barTime, price: 105,
+      index: 1, kind: 'high', confirmed: true,
+    }],
+    segments: [],
+  };
+  const old = snapshot({
+    dataState: 'stale', status: '연결 지연', asOf: now - 86_400_000,
+    drawing: { patterns: [], waves: [], swings: [], asOf: barTime - 300 },
+  });
+  const recovered = snapshot({
+    drawing: { patterns: [pattern], waves: [wave], swings: [], asOf: barTime },
+  });
+  const events = buildChartLiveEvents(old, recovered, now);
+  assert.deepEqual(events.map((event) => event.kind), ['data', 'analysis']);
+  assert.ok(events.every((event) => !/이중바닥|상승 후보/.test(event.title)));
+
+  // A first healthy snapshot may display actual historical structure
+  // with its true detection time, not a synthesized present-tense timestamp.
+  const baseline = buildChartLiveEvents(null, recovered, now);
+  assert.equal(baseline.filter((event) => event.kind === 'pattern').length, 1);
+  assert.equal(baseline.filter((event) => event.kind === 'wave').length, 1);
+  assert.equal(baseline.find((event) => event.kind === 'pattern')?.at, barTime * 1000);
+});
