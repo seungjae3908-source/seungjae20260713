@@ -41,20 +41,8 @@ export function assertProductionBudgetReceipt(receipt, sha) {
   return receipt;
 }
 
-async function main() {
-  const sha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
-  if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error('APPROVED_TARGET_SHA_REQUIRED');
-  const db = productionBudgetConnection(String(process.env.PROD_DATABASE_URL ?? '').trim());
-  // A read-only check, not activation: never change a claim implementation while
-  // the automatic execution worker is running. No runtime flag is written here.
-  const response = await fetch('https://lsj119.com/api/health', { signal: AbortSignal.timeout(15000), cache: 'no-store' });
-  const health = await response.json();
-  if (!response.ok || health?.ok !== true || health?.identityMatch !== true
-    || health?.autoTradingBackground?.enabled !== false || health?.autoTradingBackground?.liveEntriesArmed !== false
-    || health?.autoTradingBackground?.liveEntryArmPresent !== false) {
-    throw new Error('PRODUCTION_BUDGET_AUTO_WORKER_MUST_BE_OFF');
-  }
-  const source = readFileSync(path.join(root, migrationPath), 'utf8');
+export function productionBudgetInstallationSql(source, sha) {
+  if (!/^[a-f0-9]{40}$/u.test(sha ?? '')) throw new Error('APPROVED_TARGET_SHA_REQUIRED');
   const migrationHash = createHash('sha256').update(source).digest('hex');
   const body = productionBudgetMigrationBody(source);
   const fingerprint = String.raw`select md5(coalesce(string_agg(part,',' order by part),'')) from (
@@ -110,6 +98,23 @@ async function main() {
       'orderRequests',0,'cancelRequests',0,'amendRequests',0,'transferRequests',0,'withdrawalRequests',0,
       'liveTradingAuthorityGranted',false,'autoTradingAuthorityGranted',false)::text;`, 'commit;', '',
   ].join('\n');
+  return sql;
+}
+
+async function main() {
+  const sha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(sha)) throw new Error('APPROVED_TARGET_SHA_REQUIRED');
+  const db = productionBudgetConnection(String(process.env.PROD_DATABASE_URL ?? '').trim());
+  // A read-only check, not activation: never change a claim implementation while
+  // the automatic execution worker is running. No runtime flag is written here.
+  const response = await fetch('https://lsj119.com/api/health', { signal: AbortSignal.timeout(15000), cache: 'no-store' });
+  const health = await response.json();
+  if (!response.ok || health?.ok !== true || health?.identityMatch !== true
+    || health?.autoTradingBackground?.enabled !== false || health?.autoTradingBackground?.liveEntriesArmed !== false
+    || health?.autoTradingBackground?.liveEntryArmPresent !== false) {
+    throw new Error('PRODUCTION_BUDGET_AUTO_WORKER_MUST_BE_OFF');
+  }
+  const sql = productionBudgetInstallationSql(readFileSync(path.join(root, migrationPath), 'utf8'), sha);
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith('PG') || key === 'PROD_DATABASE_URL') delete env[key];
   const result = spawnSync('psql', ['-X', '--no-psqlrc', '--quiet', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1',

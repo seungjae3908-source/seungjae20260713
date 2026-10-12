@@ -40,6 +40,66 @@ test('one read-only audit collects all policy, missing-source and four-provider 
   assert.ok(audit.additionalRequiredControls.includes('ATOMIC_AGGREGATE_BUDGET'));
 });
 
+
+test('formula-AI live pilot cannot pass the AI review gate from missing, blocked or empty handoffs', async () => {
+  const at = Date.parse('2026-10-13T00:00:00Z');
+  for (const handoff of [
+    null,
+    { status: 'READY', evaluatedAtMs: at, entries: [] },
+    { status: 'BLOCKED_DATA', evaluatedAtMs: at, entries: [], blockers: ['PUBLIC_SOURCE_MISSING'] },
+  ]) {
+    const repository = new InMemoryTradingRepository();
+    const baseGet = repository.getPolicy.bind(repository);
+    repository.getPolicy = async (userId) => ({ ...(await baseGet(userId)), pilotStage: 'formula-ai-exception' });
+    let writes = 0;
+    repository.saveOrder = async () => { writes++; throw new Error('FORBIDDEN'); };
+    repository.savePlan = async () => { writes++; throw new Error('FORBIDDEN'); };
+    const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
+      async readHandoff() {
+        return handoff as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>;
+      },
+      async readLiveAccountSnapshot() { throw new Error('ACCOUNT_NOT_CONFIGURED'); },
+    };
+    const audit = await auditAutomaticLivePreactivation({
+      userId: 'audit-owner', repository, source, targetSha: 'a'.repeat(40), nowMs: at,
+      profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+    });
+    assert.deepEqual(audit.checks.find((check) => check.id === 'CURRENT_AI_EVIDENCE')?.codes,
+      ['PREACTIVATION_SIGNAL_AI_REVIEW_MISSING']);
+    assert.ok(audit.lifecycleCoverage.blockedControlIds.includes('AI_PRODUCER_CONNECTED'));
+    assert.equal(audit.ready, false);
+    assert.equal(audit.activationReady, false);
+    assert.equal(audit.orderRequests + audit.cancelRequests + audit.amendRequests, 0);
+    assert.equal(writes, 0);
+  }
+});
+
+test('formula-AI live pilot rejects expired or absent per-candidate reviews without extending the two-minute TTL', async () => {
+  const at = Date.parse('2026-10-13T00:00:00Z');
+  const repository = new InMemoryTradingRepository();
+  const baseGet = repository.getPolicy.bind(repository);
+  repository.getPolicy = async (userId) => ({ ...(await baseGet(userId)), pilotStage: 'formula-ai-exception' });
+  const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
+    async readHandoff() {
+      return { status: 'READY', evaluatedAtMs: at, entries: [
+        { identity: { signalId: 'candidate-no-current-issuer', market: 'CRYPTO_SPOT',
+          researchCodeSha: 'a'.repeat(40) }, evaluatedAtMs: at, aiReviewEvidence: {
+          reviewedAtMs: at - 120_000, expiresAtMs: at,
+        } },
+      ] } as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>;
+    },
+    async readLiveAccountSnapshot() { throw new Error('ACCOUNT_NOT_CONFIGURED'); },
+  };
+  const audit = await auditAutomaticLivePreactivation({
+    userId: 'audit-owner', repository, source, targetSha: 'a'.repeat(40), nowMs: at,
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  });
+  assert.deepEqual(audit.checks.find((check) => check.id === 'CURRENT_AI_EVIDENCE')?.codes,
+    ['PREACTIVATION_SIGNAL_AI_REVIEW_INVALID']);
+  assert.equal(audit.activationReady, false);
+  assert.equal(audit.orderRequests, 0);
+});
+
 async function historyAudit(plans: TradingPlan[], orders: TradingOrder[]) {
   const repository = new InMemoryTradingRepository();
   repository.listPlans = async () => plans;
