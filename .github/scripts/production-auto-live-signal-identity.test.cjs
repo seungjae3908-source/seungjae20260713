@@ -398,6 +398,10 @@ test('separate PUBLIC-only installer syntax and all protected Paper/financial bo
     'autoTradingActivationReady:false',
     'Preexisting', // Not required; tested preservation by no modification script.
     'CURRENT_CRON',
+    'cron daemon unavailable',
+    'CRON_OUTPUT="$(LC_ALL=C crontab -l 2>&1)"',
+    '[[ "$CRON_OUTPUT" == no\\ crontab\\ for\\ * ]]',
+    'grep awk wc tr rm pgrep',
     '[[ "$READBACK" == "$EXPECTED" ]]',
     ': > "$STAGE/DISABLED"',
     'rm -f "$ROOT/DISABLED"',
