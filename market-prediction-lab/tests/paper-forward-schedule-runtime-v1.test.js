@@ -124,6 +124,30 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
   }
 });
 
+test("same-SHA cadence change fails before provider calls and preserves existing state and evidence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-mode-identity-"));
+  const root = join(sandbox, "state");
+  let nowMs = 1_800_000_000_000;
+  let providerCalls = 0;
+  const options = { rootDirectory: root, researchCodeSha: RESEARCH_SHA,
+    clock: () => nowMs, publicEvidenceProvider: { collectPublicEvidence(input) {
+      providerCalls += 1;
+      return readyProvider(nowMs).collectPublicEvidence(input);
+    } } };
+  const paths = ["state/recurring-paper-loop.json", "status/runtime-status.json",
+    "status/invocations.jsonl", "handoff/member-auto-trading-latest.json"].map((path) => join(root, path));
+  try {
+    await runPaperForwardScheduledInvocation(options);
+    const before = await Promise.all(paths.map((path) => readFile(path, "utf8")));
+    assert.equal(providerCalls, 4);
+    nowMs += 15 * 60_000;
+    await assert.rejects(runPaperForwardScheduledInvocation({ ...options, autoLiveSignalRefresh: true }),
+      { message: "PAPER_LOOP_PREDECESSOR_IDENTITY_MISMATCH" });
+    assert.equal(providerCalls, 4, "incompatible state must block before any new source read");
+    assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, "utf8"))), before);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
 test("blocked new cycle overwrites the prior READY member automation handoff", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-handoff-blocked-"));
   const root = join(sandbox, "persistent-state");

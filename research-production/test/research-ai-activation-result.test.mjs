@@ -82,3 +82,29 @@ test('invalid exit statuses, identities and unbounded input fail closed', () => 
     assert.equal(r.failureReason,'AI_RESEARCH_ACTIVATION_RESULT_INPUT_INVALID');
   }
 });
+
+test('the production timeout diagnostic preserves provider cause separately from failed component',()=>{
+  const diagnostic={schemaVersion:'research-production-ai-diagnostic-v1',researchSha:SHA,
+    status:'PARTIAL_AI_UNAVAILABLE',provider:'gemini',credentialValuesExposed:false,executionAuthority:'NONE',
+    blockedProfiles:[{profile:'forward',reason:'FREE_AI_TIMEOUT'}],deferredProfiles:[{profile:'long-history',reason:'STALE_RELEASE_EVIDENCE'}]};
+  const diagnostics=JSON.stringify(diagnostic,null,2)+'\nAI_RESEARCH_ONE_SHOT_FAILED:research-production-ai-review.service:result=exit-code:status=75\nAI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true';
+  const r=evaluate({diagnostics,remoteExitCode:70});
+  assert.equal(r.activationSucceeded,false);assert.equal(r.failureReason,'AI_RESEARCH_ONE_SHOT_FAILED');
+  assert.equal(r.providerFailureReason,'FREE_AI_TIMEOUT');assert.equal(r.runtimeRecheckRequired,true);
+  for(const other of [{...diagnostic,researchSha:'b'.repeat(40)},
+    {...diagnostic,credentialValuesExposed:true},
+    {...diagnostic,blockedProfiles:[{reason:'TEST_ONLY_SECRET_VALUE'}]}]){
+    const result=evaluate({diagnostics:JSON.stringify(other,null,2),remoteExitCode:70});
+    assert.equal(result.providerFailureReason,null);assert.doesNotMatch(JSON.stringify(result),/TEST_ONLY_SECRET/);
+  }
+  assert.equal(evaluate({diagnostics:log()+'\n'+JSON.stringify(diagnostic),remoteExitCode:0}).providerFailureReason,null);
+});
+
+test('pretty proof handles quoted braces, but malformed or truncated trailing JSON cannot finalize success',()=>{
+  const p=proof();p.testOnly='quoted { braces } and \\" escaping';
+  const diagnostics=[JSON.stringify(p,null,2),...REQUIRED_MARKERS,'TARGET_SHA='+SHA].join('\n');
+  assert.equal(evaluate({diagnostics}).activationSucceeded,true);
+  for(const tail of ['\n{"incomplete":','\n{bad}\n']){
+    assert.equal(evaluate({diagnostics:diagnostics+tail}).activationSucceeded,false);
+  }
+});
