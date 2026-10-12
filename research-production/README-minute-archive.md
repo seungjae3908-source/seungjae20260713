@@ -159,3 +159,24 @@ CLI(공급원 HTTP, 저장, timer 조작 없이 0600 스코프 파일 분석):
 - https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market
 
 **남은 운영 P0:** 실제 4시장 저비용 사용권/1분봉 보관/재제공 조건, KR·US 주식 히스토리 및 세션 통합, 역사적 delisting 포함 PIT 로스터, 실 서버 자원 계측, 지속 가능한 요청/WSS 처리량, 누락 자동복구 증거, 이전 원본 용량/포맷 관리, 연구센터 PIT·백테스트 연결, 24시간 실제 가동 및 독립 OOS/비용/수익성 PASS. Draft green CI는 실제 원본 확보나 server activation의 증거가 아닙니다.
+
+
+## Draft v4 — 읽기 전용 원본 1분봉 → 3·5·15·60분봉
+
+추가 모듈:
+- src/research-minute-to-multiframe-reuse-v1.mjs: 분리된 연구 Draft #1534의 검증 모델(원본 소스 blob 453f0966215d82eb13acf266c0b6ea2a30452338)을 현 연구 격리 구조에 연결한 읽기 전용 포트. 신규 거래 엔진이 아니며 #1534 병합 전 canonical 중복 소유권을 정리해야 합니다.
+- src/four-market-minute-daily-rollup-v1.mjs: 서버가 보유한 0700 private 원본 루트에서 정확한 마켓·종목·UTC 날짜 한 개만 검사. 그 날짜 및 직전 날짜(120분 자정 교차)의 불변 분봉 페이지만 읽음. 파일명·폴더·SHA·OHLC 위변조/충돌·Symlink·중간 임시파일은 차단.
+- 각 분봉의 availableAtMs는 실제 서버 수집시각 retrievedAt 이상입니다. 뒤늦게 받은 과거 자료를 당시 검색기가 알고 있던 신호로 소급하지 않습니다. 생산 코드 SHA는 원본 그대로 유지하고 동일한 관측값은 중복 제거하지만 충돌하는 OHLC는 블록합니다.
+- 하루 1440개 1분 슬롯이 로컬 원본 완전성의 분모입니다. Upbit 무거래 분봉 누락과 공급원 장애 누락은 아직 구별할 증거가 없으므로 0거래량/전봉복제 봉을 생성하지 않습니다. 한 분이라도 빠진 3/5/15/60분봉 버킷은 미완료로 표시하고, 실제 존재하는 완성 버킷만 조회합니다.
+- 1/3/5/15/30/60/240/1440분 중 요청한 범위만 계산. 아직 닫히지 않은 봉과 asOf 시점 이후 서버에 수집된 retrospective 자료는 조회 결과에서 제외됩니다.
+- SOURCE_ONLY_COMPLETE_DAY_MINUTES라는 값도 해당 마켓·종목·날짜의 로컬 원본 슬롯 확인일 뿐, 역사적 상장폐지 포함 전시장 PIT 인증, 수익성, OOS/Paper/실거래 준비를 의미하지 않습니다.
+- 한국/미국 주식은 거래소 현지 정규·프리·애프터 시간과 휴장/DST, 기업행위, 승인 데이터 공급원이 필요하므로 이번 암호화폐 UTC 24h 일간 브리지에서는 STOCK_EXCHANGE_SESSION_SOURCE_NOT_CONNECTED로 차단합니다.
+
+수동 read-only 진단:
+    node research-production/bin/four-market-minute-rollup-status.mjs --dry-run
+
+조회 전에 사람 승인·정확한 Research SHA·보호된 원본 루트 경로가 필수이며, 그 조건에서도 --inspect --market=CRYPTO_SPOT --symbol=BTC --day=YYYY-MM-DD는 오직 출력용입니다. 원본 OHLC 파일의 데이터 자체를 일반 회원·Telegram·외부 AI에 전송하지 않으며 GET/원본 파일 쓰기/작업 스케줄 실행은 0입니다. 실제 운영 서버에서는 아직 실행하지 않았습니다.
+
+테스트는 원본 120분 페이지 12개와 1440개 1분봉을 사용한 일일 변환, UTC 자정 교차, 1분 누락, 중복·서로 다른 OHLC 충돌, 실제 소스 수신시각, 미래 asOf, 파일 조작/시너지 링크 및 비정상 stock 세션 입력을 검사합니다.
+
+현재 앱 관리자 HTTP/backtester에 이 파일을 직접 연결하지 않습니다. 실제 Vultr 24시간 수집, 주식 원본/API 사용권, 4시장 역사 PIT, 전시장 비용/OOS·Paper 폐쇄루프는 별도 작업/운영 승인 후 검증해야 합니다.

@@ -20,6 +20,8 @@ const SHA40 = /^[0-9a-f]{40}$/u;
 const HASH64 = /^[0-9a-f]{64}$/u;
 const POSIX_PRIVATE = 0o077;
 const PRICE_FIELDS = ['open', 'high', 'low', 'close'];
+// Bitget USDT public contracts may contain one-character or Han base codes.
+const FUTURES_SYMBOL=/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u;
 
 const fail = (code) => { throw new Error(code); };
 const integer = n => Number.isSafeInteger(n) && n > 0;
@@ -32,7 +34,7 @@ export function validateMinuteTask(raw) {
   const rule = raw.market === 'KR_STOCK' ? /^[A-Z0-9]{6}$/u
     : raw.market === 'US_STOCK' ? /^[A-Z][A-Z0-9]{0,14}(?:[.-][A-Z0-9]{1,6})?$/u
     : raw.market === 'CRYPTO_SPOT' ? /^[A-Z0-9]{1,20}$/u
-    : /^[A-Z0-9]{3,30}$/u;
+    : FUTURES_SYMBOL;
   if (!rule.test(symbol) || symbol !== raw.symbol) fail('MINUTE_SYMBOL_INVALID');
   const { windowStartMs: start, windowEndMs: end } = raw;
   if (!integer(start) || !integer(end) || start % MINUTE_MS || end % MINUTE_MS

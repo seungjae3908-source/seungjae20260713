@@ -39,6 +39,38 @@ const MATCH_PAGE_SIZE = 500;
 const MAX_MATCH_PAGES = 20;
 const MAX_PROFILE_LOOKUP_BATCH = 200;
 
+// Legacy device-watchlist rows are NOT automatically owned by the signed-in
+// account. Only an explicit member_id + explicit market/asset identity may
+// enter the Telegram subscriber set. Never infer ownership from device_id.
+const LEGACY_MARKETS: Readonly<Record<MemberWatchlistMarket, readonly string[]>> = {
+  KR_STOCK: ['KR', 'KR_STOCK'],
+  US_STOCK: ['US', 'US_STOCK'],
+  CRYPTO_SPOT: ['CRYPTO_SPOT', 'SPOT'],
+  CRYPTO_FUTURES: ['CRYPTO_FUTURES', 'FUTURES'],
+};
+const LEGACY_ASSET_TYPES: Readonly<Record<MemberWatchlistMarket, readonly string[]>> = {
+  KR_STOCK: ['STOCKKR', 'KRSTOCK'],
+  US_STOCK: ['STOCKUS', 'USSTOCK'],
+  CRYPTO_SPOT: ['COINSPOT', 'CRYPTOSPOT'],
+  CRYPTO_FUTURES: ['COINFUTURES', 'CRYPTOFUTURES'],
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** Pure ownership/market boundary for old watchlist_items. No DB writes. */
+export function linkedLegacyTelegramWatchlistOwner(
+  row: Record<string, unknown>,
+  market: MemberWatchlistMarket,
+  symbol: string,
+): string | null {
+  const userId = text(row.member_id, 64).toLowerCase();
+  if (!UUID.test(userId) || text(row.ticker, 64).toUpperCase() !== symbol) return null;
+  const storedMarket = text(row.market, 32).toUpperCase();
+  if (!LEGACY_MARKETS[market]?.includes(storedMarket)) return null;
+  const assetType = text(row.asset_type, 32).toUpperCase().replace(/[^A-Z0-9]/gu, '');
+  if (assetType && !LEGACY_ASSET_TYPES[market]?.includes(assetType)) return null;
+  return userId;
+}
+
 function text(value: unknown, maxLength: number): string {
   return String(value ?? '').normalize('NFKC').trim().slice(0, maxLength);
 }
@@ -208,6 +240,36 @@ export async function findMemberWatchlistSubscribers(
   }
 
   if (!exhausted) throw new Error('MEMBER_WATCHLIST_MATCH_LIMIT_EXCEEDED');
+
+  // A previous app version saved some signed-in watchlists in watchlist_items,
+  // not member_watchlist_items. Read only rows with an explicit member_id;
+  // device-only rows are intentionally excluded from personal notifications.
+  // Both sources are deduplicated before capability/approval checks below.
+  let legacyExhausted = false;
+  for (let page = 0; page < MAX_MATCH_PAGES; page += 1) {
+    const from = page * MATCH_PAGE_SIZE;
+    const { data, error } = await client
+      .from('watchlist_items')
+      .select('member_id,market,ticker,asset_type')
+      .not('member_id', 'is', null)
+      .in('market', [...LEGACY_MARKETS[market]])
+      .eq('ticker', symbol)
+      .range(from, from + MATCH_PAGE_SIZE - 1);
+    if (error) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
+    const rows = Array.isArray(data) ? data : [];
+    for (const raw of rows) {
+      const userId = linkedLegacyTelegramWatchlistOwner(
+        raw as Record<string, unknown>, market, symbol,
+      );
+      if (userId) userIds.add(userId);
+    }
+    if (rows.length < MATCH_PAGE_SIZE) {
+      legacyExhausted = true;
+      break;
+    }
+  }
+  if (!legacyExhausted) throw new Error('MEMBER_WATCHLIST_MATCH_LIMIT_EXCEEDED');
+
   const candidates = Array.from(userIds).sort();
   if (candidates.length === 0) return [];
 
