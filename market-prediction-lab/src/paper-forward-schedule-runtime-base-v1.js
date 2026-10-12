@@ -211,6 +211,32 @@ function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, auth
   });
 }
 
+function scheduleModeCadence(outcomeAccumulationEnabled, authoritativeAccountRequired, autoLiveSignalRefresh) {
+  if (typeof outcomeAccumulationEnabled !== "boolean" || typeof authoritativeAccountRequired !== "boolean") {
+    throw new TypeError("Paper Forward mode flags must be boolean");
+  }
+  if (typeof autoLiveSignalRefresh !== "boolean" || autoLiveSignalRefresh && outcomeAccumulationEnabled) {
+    throw new Error("AUTO_LIVE_SIGNAL_REFRESH_REQUIRES_OBSERVATION_ONLY_MODE");
+  }
+  if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
+    throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
+  }
+  return autoLiveSignalRefresh ? AUTO_LIVE_PUBLIC_SIGNAL_CADENCE : PAPER_FORWARD_SCHEDULE_CADENCE;
+}
+
+/** Read-only installer preflight. A same-SHA cadence/mode change is a new
+ * identity, not permission to rewrite or redate the previous Paper state. */
+export function assertPaperForwardScheduleStateMode(state, {
+  researchCodeSha,
+  outcomeAccumulationEnabled = false,
+  authoritativeAccountRequired = false,
+  autoLiveSignalRefresh = false,
+} = {}) {
+  const cadence = scheduleModeCadence(outcomeAccumulationEnabled, authoritativeAccountRequired, autoLiveSignalRefresh);
+  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired, cadence);
+  restoreRecurringPaperLoopState(state, identity);
+}
+
 function bindIdentityToPublicEvidenceProvider(provider, identity) {
   return Object.freeze({
     collectPublicEvidence(input = {}) {
@@ -492,15 +518,7 @@ export async function runPaperForwardScheduledInvocation({
   if (!finite(activationAtMs) || typeof clock !== "function") {
     throw new TypeError("finite activation time and clock are required");
   }
-  if (typeof outcomeAccumulationEnabled !== "boolean" || typeof authoritativeAccountRequired !== "boolean") {
-    throw new TypeError("Paper Forward mode flags must be boolean");
-  }
-  if (typeof autoLiveSignalRefresh !== "boolean" || autoLiveSignalRefresh && outcomeAccumulationEnabled) {
-    throw new Error("AUTO_LIVE_SIGNAL_REFRESH_REQUIRES_OBSERVATION_ONLY_MODE");
-  }
-  if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
-    throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
-  }
+  const cadence = scheduleModeCadence(outcomeAccumulationEnabled, authoritativeAccountRequired, autoLiveSignalRefresh);
   if (authoritativeAccountRequired && !digest(expectedPublisherAccountIdSha256)) {
     throw Object.assign(new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED"), {
       code: "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED",
@@ -517,7 +535,6 @@ export async function runPaperForwardScheduledInvocation({
   const nowMs = clock();
   if (!finite(nowMs)) throw new TypeError("clock must return a finite number");
 
-  const cadence = autoLiveSignalRefresh ? AUTO_LIVE_PUBLIC_SIGNAL_CADENCE : PAPER_FORWARD_SCHEDULE_CADENCE;
   const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired, cadence);
   const boundRunCycle = bindRecurringPaperCycle({ identity, settlementCostProducer });
   const state = await loadOrCreateState(paths, identity, nowMs, {
