@@ -45,6 +45,12 @@ export async function readBoundedTradingProviderJson(response: Response, input: 
     if (!raw.trim()) throw new Error(input.invalidCode);
     try { return JSON.parse(raw) as unknown; }
     catch { throw new Error(input.invalidCode); }
+  } catch (error) {
+    if (input.signal.aborted) throw abort();
+    // A stream can reject with socket errors, raw provider text, or even a
+    // non-Error value. Only our two bounded classifications may escape.
+    if (error instanceof Error && [input.invalidCode, input.boundCode].includes(error.message)) throw error;
+    throw new Error(input.invalidCode);
   } finally {
     input.signal.removeEventListener('abort', cancel);
     if (!complete) cancel();
