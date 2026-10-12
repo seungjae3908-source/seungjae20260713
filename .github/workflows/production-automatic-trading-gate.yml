@@ -285,6 +285,10 @@ jobs:
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
+          // The automatic LIVE worker must consume ONLY the isolated public
+          // observer. Paper Forward accounts and research are independent.
+          const automaticLiveHandoffPath =
+            '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json';
           const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
           const liveEntryArmActivationDelayMs = 120_000;
           const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
@@ -438,6 +442,9 @@ jobs:
             telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
           });
           const assertAllFourManual = (env, expectedAuto) => {
+            if (expectedAuto && String(env.MEMBER_AUTO_TRADING_HANDOFF_PATH || '') !== automaticLiveHandoffPath) {
+              throw new Error('AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID');
+            }
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
@@ -514,6 +521,8 @@ jobs:
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath
+                  : String(baselineEnv.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? ''),
                 TRADE_RECOVERY_WORKER_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
                 TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
                 MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
@@ -529,30 +538,27 @@ jobs:
           // A missing/stale publisher is a known deterministic failure. Refuse
           // to change any PM2 flags or arm files until a fresh public handoff
           // exists; the worker still performs the full digest/evidence check.
-          const requireFreshPublishedHandoff = async (env) => {
-            const handoffPath = String(env.MEMBER_AUTO_TRADING_HANDOFF_PATH || '').trim()
-              || '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
-            let h;
-            try {
-              const file = lstatSync(handoffPath);
-              if (!file.isFile() || file.isSymbolicLink() || file.size <= 0 || file.size > 32 * 1024 * 1024) {
-                throw new Error('INVALID_HANDOFF_FILE');
-              }
-              h = JSON.parse(readFileSync(handoffPath, 'utf8'));
-            } catch {
-              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID');
-            }
-            // Deploy source includes ops and market-prediction-lab; use their
-            // canonical digest/lineage validator, not a partial inline parser.
+          const requireFreshPublishedHandoff = async (_env) => {
+            // Never accept the legacy Paper fallback even if old PM2 settings
+            // still contain it. Check the new collector before PM2 mutation.
+            const handoffPath = automaticLiveHandoffPath;
             let prearm;
+            let readTrustedHandoff;
             try {
               const published = await import('file:///opt/stock-app/ops/production-auto-live-signal-identity.cjs');
               prearm = published.default?.verifyProductionAutoLivePrearmHandoff;
+              readTrustedHandoff = published.default?.readProductionAutoLiveSignalHandoff;
             } catch {
               throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
             }
-            if (typeof prearm !== 'function') {
+            if (typeof prearm !== 'function' || typeof readTrustedHandoff !== 'function') {
               throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
+            }
+            let h;
+            try {
+              h = readTrustedHandoff(handoffPath);
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID');
             }
             const signal = await prearm(h, target, Date.now());
             if (signal.producerInvocationVerified !== false || signal.sourceTransportOnly !== true) {
@@ -904,6 +910,8 @@ jobs:
             env: {
               ...process.env,
               ...preservedDisableRuntimeEnv(before),
+              // Disable is not permission to redirect Paper or AUTO sources.
+              MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? ''),
               AUTO_TRADING: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',

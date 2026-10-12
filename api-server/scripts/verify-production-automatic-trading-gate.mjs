@@ -199,6 +199,20 @@ forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
 requireText(workflow, 'await requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'const automaticLiveHandoffPath =', 'AUTO_GATE_ISOLATED_SOURCE_CONSTANT_MISSING');
+requireText(workflow, '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json',
+  'AUTO_GATE_ISOLATED_SOURCE_PATH_MISSING');
+requireText(workflow, 'const handoffPath = automaticLiveHandoffPath;', 'AUTO_GATE_PREARM_ISOLATED_PATH_NOT_USED');
+requireText(workflow, 'published.default?.readProductionAutoLiveSignalHandoff', 'AUTO_GATE_NOFOLLOW_READER_MISSING');
+requireText(workflow, 'h = readTrustedHandoff(handoffPath);', 'AUTO_GATE_HANDOFF_READER_NOT_CALLED');
+requireText(workflow, 'MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath',
+  'AUTO_GATE_PM2_ISOLATED_BINDING_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID',
+  'AUTO_GATE_ACTIVE_PM2_SOURCE_RECHECK_MISSING');
+requireText(workflow, "MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')",
+  'AUTO_GATE_DISABLE_SOURCE_PRESERVATION_MISSING');
+forbid(workflow, /\/opt\/stock-app-data\/paper-forward-v1\/runtime-state\/handoff\/member-auto-trading-latest\.json/u,
+  'AUTO_GATE_PAPER_SIGNAL_FALLBACK_FORBIDDEN');
 requireText(workflow, 'ops/production-auto-live-signal-identity.cjs', 'AUTO_GATE_PREARM_CANONICAL_SOURCE_NOT_IMPORTED');
 requireText(workflow, 'verifyProductionAutoLivePrearmHandoff', 'AUTO_GATE_PREARM_CANONICAL_CHECK_NOT_CALLED');
 requireText(workflow, 'AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE', 'AUTO_GATE_PREARM_MODULE_MISSING_BLOCK');
