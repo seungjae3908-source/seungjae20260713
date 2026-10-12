@@ -72,12 +72,16 @@ export function buildChartLiveEvents(previous: ChartLiveSnapshot | null, snapsho
       { at: snapshot.closedTime * 1000, price: safePrice(snapshot.price) });
   }
   for (const pattern of snapshot.drawing.patterns) {
+    // Do not replay patterns discovered during an outage or source switch as
+    // new live detections; the drawing summary retains historical context.
+    if (prior && !continuousSource) continue;
     if (!safeTime(pattern.eventAt * 1000, now) || prior?.drawing.patterns.some(item => item.id === pattern.id && item.status === pattern.status)) continue;
     add('pattern', `${pattern.id}:${pattern.status}:${pattern.eventAt}`, `${pattern.name} · ${PATTERN_STATUS_LABELS[pattern.status]}`,
       pattern.status === 'candidate' ? '아직 돌파 미확인 · 측정 목표는 예측이나 승률이 아닙니다.' : '완료봉 기준 상태 · 목표 도달을 보장하지 않습니다.',
       { at: pattern.eventAt * 1000, price: safePrice(pattern.confirmation) });
   }
   for (const wave of snapshot.drawing.waves) {
+    if (prior && !continuousSource) continue;
     const last = wave.points.at(-1);
     if (!last || !safeTime(last.confirmedAt * 1000, now)) continue;
     const signature = wave.points.map(point => `${point.label}:${point.time}`).join('|');
