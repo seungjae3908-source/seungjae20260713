@@ -16,6 +16,64 @@ function candidate() {
   };
 }
 
+const EPOCH='11111111-1111-4111-8111-111111111111';
+const CONTEXT=[
+ ['KR','KR_STOCK','krx-symbol-master'],['US','US_STOCK','nasdaq-trader-public-directory'],
+ ['SPOT','CRYPTO_SPOT','upbit-public'],['FUTURES','CRYPTO_FUTURES','bitget-public'],
+];
+function confirmedTestOnlySourceLanes(){
+ const frames=[['SCALPING_15M','SCALPING','15m'],
+   ['SWING_60M','SWING','60m'],['MID_LONG_1D','MID_LONG','1D']];
+ return CONTEXT.flatMap(([prefix,market,universeSource])=>
+   frames.map(([frame,strategy,timeframe])=>{
+     const hasCandidate=prefix==='KR'&&frame==='MID_LONG_1D';
+     return{
+       laneId:prefix+'_'+frame,sourceCycleId:EPOCH,market,strategy,
+       timeframe,universeSource,totalUniverse:200,
+       status:hasCandidate?'CANDIDATES_AVAILABLE':'VALID_NO_TRADE',
+       scannedCards:hasCandidate?1:0,retainedFromBatch:hasCandidate?1:0,
+       cursorBefore:0,cursorAfter:5,lastGoodPreserved:false,
+       cursorRotatedBlockedOnly:false,responseDataState:'complete',
+       universePartial:false,universeStale:false,universeProviderErrors:0,
+       providerErrors:0,timeouts:0,
+       publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:5,
+         started:5,completed:5,partial:false,timedOut:false,
+         providerErrors:0,timeouts:0,failuresObserved:0},
+     };
+   }));
+}
+function testOnlyCanonicalCandidate(symbol='005930'){
+ // Synthetic test fixture is NOT an independent real-world OOS receipt.
+ const strategyId='SWING',costPolicyId='fixture-only-cost-v1';
+ return{
+   ...candidate(),symbol,strategy:strategyId,
+   evidence:{source:'CANONICAL_PROFIT_EVIDENCE_READY',
+     expectedNetEdgeR:1.1,expectedNetEdgePercent:1,
+     expectedNetReturnPercent:1,riskRewardRatio:2,sampleSize:80,costPolicyId},
+   provenance:{
+     sourceCycleId:EPOCH,laneId:'KR_MID_LONG_1D',cursor:0,
+     scannerSignalId:'fixture-signal-'+symbol,
+     scannerSources:['yahoo-public'],profitBlockers:[],
+     edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
+     profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
+     costPolicyId,paperIdentity:{
+       signalId:'fixture-signal-'+symbol,strategyId,
+       strategyVersion:'fixture-only-v1',parameterHash:'fixture-parameters-'+symbol,
+       researchCodeSha:SHA,market:'KR_STOCK',symbol,timeframe:'1D',horizon:5,
+       direction:'BUY',costPolicyVersion:costPolicyId,executionAuthority:'NONE',
+     },
+   },
+ };
+}
+function verifiedPublicFixture(symbol='005930'){
+ return{
+   ...runSignalIntelligenceV3([testOnlyCanonicalCandidate(symbol)]),
+   profile:{fullStrategyCoverage:true},
+   coverage:confirmedTestOnlySourceLanes(),
+   serviceSha:SHA,
+ };
+}
+
 async function startServer(stateFile, port, producerPath = '', maxStateAge = '600000') {
   const child = spawn(process.execPath, ['signal-intelligence-v3/src/server.mjs'], {
     cwd: process.cwd(),
@@ -64,11 +122,13 @@ test('server exposes read-only fresh snapshot and safety health', async () => {
     assert.equal(health.snapshotClockReady, true);
     assert.equal(health.snapshotPublicationReady,false);
     assert.equal(health.snapshotBlockedReason,'FULL_STRATEGY_SOURCE_NOT_VERIFIED');
+    assert.equal(health.snapshotPublicationIntegrity,false);
+    assert.equal(health.snapshotFresh,false);
 
     const kr = await (await fetch(`http://127.0.0.1:${port}/v1/signals/kr`)).json();
-    assert.equal(kr.ok, true);
-    assert.equal(kr.candidates.length, 1);
-    assert.equal(kr.candidates[0].symbol, '005930');
+    assert.equal(kr.ok,true);
+    assert.equal(kr.candidates.length,0,
+      'synthetic engine CANDIDATE without twelve verified source pages is not a public BUY');
 
     const post = await fetch(`http://127.0.0.1:${port}/v1/signals`, { method: 'POST' });
     assert.equal(post.status, 405);
@@ -264,8 +324,8 @@ test('atomic snapshot with same mtime and different inode must never replay a ca
   const state=join(dir,'latest-snapshot.json');
   const staged=join(dir,'replacement.json');
   const port=27000+Math.floor(Math.random()*500);
-  const first={...runSignalIntelligenceV3([candidate()]),serviceSha:SHA};
-  const second={...runSignalIntelligenceV3([{...candidate(),symbol:'000660'}]),serviceSha:SHA};
+  const first=verifiedPublicFixture('005930');
+  const second=verifiedPublicFixture('000660');
   await writeFile(state,JSON.stringify(first)+'\n');
   const instance=await startServer(state,port);
   try{
@@ -309,4 +369,69 @@ test('corrupt JSON cannot leak raw error data into health or 503 responses',asyn
     await new Promise(resolve=>instance.child.once('exit',resolve));
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+test('public API serves only exact canonical, current-source validated signal candidates',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'signal-v3-verified-public-'));
+ const state=join(dir,'snapshot.json');
+ const port=28300+Math.floor(Math.random()*400);
+ const snapshot=verifiedPublicFixture();
+ await writeFile(state,JSON.stringify(snapshot)+'\n');
+ const instance=await startServer(state,port);
+ try{
+   const health=await(await fetch('http://127.0.0.1:'+port+'/health')).json();
+   assert.equal(health.snapshotReady,true);
+   assert.equal(health.snapshotCurrentPageSourceReady,true);
+   assert.equal(health.snapshotPublicationIntegrity,true);
+   assert.equal(health.snapshotPublicationReady,true);
+   const list=await(await fetch('http://127.0.0.1:'+port+'/v1/signals/kr')).json();
+   assert.equal(list.candidates.length,1);
+   assert.equal(list.candidates[0].symbol,'005930');
+   const full=await(await fetch('http://127.0.0.1:'+port+'/v1/signals')).json();
+   assert.equal(full.snapshot.events.length,1);
+   assert.equal(full.snapshot.events[0].type,'NEW_CANDIDATE');
+   assert.equal(full.snapshot.safety.executionAuthority,'NONE');
+ }finally{
+   instance.child.kill('SIGTERM');
+   await new Promise(resolve=>instance.child.once('exit',resolve));
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+test('a tampered on-disk list or event cannot be served as a recommendation',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'signal-v3-tampered-public-'));
+ const state=join(dir,'snapshot.json');
+ const port=28700+Math.floor(Math.random()*400);
+ const original=verifiedPublicFixture();
+ const forged=JSON.parse(JSON.stringify(original));
+ // Separate persisted copies may diverge: same row ID must not authorize
+ // altered economic utility or the wrong direction.
+ forged.lists.krBuy[0].utilityR=99;
+ forged.events[0].direction='SHORT';
+ await writeFile(state,JSON.stringify(forged)+'\n');
+ const instance=await startServer(state,port);
+ try{
+   const health=await(await fetch('http://127.0.0.1:'+port+'/health')).json();
+   assert.equal(health.snapshotReady,true);
+   assert.equal(health.snapshotPublicationIntegrity,false);
+   assert.equal(health.snapshotPublicationReady,false);
+   assert.equal(health.snapshotBlockedReason,'CURRENT_PUBLICATION_PROOF_MISMATCH');
+   const list=await(await fetch('http://127.0.0.1:'+port+'/v1/signals/kr')).json();
+   assert.deepEqual(list.candidates,[]);
+   const full=await(await fetch('http://127.0.0.1:'+port+'/v1/signals')).json();
+   assert.deepEqual(full.snapshot.events,[]);
+   assert.deepEqual(full.snapshot.lists.krBuy,[]);
+   assert.equal(full.executionAuthority,'NONE');
+   // A genuine, atomic replacement may restore publication; never cache
+   // the previous tampered candidate or its changed utilityR.
+   const replacement=join(dir,'replacement.json');
+   await writeFile(replacement,JSON.stringify(original)+'\n');
+   await rename(replacement,state);
+   const after=await(await fetch('http://127.0.0.1:'+port+'/v1/signals/kr')).json();
+   assert.equal(after.candidates.length,1);
+   assert.equal(after.candidates[0].utilityR,1.1);
+ }finally{
+   instance.child.kill('SIGTERM');
+   await new Promise(resolve=>instance.child.once('exit',resolve));
+   await rm(dir,{recursive:true,force:true});
+ }
 });
