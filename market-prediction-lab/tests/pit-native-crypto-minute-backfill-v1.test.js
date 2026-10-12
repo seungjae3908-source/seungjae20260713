@@ -575,3 +575,31 @@ test("PIT native 1m CLI retry requires explicit public read and prior immutable 
    assert.equal(accepted.expectedExistingSourceDigestSha256,SHA);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test("direct native 1m private CLI previews reviewed partial source without a GET",async()=>{
+ const root=tmp(),calls=[],market="CRYPTO_SPOT",symbol="KRW-BTC";
+ try{
+  const m=manifest(market,symbol);
+  const first=await collect(config(root,market,symbol,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitMock(calls)}));
+  assert.equal(first.status,"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY");
+  const manifestPath=join(root,"dry-roster.json");
+  const output=join(root,"dry-preflight.json");
+  writeFileSync(manifestPath,JSON.stringify(m),{mode:0o600});
+  const args=["--root",root,"--market",market,"--symbol",symbol,
+   "--day","2026-09-18","--manifest",manifestPath,
+   "--expected-roster-sha",m.rawMembershipDigestSha256,
+   "--output",output,"--retry-partial","--expected-existing-sha",
+   first.archiveSourceDigestSha256];
+  const cfg=parse(args);
+  assert.equal(cfg.allowPublicReadOnlyFetch,false);
+  assert.equal(cfg.retryPartialSource,true);
+  const preview=await cli(cfg,{nowImpl,
+   upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}});
+  assert.equal(preview.status,"BLOCKED_DATA");
+  assert.equal(preview.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(preview.executionAuthority,"NONE");
+  assert.equal(calls.length,1);
+  assert.equal(statSync(output).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

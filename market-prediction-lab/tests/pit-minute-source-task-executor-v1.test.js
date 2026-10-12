@@ -651,3 +651,93 @@ test("source task mode confusion cannot read a review ticket as missing-source G
   assert.equal(calls.length,1);
  }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+
+test("reviewed partial 1m PIT task has a zero-GET preflight for both crypto markets",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),calls=[];
+  try{
+   const provider=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+   const initial=await execute(request(t,{allowPublicReadOnlyFetch:true,...provider}));
+   assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+   const previousCalls=calls.length;
+   const pages=await makePageReceipts(t.root,market,t.manifest);
+   const reviewed=plan({market,day:"2026-09-18",manifest:t.manifest,pages,taskPageIndex:0});
+   const sourceDigest=initial.retainedSourceDigestSha256;
+   const cfg=request(t,{pages,expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+    retryPartialSource:true,expectedExistingSourceDigestSha256:sourceDigest,
+    allowPublicReadOnlyFetch:false,
+    upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");},
+    bitgetClient:{get:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}},
+   });
+   const r=await execute(cfg);
+   assert.equal(r.status,"BLOCKED_DATA");
+   assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+   assert.equal(r.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+   assert.equal(r.reviewedExistingSourceDigestSha256,sourceDigest);
+   assert.equal(r.reviewedExistingNativeMinuteCount,3);
+   assert.equal(r.reviewSourceOnly,true);
+   assert.equal(r.providerGETCount,0);
+   assert.equal(r.publicGETAttempted,false);
+   assert.equal(r.profitabilityProven,false);
+   assert.equal(calls.length,previousCalls);
+   assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+   const stale=await execute({...cfg,expectedExistingSourceDigestSha256:SHA});
+   assert.equal(stale.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+   assert.equal(calls.length,previousCalls);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
+test("missing-source task dry-run rechecks current archive and refuses stale preview",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  await execute(request(t,{allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls)}));
+  const stale=await execute(request(t,{allowPublicReadOnlyFetch:false,
+   upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}}));
+  assert.equal(stale.reason,"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY");
+  assert.equal(stale.providerGETCount,0);
+  assert.equal(stale.selectedTaskKind,"MISSING_SOURCE");
+  assert.equal(calls.length,1);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("private PIT task CLI permits reviewed partial dry-run without public read opt-in",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const initial=await execute(request(t,{allowPublicReadOnlyFetch:true,
+   upbitFetchImpl:upbitFetch(calls)}));
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const review=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  const manifestFile=join(t.root,"review-roster.json");
+  const pageFile=join(t.root,"review-page.json");
+  const indexFile=join(t.root,"review-index.json");
+  const receipt=join(t.root,"review-preflight.json");
+  writeFileSync(manifestFile,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pageFile,JSON.stringify(pages[0]),{mode:0o600});
+  writeFileSync(indexFile,JSON.stringify({pageReceiptFiles:[pageFile]}),{mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+   "--manifest",manifestFile,"--page-index",indexFile,
+   "--root",t.root,"--task-page-index","0","--task-index","0",
+   "--expected-task-digest",review.partialRetryReviewDigestSha256,
+   "--output",receipt,"--retry-partial","--expected-existing-sha",
+   initial.retainedSourceDigestSha256];
+  const cfg=parse(args);
+  assert.equal(cfg.retryPartialSource,true);
+  assert.equal(cfg.allowPublicReadOnlyFetch,false);
+  const r=await cli(cfg,{nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}});
+  assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(r.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(r.readPublicExplicitlyRequested,false);
+  assert.equal(r.profitabilityProven,false);
+  assert.equal(calls.length,1);
+  const saved=JSON.parse(readFileSync(receipt,"utf8"));
+  assert.equal(saved.reviewedExistingSourceDigestSha256,
+   initial.retainedSourceDigestSha256);
+  assert.equal(saved.providerGETCount,0);
+  assert.equal(saved.publicGETAttempted,false);
+  assert.equal(statSync(receipt).mode&0o077,0);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
