@@ -2,9 +2,11 @@ import path from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
+const localPort = Number(process.env.RESEARCH_E2E_PORT ?? 4173);
+if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error('Invalid isolated E2E port');
 const baseURL = stagingMode
   ? process.env.STAGING_BASE_URL
-  : 'http://127.0.0.1:4173';
+  : `http://127.0.0.1:${localPort}`;
 const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
 
 if (stagingMode && !baseURL) {
@@ -43,8 +45,8 @@ export default defineConfig({
   },
   webServer: stagingMode ? undefined : {
     command: 'node ./e2e/support/start-vite-e2e-server.mjs vite.config.ts',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
+    url: `http://127.0.0.1:${localPort}`,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

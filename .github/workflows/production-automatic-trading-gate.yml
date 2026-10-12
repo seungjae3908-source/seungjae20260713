@@ -97,7 +97,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Validate Production gate and zero-LIVE automatic Paper wallet contracts
+      - name: Validate Production gate, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
       - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
 

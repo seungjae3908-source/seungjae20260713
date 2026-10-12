@@ -19,7 +19,7 @@ async function workspace(fn) {
   finally { await rm(root, { recursive: true, force: true }); }
 }
 async function dirs(root) {
-  for (const category of ['events','outcomes','cadence'])
+  for (const category of ['events','outcomes','cadence','capped'])
     await mkdir(join(root,'watch',category), { recursive: true, mode: 0o700 });
 }
 async function put(root, category='events', name=day+'.jsonl', data='{"public":true}\n') {
@@ -39,7 +39,7 @@ test('missing watch directories are clearly incomplete, never a retention approv
     assert.equal(report.contract,WATCH_CAPACITY_CONTRACT);
     assert.equal(report.status,'INSUFFICIENT_HISTORY');
     assert.equal(report.fileCount,0);
-    assert.equal(report.missingCategoryCount,3);
+    assert.equal(report.missingCategoryCount,4);
     assert.equal(report.categoryMetadataComplete,false);
     assert.equal(report.sourceDataRead,false);
     assert.equal(report.continuous24hProven,false);
@@ -58,9 +58,11 @@ test('private daily event, outcome, cadence metadata is counted without reading 
     const file=await put(root,'events',day+'.jsonl','{"secretApiKey":"NEVER_SHOW"}\n');
     await put(root,'outcomes',day+'.jsonl');
     await put(root,'cadence','2026-10-10.jsonl');
+    const privateCapped=await put(root,'capped',day+'.jsonl',
+      '{"cappedIdentityDigest":"sensitive-source-hash"}\n');
     const before=await readFile(file,'utf8');
     const v=await readWatchStorageCapacity(root,nowMs);
-    assert.equal(v.fileCount,3);
+    assert.equal(v.fileCount,4);
     assert.equal(v.datedDayCount,2);
     assert.equal(v.missingCategoryCount,0);
     assert.equal(v.categoryMetadataComplete,true);
@@ -71,7 +73,9 @@ test('private daily event, outcome, cadence metadata is counted without reading 
     const cli=runCli(root);
     assert.equal(cli.status,0,cli.stdout+' '+cli.stderr);
     const report=JSON.parse(cli.stdout);
-    assert.equal(report.fileCount,3);
+    assert.equal(report.fileCount,4);
+    assert.equal(JSON.stringify(report).includes('sensitive-source-hash'),false);
+    assert.ok((await readFile(privateCapped,'utf8')).includes('sensitive-source-hash'));
     assert.equal(report.configuredResearchSha,SHA);
     assert.equal(report.exactReleaseAttested,false);
     assert.equal(report.privateApiAccessed,false);
@@ -89,7 +93,7 @@ test('missing category after valid data is reported incomplete, never green',asy
     await put(root);
     const v=await readWatchStorageCapacity(root,nowMs);
     assert.equal(v.fileCount,1);
-    assert.equal(v.missingCategoryCount,2);
+    assert.equal(v.missingCategoryCount,3);
     assert.equal(v.categoryMetadataComplete,false);
     assert.notEqual(v.status,'OBSERVING');
     assert.equal(v.continuous24hProven,false);
