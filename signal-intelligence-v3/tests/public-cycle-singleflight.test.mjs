@@ -33,22 +33,27 @@ test('a timer-held flock prevents concurrent manual rescan and releases after ex
   try{
     const hold=[
       process.execPath,'-e',
-      'process.stdin.resume();process.stdin.on("end",()=>process.exit(0))',
+      'process.stdin.resume();process.stdout.write("V3_FLOCK_READY\\n");process.stdin.on("end",()=>process.exit(0))',
     ];
     holder=spawn(cmd.command,[...cmd.args.slice(0,4),...hold],{
-      stdio:['pipe','ignore','ignore'],
+      stdio:['pipe','pipe','ignore'],
     });
     const exit=new Promise((resolve,reject)=>{
       holder.once('error',reject);
       holder.once('exit',resolve);
     });
-    let conflict=null;
-    for(let i=0;i<60;i++){
-      conflict=await run(cmd.command,['-n','-E','75',cmd.lockPath,
-        process.execPath,'-e','process.exit(0)']);
-      if(conflict===75)break;
-      await new Promise(done=>setTimeout(done,15));
-    }
+    // The child announces readiness only AFTER flock has exec'd the holder.
+    // A fixed sleep or probing loop can race with a heavily loaded CI runner.
+    const ready=await new Promise((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(new Error('V3_FLOCK_HOLDER_READY_TIMEOUT')),8_000);
+      holder.stdout.once('data',chunk=>{clearTimeout(timeout);resolve(String(chunk));});
+      holder.once('error',error=>{clearTimeout(timeout);reject(error);});
+      holder.once('exit',code=>{clearTimeout(timeout);
+        reject(new Error('V3_FLOCK_HOLDER_EXITED_BEFORE_READY_'+code));});
+    });
+    assert.match(ready,/V3_FLOCK_READY/);
+    const conflict=await run(cmd.command,['-n','-E','75',cmd.lockPath,
+      process.execPath,'-e','process.exit(0)']);
     assert.equal(conflict,75,'concurrent writer must not start');
     assert.equal(await run(cmd.command,['-n','-E','75',cmd.lockPath,
       process.execPath,'-e','process.exit(0)']),75);
