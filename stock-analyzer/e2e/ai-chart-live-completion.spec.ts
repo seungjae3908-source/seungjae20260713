@@ -102,12 +102,19 @@ test('source staleness halts new opinions even with fresh updatedAt; recovery is
   await refresh(page, fixture);
   await expect(feed.getByTestId('chart-live-halted')).toContainText('오래된 데이터 · 새 판단 중단');
   await expect(page.getByTestId('ai-chart-drawing-historical')).toContainText('과거 관측');
+  // Stale history must never remain in CURRENT judgment / scanner cards.
+  await expect(page.getByTestId('ai-chart-current-halted')).toContainText('현재 판단으로 표시하지 않습니다');
+  await expect(page.getByTestId('ai-chart-current-judgment')).toContainText('차트 데이터 확인 후 표시됩니다.');
+  await expect(page.getByTestId('ai-chart-current-judgment')).not.toContainText('기술 강도');
+  await expect(page.getByTestId('analysis-signal-score')).toContainText('-');
   await expect(feed.locator('[data-event-kind="analysis"]')).toHaveCount(1);
   await expect(feed.locator('[data-event-kind="bar"]')).toHaveCount(0);
   fixture.ageSeconds = 0;
   await refresh(page, fixture);
   await expect(feed.getByTestId('chart-live-halted')).toHaveCount(0);
   await expect(page.getByTestId('ai-chart-drawing-historical')).toHaveCount(0);
+  await expect(page.getByTestId('ai-chart-current-halted')).toHaveCount(0);
+  await expect(page.getByTestId('ai-chart-current-judgment')).toContainText('기술 강도');
   // A jump from the stale candle to the recovered snapshot is a new baseline,
   // not a continuously observed live candle close.
   await expect(feed.locator('[data-event-kind="bar"]')).toHaveCount(0);
@@ -122,6 +129,7 @@ test('a failed provider refresh clears current judgment and marks old log as his
   fixture.status = 503;
   await refresh(page, fixture);
   await expect(page.getByTestId('chart-error-state')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-current-halted')).toContainText('현재 판단으로 표시하지 않습니다');
   await expect(feed.getByTestId('chart-live-halted')).toContainText('연결 오류 · 새 판단 중단');
   await expect(page.getByTestId('ai-chart-drawing-historical')).toContainText('현재 돌파·매매 신호가 아닙니다');
   const currentJudgment = page.getByTestId('ai-chart-current-judgment');
@@ -134,6 +142,27 @@ test('a failed provider refresh clears current judgment and marks old log as his
   await expect(feed.getByTestId('chart-live-halted')).toHaveCount(0);
   await expect(page.getByTestId('ai-chart-drawing-historical')).toHaveCount(0);
   await expect(currentJudgment).toContainText('기술 강도');
+  await expect(page.getByTestId('ai-chart-current-halted')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(orderWrites).toEqual([]);
+});
+
+test('mobile stale provider never leaves an actionable cached summary on-screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { fixture, pageErrors, orderWrites } = await setup(page);
+  await ready(page);
+  await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
+  await expect(page.getByTestId('ai-chart-current-judgment')).toContainText('기술 강도');
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  fixture.ageSeconds = 86_400;
+  await refresh(page, fixture);
+  await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
+  const summary = page.getByTestId('ai-chart-mobile-summary');
+  await expect(page.getByTestId('ai-chart-current-halted')).toBeVisible();
+  await expect(summary).toContainText('판단 대기');
+  await expect(summary).toContainText('차트 데이터 확인 후 표시됩니다.');
+  await expect(summary).not.toContainText('매수');
+  await expect(page.getByTestId('ai-chart-current-judgment')).not.toContainText('기술 강도');
   expect(pageErrors).toEqual([]);
   expect(orderWrites).toEqual([]);
 });

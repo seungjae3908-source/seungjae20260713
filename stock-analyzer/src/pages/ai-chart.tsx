@@ -15,6 +15,7 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ChartCurrencyProvider, useChartCurrency } from '@/components/chart-currency-provider';
 import { AiChartLivePanel, AiChartDrawingSummary, type ChartLiveSnapshot } from '@/components/ai-chart-live-panel';
+import { isChartLiveSnapshotUsable } from '@/lib/chart-live-feed';
 
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import {
@@ -235,9 +236,11 @@ function useDesktopChartLayout(): boolean {
 }
 
 function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; analysis: ChartAnalysis | null }) {
-  const plan = selection.pricePlan;
-  const confidence = analysis?.confidence ?? selection.confidence;
-  const reason = analysis?.summary ?? selection.reasons?.[0] ?? '확인된 추가 설명 없음';
+  // Scanner selections can outlive their source candles. Do not present old
+  // action/entry/stop/targets as a current chart decision during an outage.
+  const plan = analysis ? selection.pricePlan : undefined;
+  const confidence = analysis?.confidence;
+  const reason = analysis?.summary ?? '차트 데이터 확인 후 표시됩니다.';
 
   return (
     <section data-testid="ai-chart-mobile-summary" className="space-y-3 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -249,14 +252,14 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
-          {contextualActionLabel(selection, analysis)}
+          {analysis ? contextualActionLabel(selection, analysis) : '판단 대기'}
         </span>
       </div>
 
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">신호점수</p>
-          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(selection.signalScore)}</strong>
+          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(analysis ? selection.signalScore : null)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">근거 강도</p>
@@ -264,7 +267,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">위험</p>
-          <strong className="mt-0.5 block truncate text-sm">{selection.riskLevel || '미확인'}</strong>
+          <strong className="mt-0.5 block truncate text-sm">{analysis ? selection.riskLevel || '미확인' : '미확인'}</strong>
         </div>
       </div>
 
@@ -287,7 +290,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
         </div>
         <div className="rounded-2xl border border-card-border p-3">
           <p className="text-[10px] font-bold text-muted-foreground">손익비</p>
-          <strong className="mt-1 block tabular-nums">{plan?.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)}</strong>
+          <strong className="mt-1 block tabular-nums">{plan?.riskReward == null || !Number.isFinite(plan.riskReward) ? '미확인' : plan.riskReward.toFixed(2)}</strong>
         </div>
       </div>
 
@@ -323,7 +326,7 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
         </div>
         <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
           <p className="text-[10px] text-muted-foreground">근거 강도</p>
-          <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
+          <strong>{formatAiChartScore(analysis?.confidence)}</strong>
         </div>
       </div>
     </section>
@@ -395,6 +398,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [liveSnapshot, setLiveSnapshot] = useState<ChartLiveSnapshot | null>(null);
   const handleLiveSnapshotChange = useCallback((snapshot: ChartLiveSnapshot) => setLiveSnapshot(snapshot), []);
   const visibleLiveSnapshot = liveSnapshot?.identity === `${selection.market}:${selection.ticker}:${selection.timeframe}` ? liveSnapshot : null;
+  // A successful fetch is not proof of fresh source candles. Current decision
+  // cards must use the exact same fail-closed freshness boundary as live feed.
+  const currentEvidenceUsable = visibleLiveSnapshot != null && isChartLiveSnapshotUsable(visibleLiveSnapshot);
+  const currentAnalysis = currentEvidenceUsable ? analysis : null;
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const evidenceReadyRef = useRef(!DIRECT_AI_CHART_COLD_ROUTE);
   const evidenceIdleRef = useRef<number | null>(null);
@@ -751,7 +758,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
       <LazyAiChartV2IntelligencePanel
         selection={selection}
-        analysis={analysis}
+        analysis={currentAnalysis}
         mode={strategyMode}
         onModeChange={updateStrategyModeAndTimeframe}
       />
@@ -760,10 +767,11 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const details = hasSelection ? (
     <div className="space-y-3">
-      {!desktop && !embedded && !externalMode && <MobileSummary selection={selection} analysis={analysis} />}
-      <DecisionCard analysis={analysis} />
+      {!desktop && !embedded && !externalMode && <MobileSummary selection={selection} analysis={currentAnalysis} />}
+      {visibleLiveSnapshot && !currentEvidenceUsable ? <p role="status" data-testid="ai-chart-current-halted" className="rounded-2xl border border-warning/30 bg-warning/5 p-3 text-xs font-bold text-warning">{visibleLiveSnapshot.status} · 이전 방향·가격·진입/손절/목표와 근거 점수를 현재 판단으로 표시하지 않습니다. 생중계의 과거 관측 기록은 보존됩니다.</p> : null}
+      <DecisionCard analysis={currentAnalysis} />
       <AiChartDrawingSummary snapshot={visibleLiveSnapshot} />
-      <ContextCard selection={selection} analysis={analysis} />
+      <ContextCard selection={selection} analysis={currentAnalysis} />
       {deferNonCriticalEvidence ? (
         <p role="status" data-testid="ai-chart-cold-evidence-deferred" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">
           차트를 먼저 준비한 뒤 AI 분석 근거와 공개 시장 근거를 불러옵니다.
