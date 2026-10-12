@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-for (const name of ['research-production-activation', 'research-ai-production-activation', 'research-market-watch-activation']) {
+for (const name of ['research-production-activation', 'research-ai-production-activation', 'research-market-watch-activation', 'research-dashboard-activation']) {
   test(`${name} requires protected Production approval before SSH activation`, async () => {
     const source = (await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
     const activate = source.split('\n  activate:\n')[1]?.split(/\n  [a-zA-Z][a-zA-Z0-9_-]*:\n/u)[0] ?? '';
