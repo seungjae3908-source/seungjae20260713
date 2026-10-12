@@ -57,7 +57,7 @@ function fixture(){
        scannerSignalId:'signal-aapl-1',
        edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
        profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
-       costPolicyId:'runtime-cost-v1',profitBlockers:[],
+       costPolicyId:'runtime-cost-v1',profitBlockers:[] as string[],
        paperIdentity:{signalId:'signal-aapl-1',strategyId:'scanner-swing-v1',
          strategyVersion:'scanner-swing-v1',parameterHash:'params-sha256:one',
          market:'US_STOCK',symbol:'AAPL',timeframe:'60m',direction:'BUY',
