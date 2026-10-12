@@ -56,6 +56,12 @@ test("public API outage differs from implementation and parsing errors",()=>{
   assert.equal(classifyPublicSourceFailure(new TypeError("undefined is not a function")),"UNEXPECTED_CODE_FAILURE");
   assert.equal(classifyPublicSourceFailure(Object.assign(new Error("request expired"), { code: "UPBIT_HISTORY_TIMEOUT" })), "BLOCKED_DATA");
   assert.equal(classifyPublicSourceFailure(Object.assign(new Error("conflicting page"), { code: "BITGET_HISTORY_DUPLICATE_CONFLICT" })), "BLOCKED_DATA");
+  assert.equal(classifyPublicSourceFailure(
+    Object.assign(new Error("source exhausted per-call page budget"),
+      { code: "BITGET_HISTORY_PAGE_BUDGET_EXCEEDED" })), "BLOCKED_DATA");
+  assert.equal(classifyPublicSourceFailure(
+    Object.assign(new Error("unrecognized Bitget collector defect"),
+      { code: "BITGET_HISTORY_UNKNOWN_IMPLEMENTATION" })), "UNEXPECTED_CODE_FAILURE");
   assert.equal(classifyPublicSourceFailure(Object.assign(new TypeError("unknown implementation failure"), { code: "UPBIT_HISTORY_UNEXPECTED_BUG" })), "UNEXPECTED_CODE_FAILURE");
   assert.equal(classifyPublicSourceFailure(new SyntaxError("invalid local configuration")), "UNEXPECTED_CODE_FAILURE");
 });
