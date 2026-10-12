@@ -263,3 +263,34 @@ test('previous cycle near-tie cannot make an independently sourced SHORT abstain
  ]);
  assert.equal(sameTime.rows.filter(row=>row.state==='ABSTAIN').length,2);
 });
+
+test('a prior research-only CANDIDATE cannot suppress the first newly publishable source event',()=>{
+ const previousEngine=runSignalIntelligenceV3([baseCandidate()]);
+ assert.equal(previousEngine.stateById[previousEngine.rows[0].id],'CANDIDATE');
+ const unpublished={...previousEngine,lists:{
+   ...previousEngine.lists,krBuy:[],
+ },events:[]}; // matches public source gating of a blocked page
+ const next=runSignalIntelligenceV3([baseCandidate()],{
+   previousSnapshot:unpublished,
+ });
+ assert.equal(next.events.filter(e=>e.type==='NEW_CANDIDATE').length,1,
+   'a raw prior CANDIDATE was never actually published');
+ const alreadyPublished=runSignalIntelligenceV3([baseCandidate()],{
+   previousSnapshot:previousEngine,
+ });
+ assert.equal(alreadyPublished.events.some(e=>e.type==='NEW_CANDIDATE'),false,
+   'a still-published candidate must not produce a duplicate episode');
+});
+
+test('previous publication history is market and direction scoped, not arbitrary state aliases',()=>{
+ const initial=runSignalIntelligenceV3([
+   baseCandidate({market:'US_STOCK',symbol:'AAPL',direction:'BUY'}),
+ ]);
+ const unknown={...initial,lists:{...initial.lists,usBuy:[],
+   krBuy:initial.lists.usBuy}};
+ const next=runSignalIntelligenceV3([
+   baseCandidate({market:'US_STOCK',symbol:'AAPL',direction:'BUY'}),
+ ],{previousSnapshot:unknown});
+ assert.equal(next.events.filter(e=>e.type==='NEW_CANDIDATE').length,1,
+   'a forged cross-market list must not suppress a real current candidate');
+});

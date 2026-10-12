@@ -329,9 +329,36 @@ function candidateStateMap(rows) {
   return Object.fromEntries(rows.map((row) => [row.id, row.state]));
 }
 
+// V3 persists the whole rolling research pool in rows/stateById, but the
+// separately verified current-page projection alone grants publication.
+// Treating a prior unpublishable research CANDIDATE as already announced
+// silently loses the first real NEW_CANDIDATE when its source recovers.
+function previouslyPublishedCandidateIds(snapshot) {
+  const published = new Set();
+  const slots = [
+    ['krBuy', 'KR_STOCK', 'BUY'],
+    ['usBuy', 'US_STOCK', 'BUY'],
+    ['spotBuy', 'CRYPTO_SPOT', 'BUY'],
+    ['futuresLong', 'CRYPTO_FUTURES', 'LONG'],
+    ['futuresShort', 'CRYPTO_FUTURES', 'SHORT'],
+  ];
+  for (const [key, market, direction] of slots) {
+    const rows = snapshot?.lists?.[key];
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (row?.market === market && row?.direction === direction
+        && row?.state === 'CANDIDATE' && row?.id === identity(row)) {
+        published.add(row.id);
+      }
+    }
+  }
+  return published;
+}
+
 export function buildSignalEvents(snapshot, previousSnapshot = null) {
   const events = [];
   const previousStates = previousSnapshot?.stateById ?? {};
+  const previouslyPublished = previouslyPublishedCandidateIds(previousSnapshot);
   for (const row of snapshot.rows) {
     const before = previousStates[row.id] ?? null;
     if (row.ai.rescanRequested) {
@@ -347,7 +374,7 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         validationTier: row.validationTier,
       }));
     }
-    if (row.state === 'CANDIDATE' && before !== 'CANDIDATE') {
+    if (row.state === 'CANDIDATE' && !previouslyPublished.has(row.id)) {
       events.push(Object.freeze({
         type: 'NEW_CANDIDATE',
         id: row.id,
