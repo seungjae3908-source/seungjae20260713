@@ -296,7 +296,7 @@ test('admin historical 1m coverage reads and aggregates the full selected period
     const firstDate = second ? '2016-02-01' : '2016-01-01';
     await fulfill(route, {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true,
+      available: true, market: 'US_STOCK',
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'MISSING_HISTORICAL_MINUTE_DATE_RECEIPT',
       executionAuthority: 'NONE',
@@ -388,7 +388,7 @@ test('same-window admin recheck revokes previously displayed source totals after
     if (calls > 1) return fulfill(route, { error: 'CAPABILITY_REQUIRED' }, 403);
     return fulfill(route, {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true,
+      available: true, market: 'CRYPTO_SPOT',
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'SOURCE_PARTIAL',
       executionAuthority: 'NONE', profitabilityProven: false,
@@ -449,7 +449,8 @@ test('full ten-year PIT inventory uses bounded GET planning and never implies ma
     active -= 1;
     return {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-      available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      available: true, market: 'CRYPTO_SPOT',
+      status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
       reason: 'TEST_ONLY_INCOMPLETE_SOURCE',
       profitabilityProven: false, executionAuthority: 'NONE',
       report: {
@@ -488,7 +489,8 @@ test('PIT period parser rejects incorrect counters, untrusted statuses and wrong
   };
   const base = {
     schemaVersion: 'research-pit-minute-coverage-readonly-v1',
-    available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+    available: true, market: 'US_STOCK',
+    status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
     reason: 'SOURCE_PARTIAL', profitabilityProven: false, executionAuthority: 'NONE',
     report: {
       status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
@@ -514,6 +516,34 @@ test('PIT period parser rejects incorrect counters, untrusted statuses and wrong
   expect(isValidPITCoverageResponse({
     ...base, report: { ...base.report, executionAuthority: 'LIVE' },
   })).toBe(false);
+  // Regression: do not infer source completeness from forged status, missing
+  // numeric evidence, or another market's page.
+  expect(isValidPITCoverageResponse({
+    ...base, status: 'READY', report: { ...base.report, status: 'READY' },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({ ...base, market: 'INVALID_MARKET' })).toBe(false);
+  expect(isValidPITCoverageResponse({ ...base, financialMutationCount: 1 })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...base, report: { ...base.report, missingSourceDays: 2, partialSourceDays: 1 },
+  })).toBe(false);
+  const sourceOnly = {
+    ...base, status: 'SOURCE_ATTESTED_COMPACT_MINUTE_SOURCE_CHUNK_ONLY',
+    report: { ...base.report,
+      status: 'SOURCE_ATTESTED_COMPACT_MINUTE_SOURCE_CHUNK_ONLY',
+      missingSourceDays: 0, partialSourceDays: 0,
+      locallyCompleteMinuteSourceDays: 2 },
+  };
+  expect(isValidPITCoverageResponse(sourceOnly)).toBe(true);
+  expect(isValidPITCoverageResponse({
+    ...sourceOnly, report: { ...sourceOnly.report, sourceMinuteRows: null },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...sourceOnly, report: { ...sourceOnly.report, sourceMinuteRows: 3,
+      retrospectiveMinuteRows: 5 },
+  })).toBe(false);
+  await expect(collectPITMinuteCoveragePeriod(
+    selection, async () => ({ ...base, market: 'CRYPTO_SPOT' }),
+  )).rejects.toThrow('시장');
   await expect(collectPITMinuteCoveragePeriod(
     selection, async () => ({ ...base, report: {
       ...base.report, nextCursorDate: '2026-09-19',
