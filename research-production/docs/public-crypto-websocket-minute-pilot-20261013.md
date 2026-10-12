@@ -153,3 +153,52 @@ source subscription payloads, secrets, portfolio data or private endpoints.
 systemd, cron, live WebSocket/REST provider traffic, DB/Secret/permissions,
 private broker calls, member re-publication, Paper/LIVE orders, withdrawals
 or Telegram sends. All tests synthetic/offline. `executionAuthority=NONE`.
+
+
+## Draft v3 — REST audit pressure, restart gap continuation, source-only receipts
+
+The prior in-memory supervisor could reach 2,048 pending REST audits after
+about three minute rollovers across 760 symbols (760 * 3 > 2,048). That would
+break long-running capture irrespective of the public WebSocket rate budget.
+This Draft addresses the **source-evidence bookkeeping**, NOT vendor quotas.
+
+- Adjacent WS minute rollovers for the *same market/symbol* coalesce into a
+  single unverified REST-required window. It retains
+  `requestedEndExclusiveMs` even after the first bounded
+  `toExclusiveMs` reaches 180 minutes. Long outages and zero-trade
+  ambiguities never disappear merely because a one-shot query is capped.
+  Different market/symbols are kept independent. The original protected
+  audit cap still fails closed if distinct unverified entries exceed it.
+- New `src/public-crypto-ws-rest-handoff-v1.mjs` proposes up to 16
+  scope-validated **closed** 120/180-minute REST lookup tasks at a time,
+  with deterministic pagination and the remaining missing tail. It performs
+  **zero** actual GET calls, does not call no-trade verified, and never
+  fabricates candles or historical as-of evidence.
+- New `src/public-crypto-ws-restart-recovery-v1.mjs` reads only the
+  existing SHA-verified private 0700/0600 gzip WS sidecar and rebuilds
+  source-only unknown-interval REST proposals from the latest provisional
+  minute of each expected symbol through the actual restart cutoff.
+  Symbols with no sidecar observations stay marked missing/unknown. If
+  the sidecar itself is absent, it returns a manual-REST hold rather than
+  falsely reporting 100% market availability.
+- Read-only `inspectAndAdvancePublicWsRestAuditV1` examines the already
+  sealed **original REST page** with exact market/symbol/UTC boundaries,
+  SHA receipt and 1m slot counts. It changes only a returned *in-memory
+  audit state* after **all original slots are locally complete**.
+  A missing page or any Upbit zero-trade/transport gap stays unresolved.
+  Each successful local advancement is `SOURCE_ONLY`:
+  `genuineScannerAsOfAvailabilityProven=false`,
+  `originalMinuteProof=false` for the entire market, and
+  OOS/full costs/Paper/Live authority all remain false.
+- This work does **not** turn a pure source-only simulator into a deployed
+  worker. There is still no actual public socket connection, REST batch
+  service, journaled cursor handoff, on-host restart test, transactional
+  storage admission, host/resource/connection quota attestation, legal
+  license or paid data product. Pending audits remain a serialized-state
+  responsibility for a future dedicated isolated worker; never trust
+  an in-memory success as a durable settlement receipt.
+
+Offline negative/regression fixtures cover 240 consecutive rollovers,
+>180-minute disconnected tails, 760 scoped symbols, forbidden/forged
+REST settlement, idempotent source readback, missing original pages,
+and uncertain no-trade slots. Replit/Replit Agent forbidden; Draft only.
