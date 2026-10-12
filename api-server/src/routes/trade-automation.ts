@@ -19,7 +19,10 @@ import {
   automaticPaperWalletBootstrapReadiness,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   memberAutoTradingWorkerMode,
+  SupabaseMemberAutoTradingBackgroundSource,
 } from '../services/member-auto-trading-background-worker.service';
+import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
+import { assertPublicLivePlanOrigin, publicPlanPolicy, assertPublicPlanApprovalOrigin } from '../services/public-live-plan-origin.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { getUserSupabase } from '../lib/supabase';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
@@ -275,6 +278,7 @@ function sanitizedAutomaticRuntimeHealth() {
     lastTickAt: health.lastTickAt,
     tickOk: health.tickOk,
     handoffReady: health.handoffReady,
+    handoffErrorCode: health.handoffErrorCode,
     newEntriesFailClosed: health.newEntriesFailClosed,
     liveEntryArmPresent: health.liveEntryArmPresent,
     liveEntriesArmed: health.liveEntriesArmed,
@@ -1185,6 +1189,17 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
   }
 });
 
+router.get('/live-preactivation-readiness', async (req: AuthenticatedRequest, res) => {
+  if (!requireLiveOrderCapability(req, res)) return;
+  try {
+    const { userId, repository } = context(req);
+    const audit = await auditAutomaticLivePreactivation({ userId, repository, profile: req.member!,
+      source: new SupabaseMemberAutoTradingBackgroundSource(), targetSha: String(process.env.DEPLOY_SHA ?? '') });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true, ...audit });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -1873,10 +1888,11 @@ router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) =
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation, execution, splitExecution } = context(req);
     const input = req.body as TradingPlanInput;
-    exchangeValue(input.exchange);
     if (input.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
+    assertPublicLivePlanOrigin(input);
+    const { userId, repository, automation, execution, splitExecution } = context(req);
+    exchangeValue(input.exchange);
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
     ]);
@@ -1886,12 +1902,13 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       ...input.marketSnapshot,
       dailyOrderCount: Math.max(Number(input.marketSnapshot?.dailyOrderCount ?? 0), persistedDailyOrders),
     };
-    const result = await automation.createPlan(userId, input, policy,
+    const requestPolicy = publicPlanPolicy(input, policy);
+    const result = await automation.createPlan(userId, input, requestPolicy,
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
     let plan = result.plan;
     let automaticExecution = null;
-    if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    if (requestPolicy.mode === 'automatic' && requestPolicy.automaticEnabled) {
       if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(userId, plan.id);
       if (plan.state === 'SUBMITTED') {
         automaticExecution = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
@@ -1915,6 +1932,7 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
     const currentPlan = await repository.getPlan(userId, String(req.params.id));
     if (!currentPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
+    assertPublicPlanApprovalOrigin(currentPlan);
     const plan = await automation.approvePlan(userId, String(req.params.id));
     const result = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
     return res.json({ ok: true, plan, ...result });
