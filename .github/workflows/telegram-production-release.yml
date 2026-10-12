@@ -659,6 +659,88 @@ jobs:
           });
           NODE
 
+      # These are read-only vetoes. They must complete before the first
+      # database/Vault/PM2/Bot API mutation of the Telegram release.
+      - name: Preflight successful exact-SHA Production Deploy before any Telegram storage write
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA || '');
+            const active = String(process.env.PRE_ACTIVE_SHA || '');
+            if (!/^[0-9a-f]{40}$/.test(target) || target !== active) {
+              core.setFailed('TELEGRAM_PREDB_PRODUCTION_RUNTIME_NOT_APPROVED_SHA');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+              head_sha:target,event:'workflow_dispatch',status:'completed',per_page:100,
+            });
+            let verified = false;
+            for (const run of runs.filter(r => r.name === 'Production Deploy'
+              && r.path === '.github/workflows/production-deploy.yml'
+              && r.head_branch === 'main' && r.head_sha === target
+              && r.event === 'workflow_dispatch' && r.conclusion === 'success').slice(0,10)) {
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner:context.repo.owner,repo:context.repo.repo,run_id:run.id,per_page:100,
+              });
+              if (jobs.some(j => j.name === 'Approved canary, production deploy, verify, and rollback'
+                && j.status === 'completed' && j.conclusion === 'success')) {
+                verified = true;
+                break;
+              }
+            }
+            if (!verified) core.setFailed('TELEGRAM_PREDB_PRODUCTION_DEPLOY_RECEIPT_MISSING');
+            else core.info('TELEGRAM_PREDB_PRODUCTION_DEPLOY_VERIFIED');
+
+      - name: Preflight two protected and independently timed Telegram Staging TLS receipts
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA || '');
+            const now = Date.now();
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner:context.repo.owner,repo:context.repo.repo,
+              workflow_id:'telegram-only-staging-qa.yml',
+              branch:'main',event:'issue_comment',per_page:100,
+            });
+            const recent = (data.workflow_runs || []).filter(r =>
+              r.head_sha === target && r.event === 'issue_comment'
+              && r.name === 'Telegram-Only Staging QA (Read-Only / No Deploy)'
+              && Number.isFinite(Date.parse(r.created_at))
+              && now >= Date.parse(r.created_at) && now - Date.parse(r.created_at) <= 30*60_000);
+            if (recent.length < 2 || recent.some(r =>
+              r.status !== 'completed' || r.conclusion !== 'success')) {
+              core.setFailed('TELEGRAM_PREDB_STAGING_TLS_RECENT_INDEPENDENT_PROOFS_MISSING');
+              return;
+            }
+            const valid = [];
+            for (const run of recent) {
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner:context.repo.owner,repo:context.repo.repo,run_id:run.id,per_page:100,
+              });
+              const probe = jobs.find(j =>
+                j.name === 'Staging Telegram-only network and exact-SHA evidence, no send/deploy');
+              if (probe?.status !== 'completed' || probe.conclusion !== 'success') {
+                core.setFailed('TELEGRAM_PREDB_STAGING_TLS_PROTECTED_PROBE_NOT_PROVEN');
+                return;
+              }
+              valid.push(run);
+            }
+            valid.sort((a,b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+            const earliest = Date.parse(valid[0].created_at);
+            const latest = Date.parse(valid.at(-1).created_at);
+            if (new Set(valid.map(r => r.id)).size !== valid.length
+              || latest - earliest < 5*60_000 || now - latest > 10*60_000) {
+              core.setFailed('TELEGRAM_PREDB_STAGING_TLS_NOT_STABLE');
+              return;
+            }
+            core.info('TELEGRAM_PREDB_PROTECTED_STAGING_TLS_PASS');
+
       - name: Apply and verify Production personal Telegram storage atomically
         id: storage
         env:

@@ -280,3 +280,20 @@ rejected digest admission remains `skipped`; missing admission proof
 remains `failed`. `SUPPRESSED` continues to be skipped.
 Mock regression tests exercise both accepted and rejected digest
 admissions without any live Telegram send, real DB insert or order.
+
+
+## 2026-10-12 — Full Telegram release: pre-mutation receipt ordering
+
+The owner-only full Telegram Production release must reject the run **before any
+Production personal-Telegram schema/Vault/PM2/Bot API mutation** unless the
+exact current-main SHA has already passed a successful protected Production
+Deploy job and is the live PM2 SHA. The later existing Production Deploy
+receipt gate remains in place as a second check; it is not replaced.
+
+It also requires **two independent protected Telegram Staging read-only IPv4/TLS
+QA successes**, at least five minutes apart, both within 30 minutes and the
+most recent within ten minutes, with no recent failed/missing protected probe.
+PR-only mocked QA, skipped network jobs, or stale successful runs cannot count.
+Neither preflight posts to Telegram or changes a database, server process,
+secret or trading authority. This is an additional NO-GO guard, not a claim of
+real personal/signal delivery; those still require separately verified receipts.
