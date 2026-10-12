@@ -114,18 +114,27 @@ export async function auditAutomaticLivePreactivation(input: {
   });
   await check('CANONICAL_OWNERSHIP_AND_DUPLICATES', () => {
     canonicalAutomaticLivePositions(plans(), orders());
+    const byId = new Map(plans().map((p) => [p.id, p]));
     const seen = new Set<string>();
     for (const row of orders()) {
+      const parent = byId.get(row.planId);
+      // An unknown parent is not proof that this is a harmless Paper order.
+      if (!parent) return ['PREACTIVATION_ORDER_PARENT_UNRESOLVED'];
+      if (parent.accountMode === 'paper') continue;
+      if (parent.accountMode !== 'live' || parent.userId !== row.userId || parent.exchange !== row.exchange) {
+        return ['PREACTIVATION_LIVE_ORDER_LINEAGE_INVALID'];
+      }
       const key = `${row.exchange}:${row.clientOrderId}`;
       if (seen.has(key)) return ['PREACTIVATION_DUPLICATE_CLIENT_ORDER_ID'];
       seen.add(key);
     }
-    const keys = plans().map((p) => p.idempotencyKey);
+    const keys = plans().filter((p) => p.accountMode === 'live').map((p) => p.idempotencyKey);
     return new Set(keys).size === keys.length ? [] : ['PREACTIVATION_DUPLICATE_IDEMPOTENCY_KEY'];
   });
   await check('LIVE_PENDING_AND_RECOVERY', () => {
-    const liveIds = new Set(plans().filter((p) => p.accountMode === 'live').map((p) => p.id));
-    return orders().some((o) => liveIds.has(o.planId)
+    const byId = new Map(plans().map((p) => [p.id, p]));
+    if (orders().some((o) => !byId.has(o.planId))) return ['PREACTIVATION_ORDER_PARENT_UNRESOLVED'];
+    return orders().some((o) => byId.get(o.planId)?.accountMode !== 'paper'
       && ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'].includes(o.state))
       ? ['PREACTIVATION_LIVE_ORDER_RECONCILIATION_REQUIRED'] : [];
   });
