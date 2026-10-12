@@ -390,6 +390,51 @@ test('independent collector refuses unreadable final crontab before any cron mut
   assert.doesNotMatch(script.slice(finalRead,write),/crontab -l 2>\/dev\/null \|\| true/u);
 });
 
+test('isolated deployed public collector imports its pinned source graph without app node_modules', () => {
+  // Mirror the three source-only directories copied by the protected installer,
+  // outside the repository tree so root node_modules cannot hide a missing
+  // runtime dependency. Loading a module never starts the schedule or calls providers.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-live-snapshot-import-'));
+  try {
+    for (const rel of [
+      'market-prediction-lab', 'packages/strategy-hypothesis',
+      'packages/external-research',
+    ]) {
+      fs.cpSync(rel, path.join(root, rel), {
+        recursive: true,
+        filter(source) {
+          const segments = source.split(path.sep);
+          const name = segments.at(-1) ?? '';
+          return !segments.includes('node_modules')
+            && !name.startsWith('.env')
+            && !/\.(?:pem|key|p12)$/iu.test(name);
+        },
+      });
+    }
+    const entry = path.join(root, 'market-prediction-lab/scripts/run-paper-forward-schedule.js');
+    const program = [
+      "const { pathToFileURL } = require('node:url');",
+      "globalThis.fetch = () => { throw new Error('OFFLINE_IMPORT_NETWORK_FORBIDDEN'); };",
+      "import(pathToFileURL(process.argv[1]).href).then(() => {",
+      "  process.stdout.write('ISOLATED_AUTO_LIVE_PUBLIC_IMPORT_OK\\n');",
+      "}).catch((e) => { process.stderr.write(String(e)); process.exitCode = 1; });",
+    ].join('\n');
+    const probe = spawnSync(process.execPath, ['-e', program, entry], {
+      cwd: root, encoding: 'utf8', timeout: 25000,
+      env: { NODE_ENV: 'production', HOME: root, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+    });
+    assert.equal(probe.status, 0, (probe.stderr ?? '').slice(0, 2000));
+    assert.match(probe.stdout, /ISOLATED_AUTO_LIVE_PUBLIC_IMPORT_OK/u);
+    assert.doesNotMatch(probe.stdout, /BLOCKED_DATA|ORDER_SUBMITTED|realOrder/u);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
   const script = buildIndependentAutoLivePublicInstallScript();
