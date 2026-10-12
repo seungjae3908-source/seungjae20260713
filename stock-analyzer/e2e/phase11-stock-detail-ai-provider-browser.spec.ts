@@ -115,6 +115,9 @@ test('cancelling an in-flight AI request prevents late provider results from rep
   await page.goto(routeToDetail('US', 'AAPL'));
   await page.getByTestId('stock-ai-request-analysis').click();
   await expect(page.getByRole('button', { name: 'AI 분석 요청 취소' })).toBeVisible();
+  // Ensure the provider request is actually in flight before aborting it.
+  // Cancelling during an unrelated auth bootstrap does not prove late-response safety.
+  await expect.poll(() => requests.length).toBe(1);
   await page.getByRole('button', { name: 'AI 분석 요청 취소' }).click();
   release();
   await expect(page.getByRole('alert')).toContainText('요청을 취소했습니다');
