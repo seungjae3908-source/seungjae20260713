@@ -49,7 +49,9 @@ function config(root,market,symbol,options={}){
     manifest:pit,
     expectedRosterDigestSha256:options.digest??pit.rawMembershipDigestSha256,
     allowPublicReadOnlyFetch:options.allowPublicReadOnlyFetch??false,
-    retryPartialSource:options.retryPartialSource??false,nowImpl,
+    retryPartialSource:options.retryPartialSource??false,
+    expectedExistingSourceDigestSha256:
+      options.expectedExistingSourceDigestSha256??null,nowImpl,
     ...(options.upbitFetchImpl?{upbitFetchImpl:options.upbitFetchImpl}:{}),
     ...(options.bitgetClient?{bitgetClient:options.bitgetClient}:{}),
   };
