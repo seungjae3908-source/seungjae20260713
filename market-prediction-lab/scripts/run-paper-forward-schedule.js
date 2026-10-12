@@ -1144,6 +1144,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       activationAtMs,
       triggerSource,
       outcomeAccumulationEnabled,
+      autoLiveSignalRefresh: env.AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED === "true",
       authoritativeAccountRequired,
       authoritativeAccountSeedSnapshot,
       expectedPublisherAccountIdSha256,
