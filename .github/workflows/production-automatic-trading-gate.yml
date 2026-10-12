@@ -1209,11 +1209,12 @@ jobs:
           umask 077
           # This is NOT the Application deployment pipeline: no DB/RLS,
           # PM2, provider credentials, Paper-state mutation or live-order calls.
-          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA")"
+          [[ "$PUBLIC_SOURCE_STAGE" =~ ^/opt/stock-app-data/\.auto-live-public-seal\.[A-Za-z0-9]{8}$ ]] || exit 1
+          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_SEAL_DIR=%q AUTO_LIVE_INDEPENDENT_SOURCE_MANIFEST_HASH=%q AUTO_LIVE_INDEPENDENT_SOURCE_HELPER_HASH=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA" "$PUBLIC_SOURCE_STAGE" "$PUBLIC_MANIFEST_SHA256" "$PUBLIC_HELPER_SHA256")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "cd /opt/stock-app && $remote_env node ops/production-auto-live-signal-identity.cjs" \
+            "cd $PUBLIC_SOURCE_STAGE && $remote_env node ops/production-auto-live-signal-identity.cjs" \
             > "$RUNNER_TEMP/public-source-install.json"
           node - "$RUNNER_TEMP/public-source-install.json" "$TARGET_SHA" <<'NODE'
           const fs = require('node:fs');
@@ -1244,6 +1245,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          # Readback must execute the isolated installed exact-main helper,
+          # never the old app checkout. Compare installed helper hash first.
+          installed_helper_hash="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'test -f /opt/stock-app-data/auto-live-signal-v1/bin/production-auto-live-signal-identity.cjs && test ! -L /opt/stock-app-data/auto-live-signal-v1/bin/production-auto-live-signal-identity.cjs && sha256sum /opt/stock-app-data/auto-live-signal-v1/bin/production-auto-live-signal-identity.cjs' | awk '{print $1}')"
+          [[ "$installed_helper_hash" == "$PUBLIC_HELPER_SHA256" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH' >&2
+            exit 1
+          }
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$RUNNER_TEMP/public-source-schedule-readback.json" <<'NODE'
@@ -1252,7 +1263,7 @@ jobs:
             inspectManagedPaperForwardSchedule,
             readProductionAutoLiveScheduleActivation,
             assertAutoLiveSignalNotDisabled,
-          } = require('/opt/stock-app/ops/production-auto-live-signal-identity.cjs');
+          } = require('/opt/stock-app-data/auto-live-signal-v1/bin/production-auto-live-signal-identity.cjs');
           const sha = String(process.env.TARGET_SHA || '');
           const root = '/opt/stock-app-data/auto-live-signal-v1';
           const activation = readProductionAutoLiveScheduleActivation(root + '/activation.json');
@@ -1298,6 +1309,22 @@ jobs:
             throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID');
           }
           NODE
+
+      - name: Delete only private GitHub public-source scratch (never application or Paper)
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -n "$PUBLIC_SOURCE_STAGE" ]]; then
+            [[ "$PUBLIC_SOURCE_STAGE" =~ ^/opt/stock-app-data/\.auto-live-public-seal\.[A-Za-z0-9]{8}$ ]] || {
+              echo 'AUTO_LIVE_PUBLIC_INSTALL_CLEANUP_SCOPE_INVALID' >&2
+              exit 1
+            }
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+              -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "test -d '$PUBLIC_SOURCE_STAGE' && test ! -L '$PUBLIC_SOURCE_STAGE' && rm -rf -- '$PUBLIC_SOURCE_STAGE'"
+          fi
 
       - name: Record source-only installation without asserting scanner, AI, or LIVE readiness
         uses: actions/github-script@v7
