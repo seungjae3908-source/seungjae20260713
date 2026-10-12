@@ -6,6 +6,7 @@ import { lstat, open, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { MINUTE_MS, MINUTE_ARCHIVE_LIMITS, validateMinuteTask,
   runMinuteArchiveIntakeV1 } from './four-market-minute-archive-intake-v1.mjs';
+import { assessMinuteManifestCapacity } from './four-market-minute-roster-capacity-v1.mjs';
 
 export const QUEUE_CONTRACT = 'research-minute-backfill-cursor/v1';
 export const SCOPE_CONTRACT = 'research-minute-backfill-scope/v1';
@@ -272,6 +273,19 @@ export async function runDurableMinuteBackfillCycle({
     || !nonnegative(maxActions) || maxActions > QUEUE_LIMITS.maxActionsPerCycle)
     fail('MINUTE_QUEUE_CONFIG_INVALID');
   const scope=validateBackfillScope(manifest);
+  const capacity=assessMinuteManifestCapacity(manifest,{actionsPerCycle:maxActions});
+  if(capacity.status==='CAPACITY_MODEL_INSUFFICIENT'
+    ||capacity.status==='STOCK_SESSION_NOT_MODELLED') {
+    // A short research pilot is not silently called sustainable all-symbol
+    // capture. Do not create a queue or access providers until capacity
+    // constraints have been separately reviewed and the job budget changed.
+    return Object.freeze({
+      contract:QUEUE_CONTRACT,status:'HOLD_CAPACITY',capacity,
+      attempts:0,providerCalls:0,filesWritten:0,
+      fullUniverseProven:false,independentOosProven:false,
+      profitabilityProven:false,executionAuthority:'NONE',
+    });
+  }
   const root=await checkRoot(queueRoot);
   let state=await readBackfillQueue(root,scope);
   if (!state) {
@@ -311,7 +325,7 @@ export async function runDurableMinuteBackfillCycle({
         :attempts?'PROGRESS_RECORDED':'WAIT_OR_NO_ELIGIBLE_WINDOW',
     scopeDigest:scope.scopeDigest,rangeCount:state.ranges.length,
     completeCount,rollingCount,reviewCount,backoffCount,
-    attempts,providerCalls,filesWritten,outcomes,
+    attempts,providerCalls,filesWritten,outcomes,capacity,
     // These are *not* source gap closure, full population, or historic PIT proof.
     missingMinuteClassificationComplete:false,fullUniverseProven:false,
     independentOosProven:false,profitabilityProven:false,
