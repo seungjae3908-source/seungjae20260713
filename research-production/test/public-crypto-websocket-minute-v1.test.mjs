@@ -75,13 +75,15 @@ test('public Upbit and Bitget subscription requests are bounded and credential f
   assert.equal(r.socketConnectionsOpened,0);
   assert.equal(r.publicProviderGETCount,0);
 });
-test('760-symbol former roster fits 19 bounded 40-channel socket plans as a proposal only',()=>{
+test('760 symbols need twenty venue-isolated 40-channel socket plans, not nineteen',()=>{
   const spot=Array.from({length:294},(_,i)=>
     'T'+String(i).padStart(4,'0'));
   const futures=Array.from({length:466},(_,i)=>
     'Q'+String(i).padStart(4,'0'));
   const r=plan({enabled:true,...rosters(spot,futures),nowMs:NOW});
-  assert.equal(r.plannedConnections,19);
+  assert.equal(r.plannedConnections,20);
+  assert.equal(r.plans.filter(x=>x.market==='CRYPTO_SPOT').length,8);
+  assert.equal(r.plans.filter(x=>x.market==='CRYPTO_FUTURES').length,12);
   assert.equal(r.plannedPublicChannels,760);
   assert.ok(r.plans.every(p=>
     p.symbols.length<=PUBLIC_WS_MINUTE_LIMITS.maxSymbolsPerSocket));
