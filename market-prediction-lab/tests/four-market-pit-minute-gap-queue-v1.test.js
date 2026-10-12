@@ -249,3 +249,49 @@ test("private CLI builds selected task page, rejects overwrite and insecure rece
       /PIT_GAP_PLAN_CLI_(?:ARGUMENTS|OPTION)_INVALID/);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test("day-wide PIT missing planner offers source-limited prior-SHA review without authorizing an extra GET",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const root=temp(),manifest=make(market,3),sym=symbol(market,0);
+  try{
+   const retained=await store({root,source:tenMinuteSource(market,sym)});
+   const entries=await pageAll(root,market,manifest);
+   const planResult=plan(input(market,manifest,entries));
+   assert.equal(planResult.status,"PLANNED_MISSING_SOURCES_WITH_MANUAL_REVIEW");
+   assert.equal(planResult.candidateTasks.length,2,
+     "partial prior source cannot be treated as a missing/approved fresh GET");
+   assert.equal(planResult.partialRetryReviewCount,1);
+   assert.equal(planResult.partialRetryReviewTasks.length,1);
+   assert.equal(planResult.partialRetryReviewTasks[0].symbol,sym);
+   assert.equal(planResult.partialRetryReviewTasks[0].expectedExistingSourceDigestSha256,
+     retained.sourceDigestSha256);
+   assert.equal(planResult.partialRetryReviewTasks[0].missingUnverifiedMinuteSlots,1430);
+   assert.equal(planResult.partialRetryReviewTasks[0].sourceRevisionAutoSelected,false);
+   assert.equal(planResult.partialRetryReviewTasks[0].autoExecuteAllowed,false);
+   assert.equal(planResult.partialRetryCannotAutoExecute,true);
+   assert.equal(planResult.providerGETCount,0);
+   assert.equal(planResult.profitabilityProven,false);
+   const corrupted=structuredClone(entries);
+   corrupted[0].partialSourcePlan[0].expectedExistingSourceDigestSha256=
+     "invalid-archive-source-digest";
+   const denied=plan(input(market,manifest,corrupted));
+   assert.equal(denied.status,"BLOCKED_DAY_SOURCE_LEDGER");
+   assert.equal(denied.candidateTasks.length,0);
+  }finally{rmSync(root,{recursive:true,force:true});}
+ }
+});
+
+test("review-only partial source remains non-executable with TEST_FIXTURE PIT",async()=>{
+ const root=temp(),market="CRYPTO_SPOT",manifest=make(market,1,true);
+ try{
+  await store({root,source:tenMinuteSource(market,symbol(market,0))});
+  const entries=await pageAll(root,market,manifest);
+  const r=plan(input(market,manifest,entries));
+  assert.equal(r.status,"BLOCKED_FIXTURE_PIT_PUBLIC_COLLECTION");
+  assert.equal(r.candidateTasks.length,0);
+  assert.equal(r.partialRetryReviewCount,1);
+  assert.equal(r.partialRetryReviewTasks[0].proposedProvider,null);
+  assert.equal(r.partialRetryReviewTasks[0].autoExecuteAllowed,false);
+  assert.equal(r.providerGETCount,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
