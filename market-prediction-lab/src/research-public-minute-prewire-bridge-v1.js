@@ -60,7 +60,9 @@ export function validatePublicMinutePrewireForNativeArchiveV1(prewire, opts = {}
     || !stamp(prewire.newestActualReceiptMs)
     || prewire.oldestActualReceiptMs > prewire.newestActualReceiptMs
     || !Array.isArray(prewire.sourceArchiveDigests)
-    || prewire.sourceArchiveDigests.length < 12
+    // Eight source pages can now span 1440 real 1m slots when each 180m
+    // immutable producer receipt is independently checked upstream.
+    || prewire.sourceArchiveDigests.length < 8
     || prewire.sourceArchiveDigests.length > 512
     || prewire.metadata?.sourceMinutePages !== prewire.sourceArchiveDigests.length
     || prewire.metadata?.missingOneMinuteSlots !== 0
@@ -109,6 +111,8 @@ export function validatePublicMinutePrewireForNativeArchiveV1(prewire, opts = {}
   return stop('RETROSPECTIVE_ORIGINAL_SOURCE_COMPATIBLE', null, {
     market: s.market, symbol: s.symbol, day: prewire.day,
     sourceMinuteDigest: prewire.sourceMinuteDigest,
+    // Do not equate 8 distinct receipt digests with real historical PIT or
+    // signal-time information. Full closed-source 1440 slots remain mandatory.
     // Never include raw OHLCV in the compatibility/status response.
     observedMinuteRows: 1440,
     actualSourceReceipts: prewire.sourceArchiveDigests.length,
