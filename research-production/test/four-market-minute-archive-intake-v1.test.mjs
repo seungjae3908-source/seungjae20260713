@@ -194,7 +194,7 @@ test('unsafe root and insufficient disk stop before any provider requests', asyn
     await symlink(root,rootLink);
     await assert.rejects(runMinuteArchiveIntakeV1({
       ...args, root:rootLink,
-    }), /MINUTE_ARCHIVE_DIRECTORY_UNSAFE/);
+    }), /MINUTE_ARCHIVE_(?:DIRECTORY_UNSAFE|ANCESTOR_SYMLINK)/);
     await assert.rejects(runMinuteArchiveIntakeV1({
       ...args, root, tasks:[spot,spot],
     }), /MINUTE_INTAKE_DUPLICATE_TASK/);

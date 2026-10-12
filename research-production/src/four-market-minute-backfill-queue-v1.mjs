@@ -116,7 +116,7 @@ export function verifyBackfillQueue(state, scope) {
       || !STATUS.has(r.status)
       || !nonnegative(r.retryAtMs) || !nonnegative(r.lastSuccessAtMs)
       || (r.lastFailure != null
-        && !/^MINUTE_[A-Z0-9_]{1,80}$/u.test(r.lastFailure))
+        && !/^(?:MINUTE_[A-Z0-9_]{1,80}|BLOCKED_EMPTY_RESPONSE|BLOCKED_STOCK_FEED_NOT_CONFIGURED)$/u.test(r.lastFailure))
       || (r.status === 'COMPLETE' && (r.mode!=='BACKFILL' || r.cursorMs !== r.endMs))
       || (r.mode==='BACKFILL' && r.status !== 'COMPLETE' && r.cursorMs === r.endMs)
       || (r.status === 'BACKOFF' && r.retryAtMs <= 0)
