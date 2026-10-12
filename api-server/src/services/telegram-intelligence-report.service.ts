@@ -73,6 +73,12 @@ function minuteOfDay(clock: LocalClock): number {
   return clock.hour * 60 + clock.minute;
 }
 
+function tradingWeekday(clock: LocalClock): boolean {
+  // No calendar data is available here: only known weekend closures can be
+  // excluded. Exchange holidays/halts stay data-level NO_TRADE/N/A.
+  return clock.weekday !== 'Sat' && clock.weekday !== 'Sun';
+}
+
 function within(clock: LocalClock, startHour: number, startMinute: number, endHour: number, endMinute: number): boolean {
   const current = minuteOfDay(clock);
   const start = startHour * 60 + startMinute;
@@ -137,13 +143,13 @@ export function dueTelegramIntelligenceReports(
   }
 
   // KR close report: user contract explicitly allows 15:50-16:10 KST.
-  if (within(kst, 15, 50, 16, 10)) {
+  if (tradingWeekday(kst) && within(kst, 15, 50, 16, 10)) {
     due.push(reportPlan('KR_CLOSING', KST, kst, audience));
   }
 
   // US premarket report: 08:00 New York local time. Intl timezone conversion
   // keeps the same wall-clock target across EST/EDT without hard-coded UTC offsets.
-  if (within(newYork, 7, 50, 8, 10)) {
+  if (tradingWeekday(newYork) && within(newYork, 7, 50, 8, 10)) {
     due.push(reportPlan('US_PREMARKET', NEW_YORK, newYork, audience));
   }
 
