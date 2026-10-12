@@ -47,6 +47,18 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(signalIdentity.includes('buildIndependentAutoLivePublicInstallScript()'));
   assert.ok(signalIdentity.includes('installIndependentAutoLivePublicSource('));
   assert.ok(!production.includes('bash ops/disable-paper-forward-schedule.sh'));
+  // The exact LIVE activation gate must bind PM2 and pre-arm to the
+  // independent collector, never to the historical Paper handoff.
+  const autoGate = read('.github/workflows/production-automatic-trading-gate.yml');
+  assert.ok(autoGate.includes('const automaticLiveHandoffPath ='));
+  assert.ok(autoGate.includes('/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json'));
+  assert.ok(autoGate.includes('const handoffPath = automaticLiveHandoffPath;'));
+  assert.ok(autoGate.includes('published.default?.readProductionAutoLiveSignalHandoff'));
+  assert.ok(autoGate.includes('h = readTrustedHandoff(handoffPath);'));
+  assert.ok(autoGate.includes('MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath'));
+  assert.ok(autoGate.includes('AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID'));
+  assert.ok(autoGate.includes("MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')"));
+  assert.ok(!autoGate.includes('/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json'));
 
   // Bound pre-DB and last-moment checks to the dedicated root. Historical
   // Paper owner state and cron remain unmodified, even when Paper is ACTIVE.
