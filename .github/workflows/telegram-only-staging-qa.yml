@@ -48,6 +48,8 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Telegram-only service tests (no Browser, no network delivery)
         run: pnpm --dir api-server test:telegram
+      - name: Strict V3 intake and member-watchlist mocked source tests
+        run: node ops/telegram-v3-source-mock-tests.mjs
       - name: Telegram routing, Vault and Staging boundary contracts
         run: |
           node --test \
@@ -169,8 +171,8 @@ jobs:
             'stagingDeployed','productionDeployed','secretValuesRecorded',
           ];
           const safe = [
-            'NOT_CHECKED','IPV4_DNS_FAILED','IPV4_DNS_TIMEOUT','IPV4_TLS_READY',
-            'IPV4_TLS_TIMEOUT','IPV4_TLS_CERT_FAILED','IPV4_TLS_CONNECT_FAILED',
+            'NOT_CHECKED','IPV4_DNS_FAILED','IPV4_DNS_TIMEOUT','IPV4_DNS_UNSAFE_ADDRESS','IPV4_TLS_READY',
+            'IPV4_TCP_TIMEOUT','IPV4_TLS_TIMEOUT','IPV4_TLS_CERT_FAILED','IPV4_TLS_CONNECT_FAILED',
           ];
           if (JSON.stringify(Object.keys(r).sort()) !== JSON.stringify(expected.sort())
             || r.schemaVersion !== 'telegram-only-staging-readonly-v1'
