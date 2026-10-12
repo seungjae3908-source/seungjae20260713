@@ -1,8 +1,13 @@
 const test = require('node:test');
+const { createHash } = require('node:crypto');
+const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
+const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
+const MANAGED_CRON = '*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock ' +
+  '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule # stock-app-paper-forward-v1';
 const entry = (market, researchCodeSha = SHA) => ({ identity: { market, researchCodeSha } });
 test('an empty handoff is transport-only and does not prove scanner/AI invocation or candidate SHA', () => {
   const proof = inspectSignalEntryIdentity([], SHA);
@@ -68,4 +73,80 @@ test('prearm validates published schema and SHA256 without fabricating scanner/A
   await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
     published, SHA, Number.NaN),
   /AUTOMATIC_TRADING_PREARM_ARGUMENT_INVALID/u);
+});
+
+function activationFor(cronLine = MANAGED_CRON, overrides = {}) {
+  return {
+    schemaVersion: 'paper-forward-schedule-activation-v2',
+    status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
+    targetSha: SHA, deployedSha: SHA, activationAtMs: SCHEDULE_AT,
+    installedAt: new Date(SCHEDULE_AT).toISOString(),
+    scheduleActive: true, pollCadence: 'EVERY_15_MINUTES',
+    canonicalCycleIntervalMs: 900_000, autoLivePublicSignalRefreshEnabled: true,
+    runtimeDigest: 'b'.repeat(64),
+    cronHash: createHash('sha256').update(cronLine).digest('hex'),
+    paperTradeOutcomeAccumulationEnabled: false,
+    simulatedFinancialAdaptersEnabled: false,
+    externalFinancialMutationAllowed: false,
+    publicDataOnly: true,
+    liveTrading: false, privateAccountAccess: false, orderAuthority: false,
+    ...overrides,
+  };
+}
+
+test('only exact installed 15-minute cron and SHA-bound receipt prove schedule configuration', () => {
+  const result = inspectManagedPaperForwardSchedule(MANAGED_CRON,
+    activationFor(), SHA, SCHEDULE_AT, SCHEDULE_AT + 15_000);
+  assert.deepEqual(result, { exactActiveCommand: true, activationBound: true,
+    entryCount: 1, publicOnly: true, refreshIntervalMs: 900_000 });
+  const bin = '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+  const bad = [
+    '# stock-app-paper-forward-v1', '# ' + MANAGED_CRON,
+    MANAGED_CRON.replace('*/15 * * * *', '0 * * * *'),
+    MANAGED_CRON.replace('/usr/bin/flock', 'echo'),
+    MANAGED_CRON.replace(bin, '/tmp/run-paper-forward-schedule'),
+    MANAGED_CRON + ' ; true',
+    MANAGED_CRON + '\n' + MANAGED_CRON,
+    MANAGED_CRON + '\n*/15 * * * * /usr/bin/flock -n /tmp/other.lock ' + bin,
+  ];
+  for (const cron of bad) {
+    assert.throws(() => inspectManagedPaperForwardSchedule(
+      cron, activationFor(), SHA, SCHEDULE_AT, SCHEDULE_AT + 15_000,
+    ), /AUTO_LIVE_SIGNAL_SCHEDULE_/u);
+  }
+});
+
+test('cron configuration cannot re-use stale, mismatched or Paper-outcome activation receipts', () => {
+  for (const patch of [
+    { targetSha: 'c'.repeat(40) }, { deployedSha: 'c'.repeat(40) },
+    { activationAtMs: SCHEDULE_AT - 10_000 },
+    { installedAt: new Date(SCHEDULE_AT - 10_000).toISOString() },
+    { cronHash: '0'.repeat(64) }, { scheduleActive: false },
+    { pollCadence: 'EVERY_60_MINUTES' }, { canonicalCycleIntervalMs: 14_400_000 },
+    { autoLivePublicSignalRefreshEnabled: false }, { paperTradeOutcomeAccumulationEnabled: true },
+    { simulatedFinancialAdaptersEnabled: true }, { externalFinancialMutationAllowed: true },
+    { liveTrading: true }, { privateAccountAccess: true }, { orderAuthority: true },
+    { runtimeDigest: '' },
+  ]) {
+    assert.throws(() => inspectManagedPaperForwardSchedule(
+      MANAGED_CRON, activationFor(MANAGED_CRON, patch), SHA, SCHEDULE_AT, SCHEDULE_AT + 15_000,
+    ), /AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID/u);
+  }
+  assert.throws(() => inspectManagedPaperForwardSchedule(
+    MANAGED_CRON, activationFor(), SHA, SCHEDULE_AT + 1_000, SCHEDULE_AT + 15_000,
+  ), /AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID/u);
+  assert.throws(() => inspectManagedPaperForwardSchedule(
+    MANAGED_CRON, activationFor(), SHA, SCHEDULE_AT, SCHEDULE_AT - 1_000,
+  ), /AUTO_LIVE_SIGNAL_SCHEDULE_ARGUMENT_INVALID/u);
+});
+
+test('audit rejects both disable sentinels and a different source-wrapper identity', () => {
+  const source = readFileSync('ops/production-auto-live-signal-source-audit.mjs', 'utf8');
+  assert.ok(source.includes("scheduleRoot + '/DISABLED'"));
+  assert.ok(source.includes("scheduleRoot + '/runtime-state/DISABLED'"));
+  assert.ok(source.includes('inspectManagedPaperForwardSchedule('));
+  assert.ok(source.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
+  assert.ok(source.includes("PAPER_FORWARD_RESEARCH_SHA='"));
+  assert.ok(source.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'"));
+  assert.ok(source.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
 });
