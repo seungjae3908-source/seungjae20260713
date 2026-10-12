@@ -48,6 +48,7 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticLiveStrategyAllowlisted,
+  currentLiveMemberAccessMatchesBatch,
   automaticPaperCapitalPolicyReady,
   automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
@@ -64,6 +65,25 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
+  const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  const spot = { exchange: 'upbit', accountMode: 'live', leverage: null } as const;
+  const futures = { exchange: 'bitget', accountMode: 'live', leverage: 7 } as const;
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, spot), true);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, futures), true);
+  for (const profile of [{ ...admin, status: 'suspended' }, { ...admin, is_active: false },
+    { ...admin, membership_expires_at: new Date(Date.now() - 1).toISOString() },
+    { ...admin, membership_level: 'regular', role: 'user' }]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(profile, 1_000_000, spot), false);
+  }
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, undefined, spot), false);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 500_000, spot), false, 'upgrade cannot inherit old batch authority');
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...spot, accountMode: 'paper' }), false);
+  for (const leverage of [1, 8, 7.1, null, Number.NaN]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage }), false);
+  }
+});
 
 test('worker stopped during an awaited member read cannot create plans or resume on a later tick', async () => {
   const repository = new InMemoryTradingRepository();
@@ -429,6 +449,8 @@ function source(
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
+    // Explicit fake current-authority reader; never a Production capability.
+    async revalidateLiveMemberAccess() { return !options.expired && options.tier !== 'pending'; },
     async readHandoff() {
       return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
     },
