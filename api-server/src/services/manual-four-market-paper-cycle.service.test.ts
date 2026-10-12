@@ -260,3 +260,58 @@ test('manual Paper journal separates entry-price and as-of FX effects without cl
   assert.equal(receipt.journal?.causalImpactProven,false);
   assert.equal(receipt.actualPaperLedgerWritten,false);
 });
+
+test('USDT-margined futures cannot earn KRW profit from FX alone at unchanged native price',()=>{
+  for(const side of ['LONG','SHORT'] as const){
+    const base=change(fixture('crypto_futures'),'selected',{side});
+    const zeroPrice=side==='LONG'?100:99;
+    const neutral=change(base,'exitQuote',{bid:zeroPrice,ask:zeroPrice});
+    const fx=change(neutral,'costs',{
+      entryCommissionRate:0,exitCommissionRate:0,
+      spreadAndSlippageKrw:0,taxKrw:0,signedFundingKrw:0,
+      exitFxKrwPerQuote:1500,
+    });
+    const result=evaluateManualFourMarketPaperClosedCycle(fx);
+    assert.equal(result.status,'RESEARCH_SIMULATED_CLOSED',JSON.stringify(result.blockers));
+    assert.equal(result.grossPnlKrw,0);
+    assert.equal(result.netPnlKrw,0);
+    assert.equal(result.journal?.priceMovementKrw,0);
+    assert.equal(result.journal?.fxTranslationKrw,0);
+    assert.equal(result.newReserveProfitKrw,0);
+  }
+});
+test('futures translates only native variation while cash USD stock retains principal FX exposure',()=>{
+  const f=change(fixture('crypto_futures'),'costs',{exitFxKrwPerQuote:1500});
+  const result=evaluateManualFourMarketPaperClosedCycle(f);
+  assert.equal(result.status,'RESEARCH_SIMULATED_CLOSED',JSON.stringify(result.blockers));
+  const nativePnL=result.quantity!*(108-100);
+  assert.ok(Math.abs(result.grossPnlKrw!-nativePnL*1500)<0.02);
+  assert.ok(Math.abs(Number(result.journal?.priceMovementKrw)
+    +Number(result.journal?.fxTranslationKrw)-result.grossPnlKrw!)<=0.02);
+  const cash=change(fixture('us_stock'),'exitQuote',{bid:100,ask:100});
+  const changed=change(cash,'costs',{exitFxKrwPerQuote:1500});
+  const cashResult=evaluateManualFourMarketPaperClosedCycle(changed);
+  assert.equal(cashResult.status,'RESEARCH_SIMULATED_CLOSED');
+  assert.ok(cashResult.grossPnlKrw!>0,'USD cash principal retains genuine FX translation');
+});
+test('50/50 high-water advances only on wins and never credits reserve on later losses',()=>{
+  const first=evaluateManualFourMarketPaperClosedCycle(fixture('domestic_stock'));
+  assert.equal(first.status,'RESEARCH_SIMULATED_CLOSED',JSON.stringify(first.blockers));
+  assert.ok(first.newReserveProfitKrw!>0);
+  assert.equal(first.updatedHighWaterMarkKrw,
+    Math.round((1_000_000+first.netPnlKrw!)*100)/100);
+  const second=change(fixture('domestic_stock'),'verifiedOwner',{
+    operatingCapitalKrw:first.updatedOperatingCapitalKrw,
+    lockedReserveKrw:first.updatedLockedReserveKrw,
+    highWaterMarkKrw:first.updatedHighWaterMarkKrw,
+    currentRoundNumber:2,currentEpochId:'manual-v1-second',
+  });
+  const loss=evaluateManualFourMarketPaperClosedCycle(
+    change(second,'exitQuote',{bid:95,ask:95}));
+  assert.equal(loss.status,'RESEARCH_SIMULATED_CLOSED',JSON.stringify(loss.blockers));
+  assert.ok(loss.netPnlKrw!<0);
+  assert.equal(loss.newReserveProfitKrw,0);
+  assert.equal(loss.newCompoundedProfitKrw,0);
+  assert.equal(loss.updatedHighWaterMarkKrw,first.updatedHighWaterMarkKrw);
+  assert.equal(loss.updatedLockedReserveKrw,first.updatedLockedReserveKrw);
+});
