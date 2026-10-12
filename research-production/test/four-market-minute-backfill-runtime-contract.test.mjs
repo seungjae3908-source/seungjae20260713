@@ -67,6 +67,11 @@ test('capacity-only CLI reads protected scope and performs zero provider calls/w
     assert.equal(payload.status,'CAPACITY_AUDIT_ONLY');
     assert.equal(payload.capacity.status,'CAPACITY_MODEL_INSUFFICIENT');
     assert.equal(payload.capacity.minActionsPerCycleNoHeadroom,17);
+    assert.equal(payload.pacingPreflight.status,'OPERATOR_REVIEW_REQUIRED');
+    assert.equal(payload.pacingPreflight.maxSequentialActionsWithReserve,23);
+    assert.equal(payload.pacingPreflight.actualRuntimeMaximumActionsPerCycle,16);
+    assert.equal(payload.pacingPreflight.actionable,false);
+    assert.equal(payload.pacingPreflight.providerRateBudgetVerified,false);
     assert.equal(payload.providerCalls,0);
     assert.equal(payload.storageEstimate.projectedPageFiles,400*12*365);
     assert.equal(payload.storageEstimate.hostDiskSpaceRead,false);
