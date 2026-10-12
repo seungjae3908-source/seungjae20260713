@@ -569,7 +569,15 @@ function buildProductionPostdeployQaEvidence({
       : 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,
-    activationReady: true,
+    // Account/UI/signal rehearsal is a subset. It cannot attest the remaining
+    // execution/runtime controls listed by that very receipt. Do not turn an
+    // acknowledgement of missing proofs into permission for AUTO LIVE.
+    qaComplete: true,
+    automaticLiveActivationReady: false,
+    unprovenAutomaticLiveControls: qaScope === 'auto_live'
+      ? [...autoLive.memberAccountSignalAudit.additionalRequiredControls]
+      : ['AUTOMATIC_LIVE_COMPLETE_CONTROL_AUDIT_REQUIRED'],
+    activationReady: qaScope !== 'auto_live',
   };
 }
 
