@@ -5,6 +5,7 @@ import {
   verifyPublicMinuteRoster, assessMinuteArchiveCapacity,
   assessMinuteManifestCapacity, proposeCurrentCryptoMinuteManifest,
   probePublicCurrentCryptoRosters, PUBLIC_ROSTER_FETCH_LIMITS,
+  forecastPublicMinuteArchiveFootprintV1,
 } from '../src/four-market-minute-roster-capacity-v1.mjs';
 
 const NOW=Date.parse('2026-10-12T09:00:00.000Z');
@@ -229,4 +230,28 @@ test('one-character and Han-based Bitget USDT contracts remain in exact current 
   assert.throws(()=>normalizeBitgetUsdtMinuteRoster({
     code:'00000',data:[{...raw.data[1],symbol:'币/USDT'}],
   },NOW),/MINUTE_BITGET_ROSTER_INVALID/);
+});
+
+
+test('760 crypto symbols at 120m JSON pages imply multi-million yearly files, not free infinite retention',()=>{
+  const x=forecastPublicMinuteArchiveFootprintV1({
+    cryptoSpotSymbols:294,cryptoFuturesSymbols:466,days:365,
+  });
+  assert.equal(x.status,'UNVERIFIED_CAPACITY_ESTIMATE_ONLY');
+  assert.equal(x.projectedRawMinuteRows,760*1440*365);
+  assert.equal(x.projectedPageFiles,760*12*365);
+  assert.ok(x.projectedGiB>60);
+  assert.equal(x.hostDiskSpaceRead,false);
+  assert.equal(x.independentBackupsVerified,false);
+  assert.equal(x.totalFilesystemInodesVerified,false);
+  assert.equal(x.executionAuthority,'NONE');
+});
+test('archive forecast rejects forged zero/oversized intervals and unsupported values',()=>{
+  for(const bad of [
+    {cryptoSpotSymbols:-1},{cryptoFuturesSymbols:5000},
+    {days:0},{days:10000},{minutesPerDay:0},
+    {pageWindowMinutes:0},{pageWindowMinutes:77},
+    {bytesPerObservedMinuteRow:0},{pageMetadataBytes:100_000},
+  ]) assert.throws(()=>forecastPublicMinuteArchiveFootprintV1(bad),
+    /MINUTE_FOOTPRINT_/);
 });

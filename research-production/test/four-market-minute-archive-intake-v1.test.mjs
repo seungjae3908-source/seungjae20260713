@@ -271,3 +271,27 @@ test('Bitget one-character and Han USDT symbols preserve exact safe original ide
     assert.throws(()=>validateMinuteTask(make(symbol)),/MINUTE_SYMBOL_INVALID/);
   }
 });
+
+
+test('source window gap audit identifies missing minute slots without fake zero-volume bars',async()=>{
+  const {auditOriginalMinuteWindowSlotsV1}=await import(
+    '../src/four-market-minute-archive-intake-v1.mjs');
+  const task={market:'CRYPTO_SPOT',symbol:'BTC',
+    windowStartMs:BEGIN,windowEndMs:BEGIN+5*MINUTE_MS};
+  const audit=auditOriginalMinuteWindowSlotsV1(task,[
+    candle(BEGIN),candle(BEGIN+2*MINUTE_MS),candle(BEGIN+4*MINUTE_MS),
+  ]);
+  assert.equal(audit.sourceWindowMinuteSlots,5);
+  assert.equal(audit.observedOneMinuteSlots,3);
+  assert.equal(audit.unverifiedMissingMinuteSlots,2);
+  assert.equal(audit.unverifiedGapRunCount,2);
+  assert.equal(audit.localSlotCountComplete,false);
+  assert.equal(audit.missingMinutesMayBeNoTrade,true);
+  assert.equal(audit.allAbsencesClassified,false);
+  assert.equal(audit.executionAuthority,'NONE');
+  assert.deepEqual(audit.missingPreview.map(x=>x.firstMissingMs),
+    [BEGIN+MINUTE_MS,BEGIN+3*MINUTE_MS]);
+  assert.throws(()=>auditOriginalMinuteWindowSlotsV1(task,[
+    candle(BEGIN),candle(BEGIN),
+  ]),/MINUTE_SLOTS_INPUT_INVALID/);
+});
