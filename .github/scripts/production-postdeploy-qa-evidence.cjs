@@ -1,3 +1,5 @@
+const { assertMemberAccountSignalAudit } = require('./automatic-live-preactivation-audit.cjs');
+const { assertSignalEntryIdentityReceipt } = require('../../ops/production-auto-live-signal-identity.cjs');
 const REQUIRED_PROVIDERS = Object.freeze(['bitget', 'kiwoom', 'toss', 'upbit']);
 const REQUIRED_CREDENTIAL_REUSE_PATHS = Object.freeze(REQUIRED_PROVIDERS.map(
   (provider) => `/api/trade-automation/connections/${provider}/reuse-readonly`,
@@ -128,6 +130,21 @@ function assertAccountReceipt(account, { targetSha, productionDeployRunId }) {
     }
   }
   assertNoForbiddenEvidenceKeys(account);
+}
+
+function assertAutomaticPositionIsolationReceipt(account) {
+  for (const row of providerRows(account, 'POSTDEPLOY_QA_ACCOUNT')) {
+    const proof = row.automaticPositionIsolation;
+    if (proof?.policyVersion !== 'manual-protected-auto-ledger-v1' || proof.provider !== row.provider
+      || proof.ok !== true || proof.ready !== true || proof.fresh !== true
+      || proof.manualEntryBlocked !== true || proof.canonicalExitOnly !== true
+      || proof.ambiguousPositionCount !== 0
+      || !Number.isSafeInteger(proof.manualProtectedPositionCount) || proof.manualProtectedPositionCount < 0
+      || !Number.isSafeInteger(proof.automaticOwnedPositionCount) || proof.automaticOwnedPositionCount < 0) {
+      throw new Error(`POSTDEPLOY_QA_AUTOMATIC_POSITION_ISOLATION_INVALID:${row.provider}`);
+    }
+    requireZeroAuthority(proof, 'POSTDEPLOY_QA_POSITION_ISOLATION');
+  }
 }
 
 function assertCredentialReceipt(credential, { targetSha, productionDeployRunId }) {
@@ -261,12 +278,122 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
   assertNoForbiddenEvidenceKeys(tradingCore);
 }
 
+function assertAutoLiveReceipt(autoLive, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
+  const providerNames = Object.keys(autoLive?.providers ?? {}).sort();
+  const marketNames = Object.keys(autoLive?.markets ?? {}).sort();
+  if (autoLive?.schemaVersion !== 'production-auto-live-readonly-qa-v3'
+    || autoLive?.productionDeployRunId !== deployRunId
+    || autoLive?.officialProductionOrigin !== true
+    || autoLive?.authenticatedProductionSession !== true
+    || autoLive?.identityMatch !== true
+    || JSON.stringify(autoLive?.viewports) !== JSON.stringify(['desktop-1440', 'tablet-1024', 'mobile-390'])
+    || JSON.stringify(providerNames) !== JSON.stringify([...REQUIRED_PROVIDERS].sort())
+    || providerNames.some((provider) => autoLive.providers[provider] !== 'PASS')
+    || JSON.stringify(marketNames) !== JSON.stringify(['crypto_futures', 'crypto_spot', 'domestic_stock', 'us_stock'])
+    || marketNames.some((market) => autoLive.markets[market] !== 'PASS')
+    || autoLive?.memberAutoPolicyReady !== true
+    || !Array.isArray(autoLive?.memberAutoPolicyBlockers)
+    || autoLive.memberAutoPolicyBlockers.length !== 0
+    || !['kiwoom', 'toss'].includes(autoLive?.memberAutoDomesticBroker)
+    || !Number.isInteger(autoLive?.memberAutoBitgetLeverage)
+    || autoLive.memberAutoBitgetLeverage < 2
+    || autoLive.memberAutoBitgetLeverage > 7
+    || !['validated', 'formula-ai-exception'].includes(autoLive?.memberAutoPilotStage)
+    || autoLive?.memberAutoLivePilotReady !== true
+    || autoLive?.providerVerificationFresh !== true
+    || autoLive?.marketReadinessBlockersOnlyExpectedPreactivation !== true
+    || autoLive?.workerPreactivationSafe !== true
+    || autoLive?.workerEnabled !== false
+    || autoLive?.liveBackgroundRequested !== false
+    || autoLive?.liveEntryArmPresent !== false
+    || autoLive?.liveEntriesArmed !== false
+    || autoLive?.pendingOrderCount !== 0
+    || autoLive?.recoveryRequiredOrderCount !== 0
+    || autoLive?.statusRequestOrderSubmissionCount !== 0
+    || autoLive?.paperTrading !== 'OUT_OF_SCOPE'
+    || autoLive?.telegram !== 'OUT_OF_SCOPE'
+    || autoLive?.paperRequests !== 0
+    || autoLive?.telegramRequests !== 0
+    || autoLive?.observedMutationRequests !== 0
+    || autoLive?.realOrderSubmitted !== false
+    || autoLive?.secretValuesRecorded !== false
+    || autoLive?.accountValuesRecorded !== false) {
+    throw new Error('POSTDEPLOY_QA_AUTO_LIVE_INVALID');
+  }
+  requireExactSha(autoLive.targetSha, sha, 'POSTDEPLOY_QA_AUTO_LIVE_SHA_MISMATCH');
+  assertMemberAccountSignalAudit(autoLive.memberAccountSignalAudit, {
+    targetSha: sha, generatedAt: autoLive.generatedAt,
+  });
+  requireZeroAuthority(autoLive, 'POSTDEPLOY_QA_AUTO_LIVE');
+  assertNoForbiddenEvidenceKeys(autoLive);
+}
+
+function assertAutoLiveSignalReceipt(signal, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
+  if (signal?.schemaVersion !== 'production-auto-live-signal-source-v2'
+    || signal?.productionDeployRunId !== deployRunId
+    || signal?.canonicalValidation !== true
+    || signal?.handoffStatus !== 'READY'
+    || signal?.handoffFresh !== true
+    || signal?.handoffEvaluatedAfterScheduleActivation !== true
+    || signal?.maximumAgeMinutes !== 30
+    || !Number.isInteger(signal?.entryCount)
+    || signal.entryCount < 0
+    || !Array.isArray(signal?.observedMarkets)
+    || signal.observedMarkets.some((market) =>
+      !['CRYPTO_FUTURES', 'CRYPTO_SPOT', 'KR_STOCK', 'US_STOCK'].includes(market))
+    || signal?.scheduleActive !== true
+    || signal?.scheduleEntryCount !== 1
+    || signal?.disableSentinelPresent !== false
+    || signal?.publicDataOnly !== true
+    || signal?.privateRequestCount !== 0
+    || signal?.financialMutationCount !== 0
+    || signal?.executionAuthority !== 'NONE'
+    || signal?.realOrderSubmitted !== false
+    || signal?.secretValuesRecorded !== false
+    || signal?.accountValuesRecorded !== false) {
+    throw new Error('POSTDEPLOY_QA_AUTO_LIVE_SIGNAL_INVALID');
+  }
+  requireExactSha(signal.targetSha, sha, 'POSTDEPLOY_QA_AUTO_LIVE_SIGNAL_SHA_MISMATCH');
+  assertSignalEntryIdentityReceipt(signal, sha);
+  requireZeroAuthority(signal, 'POSTDEPLOY_QA_AUTO_LIVE_SIGNAL');
+  assertNoForbiddenEvidenceKeys(signal);
+}
+
 function isActiveProductionTradingGateRun(run) {
   // PR checks validate contracts only: they cannot activate Live/Auto authority.
   // Operational issue commands (or future workflow dispatches) must still
   // stop QA while their run is nonterminal, even if its intent is uncertain.
   return (run?.event === 'issue_comment' || run?.event === 'workflow_dispatch')
     && run?.status !== 'completed';
+}
+
+async function revalidateProductionTradingGateConflicts(
+  candidates,
+  {
+    loadRun,
+    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    stabilizationMs = 10_000,
+  } = {},
+) {
+  const active = Array.isArray(candidates)
+    ? candidates.filter(isActiveProductionTradingGateRun)
+    : [];
+  if (active.length === 0) return [];
+  if (typeof loadRun !== 'function') {
+    throw new Error('POSTDEPLOY_QA_GATE_REVALIDATION_LOADER_MISSING');
+  }
+
+  // Every Issue comment creates a short-lived run for all three Gate workflows.
+  // Non-Gate comments are rejected by each workflow's job-level condition and
+  // finish as SKIPPED, but GitHub may expose them as queued/in_progress for a
+  // few seconds. Re-read only the exact candidate run IDs after that condition
+  // has settled. A real activation remains waiting/in_progress and still blocks
+  // fail-closed; a completed SKIPPED run is not trading authority.
+  await sleep(stabilizationMs);
+  const refreshed = await Promise.all(active.map((run) => loadRun(run.id)));
+  return refreshed.filter(isActiveProductionTradingGateRun);
 }
 function verifyPostDeployMainLineage({ targetSha, currentMainSha, comparison = null }) {
   const target = String(targetSha ?? '').trim().toLowerCase();
@@ -293,6 +420,8 @@ function buildProductionPostdeployQaEvidence({
   productionDeployRunId,
   comprehensive = null,
   tradingCore = null,
+  autoLive = null,
+  autoLiveSignal = null,
   qaScope = 'full',
   account,
   credential,
@@ -308,10 +437,14 @@ function buildProductionPostdeployQaEvidence({
     assertComprehensiveReceipt(comprehensive, { targetSha: sha, productionDeployRunId: deployRunId });
   } else if (qaScope === 'trading_core') {
     assertTradingCoreReceipt(tradingCore, { targetSha: sha, productionDeployRunId: deployRunId });
+  } else if (qaScope === 'auto_live') {
+    assertAutoLiveReceipt(autoLive, { targetSha: sha, productionDeployRunId: deployRunId });
+    assertAutoLiveSignalReceipt(autoLiveSignal, { targetSha: sha, productionDeployRunId: deployRunId });
   } else {
     throw new Error('POSTDEPLOY_QA_SCOPE_INVALID');
   }
   assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });
+  if (qaScope === 'auto_live') assertAutomaticPositionIsolationReceipt(account);
   assertCredentialReceipt(credential, { targetSha: sha, productionDeployRunId: deployRunId });
 
   const actualMainSha = String(context?.mainSha ?? '').trim().toLowerCase();
@@ -359,7 +492,9 @@ function buildProductionPostdeployQaEvidence({
   }
   const scopedReceipts = qaScope === 'trading_core'
     ? { tradingCore, account, credential }
-    : { comprehensive, account, credential };
+    : qaScope === 'auto_live'
+      ? { autoLive, autoLiveSignal, account, credential }
+      : { comprehensive, account, credential };
   for (const [name, receipt] of Object.entries(scopedReceipts)) {
     const receiptGeneratedAt = Date.parse(String(receipt?.generatedAt ?? ''));
     if (!Number.isFinite(receiptGeneratedAt) || receiptGeneratedAt < orchestratorStartedAt) {
@@ -382,6 +517,10 @@ function buildProductionPostdeployQaEvidence({
     identityMatch: true,
     comprehensiveQa: qaScope === 'full' ? 'PASS' : 'NOT_RUN',
     tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
+    autoLiveQa: qaScope === 'auto_live' ? 'PASS' : 'NOT_RUN',
+    autoLiveSignalTransport: qaScope === 'auto_live' ? 'PASS' : 'NOT_RUN',
+    canonicalAutoLiveSignalSource: qaScope === 'auto_live' ? 'NOT_PROVEN' : 'NOT_EVALUATED',
+    automaticPositionIsolation: qaScope === 'auto_live' ? 'PASS' : 'NOT_EVALUATED',
     telegramActivationState: qaScope === 'trading_core'
       ? tradingCore.telegramActivationState
       : 'NOT_EVALUATED',
@@ -391,14 +530,16 @@ function buildProductionPostdeployQaEvidence({
     telegramActivationVerified: qaScope === 'trading_core'
       ? tradingCore.telegramActivationState === 'ACTIVE_VERIFIED'
       : false,
-    memberAutoPolicyReady: qaScope === 'trading_core'
-      ? tradingCore.memberAutoPolicyReady
+    memberAutoPolicyReady: qaScope === 'trading_core' || qaScope === 'auto_live'
+      ? (qaScope === 'trading_core' ? tradingCore.memberAutoPolicyReady : autoLive.memberAutoPolicyReady)
       : false,
-    memberAutoLivePilotReady: qaScope === 'trading_core'
-      ? tradingCore.memberAutoLivePilotReady === true
+    memberAutoLivePilotReady: qaScope === 'trading_core' || qaScope === 'auto_live'
+      ? (qaScope === 'trading_core'
+        ? tradingCore.memberAutoLivePilotReady === true
+        : autoLive.memberAutoLivePilotReady === true)
       : false,
-    memberAutoPilotStage: qaScope === 'trading_core'
-      ? String(tradingCore.memberAutoPilotStage ?? '')
+    memberAutoPilotStage: qaScope === 'trading_core' || qaScope === 'auto_live'
+      ? String((qaScope === 'trading_core' ? tradingCore : autoLive).memberAutoPilotStage ?? '')
       : 'NOT_EVALUATED',
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
@@ -424,24 +565,41 @@ function buildProductionPostdeployQaEvidence({
     bitgetPositionMode: account.bitgetPositionMode,
     bitgetMarginModePolicy: 'isolated',
     bitgetLeveragePolicy: '2-7',
-    duplicateWorkerExecutionCount: 0,
+    bitgetAdministratorLeveragePolicy: '2-7',
+    bitgetMemberLeveragePolicy: '2-3',
+    duplicateWorkerExecutionCount: qaScope === 'auto_live'
+      ? (autoLive.workerEnabled === false ? 0 : 1)
+      : 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,
-    activationReady: true,
+    // Account/UI/signal rehearsal is a subset. It cannot attest the remaining
+    // execution/runtime controls listed by that very receipt. Do not turn an
+    // acknowledgement of missing proofs into permission for AUTO LIVE.
+    qaComplete: true,
+    automaticLiveActivationReady: false,
+    unprovenAutomaticLiveControls: qaScope === 'auto_live'
+      ? [...autoLive.memberAccountSignalAudit.additionalRequiredControls,
+        'SCANNER_PRODUCER_CONNECTED', 'AI_PRODUCER_CONNECTED', 'STRATEGY_EXECUTION_LINKAGE']
+      : ['AUTOMATIC_LIVE_COMPLETE_CONTROL_AUDIT_REQUIRED'],
+    activationReady: qaScope !== 'auto_live',
   };
 }
 
 module.exports = {
+  assertAutomaticPositionIsolationReceipt,
   REQUIRED_PROVIDERS,
   REQUIRED_CREDENTIAL_REUSE_PATHS,
   ZERO_COUNTERS,
   ZERO_SAFETY_COUNTERS,
   assertAccountReceipt,
+  assertAutoLiveSignalReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
   assertMemberReceipt,
   assertTradingCoreReceipt,
+  assertAutoLiveReceipt,
   buildProductionPostdeployQaEvidence,
   verifyPostDeployMainLineage,
   isActiveProductionTradingGateRun,
+  revalidateProductionTradingGateConflicts,
 };

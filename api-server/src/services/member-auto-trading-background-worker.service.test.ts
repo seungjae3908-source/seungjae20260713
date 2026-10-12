@@ -1,25 +1,44 @@
 import test from 'node:test';
+// Run canonical exit identity regressions in the already registered phase12 lane.
+import './member-auto-trading-exit-plan.service.test';
+import './automatic-live-preactivation-audit.service.test';
+import './automatic-live-unrealized-risk.service.test';
+import './bitget-native-protection-readonly.service.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
+import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { automaticLiveExecutionEnabled } from './trade-automation.service';
-import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type ExchangeConnection,
+  type TradingPlan,
+  type TradingPolicy,
+} from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  automaticLiveIsolationReceipt,
+} from './automatic-live-position-isolation.service';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
   liveBackgroundEnabled,
   memberAutoTradingWorkerMode,
+  costPercent,
   marketMapping,
   resolveMemberStockBroker,
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
+  automaticTradingStoredEntryReasons,
   assertCanonicalLiveProviderPositions,
   liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
@@ -29,12 +48,14 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticLiveStrategyAllowlisted,
+  currentLiveMemberAccessMatchesBatch,
   automaticPaperCapitalPolicyReady,
   automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
   automaticPaperOrderWithinWalletEpoch,
   automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
+  deriveFourMarketPaperExecutionPolicy,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -44,6 +65,65 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
+  const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  const spot = { exchange: 'upbit', accountMode: 'live', leverage: null } as const;
+  const futures = { exchange: 'bitget', accountMode: 'live', leverage: 7 } as const;
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, spot), true);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, futures), true);
+  for (const profile of [{ ...admin, status: 'suspended' }, { ...admin, is_active: false },
+    { ...admin, membership_expires_at: new Date(Date.now() - 1).toISOString() },
+    { ...admin, membership_level: 'regular', role: 'user' }]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(profile, 1_000_000, spot), false);
+  }
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, undefined, spot), false);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 500_000, spot), false, 'upgrade cannot inherit old batch authority');
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...spot, accountMode: 'paper' }), false);
+  for (const leverage of [1, 8, 7.1, null, Number.NaN]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage }), false);
+  }
+});
+
+test('worker stopped during an awaited member read cannot create plans or resume on a later tick', async () => {
+  const repository = new InMemoryTradingRepository();
+  const nowMs = Date.now();
+  let unblock!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async listEligibleMembers() { started(); await blocked; return await base.listEligibleMembers(); },
+  });
+  const first = withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  await entered;
+  worker.stop(); unblock();
+  const stoppedTick = await first;
+  assert.equal(stoppedTick.newEntriesFailClosed, true);
+  assert.equal(stoppedTick.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(stoppedTick.liveOrders + stoppedTick.paperExitOrders + stoppedTick.privateTradingRequests, 0);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  const later = await worker.runOnce(new Date(nowMs + 1_000));
+  assert.equal(later.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(later.liveEntryWarmupComplete, false); assert.equal(later.liveEntriesArmed, false);
+  assert.equal(later.newEntriesFailClosed, true);
+});
+
+test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
+  const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
+    direction: 'BUY', timeframe: '5m', regime: 'TREND' },
+    signal: { learningSnapshot: { reasons: ['실제 저장된 진입 조건', null, ''] } },
+    riskEvidence: { actualRiskPercent: 0.2, riskReward1: 2 } } as any;
+  const reasons = automaticTradingStoredEntryReasons(entry);
+  assert.equal(reasons[0], '실제 저장된 진입 조건');
+  assert.ok(reasons.includes('진입 전략: trend-breakout-v1 · 버전 v1'));
+  assert.ok(reasons.includes('진입 당시 검증 위험비율: 0.2%'));
+  assert.ok(reasons.includes('진입 당시 목표 1 손익비: 2'));
+  const withoutDescription = automaticTradingStoredEntryReasons({ ...entry, signal: { learningSnapshot: null },
+    riskEvidence: { actualRiskPercent: null, riskReward1: null } });
+  assert.doesNotMatch(withoutDescription.join('|'), /거래량|캔들|AI 승인|위험비율/);
+});
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({
@@ -145,10 +225,10 @@ test('dedicated automatic Paper equity never borrows manual simulator cash or co
   };
   assert.equal(selectAutomaticPaperAccountEquity([]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual]), null);
-  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 500_000);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 1_000_000);
   assert.equal(selectAutomaticPaperAccountEquity([manual, { ...dedicated, deletedAt: at }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
-    ...dedicated, payload: { ...dedicated.payload, initialBalance: 1_000_000 },
+    ...dedicated, payload: { ...dedicated.payload, initialBalance: 500_000 },
   }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
     ...dedicated, payload: { ...dedicated.payload, equity: -1 },
@@ -369,6 +449,8 @@ function source(
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
+    // Explicit fake current-authority reader; never a Production capability.
+    async revalidateLiveMemberAccess() { return !options.expired && options.tier !== 'pending'; },
     async readHandoff() {
       return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
     },
@@ -584,7 +666,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('Bitget futures worker preserves every validated 4x-7x policy and evidence into the plan', async () => {
+test('Bitget futures worker preserves administrator 4x-7x and blocks the same evidence for members', async () => {
   for (const expectedLeverage of [4, 5, 6, 7] as const) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
@@ -598,7 +680,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
     },
     exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
     bitgetLeverage: expectedLeverage,
-  });
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
   await repository.savePolicy(USER, futuresPolicy);
 
   const futuresHandoff = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
@@ -640,7 +722,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
       return [{
         userId: USER,
         policy: futuresPolicy,
-        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
       }];
     },
     async resolveFx() {
@@ -662,6 +744,33 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
   assert.equal(plans[0]?.exchange, 'bitget');
   assert.equal(plans[0]?.leverage, expectedLeverage);
   assert.equal(plans[0]?.marginMode, 'isolated');
+
+  const memberRepository = new InMemoryTradingRepository();
+  await memberRepository.savePolicy(USER, futuresPolicy);
+  const memberBase = source(memberRepository, nowMs);
+  const memberWorker = new MemberAutoTradingBackgroundWorker({
+    ...memberBase,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+  const memberResult = await withFetchMock(() => memberWorker.runOnce(new Date(nowMs)));
+  assert.equal(memberResult.createdPlans, 0);
+  assert.equal((await memberRepository.listPlans(USER)).length, 0);
   }
 });
 
@@ -1102,7 +1211,7 @@ test('live background lane requires every explicit live authority flag', () => {
   }
 });
 
-test('first live-enabled worker tick is a read/sync warmup and cannot create a live entry', async () => {
+test('first live-enabled worker tick is a read-only warmup and cannot create a live entry', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
     'AUTO_TRADING',
@@ -1142,7 +1251,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     assert.equal(result.liveOrders, 0);
     assert.equal(result.liveExitOrders, 0);
     assert.equal(liveReads, 0);
-    assert.ok(syncCalls.count >= 2);
+    assert.equal(syncCalls.count, 0, 'Live readiness must not depend on Paper journal/Telegram projection');
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -1623,8 +1732,31 @@ test('first live warmup suppresses automatic exits for existing live positions b
     assert.equal(quarantined.liveExitOrders, 0);
     assert.equal(quarantined.newEntriesFailClosed, true);
     assert.equal(quarantined.createdPlans, 0);
-    assert.equal(quarantined.failures, 1);
+    assert.equal(quarantined.failures, 0, 'missing Paper state is not a Live worker failure');
     assert.equal(liveReads, 0);
+
+    const futuresRepository = new InMemoryTradingRepository();
+    await futuresRepository.savePolicy(USER, allFourPolicy());
+    const futuresPlan = { ...await repository.getPlan(USER, 'live-plan-existing'),
+      id: 'futures-existing', exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', leverage: 2, marginMode: 'isolated', idempotencyKey: 'futures-existing-key' } as TradingPlan;
+    await futuresRepository.savePlan(futuresPlan);
+    await futuresRepository.saveOrder({ ...await repository.getOrder(USER, 'live-order-existing'),
+      id: 'futures-filled', planId: futuresPlan.id, exchange: 'bitget',
+      clientOrderId: 'futures-filled-client' } as import('./trade-automation.types').TradingOrder);
+    let nativeReads = 0;
+    const unprotected = new MemberAutoTradingBackgroundWorker({
+      ...source(futuresRepository, nowMs, { tier: 'admin', policyOverride: allFourPolicy() }),
+      async auditNativeFuturesProtection() { nativeReads += 1; throw new Error('BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED'); },
+    });
+    const unsafe = await withFetchMock(() => unprotected.runOnce(new Date(nowMs)));
+    assert.equal(nativeReads, 1);
+    assert.equal(unsafe.nativeProtectionErrorCode, 'BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED');
+    assert.equal(unsafe.liveTrackedPositions, 1, 'unknown native close must not hide canonical ownership');
+    assert.equal(unsafe.newEntriesFailClosed, true);
+    assert.equal(unsafe.liveEntryWarmupComplete, false, 'unverified protection cannot become a healthy warmup');
+    assert.equal(unsafe.liveOrders + unsafe.liveExitOrders + unsafe.privateTradingRequests, 0);
+    assert.equal((await futuresRepository.listOrders(USER)).length, 1, 'no invented exit fill or test order');
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -1799,7 +1931,7 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
 });
 
 
-test('Telegram outage blocks armed live entry while preserving independent exit warmup', async () => {
+test('Live readiness and entry do not require Paper wallet or Telegram binding', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
     'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
@@ -1813,12 +1945,15 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
   const root = await mkdtemp(join(tmpdir(), 'auto-telegram-gate-'));
   const armPath = join(root, 'arm.json');
   const targetSha = 'c'.repeat(40);
-  let telegramReady = true;
   let liveReads = 0;
   const base = source(repository, nowMs, { tier: 'admin' });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
-    telegramDeliveryHealthy() { return telegramReady; },
+    telegramDeliveryHealthy() { return false; },
+    async memberTelegramConnected() { return false; },
+    paperJournalRepositoryFor() {
+      return { async listSnapshot() { return []; } } as unknown as PaperJournalRepository;
+    },
     async listEligibleMembers() {
       return [{
         userId: USER, policy: readyPolicy,
@@ -1827,7 +1962,7 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
     },
     async readLiveAccountSnapshot() {
       liveReads += 1;
-      throw new Error('TELEGRAM_OUTAGE_MUST_NOT_READ_PRIVATE_PROVIDER');
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
     },
   });
   try {
@@ -1843,15 +1978,13 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
       armedAt: new Date(nowMs + 100).toISOString(),
       activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
     }) + '\n', { mode: 0o600, flag: 'wx' });
-    telegramReady = false;
     const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
     assert.equal(blocked.liveEntryArmPresent, true);
     assert.equal(blocked.liveEntryWarmupComplete, true);
-    assert.equal(blocked.liveEntriesArmed, false);
-    assert.equal(blocked.newEntriesFailClosed, true);
-    assert.equal(blocked.liveEntriesSuppressedByTelegram, 1);
+    assert.equal(blocked.liveEntriesArmed, true);
+    assert.equal(blocked.liveEntriesSuppressedByTelegram, 0);
     assert.equal(blocked.liveOrders, 0);
-    assert.equal(liveReads, 0);
+    assert.equal(liveReads, 1, 'armed Live path must reach its own provider preflight');
     assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -2008,40 +2141,58 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
   assert.equal(result.createdPlans, 0);
   assert.equal(result.liveOrders, 0);
   assert.equal(result.failures, 1);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_PAPER_HANDOFF_STALE');
+});
+
+test('handoff failure reports a sanitized cause without leaking filesystem or secret details', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const result = await new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { throw new Error('HANDOFF_ENTRY_STALE:private-file:secret-value'); },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffErrorCode, 'HANDOFF_ENTRY_STALE');
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 
-test('read-only Live pre-entry exposure blocks untracked securities but excludes Upbit KRW settlement cash', () => {
-  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+test('manual holdings remain protected without becoming canonical AUTO assets; unknown or mixed ownership blocks', () => {
+  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 2 } as TradingPlan;
   const position = (symbol: string, quantity: number | null, side: string | null = 'long') =>
-    ({ symbol, quantity, side }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
+    ({ market: 'USDT', symbol, quantity, availableQuantity: quantity, side, leverage: 2 }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
   const bitget = (positions: CanonicalAccountSnapshot['positions']) =>
-    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [tracked]);
+    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [{ plan: tracked, remainingQuantity: 1 }]);
   assert.doesNotThrow(() => bitget([position('BTCUSDT', 1)]));
   const crossProviderPlan = { symbol: '005930', side: 'buy', exchange: 'kiwoom' } as TradingPlan;
-  assert.throws(() => assertCanonicalLiveProviderPositions({
+  const protectedToss = assertCanonicalLiveProviderPositions({
     provider: 'toss', positions: [position('005930', 1, null)],
-  }, [crossProviderPlan]), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/,
-  'same symbol on a different broker must not reconcile external exposure');
-  assert.throws(() => bitget([position('ETHUSDT', 1)]),
-    /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  }, [{ plan: crossProviderPlan, remainingQuantity: 1 }]);
+  assert.equal(protectedToss.manualProtected.length, 1, 'another broker cannot adopt manual assets');
+  assert.equal(protectedToss.automaticOwned.length, 0);
+  assert.throws(() => bitget([position('ETHUSDT', 1)]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
   assert.throws(() => bitget([position('BTCUSDT', 1, 'short')]),
     /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
   assert.throws(() => bitget(null), /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
   assert.throws(() => bitget([position('BTCUSDT', null)]),
     /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
-  assert.doesNotThrow(() => bitget([]));
+  assert.throws(() => bitget([]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
+  assert.throws(() => bitget([position('BTCUSDT', 1.2)]), /BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT/);
 
   // Upbit includes its KRW cash wallet in positions; that is NOT an open
-  // market exposure, but a separately held ETH coin must still block entry.
+  // market exposure. A separately held ETH coin is protected, not adopted.
   assert.doesNotThrow(() => assertCanonicalLiveProviderPositions({
     provider: 'upbit', positions: [position('KRW', 500_000, null)],
   }, []));
-  assert.throws(() => assertCanonicalLiveProviderPositions({
+  const protectedUpbit = assertCanonicalLiveProviderPositions({
     provider: 'upbit', positions: [
       position('KRW', 500_000, null), position('ETH', 0.4, null),
     ],
-  }, []), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  }, []);
+  assert.equal(protectedUpbit.manualProtected.length, 1);
+  assert.equal(protectedUpbit.automaticOwned.length, 0);
 });
 
 
@@ -2071,26 +2222,81 @@ test('live warmup rechecks current provider exposure, open orders, and Bitget on
     ...(provider === 'bitget' ? { positionMode: 'one_way_mode' as const } : {}),
     ...overrides,
   });
-  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 7 } as TradingPlan;
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss'), []), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
     openOrders: [{ id: 'manual-open', market: 'KR', symbol: '005930', side: 'buy', price: 1, quantity: 1, remainingQuantity: 1, status: 'OPEN' }],
   }), []), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
     positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
-  }), []), false);
+  }), []), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positionMode: 'hedge_mode',
   }), []), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 7, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
-  }), [bitgetPlan]), true);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), true);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 8, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
-  }), [bitgetPlan]), false);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
   assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
     positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 3, liquidationPrice: null, marginMode: 'cross', side: 'long' }],
-  }), [bitgetPlan]), false);
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
+});
+
+test('same-account manual assets cannot be entered or exited by AUTO, while a separate symbol remains eligible', () => {
+  const snapshot = {
+    provider: 'upbit', connected: true, status: 'CONNECTED', stale: false, errorCode: null,
+    readOnly: true, accounts: [], balances: [], checkedAt: new Date().toISOString(), lastGoodAt: new Date().toISOString(),
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false,
+    openOrders: [], positions: [
+      { market: 'UPBIT', symbol: 'KRW', quantity: 1_000_000, availableQuantity: 1_000_000 },
+      { market: 'UPBIT', symbol: 'BTC', quantity: 0.2, availableQuantity: 0.2 },
+      { market: 'UPBIT', symbol: 'ETH', quantity: 2, availableQuantity: 2 },
+    ],
+  } as unknown as CanonicalAccountSnapshot;
+  const plan = { userId: 'owner', id: 'auto', exchange: 'upbit', market: 'KRW', symbol: 'KRW-SOL',
+    accountMode: 'live', executionMode: 'automatic', side: 'buy', quantity: 1, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlan;
+  const proof = automaticLiveIsolationReceipt(snapshot, [], 3);
+  assert.equal(proof.manualProtectedPositionCount, 2);
+  assert.equal(proof.automaticOwnedPositionCount, 0);
+  assert.equal(proof.ready, true);
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(snapshot, [], plan));
+  for (const symbol of ['BTC', 'KRW-BTC']) {
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol }), /MANUAL_ASSET_PROTECTED/);
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol, side: 'sell', reduceOnly: true }), /MANUAL_ASSET_PROTECTED/);
+  }
+  const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
+    ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
+  assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
+  const order = { id: 'entry-fill', planId: plan.id, userId: plan.userId, exchange: plan.exchange,
+    state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
+  assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
+  const filled = { ...order, state: 'FILLED' as const, filledQuantity: 1 };
+  const owned = canonicalAutomaticLivePositions([plan], [filled]);
+  const withAuto = { ...snapshot, positions: [...snapshot.positions!,
+    { market: 'UPBIT', symbol: 'SOL', quantity: 1, availableQuantity: 1 } as NonNullable<CanonicalAccountSnapshot['positions']>[number]] };
+  const exit = { ...plan, id: 'exit', symbol: 'KRW-SOL', side: 'sell' as const, reduceOnly: true,
+    signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
+  for (const filledQuantity of [0.5, 1]) {
+    const wrongExit = { ...exit, side: 'buy' as const };
+    const wrongOrder = { ...filled, id: 'exit-fill', planId: exit.id, filledQuantity };
+    assert.throws(() => canonicalAutomaticLivePositions([plan, wrongExit], [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+    assert.throws(() => canonicalAutomaticLivePositions([plan,
+      { ...exit, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto', 'AUTO_EXIT_ENTRY_PLAN:foreign'] }],
+    [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+  }
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(withAuto, owned, exit));
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, plan), /AUTOMATIC_POSITION_ALREADY_OPEN/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, signalReasons: [] }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => canonicalAutomaticLivePositions([plan], [filled, { ...filled, id: 'duplicate' }]), /OWNERSHIP_AMBIGUOUS/);
+  const closedOrder = { ...filled, id: 'exit-fill', planId: exit.id };
+  assert.deepEqual(canonicalAutomaticLivePositions([plan, exit], [filled, closedOrder]), []);
+  assert.equal(automaticLiveIsolationReceipt(withAuto, [], 3).manualProtectedPositionCount, 3,
+    'assets without a proven remaining fill stay manual/protected, including a later manual reacquisition');
 });
 
 test('member Telegram live admission requires a SENT receipt after this chat binding, never from a former chat', () => {
@@ -2204,6 +2410,55 @@ async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, n
     createdAt: timestamp, updatedAt: timestamp,
   } as any);
 }
+
+test('restart with a current arm and missing entry handoff still evaluates only owned guarded Live exits', async () => {
+  const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH'] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const root = await mkdtemp(join(tmpdir(), 'auto-owned-exit-restart-'));
+  const armPath = join(root, 'arm.json');
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { return null; },
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      // Stop before order creation: no actual or simulated financial POST.
+      throw new Error('BACKGROUND_EXIT_READONLY_TEST_BOUNDARY');
+    },
+  });
+  try {
+    for (const key of flags.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({ schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha: 'c'.repeat(40), armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString() }), { mode: 0o600 });
+    for (const timestamp of [nowMs, nowMs + 15_000]) {
+      const result = await withFetchMock(() => worker.runOnce(new Date(timestamp)));
+      assert.equal(result.handoffReady, false);
+      assert.equal(result.liveEntriesArmed, false);
+      assert.equal(result.newEntriesFailClosed, true);
+      assert.equal(result.liveTrackedPositions, 1);
+      assert.equal(result.liveExitsSuppressedByWarmupOrArm, 0);
+      assert.equal(result.liveOrders + result.liveExitOrders, 0);
+      assert.equal(result.createdPlans, 0);
+    }
+    assert.equal(providerReads, 2, 'each guarded exit reaches a read-only provider boundary despite missing entry handoff');
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of flags) {
+      const value = previous[key];
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test('expired automatic member retains read-only Live fill visibility and has zero order authority', async () => {
   const flags = [
@@ -2330,7 +2585,7 @@ test('blocked member evidence survives paginated warmup and cannot be erased by 
     }
   }
 });
-test('armed Live worker cannot bypass an unfilled Paper mirror to call a private provider', async () => {
+test('armed Live worker evaluates its provider path without requiring a filled Paper mirror', async () => {
   const flags = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
     'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
@@ -2357,7 +2612,7 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
     },
     async readLiveAccountSnapshot() {
       providerReads++;
-      throw new Error('LIVE_PROVIDER_READ_NOT_ALLOWED_WITHOUT_FILLED_PAPER');
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
     },
   });
   try {
@@ -2381,8 +2636,7 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
     assert.equal(blocked.liveEntriesArmed, true);
     assert.equal(blocked.filledOrders, 0);
     assert.equal(blocked.liveOrders, 0);
-    assert.equal(blocked.newEntriesFailClosed, true);
-    assert.equal(providerReads, 0);
+    assert.equal(providerReads, 1);
     assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -2569,13 +2823,34 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
 });
 
-test('automatic Paper worker shares the 500k minimum capital policy admission guard with readiness', () => {
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), false);
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), false);
+test('automatic Paper capital remains independent from the smaller LIVE role budget', () => {
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 9_999 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 500_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
+});
+
+test('four-market Paper projection gives every member a 1m lane and compounds without changing Live policy', () => {
+  const stored = policy();
+  const projected = deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: true,
+    newEntriesAllowed: true,
+    operatingCapitalKrw: 1_050_000,
+  });
+  assert.equal(projected.totalCapitalKrw, 1_050_000);
+  assert.equal(projected.maxOrderKrw, 1_050_000);
+  assert.equal(projected.maxInstrumentKrw, 1_050_000);
+  assert.equal(projected.maxAssetClassKrw.crypto_spot, 1_050_000);
+  assert.equal(projected.bitgetLeverage, stored.bitgetLeverage);
+  assert.equal(stored.maxOrderKrw, 100_000, 'stored/Live policy must remain unchanged');
+  assert.throws(() => deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: false,
+    newEntriesAllowed: false,
+    operatingCapitalKrw: 1_000_000,
+  }), /BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY/);
 });
 
 test('admin four-market Paper worker isolates the 1m capital floor without creating private orders', async () => {
@@ -2682,4 +2957,70 @@ test('blank live strategy allowlist is never wildcard authorization for a real o
   assert.equal(automaticLiveStrategyAllowlisted({
     enabledStrategies: undefined as never,
   }, 'safe-canonical-setup'), false);
+});
+
+test('Cost missing is not an allowed zero-rate estimate in automatic Paper handoff', () => {
+  const shape = (value: unknown) => ({
+    execution: { costPolicy: value },
+  }) as Parameters<typeof costPercent>[0];
+  assert.equal(costPercent(shape({commissionRate:0}), 'commissionRate'), 0);
+  assert.equal(costPercent(shape({commissionRate:0.001}), 'commissionRate'), 0.1);
+  for (const cost of [
+    undefined, null, {}, {commissionRate:null}, {commissionRate:''},
+    {commissionRate:NaN}, {commissionRate:Infinity}, {commissionRate:-0.1},
+    {commissionRate:1.1}, {commissionRate:' '}, {commissionRate:'0'},
+    {commissionRate:false}, {commissionRate:[]}, {commissionRate:{}},
+  ]) assert.equal(costPercent(shape(cost), 'commissionRate'), null);
+});
+
+
+test('automatic Paper worker persists cost-policy tax/fee/FX receipts while missing policy stays blocked', async () => {
+  const nowMs = Date.now();
+  const prior = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+  const serverOnly = JSON.stringify({
+    contract: 'member-auto-paper-cost-rules/v1',
+    rules: [{
+      market: 'CRYPTO_SPOT', exchange: 'upbit',
+      policyId: 'server-paper-cost-v1:worker-scope-fixture',
+      feeRatePercent: 0.05, taxRatePercent: 0,
+      effectiveAt: new Date(nowMs - 60_000).toISOString(),
+      expiresAt: new Date(nowMs + 60_000).toISOString(),
+    }],
+  });
+  try {
+    const repository = new InMemoryTradingRepository();
+    await repository.savePolicy(USER, policy());
+    process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = serverOnly;
+    const ready = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(repository, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(ready.createdPlans, 1);
+    assert.equal(ready.filledOrders, 1);
+    assert.equal(ready.privateTradingRequests, 0);
+    assert.equal(ready.liveOrders, 0);
+    const orders = await repository.listOrders(USER);
+    const plans = await repository.listPlans(USER);
+    assert.equal(orders.length, 1);
+    assert.equal(orders[0]?.state, 'FILLED');
+    assert.equal(orders[0]?.taxAmount, 0);
+    assert.equal(orders[0]?.taxCurrency, 'KRW');
+    assert.ok((orders[0]?.feeAmount ?? -1) > 0);
+    assert.equal(orders[0]?.feeCurrency, 'KRW');
+    assert.equal(orders[0]?.settlementFxEvidence?.source, 'NATIVE_KRW');
+    const journal = tradeAutomationJournalPayloadsFromSnapshot(USER, orders, plans);
+    assert.equal(journal[0]?.tax, 0);
+    assert.ok(typeof journal[0]?.fees === 'number' && journal[0].fees > 0);
+    const withoutPolicy = new InMemoryTradingRepository();
+    await withoutPolicy.savePolicy(USER, policy());
+    delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    const missing = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(withoutPolicy, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(missing.createdPlans, 1);
+    assert.equal(missing.liveOrders, 0);
+    const [unverified] = await withoutPolicy.listOrders(USER);
+    assert.equal(unverified?.taxAmount ?? null, null,
+      'a missing protected rule cannot mint an apparent zero-tax receipt');
+  } finally {
+    if (prior === undefined) delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    else process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = prior;
+  }
 });

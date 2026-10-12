@@ -6,13 +6,17 @@ const {
   ZERO_COUNTERS,
   ZERO_SAFETY_COUNTERS,
   assertAccountReceipt,
+  assertAutomaticPositionIsolationReceipt,
+  assertAutoLiveReceipt,
+  assertAutoLiveSignalReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
   assertTradingCoreReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
 const { findUniqueEvidenceFile } = require('./production-preactivation-evidence-paths.cjs');
 
-const args = process.argv.slice(2);
+const requirePositionIsolation = process.argv.includes('--require-automatic-position-isolation');
+const args = process.argv.slice(2).filter((arg) => arg !== '--require-automatic-position-isolation');
 if (args.length < 4) {
   throw new Error('Usage: verify-production-preactivation-evidence.cjs <sha> <run-id> <deployment-boundary> <evidence-dir|comprehensive> [account credential activation-ready]');
 }
@@ -24,6 +28,8 @@ const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
 let comprehensive = null;
 let tradingCore = null;
+let autoLive = null;
+let autoLiveSignal = null;
 let account;
 let credential;
 let activation;
@@ -37,6 +43,9 @@ if (args.length === 4 && fs.existsSync(args[3]) && fs.statSync(args[3]).isDirect
   activation = read(activationPath);
   if (activation?.qaScope === 'trading_core') {
     tradingCore = read(evidence('production-trading-core-qa.json'));
+  } else if (activation?.qaScope === 'auto_live') {
+    autoLive = read(evidence('production-auto-live-qa.json'));
+    autoLiveSignal = read(evidence('production-auto-live-signal-source.json'));
   } else {
     comprehensive = read(evidence('production-comprehensive-readonly-qa.json'));
   }
@@ -51,19 +60,36 @@ if (args.length === 4 && fs.existsSync(args[3]) && fs.statSync(args[3]).isDirect
   activation = read(activationPath);
 }
 
-const qaScope = activation?.qaScope === 'trading_core' ? 'trading_core' : 'full';
+const qaScope = ['full', 'trading_core', 'auto_live'].includes(activation?.qaScope)
+  ? activation.qaScope
+  : activation?.schemaVersion === 'production-postdeploy-activation-ready-v3' ? 'full' : null;
+if (!qaScope) throw new Error('PREACTIVATION_QA_SCOPE_INVALID');
 if (qaScope === 'trading_core') {
   assertTradingCoreReceipt(tradingCore, context);
+} else if (qaScope === 'auto_live') {
+  assertAutoLiveReceipt(autoLive, context);
+  assertAutoLiveSignalReceipt(autoLiveSignal, context);
 } else {
   assertComprehensiveReceipt(comprehensive, context);
 }
 assertAccountReceipt(account, context);
+if (qaScope === 'auto_live' || requirePositionIsolation) assertAutomaticPositionIsolationReceipt(account);
 assertCredentialReceipt(credential, context);
+
+// An older full/trading-core/UI receipt is not an AUTO safety-control proof.
+// The current subset expressly cannot prove the remaining execution/runtime
+// controls. Keep every AUTO activation route closed until a complete, audited
+// control collector is wired; never interpret absent fields as zero/success.
+if (requirePositionIsolation || qaScope === 'auto_live') {
+  throw new Error('PREACTIVATION_AUTOMATIC_LIVE_COMPLETE_CONTROL_AUDIT_REQUIRED');
+}
 
 const boundary = Date.parse(String(boundaryText ?? ''));
 if (!Number.isFinite(boundary)) throw new Error('PREACTIVATION_EVIDENCE_BOUNDARY_INVALID');
 const scopedReceipts = qaScope === 'trading_core'
   ? { tradingCore, account, credential, activation }
+  : qaScope === 'auto_live'
+    ? { autoLive, autoLiveSignal, account, credential, activation }
   : { comprehensive, account, credential, activation };
 for (const [name, receipt] of Object.entries(scopedReceipts)) {
   const generatedAt = Date.parse(String(receipt?.generatedAt ?? ''));
@@ -80,7 +106,12 @@ const v4Scoped = activation?.schemaVersion === 'production-postdeploy-activation
   && activation?.qaScope === qaScope
   && (qaScope === 'trading_core'
     ? activation?.tradingCoreQa === 'PASS' && activation?.comprehensiveQa === 'NOT_RUN'
-    : activation?.comprehensiveQa === 'PASS');
+    : qaScope === 'auto_live'
+      ? activation?.autoLiveQa === 'PASS'
+        && activation?.canonicalAutoLiveSignalSource === 'PASS'
+        && activation?.tradingCoreQa === 'NOT_RUN'
+        && activation?.comprehensiveQa === 'NOT_RUN'
+      : activation?.comprehensiveQa === 'PASS');
 if ((!v3Full && !v4Scoped)
   || activation?.targetSha !== sha
   || activation?.mainSha !== sha
@@ -95,9 +126,13 @@ if ((!v3Full && !v4Scoped)
   || activation?.bitgetPositionMode !== 'one_way_mode'
   || activation?.bitgetMarginModePolicy !== 'isolated'
   || activation?.bitgetLeveragePolicy !== '2-7'
+  || activation?.bitgetAdministratorLeveragePolicy !== '2-7'
+  || activation?.bitgetMemberLeveragePolicy !== '2-3'
   || activation?.duplicateWorkerExecutionCount !== 0
   || activation?.pm2FlagDriftCount !== 0
   || activation?.legacyCryptoAutoAuthorityGranted !== false
+  || (qaScope === 'auto_live' && (activation?.memberAutoLivePilotReady !== true
+    || activation?.automaticPositionIsolation !== 'PASS'))
   || activation?.activationReady !== true) {
   throw new Error('PREACTIVATION_ACTIVATION_READY_RECEIPT_INVALID');
 }

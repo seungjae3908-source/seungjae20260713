@@ -178,12 +178,12 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await installRuntime(page);
     await page.goto('/research-center');
 
-    await expect(page.getByRole('heading', { name: '현재 어디까지 왔나요?', exact: true })).toBeVisible();
-    const expertButton = page.getByRole('button', { name: '상세', exact: true });
+    await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
+    const expertButton = page.getByRole('button', { name: '연구', exact: true });
     const generalButton = page.getByRole('button', { name: '요약', exact: true });
     await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
     await expect(expertButton).toBeVisible();
-    await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'AI', exact: true })).toBeVisible();
 
     const general = page.getByTestId('research-general-view');
     await expect(general).toContainText('근거 수집 중');
@@ -197,28 +197,48 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(general).not.toContainText('LIVE_TRADING=false');
     const paperCard = page.getByTestId('research-summary-paper');
     await expect(paperCard).toContainText('모의매매 표본');
+    for (const [id, label] of [
+      ['research', '연구 상태'],
+      ['data', '데이터 수집'],
+      ['paper', '모의매매 표본'],
+      ['profitability', '수익성 검증'],
+    ] as const) {
+      await expect(page.getByTestId(`research-summary-${id}`).getByText(label, { exact: true })).toBeVisible();
+    }
+    const scrollBefore = await general.locator('main').evaluate(element => element.scrollTop);
     await paperCard.click();
-    await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
+    await expect(page.getByRole('dialog')).toBeVisible();
+    expect(await general.locator('main').evaluate(element => element.scrollTop)).toBe(scrollBefore);
+    await expect(page.getByTestId('research-general-selected-detail')).not.toContainText('다음에 뭘 보면 되나요?');
     const fullCost = page.getByTestId('research-full-cost-summary');
     await expect(fullCost).toBeVisible();
-    await expect(fullCost).toContainText('FULL_COST_READY · 미충족');
+    await expect(fullCost).toContainText('비용 검증 · 미충족');
     await expect(fullCost).toContainText('4/8');
-    await expect(fullCost).toContainText('후보 Settlement 3건 연결');
+    await expect(fullCost).toContainText('후보 정산 3건 연결');
     await expect(fullCost).toContainText('CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING');
     await expect(page.getByTestId('research-full-cost-commission')).toContainText('관측됨');
     await expect(page.getByTestId('research-full-cost-commission')).toContainText('public:commission');
-    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 경제증거 아님');
+    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 실측 아님');
     await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
     await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
-    await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('최신성 · 미제공');
+    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('품질 · 미제공');
+    await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(6);
 
     const overflow = await page.evaluate(() => Math.max(
       document.documentElement.scrollWidth,
       document.body.scrollWidth,
     ) - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(2);
+    const geometry = await page.getByRole('dialog').boundingBox();
+    expect(geometry!.width).toBeLessThan(width);
+    expect(geometry!.height).toBeLessThan(height);
+    expect(await page.getByRole('dialog').evaluate(element => getComputedStyle(element).backgroundColor)).not.toMatch(/rgba\([^)]*,\s*0\.?\d*\)$/);
+    await page.keyboard.press('Tab');
+    expect(await page.getByRole('dialog').evaluate(element => element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(paperCard).toBeFocused();
   });
 }
 
@@ -227,17 +247,18 @@ test('expert view preserves the canonical research evidence surface', async ({ p
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const expert = page.getByRole('button', { name: '상세', exact: true });
+  const expert = page.getByRole('button', { name: '연구', exact: true });
   await expert.click();
   await expect(expert).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-center-page')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-  await expect(page.getByRole('tab', { name: '검증 리포트', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '연구 현황', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '검증', exact: true })).toBeVisible();
 
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
-  await expect(page.getByText('Research source SHA', { exact: true })).toBeVisible();
-  await expect(page.getByText('Dataset identity', { exact: true })).toBeVisible();
-  await expect(page.getByText('Profitability proof', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
+  await page.getByText('연결 식별자', { exact: true }).click();
+  await expect(page.getByText('소스 버전', { exact: true })).toBeVisible();
+  await expect(page.getByText('데이터 식별자', { exact: true })).toBeVisible();
+  await expect(page.getByText('수익성 입증', { exact: true })).toBeVisible();
 });
 
 test('copilot entry keeps the established button contract', async ({ page }) => {
@@ -245,7 +266,7 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const copilot = page.getByRole('button', { name: 'AI 도우미', exact: true });
+  const copilot = page.getByRole('button', { name: 'AI', exact: true });
   await expect(copilot).toBeVisible();
   await copilot.click();
   await expect(page.getByTestId('research-general-view')).toHaveCount(0);

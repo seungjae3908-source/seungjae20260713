@@ -35,6 +35,9 @@ test('six formula+AI strategy packs reach ACTIVE_REHEARSAL without OOS/promotion
   assert.equal(RULE_PACK_PILOT_PROFILE.profitCompoundShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.profitReserveShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.futuresMaxLeverage, 7);
+  assert.equal(RULE_PACK_PILOT_PROFILE.mode, 'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY');
+  assert.equal(RULE_PACK_PILOT_PROFILE.liveOrderRequiresExplicitConfirmation, false);
+  assert.equal(RULE_PACK_PILOT_PROFILE.automaticLiveExecutionAllowed, true);
 
   for (const [strategyId, market, direction] of cases) {
     const result = evaluateFormulaAiAutoRehearsal({
@@ -43,7 +46,11 @@ test('six formula+AI strategy packs reach ACTIVE_REHEARSAL without OOS/promotion
       direction,
       ...ready,
       ...(market === 'CRYPTO_FUTURES'
-        ? { futuresMarginMode: 'isolated' as const, futuresLeverage: 7 }
+        ? {
+            futuresMarginMode: 'isolated' as const,
+            futuresLeverage: 7,
+            futuresMaximumLeverage: 7,
+          }
         : {}),
     });
     assert.equal(result.status, 'ACTIVE_REHEARSAL', strategyId);
@@ -66,6 +73,7 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'isolated',
     futuresLeverage: 7,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(pass.status, 'ACTIVE_REHEARSAL');
 
@@ -76,6 +84,7 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'crossed',
     futuresLeverage: 7,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(crossed.status, 'BLOCKED_REHEARSAL');
   assert.ok(crossed.blockers.includes('FORMULA_AI_FUTURES_ISOLATED_REQUIRED'));
@@ -87,9 +96,22 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'isolated',
     futuresLeverage: 8,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(over.status, 'BLOCKED_REHEARSAL');
   assert.ok(over.blockers.includes('FORMULA_AI_FUTURES_LEVERAGE_LIMIT'));
+
+  const memberOver = evaluateFormulaAiAutoRehearsal({
+    strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    market: 'CRYPTO_FUTURES',
+    direction: 'LONG',
+    ...ready,
+    futuresMarginMode: 'isolated',
+    futuresLeverage: 4,
+    futuresMaximumLeverage: 3,
+  });
+  assert.equal(memberOver.status, 'BLOCKED_REHEARSAL');
+  assert.ok(memberOver.blockers.includes('FORMULA_AI_FUTURES_LEVERAGE_LIMIT'));
 });
 
 test('AI veto, cash-market short, missing provider chain, and unknown strategy fail closed', () => {
@@ -135,6 +157,7 @@ test('AI veto, cash-market short, missing provider chain, and unknown strategy f
 
 test('rehearsal executes the real Paper engine through fill and journal projection with zero live authority', () => {
   const probe = runFormulaAiPaperRehearsalProbe(new Date('2026-10-07T01:00:00.000Z'));
+  assert.equal(probe.initialCapitalKrw, 500_000);
   assert.equal(probe.paperAutoReady, true);
   assert.equal(probe.paperFillReady, true);
   assert.equal(probe.journalReady, true);
@@ -147,4 +170,12 @@ test('rehearsal executes the real Paper engine through fill and journal projecti
   assert.equal(probe.exchangeRequestSent, false);
   assert.equal(probe.providerMutationRequests, 0);
   assert.equal(probe.productionMutationAllowed, false);
+
+  const administratorProbe = runFormulaAiPaperRehearsalProbe(
+    new Date('2026-10-07T01:00:00.000Z'),
+    1_000_000,
+  );
+  assert.equal(administratorProbe.initialCapitalKrw, 1_000_000);
+  assert.equal(administratorProbe.riskReady, true);
+  assert.equal(administratorProbe.realOrderSubmitted, false);
 });

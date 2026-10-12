@@ -6,6 +6,12 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
+import {
+  canonicalAutomaticLivePositions,
+  readAutomaticLiveExecutionAccount,
+  automaticLiveIsolationReceipt,
+} from '../services/automatic-live-position-isolation.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
@@ -13,7 +19,10 @@ import {
   automaticPaperWalletBootstrapReadiness,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   memberAutoTradingWorkerMode,
+  SupabaseMemberAutoTradingBackgroundSource,
 } from '../services/member-auto-trading-background-worker.service';
+import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
+import { assertPublicLivePlanOrigin, publicPlanPolicy, assertPublicPlanApprovalOrigin } from '../services/public-live-plan-origin.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { getUserSupabase } from '../lib/supabase';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
@@ -60,7 +69,16 @@ import type {
   TradingOrder,
   TradingPlan,
   TradingPlanInput,
+  TradingPolicy,
   TradingSignalState,
+} from '../services/trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+  PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -70,6 +88,7 @@ const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
+let livePolicyAuthorityOverrideForTests: boolean | null = null;
 let paperRuntimeWalletReaderForTests:
   ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null = null;
 let paperRuntimeRecordsReaderForTests:
@@ -98,6 +117,10 @@ export function setTradeAutomationRepositoryFactoryForTests(
   factory: ((userId: string) => TradingRepository) | null,
 ) {
   repositoryFactoryForTests = factory;
+}
+
+export function setTradeLivePolicyAuthorityOverrideForTests(value: boolean | null) {
+  livePolicyAuthorityOverrideForTests = value;
 }
 
 export function setTradeSplitOrderRepositoryFactoryForTests(
@@ -182,7 +205,7 @@ function context(req: AuthenticatedRequest) {
   const repository = repositoryFactoryForTests
     ? repositoryFactoryForTests(userId)
     : req.accessToken
-      ? createSupabaseTradingRepository(req.accessToken, userId)
+      ? createSupabaseTradingRepository(req.accessToken, userId, maximumSingleEntryKrw(req))
       : (() => { throw new Error('LOGIN_REQUIRED'); })();
   const splitRepository = splitRepositoryFactoryForTests
     ? splitRepositoryFactoryForTests(userId)
@@ -255,6 +278,7 @@ function sanitizedAutomaticRuntimeHealth() {
     lastTickAt: health.lastTickAt,
     tickOk: health.tickOk,
     handoffReady: health.handoffReady,
+    handoffErrorCode: health.handoffErrorCode,
     newEntriesFailClosed: health.newEntriesFailClosed,
     liveEntryArmPresent: health.liveEntryArmPresent,
     liveEntriesArmed: health.liveEntriesArmed,
@@ -908,7 +932,9 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       credentialsExposed: false;
     }>;
 
-    const paper = runFormulaAiPaperRehearsalProbe();
+    const paper = runFormulaAiPaperRehearsalProbe(
+      new Date(), maximumSingleEntryKrw(req), maximumBitgetLeverage(req),
+    );
     const journalReadReady = req.body?.journalReadReady === true;
     const telegramReady = req.body?.telegramReady === true;
     const futures = futuresLiveRuntimeStatus();
@@ -968,7 +994,11 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         journalReady: paper.journalReady && journalReadReady,
         telegramReady,
         ...(item.market === 'CRYPTO_FUTURES'
-          ? { futuresMarginMode, futuresLeverage }
+          ? {
+              futuresMarginMode,
+              futuresLeverage,
+              futuresMaximumLeverage: maximumBitgetLeverage(req),
+            }
           : {}),
       });
       return {
@@ -1044,7 +1074,10 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         marginMode: futures.marginMode || null,
         maxLeverage: futures.maxLeverage,
         isolatedReady: futures.marginMode === 'isolated',
-        leverageReady: Number.isInteger(futuresLeverage) && futuresLeverage >= 2 && futuresLeverage <= 7,
+        maximumLeverageForRequester: maximumBitgetLeverage(req),
+        leverageReady: Number.isInteger(futuresLeverage)
+          && futuresLeverage >= 2
+          && futuresLeverage <= maximumBitgetLeverage(req),
       },
       markets,
       allProvidersReady,
@@ -1084,39 +1117,49 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
           .getRecord(userId, 'account', AUTOMATIC_PAPER_ACCOUNT_ID)
         : Promise.reject(new Error('LOGIN_REQUIRED'));
     const administratorFourMarket = Boolean(req.member && hasCapability(req.member, 'canManageMembers'));
-    const adminRecordsRead = administratorFourMarket
-      ? paperRuntimeRecordsReaderForTests
-        ? paperRuntimeRecordsReaderForTests(userId)
+    const marketRecordsRead = paperRuntimeRecordsReaderForTests
+      ? paperRuntimeRecordsReaderForTests(userId)
+      : paperRuntimeWalletReaderForTests
+        ? Promise.resolve([] as StoredPaperJournalRecord[])
         : req.accessToken
           ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
-          : Promise.reject(new Error('LOGIN_REQUIRED'))
-      : Promise.resolve([] as StoredPaperJournalRecord[]);
-    const adminGuardRead = administratorFourMarket
-      ? (async () => {
+          : Promise.reject(new Error('LOGIN_REQUIRED'));
+    const [policy, globalStopped, wallet, marketWalletRecords] = await Promise.all([
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+      walletRead,
+      marketRecordsRead,
+    ]);
+    // The authenticated member role determines the required V2 namespace.
+    // Never infer the role from whether wallet rows happen to exist: doing so
+    // made a missing four-market wallet silently skip the database guard and
+    // report that guard as ready.
+    const fourMarketWalletRole = administratorFourMarket
+      ? 'admin' as const : 'member' as const;
+    const marketGuardRead = (async () => {
         try {
           if (paperRuntimeAdminGuardReaderForTests) {
             return await paperRuntimeAdminGuardReaderForTests(userId) === true;
           }
           if (!req.accessToken) return false;
           const { data, error } = await getUserSupabase(req.accessToken)
-            .rpc('admin_four_paper_wallet_rls_guard_ready');
+            .rpc('four_market_paper_wallet_rls_guard_ready');
           return !error && data === true;
         } catch {
           return false;
         }
-      })()
-      : Promise.resolve(true);
-    const [policy, globalStopped, wallet, adminMarketWalletRecords, adminDatabaseGuardReady] = await Promise.all([
-      repository.getPolicy(userId),
-      repository.getGlobalEmergencyStop(),
-      walletRead, adminRecordsRead, adminGuardRead,
-    ]);
+      })();
+    const fourMarketDatabaseGuardReady = await marketGuardRead;
     const readiness = memberAutomaticPaperReadiness({
       policy,
       wallet,
       administratorFourMarket,
-      adminMarketWalletRecords,
-      adminDatabaseGuardReady,
+      adminMarketWalletRecords: administratorFourMarket ? marketWalletRecords : [],
+      adminDatabaseGuardReady: administratorFourMarket
+        ? fourMarketDatabaseGuardReady : undefined,
+      fourMarketWalletRole,
+      fourMarketWalletRecords: marketWalletRecords,
+      fourMarketDatabaseGuardReady,
       workerHealth: readMemberAutoTradingBackgroundRuntimeHealth(),
       workerMode: memberAutoTradingWorkerMode(),
       globalStopped: globalStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -1144,6 +1187,17 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
       exchangeRequestSent: false,
     });
   }
+});
+
+router.get('/live-preactivation-readiness', async (req: AuthenticatedRequest, res) => {
+  if (!requireLiveOrderCapability(req, res)) return;
+  try {
+    const { userId, repository } = context(req);
+    const audit = await auditAutomaticLivePreactivation({ userId, repository, profile: req.member!,
+      source: new SupabaseMemberAutoTradingBackgroundSource(), targetSha: String(process.env.DEPLOY_SHA ?? '') });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ ok: true, ...audit });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/status', async (req: AuthenticatedRequest, res) => {
@@ -1248,6 +1302,11 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     return res.json({
       ok: true,
       policy,
+      initialMaxOrderKrw: maximumSingleEntryKrw(req),
+      discoveryMaxOrderKrw: discoveryMaximumSingleEntryKrw(req),
+      administratorOrderBaseline: maximumSingleEntryKrw(req) === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      maximumBitgetLeverage: maximumBitgetLeverage(req),
+      administratorLeveragePolicy: maximumBitgetLeverage(req) === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
       connections: safeConnections(connections),
       emergencyStopped: policy.emergencyStopped || persistentGlobalStop || environmentGlobalStop,
       emergencyStopSources: {
@@ -1296,6 +1355,63 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     }
     return errorResponse(res, error);
   }
+});
+
+router.get('/live-position-isolation/:provider', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    if (!req.member || !hasCapability(req.member, 'canPlaceOrders')
+      || !hasCapability(req.member, 'canAccessAutoTrading')) {
+      return res.status(403).json({ ok: false, error: 'MEMBER_ORDER_CAPABILITY_REQUIRED' });
+    }
+    const provider = String(req.params.provider) as AccountProvider;
+    if (!EXCHANGES.has(provider) || provider === 'bitget' && !hasCapability(req.member, 'canAccessFutures')) {
+      return res.status(403).json({ ok: false, error: 'ACCOUNT_PROVIDER_CAPABILITY_REQUIRED' });
+    }
+    const { userId, repository } = context(req);
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(repository, userId, provider),
+      repository.listPlans(userId), repository.listOrders(userId),
+    ]);
+    return res.json({ ok: true, ...automaticLiveIsolationReceipt(snapshot,
+      canonicalAutomaticLivePositions(plans, orders), maximumBitgetLeverage(req)) });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/holdings', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    const accountMode = String(req.query.accountMode ?? 'live');
+    const origin = String(req.query.origin ?? 'automatic');
+    const provider = String(req.query.provider ?? '') as AccountProvider;
+    if (!['live', 'paper'].includes(accountMode) || !['automatic', 'manual'].includes(origin)) {
+      return res.status(400).json({ ok: false, error: 'HOLDINGS_SCOPE_INVALID' });
+    }
+    if (!req.member || !hasCapability(req.member, accountMode === 'live' ? 'canPlaceOrders' : 'canAccessPaperTrading')) {
+      return res.status(403).json({ ok: false, error: 'HOLDINGS_CAPABILITY_REQUIRED' });
+    }
+    if (accountMode === 'live' && (!EXCHANGES.has(provider)
+      || !hasCapability(req.member, 'canAccessAutoTrading')
+      || provider === 'bitget' && !hasCapability(req.member, 'canAccessFutures'))) {
+      return res.status(403).json({ ok: false, error: 'ACCOUNT_PROVIDER_CAPABILITY_REQUIRED' });
+    }
+    const { userId, repository } = context(req);
+    const [plans, orders, snapshot, paperWalletRecords] = await Promise.all([
+      repository.listPlans(userId), repository.listOrders(userId),
+      accountMode === 'live' ? readAutomaticLiveExecutionAccount(repository, userId, provider) : Promise.resolve(null),
+      accountMode === 'paper' && origin === 'automatic'
+        ? paperRuntimeRecordsReaderForTests ? paperRuntimeRecordsReaderForTests(userId)
+          : req.accessToken ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
+            : Promise.reject(new Error('LOGIN_REQUIRED'))
+        : Promise.resolve(null),
+    ]);
+    const result = snapshot ? liveTradingHoldings(snapshot, plans, orders)
+      : paperTradingHoldings(plans, orders, origin as 'automatic' | 'manual', paperWalletRecords ? {
+        records: paperWalletRecords, role: hasCapability(req.member, 'canManageMembers') ? 'admin' : 'member', nowMs: Date.now(),
+      } : undefined);
+    return res.json({ ok: true, ...result, items: result.items.filter(row =>
+      row.market !== 'BITGET' || hasCapability(req.member!, 'canAccessFutures')) });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/execution-ledger', async (req: AuthenticatedRequest, res) => {
@@ -1375,7 +1491,22 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
-    let candidate = normalizeTradingPolicy(req.body);
+    const requestedLeverage = req.body?.bitgetLeverage == null
+      ? null
+      : Number(req.body.bitgetLeverage);
+    if (Number.isInteger(requestedLeverage)
+      && requestedLeverage! >= 2
+      && requestedLeverage! <= PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      && requestedLeverage! > maximumBitgetLeverage(req)) {
+      return res.status(409).json({
+        ok: false,
+        error: 'BITGET_LEVERAGE_ROLE_LIMIT',
+        maximumBitgetLeverage: maximumBitgetLeverage(req),
+        orderSubmitted: false,
+        providerMutationRequests: 0,
+      });
+    }
+    let candidate = normalizeTradingPolicy(req.body, maximumSingleEntryKrw(req));
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
       candidate.marketEnabled.crypto_futures = false;
       candidate.exchangeEnabled.bitget = false;
@@ -1400,6 +1531,104 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+const LIVE_POLICY_AUTHORITY_ENV_KEYS = [
+  'ORDER_EXECUTION_ENABLED',
+  'REAL_ORDER_ENABLED',
+  'PRIVATE_TRADING_API_ALLOWED',
+  'LIVE_TRADING_ACTIVATION_APPROVED',
+  'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+  'FUTURES_LIVE_TRADING_ACTIVATION_APPROVED',
+  'AUTO_TRADING',
+  'LIVE_AUTOMATIC_TRADING_ENABLED',
+  'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+] as const;
+
+function livePolicyAuthorityActive() {
+  if (livePolicyAuthorityOverrideForTests != null) return livePolicyAuthorityOverrideForTests;
+  return [...EXCHANGES].some((exchange) =>
+    liveExecutionEnabled(exchange) || automaticLiveExecutionEnabled(exchange))
+    || LIVE_POLICY_AUTHORITY_ENV_KEYS.some((key) => process.env[key] === 'true');
+}
+
+function maximumSingleEntryKrw(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+function discoveryMaximumSingleEntryKrw(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW;
+}
+
+function maximumBitgetLeverage(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+}
+
+router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.body?.confirmation !== 'SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED'
+      || req.body?.maxOrderKrw !== PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW) {
+      return res.status(409).json({
+        ok: false,
+        error: 'PRODUCTION_ORDER_LIMIT_CONFIRMATION_REQUIRED',
+        policyUpdated: false,
+        orderSubmitted: false,
+        cancelRequested: false,
+        amendRequested: false,
+        transferRequested: false,
+        withdrawalRequested: false,
+      });
+    }
+    if (livePolicyAuthorityActive()) {
+      return res.status(409).json({
+        ok: false,
+        error: 'PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF',
+        policyUpdated: false,
+        orderSubmitted: false,
+        cancelRequested: false,
+        amendRequested: false,
+        transferRequested: false,
+        withdrawalRequested: false,
+      });
+    }
+
+    const { userId, repository } = context(req);
+    const current = await repository.getPolicy(userId);
+    const policy: TradingPolicy = {
+      ...current,
+      totalCapitalKrw: Math.max(current.totalCapitalKrw, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW),
+      maxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+    };
+    const changed = current.totalCapitalKrw !== policy.totalCapitalKrw
+      || current.maxOrderKrw !== policy.maxOrderKrw;
+    if (changed) await repository.savePolicy(userId, policy);
+
+    return res.json({
+      ok: true,
+      policy,
+      targetMaxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      policyUpdated: changed,
+      idempotent: !changed,
+      riskCeilingsPreserved: {
+        maxInstrumentKrw: policy.maxInstrumentKrw,
+        maxAssetClassKrw: policy.maxAssetClassKrw,
+      },
+      liveTradingEnabledByThisRequest: false,
+      automaticTradingEnabledByThisRequest: false,
+      executionAuthority: 'NONE',
+      orderSubmitted: false,
+      cancelRequested: false,
+      amendRequested: false,
+      transferRequested: false,
+      withdrawalRequested: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -1457,7 +1686,7 @@ router.post('/admin/pilot-stage', requireAdmin, async (req: AuthenticatedRequest
       ...current,
       pilotStage: 'formula-ai-exception',
       automaticEnabled: false,
-    });
+    }, maximumSingleEntryKrw(req));
     await repository.savePolicy(userId, policy);
     return res.json({
       ok: true,
@@ -1659,10 +1888,11 @@ router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) =
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation, execution, splitExecution } = context(req);
     const input = req.body as TradingPlanInput;
-    exchangeValue(input.exchange);
     if (input.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
+    assertPublicLivePlanOrigin(input);
+    const { userId, repository, automation, execution, splitExecution } = context(req);
+    exchangeValue(input.exchange);
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
     ]);
@@ -1672,12 +1902,13 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       ...input.marketSnapshot,
       dailyOrderCount: Math.max(Number(input.marketSnapshot?.dailyOrderCount ?? 0), persistedDailyOrders),
     };
-    const result = await automation.createPlan(userId, input, policy,
+    const requestPolicy = publicPlanPolicy(input, policy);
+    const result = await automation.createPlan(userId, input, requestPolicy,
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
     let plan = result.plan;
     let automaticExecution = null;
-    if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    if (requestPolicy.mode === 'automatic' && requestPolicy.automaticEnabled) {
       if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(userId, plan.id);
       if (plan.state === 'SUBMITTED') {
         automaticExecution = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
@@ -1701,6 +1932,7 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
     const currentPlan = await repository.getPlan(userId, String(req.params.id));
     if (!currentPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
+    assertPublicPlanApprovalOrigin(currentPlan);
     const plan = await automation.approvePlan(userId, String(req.params.id));
     const result = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
     return res.json({ ok: true, plan, ...result });
@@ -1725,7 +1957,7 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
       ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
       marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
       exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
-    });
+    }, maximumSingleEntryKrw(req));
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
   } catch (error) { return errorResponse(res, error); }

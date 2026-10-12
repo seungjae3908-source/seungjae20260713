@@ -55,8 +55,12 @@ assert(production.includes('actions.listArtifactsForRepo'), 'production gate mus
 assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
 assert(production.includes('actions/download-artifact@v4'), 'production gate must download the exact verdict artifact');
 assert(production.includes('verify-staging-verdict.mjs'), 'production gate must validate verdict contents');
-assert(production.includes('staging-verdict-${{ steps.target.outputs.sha }}'), 'production gate must use an exact-SHA artifact name');
-assert(production.includes("run.path === '.github/workflows/staging-readiness.yml'"), 'production gate must require the official staging workflow');
+assert(production.includes("format('staging-verdict-{0}', steps.target.outputs.sha)"), 'production full gate must use an exact-SHA artifact name');
+assert(production.includes("format('staging-automation-research-verdict-{0}', steps.target.outputs.sha)"), 'production scoped gate must use an exact-SHA artifact name');
+assert(production.includes('verify-staging-automation-research-verdict.mjs'), 'production scoped gate must validate verdict contents');
+assert(production.includes("? '.github/workflows/staging-trading-core-only.yml'")
+  && production.includes(": '.github/workflows/staging-readiness.yml'"),
+'production gate must bind each verdict scope to its allowlisted staging workflow');
 assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
 assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
 assert(production.includes("github.event_name == 'workflow_dispatch'"), 'production concurrency must distinguish real workflow_dispatch from PR validation');

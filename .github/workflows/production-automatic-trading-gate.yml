@@ -7,6 +7,8 @@ on:
       - .github/workflows/production-automatic-trading-gate.yml
       - .github/scripts/production-trading-gate-conflicts.cjs
       - .github/scripts/production-trading-gate-conflicts.test.cjs
+      - .github/scripts/production-manual-live-receipts.cjs
+      - .github/scripts/production-manual-live-receipts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-preactivation-evidence-paths.cjs
@@ -21,6 +23,18 @@ on:
       - api-server/src/services/trade-automation-policy-guard.service.ts
       - api-server/src/services/trade-automation-policy-guard.service.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/member-auto-trading-readiness.service.ts
+      - api-server/src/services/member-auto-trading-readiness.service.test.ts
+      - api-server/src/services/admin-four-market-paper-capital.service.ts
+      - api-server/src/services/admin-four-market-paper-capital.service.test.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.test.ts
+      - api-server/src/services/member-four-market-paper-wallet-migration.test.ts
+      - api-server/src/services/paper-journal-supabase.repository.ts
+      - api-server/src/routes/paper-journal.ts
+      - api-server/src/routes/paper-journal.smoke.test.ts
+      - api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
       - api-server/src/services/trade-automation.types.ts
@@ -75,13 +89,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Validate Production gate and zero-LIVE automatic Paper wallet contracts
+      - name: Validate Production gate, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
-      - run: >-
-          node --test
-          .github/scripts/production-preactivation-evidence-paths.test.cjs
-          .github/tests/production-paper-forward-readiness.test.mjs
-          .github/tests/production-telegram-runtime-readiness.test.mjs
+      - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
+      - run: node --test .github/scripts/production-manual-live-receipts.test.cjs
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
@@ -154,129 +165,17 @@ jobs:
               core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
               return;
             }
-            const telegramRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head_sha: target,
-              branch: 'main',
-              event: 'issue_comment',
-              status: 'completed',
-              per_page: 100,
-            });
-            const telegramArtifactName = `telegram-production-runtime-verification-${target}`;
-            let telegramRun = null;
-            for (const candidate of telegramRuns
-              .filter((run) => run.name === 'Telegram Production Release'
-                && run.path === '.github/workflows/telegram-production-release.yml'
-                && run.head_sha === target
-                && run.head_branch === 'main'
-                && run.event === 'issue_comment'
-                && run.status === 'completed'
-                && run.conclusion === 'success')
-              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
-              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: candidate.id,
-                per_page: 100,
-              });
-              const artifact = (artifactResponse.data.artifacts ?? []).find((item) =>
-                item.name === telegramArtifactName
-                  && item.expired !== true
-                  && item.size_in_bytes > 0);
-              if (artifact) {
-                telegramRun = candidate;
-                break;
-              }
-            }
-            if (!telegramRun) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED:' + target);
-              return;
-            }
-            const paperRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head_sha: target,
-              branch: 'main',
-              event: 'issue_comment',
-              status: 'completed',
-              per_page: 100,
-            });
-            const paperArtifactName = `paper-forward-no-deploy-${target}`;
-            let paperRun = null;
-            for (const run of paperRuns
-              .filter((candidate) => candidate.name === 'Paper Forward No-Deploy Schedule Activation'
-                && candidate.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
-                && candidate.head_sha === target
-                && candidate.head_branch === 'main'
-                && candidate.event === 'issue_comment'
-                && candidate.status === 'completed'
-                && candidate.conclusion === 'success'
-                && Date.parse(candidate.updated_at || candidate.created_at || '') >= productionCompletedAt)
-              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
-              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: run.id,
-                per_page: 100,
-              });
-              const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
-                candidate.name === paperArtifactName
-                  && candidate.expired !== true
-                  && candidate.size_in_bytes > 0);
-              if (artifact) {
-                paperRun = run;
-                break;
-              }
-            }
-            if (!paperRun) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED:' + target);
-              return;
-            }
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
-            const postDeploy = comments.filter((comment) =>
-              Date.parse(comment.created_at || '') >= productionCompletedAt);
-
-            const spotReceipt = [...postDeploy].reverse().find((comment) => {
-              const body = String(comment.body || '');
-              return body.includes('[PRODUCTION_LIVE_TRADING_GATE]')
-                && body.includes('status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL')
-                && body.includes('target_sha: ' + target)
-                && body.includes('providers: kiwoom,toss,upbit')
-                && body.includes('AUTO_TRADING=false')
-                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
-                && body.includes('executionAuthority=SPOT_LIVE_LIMITED')
-                && body.includes('REAL_ORDER_SUBMITTED=false');
+            const { inspectManualLiveReceipts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-manual-live-receipts.cjs`
+            );
+            const { spot: spotReceipt, futures: futuresReceipt } = await inspectManualLiveReceipts({
+              github, context, comments, targetSha: target,
+              deploymentCompletedAt: release.productionDeployCompletedAt,
             });
-            if (!spotReceipt) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED:' + target);
-              return;
-            }
-
-            const futuresReceipt = [...postDeploy].reverse().find((comment) => {
-              const body = String(comment.body || '');
-              return body.includes('[PRODUCTION_FUTURES_LIVE_TRADING_GATE]')
-                && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
-                && body.includes('target_sha: ' + target)
-                && body.includes('provider: bitget')
-                && /max_leverage:\s*([2-7])/u.test(body)
-                && body.includes('margin_mode: isolated')
-                && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
-                && body.includes('AUTO_TRADING=false')
-                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
-                && body.includes('REAL_ORDER_SUBMITTED=false');
-            });
-            if (!futuresReceipt) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
-              return;
-            }
-            const leverage = /max_leverage:\s*([2-7])/u.exec(String(futuresReceipt.body || ''))?.[1];
-            if (!leverage) {
-              core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
-              return;
-            }
+            const leverage = futuresReceipt.leverage;
 
             core.setOutput('ci_run_id', String(ciRunId));
             core.setOutput('production_run_id', String(production.id));
@@ -284,11 +183,9 @@ jobs:
             core.setOutput('account_run_id', String(account.id));
             core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
             core.setOutput('qa_scope', release.qaScope);
-            core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
-            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
+            core.setOutput('spot_receipt_comment_id', String(spotReceipt.commentId));
+            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.commentId));
             core.setOutput('futures_max_leverage', leverage);
-            core.setOutput('paper_forward_run_id', String(paperRun.id));
-            core.setOutput('telegram_release_run_id', String(telegramRun.id));
 
       - name: Download exact Production post-deploy evidence
         uses: actions/download-artifact@v4
@@ -310,48 +207,8 @@ jobs:
           root="${{ runner.temp }}/production-preactivation-evidence"
           test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
-
-      - name: Download exact-SHA Telegram runtime ACTIVE_VERIFIED evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: telegram-production-runtime-verification-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/telegram-runtime-verification
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.gate.outputs.telegram_release_run_id }}
-
-      - name: Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-          PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
-        run: |
-          set -Eeuo pipefail
-          evidence="$(find "${{ runner.temp }}/telegram-runtime-verification" -type f -name production-telegram-runtime-proof.json -print -quit)"
-          test -n "$evidence"
-          node ops/verify-production-telegram-runtime-readiness.mjs \
-            --artifact "$evidence" "$TARGET_SHA" "$PRODUCTION_RUN_ID"
-
-      - name: Download exact-SHA Paper Forward runtime evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: paper-forward-no-deploy-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/paper-forward-runtime-evidence
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.gate.outputs.paper_forward_run_id }}
-
-      - name: Verify exact-SHA Paper Forward activation evidence
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          evidence="$(find "${{ runner.temp }}/paper-forward-runtime-evidence" -type f -name natural-cycle.json -print -quit)"
-          test -n "$evidence"
-          node ops/verify-production-paper-forward-readiness.mjs \
-            --activation-artifact "$evidence" "$TARGET_SHA"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root" \
+            --require-automatic-position-isolation
 
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
@@ -398,125 +255,6 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-
-      - name: Require fresh canonical Paper Forward handoff before AUTO authority
-        id: paper-runtime
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          evidence="$RUNNER_TEMP/production-paper-forward-runtime-readiness.json"
-          printf -v remote_command 'node --input-type=module - %q' "$TARGET_SHA"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "$remote_command" > "$evidence" <<'NODE'
-          import { execFileSync } from 'node:child_process';
-          import { existsSync, lstatSync, readFileSync } from 'node:fs';
-          import { pathToFileURL } from 'node:url';
-
-          const targetSha = String(process.argv[2] ?? '').trim().toLowerCase();
-          if (!/^[0-9a-f]{40}$/u.test(targetSha)) throw new Error('PAPER_FORWARD_TARGET_SHA_INVALID');
-          const root = '/opt/stock-app-data/paper-forward-v1';
-          const runtimeRoot = `${root}/runtime-state`;
-          const paths = {
-            marker: '/opt/stock-app/.deploy/current-sha',
-            activation: `${root}/activation.json`,
-            invocations: `${runtimeRoot}/status/invocations.jsonl`,
-            handoff: `${runtimeRoot}/handoff/member-auto-trading-latest.json`,
-            validator: `${root}/releases/${targetSha}/market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js`,
-          };
-          const read = (file) => {
-            const stat = lstatSync(file);
-            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('PAPER_FORWARD_FILE_UNSAFE');
-            return readFileSync(file, 'utf8');
-          };
-          const productionSha = read(paths.marker).trim();
-          if (productionSha !== targetSha) throw new Error('PAPER_FORWARD_PRODUCTION_SHA_MISMATCH');
-          const activation = JSON.parse(read(paths.activation));
-          if (activation?.schemaVersion !== 'paper-forward-schedule-no-deploy-activation-v2'
-            || activation?.paperRuntimeSourceSha !== targetSha
-            || activation?.productionAppShaBefore !== targetSha
-            || activation?.scheduleActive !== true
-            || activation?.externalFinancialMutationAllowed !== false
-            || activation?.liveTrading !== false
-            || activation?.privateAccountAccess !== false
-            || activation?.orderAuthority !== false) {
-            throw new Error('PAPER_FORWARD_ACTIVATION_STATE_INVALID');
-          }
-          const invocationLines = read(paths.invocations).trim().split(/\r?\n/u).filter(Boolean);
-          const invocation = invocationLines.map((line) => JSON.parse(line))
-            .filter((row) => row?.triggerSource === 'cron')
-            .at(-1);
-          if (!invocation || invocation.status !== 'COMPLETED'
-            || invocation.naturalScheduleInvocation !== true
-            || invocation.mutationCount !== 1
-            || invocation.publicForwardEvidenceAccumulating !== true
-            || invocation.paperTradeOutcomeAccumulationEnabled !== true
-            || invocation.privateRequestCount !== 0
-            || invocation.financialMutationCount !== 0
-            || invocation.orderCount !== 0
-            || invocation.liveTrading !== false
-            || invocation.orderAuthority !== false) {
-            throw new Error('PAPER_FORWARD_LAST_INVOCATION_INVALID');
-          }
-          const nowMs = Date.now();
-          const freshMs = 30 * 60 * 1000;
-          const completedAtMs = Number(invocation.completedAtMs);
-          if (!Number.isFinite(completedAtMs) || completedAtMs > nowMs || nowMs - completedAtMs > freshMs) {
-            throw new Error('PAPER_FORWARD_LAST_INVOCATION_STALE');
-          }
-          const providerLanes = Array.isArray(invocation.providerLanes) ? invocation.providerLanes : [];
-          const markets = providerLanes.map((lane) => String(lane?.market ?? '')).sort();
-          const requiredMarkets = ['CRYPTO_FUTURES', 'CRYPTO_SPOT', 'KR_STOCK', 'US_STOCK'];
-          if (JSON.stringify(markets) !== JSON.stringify(requiredMarkets)
-            || providerLanes.some((lane) => lane?.status !== 'READY')) {
-            throw new Error('PAPER_FORWARD_FOUR_MARKET_LANES_NOT_READY');
-          }
-          const handoff = JSON.parse(read(paths.handoff));
-          const validator = await import(`${pathToFileURL(paths.validator).href}?sha=${targetSha}`);
-          const validated = validator.validateMemberAutoTradingPaperHandoff(handoff, nowMs);
-          if (validated.status !== 'READY') throw new Error('PAPER_FORWARD_HANDOFF_NOT_READY');
-          if (nowMs - Number(validated.evaluatedAtMs) > freshMs) throw new Error('PAPER_FORWARD_HANDOFF_STALE');
-          const cron = execFileSync('crontab', ['-l'], { encoding: 'utf8' });
-          const cronMatches = cron.split(/\r?\n/u).filter((line) => line.includes('# stock-app-paper-forward-v1')).length;
-          if (cronMatches !== 1) throw new Error('PAPER_FORWARD_CRON_COUNT_INVALID');
-          const disabledSentinelPresent = existsSync(`${root}/DISABLED`) || existsSync(`${runtimeRoot}/DISABLED`);
-          if (disabledSentinelPresent) throw new Error('PAPER_FORWARD_DISABLED_SENTINEL_PRESENT');
-          process.stdout.write(`${JSON.stringify({
-            schemaVersion: 'production-paper-forward-runtime-readiness-v1',
-            status: 'passed',
-            targetSha,
-            productionSha,
-            paperRuntimeSha: activation.paperRuntimeSourceSha,
-            scheduleActive: true,
-            oneCronEntry: true,
-            freshWithinMinutes: 30,
-            invocationFresh: true,
-            handoffFresh: true,
-            handoffStatus: validated.status,
-            handoffEntryCount: validated.entryCount,
-            handoffDigest: validated.handoffDigest,
-            handoffValidatedByCanonicalModule: true,
-            providerLanes: providerLanes.map((lane) => ({ market: lane.market, provider: lane.provider, status: lane.status })),
-            privateRequestCount: 0,
-            financialMutationCount: 0,
-            orderCount: 0,
-            liveTrading: false,
-            disabledSentinelPresent: false,
-            rawCredentialsExposed: false,
-          }, null, 2)}\n`);
-          NODE
-          node ops/verify-production-paper-forward-readiness.mjs \
-            --runtime-artifact "$evidence" "$TARGET_SHA"
-          printf 'artifact=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
-
-      - name: Upload sanitized Paper Forward runtime readiness evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-paper-forward-runtime-${{ steps.command.outputs.sha }}
-          path: ${{ steps.paper-runtime.outputs.artifact }}
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Activate automatic execution across all four markets
         shell: bash
@@ -622,24 +360,22 @@ jobs:
                   'http://127.0.0.1:' + port + '/api/health',
                 ], { encoding: 'utf8' }));
                 const health = last?.autoTradingBackground;
+                const recovery = last?.tradeRecoveryWorker;
                 const nowMs = Date.now();
                 const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
-                const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''));
-                const telegramProofAtMs = Date.parse(String(last?.userTelegramDelivery?.lastConfirmedDeliveryAt || ''));
                 const autoHealthFresh = Number.isFinite(autoLastTickMs)
                   && autoLastTickMs <= nowMs
                   && nowMs - autoLastTickMs <= 360_000;
-                const telegramHealthFresh = Number.isFinite(telegramLastTickMs)
-                  && telegramLastTickMs <= nowMs
-                  && nowMs - telegramLastTickMs <= 360_000;
-                const telegramProofFresh = Number.isFinite(telegramProofAtMs)
-                  && telegramProofAtMs <= nowMs + 5_000
-                  && nowMs - telegramProofAtMs <= 24 * 60 * 60_000;
                 if (health?.enabled === true
+                  && recovery?.enabled === true
+                  && recovery?.privateLookupEnabled === true
+                  && recovery?.tickOk === true
+                  && recovery?.financialMutationCount === 0
+                  && Number.isFinite(Date.parse(String(recovery?.lastTickAt ?? '')))
+                  && nowMs - Date.parse(recovery.lastTickAt) >= 0
+                  && nowMs - Date.parse(recovery.lastTickAt) <= 360_000
                   && health?.liveModeRequested === true
                   && autoHealthFresh
-                  && telegramHealthFresh
-                  && telegramProofFresh
                   && health?.tickOk === true
                   && health?.handoffReady === true
                   && health?.newEntriesFailClosed === false
@@ -655,12 +391,7 @@ jobs:
                   && health?.liveCyclePolicyReady === true
                   && health?.liveCycleAllFourPolicyReady === true
                   && health?.globalEmergencyStopActive === false
-                  && last?.userTelegramDelivery?.enabled === true
-                  && last?.userTelegramDelivery?.tickOk === true
-                  && last?.userTelegramDelivery?.deliveryConfirmed === true
-                  && last?.userTelegramDelivery?.lastConfirmedDeliveryAt
-                  && last?.userTelegramDelivery?.errorCode == null
-                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true && health?.liveEntriesArmed === true)) {
                   return health;
                 }
               } catch {}
@@ -668,7 +399,7 @@ jobs:
             }
             throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify({
               autoTradingBackground: last?.autoTradingBackground ?? null,
-              userTelegramDelivery: last?.userTelegramDelivery ?? null,
+              tradeRecoveryWorker: last?.tradeRecoveryWorker ?? null,
             }));
           };
           const manualState = (env) => ({
@@ -699,9 +430,6 @@ jobs:
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
-            }
-            if (!manual.telegramApproved || !manual.telegramIntelligenceWorker || !manual.telegramDeliveryWorker) {
-              throw new Error('AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE');
             }
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
@@ -762,6 +490,8 @@ jobs:
             LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
             TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
             PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+            TRADE_RECOVERY_WORKER_ENABLED: String(env.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+            TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: String(env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
           });
           const restartAutomatic = (enabled, baselineEnv) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
@@ -773,6 +503,8 @@ jobs:
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                TRADE_RECOVERY_WORKER_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+                TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
                 MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
                 CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
                 CRYPTO_AUTO_TRADE_ENABLED: 'false',
@@ -809,9 +541,11 @@ jobs:
           const preserved = manualState(before);
           let mutated = false;
           try {
+            // Restart may mutate PM2 successfully before `pm2 save` fails.
+            // Record rollback intent BEFORE either operation, not afterwards.
+            mutated = true;
             disarmLiveEntries();
             restartAutomatic(true, before);
-            mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
             const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
@@ -824,6 +558,9 @@ jobs:
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
+            // Observe the actual post-delay worker transition. The mock
+            // zero-mutation rehearsal alone is not Production activation.
+            const armedHealth = requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
               status: 'ACTIVATED_ALL4',
               targetSha: target,
@@ -833,7 +570,7 @@ jobs:
               LIVE_AUTOMATIC_TRADING_ENABLED: true,
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: true,
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: true,
-              PAPER_AUTOMATIC_EXECUTION: true,
+              PAPER_AUTOMATIC_EXECUTION: false,
               LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
               persistenceReadback: 'PASS',
               WORKER_WARMUP_PROVEN: true,
@@ -845,12 +582,13 @@ jobs:
               LIVE_ENTRY_ARM_ACTIVATE_NOT_BEFORE: activateNotBeforeAt,
               LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs,
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
+              POST_ARM_RUNTIME_HEALTH_PROVEN: armedHealth.liveEntriesArmed === true,
               LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
               LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
               LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
               LIVE_CYCLE_ALL_FOUR_POLICY_READY: warmupHealth.liveCycleAllFourPolicyReady,
               GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
-              TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
+              OPTIONAL_TELEGRAM_STATE_PRESERVED: true,
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
@@ -911,7 +649,7 @@ jobs:
                 'LIVE_AUTOMATIC_TRADING_ENABLED=true',
                 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true',
                 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=true',
-                'paper_automatic_execution=true',
+                'paper_automatic_execution=false',
                 'live_automatic_background_execution=true',
                 'persistence_readback=PASS',
                 'worker_warmup_proven=true',
@@ -922,12 +660,13 @@ jobs:
                 'live_entry_arm_readback_proven=true',
                 'live_entry_arm_activation_delay_ms=120000',
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
+                'post_arm_runtime_health_proven=true',
                 'live_readiness_cycle_complete=true',
                 'live_cycle_order_eligible=true',
                 'live_cycle_policy_ready=true',
                 'live_cycle_all_four_policy_ready=true',
                 'global_emergency_stop=false',
-                'telegram_delivery_worker_post_restart=HEALTHY',
+                'optional_telegram_state_preserved=true',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',

@@ -3,7 +3,11 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
+const {
+  verifyPostDeployMainLineage,
+  isActiveProductionTradingGateRun,
+  revalidateProductionTradingGateConflicts,
+} = require('./production-postdeploy-qa-evidence.cjs');
 
 const [output, targetSha, productionDeployRunId, deploymentCompletedAt, qaStartedAt, mode = 'completed'] = process.argv.slice(2);
 const repository = String(process.env.GITHUB_REPOSITORY ?? '').trim();
@@ -66,15 +70,18 @@ const gateWorkflows = [
   'production-futures-live-trading-gate.yml',
   'production-automatic-trading-gate.yml',
 ];
-const conflicts = [];
+const candidateConflicts = [];
 for (const workflow of gateWorkflows) {
   const value = await api(`/actions/workflows/${workflow}/runs?per_page=100`);
   for (const run of value.workflow_runs ?? []) {
     if (isActiveProductionTradingGateRun(run)) {
-      conflicts.push({ id: run.id, name: run.name, status: run.status, headSha: run.head_sha });
+      candidateConflicts.push(run);
     }
   }
 }
+const conflicts = await revalidateProductionTradingGateConflicts(candidateConflicts, {
+  loadRun: async (runId) => api(`/actions/runs/${runId}`),
+});
 
 let latestSuccessfulDeploy = null;
 if (mode === 'completed') {
@@ -107,13 +114,21 @@ const value = {
   orchestratorStartedAt: qaStartedAt,
   latestSuccessfulDeploySha: latestSuccessfulDeploy ? String(latestSuccessfulDeploy.head_sha ?? '').toLowerCase() : null,
   latestSuccessfulDeployRunId: latestSuccessfulDeploy?.id ?? null,
-  activeConflictingTradingGates: conflicts,
+  activeConflictingTradingGates: conflicts.map((run) => ({
+    id: run.id,
+    name: run.name,
+    status: run.status,
+    headSha: run.head_sha,
+  })),
 };
 
 for (const key of ['productionDeploySha', 'processDeploySha', 'deployMarkerSha', 'productionDeployHeadSha']) {
   if (value[key] !== normalizedTarget) throw new Error(`POSTDEPLOY_CONTEXT_${key.toUpperCase()}_MISMATCH`);
 }
-if (!value.identityMatch || conflicts.length !== 0) throw new Error('POSTDEPLOY_CONTEXT_IDENTITY_OR_GATE_CONFLICT');
+if (!value.identityMatch) throw new Error(`POSTDEPLOY_CONTEXT_IDENTITY_MISMATCH:${health?.identityStatus ?? 'unknown'}`);
+if (conflicts.length !== 0) {
+  throw new Error(`POSTDEPLOY_CONTEXT_ACTIVE_TRADING_GATE_CONFLICT:${conflicts.map((run) => run.id).join(',')}`);
+}
 const completedMs = Date.parse(String(deploymentCompletedAt ?? ''));
 const startedMs = Date.parse(String(qaStartedAt ?? ''));
 if (!Number.isFinite(completedMs) || !Number.isFinite(startedMs) || startedMs < completedMs) {

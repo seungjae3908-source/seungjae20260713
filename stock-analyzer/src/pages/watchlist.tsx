@@ -23,6 +23,8 @@ import { BottomNav } from "@/components/bottom-nav";
 import { LoadingState } from "@/components/data-state";
 import { api, apiGet, type SearchResult } from "@/lib/api";
 import { authorizedFetch } from "@/lib/auth-fetch";
+import { reviewQuarantinedLegacyWatchlist, importConfirmedLegacyWatchlist,
+  LEGACY_WATCHLIST_REVIEW_EVENT } from "@/lib/watchlist-sync";
 import {
   classifyStock,
   stockClassBadgeClass,
@@ -80,9 +82,11 @@ export default function WatchlistPage() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<InterestTab>("watchlist");
-  const [items, setItems] = useState<WatchlistItem[]>(() =>
-    readWatchlistItems(),
-  );
+  const [items, setItems] = useState<WatchlistItem[]>(() => readWatchlistItems());
+  const [legacyReview, setLegacyReview] = useState(() => reviewQuarantinedLegacyWatchlist());
+  const [legacyConsent, setLegacyConsent] = useState(false);
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
 
   const alertsQuery = useQuery({
     queryKey: ["notification-price-alerts"],
@@ -126,6 +130,25 @@ export default function WatchlistPage() {
       window.removeEventListener("storage", refresh);
     };
   }, []);
+
+  useEffect(() => {
+    const refresh = () => { setLegacyReview(reviewQuarantinedLegacyWatchlist()); setLegacyConsent(false); setLegacyNotice(null); };
+    window.addEventListener(LEGACY_WATCHLIST_REVIEW_EVENT, refresh);
+    return () => window.removeEventListener(LEGACY_WATCHLIST_REVIEW_EVENT, refresh);
+  }, []);
+
+  async function confirmLegacyImport() {
+    if (!legacyConsent || legacyBusy || !legacyReview.length) return;
+    setLegacyBusy(true); setLegacyNotice(null);
+    try {
+      const result = await importConfirmedLegacyWatchlist();
+      setLegacyReview(reviewQuarantinedLegacyWatchlist());
+      setItems(readWatchlistItems());
+      setLegacyNotice(`회원 관심종목 ${result.imported}건 확인 · 기존 등록 ${result.alreadyPresent}건`);
+    } catch {
+      setLegacyNotice('회원 저장 확인 실패. 로그인·시장구분·서버 연결을 확인하세요. 기기 원본은 보존됩니다.');
+    } finally { setLegacyBusy(false); setLegacyConsent(false); }
+  }
 
   const quoteMap = useMemo(
     () =>
@@ -230,6 +253,28 @@ export default function WatchlistPage() {
       </header>
 
       <main className="flex-none p-3 pb-24">
+        {tab === "watchlist" && legacyReview.length > 0 && (
+          <section data-testid="watchlist-legacy-consent-review" className="mb-3 rounded-2xl border border-card-border bg-card p-3">
+            <h2 className="text-sm font-extrabold">이 기기의 미연결 관심종목 {legacyReview.length}건</h2>
+            <p className="mt-1 text-xs text-muted-foreground">본인이 직접 등록한 항목만 확인하고 가져오세요.
+              가져오기 전에는 개인 텔레그램 신호 알림 대상이 아닙니다.</p>
+            <details className="mt-2 text-xs"><summary className="cursor-pointer font-bold">종목 확인</summary>
+              <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">{legacyReview.map(row => (
+                <li key={`${row.market}:${row.ticker}`}>{row.name} · {row.ticker} · {row.market === 'UNRESOLVED' ? '시장 미확인 (신호 제외)' : row.market}</li>
+              ))}</ul>
+            </details>
+            <label className="mt-3 flex items-start gap-2 text-xs">
+              <input type="checkbox" checked={legacyConsent} onChange={e => setLegacyConsent(e.currentTarget.checked)} />
+              <span>이 기기에 저장된 항목이 내 관심종목임을 확인합니다.</span>
+            </label>
+            <button data-testid="watchlist-explicit-legacy-import" type="button"
+              className="mt-2 rounded-xl bg-primary px-3 py-2 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
+              disabled={!legacyConsent || legacyBusy} onClick={() => void confirmLegacyImport()}>
+              {legacyBusy ? '저장 검증 중…' : '확인한 항목을 회원 관심종목으로 가져오기'}
+            </button>
+          </section>
+        )}
+        {tab === "watchlist" && legacyNotice && <p role="status" className="mb-3 text-xs">{legacyNotice}</p>}
         {tab === "watchlist" ? (
           items.length === 0 ? (
             <EmptyState />
