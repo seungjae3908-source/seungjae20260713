@@ -36,6 +36,25 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-qa.json'));
   assert.ok(production.includes('production-auto-live-signal-source.json'));
   assert.ok(production.includes('Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS'));
+
+  // AUTO LIVE must not disable or replace a separately owned Natural/Paper
+  // schedule, even when the shared root contains only archived/disabled state.
+  const preflight = read('ops/production-auto-live-signal-identity.cjs');
+  const earlyOwner = production.indexOf(
+    '- name: Reject shared Paper Forward owner before AUTO LIVE database or application mutation');
+  const databaseMutation = production.indexOf(
+    '- name: Require canonical Production trade schema and journal privileges before application mutation');
+  const lastOwner = production.indexOf('AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA"');
+  const disableOriginal = production.indexOf('bash ops/disable-paper-forward-schedule.sh');
+  assert.ok(earlyOwner > 0 && earlyOwner < databaseMutation);
+  assert.ok(lastOwner > databaseMutation && lastOwner < disableOriginal);
+  assert.ok(production.includes('< ops/production-auto-live-signal-identity.cjs'));
+  assert.ok(production.includes('AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q'));
+  assert.ok(preflight.includes('AUTO_LIVE_SHARED_PAPER_SCHEDULE_ALREADY_OWNED'));
+  assert.ok(preflight.includes('AUTO_LIVE_SHARED_PAPER_STATE_ALREADY_OWNED'));
+  assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/paper-forward-v1')"));
+  assert.ok(preflight.includes('liveActivationReady: false'));
+
   assert.ok(production.includes('PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false'));
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
   assert.ok(production.includes('tail -n 1 "$state_root/logs/cron.log"'));

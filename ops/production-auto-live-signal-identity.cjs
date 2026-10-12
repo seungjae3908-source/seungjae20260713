@@ -118,8 +118,77 @@ function inspectManagedPaperForwardSchedule(crontabText, activation, targetSha, 
     entryCount: 1, publicOnly: true, refreshIntervalMs: 900_000 });
 }
 
+
+// Read-only preflight for the SHARED historical Paper Forward owner. The
+// Automatic LIVE release must never silently disable an existing Natural
+// Paper schedule or reconfigure a persisted four-hour state into 15-minute
+// observation mode. A separate dedicated worker is needed for coexistence.
+function inspectAutoLiveSharedPaperForwardOwnership({ targetSha, crontabText, sharedStateRootPresent }) {
+  if (!/^[a-f0-9]{40}$/u.test(targetSha ?? '') || typeof crontabText !== 'string'
+    || typeof sharedStateRootPresent !== 'boolean') {
+    throw new Error('AUTO_LIVE_SHARED_SCHEDULE_ARGUMENT_INVALID');
+  }
+  const references = crontabText.split(/\r?\n/u).some((line) =>
+    /stock-app-paper-forward-v1|paper-forward|run-paper-forward-schedule/iu.test(line));
+  if (references) throw new Error('AUTO_LIVE_SHARED_PAPER_SCHEDULE_ALREADY_OWNED');
+  // Preserve disabled/archived Paper epochs as well: an old state root is
+  // neither empty nor consent to overwrite its histories and publisher links.
+  if (sharedStateRootPresent) throw new Error('AUTO_LIVE_SHARED_PAPER_STATE_ALREADY_OWNED');
+  return Object.freeze({
+    schemaVersion: 'automatic-live-shared-paper-owner-preflight-v1',
+    status: 'PASS_NO_EXISTING_PAPER_OWNER',
+    targetSha, financeOrScheduleMutationCount: 0,
+    scannerInvocationVerified: false, aiIssuerVerified: false,
+    liveActivationReady: false,
+  });
+}
+
+function runAutoLiveSharedPaperForwardPreflight() {
+  const { lstatSync } = require('node:fs');
+  const { spawnSync } = require('node:child_process');
+  const result = spawnSync('crontab', ['-l'], {
+    encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error || result.signal) throw new Error('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE');
+  let crontabText;
+  if (result.status === 0) crontabText = String(result.stdout ?? '');
+  else if (result.status === 1
+    && /^no crontab for [^\n]+$/iu.test(String(result.stderr ?? '').trim())) crontabText = '';
+  else throw new Error('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE');
+
+  let sharedStateRootPresent = false;
+  try {
+    // lstat, not existsSync: an unexpected or dangling symlink is also
+    // prior ownership and can never be treated as an empty install.
+    lstatSync('/opt/stock-app-data/paper-forward-v1');
+    sharedStateRootPresent = true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE');
+  }
+  return inspectAutoLiveSharedPaperForwardOwnership({
+    targetSha: process.env.AUTO_LIVE_TARGET_SHA,
+    crontabText, sharedStateRootPresent,
+  });
+}
+
 module.exports = {
+  inspectAutoLiveSharedPaperForwardOwnership,
   inspectManagedPaperForwardSchedule,
   inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff,
 };
+
+// This file can be streamed over a protected SSH stdin (node -), so the
+// predeploy check uses the exact PR source before the current app is deployed.
+// Importing the helper in offline tests has no side effects.
+if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+  try {
+    process.stdout.write(JSON.stringify(runAutoLiveSharedPaperForwardPreflight()) + '\n');
+  } catch (error) {
+    const safe = error instanceof Error && /^AUTO_LIVE_SHARED_[A-Z0-9_]{1,100}$/u.test(error.message)
+      ? error.message : 'AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE';
+    process.stderr.write('[auto-live-shared-paper-preflight] ' + safe + '\n');
+    process.exitCode = 1;
+  }
+}

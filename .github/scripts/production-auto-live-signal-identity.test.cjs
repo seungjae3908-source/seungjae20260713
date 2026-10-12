@@ -2,7 +2,7 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
@@ -149,4 +149,45 @@ test('audit rejects both disable sentinels and a different source-wrapper identi
   assert.ok(source.includes("PAPER_FORWARD_RESEARCH_SHA='"));
   assert.ok(source.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'"));
   assert.ok(source.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
+});
+
+test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owner', () => {
+  const clean = inspectAutoLiveSharedPaperForwardOwnership({
+    targetSha: SHA, crontabText: '10 * * * * /usr/bin/date', sharedStateRootPresent: false,
+  });
+  assert.deepEqual(clean, {
+    schemaVersion: 'automatic-live-shared-paper-owner-preflight-v1',
+    status: 'PASS_NO_EXISTING_PAPER_OWNER', targetSha: SHA,
+    financeOrScheduleMutationCount: 0, scannerInvocationVerified: false,
+    aiIssuerVerified: false, liveActivationReady: false,
+  });
+  const occupied = [
+    '# stock-app-paper-forward-v1',
+    '# */15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock',
+    '*/15 * * * * /usr/bin/flock -n /tmp/x /opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule',
+    '0 */4 * * * /usr/bin/node /srv/research/run-paper-forward-schedule.js',
+  ];
+  for (const crontabText of occupied) {
+    assert.throws(() => inspectAutoLiveSharedPaperForwardOwnership({
+      targetSha: SHA, crontabText, sharedStateRootPresent: false,
+    }), /AUTO_LIVE_SHARED_PAPER_SCHEDULE_ALREADY_OWNED/u);
+  }
+  for (const crontabText of ['', '10 * * * * /usr/bin/date']) {
+    assert.throws(() => inspectAutoLiveSharedPaperForwardOwnership({
+      targetSha: SHA, crontabText, sharedStateRootPresent: true,
+    }), /AUTO_LIVE_SHARED_PAPER_STATE_ALREADY_OWNED/u);
+  }
+  for (const fields of [
+    { targetSha: 'bad', crontabText: '', sharedStateRootPresent: false },
+    { targetSha: SHA, crontabText: null, sharedStateRootPresent: false },
+    { targetSha: SHA, crontabText: '', sharedStateRootPresent: undefined },
+  ]) {
+    assert.throws(() => inspectAutoLiveSharedPaperForwardOwnership(fields),
+      /AUTO_LIVE_SHARED_SCHEDULE_ARGUMENT_INVALID/u);
+  }
+  const preflight = readFileSync('ops/production-auto-live-signal-identity.cjs', 'utf8');
+  assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/paper-forward-v1')"));
+  assert.ok(preflight.includes('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE'));
+  assert.ok(preflight.includes("process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true'"));
+  assert.doesNotMatch(preflight, /\b(?:execFileSync|spawnSync)\(\s*['"](?:pm2|psql|bash|sh)['"]/iu);
 });
