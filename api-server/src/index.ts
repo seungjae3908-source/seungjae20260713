@@ -10,12 +10,15 @@ import {
   startUserTelegramDeliveryWorker,
 } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
-import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { startTradeRecoveryWorker, readTradeRecoveryRuntimeHealth } from './services/trade-recovery-worker.service';
 import {
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
 } from './services/member-auto-trading-background-worker.service';
-import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
+import {
+  readTelegramIntelligenceWorkerHealth,
+  startTelegramIntelligenceWorker,
+} from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
 import {
@@ -59,7 +62,9 @@ function healthPayload(route: '/health' | '/api/health') {
     bindHost,
     backgroundWorkersEnabled,
     autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
+    tradeRecoveryWorker: readTradeRecoveryRuntimeHealth(),
     userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
+    telegramIntelligenceWorker: readTelegramIntelligenceWorkerHealth(),
     time: new Date().toISOString(),
   };
 }
@@ -86,10 +91,12 @@ app.use(
 );
 
 app.get('/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.json(healthPayload('/health'));
 });
 
 app.get('/api/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.json(healthPayload('/api/health'));
 });
 

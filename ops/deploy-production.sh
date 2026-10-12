@@ -78,6 +78,7 @@ sync_source_tree() {
     --exclude='.env.*' \
     --exclude='*/.env' \
     --exclude='*/.env.*' \
+    --exclude='.runtime/' \
     --exclude='.deploy/' \
     --exclude='/releases/' \
     --exclude='logs/' \
@@ -521,7 +522,7 @@ rm -f "$PM2_JSON"
 (
   cd "$RELEASE_DIR/api-server"
   nohup env PORT="$CANARY_PORT" API_PORT="$CANARY_PORT" NODE_ENV=production DEPLOY_SHA="$TARGET_SHA" NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection" \
-    LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false \
+    LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false BACKGROUND_WORKERS_ENABLED=false \
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false \
     ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
     FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false BITGET_FUTURES_LIVE_ORDER_ENABLED=false \

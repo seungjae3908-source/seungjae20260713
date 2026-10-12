@@ -209,6 +209,7 @@ declare
   column_count integer;
   primary_key_columns text;
   admin_v2_guard_ready boolean := false;
+  member_v2_guard_ready boolean := false;
 begin
   for item in select name from (values ${tableValues}) as required(name)
   loop
@@ -287,13 +288,13 @@ begin
   select count(*)::integer into safe_policy_count
   ${policyContractFromSql};
   -- The 24 owner-scoped permissive policies must remain intact. A fully
-  -- protected administrator V2 rollout adds exactly three RESTRICTIVE wallet
-  -- policies; never treat those as corruption and never run the legacy policy
-  -- repair (which could otherwise discard the administrator write barriers).
-  if policy_count not in (24, 27) or safe_policy_count <> 24 then
+  -- protected administrator V2 rollout adds three RESTRICTIVE wallet policies,
+  -- and the member V2 rollout adds three more. Attest the exact protections,
+  -- not merely the count; never repair or discard these server-owned barriers.
+  if policy_count not in (24, 27, 30) or safe_policy_count <> 24 then
     raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
   end if;
-  if policy_count = 27 then
+  if policy_count in (27, 30) then
     if to_regprocedure('public.admin_four_paper_wallet_rls_guard_ready()') is null then
       raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
     end if;
@@ -302,6 +303,19 @@ begin
     execute 'select public.admin_four_paper_wallet_rls_guard_ready()'
       into admin_v2_guard_ready;
     if admin_v2_guard_ready is distinct from true then
+      raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
+    end if;
+  end if;
+  if policy_count = 30 then
+    if to_regprocedure('public.four_market_paper_wallet_rls_guard_ready()') is null then
+      raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
+    end if;
+    -- The combined guard also verifies member wallet constraints and all 15
+    -- Worker-owned canonical Paper order write barriers. A valid admin guard
+    -- alone cannot authorize the six additional-policy state.
+    execute 'select public.four_market_paper_wallet_rls_guard_ready()'
+      into member_v2_guard_ready;
+    if member_v2_guard_ready is distinct from true then
       raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
     end if;
   end if;

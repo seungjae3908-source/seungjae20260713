@@ -3,6 +3,8 @@ import type { StoredPaperJournalRecord } from './paper-journal.types';
 import {
   ADMIN_MARKET_INITIAL_KRW,
   inspectAdminFourMarketPaperWallets,
+  inspectMemberFourMarketPaperWallets,
+  type FourMarketPaperWalletRole,
 } from './admin-four-market-paper-capital.service';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
@@ -20,6 +22,9 @@ export type MemberAutomaticPaperReadinessInput = Readonly<{
   administratorFourMarket?: boolean;
   adminMarketWalletRecords?: readonly StoredPaperJournalRecord[];
   adminDatabaseGuardReady?: boolean;
+  fourMarketWalletRole?: FourMarketPaperWalletRole | null;
+  fourMarketWalletRecords?: readonly StoredPaperJournalRecord[];
+  fourMarketDatabaseGuardReady?: boolean;
   workerHealth: MemberAutoTradingBackgroundRuntimeHealth;
   workerMode: AutomaticPaperRuntimeMode;
   globalStopped: boolean;
@@ -36,19 +41,38 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   const adminWallets = input.administratorFourMarket === true
     ? inspectAdminFourMarketPaperWallets(input.adminMarketWalletRecords ?? [], nowMs)
     : null;
-  const paperWalletReady = adminWallets
-    ? adminWallets.ready : equity !== null && epoch !== null;
-  if (!paperWalletReady) blockers.push(adminWallets
-    ? 'BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED' : 'BACKGROUND_PAPER_WALLET_REQUIRED');
-  if (adminWallets && !adminWallets.ready) blockers.push(...adminWallets.blockers);
-  if (adminWallets && input.adminDatabaseGuardReady !== true) {
-    blockers.push('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED');
+  const roleWallets = input.fourMarketWalletRole === 'admin'
+    ? inspectAdminFourMarketPaperWallets(input.fourMarketWalletRecords ?? [], nowMs)
+    : input.fourMarketWalletRole === 'member'
+      ? inspectMemberFourMarketPaperWallets(input.fourMarketWalletRecords ?? [], nowMs)
+      : adminWallets;
+  const role = input.fourMarketWalletRole
+    ?? (input.administratorFourMarket === true ? 'admin' : null);
+  const paperWalletReady = roleWallets
+    ? roleWallets.ready : equity !== null && epoch !== null;
+  if (!paperWalletReady) {
+    blockers.push(roleWallets
+      ? 'BACKGROUND_FOUR_MARKET_PAPER_WALLETS_REQUIRED' : 'BACKGROUND_PAPER_WALLET_REQUIRED');
+    if (role === 'admin') blockers.push('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED');
+    // Compatibility alias for existing member UI while the V1 -> V2 wallet
+    // migration is in progress. Readiness remains fail-closed on the stricter
+    // four-market requirement.
+    if (role === 'member') blockers.push('BACKGROUND_PAPER_WALLET_REQUIRED');
   }
-  const paperCapitalPolicyReady = adminWallets
-    ? Number.isFinite(policy.totalCapitalKrw)
-      && policy.totalCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
+  if (roleWallets && !roleWallets.ready) blockers.push(...roleWallets.blockers);
+  const databaseGuardReady = input.fourMarketDatabaseGuardReady
+    ?? input.adminDatabaseGuardReady;
+  if (roleWallets && databaseGuardReady !== true) {
+    blockers.push('BACKGROUND_FOUR_MARKET_DATABASE_GUARD_REQUIRED');
+    if (role === 'admin') blockers.push('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED');
+  }
+  const paperCapitalPolicyReady = roleWallets
+    ? role === 'admin'
+      ? Number.isFinite(policy.totalCapitalKrw)
+        && policy.totalCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
+      : automaticPaperCapitalPolicyReady(policy)
     : automaticPaperCapitalPolicyReady(policy);
-  if (!paperCapitalPolicyReady) blockers.push(adminWallets
+  if (!paperCapitalPolicyReady) blockers.push(roleWallets && role === 'admin'
     ? 'BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED' : 'BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW');
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
@@ -66,8 +90,9 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   if (policy.emergencyStopped || policy.newEntriesStopped || input.globalStopped) blockers.push('BACKGROUND_TRADING_STOP_ACTIVE');
   if (enabledMarketCount === 0) blockers.push('BACKGROUND_MEMBER_MARKETS_DISABLED');
   if (connectedPolicyMarketCount === 0) blockers.push('BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED');
-  if (adminWallets && connectedPolicyMarketCount !== 4) {
-    blockers.push('BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED');
+  if (roleWallets && connectedPolicyMarketCount !== 4) {
+    blockers.push('BACKGROUND_FOUR_MARKETS_NOT_ENABLED');
+    if (role === 'admin') blockers.push('BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED');
   }
   if (!strategyAllowlistReady) blockers.push('BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED');
 
@@ -101,9 +126,13 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     blockers: uniqueBlockers,
     workerMode,
     paperWalletReady,
-    administratorFourMarket: adminWallets != null,
-    adminMarketWalletsReady: adminWallets?.ready ?? null,
-    adminDatabaseGuardReady: adminWallets != null ? input.adminDatabaseGuardReady === true : null,
+    administratorFourMarket: role === 'admin',
+    fourMarketWalletRole: role,
+    fourMarketWalletsReady: roleWallets?.ready ?? null,
+    fourMarketDatabaseGuardReady: roleWallets != null ? databaseGuardReady === true : null,
+    // Backwards-compatible fields for the existing admin UI contract.
+    adminMarketWalletsReady: role === 'admin' ? roleWallets?.ready ?? null : null,
+    adminDatabaseGuardReady: role === 'admin' ? databaseGuardReady === true : null,
     paperCapitalPolicyReady,
     strategyAllowlistReady,
     enabledMarketCount,

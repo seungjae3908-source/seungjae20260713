@@ -25,6 +25,9 @@ function canonical(overrides: Record<string, unknown> = {}) {
       connected: false,
       status: 'DISCONNECTED',
       connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
     },
     preferences: {
       ORDER_SUBMITTED: true,
@@ -80,6 +83,13 @@ function canonical(overrides: Record<string, unknown> = {}) {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: false,
+      personalWorkerEnabled: false,
+      personalWorkerStarted: false,
+      personalWorkerHealthy: false,
+      personalWorkerErrorCode: null,
+      personalWorkerLastTickAt: null,
+      personalWorkerLastConfirmedDeliveryAt: null,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -161,8 +171,29 @@ test('requires Telegram connection state and timestamp to agree', () => {
     telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-09-10T00:00:06.000Z' },
   }));
   expect(requireUserIntegrationsResponse(canonical({
-    telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-09-10T00:00:00.000Z' },
+    telegram: {
+      connected: true,
+      status: 'ACTIVE',
+      connectedAt: '2026-09-10T00:00:00.000Z',
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
   }), USER_ID, NOW)).toBeTruthy();
+});
+
+test('accepts only explicit fail-closed Telegram recovery state', () => {
+  const recovery = {
+    connected: false,
+    status: 'RECOVERY_REQUIRED',
+    connectedAt: '2026-09-09T23:00:00.000Z',
+    recoveryRequired: true,
+    recoveryErrorCode: 'TELEGRAM_HTTP_403',
+    recoveryFailedAt: '2026-09-09T23:30:00.000Z',
+  };
+  expect(requireUserIntegrationsResponse(canonical({ telegram: recovery }), USER_ID, NOW)).toBeTruthy();
+  rejects(canonical({ telegram: { ...recovery, recoveryErrorCode: null } }));
+  rejects(canonical({ telegram: { ...recovery, connected: true } }));
 });
 
 test('rejects cross-user alert-policy identity and malformed policy evidence', () => {

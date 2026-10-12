@@ -3,6 +3,12 @@ import {
   isEvidenceBackedAutoStrategyId,
   evidenceBackedAutoStrategyCatalog,
 } from './evidence-backed-auto-strategy-catalog.service';
+import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
 
 export const FORMULA_AI_REHEARSAL_POLICY_VERSION = 'formula-ai-rehearsal-v1' as const;
 
@@ -20,9 +26,11 @@ export type FormulaAiRehearsalInput = Readonly<{
   telegramReady: boolean;
   futuresMarginMode?: 'isolated' | 'crossed' | null;
   futuresLeverage?: number | null;
+  futuresMaximumLeverage?: number | null;
 }>;
 
 export type FormulaAiPaperRehearsalProbe = Readonly<{
+  initialCapitalKrw: number;
   paperAutoReady: boolean;
   paperFillReady: boolean;
   journalReady: boolean;
@@ -37,11 +45,21 @@ export type FormulaAiPaperRehearsalProbe = Readonly<{
   productionMutationAllowed: false;
 }>;
 
-export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPaperRehearsalProbe {
+export function runFormulaAiPaperRehearsalProbe(
+  now = new Date(),
+  requestedInitialCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  requestedMaximumLeverage: number = PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+): FormulaAiPaperRehearsalProbe {
+  const initialCapitalKrw = requestedInitialCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const maximumLeverage = requestedMaximumLeverage === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
   const at = new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
   const observedAt = at.toISOString();
-  const state = createPaperTradingState(500_000, at);
+  const state = createPaperTradingState(initialCapitalKrw, at);
   const entryResult = applyPaperTradingAction(state, {
     type: 'place_order',
     eventId: `formula-ai-rehearsal-${at.getTime()}`,
@@ -76,7 +94,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
       quantityPrecision: 3,
       minimumQuantity: 0.001,
       minimumNotional: 5,
-      maximumLeverage: 7,
+      maximumLeverage,
       maintenanceMarginRate: 0.005,
       status: 'live',
       updatedAt: observedAt,
@@ -86,7 +104,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
       market: 'crypto-futures',
       symbol: 'BTCUSDT',
       side: 'long',
-      accountBalance: 500_000,
+      accountBalance: initialCapitalKrw,
       entryPrice: 100,
       stopLossPrice: 98,
       targetPrice1: 105,
@@ -102,8 +120,8 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
       minimumQuantity: 0.001,
       minimumNotional: 5,
       maintenanceMarginRate: 0.005,
-      maximumLeverage: 7,
-      appMaximumLeverage: 7,
+      maximumLeverage,
+      appMaximumLeverage: maximumLeverage,
       contractRulesStatus: 'live',
       dataStatus: 'live',
     },
@@ -140,6 +158,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
   const journalEntryCount = closeResult?.state.journal.length ?? entryResult.state.journal.length;
 
   return Object.freeze({
+    initialCapitalKrw,
     paperAutoReady,
     paperFillReady,
     journalReady,
@@ -203,7 +222,10 @@ export function evaluateFormulaAiAutoRehearsal(input: FormulaAiRehearsalInput): 
   if (input.market === 'CRYPTO_FUTURES') {
     if (input.futuresMarginMode !== 'isolated') add(blockers, 'FORMULA_AI_FUTURES_ISOLATED_REQUIRED');
     const leverage = Number(input.futuresLeverage);
-    if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+    const maximumLeverage = input.futuresMaximumLeverage === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+    if (!Number.isInteger(leverage) || leverage < 2 || leverage > maximumLeverage) {
       add(blockers, 'FORMULA_AI_FUTURES_LEVERAGE_LIMIT');
     }
   }

@@ -57,7 +57,9 @@ test('canonical integration remains fail-closed and does not add a second browse
   expect(autoTrading).toContain('automaticServerGateEnabled');
   expect(autoTrading).toContain('계정 주문 권한 없음');
   expect(autoTrading).toContain('autoTradingBackground');
-  expect(autoTrading).toContain('userTelegramDelivery');
+  expect(autoTrading).not.toContain('userTelegramDelivery');
+  expect(autoTrading).toContain("if (mode !== 'paper' || paperOrigin !== 'automatic')");
+  expect(autoTrading).toContain("if (mode !== 'paper' || paperOrigin !== 'automatic' || fixture");
   expect(autoTrading).toContain('liveEntriesArmed');
   expect(autoTrading).toContain('자동 실거래 작동 준비됨');
   expect(autoTrading).not.toContain('value="서버 Gate 필요"');

@@ -6,22 +6,34 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('trading shell exposes auto and paper as first-class modes while preserving navigation names', () => {
+test('technical trading has one menu entry and shared live/paper shell with separate execution scopes', () => {
   const page = source('src/pages/auto-trading.tsx');
   const paper = source('src/pages/paper-trading.tsx');
   const workspace = source('src/pages/technical-workspace.tsx');
   const navigation = source('src/lib/app-navigation.ts');
 
   expect(page).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
-  expect(page).toContain('data-testid="trading-mode-tabs"');
-  expect(page).toContain('자동매매</SegmentedButton>');
-  expect(page).toContain('모의매매</SegmentedButton>');
-  expect(paper).toContain('<AutoTradingPage initialMode="paper" />');
-  expect(workspace).toContain("{ value: 'trade', label: '자동매매' }");
-  expect(workspace).toContain("trade: '자동매매'");
-  expect(navigation).toContain("label: '자동매매'");
-  expect(navigation).toContain("label: '모의매매'");
+  expect(page).not.toContain('data-testid="trading-mode-tabs"');
+  expect(page).toContain('data-testid="trading-market-select"');
+  expect(paper).toContain('initialMode="paper"');
+  expect(paper).toContain("get('kind') === 'manual'");
+  expect(workspace).toContain("{ value: 'trade', label: '기술매매' }");
+  expect(workspace).toContain("trade: '기술매매'");
+  expect(navigation).toContain("label: '기술매매'");
+  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(0);
+  expect(page).toContain('data-testid="technical-trading-modes"');
+  expect(page).toContain('data-testid="trading-paper-modes"');
+  expect(page).toContain('<TradingHoldingsPanel');
+  expect(page).not.toContain('data-testid="trading-workspace-safety-note"');
   expect(navigation).not.toContain("label: '승인형 주문'");
+});
+
+test('LIVE status fetching is not accidentally restricted to Paper mode', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const statusEffect = page.slice(page.indexOf('useEffect(() => {', page.indexOf('setSection(next.section)')),
+    page.indexOf("setAutoPaperPreflight(null)"));
+  expect(statusEffect).toContain("authorizedFetch('/api/trade-automation/status'");
+  expect(statusEffect).not.toContain("if (mode !== 'paper') return");
 });
 
 test('trading shell keeps professional typography and standing-authorization safety contract', () => {
@@ -34,6 +46,7 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('위험검사');
   expect(page).toContain('data-testid="trading-market-tabs"');
   expect(page).toContain('data-testid="trading-section-tabs"');
+  expect(page).toContain('data-testid="auto-trading-rehearsal-settings"');
   expect(page).not.toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
   expect(page).toContain('title="매매일지"');
   expect(page).toContain('직접매매/자동매매/자동모의매매');
@@ -42,7 +55,8 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).not.toContain('font-black');
   expect(page).not.toContain('TradeApprovalQueue');
   expect(page).not.toContain('approvalFixture');
-  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />');
+  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot}');
+  expect(page).toContain('onStatusRead={receiveSettingsStatus}');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
 
@@ -70,7 +84,7 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain("auth.can('canPlaceOrders')");
   expect(page).toContain('계정 주문 권한 없음');
   expect(page).toContain('autoTradingBackground');
-  expect(page).toContain('userTelegramDelivery');
+  expect(page).not.toContain('runtimeStatus?.userTelegramDelivery');
   expect(page).toContain('liveEntriesArmed');
   expect(page).toContain('안전대기 · Arm 준비 중');
   expect(page).toContain('자동 실거래 작동 준비됨');
@@ -79,14 +93,14 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('runtimeHealthFresh');
   expect(page).toContain('360_000');
   expect(page).toContain('자동 워커 상태 지연');
-  expect(page).toContain('Telegram 상태 지연');
+  expect(page).not.toContain('Telegram 상태 지연');
   expect(page).toContain('runtimeRefreshInFlight');
   expect(page).toContain('setRuntimeClockMs(Date.now())');
   expect(page).toContain('setRuntimeReadError(true)');
   expect(page).toContain('상태 조회 실패');
   expect(page).toContain("tone={providerVerified ? 'ok' : 'warn'}");
   expect(page).toContain("tone={effectiveEntryStopped ? 'warn' : 'ok'}");
-  expect(page).toContain("tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}");
+  expect(page).toContain("tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}");
   expect(page).toContain('시장 설정 ON');
   expect(page).toContain('AlertTriangle');
   expect(page).not.toContain('value="서버 Gate 필요"');
@@ -123,15 +137,15 @@ test('automatic Paper wallet requires explicit simulated-only setup and never tr
   const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
   expect(page).toContain('data-testid="automatic-paper-wallet-readiness"');
   expect(page).toContain('data-testid="prepare-isolated-automatic-paper-epoch"');
-  expect(page).toContain('START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY');
-  expect(page).toContain('과거 기록 보존 후 신규 50만원 모의계좌 준비');
+  expect(page).toContain('START_NEW_1M_PAPER_EPOCH_PRESERVE_HISTORY');
+  expect(page).toContain('과거 기록 보존 후 신규 100만원 모의계좌 준비');
   expect(page).toContain('data-testid="prepare-automatic-paper-account"');
-  expect(page).toContain('AUTO_PAPER_INITIAL_KRW = 500_000');
+  expect(page).toContain('AUTO_PAPER_INITIAL_KRW = 1_000_000');
   expect(page).toContain('await syncJournalRecords({');
   expect(page).toContain('await inspectAutomaticPaperAccount()');
   expect(page).toContain('result.orderSubmitted !== false || result.exchangeRequestSent !== false');
   expect(page).not.toContain('createLiveOrderForPaperSetup');
-  expect(worker).toContain("AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'");
+  expect(worker).toContain("AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m'");
   expect(worker).toContain('selectAutomaticPaperAccountEquity(records)');
   expect(worker).toContain('inspectAdminFourMarketPaperWallets(records, nowMs)');
   expect(worker).toContain('adminPaperDatabaseGuardReady');

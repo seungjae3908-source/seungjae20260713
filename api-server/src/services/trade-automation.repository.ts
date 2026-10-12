@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type ExchangeConnection,
   type TradingExchange,
   type TradingOrder,
@@ -11,6 +12,9 @@ import {
   type TradingPolicy,
 } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { readCompleteTradingHistory } from './trade-history-completeness.service';
+import { automaticLiveBudgetRequired, serverOwnedAutomaticLiveLedger, projectAutomaticLiveBudget, assertAutomaticLiveBudgetProjection,
+  type AutomaticLiveBudgetCharge, type AutomaticLiveBudgetSnapshot } from './automatic-live-budget.service';
 
 export type AtomicOrderResult = {
   order: TradingOrder;
@@ -47,6 +51,9 @@ export interface TradingRepository {
     event: TradingOrderEvent,
   ): Promise<AtomicTransitionResult>;
   claimOrderExecution(order: TradingOrder, expectedVersion: number, claimId: string): Promise<TradingOrder | null>;
+  claimAutomaticLiveEntry?(order: TradingOrder, expectedVersion: number, claimId: string): Promise<TradingOrder | null>;
+  assertAutomaticLiveEntryBudget?(plan: TradingPlan): Promise<void>;
+  readAutomaticLiveBudgetGuard?(): Promise<{ ready: boolean; version: string }>;
   saveOrder(order: TradingOrder): Promise<void>;
   listOrders(userId: string): Promise<TradingOrder[]>;
   appendEvent(event: TradingOrderEvent): Promise<void>;
@@ -78,6 +85,10 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     fills: copy(order.fills ?? []),
     feeAmount: order.feeAmount ?? null,
     feeCurrency: order.feeCurrency ?? null,
+    taxAmount: order.taxAmount ?? null,
+    taxCurrency: order.taxCurrency ?? null,
+    settlementFxEvidence: order.settlementFxEvidence ?? null,
+    paperFundingSettlementEvidence: order.paperFundingSettlementEvidence ?? null,
     exchangeCreatedAt: order.exchangeCreatedAt ?? null,
     exchangeUpdatedAt: order.exchangeUpdatedAt ?? null,
     cancelable: order.cancelable ?? null,
@@ -104,6 +115,8 @@ export class InMemoryTradingRepository implements TradingRepository {
   private orders = new Map<string, TradingOrder>();
   private events: TradingOrderEvent[] = [];
   private executionClaims = new Map<string, { id: string; claimedAt: number }>();
+  private budgetHolds = new Map<string, AutomaticLiveBudgetCharge>();
+  private budgetQueues = new Map<string, Promise<void>>();
 
   async getGlobalEmergencyStop() { return this.globalEmergencyStopped; }
   async setGlobalEmergencyStop(stopped: boolean, _changedBy: string) { this.globalEmergencyStopped = stopped; }
@@ -190,15 +203,69 @@ export class InMemoryTradingRepository implements TradingRepository {
     return { order: current, applied: true };
   }
   async claimOrderExecution(order: TradingOrder, expectedVersion: number, claimId: string) {
+    const plan = this.plans.get(order.planId);
+    if (plan && automaticLiveBudgetRequired(plan)) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');
+    return this.claimExecution(order, expectedVersion, claimId);
+  }
+  private claimExecution(order: TradingOrder, expectedVersion: number, claimId: string) {
     const current = this.orders.get(order.id);
     if (!current || current.userId !== order.userId || current.state !== 'SUBMITTED'
-      || orderVersion(current) !== expectedVersion) return null;
+      || orderVersion(current) !== expectedVersion || current.submissionStartedAt) return null;
     const previous = this.executionClaims.get(order.id);
     if (previous && Date.now() - previous.claimedAt < 30_000) return null;
     this.executionClaims.set(order.id, { id: claimId, claimedAt: Date.now() });
     Object.assign(current, normalizedOrder({ ...current, version: expectedVersion + 1, executionClaimId: claimId,
       updatedAt: new Date().toISOString() }));
     return current;
+  }
+  private async serializedBudget<T>(userId: string, operation: () => Promise<T>): Promise<T> {
+    const prior = this.budgetQueues.get(userId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const tail = prior.then(() => current);
+    this.budgetQueues.set(userId, tail);
+    await prior;
+    try { return await operation(); }
+    finally { release(); if (this.budgetQueues.get(userId) === tail) this.budgetQueues.delete(userId); }
+  }
+  private async budgetSnapshot(userId: string): Promise<AutomaticLiveBudgetSnapshot> {
+    const orders = await this.listOrders(userId);
+    return { policy: await this.getPolicy(userId), emergencyStopped: this.globalEmergencyStopped,
+      plans: await this.listPlans(userId), orders,
+      holds: [...this.budgetHolds.values()].filter((hold) => orders.some((row) => row.id === hold.orderId)).map(copy) };
+  }
+  async claimAutomaticLiveEntry(order: TradingOrder, expectedVersion: number, claimId: string) {
+    return this.serializedBudget(order.userId, async () => {
+      const current = this.orders.get(order.id);
+      if (!current || orderVersion(current) !== expectedVersion || current.submissionStartedAt) return null;
+      const snapshot = await this.budgetSnapshot(order.userId);
+      const projection = await projectAutomaticLiveBudget(snapshot, order.userId, order.id, (value) => {
+        if (!value) throw new Error('AUTOMATIC_LIVE_BUDGET_POLICY_REQUIRED');
+        return value;
+      });
+      assertAutomaticLiveBudgetProjection(projection, snapshot.holds);
+      const claimed = this.claimExecution(order, expectedVersion, claimId);
+      if (!claimed) return null;
+      projection.releases.forEach((id) => this.budgetHolds.delete(id));
+      this.budgetHolds.set(order.id, { orderId: projection.orderId, market: projection.market,
+        instrument: projection.instrument, strategy: projection.strategy,
+        amountKrw: projection.amountKrw, riskKrw: projection.riskKrw });
+      return claimed;
+    });
+  }
+  async assertAutomaticLiveEntryBudget(plan: TradingPlan) {
+    return this.serializedBudget(plan.userId, async () => {
+      const order = await this.findOrderByPlan(plan.userId, plan.id);
+      if (!order || !order.executionClaimId || !this.budgetHolds.has(order.id)) {
+        throw new Error('AUTOMATIC_LIVE_BUDGET_RESERVATION_REQUIRED');
+      }
+      const snapshot = await this.budgetSnapshot(plan.userId);
+      const projection = await projectAutomaticLiveBudget(snapshot, plan.userId, order.id, (value) => {
+        if (!value) throw new Error('AUTOMATIC_LIVE_BUDGET_POLICY_REQUIRED');
+        return value;
+      });
+      assertAutomaticLiveBudgetProjection(projection, snapshot.holds);
+    });
   }
   async saveOrder(order: TradingOrder) {
     const current = this.orders.get(order.id);
@@ -286,8 +353,69 @@ function createScopedTradingRepository(
   client: SupabaseClient,
   secureClient: () => SupabaseClient,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number,
 ): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
+  const writeClientForPlan = (plan: TradingPlan) => serverOwnedAutomaticLiveLedger(plan) ? secureClient() : client;
+  const writeClientForOrder = async (order: Pick<TradingOrder, 'userId' | 'planId'>) => {
+    owned(order.userId);
+    const result = await client.from('trade_order_plans').select('payload')
+      .eq('user_id', order.userId).eq('id', order.planId).maybeSingle();
+    if (result.error) throw databaseError();
+    // Missing/hidden parents do not justify privileged writes. Ordinary RLS/FK
+    // still rejects them; never use a client-provided executionMode as proof.
+    return result.data?.payload ? writeClientForPlan(result.data.payload as TradingPlan) : client;
+  };
+  const budgetOperation = async (order: TradingOrder, expectedVersion: number, claimId: string, verifyOnly: boolean) => {
+    owned(order.userId);
+    if (!claimId) throw new Error('AUTOMATIC_LIVE_BUDGET_CLAIM_REQUIRED');
+    const privileged = secureClient();
+    // This bounded retry only handles a confirmed pre-mutation snapshot race.
+    // A network/unknown result is never retried or interpreted as no order.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const read = await privileged.rpc('read_automatic_live_budget_snapshot', { p_user_id: order.userId });
+      if (read.error || !read.data) throw new Error('AUTOMATIC_LIVE_BUDGET_STORAGE_UNAVAILABLE');
+      const snapshot = read.data as AutomaticLiveBudgetSnapshot;
+      const current = snapshot.orders?.find((row) => row.id === order.id);
+      if (!current || orderVersion(current) !== expectedVersion) return null;
+      const projection = await projectAutomaticLiveBudget(snapshot, order.userId, order.id,
+        (value) => normalizeTradingPolicy(value, maximumSingleEntryKrw));
+      const result = await privileged.rpc('reserve_automatic_live_entry_budget', {
+        p_user_id: order.userId, p_order_id: order.id, p_claim_id: claimId,
+        p_expected_snapshot: snapshot, p_projection: projection, p_verify_only: verifyOnly,
+      });
+      if (result.error?.code === '40001') continue; // Confirmed whole-transaction rollback, not network uncertainty.
+      if (result.error || !result.data) throw new Error('AUTOMATIC_LIVE_BUDGET_STORAGE_UNAVAILABLE');
+      const response = result.data as { status: string; order?: TradingOrder; blockCode?: string };
+      if (response.status === 'SNAPSHOT_STALE') continue;
+      if (response.status === 'CLAIM_UNAVAILABLE') return null;
+      if (response.status === 'BLOCKED') throw new Error(response.blockCode ?? 'AUTOMATIC_LIVE_BUDGET_BLOCKED');
+      if (response.status !== 'RESERVED' || !response.order) throw new Error('AUTOMATIC_LIVE_BUDGET_RESPONSE_INVALID');
+      return normalizedOrder(response.order);
+    }
+    throw new Error('AUTOMATIC_LIVE_BUDGET_SNAPSHOT_CHANGED');
+  };
+  const completeHistory = async <T>(table: 'trade_order_plans' | 'trade_orders', userId: string,
+    project: (value: unknown) => T) => {
+    owned(userId);
+    return readCompleteTradingHistory<T>({
+      async snapshot() {
+        const { data, error, count } = await client.from(table).select('updated_at', { count: 'exact' })
+          .eq('user_id', userId).order('updated_at', { ascending: false }).limit(1);
+        if (error || count == null) throw databaseError();
+        return { count, lastUpdatedAt: data?.[0]?.updated_at ?? null };
+      },
+      async page(afterId, pageSize) {
+        let query = client.from(table).select('id,updated_at,payload').eq('user_id', userId)
+          .order('id', { ascending: true }).limit(pageSize);
+        if (afterId != null) query = query.gt('id', afterId);
+        const { data, error } = await query;
+        if (error) throw databaseError();
+        return data ?? [];
+      },
+      project,
+    });
+  };
 
   const selectPlanByIdempotency = async (userId: string, key: string) => {
     owned(userId);
@@ -328,7 +456,10 @@ function createScopedTradingRepository(
       const { data, error } = await client.from('trade_automation_profiles').select('payload')
         .eq('user_id', userId).maybeSingle();
       if (error) throw databaseError();
-      return normalizeTradingPolicy((data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>);
+      return normalizeTradingPolicy(
+        (data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>,
+        maximumSingleEntryKrw,
+      );
     },
     async savePolicy(userId, policy) {
       owned(userId);
@@ -378,15 +509,11 @@ function createScopedTradingRepository(
       return data?.payload as TradingPlan | null;
     },
     async listPlans(userId) {
-      owned(userId);
-      const { data, error } = await client.from('trade_order_plans').select('payload')
-        .eq('user_id', userId).order('updated_at', { ascending: false }).limit(200);
-      if (error) throw databaseError();
-      return (data ?? []).map((row) => row.payload as TradingPlan);
+      return completeHistory('trade_order_plans', userId, (value) => value as TradingPlan);
     },
     async insertPlan(plan) {
       owned(plan.userId);
-      const { error } = await client.from('trade_order_plans').insert(planRow(plan));
+      const { error } = await writeClientForPlan(plan).from('trade_order_plans').insert(planRow(plan));
       if (!error) return { plan: { ...plan, version: planVersion(plan) }, inserted: true };
       if (!isUniqueViolation(error)) throw databaseError();
       const existing = await selectPlanByIdempotency(plan.userId, plan.idempotencyKey);
@@ -396,7 +523,7 @@ function createScopedTradingRepository(
     async compareAndSetPlan(plan, expectedState, expectedVersion) {
       owned(plan.userId);
       const payload = { ...plan, version: expectedVersion, updatedAt: plan.updatedAt };
-      const { data, error } = await client.rpc('transition_trade_plan_atomic', {
+      const { data, error } = await writeClientForPlan(plan).rpc('transition_trade_plan_atomic', {
         p_user_id: plan.userId,
         p_plan_id: plan.id,
         p_expected_state: expectedState,
@@ -409,7 +536,7 @@ function createScopedTradingRepository(
     },
     async savePlan(plan) {
       owned(plan.userId);
-      const { error } = await client.from('trade_order_plans').upsert(planRow(plan), { onConflict: 'user_id,id' });
+      const { error } = await writeClientForPlan(plan).from('trade_order_plans').upsert(planRow(plan), { onConflict: 'user_id,id' });
       if (error) throw databaseError();
     },
     async getOrder(userId, id) {
@@ -422,7 +549,8 @@ function createScopedTradingRepository(
     async findOrderByPlan(userId, planId) { return selectOrderByPlan(userId, planId); },
     async createOrderAtomic(order, event, expectedPlanState) {
       owned(order.userId);
-      const { data, error } = await client.rpc('create_trade_order_atomic', {
+      const writer = await writeClientForOrder(order);
+      const { data, error } = await writer.rpc('create_trade_order_atomic', {
         p_user_id: order.userId,
         p_plan_id: order.planId,
         p_expected_plan_state: expectedPlanState,
@@ -440,7 +568,8 @@ function createScopedTradingRepository(
     },
     async transitionOrderAtomic(order, expectedState, expectedVersion, event) {
       owned(order.userId);
-      const { data, error } = await client.rpc('transition_trade_order_atomic', {
+      const writer = await writeClientForOrder(order);
+      const { data, error } = await writer.rpc('transition_trade_order_atomic', {
         p_user_id: order.userId,
         p_order_id: order.id,
         p_expected_state: expectedState,
@@ -466,21 +595,37 @@ function createScopedTradingRepository(
       if (error) throw databaseError();
       return data ? normalizedOrder(data as TradingOrder) : null;
     },
+    async claimAutomaticLiveEntry(order, expectedVersion, claimId) {
+      return budgetOperation(order, expectedVersion, claimId, false);
+    },
+    async readAutomaticLiveBudgetGuard() {
+      const result = await secureClient().rpc('read_automatic_live_budget_guard');
+      if (result.error || result.data?.version !== 'automatic-live-atomic-budget-v3'
+        || result.data?.ready !== true) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY');
+      return { ready: true, version: result.data.version };
+    },
+    async assertAutomaticLiveEntryBudget(plan) {
+      owned(plan.userId);
+      const order = await selectOrderByPlan(plan.userId, plan.id);
+      if (!order || !order.executionClaimId
+        || !await budgetOperation(order, orderVersion(order), order.executionClaimId, true)) {
+        throw new Error('AUTOMATIC_LIVE_BUDGET_RESERVATION_REQUIRED');
+      }
+    },
     async saveOrder(order) {
       owned(order.userId);
-      const { error } = await client.from('trade_orders').upsert(orderRow(order), { onConflict: 'user_id,id' });
+      const writer = await writeClientForOrder(order);
+      const { error } = await writer.from('trade_orders').upsert(orderRow(order), { onConflict: 'user_id,id' });
       if (error) throw databaseError();
     },
     async listOrders(userId) {
-      owned(userId);
-      const { data, error } = await client.from('trade_orders').select('payload')
-        .eq('user_id', userId).order('updated_at', { ascending: false }).limit(500);
-      if (error) throw databaseError();
-      return (data ?? []).map((row) => normalizedOrder(row.payload as TradingOrder));
+      return completeHistory('trade_orders', userId, (value) => normalizedOrder(value as TradingOrder));
     },
     async appendEvent(event) {
       owned(event.userId);
-      const { error } = await client.from('trade_order_events').insert({
+      const current = await this.getOrder(event.userId, event.orderId);
+      const writer = current ? await writeClientForOrder(current) : client;
+      const { error } = await writer.from('trade_order_events').insert({
         user_id: event.userId, id: event.id, order_id: event.orderId, to_state: event.toState,
         payload: event, created_at: event.createdAt,
       });
@@ -510,6 +655,7 @@ function createScopedTradingRepository(
 export function createSupabaseTradingRepository(
   accessToken: string,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   const client = getUserSupabase(accessToken);
@@ -517,19 +663,20 @@ export function createSupabaseTradingRepository(
     if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
     return getSupabase();
   };
-  return createScopedTradingRepository(client, secureClient, authenticatedUserId);
+  return createScopedTradingRepository(client, secureClient, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 export function createServiceRoleTradingRepository(
   authenticatedUserId: string,
   injectedClient?: SupabaseClient,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   if (!injectedClient && !hasSupabaseServerKey()) {
     throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
   }
   const client = injectedClient ?? getSupabase();
-  return createScopedTradingRepository(client, () => client, authenticatedUserId);
+  return createScopedTradingRepository(client, () => client, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {

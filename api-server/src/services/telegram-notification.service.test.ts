@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import {
   clearTelegramAlertState,
@@ -18,10 +21,16 @@ import {
   telegramReportDestinations,
 } from './telegram-intelligence-report.service';
 import {
+  FileTelegramIntelligenceStateStore,
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
+  readTelegramIntelligenceWorkerHealth,
+  safeTelegramBriefFailureCode,
 } from './telegram-intelligence-worker.service';
-import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
+import {
+  buildSignalIntelligenceTelegramInput,
+  SignalIntelligenceTelegramDeliveryState,
+} from './signal-intelligence-telegram-subscriber.service';
 import {
   addTelegramSignalFreshness,
   deliverScannerTelegramAlerts,
@@ -32,6 +41,9 @@ import {
   type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
+import { deliverMemberWatchlistTelegramForSignal } from './member-watchlist-telegram-producer.service';
+import { TELEGRAM_POLICY_SAFETY } from './telegram-alert-policy.service';
+import './signal-intelligence-telegram-subscriber.service.test';
 
 const originalFetch = globalThis.fetch;
 const originalEnv = {
@@ -225,6 +237,106 @@ test('editing a Telegram signal explicitly clears a stale order keyboard', async
   assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
 });
 
+test('ambiguous Telegram edit never replays an obsolete order keyboard', async () => {
+  setFakeConfig();
+  const input = {
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT' as const, text: '이전 주문 버튼 상태',
+    buttons: [[{ text: '오래된 주문 링크', url: 'https://example.org/old-order' }]],
+  };
+  const uncertain = { ok: false, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+  for (const behavior of ['http_502', 'network_error', 'malformed_200'] as const) {
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      calls++;
+      assert.match(String(init?.body), /old-order/u);
+      if (behavior === 'http_502') return new Response('upstream failed', { status: 502 });
+      if (behavior === 'network_error') throw new Error('connection reset after remote edit');
+      return new Response('{not json', { status: 200 });
+    };
+    assert.deepEqual(await editTelegramMessage(input), uncertain);
+    assert.equal(calls, 1, `ambiguous ${behavior} must never replay the old button`);
+  }
+});
+
+test('Telegram edit retries an explicit HTTP 429 once but no other rejected request', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response('retry later', { status: 429, headers: { 'retry-after': '0' } })
+      : okResponse();
+  };
+  assert.deepEqual(await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT', text: '안전한 재시도',
+  }), { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } });
+  };
+  assert.deepEqual(await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77, messageKind: 'TEXT', text: '과도한 요청',
+  }), { ok: false, attempts: 2, skipped: 'DELIVERY_FAILED' });
+  assert.equal(calls, 2);
+});
+
+test('Telegram flood retry_after is honored without an early send or edit replay', async () => {
+  setFakeConfig();
+  for (const variant of ['bot_wait', 'header_wait'] as const) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return variant === 'bot_wait'
+        ? new Response(JSON.stringify({ ok: false, error_code: 429,
+            parameters: { retry_after: 90 } }), {
+            status: 429, headers: { 'Content-Type': 'application/json' },
+          })
+        : new Response(JSON.stringify({ ok: false, error_code: 429,
+            parameters: { retry_after: 0 } }), {
+            status: 429, headers: { 'retry-after': '30', 'Content-Type': 'application/json' },
+          });
+    };
+    clearTelegramAlertState();
+    assert.deepEqual(await sendTelegramAlert({
+      type: 'system_critical', details: `flood-control-${variant}`,
+    }), { ok: false, attempts: 1, skipped: 'DELIVERY_FAILED',
+      errorCode: 'TELEGRAM_HTTP_429' });
+    assert.equal(calls, 1, 'send must respect flood-control wait longer than two seconds');
+
+    calls = 0;
+    assert.deepEqual(await editTelegramMessage({
+      destinationChatId: 'ci-chat-id-sentinel',
+      messageId: 77, messageKind: 'TEXT',
+      text: '주문 링크 삭제 상태 유지', buttons: [],
+    }), { ok: false, attempts: 1, skipped: 'DELIVERY_FAILED' });
+    assert.equal(calls, 1, 'edit must not replay before flood-control wait expires');
+  }
+});
+
+test('Telegram 429 with a zero-second Bot API retry hint can retry once', async () => {
+  setFakeConfig();
+  clearTelegramAlertState();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response(JSON.stringify({ ok: false, error_code: 429,
+          parameters: { retry_after: 0 } }), {
+          status: 429, headers: { 'Content-Type': 'application/json' },
+        }) : okResponse();
+  };
+  assert.deepEqual(await sendTelegramAlert({
+    type: 'system_critical', details: 'short flood-retry',
+  }), { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+});
+
 test('long signal updates preserve Telegram HTML tags, entities, and stale-button revocation', async () => {
   setFakeConfig();
   const calls: Array<Record<string, unknown>> = [];
@@ -288,7 +400,7 @@ test('suppresses exact duplicates and applies per-subject cooldown', async () =>
   assert.equal(calls, 1);
 });
 
-test('Telegram outage fails open after a bounded retry and does not expose secrets', async () => {
+test('Telegram transport failure is unconfirmed and cannot retry an ambiguously accepted POST', async () => {
   setFakeConfig();
   let calls = 0;
   globalThis.fetch = async () => {
@@ -304,13 +416,88 @@ test('Telegram outage fails open after a bounded retry and does not expose secre
   });
   assert.deepEqual(result, {
     ok: false,
-    attempts: 2,
-    skipped: 'DELIVERY_FAILED',
+    attempts: 1,
+    skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('ci-bot-token-sentinel'), false);
   assert.equal(serialized.includes('ci-chat-id-sentinel'), false);
+});
+
+
+test('Telegram 429 rejection may be retried once but 500 and invalid acknowledgments cannot', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response(JSON.stringify({ ok: false }), { status: 429 })
+      : okResponse();
+  };
+  const accepted = await sendTelegramAlert({ type: 'system_critical', details: 'safe retry only' });
+  assert.deepEqual(accepted, { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+
+  clearTelegramAlertState();
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response('upstream could have accepted POST', { status: 502 });
+  };
+  const uncertain = await sendTelegramAlert({ type: 'system_critical', details: 'ambiguous server response' });
+  assert.deepEqual(uncertain, {
+    ok: false, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+  });
+  assert.equal(calls, 1, 'never retry 5xx when Telegram might already have the message');
+  const repeated = await sendTelegramAlert({ type: 'system_critical', details: 'ambiguous server response' });
+  assert.deepEqual(repeated, { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' });
+  assert.equal(calls, 1, 'unknown delivery must not be retried in a later tick');
+
+  clearTelegramAlertState();
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  const missingReceipt = await sendTelegramAlertWithReceipt({
+    type: 'system_critical', details: '200 without Telegram message_id',
+  });
+  assert.equal(missingReceipt.ok, false);
+  if (!missingReceipt.ok) assert.equal(missingReceipt.errorCode, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED');
+  assert.equal(calls, 1);
+});
+
+test('Telegram HTTP 403 is classified safely and is not retried', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ ok: false, description: 'sensitive provider detail' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const result = await sendTelegramAlert({
+    type: 'intelligence_report',
+    details: 'connection check',
+    cooldownMs: 0,
+    duplicateWindowMs: 0,
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    attempts: 1,
+    skipped: 'DELIVERY_FAILED',
+    errorCode: 'TELEGRAM_HTTP_403',
+  });
+  assert.equal(calls, 1);
+  assert.equal(JSON.stringify(result).includes('sensitive provider detail'), false);
 });
 
 test('supports all requested alert templates', () => {
@@ -647,6 +834,260 @@ test('Telegram intelligence daily dedupe suppresses an already delivered report 
   assert.deepEqual(deduped, []);
 });
 
+test('corrupted market briefing ledger fails closed; no replay, overwrite or Telegram send', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-brief-dedupe-'));
+  const file = path.join(directory, 'delivery.json');
+  try {
+    const corrupt = '{BROKEN_LEGACY_STATE';
+    await writeFile(file, corrupt, 'utf8');
+    let sends = 0;
+    const worker = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(file),
+      async () => { sends += 1; return { ok: true as const, attempts: 1 }; },
+      (destination) => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+      async () => { throw new Error('NO_REAL_MARKET_FETCH'); },
+    );
+    const time = new Date('2026-08-14T07:00:00.000Z');
+    await assert.rejects(worker.runOnce(time), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    await assert.rejects(worker.runOnce(time), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 0);
+    assert.equal(await readFile(file, 'utf8'), corrupt);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('market brief reservation disk failure blocks Bot API before the first send', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-brief-durable-'));
+  try {
+    const stateDirectory = path.join(directory, 'state');
+    const archivedDirectory = path.join(directory, 'archived');
+    await mkdir(stateDirectory);
+    const file = path.join(stateDirectory, 'delivery.json');
+    const original = '{"version":1,"delivered":{}}';
+    await writeFile(file, original, 'utf8');
+    const store = new FileTelegramIntelligenceStateStore(file);
+    assert.equal(await store.has('telegram-intelligence:warmup'), false);
+
+    // Move the already-opened state directory aside, then make its former
+    // path a regular file. mkdir(stateDirectory) must fail with ENOTDIR.
+    await rename(stateDirectory, archivedDirectory);
+    await writeFile(stateDirectory, 'SIMULATED_DISK_FAILURE', 'utf8');
+
+    let sends = 0;
+    const worker = new TelegramIntelligenceWorker(
+      store,
+      async () => { sends += 1; return { ok: true as const, attempts: 1 }; },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-room' : null,
+    );
+    const when = new Date('2026-08-14T07:00:00.000Z');
+    await assert.rejects(worker.runOnce(when), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 0, 'no Bot API call before the reservation is durable');
+    await assert.rejects(worker.runOnce(when), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 0, 'fail-closed after the unavailable ledger');
+    assert.equal(await readFile(path.join(archivedDirectory, 'delivery.json'), 'utf8'), original);
+    assert.equal(await readFile(stateDirectory, 'utf8'), 'SIMULATED_DISK_FAILURE');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Telegram scheduled worker exposes safe idle readiness without any send evidence', () => {
+  const status = readTelegramIntelligenceWorkerHealth();
+  assert.equal(typeof status.enabled, 'boolean');
+  assert.ok(['NOT_STARTED', 'RUNNING', 'DISABLED', 'STOPPED'].includes(status.state));
+  assert.ok(['NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY','NOT_CONFIGURED',
+    'DELIVERY_FAILED','NO_ATTEMPTS','LEDGER_UNREADABLE','TICK_FAILED'].includes(status.lastDueCode));
+  assert.equal(Object.keys(status).some(key => /token|chat|account|user|order|secret/i.test(key)), false);
+});
+
+test('ambiguous scheduled Telegram POST is persisted as unconfirmed and never automatically replayed after restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-uncertain-brief-'));
+  const ledger = path.join(directory, 'brief-state.json');
+  const now = new Date('2026-10-12T07:00:00.000Z');
+  let sends = 0;
+  try {
+    const worker = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        sends++;
+        return { ok: false as const, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED' as const,
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-only-kr-room' : null,
+    );
+    const first = await worker.runOnce(now);
+    assert.equal(first.duePlans, 1);
+    assert.equal(first.attempted, 1);
+    assert.equal(first.delivered, 0);
+    assert.equal(first.deduped, 0);
+    assert.equal(first.failed, 1);
+    assert.equal(sends, 1);
+    const persisted = JSON.parse(await readFile(ledger, 'utf8'));
+    assert.equal(persisted.version, 1);
+    assert.equal(Object.keys(persisted.delivered).length, 0, 'uncertain is never recorded as SENT');
+    assert.equal(Object.keys(persisted.unconfirmed).length, 1);
+
+    const reopened = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        sends++;
+        throw new Error('UNCERTAIN_MESSAGE_MUST_NOT_BE_REPLAYED');
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-only-kr-room' : null,
+    );
+    const again = await reopened.runOnce(now);
+    assert.equal(again.attempted, 0);
+    assert.equal(again.delivered, 0);
+    assert.equal(again.deduped, 0);
+    assert.equal(again.failed, 1, 'unconfirmed message remains explicitly unresolved');
+    assert.equal(sends, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+test('scheduled brief cannot replay an accepted POST if the sender crashes before receiving a receipt', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-crash-'));
+  const ledger = path.join(dir, 'brief.json');
+  const now = new Date('2026-10-12T07:00:00.000Z');
+  let sends = 0;
+  try {
+    const first = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        sends++;
+        throw new Error('SIMULATED_CRASH_AFTER_REMOTE_ACCEPTANCE');
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+    );
+    await assert.rejects(first.runOnce(now), /SIMULATED_CRASH_AFTER_REMOTE_ACCEPTANCE/);
+    const disk = JSON.parse(await readFile(ledger, 'utf8'));
+    assert.equal(Object.keys(disk.delivered).length, 0);
+    assert.equal(Object.keys(disk.unconfirmed).length, 1,
+      'pre-send reservation survives the simulated process death');
+    const restarted = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => { sends++; return { ok: true as const, attempts: 1 }; },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+    );
+    const result = await restarted.runOnce(now);
+    assert.equal(result.attempted, 0);
+    assert.equal(result.delivered, 0);
+    assert.equal(result.failed, 1);
+    assert.equal(sends, 1, 'no possible second Bot API send');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('explicit Telegram 403 refusal safely releases scheduled brief reservation for a later retry', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-403-'));
+  const ledger = path.join(dir, 'brief.json');
+  const now = new Date('2026-10-12T07:00:00.000Z');
+  let attempts = 0;
+  try {
+    const worker = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        attempts++;
+        return attempts === 1
+          ? { ok: false as const, attempts: 1, skipped: 'DELIVERY_FAILED' as const,
+              errorCode: 'TELEGRAM_HTTP_403' }
+          : { ok: true as const, attempts: 1 };
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+    );
+    const rejected = await worker.runOnce(now);
+    assert.equal(rejected.attempted, 1);
+    assert.equal(rejected.failed, 1);
+    const diskAfterReject = JSON.parse(await readFile(ledger, 'utf8'));
+    assert.equal(Object.keys(diskAfterReject.unconfirmed).length, 0);
+    assert.equal(Object.keys(diskAfterReject.delivered).length, 0);
+    const next = await worker.runOnce(now);
+    assert.equal(next.delivered, 1);
+    assert.equal(attempts, 2);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('in-flight duplicate without Bot API receipt stays unresolved, never counted as SENT', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-duplicate-'));
+  const ledger = path.join(dir, 'brief.json');
+  const now = new Date('2026-10-12T07:00:00.000Z');
+  let calls = 0;
+  try {
+    const first = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => { calls++; return { ok: false as const, attempts: 0,
+        skipped: 'DUPLICATE' as const }; },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+    );
+    const result = await first.runOnce(now);
+    assert.equal(result.deduped, 0);
+    assert.equal(result.delivered, 0);
+    assert.equal(result.failed, 1);
+    const disk = JSON.parse(await readFile(ledger, 'utf8'));
+    assert.equal(Object.keys(disk.delivered).length, 0);
+    assert.equal(Object.keys(disk.unconfirmed).length, 1);
+    const reopened = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => { calls++; return { ok: true as const, attempts: 1 }; },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+    );
+    assert.equal((await reopened.runOnce(now)).attempted, 0);
+    assert.equal(calls, 1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('scheduled brief unknown send outcome does not expire after 14 days when another report is saved', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-no-replay-'));
+  const ledger = path.join(dir, 'brief.json');
+  try {
+    const writer = new FileTelegramIntelligenceStateStore(ledger);
+    const unknown = 'telegram-intelligence:MORNING:2026-09-01:KR_STOCK_ROOM:mock';
+    const newer = 'telegram-intelligence:MORNING:2026-10-12:KR_STOCK_ROOM:mock';
+    await writer.markUnconfirmed(unknown, new Date('2026-09-01T00:00:00.000Z'));
+    await writer.markDelivered(newer, new Date('2026-10-12T00:00:00.000Z'));
+    const reopened = new FileTelegramIntelligenceStateStore(ledger);
+    assert.equal(await reopened.hasUnconfirmed(unknown), true);
+    assert.equal(await reopened.has(newer), true);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('concurrent Telegram ledger readers await initial persistence before dedupe and uncertain checks', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-concurrent-load-'));
+  try {
+    const at = new Date('2026-10-11T10:00:00.000Z');
+    const prefix = 'signal-intelligence-v3:' + 'a'.repeat(40);
+    const v3Sent = prefix + ':candidate:confirmed';
+    const v3Unknown = prefix + ':candidate:uncertain';
+    const v3Path = path.join(dir, 'v3.json');
+    const v3Writer = new SignalIntelligenceTelegramDeliveryState(v3Path);
+    await v3Writer.mark(v3Sent, at);
+    await v3Writer.markUnconfirmed(v3Unknown, at);
+    const v3Reader = new SignalIntelligenceTelegramDeliveryState(v3Path);
+    const [confirmed, unknown] = await Promise.all([
+      v3Reader.has(v3Sent, at), v3Reader.hasUnconfirmed(v3Unknown, at),
+    ]);
+    assert.equal(confirmed, true, 'parallel V3 reader must not skip pending file load');
+    assert.equal(unknown, true, 'parallel V3 reader must not forget uncertain outcome');
+
+    const marketSent = 'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock-one';
+    const marketUnknown = 'telegram-intelligence:MORNING:2026-10-11:US_STOCK_ROOM:mock-two';
+    const marketPath = path.join(dir, 'market.json');
+    const marketWriter = new FileTelegramIntelligenceStateStore(marketPath);
+    await marketWriter.markDelivered(marketSent, at);
+    await marketWriter.markUnconfirmed(marketUnknown, at);
+    const marketReader = new FileTelegramIntelligenceStateStore(marketPath);
+    const [briefConfirmed, briefUnknown] = await Promise.all([
+      marketReader.has(marketSent), marketReader.hasUnconfirmed(marketUnknown),
+    ]);
+    assert.equal(briefConfirmed, true, 'parallel brief reader must wait for ledger load');
+    assert.equal(briefUnknown, true, 'parallel brief reader must preserve unknown send');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('Telegram intelligence worker sends a due KR close report exactly once', async () => {
   delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
   const store = new MemoryTelegramIntelligenceStateStore();
@@ -742,4 +1183,161 @@ test('max-length escaping never truncates inside Telegram HTML tag/entity',()=>{
   assert.ok(output.length<=4096);
   assert.equal((output.match(/<b>/gu)||[]).length,(output.match(/<\/b>/gu)||[]).length);
   assert.doesNotMatch(output,/&(?:a|am|amp|l|lt|g|gt|quo|quot|#|#3|#39)$/u);
+});
+
+test('weekend exchange close/premarket Telegram plans never fire as regular session reports', () => {
+  const audience={membership:'admin' as const};
+  for(const now of [
+    '2026-10-11T07:00:00.000Z', // Sunday 16:00 Seoul (TODAY)
+    '2026-10-10T07:00:00.000Z', // Saturday 16:00 Seoul
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('KR_CLOSING'),now);
+  }
+  for(const now of [
+    '2026-10-11T12:00:00.000Z', // Sunday 08:00 New York EDT
+    '2026-10-10T12:00:00.000Z', // Saturday 08:00 New York EDT
+    '2026-01-11T13:00:00.000Z', // Sunday 08:00 New York EST
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('US_PREMARKET'),now);
+  }
+  // Daily market-condition briefing is still permitted on weekends,
+  // but it can only use data-available/N/A, not synthetic weekend trades.
+  const sundayMorning=dueTelegramIntelligenceReports(
+    new Date('2026-10-10T23:00:00.000Z'),audience);
+  assert.deepEqual(sundayMorning.map(x=>x.kind),['MORNING']);
+  assert.ok(sundayMorning.every(x=>x.orderSubmitted===false &&
+    x.liveTradingAuthority===false));
+});
+
+test('scheduled Telegram market-brief ledger refuses linked files and preserves the original', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-linked-'));
+  try {
+    const original = path.join(dir, 'real.json');
+    const linked = path.join(dir, 'linked.json');
+    const content = JSON.stringify({ version: 1, delivered: {
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock':
+        '2026-10-11T00:00:00.000Z',
+    } });
+    await writeFile(original, content, 'utf8');
+    await symlink(original, linked);
+    const store = new FileTelegramIntelligenceStateStore(linked);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(original, 'utf8'), content);
+    // Same fail-closed behavior on a genuine corrupt file is covered above.
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduled Telegram report never overwrites a separate file through a temporary symlink', async () => {
+  const dir=await mkdtemp(path.join(tmpdir(),'telegram-brief-trap-'));
+  try {
+    const ledger=path.join(dir,'market.json');
+    const unrelated=path.join(dir,'private-note.txt');
+    const trap=`${ledger}.${process.pid}.tmp`;
+    const original='DO_NOT_WRITE_PRIVATE_MATERIAL';
+    await writeFile(unrelated,original,'utf8');
+    await symlink(unrelated,trap);
+    const store=new FileTelegramIntelligenceStateStore(ledger);
+    await assert.rejects(store.markDelivered(
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock',
+      new Date('2026-10-11T00:00:00.000Z')),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),original);
+    await assert.rejects(store.has('telegram-intelligence:anything'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('scheduled market brief errors keep sensitive provider messages out of sanitized log classification', async () => {
+  const sensitive=Error('TELEGRAM_BOT_TOKEN=PRIVATE_SECRET https://private.example/key');
+  const code=safeTelegramBriefFailureCode(sensitive);
+  assert.equal(code,'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE');
+  assert.equal(JSON.stringify({code}).includes('PRIVATE_SECRET'),false);
+  const timedOut=Error('CONFIDENTIAL_DETAILS');
+  timedOut.name='AbortError';
+  assert.equal(safeTelegramBriefFailureCode(timedOut),'TELEGRAM_BRIEF_TIMEOUT');
+  const before=process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  let sent=0,fetches=0;
+  try{
+    process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED='true';
+    const worker=new TelegramIntelligenceWorker(
+      new MemoryTelegramIntelligenceStateStore(),
+      async()=>{sent+=1;return {ok:true as const,attempts:1};},
+      room=>room==='KR_STOCK_ROOM'?'mock-kr-room':null,
+      async()=>{fetches+=1;throw sensitive;},
+    );
+    const result=await worker.runOnce(new Date('2026-10-12T07:00:00.000Z'));
+    assert.equal(fetches,1);
+    assert.equal(result.delivered,1);
+    assert.equal(sent,1);
+    assert.equal(result.liveTradingAuthority,false);
+    assert.equal(result.orderSubmitted,false);
+  }finally{
+    if(before===undefined)delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=before;
+  }
+});
+
+test('member watchlist BATCHED personal digest is counted as durable queue, never delivered or skipped', async () => {
+  const event = {
+    type:'NEW_CANDIDATE' as const,
+    id:'US_STOCK|AAPL|SWING|60m|BUY',
+    serviceSha:'a'.repeat(40),
+    market:'US_STOCK' as const,
+    symbol:'AAPL',
+    strategy:'SWING',
+    timeframe:'60m',
+    direction:'BUY' as const,
+    validationTier:'RESEARCH_CANDIDATE' as const,
+    occurredAt:'2026-10-11T06:00:00.000Z',
+  };
+  const accepted=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:true,deliveryId:'mock-outbox-id',
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(accepted.eligible,true);
+  assert.equal(accepted.attempted,1);
+  assert.equal(accepted.queued,1,'a saved digest is a real queued alert');
+  assert.equal(accepted.delivered,0,'a saved digest is NOT Telegram Bot API acceptance');
+  assert.equal(accepted.skipped,0,'queued digest must not be reported as suppressed');
+  assert.equal(accepted.failed,0);
+  assert.equal(accepted.reason,'COMPLETE');
+
+  const refused=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:false,deliveryId:null,
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(refused.queued,0);
+  assert.equal(refused.delivered,0);
+  assert.equal(refused.skipped,1,'a rejected digest entry is not a queued success');
 });

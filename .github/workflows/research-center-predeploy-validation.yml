@@ -11,6 +11,8 @@ on:
       - '.github/workflows/prediction-lab-52d-validation.yml'
       - '.github/workflows/prediction-lab-canonical-shadow-cycle.yml'
       - 'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js'
+      - 'market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v2.json'
+      - 'market-prediction-lab/tests/paper-risk-policy-human-approval-v2.test.js'
       - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
       - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
       - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
@@ -125,6 +127,14 @@ jobs:
           node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
           node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
 
+      - name: Assert formula queue missing producer and Paper consumer do not appear ready
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq "if counts['PASS'] or registered:" research-dashboard/server.py
+          grep -Fq "input.producerBound !== false || input.paperConsumerBound !== false" api-server/src/services/research-center-readonly-contract.service.ts
+          grep -Fq 'Paper 미연결' stock-analyzer/src/pages/research-center.tsx
+
       - name: Backend and frontend semantic typecheck
         run: |
           set -Eeuo pipefail
@@ -142,11 +152,16 @@ jobs:
           pnpm exec esbuild src/routes/paper-journal.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/paper-journal-route.test.cjs"
           pnpm exec esbuild src/routes/market-summary-availability.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-video-readback.test.cjs"
           pnpm exec esbuild src/services/research-workspace-authorization-v5.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-workspace-auth.test.cjs"
+          pnpm exec esbuild src/routes/research-overview.test.ts --bundle --platform=node --format=cjs --target=node22 --outfile="$RUNNER_TEMP/research-member-overview.test.cjs"
 
       - name: Run focused backend Research Center contracts
         run: |
           set -Eeuo pipefail
           node --test             "$RUNNER_TEMP/research-center-readonly.test.cjs"             "$RUNNER_TEMP/research-promotion-bridge.test.cjs"             "$RUNNER_TEMP/research-adoption-review.test.cjs"             "$RUNNER_TEMP/strategy-promotion-route.test.cjs"             "$RUNNER_TEMP/paper-journal-route.test.cjs"             "$RUNNER_TEMP/research-video-readback.test.cjs"             "$RUNNER_TEMP/research-workspace-auth.test.cjs"
+          node --test "$RUNNER_TEMP/research-member-overview.test.cjs"
+          node --test research-production/test/research-owner-criteria.test.mjs research-production/test/research-free-policy-confirmation.test.mjs research-production/test/research-production-activation-workflow.test.mjs
+          node --test market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js market-prediction-lab/tests/paper-risk-policy-human-approval-v2.test.js
+          node --test .github/tests/research-center-batch-scope.test.mjs
 
       - name: Validate Research Dashboard runtime contract
         working-directory: research-dashboard
@@ -331,7 +346,7 @@ jobs:
       - name: Research Center overview, evidence, Paper and abort browser regressions
         run: |
           set -Eeuo pipefail
-          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts             e2e/research-copilot.spec.ts
 
       - name: Research Video and Workspace browser regressions
         run: |

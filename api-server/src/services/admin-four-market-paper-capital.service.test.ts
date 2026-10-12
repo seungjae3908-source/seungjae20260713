@@ -6,6 +6,9 @@ import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_TOTAL_INITIAL_KRW,
   adminPaperWalletId, adminPaperMarketFromPlan, adminMarketPaperRiskBudget,
   buildAdminFourMarketPaperBootstrap, inspectAdminFourMarketPaperWallets,
+  buildMemberFourMarketPaperBootstrap, inspectMemberFourMarketPaperWallets,
+  memberPaperWalletId, memberMarketPaperRiskBudget, projectMemberMarketCapital,
+  MEMBER_MARKET_INITIAL_KRW, MEMBER_TOTAL_INITIAL_KRW,
   projectAdminMarketCapital,
   adminMarketCurrentEpochSettlementScope,
   adminMarketPaperAvailableBalance,
@@ -33,6 +36,40 @@ test('admin receives exactly four independent 1m Paper wallets in one epoch', ()
     assert.equal(result.marketWallets[market].openedAtMs, AT.getTime());
   }
 });
+test('member receives four independent 1m Paper wallets with the same 50/50 compound policy', () => {
+  const initial = buildMemberFourMarketPaperBootstrap(AT);
+  assert.equal(initial.length, 4);
+  assert.deepEqual(initial.map((row) => row.id),
+    ADMIN_FOUR_PAPER_MARKETS.map(memberPaperWalletId));
+  assert.equal(initial.reduce((sum, row) => sum + Number(row.payload.initialBalance), 0),
+    MEMBER_TOTAL_INITIAL_KRW);
+  const stored = initial.map((row) => ({
+    ...row, createdAt: AT.toISOString(), serverUpdatedAt: AT.toISOString(),
+  }));
+  const inspection = inspectMemberFourMarketPaperWallets(stored, AT.getTime());
+  assert.equal(inspection.ready, true);
+  assert.equal(inspection.role, 'member');
+  assert.equal(inspection.initialCapitalKrw, 4_000_000);
+  for (const market of ADMIN_FOUR_PAPER_MARKETS) {
+    assert.equal(inspection.marketWallets[market].equityKrw, MEMBER_MARKET_INITIAL_KRW);
+  }
+
+  const settled = projectMemberMarketCapital('crypto_spot', [{
+    id: 'member-spot-profit', market: 'crypto_spot',
+    closedAt: new Date(AT.getTime() + 1_000).toISOString(),
+    netPnlKrw: 100_000, fullCostsVerified: true, closeTimeFxVerified: true,
+  }], AT.getTime() + 5_000);
+  assert.equal(settled.operatingCapitalKrw, 1_050_000);
+  assert.equal(settled.reserveKrw, 50_000);
+  assert.equal(settled.reserveWithdrawalAutomatic, false);
+  const budget = memberMarketPaperRiskBudget({
+    market: 'crypto_spot', records: stored, openPlans: [],
+    verifiedCapital: settled, nowMs: AT.getTime() + 5_000,
+  });
+  assert.equal(budget.ready, true);
+  assert.equal(budget.availableToTradeKrw, 1_050_000);
+  assert.equal(budget.reserveKrw, 50_000);
+});
 test('tampered, missing, tombstoned, staggered and legacy Paper wallets fail closed', () => {
   const w = wallets();
   const missing = inspectAdminFourMarketPaperWallets(w.slice(1), AT.getTime());
@@ -56,6 +93,7 @@ test('tampered, missing, tombstoned, staggered and legacy Paper wallets fail clo
 });
 test('all four markets have separate, non-cross-subsidizing trading budgets', () => {
   const w = wallets();
+  const evaluationMs = AT.getTime() + 24 * 60 * 60_000;
   const us = {
     exchange: 'kiwoom', market: 'US', accountMode: 'paper',
     executionMode: 'automatic', estimatedKrw: 700_000,
@@ -66,20 +104,24 @@ test('all four markets have separate, non-cross-subsidizing trading budgets', ()
     executionMode: 'automatic', estimatedKrw: 100_000,
     createdAt: new Date(AT.getTime() + 1_000).toISOString(),
   } as TradingPlan;
-  const state = [...w];
-  const poorerUS = state.map((row) => row.id === adminPaperWalletId('us_stock')
-    ? { ...row, payload: { ...row.payload, equity: 900_000, cashBalance: 900_000, availableMargin: 900_000 } } : row);
+  // Seed wallets are immutable. A loss is represented only by canonical,
+  // fully-costed settlement evidence for the exact market lane.
+  const usCapital = projectAdminMarketCapital('us_stock', [{
+    id: 'us-loss', market: 'us_stock',
+    closedAt: new Date(AT.getTime() + 2_000).toISOString(),
+    netPnlKrw: -100_000, fullCostsVerified: true, closeTimeFxVerified: true,
+  }], evaluationMs);
   const usBudget = adminMarketPaperRiskBudget({
-    market: 'us_stock', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
-    verifiedCapital: projectAdminMarketCapital('us_stock', [], AT.getTime() + 5_000),
+    market: 'us_stock', records: w, openPlans: [us, spot], nowMs: evaluationMs,
+    verifiedCapital: usCapital,
   });
   const krBudget = adminMarketPaperRiskBudget({
-    market: 'domestic_stock', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
-    verifiedCapital: projectAdminMarketCapital('domestic_stock', [], AT.getTime() + 5_000),
+    market: 'domestic_stock', records: w, openPlans: [us, spot], nowMs: evaluationMs,
+    verifiedCapital: projectAdminMarketCapital('domestic_stock', [], evaluationMs),
   });
   const spotBudget = adminMarketPaperRiskBudget({
-    market: 'crypto_spot', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
-    verifiedCapital: projectAdminMarketCapital('crypto_spot', [], AT.getTime() + 5_000),
+    market: 'crypto_spot', records: w, openPlans: [us, spot], nowMs: evaluationMs,
+    verifiedCapital: projectAdminMarketCapital('crypto_spot', [], evaluationMs),
   });
   assert.equal(usBudget.availableToTradeKrw, 200_000);
   assert.equal(krBudget.availableToTradeKrw, 1_000_000);

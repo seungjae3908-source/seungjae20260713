@@ -41,12 +41,15 @@ const files = Object.fromEntries(await Promise.all([
   'stock-analyzer/src/App.tsx',
   'stock-analyzer/src/lib/app-navigation.ts',
   'stock-analyzer/src/lib/research-center.ts',
+  'stock-analyzer/src/pages/research-center.tsx',
+  'research-dashboard/server.py',
   'stock-analyzer/src/lib/research-center-product.ts',
   'stock-analyzer/src/lib/research-journal-binding.ts',
   'stock-analyzer/src/lib/strategy-promotion.ts',
   'stock-analyzer/src/components/research-video-source-panel.tsx',
   'api-server/src/routes/index.ts',
   'api-server/src/routes/admin.ts',
+  'api-server/src/routes/research-overview.ts',
   'api-server/src/routes/video-research-evidence.ts',
   'api-server/src/routes/video-research-source-evidence.ts',
   'api-server/src/routes/research-workspace.ts',
@@ -65,6 +68,8 @@ const files = Object.fromEntries(await Promise.all([
 const app = files['stock-analyzer/src/App.tsx'];
 const nav = files['stock-analyzer/src/lib/app-navigation.ts'];
 const researchClient = files['stock-analyzer/src/lib/research-center.ts'];
+const researchPage = files['stock-analyzer/src/pages/research-center.tsx'];
+const dashboardSource = files['research-dashboard/server.py'];
 const product = files['stock-analyzer/src/lib/research-center-product.ts'];
 const journalClient = files['stock-analyzer/src/lib/research-journal-binding.ts'];
 const promotionClient = files['stock-analyzer/src/lib/strategy-promotion.ts'];
@@ -79,10 +84,26 @@ const paperRoute = files['api-server/src/routes/paper-journal.ts'];
 const overviewContract = files['api-server/src/services/research-center-readonly-contract.service.ts'];
 const candidateReader = files['market-prediction-lab/src/frozen-candidate-performance-reader-v1.js'];
 
-requireText(app, "function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }", 'frontend Research Center capability');
+requireText(app, "function ResearchCenterAccess() { return gated('canAccessBasicInfo', <ResearchCenterPage />); }", 'frontend read-only Research Center capability');
 requireText(app, '<Route path="/research-center" component={ResearchCenterAccess} />', 'frontend Research Center route');
-requireRegex(nav, /id:\s*'research-center'[\s\S]{0,220}capability:\s*'canManageMembers'/u, 'navigation Research Center capability');
-requireText(researchClient, "authorizedFetch('/api/admin/research/overview'", 'overview client endpoint');
+requireRegex(nav, /id:\s*'research-center'[\s\S]{0,220}capability:\s*'canAccessBasicInfo'/u, 'navigation read-only Research Center capability');
+requireText(researchClient, "'/api/admin/research/overview'", 'admin overview client endpoint');
+requireText(researchClient, "'/api/research/overview'", 'member overview client endpoint');
+requireText(routeIndex, "router.use('/research', requireCapability('canAccessBasicInfo'), researchOverviewRouter);", 'authenticated member read-only mount');
+const memberOverview = files['api-server/src/routes/research-overview.ts'];
+requireText(memberOverview, "router.get('/overview'", 'member GET-only overview');
+requireText(memberOverview, 'sanitizeResearchCenterOverview', 'member overview safety sanitizer');
+requireText(memberOverview, 'http://127.0.0.1:18090/api/research/overview', 'member fixed loopback endpoint');
+requireText(memberOverview, '10_000', 'member bounded readback');
+for (const method of ['post', 'put', 'patch', 'delete']) forbidText(memberOverview, `router.${method}(`, 'member mutation boundary');
+requireText(researchClient, 'export interface ResearchFormulaBacktestReadback', 'bounded formula readback DTO');
+requireText(researchPage, 'data-testid="research-formula-backtest-status"', 'visible diagnostics');
+requireText(researchPage, 'Paper 미연결', 'missing consumer must remain explicit');
+requireText(overviewContract, 'function sanitizeFormulaBacktestReadback', 'formula DTO sanitizer');
+requireText(overviewContract, 'input.producerBound !== false || input.paperConsumerBound !== false', 'no unverified producer or consumer claim');
+requireText(dashboardSource, 'def summarize_formula_queue_readback(summary, registry):', 'dashboard readback');
+requireText(dashboardSource, "if counts['PASS'] or registered:", 'no TRAIN-only PASS or Paper registry promotion');
+requireText(dashboardSource, "'producerBound': False, 'paperConsumerBound': False", 'unattested inputs fail-closed');
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
@@ -101,7 +122,7 @@ requireText(videoSource, 'snapshotBound', 'video automation lineage binding');
 requireText(videoSource, 'VIDEO_RUNTIME_MAX_AGE_MS', 'video runtime bounded freshness');
 requireText(videoSource, 'VIDEO_RESEARCH_SNAPSHOT_STALE', 'video stale snapshot fail-closed state');
 requireText(videoClient, 'snapshotBound', 'browser video lineage parser');
-requireText(videoClient, '현재 snapshot과 lineage 미결합', 'browser stale automation fail-closed state');
+requireText(videoClient, '기록 연결 확인 필요', 'browser stale automation fail-closed state');
 forbidText(videoSource, "router.post('/',", 'video source write route');
 forbidText(videoSource, "router.put('/',", 'video source write route');
 forbidText(videoSource, "router.delete('/',", 'video source write route');
@@ -186,6 +207,9 @@ const technicalFailure = multiMarket.slice(failureStart, nextJob);
 forbidText(technicalFailure, "steps.market_suite.outputs.research_ready != 'true'", 'Multi-Market expected research hold');
 requireText(technicalFailure, "steps.research_hold.outcome == 'failure'", 'Multi-Market research-hold validation failure guard');
 
+requireText(researchPage, 'data-testid="research-paper-target-capital"', 'Paper KRW 1M target not a funded balance');
+requireText(researchPage, '1,000,000원 (KRW)', 'Paper canonical target');
+requireText(researchPage, '평가금액은 미측정', 'Paper funding evidence missing');
 requireText(overviewContract, "safety.readOnlyDashboard !== true", 'overview read-only safety sanitizer');
 requireText(overviewContract, "safety.liveTrading !== false", 'overview live-trading safety sanitizer');
 requireText(overviewContract, "safety.privateApi !== false", 'overview private-API safety sanitizer');

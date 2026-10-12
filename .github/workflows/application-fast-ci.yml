@@ -146,6 +146,10 @@ jobs:
         if: steps.impact.outputs.backend == 'true'
         run: pnpm --dir api-server run test:unit
 
+      - name: Automatic LIVE-only offline safety preflight
+        if: steps.impact.outputs.backend == 'true' || steps.impact.outputs.shared == 'true'
+        run: pnpm --dir api-server run test:auto-live:preflight
+
       - name: Phase 2 impacted tests
         if: steps.impact.outputs.phase2 == 'true'
         run: pnpm --dir api-server run test:phase2

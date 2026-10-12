@@ -33,6 +33,7 @@ TAG="# stock-app-paper-forward-v1"
 CRON_EXPRESSION="*/15 * * * *"
 CANONICAL_CYCLE_MS="14400000"
 OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false}"
+AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED="${AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED:-false}"
 # The scheduled runner owns this explicit read-only adapter. #772 owns record
 # validation, not a filename or investment-policy defaults.
 PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"
@@ -84,6 +85,11 @@ trap restore_on_error EXIT
 
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "exact lowercase 40-character SHA required" 2
 [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || "$OUTCOME_ACCUMULATION_ENABLED" == "false" ]] || fail "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED must be true or false" 2
+[[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" || "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "false" ]] || fail "AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED must be true or false" 2
+if [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]]; then
+  [[ "$OUTCOME_ACCUMULATION_ENABLED" == "false" ]] || fail "Auto signal refresh cannot enable Paper outcome authority" 2
+  CANONICAL_CYCLE_MS="900000"
+fi
 [[ -r "$DEPLOY_MARKER" ]] || fail "production deploy marker missing" 3
 DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || fail "production SHA mismatch: $DEPLOYED_SHA" 4
@@ -140,6 +146,34 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
+# Read-only mode identity preflight precedes every installer filesystem mutation.
+# SHA equality alone cannot authorize reusing a different cadence/authority.
+STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
+if [[ -r "$STATE_FILE" ]]; then
+  "$NODE_BIN" --input-type=module - "$SOURCE_LAB" "$STATE_FILE" "$TARGET_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" <<'NODE'
+import fs from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [sourceLab, statePath, targetSha, outcome, autoRefresh] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  if (!/^[0-9a-f]{40}$/.test(String(state?.identity?.researchCodeSha ?? ''))) throw new Error();
+  if (state.identity.researchCodeSha === targetSha) {
+    const { assertPaperForwardScheduleStateMode } = await import(
+      pathToFileURL(join(sourceLab, 'src', 'paper-forward-schedule-runtime-base-v1.js')).href);
+    assertPaperForwardScheduleStateMode(state, {
+      researchCodeSha: targetSha,
+      outcomeAccumulationEnabled: outcome === 'true',
+      authoritativeAccountRequired: outcome === 'true',
+      autoLiveSignalRefresh: autoRefresh === 'true',
+    });
+  }
+} catch {
+  process.stderr.write('[paper-forward-activate] PAPER_FORWARD_EXISTING_STATE_MODE_INCOMPATIBLE\n');
+  process.exit(11);
+}
+NODE
+fi
 mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 
@@ -396,6 +430,7 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_RESEARCH_SHA='$TARGET_SHA' \
   PAPER_FORWARD_ACTIVATION_AT_MS='$ACTIVATION_AT_MS' \
   PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED' \
+  AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED' \
   RESEARCH_PRODUCTION='$OUTCOME_ACCUMULATION_ENABLED' \
   PAPER_FORWARD_PUBLISHER_BINDING_PATH='$PUBLISHER_BINDING_PATH' \
   PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH' \
@@ -444,9 +479,9 @@ MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 
 RUNTIME_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
-"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" <<'NODE'
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" "$CANONICAL_CYCLE_MS" <<'NODE'
 const fs = require('node:fs');
-const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw, snapshotBridgeRaw, snapshotSourceShaBeforeRaw, snapshotArchivePathRaw] = process.argv.slice(2);
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw, snapshotBridgeRaw, snapshotSourceShaBeforeRaw, snapshotArchivePathRaw, cycleIntervalRaw] = process.argv.slice(2);
 const outcomeAccumulationEnabled = outcomeAccumulationRaw === 'true';
 const snapshotBridgeApplied = snapshotBridgeRaw === 'true';
 const value = {
@@ -457,7 +492,8 @@ const value = {
   activationAtMs: Number(activationAtMs),
   installedAt: new Date(Number(activationAtMs)).toISOString(),
   pollCadence: 'EVERY_15_MINUTES',
-  canonicalCycleIntervalMs: 14400000,
+  canonicalCycleIntervalMs: Number(cycleIntervalRaw),
+  autoLivePublicSignalRefreshEnabled: Number(cycleIntervalRaw) === 900000,
   runtimeDigest,
   cronHash,
   crontabBackupPath: backupPath,

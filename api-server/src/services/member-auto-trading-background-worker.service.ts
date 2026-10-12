@@ -1,3 +1,8 @@
+import { automaticLiveUnrealizedPnlKrw } from './automatic-live-unrealized-risk.service';
+import { readAutomaticFuturesNativeProtection, sendBitgetNativeProtectionReadonly } from './bitget-native-protection-readonly.service';
+import { decryptTradingCredentials } from './trade-credential-vault.service';
+import type { BitgetCredentials } from './trade-exchange-adapters.service';
+import { issueProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -17,12 +22,15 @@ import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
-import { adminFourMarketPaperCapitalReadback } from './admin-four-market-paper-readback.service';
+import {
+  adminFourMarketPaperCapitalReadback,
+  memberFourMarketPaperCapitalReadback,
+} from './admin-four-market-paper-readback.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS,
   ADMIN_MARKET_INITIAL_KRW,
@@ -31,7 +39,12 @@ import {
   adminMarketPaperRiskBudget,
   adminMarketPaperAvailableBalance,
   inspectAdminFourMarketPaperWallets,
+  inspectMemberFourMarketPaperWallets,
+  memberMarketPaperRiskBudget,
   projectAdminMarketCapital,
+  projectMemberMarketCapital,
+  type FourMarketPaperWalletRole,
+  type VerifiedMarketSettlement,
 } from './admin-four-market-paper-capital.service';
 import type {
   ExchangeConnection,
@@ -44,12 +57,25 @@ import type {
   TradingSide,
 } from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
+import {
   resolveMemberAutoTradingKrwRate,
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
+import {
+  canonicalAutomaticLivePositions,
+  partitionAutomaticLiveProviderPositions,
+  assertAutomaticLiveSnapshotIsolation,
+  assertAutomaticLiveTargetIsolation,
+  type AutomaticLiveOwnedPosition,
+} from './automatic-live-position-isolation.service';
 import {
   readTradeAutomationJournalPayloads,
   tradeAutomationJournalPayloadsFromSnapshot,
@@ -74,6 +100,7 @@ import {
   deriveRulePackPilotExecutionPolicy,
   issueRulePackPilotDynamicCapReceipt,
   readRulePackPilotCapitalState,
+  rulePackPilotInitialCapitalForPolicy,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
 import {
@@ -88,6 +115,25 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+function maximumSingleEntryKrwForProfile(profile: MemberAccessProfile) {
+  return hasCapability(profile, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+export function currentLiveMemberAccessMatchesBatch(
+  profile: MemberAccessProfile, expectedMaximumSingleEntryKrw: number | undefined,
+  plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>,
+) {
+  if (plan.accountMode !== 'live' || !hasCapability(profile, 'canAccessAutoTrading')
+    || !hasCapability(profile, 'canPlaceOrders')
+    || expectedMaximumSingleEntryKrw !== maximumSingleEntryKrwForProfile(profile)) return false;
+  if (plan.exchange !== 'bitget') return true;
+  const maximumLeverage = hasCapability(profile, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+  return hasCapability(profile, 'canAccessFutures') && Number.isInteger(plan.leverage)
+    && Number(plan.leverage) >= 2 && Number(plan.leverage) <= maximumLeverage;
+}
 // A READY handoff without entries otherwise has no per-entry freshness clock.
 // Keep a bounded publisher heartbeat even during quiet market periods.
 const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
@@ -281,8 +327,17 @@ export function automaticPaperLegacyEpochIsolationReadiness(
   };
 }
 
-export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
-export const AUTOMATIC_PAPER_INITIAL_KRW = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m';
+export const AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS = Object.freeze([
+  'automatic-paper-account-v1',
+] as const);
+export function isAutomaticPaperAccountId(value: unknown): boolean {
+  return value === AUTOMATIC_PAPER_ACCOUNT_ID
+    || AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS.some((id) => id === value);
+}
+// Every member starts the current automatic Paper epoch with one million won.
+// The legacy 500k account remains immutable history and is never refilled.
+export const AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -304,9 +359,11 @@ type MemberRuntimeState = Readonly<{
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
   consecutiveLosses: number;
-  adminMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
-  adminMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
-  adminMarketCapital: Record<AdminPaperMarket, ReturnType<typeof projectAdminMarketCapital>> | null;
+  fourMarketWalletRole: FourMarketPaperWalletRole | null;
+  fourMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
+  fourMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
+  fourMarketCapital: Record<AdminPaperMarket,
+    ReturnType<typeof projectAdminMarketCapital> | ReturnType<typeof projectMemberMarketCapital>> | null;
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
 }>;
@@ -319,7 +376,10 @@ export interface MemberAutoTradingBackgroundSource {
   memberTelegramConnected?(userId: string): Promise<boolean>;
   /** Recheck V2 database protections every tick. Missing RPC means FAIL-CLOSED. */
   adminPaperDatabaseGuardReady?(): Promise<boolean>;
+  fourMarketPaperDatabaseGuardReady?(): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
+  /** Current owner capability/role read, never a cached batch permission. */
+  revalidateLiveMemberAccess?(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
   resolveFx(
@@ -327,6 +387,9 @@ export interface MemberAutoTradingBackgroundSource {
     nowMs: number,
   ): Promise<MemberAutoTradingFxQuote>;
   readLiveAccountSnapshot(userId: string, provider: AccountProvider): Promise<CanonicalAccountSnapshot>;
+  /** Read-only native protection watch. Missing/failed proof blocks new entries,
+   * not observation of existing AUTO-owned positions or guarded exits. */
+  auditNativeFuturesProtection?(userId: string, plans: readonly TradingPlan[], orders: readonly TradingOrder[]): Promise<boolean>;
   readMarketMark(
     market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
     symbol: string,
@@ -342,7 +405,10 @@ export interface MemberAutoTradingBackgroundSource {
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
+  nativeProtectionErrorCode: string | null;
   handoffStatus: 'MISSING' | 'BLOCKED_DATA' | 'READY';
+  /** Sanitized code only; never include file paths, credentials or candidate payloads. */
+  handoffErrorCode: string | null;
   handoffReady: boolean;
   newEntriesFailClosed: boolean;
   liveEntriesArmed: boolean;
@@ -388,11 +454,13 @@ export type MemberAutoTradingBackgroundRunResult = {
 };
 
 export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
+  nativeProtectionErrorCode: string | null;
   enabled: boolean;
   liveModeRequested: boolean;
   lastTickAt: string | null;
   tickOk: boolean | null;
   handoffStatus: MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  handoffErrorCode: string | null;
   handoffReady: boolean;
   newEntriesFailClosed: boolean;
   liveEntryArmPresent: boolean;
@@ -418,12 +486,16 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   errorCode: string | null;
 }>;
 
+let backgroundWorkerHandle: { stop(): void } | null = null;
+let backgroundWorkerGeneration = 0;
 let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.freeze({
+  nativeProtectionErrorCode: null,
   enabled: false,
   liveModeRequested: false,
   lastTickAt: null,
   tickOk: null,
   handoffStatus: 'MISSING',
+  handoffErrorCode: null,
   handoffReady: false,
   newEntriesFailClosed: true,
   liveEntryArmPresent: false,
@@ -550,6 +622,23 @@ function recentMovePercent(entry: MemberAutoTradingPaperHandoffEntry, observedAt
   return (midpoint - reference) / reference * 100;
 }
 
+export function automaticTradingStoredEntryReasons(entry: MemberAutoTradingPaperHandoffEntry): string[] {
+  // Capture observed context at plan creation, not a retrospective AI explanation.
+  const learning = record(entry.signal.learningSnapshot);
+  const observedReasons = Array.isArray(learning?.reasons)
+    ? learning.reasons.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      .slice(0, 10).map(value => value.trim().slice(0, 300)) : [];
+  const reasons = [
+    ...observedReasons,
+    '진입 전략: ' + entry.identity.strategyId + ' · 버전 ' + entry.identity.strategyVersion,
+    '신호 방향: ' + entry.identity.direction + ' · 주기 ' + entry.identity.timeframe,
+  ];
+  if (entry.identity.regime) reasons.push('진입 당시 시장 국면: ' + entry.identity.regime);
+  if (finite(entry.riskEvidence.actualRiskPercent)) reasons.push('진입 당시 검증 위험비율: ' + entry.riskEvidence.actualRiskPercent + '%');
+  if (finite(entry.riskEvidence.riskReward1)) reasons.push('진입 당시 목표 1 손익비: ' + entry.riskEvidence.riskReward1);
+  return reasons;
+}
+
 function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
   const learning = record(entry.signal.learningSnapshot);
   const stop = Number(learning?.stopLoss);
@@ -566,10 +655,12 @@ function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
   return { stop, targets };
 }
 
-function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
+export function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
-  const rate = Number(cost?.[key]);
-  return finite(rate) && rate >= 0 ? rate * 100 : null;
+  // No coercion: null, strings, whitespace, false and arrays are not
+  // attested numeric policy rates. Only an explicit finite number qualifies.
+  const rate = cost?.[key];
+  return finite(rate) && rate >= 0 && rate <= 1 ? rate * 100 : null;
 }
 
 // Only canonical, signal-bound upstream AI evidence may authorize the formula
@@ -641,6 +732,7 @@ function validateFormulaAiPilotEntry(
   pilot: RulePackPilotCapitalState,
   estimatedKrw: number,
   nowMs: number,
+  discoveryEntryCapRequired: boolean,
 ) {
   if (member.policy.pilotStage !== 'formula-ai-exception') return;
   const decision = evaluateRulePackPilotEntryGuard({
@@ -653,6 +745,7 @@ function validateFormulaAiPilotEntry(
     policyTotalCapitalKrw: member.policy.totalCapitalKrw,
     openLivePositions: openAutomaticPlans(runtime, 'live').length,
     nowMs,
+    discoveryEntryCapRequired,
   });
   if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
@@ -671,16 +764,48 @@ export function automaticLiveStrategyAllowlisted(
 }
 
 /**
- * Shared admission invariant: a new automatic Paper campaign cannot claim
- * 500,000 KRW collateral while its saved member-wide capital budget remains
- * below that baseline. This does NOT disable risk-reducing exit supervision.
+ * A V2 Paper lane owns its own one-million-won operating balance. Its
+ * settlement-backed 50% compound growth may expand Paper sizing only; it
+ * never changes the stored member policy or any Live/provider authority.
+ */
+export function deriveFourMarketPaperExecutionPolicy(
+  policy: TradingPolicy,
+  market: AdminPaperMarket,
+  capital: Readonly<{
+    settlementReady: boolean;
+    newEntriesAllowed: boolean;
+    operatingCapitalKrw: number;
+  }>,
+): TradingPolicy {
+  const laneCapital = Number(capital.operatingCapitalKrw);
+  if (!capital.settlementReady || !capital.newEntriesAllowed
+    || !finite(laneCapital) || laneCapital <= 0) {
+    throw new Error('BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY');
+  }
+  return Object.freeze({
+    ...policy,
+    totalCapitalKrw: laneCapital,
+    maxOrderKrw: laneCapital,
+    maxInstrumentKrw: laneCapital,
+    maxAssetClassKrw: Object.freeze({
+      ...policy.maxAssetClassKrw,
+      [market]: laneCapital,
+    }),
+  });
+}
+
+/**
+ * Paper collateral is owned by the server-created Paper wallet and is
+ * intentionally independent from the smaller role-scoped LIVE budget. The
+ * stored policy must still contain a finite positive operating budget, but a
+ * 500k LIVE member policy must not invalidate a 1M Paper lane.
  */
 export function automaticPaperCapitalPolicyReady(
   policy: Pick<TradingPolicy, 'totalCapitalKrw'>,
 ) {
   return typeof policy.totalCapitalKrw === 'number'
     && Number.isFinite(policy.totalCapitalKrw)
-    && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
+    && policy.totalCapitalKrw >= 10_000;
 }
 
 function policyAllowsEntry(
@@ -728,7 +853,8 @@ type TrackedAutomaticPosition = Readonly<{
 }>;
 
 function trackedAutomaticPositions(
-  runtime: MemberRuntimeState,
+  runtime: Pick<MemberRuntimeState,
+    'plans' | 'orders' | 'paperWalletOpenedAtMs' | 'snapshotObservedAtMs'>,
   accountMode: 'paper' | 'live',
 ): TrackedAutomaticPosition[] {
   const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
@@ -820,6 +946,7 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
   nowMs: number,
   equityKrw: number,
   paperWalletOpenedAtMs: number | null = null,
+  verifiedMarketSettlements: readonly VerifiedMarketSettlement[] | null = null,
 ): Readonly<{
   ready: boolean;
   blockers: readonly string[];
@@ -897,6 +1024,31 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
   if (journal.integrityIssues.length) add('BACKGROUND_PAPER_JOURNAL_INTEGRITY_REQUIRED');
   const closed = journal.trades.filter((trade) =>
     trade.source === 'APP_PAPER' && trade.status === 'CLOSED');
+  const verifiedById = new Map<string, VerifiedMarketSettlement>();
+  if (verifiedMarketSettlements !== null) {
+    if (!Array.isArray(verifiedMarketSettlements)
+      || verifiedMarketSettlements.length !== closed.length) {
+      add('BACKGROUND_PAPER_VERIFIED_CLOSED_SET_MISMATCH');
+    } else {
+      const laneMarkets = new Set(scopedPlans.filter(plan =>
+        plan.accountMode === 'paper' && plan.executionMode === 'automatic')
+        .map(adminPaperMarketFromPlan));
+      for (const receipt of verifiedMarketSettlements) {
+        const observedAt = Date.parse(receipt.closedAt);
+        if (!receipt.id || verifiedById.has(receipt.id)
+          || (laneMarkets.size && !laneMarkets.has(receipt.market))
+          || !Number.isFinite(observedAt) || observedAt > nowMs + 5_000
+          || !Number.isFinite(receipt.netPnlKrw)
+          || receipt.fullCostsVerified !== true
+          || receipt.closeTimeFxVerified !== true) {
+          add('BACKGROUND_PAPER_VERIFIED_CLOSED_RECEIPT_INVALID');
+          continue;
+        }
+        verifiedById.set(receipt.id, receipt);
+      }
+    }
+  }
+  const settled: Array<{ id: string; closedAt: string; netPnlKrw: number }> = [];
   for (const trade of closed) {
     if (trade.netPnl == null || !finite(trade.netPnl)
       || trade.costEvidence.status !== 'READY'
@@ -904,19 +1056,33 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
       || trade.tax == null || !finite(trade.tax)) {
       add('BACKGROUND_PAPER_SETTLEMENT_FULL_COST_REQUIRED');
     }
-    // Do not convert USD/USDT to KRW with a current, stale or made-up FX
-    // quote. Cross-currency settlement needs actual close-time FX evidence.
-    if (trade.currency !== 'KRW') add('BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED');
+    const receipt = verifiedMarketSettlements === null ? null : verifiedById.get(trade.id);
+    if (verifiedMarketSettlements !== null) {
+      // This is an exact-owner, exact-epoch, fully reconciled settlement
+      // generated by the *same canonical ledger*; never infer FX from a quote
+      // or trust browser/manual journal PnL.
+      if (!receipt || Date.parse(receipt.closedAt) !== Date.parse(trade.closedAt ?? '')) {
+        add('BACKGROUND_PAPER_VERIFIED_CLOSED_SET_MISMATCH');
+      }
+    } else if (trade.currency !== 'KRW') {
+      add('BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED');
+    }
+    const netPnlKrw = receipt?.netPnlKrw ?? trade.netPnl;
+    if (netPnlKrw != null && Number.isFinite(netPnlKrw) && trade.closedAt) {
+      settled.push({ id: trade.id, closedAt: trade.closedAt, netPnlKrw });
+    }
   }
-  if (blockers.length) return failed();
-  const sorted = [...closed].sort((a, b) =>
-    Date.parse(b.closedAt ?? '') - Date.parse(a.closedAt ?? '')
-      || a.id.localeCompare(b.id));
+  if (verifiedMarketSettlements !== null && verifiedById.size !== closed.length) {
+    add('BACKGROUND_PAPER_VERIFIED_CLOSED_SET_MISMATCH');
+  }
+  if (blockers.length || settled.length !== closed.length) return failed();
+  const sorted = settled.sort((a, b) =>
+    Date.parse(b.closedAt) - Date.parse(a.closedAt) || a.id.localeCompare(b.id));
   const pnlSince = (cutoff: number) => sorted.reduce((sum, row) =>
-    Date.parse(row.closedAt ?? '') >= cutoff ? sum + row.netPnl! : sum, 0);
+    Date.parse(row.closedAt) >= cutoff ? sum + row.netPnlKrw : sum, 0);
   let consecutiveLosses = 0;
   for (const trade of sorted) {
-    if (trade.netPnl! < 0) consecutiveLosses += 1;
+    if (trade.netPnlKrw < 0) consecutiveLosses += 1;
     else break;
   }
   return {
@@ -953,25 +1119,38 @@ async function memberRuntimeState(
   paper: PaperJournalRepository,
   nowMs: number,
   adminMember = false,
+  paperReadEnabled = true,
 ): Promise<MemberRuntimeState> {
   // A missing/broken Paper wallet quarantines new entries; it must never
   // hide pre-existing Live positions from their guarded read-only supervisor.
-  const [paperResult, plans, orders] = await Promise.all([
-    paper.listSnapshot(userId)
+  const paperSnapshot = paperReadEnabled
+    ? paper.listSnapshot(userId)
       .then((records) => ({ records, validRead: true }))
       .catch(() => ({
         records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>,
         validRead: false,
-      })),
+      }))
+    : Promise.resolve({
+        records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>,
+        validRead: false,
+      });
+  const [paperResult, plans, orders] = await Promise.all([
+    paperSnapshot,
     repository.listPlans(userId), repository.listOrders(userId),
   ]);
   const records = paperResult.records;
-  // Admin V2 is opt-in on a durable wallet row, not inferred from role.
-  // Existing admin/regular V1 tests and journals remain backward compatible.
-  const fourMarketMode = adminMember && records.some((row) =>
-    row.kind === 'account' && row.id.startsWith('automatic-paper-admin-v2:'));
+  // Role-scoped V2 is opt-in on durable wallet rows, not inferred from role.
+  // Existing V1 history remains visible and is never rewritten or reset.
+  const fourMarketWalletRole: FourMarketPaperWalletRole = adminMember ? 'admin' : 'member';
+  const walletPrefix = adminMember
+    ? 'automatic-paper-admin-v2:' : 'automatic-paper-member-v2:';
+  const fourMarketMode = records.some((row) =>
+    row.kind === 'account' && row.id.startsWith(walletPrefix));
   const marketWallets = fourMarketMode && paperResult.validRead
-    ? inspectAdminFourMarketPaperWallets(records, nowMs) : null;
+    ? adminMember
+      ? inspectAdminFourMarketPaperWallets(records, nowMs)
+      : inspectMemberFourMarketPaperWallets(records, nowMs)
+    : null;
   const automaticEquity = !fourMarketMode && paperResult.validRead
     ? selectAutomaticPaperAccountEquity(records) : null;
   const paperWalletOpenedAtMs = fourMarketMode
@@ -989,8 +1168,8 @@ async function memberRuntimeState(
     consecutiveLosses: 0, closedTrades: 0,
   });
   let risk = emptyRisk('BACKGROUND_PAPER_WALLET_REQUIRED');
-  let adminMarketRisk: MemberRuntimeState['adminMarketRisk'] = null;
-  let adminMarketCapital: MemberRuntimeState['adminMarketCapital'] = null;
+  let fourMarketRisk: MemberRuntimeState['fourMarketRisk'] = null;
+  let fourMarketCapital: MemberRuntimeState['fourMarketCapital'] = null;
   if (fourMarketMode && marketWallets?.ready && paperWalletOpenedAtMs != null) {
     const byId = new Map(plans.map((plan) => [plan.id, plan]));
     // Unknown filled plan references can never be assigned to an innocent
@@ -999,48 +1178,52 @@ async function memberRuntimeState(
       && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
         || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0));
     const truncated = orders.length >= 500 || plans.length >= 200;
-    adminMarketRisk = {} as NonNullable<MemberRuntimeState['adminMarketRisk']>;
-    adminMarketCapital = {} as NonNullable<MemberRuntimeState['adminMarketCapital']>;
-    const adminReadback = adminFourMarketPaperCapitalReadback({
-      ownerId: userId, records, plans, orders, nowMs,
-    });
+    fourMarketRisk = {} as NonNullable<MemberRuntimeState['fourMarketRisk']>;
+    fourMarketCapital = {} as NonNullable<MemberRuntimeState['fourMarketCapital']>;
+    const capitalReadback = adminMember
+      ? adminFourMarketPaperCapitalReadback({ ownerId: userId, records, plans, orders, nowMs })
+      : memberFourMarketPaperCapitalReadback({ ownerId: userId, records, plans, orders, nowMs });
     for (const market of ADMIN_FOUR_PAPER_MARKETS) {
       const account = marketWallets.marketWallets[market];
       const scopedPlans = plans.filter((plan) => plan.accountMode === 'paper'
         && adminPaperMarketFromPlan(plan) === market);
       const allowedPlans = new Set(scopedPlans.map((plan) => plan.id));
       const scopedOrders = orders.filter((order) => allowedPlans.has(order.planId));
+      const laneCapital = capitalReadback.capital[market];
       let laneRisk = emptyRisk('BACKGROUND_PAPER_RISK_EVIDENCE_UNAVAILABLE');
-      if (!orphan && !truncated && account.openedAtMs != null) {
+      if (!orphan && !truncated && account.openedAtMs != null
+        && laneCapital.settlementReady
+        && capitalReadback.verifiedSettlements[market] !== null) {
         try {
           laneRisk = automaticPaperRiskEvidenceFromCanonicalLedger(
             userId, scopedOrders, scopedPlans, nowMs,
-            account.equityKrw ?? 0, account.openedAtMs,
+            laneCapital.operatingCapitalKrw, account.openedAtMs,
+            capitalReadback.verifiedSettlements[market],
           );
         } catch { /* A malformed market lane must not borrow funds from its peers. */ }
       }
-      const laneCapital = adminReadback.capital[market];
-      adminMarketCapital[market] = laneCapital;
+      fourMarketCapital[market] = laneCapital;
       if (laneRisk.ready && !laneCapital.newEntriesAllowed) {
         laneRisk = {
           ...laneRisk, ready: false,
           blockers: laneCapital.blockers.length
-            ? laneCapital.blockers : ['ADMIN_PAPER_MARKET_SETTLED_LOSS_LIMIT'],
+            ? laneCapital.blockers
+            : [`${adminMember ? 'ADMIN' : 'MEMBER'}_PAPER_MARKET_SETTLED_LOSS_LIMIT`],
         };
       }
-      adminMarketRisk[market] = laneRisk;
+      fourMarketRisk[market] = laneRisk;
     }
-    const allReady = ADMIN_FOUR_PAPER_MARKETS.every((market) => adminMarketRisk![market].ready);
+    const allReady = ADMIN_FOUR_PAPER_MARKETS.every((market) => fourMarketRisk![market].ready);
     risk = allReady ? { ready: true, blockers: [],
       dailyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].dailyPnlPercent)),
+        fourMarketRisk![market].dailyPnlPercent)),
       weeklyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].weeklyPnlPercent)),
+        fourMarketRisk![market].weeklyPnlPercent)),
       consecutiveLosses: Math.max(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].consecutiveLosses)),
+        fourMarketRisk![market].consecutiveLosses)),
       closedTrades: ADMIN_FOUR_PAPER_MARKETS.reduce((sum, market) =>
-        sum + adminMarketRisk![market].closedTrades, 0),
-    } : emptyRisk('ADMIN_PAPER_MARKET_RISK_EVIDENCE_REQUIRED');
+        sum + fourMarketRisk![market].closedTrades, 0),
+    } : emptyRisk(`${adminMember ? 'ADMIN' : 'MEMBER'}_PAPER_MARKET_RISK_EVIDENCE_REQUIRED`);
   } else if (!fourMarketMode) {
     try {
       risk = automaticPaperRiskEvidenceFromCanonicalLedger(
@@ -1054,8 +1237,9 @@ async function memberRuntimeState(
     dailyPnlPercent: risk.dailyPnlPercent,
     weeklyPnlPercent: risk.weeklyPnlPercent,
     consecutiveLosses: risk.consecutiveLosses,
-    adminMarketWalletRows: fourMarketMode ? records : null,
-    adminMarketRisk, adminMarketCapital,
+    fourMarketWalletRole: fourMarketMode ? fourMarketWalletRole : null,
+    fourMarketWalletRows: fourMarketMode ? records : null,
+    fourMarketRisk, fourMarketCapital,
     plans, orders,
   });
 }
@@ -1074,19 +1258,25 @@ function exposureState(
     marketMappingForPlan(plan).assetClass === mapping.assetClass);
   const sameInstrument = sameClass.filter((plan) => plan.exchange === mapping.exchange
     && plan.symbol.toUpperCase() === entry.identity.symbol.toUpperCase());
-  const sameStrategy = runtime.adminMarketRisk && accountMode === 'paper'
+  const sameStrategy = runtime.fourMarketRisk && accountMode === 'paper'
     ? sameClass.filter((plan) => plan.strategyId === entry.identity.strategyId)
     : active.filter((plan) => plan.strategyId === entry.identity.strategyId);
   const sum = (rows: readonly TradingPlan[]) =>
     rows.reduce((total, plan) => total + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
-  const marketIsolated = runtime.adminMarketRisk != null && accountMode === 'paper';
+  const marketIsolated = runtime.fourMarketRisk != null && accountMode === 'paper';
+  const marketBudgetInput = {
+    market: mapping.assetClass,
+    records: runtime.fourMarketWalletRows ?? [],
+    openPlans: active,
+    nowMs,
+    verifiedCapital: runtime.fourMarketCapital?.[mapping.assetClass],
+  };
   const budget = marketIsolated
-    ? adminMarketPaperRiskBudget({
-        market: mapping.assetClass, records: runtime.adminMarketWalletRows ?? [],
-        openPlans: active, nowMs,
-        verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass],
-      }) : null;
-  if (budget && !budget.ready) throw new Error('ADMIN_PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
+    ? runtime.fourMarketWalletRole === 'admin'
+      ? adminMarketPaperRiskBudget(marketBudgetInput)
+      : memberMarketPaperRiskBudget(marketBudgetInput)
+    : null;
+  if (budget && !budget.ready) throw new Error('PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
   const accountExposureKrw = marketIsolated ? sum(sameClass) : sum(active);
   const instrumentExposureKrw = sum(sameInstrument);
   const budgetEquity = budget?.accountValueKrw ?? policy.totalCapitalKrw;
@@ -1153,6 +1343,7 @@ function buildPlanInput(
   runtime: MemberRuntimeState,
   fx: MemberAutoTradingFxQuote,
   nowMs: number,
+  accountMode: TradingPlan['accountMode'] = 'paper',
 ): TradingPlanInput {
   const mapping = marketMapping(entry.identity.market, member.policy);
   const quote = currentPrice(entry);
@@ -1171,8 +1362,10 @@ function buildPlanInput(
   const estimatedKrw = quantity * quote.executionPrice * fx.krwPerQuoteCurrency;
   if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
 
-  const exposure = exposureState(runtime, member.policy, entry, nowMs);
-  const marketRisk = runtime.adminMarketRisk?.[mapping.assetClass] ?? null;
+  const exposure = exposureState(runtime, member.policy, entry, nowMs, accountMode);
+  const marketRisk = accountMode === 'paper'
+    ? runtime.fourMarketRisk?.[mapping.assetClass] ?? null
+    : null;
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
   const averageSpread = costPercent(entry, 'spreadRate');
@@ -1194,9 +1387,13 @@ function buildPlanInput(
   let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
+    const maximumLeverage = hasCapability(member.profile, 'canManageMembers')
+      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
     if (!Number.isInteger(leverageEvidence)
       || leverageEvidence < 2
-      || leverageEvidence > 7
+      || leverageEvidence > maximumLeverage
+      || member.policy.bitgetLeverage > maximumLeverage
       || leverageEvidence !== member.policy.bitgetLeverage) {
       throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
     }
@@ -1227,7 +1424,7 @@ function buildPlanInput(
 
   return {
     exchange: mapping.exchange,
-    accountMode: 'paper',
+    accountMode,
     stockBroker: mapping.stockBroker,
     stockExchange,
     strategyId: entry.identity.strategyId,
@@ -1248,7 +1445,8 @@ function buildPlanInput(
     reduceOnly: false,
     invalidateAction: 'hold',
     signalReasons: [
-      'CANONICAL_PAPER_HANDOFF',
+      ...automaticTradingStoredEntryReasons(entry),
+      accountMode === 'live' ? 'CANONICAL_LIVE_AUTO_CANDIDATE' : 'CANONICAL_PAPER_HANDOFF',
       ...(member.policy.pilotStage === 'formula-ai-exception'
         ? formulaAiReviewReasonsForLive(entry, nowMs) : []),
       `HANDOFF_ID:${entry.handoffId}`,
@@ -1286,7 +1484,7 @@ function buildPlanInput(
       plannedPrice: quote.executionPrice,
       marketStatus,
       providerTimeOffsetMs: nowMs - observedAtMs,
-      source: `member-auto-trading-paper-handoff-v1:${String(evidence?.provider ?? 'PUBLIC')}:TOP_OF_BOOK`,
+      source: `${accountMode === 'live' ? 'member-auto-trading-live-candidate-v1' : 'member-auto-trading-paper-handoff-v1'}:${String(evidence?.provider ?? 'PUBLIC')}:TOP_OF_BOOK`,
       availableLiquidityKrw: null,
       estimatedSlippagePercent: slippage,
       estimatedFeePercent: fee,
@@ -1365,49 +1563,22 @@ function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEnt
 }
 
 /**
- * Unmatched external holdings cannot be valued from automatic plan notional.
- * Refuse a new Live entry rather than assuming zero external exposure. Exit
- * tracking is separately protected and must not depend on this entry guard.
+ * Existing manual assets remain protected, not adopted as AUTO positions.
+ * Unknown quantities and mixed manual/AUTO ownership still fail closed.
  */
 export function assertCanonicalLiveProviderPositions(
   snapshot: Pick<CanonicalAccountSnapshot, 'provider' | 'positions'>,
-  plans: readonly TradingPlan[],
+  owned: readonly AutomaticLiveOwnedPosition[],
 ) {
-  if (!Array.isArray(snapshot.positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
-  for (const position of snapshot.positions) {
-    // Upbit publishes the KRW settlement cash balance in positions, but
-    // KRW is not an open coin exposure and is checked independently as cash.
-    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
-    if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
-    if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
-    const matching = plans.filter((plan) =>
-      plan.exchange === snapshot.provider
-      && normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
-    if (matching.length === 0) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
-    const declaredSide = String(position.side ?? '').trim().toLowerCase();
-    if (declaredSide && matching.some((plan) => plan.exchange === 'bitget')
-      && !matching.some((plan) => plan.exchange === 'bitget' && plan.side === declaredSide)) {
-      throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH');
-    }
-  }
+  return partitionAutomaticLiveProviderPositions(snapshot, owned);
 }
 export function liveProviderSnapshotReadyForAutomaticWarmup(
   snapshot: CanonicalAccountSnapshot,
-  plans: readonly TradingPlan[],
+  owned: readonly AutomaticLiveOwnedPosition[],
+  maximumLeverage = 7,
 ) {
   try {
-    if (!snapshot.connected || snapshot.status !== 'CONNECTED' || snapshot.stale || snapshot.errorCode != null) return false;
-    if (!Array.isArray(snapshot.positions) || !Array.isArray(snapshot.openOrders) || snapshot.openOrders.length > 0) return false;
-    assertCanonicalLiveProviderPositions(snapshot, plans);
-    if (snapshot.provider === 'bitget') {
-      if (snapshot.positionMode !== 'one_way_mode') return false;
-      for (const position of snapshot.positions) {
-        if (!finite(position.quantity) || Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
-        if (String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated') return false;
-        const leverage = Number(position.leverage);
-        if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) return false;
-      }
-    }
+    assertAutomaticLiveSnapshotIsolation(snapshot, owned, maximumLeverage);
     return true;
   } catch {
     return false;
@@ -1450,19 +1621,15 @@ async function liveJournalRiskState(
   // A pending order is NOT proof of an owned broker position. Bind provider
   // holdings only to canonically filled/partially-filled entry quantities,
   // and fail closed until ambiguous fills are reconciled.
-  const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
-  assertCanonicalLiveProviderPositions(snapshot, livePlans);
-  const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
-  let unrealizedKrw = 0;
-  for (const position of snapshot.positions ?? []) {
-    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
-    if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
-    const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
-    if (!finite(position.unrealizedPnl)) continue;
-    const fx = await fxFor(tradeMarketForPlan(matched));
-    unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
-  }
+  const owned = canonicalAutomaticLivePositions(runtime.plans, runtime.orders);
+  const unrealizedKrw = await automaticLiveUnrealizedPnlKrw({
+    owned, maximumLeverage: policy.bitgetLeverage,
+    orders: runtime.orders, nowMs,
+    readMark: (plan) => source.readMarketMark(tradeMarketForPlan(plan), plan.symbol),
+    snapshotFor: async (provider) => provider === snapshot.provider ? snapshot
+      : source.readLiveAccountSnapshot(userId, provider),
+    krwPerQuoteFor: async (plan) => (await fxFor(tradeMarketForPlan(plan))).krwPerQuoteCurrency,
+  });
   const dailyKrw = await pnlKrw(nowMs - 24 * 60 * 60_000) + unrealizedKrw;
   const weeklyKrw = await pnlKrw(nowMs - 7 * 24 * 60 * 60_000) + unrealizedKrw;
   const equityBase = Math.max(1, policy.totalCapitalKrw);
@@ -1493,6 +1660,9 @@ async function buildLivePlanInput(input: {
   fxCache: Map<string, MemberAutoTradingFxQuote>;
   nowMs: number;
 }): Promise<TradingPlanInput> {
+  assertAutomaticLiveTargetIsolation(input.snapshot,
+    canonicalAutomaticLivePositions(input.runtime.plans, input.runtime.orders),
+    input.paperInput as TradingPlan);
   const exposure = exposureState(input.runtime, input.member.policy, input.entry, input.nowMs, 'live');
   const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
@@ -1529,10 +1699,9 @@ async function buildLivePlanInput(input: {
       strategyExposureKrw: exposure.strategyExposureKrw,
       assetClassExposureKrw: exposure.assetClassExposureKrw,
       openRiskKrw: exposure.openRiskKrw,
-      openPositionCount: Math.max(
-        exposure.openPositionCount,
-        (input.snapshot.positions ?? []).filter((row) => finite(row.quantity) && Math.abs(row.quantity!) > 0).length,
-      ),
+      // Manual holdings do not consume AUTO position slots or inflate AUTO PnL.
+      // Cash buying power remains broker-authoritative and excludes their value.
+      openPositionCount: exposure.openPositionCount,
       dailyOrderCount: exposure.dailyOrderCount,
       assetExposurePercent: exposure.assetExposurePercent,
       existingPositionSide: exposure.existingPositionSide,
@@ -1551,16 +1720,47 @@ async function executeAutomaticPlan(input: {
   planInput: TradingPlanInput;
   policy: TradingPolicy;
   emergencyStopped: boolean;
+  verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
+  isActive?: () => boolean;
+  memberAccessIsCurrent?: (userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) => Promise<boolean>;
 }) {
+  const assertActive = () => {
+    if (input.isActive && input.isActive() !== true) throw new Error('BACKGROUND_WORKER_STOPPED');
+  };
+  assertActive();
+  if (input.planInput.accountMode === 'live') {
+    let current = false;
+    try { current = await input.memberAccessIsCurrent?.(input.userId, input.planInput) === true; }
+    catch { /* Do not expose DB/provider exception text or infer permission. */ }
+    if (!current) throw new Error('BACKGROUND_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
+  }
+  assertActive();
   const automation = new TradeAutomationService(input.repository);
-  const execution = new TradeExecutionService(input.repository);
+  // Only the Paper worker can supply an independently server-read quote.
+  // Live execution remains on the original, independently protected path.
+  const execution = input.planInput.accountMode === 'paper' && input.verifiedPaperFxQuote
+    ? new TradeExecutionService(input.repository, undefined, undefined, {
+      fxQuote: async (market) => {
+        if (input.verifiedPaperFxQuote!.market !== market) {
+          throw new Error('BACKGROUND_PAPER_FX_MARKET_MISMATCH');
+        }
+        return input.verifiedPaperFxQuote!;
+      },
+      // Only a protected, versioned server schedule may attest Paper tax;
+      // a research-supplied cost guess can never certify settlement.
+      costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
+      fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope),
+    }, input.isActive)
+    : new TradeExecutionService(input.repository, undefined, undefined, undefined, input.isActive, input.memberAccessIsCurrent);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
   );
   if (!created.plan) return { created, plan: null, order: null, orderDuplicate: false };
   let plan = created.plan;
+  assertActive();
   if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(input.userId, plan.id);
   if (plan.state !== 'SUBMITTED') return { created, plan, order: null, orderDuplicate: false };
+  assertActive();
   const createdOrder = await automation.createOrder(input.userId, plan);
   const order = createdOrder.duplicate
     ? createdOrder.order
@@ -1576,6 +1776,7 @@ async function processAutomaticExit(input: {
   fxCache: Map<string, MemberAutoTradingFxQuote>;
   now: Date;
   live: boolean;
+  isActive?: () => boolean;
 }) {
   if (input.position.activeExit) {
     return { status: 'IDEMPOTENT' as const, privateRequests: 0, orderCreated: false };
@@ -1598,6 +1799,7 @@ async function processAutomaticExit(input: {
     fx,
     reason: initialReason,
     remainingQuantity: input.position.remainingQuantity,
+    nowMs: input.now.getTime(),
   });
   let privateRequests = 0;
 
@@ -1640,6 +1842,10 @@ async function processAutomaticExit(input: {
     userId: input.member.userId,
     planInput: exitInput,
     policy: input.member.policy,
+    verifiedPaperFxQuote: input.live ? undefined : fx,
+    isActive: input.isActive,
+    memberAccessIsCurrent: input.live ? (userId, plan) => input.source.revalidateLiveMemberAccess?.(userId, plan)
+      ?? Promise.resolve(false) : undefined,
     emergencyStopped: input.member.policy.emergencyStopped
       || persistentStop
       || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -1684,6 +1890,7 @@ export function selectRotatingHandoffEntries<T>(
 
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
+  private stopped = false;
   private liveEntryWarmupComplete = false;
   // Preserve stop/error evidence across paginated member batches. A later
   // eligible member must never erase a blocked member from the same rotation.
@@ -1696,20 +1903,26 @@ export class MemberAutoTradingBackgroundWorker {
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
+  stop() { this.stopped = true; this.liveEntryWarmupComplete = false; }
+
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
     const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
+    // An exact-SHA human-issued arm is still required for reducing exits.
+    // New-entry signal outages/restarts must not disable protection of an
+    // already owned position. Each exit independently rechecks policy,
+    // ownership, current provider exposure and reduceOnly at execution time.
     const liveExitsArmedThisTick = liveModeRequested
-      && this.liveEntryWarmupComplete
       && liveEntryArmPresentThisTick;
-    const liveTelegramHealthyThisTick = !liveModeRequested
-      || this.source.telegramDeliveryHealthy?.(now.getTime()) === true;
     const liveEntriesArmedThisTick = liveExitsArmedThisTick
-      && liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;
+      && this.liveEntryWarmupComplete
+      && !this.liveCycleHardWarmupBlocked;
     const result: MemberAutoTradingBackgroundRunResult = {
+      nativeProtectionErrorCode: null,
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
-      newEntriesFailClosed: liveModeRequested && !liveTelegramHealthyThisTick,
+      newEntriesFailClosed: false,
       liveEntriesArmed: liveEntriesArmedThisTick,
       liveEntryWarmupComplete: this.liveEntryWarmupComplete,
       liveEntriesSuppressedByWarmupOrArm: 0,
@@ -1751,6 +1964,14 @@ export class MemberAutoTradingBackgroundWorker {
       executionSyncFailures: 0,
       liveEntryArmPresent: liveEntryArmPresentThisTick,
     };
+    if (this.stopped) {
+      result.handoffStatus = 'BLOCKED_DATA';
+      result.handoffErrorCode = 'BACKGROUND_WORKER_STOPPED';
+      result.newEntriesFailClosed = true;
+      result.liveEntriesArmed = false;
+      result.liveEntryWarmupComplete = false;
+      return result;
+    }
     if (this.running) {
       result.overlapSkipped = true;
       return result;
@@ -1768,10 +1989,16 @@ export class MemberAutoTradingBackgroundWorker {
             || nowMs - handoff.evaluatedAtMs > MAX_READY_HANDOFF_AGE_MS)) {
           throw new Error('BACKGROUND_PAPER_HANDOFF_STALE');
         }
-        if (handoff) result.handoffStatus = handoff.status;
-      } catch {
+        if (handoff) {
+          result.handoffStatus = handoff.status;
+          if (handoff.status === 'BLOCKED_DATA') {
+            result.handoffErrorCode = errorCode(new Error(String(handoff.blockers[0] ?? 'BACKGROUND_HANDOFF_BLOCKED')));
+          }
+        } else result.handoffErrorCode = 'BACKGROUND_HANDOFF_MISSING';
+      } catch (error) {
         handoff = null;
         result.handoffStatus = 'BLOCKED_DATA';
+        result.handoffErrorCode = errorCode(error);
         result.failures += 1;
       }
       result.handoffReady = handoff?.status === 'READY';
@@ -1798,13 +2025,13 @@ export class MemberAutoTradingBackgroundWorker {
       const entries = batch.entries;
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
-      let paperAccountMissingThisTick = false;
       let memberAuditFailedThisTick = false;
       // Database wallet and canonical-order guards apply globally and must
       // be reverified on every Worker run (never carried across restarts).
       let adminDbGuardThisTick: boolean | null = null;
 
       for (const member of members) {
+        if (this.stopped) break;
         // Losing membership must revoke ALL execution while preserving
         // read-only visibility of previously filled automatic Live positions.
         const memberCanRunAutomation = hasCapability(member.profile, 'canAccessAutoTrading');
@@ -1818,7 +2045,7 @@ export class MemberAutoTradingBackgroundWorker {
         try {
           [runtime, persistentGlobalStop] = await Promise.all([
             memberRuntimeState(member.userId, repository, paper, nowMs,
-              hasCapability(member.profile, 'canManageMembers')),
+              hasCapability(member.profile, 'canManageMembers'), !liveModeRequested),
             repository.getGlobalEmergencyStop(),
           ]);
         } catch {
@@ -1828,20 +2055,20 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
         let adminWalletDbGuardReady = true;
-        if (runtime.adminMarketWalletRows !== null) {
+        if (runtime.fourMarketWalletRows !== null) {
           if (adminDbGuardThisTick === null) {
             try {
-              adminDbGuardThisTick =
-                await this.source.adminPaperDatabaseGuardReady?.() === true;
+              const guard = this.source.fourMarketPaperDatabaseGuardReady
+                ?? this.source.adminPaperDatabaseGuardReady;
+              adminDbGuardThisTick = await guard?.call(this.source) === true;
             } catch {
               adminDbGuardThisTick = false;
             }
           }
           adminWalletDbGuardReady = adminDbGuardThisTick === true;
-          if (!adminWalletDbGuardReady) result.newEntriesFailClosed = true;
+          if (!adminWalletDbGuardReady && !liveModeRequested) result.newEntriesFailClosed = true;
         }
-        if (!runtime.paperAccountReady && memberAutoExecutionEnabled) {
-          paperAccountMissingThisTick = true;
+        if (!runtime.paperAccountReady && memberAutoExecutionEnabled && !liveModeRequested) {
           result.newEntriesFailClosed = true;
           result.failures += 1;
         }
@@ -1874,7 +2101,7 @@ export class MemberAutoTradingBackgroundWorker {
 
         const refreshRuntime = async () => {
           runtime = await memberRuntimeState(member.userId, repository, paper, nowMs,
-            hasCapability(member.profile, 'canManageMembers'));
+            hasCapability(member.profile, 'canManageMembers'), !liveModeRequested);
           result.runtimeRefreshes += 1;
         };
         const syncExecutionProjection = async (requiredOrderId?: string) => {
@@ -1921,13 +2148,44 @@ export class MemberAutoTradingBackgroundWorker {
           }
         };
 
-        let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
-        // Do not promote potentially browser-forged V2 Paper fills into
-        // Journal/Telegram when the DB write barriers cannot be attested.
-        let entryProjectionHealthy = adminWalletDbGuardReady
-          && await syncExecutionProjection();
+        // LIVE capital and compounding are independent per market. A verified
+        // gain in (for example) Upbit spot must never enlarge a stock or
+        // futures order budget during the same worker tick.
+        const formulaAiPilotCapitalByMarket = new Map<TradingAssetClass, RulePackPilotCapitalState>();
+        const formulaAiPilotCapital = async (market: TradingAssetClass) => {
+          const cached = formulaAiPilotCapitalByMarket.get(market);
+          if (cached) return cached;
+          const capital = await readRulePackPilotCapitalState(
+            repository, member.userId, now,
+            rulePackPilotInitialCapitalForPolicy(member.policy), market,
+          );
+          formulaAiPilotCapitalByMarket.set(market, capital);
+          return capital;
+        };
+        // Paper journal / optional notification projection is an independent
+        // simulated-trading lane. A Paper DB/RLS or notification outage must
+        // never become authority for (or a blocker of) the canonical Live
+        // provider path, which has its own exact-SHA, policy and account gates.
+        let nativeProtectionHealthy = true;
+        if (liveModeRequested && canonicalAutomaticLivePositions(runtime.plans, runtime.orders)
+          .some((position) => position.plan.exchange === 'bitget')) {
+          try {
+            nativeProtectionHealthy = await this.source.auditNativeFuturesProtection?.(
+              member.userId, runtime.plans, runtime.orders) === true;
+            if (!nativeProtectionHealthy) throw new Error('BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED');
+          } catch (error) {
+            nativeProtectionHealthy = false;
+            result.nativeProtectionErrorCode = errorCode(error);
+            result.newEntriesFailClosed = true;
+            result.failures += 1;
+          }
+        }
+        let entryProjectionHealthy = liveModeRequested
+          ? nativeProtectionHealthy
+          : adminWalletDbGuardReady && await syncExecutionProjection();
         let exitChanged = false;
-        for (const position of memberAutoExecutionEnabled && runtime.paperAccountReady
+        for (const position of !liveModeRequested
+          && memberAutoExecutionEnabled && runtime.paperAccountReady
           ? trackedAutomaticPositions(runtime, 'paper') : []) {
           try {
             const exit = await processAutomaticExit({
@@ -1938,6 +2196,7 @@ export class MemberAutoTradingBackgroundWorker {
               fxCache,
               now,
               live: false,
+              isActive: () => !this.stopped,
             });
             if (exit.orderCreated) exitChanged = true;
             if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
@@ -1976,6 +2235,7 @@ export class MemberAutoTradingBackgroundWorker {
                   fxCache,
                   now,
                   live: true,
+                  isActive: () => !this.stopped,
                 });
                 result.privateTradingRequests += exit.privateRequests;
                 if (exit.orderCreated) exitChanged = true;
@@ -2005,8 +2265,10 @@ export class MemberAutoTradingBackgroundWorker {
             result.newEntriesFailClosed = true;
             continue;
           }
-          entryProjectionHealthy = adminWalletDbGuardReady
-            && (await syncExecutionProjection()) && entryProjectionHealthy;
+          entryProjectionHealthy = liveModeRequested
+            ? entryProjectionHealthy
+            : adminWalletDbGuardReady
+              && (await syncExecutionProjection()) && entryProjectionHealthy;
         }
 
         if (!entryProjectionHealthy) {
@@ -2020,23 +2282,23 @@ export class MemberAutoTradingBackgroundWorker {
           result.skipped += entries.length;
           continue;
         }
-        // Maintain eligible Live exits above even when Paper storage is
-        // absent. Do not create Paper or Live entries using placeholder equity.
-        if (!runtime.paperAccountReady
-          || (!runtime.adminMarketRisk && !runtime.paperFinancialRiskReady)) {
-          // A paper-ledger block and a simultaneous Telegram outage are two
-          // independent reasons not to admit Live entry. Surface both in
-          // health without letting either bypass the other.
-          if (liveModeRequested && !liveTelegramHealthyThisTick
-            && hasCapability(member.profile, 'canPlaceOrders')) {
-            result.liveEntriesSuppressedByTelegram += entries.length;
-          }
+        // Paper and Live are independent execution lanes. A missing Paper
+        // wallet blocks simulated entries only; a Live candidate is rebuilt
+        // from current provider/account evidence immediately before submission.
+        const paperLaneReady = runtime.paperAccountReady
+          && (runtime.fourMarketRisk != null || runtime.paperFinancialRiskReady)
+          && adminWalletDbGuardReady;
+        if (!paperLaneReady && !liveModeRequested) {
           result.newEntriesFailClosed = true;
           result.blocked += entries.length;
           continue;
         }
         for (const entry of entries) {
-          if (!policyAllowsEntry(member, entry, runtime.adminMarketRisk != null)) {
+          if (!policyAllowsEntry(
+            member,
+            entry,
+            !liveModeRequested && runtime.fourMarketRisk != null,
+          )) {
             result.skipped += 1;
             continue;
           }
@@ -2046,12 +2308,14 @@ export class MemberAutoTradingBackgroundWorker {
             // covers a prior entry that mutated an order and then failed during
             // lifecycle/projection post-processing before its normal refresh.
             await refreshRuntime();
-            if (runtime.adminMarketWalletRows !== null) {
+            if (!liveModeRequested && runtime.fourMarketWalletRows !== null) {
               // Revalidate at the new-entry boundary so a revoked migration
               // cannot be hidden by the earlier tick-scoped readiness cache.
               let guarded = false;
               try {
-                guarded = await this.source.adminPaperDatabaseGuardReady?.() === true;
+                const guard = this.source.fourMarketPaperDatabaseGuardReady
+                  ?? this.source.adminPaperDatabaseGuardReady;
+                guarded = await guard?.call(this.source) === true;
               } catch { guarded = false; }
               if (!guarded) {
                 result.newEntriesFailClosed = true;
@@ -2060,9 +2324,12 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
             const candidateMarket = marketMapping(entry.identity.market, member.policy).assetClass;
-            if (!runtime.paperAccountReady || (runtime.adminMarketRisk
-              ? runtime.adminMarketRisk[candidateMarket].ready !== true
-              : !runtime.paperFinancialRiskReady)) {
+            const refreshedPaperLaneReady = runtime.paperAccountReady
+              && adminWalletDbGuardReady
+              && (runtime.fourMarketRisk
+                ? runtime.fourMarketRisk[candidateMarket].ready === true
+                : runtime.paperFinancialRiskReady);
+            if (!refreshedPaperLaneReady && !liveModeRequested) {
               result.newEntriesFailClosed = true;
               result.blocked += 1;
               continue;
@@ -2072,84 +2339,73 @@ export class MemberAutoTradingBackgroundWorker {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
-            let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
-            let paperEntryPolicy = member.policy;
-            if (member.policy.pilotStage === 'formula-ai-exception'
-              && paperInput.estimatedKrw > member.policy.maxOrderKrw) {
-              // Compounding beyond the stored base cap requires an immutable
-              // signal-specific review and signed worker-only provenance.
-              formulaAiReviewReasonsForLive(entry, nowMs);
-              formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
-                repository, member.userId, now,
-              );
-              validateFormulaAiPilotEntry(
-                member, entry, runtime, formulaAiPilotCapital, paperInput.estimatedKrw, nowMs,
-              );
-              paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
-                member.policy, formulaAiPilotCapital,
-              );
-              paperInput = issueRulePackPilotDynamicCapReceipt(
-                member.userId, paperInput, nowMs,
-              );
-            }
             const persistentStop = await repository.getGlobalEmergencyStop();
-            const paperRun = await executeAutomaticPlan({
-              repository,
-              userId: member.userId,
-              planInput: paperInput,
-              policy: paperEntryPolicy,
-              emergencyStopped: member.policy.emergencyStopped
-                || persistentStop
-                || process.env.TRADING_EMERGENCY_STOP === 'true',
-            });
-            let paperMirrorReady = false;
-            if (!paperRun.plan || !paperRun.order) {
-              result.blocked += 1;
-            } else {
-              if (paperRun.created.duplicate || paperRun.orderDuplicate) result.duplicates += 1;
-              else result.createdPlans += 1;
-              if (paperRun.order.state === 'FILLED') {
-                result.filledOrders += paperRun.orderDuplicate ? 0 : 1;
-                const lifecycle = await persistMemberAutoTradingPaperPositionBridge({
-                  repository,
-                  userId: member.userId,
-                  plan: paperRun.plan,
-                  order: paperRun.order,
-                  entry,
-                  now,
-                });
-                if (lifecycle.status === 'PERSISTED') {
-                  result.positionLifecycles += 1;
-                  paperMirrorReady = true;
-                } else if (lifecycle.status === 'IDEMPOTENT') {
-                  result.lifecycleIdempotent += 1;
-                  paperMirrorReady = true;
-                } else {
+            if (!liveModeRequested && refreshedPaperLaneReady) {
+              let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs, 'paper');
+              let paperEntryPolicy = runtime.fourMarketCapital
+                ? deriveFourMarketPaperExecutionPolicy(
+                    member.policy,
+                    candidateMarket,
+                    runtime.fourMarketCapital[candidateMarket],
+                  )
+                : member.policy;
+              if (member.policy.pilotStage === 'formula-ai-exception'
+                && runtime.fourMarketCapital == null
+                && paperInput.estimatedKrw > member.policy.maxOrderKrw) {
+                formulaAiReviewReasonsForLive(entry, nowMs);
+                const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
+                validateFormulaAiPilotEntry(
+                  member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs, false,
+                );
+                paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
+                  member.policy, marketPilotCapital, candidateMarket,
+                );
+                paperInput = issueRulePackPilotDynamicCapReceipt(member.userId, paperInput, nowMs);
+              }
+              const paperRun = await executeAutomaticPlan({
+                isActive: () => !this.stopped,
+                repository,
+                userId: member.userId,
+                planInput: paperInput,
+                policy: paperEntryPolicy,
+                verifiedPaperFxQuote: fx,
+                emergencyStopped: member.policy.emergencyStopped
+                  || persistentStop
+                  || process.env.TRADING_EMERGENCY_STOP === 'true',
+              });
+              if (!paperRun.plan || !paperRun.order) {
+                result.blocked += 1;
+              } else {
+                if (paperRun.created.duplicate || paperRun.orderDuplicate) result.duplicates += 1;
+                else result.createdPlans += 1;
+                if (paperRun.order.state === 'FILLED') {
+                  result.filledOrders += paperRun.orderDuplicate ? 0 : 1;
+                  const lifecycle = await persistMemberAutoTradingPaperPositionBridge({
+                    repository,
+                    userId: member.userId,
+                    plan: paperRun.plan,
+                    order: paperRun.order,
+                    entry,
+                    now,
+                  });
+                  if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
+                  else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
+                  else result.blocked += 1;
+                } else if (paperRun.order.state === 'REJECTED'
+                  || paperRun.order.state === 'RECOVERY_REQUIRED') {
                   result.blocked += 1;
                 }
-              } else if (paperRun.order.state === 'REJECTED' || paperRun.order.state === 'RECOVERY_REQUIRED') {
-                result.blocked += 1;
+                await refreshRuntime();
+                entryProjectionHealthy = await syncExecutionProjection(paperRun.order.id);
+                if (!entryProjectionHealthy) {
+                  result.blocked += 1;
+                  break;
+                }
               }
-              await refreshRuntime();
-              entryProjectionHealthy = await syncExecutionProjection(paperRun.order.id);
-              if (!entryProjectionHealthy) {
-                result.blocked += 1;
-                break;
-              }
-            }
-
-            // Live admission requires a canonical filled Paper mirror AND
-            // persisted/idempotent lifecycle proof for this exact candidate.
-            // A rejected Paper order or failed bridge must never lead to Live IO.
-            if (liveModeRequested && !paperMirrorReady) {
-              result.newEntriesFailClosed = true;
-              result.blocked += 1;
-              continue;
             }
 
             if (liveModeRequested && hasCapability(member.profile, 'canPlaceOrders')) {
-              if (!liveExitsArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
-              else if (!liveTelegramHealthyThisTick) result.liveEntriesSuppressedByTelegram += 1;
+              if (!liveEntriesArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
@@ -2163,29 +2419,35 @@ export class MemberAutoTradingBackgroundWorker {
               let liveMember = member;
               if (member.policy.pilotStage === 'formula-ai-exception') {
                 formulaAiReviewReasonsForLive(entry, nowMs);
-                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(repository, member.userId, now);
+                const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
                 validateFormulaAiPilotEntry(
                   member,
                   entry,
                   runtime,
-                  formulaAiPilotCapital,
-                  paperInput.estimatedKrw,
+                  marketPilotCapital,
+                  buildPlanInput(member, entry, runtime, fx, nowMs, 'live').estimatedKrw,
                   nowMs,
+                  true,
                 );
                 liveMember = Object.freeze({
                   ...member,
-                  policy: deriveRulePackPilotExecutionPolicy(member.policy, formulaAiPilotCapital),
+                  policy: deriveRulePackPilotExecutionPolicy(
+                    member.policy, marketPilotCapital, candidateMarket, true,
+                  ),
                 });
               }
               const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
+              const liveCandidateInput = buildPlanInput(
+                liveMember, entry, runtime, fx, nowMs, 'live',
+              );
               const liveSeed = await buildLivePlanInput({
                 source: this.source,
                 repository,
                 member: liveMember,
                 entry,
                 runtime,
-                paperInput,
+                paperInput: liveCandidateInput,
                 snapshot: accountSnapshot,
                 fx,
                 fxCache,
@@ -2201,6 +2463,8 @@ export class MemberAutoTradingBackgroundWorker {
                 ...liveSeed,
                 marketSnapshot: {
                   ...livePreview.snapshot,
+                  accountValueKrw: Math.min(livePreview.snapshot.accountValueKrw,
+                    liveSeed.marketSnapshot.accountValueKrw),
                   dailyPnlPercent: liveSeed.marketSnapshot.dailyPnlPercent,
                   weeklyPnlPercent: liveSeed.marketSnapshot.weeklyPnlPercent,
                   consecutiveLosses: liveSeed.marketSnapshot.consecutiveLosses,
@@ -2215,33 +2479,14 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
-              if (member.policy.pilotStage === 'formula-ai-exception'
-                && liveInput.estimatedKrw > member.policy.maxOrderKrw) {
+              if (member.policy.pilotStage === 'formula-ai-exception') {
+                // The signed receipt also preserves the role-scoped four-
+                // market portfolio ceiling (member 2m / admin 4m) during the
+                // persisted approval and provider pre-submission rechecks,
+                // even when this particular order is below the lane cap.
                 liveInput = issueRulePackPilotDynamicCapReceipt(
                   member.userId, liveInput, nowMs,
                 );
-              }
-              // Recheck after private preflight: a Telegram outage during the tick
-              // must never allow a new automatic live order.
-              // Global delivery proof cannot prove that THIS member's channel
-              // is still connected. Check the actual connection separately.
-              let memberTelegramReady = false;
-              try {
-                memberTelegramReady = await this.source.memberTelegramConnected?.(member.userId) === true;
-              } catch {
-                memberTelegramReady = false;
-              }
-              if (!memberTelegramReady) {
-                result.newEntriesFailClosed = true;
-                result.liveEntriesSuppressedByTelegram += 1;
-                result.blocked += 1;
-                break;
-              }
-              if (this.source.telegramDeliveryHealthy?.(Date.now()) !== true) {
-                result.newEntriesFailClosed = true;
-                result.liveEntriesSuppressedByTelegram += 1;
-                result.blocked += 1;
-                break;
               }
               // The operator may revoke the arm during provider preflight.
               if (!await liveEntryArmPresent()) {
@@ -2251,6 +2496,9 @@ export class MemberAutoTradingBackgroundWorker {
                 break;
               }
               const liveRun = await executeAutomaticPlan({
+                isActive: () => !this.stopped,
+                memberAccessIsCurrent: (userId, plan) => this.source.revalidateLiveMemberAccess?.(userId, plan)
+                  ?? Promise.resolve(false),
                 repository,
                 userId: member.userId,
                 planInput: liveInput,
@@ -2270,11 +2518,6 @@ export class MemberAutoTradingBackgroundWorker {
                 }
                 if (liveRun.order.state === 'REJECTED') result.blocked += 1;
                 await refreshRuntime();
-                entryProjectionHealthy = await syncExecutionProjection(liveRun.order.id);
-                if (!entryProjectionHealthy) {
-                  result.blocked += 1;
-                  break;
-                }
               }
             }
           } catch (error) {
@@ -2320,9 +2563,9 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
 
-        const hardWarmupBlock = !result.handoffReady
+        const hardWarmupBlock = this.stopped || !result.handoffReady
+          || result.nativeProtectionErrorCode !== null
           || result.liveExitsSuppressedByPolicy > 0
-          || paperAccountMissingThisTick
           || result.executionSyncFailures > 0
           || result.executionSyncMissingReferences > 0
           || result.globalEmergencyStopActive
@@ -2362,6 +2605,12 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleAllFourWitnessUserId = null;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
+      if (this.stopped) {
+        result.newEntriesFailClosed = true;
+        result.liveEntriesArmed = false;
+        result.liveEntryWarmupComplete = false;
+        result.handoffErrorCode = 'BACKGROUND_WORKER_STOPPED';
+      }
       return result;
     } catch (error) {
       this.liveEntryWarmupComplete = false;
@@ -2391,6 +2640,7 @@ export function memberTelegramProofMatchesCurrentBinding(
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
+  private readonly maximumSingleEntryKrwByUserId = new Map<string, number>();
   private memberBatchCursor: string | null = null;
   private lastMemberBatchCompletedCycle = true;
 
@@ -2432,8 +2682,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
-      const policy = normalizeTradingPolicy((row.payload ?? {}) as Partial<TradingPolicy>);
-      return [{ userId, policy }];
+      return [{ userId, payload: (row.payload ?? {}) as Partial<TradingPolicy> }];
     });
     if (rows.length === 0) return [];
     const { data: profiles, error: profileError } = await this.client.from('profiles')
@@ -2445,11 +2694,16 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     if (rows.some((row) => !byId.has(row.userId))) {
       throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');
     }
-    return rows.map((row) => Object.freeze({
-      userId: row.userId,
-      policy: row.policy,
-      profile: byId.get(row.userId)!,
-    }));
+    return rows.map((row) => {
+      const profile = byId.get(row.userId)!;
+      const maximumSingleEntryKrw = maximumSingleEntryKrwForProfile(profile);
+      this.maximumSingleEntryKrwByUserId.set(row.userId, maximumSingleEntryKrw);
+      return Object.freeze({
+        userId: row.userId,
+        policy: normalizeTradingPolicy(row.payload, maximumSingleEntryKrw),
+        profile,
+      });
+    });
   }
 
   memberBatchCycleCompleted() {
@@ -2464,6 +2718,11 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     // SECURITY INVOKER returns only a boolean: strict V2 wallet+canonical
     // policies, seed constraint and revoked TRUNCATE must ALL still exist.
     const { data, error } = await this.client.rpc('admin_four_paper_wallet_rls_guard_ready');
+    return !error && data === true;
+  }
+
+  async fourMarketPaperDatabaseGuardReady() {
+    const { data, error } = await this.client.rpc('four_market_paper_wallet_rls_guard_ready');
     return !error && data === true;
   }
 
@@ -2505,39 +2764,77 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const profile = profileRows?.[0] as (MemberAccessProfile & { id: string }) | undefined;
     if (!profile) return false;
 
-    const policy = normalizeTradingPolicy(policyRow.payload as Partial<TradingPolicy>);
     const nowMs = Date.now();
-    const repository = createServiceRoleTradingRepository(userId, this.client);
-    const paperRepository = createServiceRolePaperJournalRepository(userId, this.client);
-    const [persistentGlobalStop, connections, runtime] = await Promise.all([
+    const maximumSingleEntryKrw = maximumSingleEntryKrwForProfile(profile);
+    this.maximumSingleEntryKrwByUserId.set(userId, maximumSingleEntryKrw);
+    const policy = normalizeTradingPolicy(
+      policyRow.payload as Partial<TradingPolicy>, maximumSingleEntryKrw,
+    );
+    const repository = createServiceRoleTradingRepository(
+      userId, this.client, maximumSingleEntryKrw,
+    );
+    const [persistentGlobalStop, connections, plans, orders] = await Promise.all([
       repository.getGlobalEmergencyStop(),
       repository.getConnections(userId),
-      memberRuntimeState(userId, repository, paperRepository, nowMs,
-        hasCapability(profile, 'canManageMembers')),
+      repository.listPlans(userId),
+      repository.listOrders(userId),
     ]);
-    const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
+    const owned = canonicalAutomaticLivePositions(plans, orders);
     const liveSnapshots = await Promise.all(
       (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
         .map((provider) => this.readLiveAccountSnapshot(userId, provider)),
     );
+    const nativeProtectionReady = await this.auditNativeFuturesProtection(userId, plans, orders);
     const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
-      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, livePlans));
+      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, owned,
+        maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+          ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE));
     return hasCapability(profile, 'canAccessAutoTrading')
       && hasCapability(profile, 'canPlaceOrders')
       && hasCapability(profile, 'canAccessFutures')
       && automaticPolicyHasAllFourMarkets(policy)
       && liveAllFourConnectionVerificationReady(policy, connections, nowMs)
       && liveSnapshotsReady
-      && runtime.paperAccountReady
+      && nativeProtectionReady
       && !persistentGlobalStop
-      && process.env.TRADING_EMERGENCY_STOP !== 'true'
-      // A globally healthy Telegram worker cannot attest a specific user's
-      // channel. Reject full-cycle warmup when the witness has no ACTIVE binding.
-      && await this.memberTelegramConnected(userId);
+      && process.env.TRADING_EMERGENCY_STOP !== 'true';
+  }
+
+  async revalidateLiveMemberAccess(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) {
+    const { data, error } = await this.client.from('profiles')
+      .select('id,role,status,membership_level,is_active,membership_expires_at')
+      .eq('id', userId).limit(2);
+    if (error || !Array.isArray(data) || data.length !== 1 || data[0]?.id !== userId) return false;
+    return currentLiveMemberAccessMatchesBatch(data[0] as MemberAccessProfile,
+      this.maximumSingleEntryKrwByUserId.get(userId), plan);
   }
 
   tradingRepositoryFor(userId: string) {
-    return createServiceRoleTradingRepository(userId, this.client);
+    return createServiceRoleTradingRepository(
+      userId,
+      this.client,
+      this.maximumSingleEntryKrwByUserId.get(userId) ?? PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+    );
+  }
+
+  async auditNativeFuturesProtection(userId: string, plans: readonly TradingPlan[], orders: readonly TradingOrder[]) {
+    if (plans.some((p) => p.userId !== userId) || orders.some((o) => o.userId !== userId)) throw new Error('USER_SCOPE_MISMATCH');
+    const positions = canonicalAutomaticLivePositions(plans, orders).filter((p) => p.plan.exchange === 'bitget');
+    if (!positions.length) return true; // Vacant is not an active-protection certificate.
+    const connection = await this.tradingRepositoryFor(userId).getConnection(userId, 'bitget');
+    if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
+      throw new Error('BITGET_NATIVE_PROTECTION_CREDENTIAL_REQUIRED');
+    }
+    const owned = positions.map((position) => {
+      const entryOrder = orders.find((order) => order.planId === position.plan.id
+        && ['FILLED', 'PARTIALLY_FILLED'].includes(order.state) && order.filledQuantity > 0);
+      if (!entryOrder) throw new Error('BITGET_NATIVE_PROTECTION_CANONICAL_OWNERSHIP_REQUIRED');
+      return { ...position, order: entryOrder };
+    });
+    const proof = await readAutomaticFuturesNativeProtection({ positions: owned,
+      credentials: decryptTradingCredentials(connection.encryptedCredentials) as BitgetCredentials,
+      send: sendBitgetNativeProtectionReadonly, now: Date.now });
+    return proof.ready && proof.activeAutomaticPositionCount === owned.length;
   }
 
   paperJournalRepositoryFor(userId: string) {
@@ -2597,15 +2894,20 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
+  // Repeated startup must not create a second timer/worker. PM2 replicas still
+  // rely on the durable order/budget claim, not this process-local singleton.
+  if (backgroundWorkerHandle) return backgroundWorkerHandle;
   const mode = memberAutoTradingWorkerMode();
   if (mode === 'DISABLED') {
     backgroundRuntimeHealth = Object.freeze({
       ...backgroundRuntimeHealth,
+      nativeProtectionErrorCode: null,
       enabled: false,
       liveModeRequested: false,
       lastTickAt: null,
       tickOk: null,
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
       newEntriesFailClosed: true,
       liveEntryArmPresent: false,
@@ -2636,11 +2938,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   if (!hasSupabaseServerKey()) {
     backgroundRuntimeHealth = Object.freeze({
       ...backgroundRuntimeHealth,
+      nativeProtectionErrorCode: null,
       enabled: true,
       liveModeRequested: liveBackgroundEnabled(),
       lastTickAt: null,
       tickOk: false,
       handoffStatus: 'MISSING',
+      handoffErrorCode: null,
       handoffReady: false,
       newEntriesFailClosed: true,
       liveEntryArmPresent: false,
@@ -2670,11 +2974,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   }
   backgroundRuntimeHealth = Object.freeze({
     ...backgroundRuntimeHealth,
+    nativeProtectionErrorCode: null,
     enabled: true,
     liveModeRequested: liveBackgroundEnabled(),
     lastTickAt: null,
     tickOk: null,
     handoffStatus: 'MISSING',
+    handoffErrorCode: null,
     handoffReady: false,
     newEntriesFailClosed: true,
     liveEntryArmPresent: false,
@@ -2700,19 +3006,26 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     errorCode: null,
   });
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
+  const generation = ++backgroundWorkerGeneration;
+  let stopped = false;
+  const current = () => !stopped && generation === backgroundWorkerGeneration;
   const tick = async () => {
+    if (!current()) return;
     try {
       const result = await worker.runOnce(new Date());
+      if (!current()) return; // stopped/replaced asynchronous ticks cannot resurrect health
       if (result.overlapSkipped) return;
       const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
         && result.liveEntryWarmupComplete;
       backgroundRuntimeHealth = Object.freeze({
+        nativeProtectionErrorCode: result.nativeProtectionErrorCode,
         enabled: true,
         liveModeRequested: liveBackgroundEnabled(),
         lastTickAt: new Date().toISOString(),
         tickOk: result.failures === 0 && result.executionSyncFailures === 0
           && result.executionSyncMissingReferences === 0,
         handoffStatus: result.handoffStatus,
+        handoffErrorCode: result.handoffErrorCode,
         handoffReady: result.handoffReady,
         newEntriesFailClosed: result.newEntriesFailClosed,
         liveEntryArmPresent: result.liveEntryArmPresent,
@@ -2741,9 +3054,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveCyclePolicyReady: result.liveCyclePolicyReady,
         liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
-        errorCode: result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
+        errorCode: result.handoffErrorCode ?? (result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
           : result.executionSyncFailures > 0 || result.executionSyncMissingReferences > 0
-            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null,
+            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null),
       });
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0
@@ -2755,6 +3068,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
+      if (!current()) return;
       backgroundRuntimeHealth = Object.freeze({
         ...backgroundRuntimeHealth,
         enabled: true,
@@ -2775,13 +3089,29 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       });
     }
   };
-  void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
+  const handle = { stop: () => {
+    if (stopped) return;
+    stopped = true;
+    worker.stop();
+    clearInterval(timer);
+    if (backgroundWorkerHandle === handle) {
+      backgroundWorkerHandle = null;
+      backgroundWorkerGeneration += 1;
+      backgroundRuntimeHealth = Object.freeze({ ...backgroundRuntimeHealth,
+        enabled: false, tickOk: null, newEntriesFailClosed: true,
+        liveEntriesArmed: false, liveEntryWarmupComplete: false,
+        liveCycleOrderEligible: false, liveCyclePolicyReady: false, liveCycleAllFourPolicyReady: false,
+        errorCode: 'BACKGROUND_WORKER_STOPPED' });
+    }
+  } };
+  backgroundWorkerHandle = handle;
+  void tick();
   console.log(mode === 'PAPER_ONLY'
     ? '[member-auto-trading-background] started with explicit Paper-only activation; Live override blocked'
     : liveBackgroundEnabled()
       ? '[member-auto-trading-background] started in Paper+Live guarded mode'
       : '[member-auto-trading-background] started in Paper-only mode');
-  return { stop: () => clearInterval(timer) };
+  return handle;
 }

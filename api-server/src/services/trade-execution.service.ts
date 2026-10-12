@@ -1,4 +1,12 @@
+import type { PaperFundingCertificate } from './paper-futures-funding-certificate.service';
+import { readBoundedTradingProviderJson } from './trading-provider-response.service';
 import { randomUUID } from 'node:crypto';
+import type {
+  MemberAutoTradingFxMarket,
+  MemberAutoTradingFxQuote,
+} from './member-auto-trading-fx.service';
+import { resolveMemberAutoTradingKrwRate } from './member-auto-trading-fx.service';
+
 import type { TradingRepository } from './trade-automation.repository';
 import {
   TradeAutomationService,
@@ -8,10 +16,20 @@ import {
 } from './trade-automation.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  readAutomaticLiveExecutionAccount,
+} from './automatic-live-position-isolation.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
+import { automaticLiveBudgetRequired } from './automatic-live-budget.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
+import {
+  processTossTokenManager,
+  type TossTokenManager,
+} from '../features/account-readonly/providers/toss-readonly.provider';
 import {
   isTransientTradingProviderError,
   tradingProviderHttpErrorCode,
@@ -49,7 +67,6 @@ import {
   prepareTossOrderbook,
   prepareTossPrices,
   prepareTossSellableQuantity,
-  prepareTossToken,
   prepareUpbitAccounts,
   prepareUpbitOrder,
   prepareUpbitOrderChance,
@@ -152,15 +169,11 @@ async function fetchExchangeJson(
       headers: request.headers,
       body: request.body,
       signal: controller.signal,
+      redirect: 'error',
     });
     if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
-    const raw = await response.text();
-    if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw new Error(invalidResponseCode(baseUrl));
-    }
+    return await readBoundedTradingProviderJson(response, { signal: controller.signal,
+      invalidCode: invalidResponseCode(baseUrl), boundCode: 'TRADING_PROVIDER_RESPONSE_BOUND_EXCEEDED' });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
     if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
@@ -205,13 +218,30 @@ function bitgetRow(data: unknown) {
 }
 
 function assertBitgetOrderAccepted(payload: ExchangePayload, expectedClientOid: string) {
-  const row = bitgetRow(assertBitgetSuccess(payload));
+  const data = assertBitgetSuccess(payload);
+  // The official acknowledgement is one object, never the first element of
+  // an arbitrary response list. clientOid is not the exchange orderId.
+  if (!isRecord(data)) throw new Error('BITGET_INVALID_RESPONSE');
+  const row = data;
   if (text(row.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
   return row;
 }
 
+export function bitgetAcknowledgedOrderId(
+  payload: ExchangePayload, expectedClientOid: string, reduceOnly = false,
+): string | null {
+  const row = assertBitgetOrderAccepted(payload, expectedClientOid);
+  const orderId = text(row.orderId);
+  // Bitget documents an absent orderId for some one-way reduce-only orders.
+  // Resolve it by a read-only clientOid lookup; never persist clientOid as
+  // an invented exchange ID, and never submit the order again.
+  if (!orderId && !reduceOnly) throw new Error('BITGET_ORDER_ID_MISSING');
+  return orderId;
+}
+
 function assertBitgetOrderLookup(payload: ExchangePayload, expectedClientOid: string) {
   const row = assertBitgetOrderAccepted(payload, expectedClientOid);
+  if (!text(row.orderId)) throw new Error('BITGET_ORDER_ID_MISSING');
   const status = String(row.status ?? row.state ?? '').toLowerCase();
   if (!BITGET_RECOGNIZED_STATES.has(status)) throw new Error('BITGET_INVALID_RESPONSE');
   return row;
@@ -262,13 +292,6 @@ function tossResult(payload: ExchangePayload) {
   const code = text(payload.code ?? payload.return_code);
   if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) throw new Error(`TOSS_${code}`);
   return isRecord(payload.result) ? payload.result : payload;
-}
-
-function tossToken(payload: ExchangePayload) {
-  const result = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
-  const token = text(result.access_token ?? result.accessToken ?? payload.access_token);
-  if (!token) throw new Error('TOSS_TOKEN_MISSING');
-  return token;
 }
 
 function tossVerificationAccountSeq(payload: ExchangePayload, requested?: string) {
@@ -459,6 +482,217 @@ function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
   return { averageFillPrice, filledQuantity };
 }
 
+/**
+ * Cost evidence may be zero only if the prospective signed Paper policy
+ * explicitly sets a numeric 0% rate. Never coerce null/undefined or empty
+ * provider data into zero via Number(null).
+ * No broker calls or activation authority are granted.
+ */
+export function paperSimulatedCostAmount(
+  price: number | null | undefined,
+  quantity: number | null | undefined,
+  ratePercent: number | null | undefined,
+): number | null {
+  if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0
+    || typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0
+    || typeof ratePercent !== 'number' || !Number.isFinite(ratePercent)
+    || ratePercent < 0 || ratePercent > 100) return null;
+  const amount = price * quantity * ratePercent / 100;
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
+/** This evidence source runs only in the server-side simulated fill lane. */
+export type ServerPaperCostPolicyV1 = Readonly<{
+  source: 'SERVER_PAPER_COST_POLICY_V1';
+  policyId: string;
+  market: MemberAutoTradingFxMarket;
+  exchange: TradingPlan['exchange'];
+  feeRatePercent: number;
+  taxRatePercent: number;
+  effectiveAt: string;
+  expiresAt: string;
+}>;
+export type ServerPaperCostEvidenceProviders = Readonly<{
+  // The built-in default reader uses public price quotes, never account keys.
+  fxQuote?: (market: MemberAutoTradingFxMarket, options?: { nowMs?: number }) => Promise<MemberAutoTradingFxQuote>;
+  // There is deliberately NO default tax rate: a missing market policy is
+  // unknown, not a fabricated zero-tax receipt.
+  costPolicy?: (plan: TradingPlan, nowMs: number) => Promise<ServerPaperCostPolicyV1 | null>;
+  /** Server-owned simulated-only event-level funding receipt. */
+  fundingReceipt?: (scope: Readonly<{
+    entryOrder: TradingOrder; entryPlan: TradingPlan;
+    exitOrder: TradingOrder; exitPlan: TradingPlan;
+    exitAtMs: number;
+  }>) => Promise<PaperFundingCertificate | null>;
+}>;
+
+function paperQuoteMarket(plan: TradingPlan): MemberAutoTradingFxMarket {
+  if (plan.exchange === 'upbit') return 'CRYPTO_SPOT';
+  if (plan.exchange === 'bitget') return 'CRYPTO_FUTURES';
+  const us = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
+    String(plan.market).toUpperCase(),
+  ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? '').toUpperCase());
+  return us ? 'US_STOCK' : 'KR_STOCK';
+}
+
+
+/**
+ * A protected, explicit Paper-only simulated cost schedule. Research handoffs,
+ * UI payloads, old fills and trading snapshots have zero tax-policy authority.
+ *
+ * Only a protected server environment may provide MEMBER_AUTO_PAPER_COST_RULES_V1
+ * as JSON: {contract:"member-auto-paper-cost-rules/v1",rules:[{
+ *   market:"CRYPTO_SPOT",exchange:"upbit",
+ *   policyId:"server-paper-cost-v1:<approved-id>",
+ *   feeRatePercent:0.05,taxRatePercent:0,
+ *   effectiveAt:"2026-10-10T00:00:00.000Z",
+ *   expiresAt:"2026-10-12T00:00:00.000Z"
+ * }]}.
+ * The above illustrative percentages are NOT defaults or Production rates.
+ * Without explicit, valid, current evidence, tax stays unknown and full-cost
+ * settlement remains blocked. No settings or deployment are changed here.
+ */
+export function protectedAutomaticPaperCostPolicyV1(
+  plan: TradingPlan,
+  nowMs = Date.now(),
+  configText: string | undefined = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1,
+): ServerPaperCostPolicyV1 | null {
+  if (plan.accountMode !== 'paper' || plan.executionMode !== 'automatic'
+    || !Number.isFinite(nowMs) || nowMs <= 0
+    || typeof configText !== 'string'
+    || configText.length < 2 || configText.length > 8192) return null;
+  let value: unknown;
+  try { value = JSON.parse(configText); } catch { return null; }
+  if (!isRecord(value) || value.contract !== 'member-auto-paper-cost-rules/v1'
+    || !Array.isArray(value.rules) || value.rules.length > 8) return null;
+  const allowed: Record<MemberAutoTradingFxMarket, readonly TradingExchange[]> = {
+    KR_STOCK: ['toss', 'kiwoom'],
+    US_STOCK: ['kiwoom'],
+    CRYPTO_SPOT: ['upbit'],
+    CRYPTO_FUTURES: ['bitget'],
+  };
+  const seen = new Set<string>();
+  const policyIds = new Set<string>();
+  const matches: ServerPaperCostPolicyV1[] = [];
+  for (const candidate of value.rules) {
+    if (!isRecord(candidate) || typeof candidate.market !== 'string'
+      || !Object.prototype.hasOwnProperty.call(allowed, candidate.market)
+      || typeof candidate.exchange !== 'string'
+      || !allowed[candidate.market as MemberAutoTradingFxMarket].includes(candidate.exchange as TradingExchange)
+      || typeof candidate.policyId !== 'string'
+      || !/^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(candidate.policyId)
+      || typeof candidate.feeRatePercent !== 'number'
+      || !Number.isFinite(candidate.feeRatePercent)
+      || candidate.feeRatePercent < 0 || candidate.feeRatePercent > 100
+      || typeof candidate.taxRatePercent !== 'number'
+      || !Number.isFinite(candidate.taxRatePercent)
+      || candidate.taxRatePercent < 0 || candidate.taxRatePercent > 100
+      || typeof candidate.effectiveAt !== 'string'
+      || typeof candidate.expiresAt !== 'string') return null;
+    const from = Date.parse(candidate.effectiveAt);
+    const until = Date.parse(candidate.expiresAt);
+    if (!Number.isFinite(from) || !Number.isFinite(until) || from >= until
+      || new Date(from).toISOString() !== candidate.effectiveAt
+      || new Date(until).toISOString() !== candidate.expiresAt) return null;
+    const identity = String(candidate.market) + ':' + String(candidate.exchange);
+    if (seen.has(identity) || policyIds.has(candidate.policyId)) return null;
+    // Identical per-broker policy IDs cannot establish an exact cost lineage.
+    seen.add(identity);
+    policyIds.add(candidate.policyId);
+    if (candidate.market !== paperQuoteMarket(plan)
+      || candidate.exchange !== plan.exchange
+      || from > nowMs || until < nowMs) continue;
+    matches.push(Object.freeze({
+      source: 'SERVER_PAPER_COST_POLICY_V1' as const,
+      policyId: candidate.policyId,
+      market: candidate.market as MemberAutoTradingFxMarket,
+      exchange: candidate.exchange as TradingExchange,
+      feeRatePercent: candidate.feeRatePercent,
+      taxRatePercent: candidate.taxRatePercent,
+      effectiveAt: candidate.effectiveAt,
+      expiresAt: candidate.expiresAt,
+    }));
+  }
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+export async function serverPaperFillCostEvidence(
+  plan: TradingPlan,
+  price: number,
+  quantity: number,
+  estimatedFeePercent: number | null | undefined,
+  providers: ServerPaperCostEvidenceProviders = {},
+  nowMs = Date.now(),
+) {
+  const market = paperQuoteMarket(plan);
+  const currency = market === 'KR_STOCK' || market === 'CRYPTO_SPOT' ? 'KRW'
+    : market === 'US_STOCK' ? 'USD' : 'USDT';
+  const expectedFxSource = currency === 'KRW' ? 'NATIVE_KRW'
+    : currency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+  const maxAgeMs = currency === 'USD' ? 86_400_000 : currency === 'USDT' ? 600_000 : 300_000;
+  let costPolicy: ServerPaperCostPolicyV1 | null = null;
+  if (plan.accountMode === 'paper' && providers.costPolicy) {
+    try {
+      const value = await providers.costPolicy(plan, nowMs);
+      const validAt = value ? Date.parse(value.effectiveAt) : Number.NaN;
+      const until = value ? Date.parse(value.expiresAt) : Number.NaN;
+      if (value?.source === 'SERVER_PAPER_COST_POLICY_V1'
+        && /^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(value.policyId)
+        && value.market === market && value.exchange === plan.exchange
+        && Number.isFinite(validAt) && validAt <= nowMs
+        && Number.isFinite(until) && until >= nowMs
+        && typeof value.feeRatePercent === 'number'
+        && Number.isFinite(value.feeRatePercent) && value.feeRatePercent >= 0
+        && value.feeRatePercent <= 100
+        && typeof value.taxRatePercent === 'number'
+        && Number.isFinite(value.taxRatePercent) && value.taxRatePercent >= 0
+        && value.taxRatePercent <= 100) costPolicy = value;
+    } catch { /* absent policy cannot certify a Paper tax */ }
+  }
+  const feeAmount = paperSimulatedCostAmount(
+    price, quantity, costPolicy?.feeRatePercent ?? estimatedFeePercent,
+  );
+  const taxAmount = costPolicy ? paperSimulatedCostAmount(
+    price, quantity, costPolicy.taxRatePercent,
+  ) : null;
+  let settlementFxEvidence: TradingOrder['settlementFxEvidence'] = null;
+  if (plan.accountMode === 'paper') {
+    try {
+      // Generic Paper HTTP orders must never acquire new implicit public
+      // network dependencies. Native KRW=1 is deterministic; USD and USDT
+      // require an explicit quote supplied by the already-verifying server
+      // Paper Worker. Missing proof leaves FX null and settlement blocked.
+      const reader = providers.fxQuote ?? (
+        market === 'KR_STOCK' || market === 'CRYPTO_SPOT'
+          ? resolveMemberAutoTradingKrwRate : null
+      );
+      if (!reader) throw new Error('PAPER_NON_NATIVE_FX_SERVER_WITNESS_REQUIRED');
+      const fx = await reader(market, { nowMs });
+      const observedMs = Date.parse(fx.observedAt);
+      if (fx.market === market && fx.stale === false && fx.source === expectedFxSource
+        && typeof fx.krwPerQuoteCurrency === 'number'
+        && Number.isFinite(fx.krwPerQuoteCurrency) && fx.krwPerQuoteCurrency > 0
+        && (currency !== 'KRW' || fx.krwPerQuoteCurrency === 1)
+        && Number.isFinite(observedMs)
+        && observedMs <= nowMs + 5_000 && nowMs - observedMs <= maxAgeMs) {
+        settlementFxEvidence = Object.freeze({
+          krwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+          source: expectedFxSource,
+          observedAt: new Date(observedMs).toISOString(),
+        });
+      }
+    } catch { /* a provider outage leaves FX unverified and settlement blocked */ }
+  }
+  return Object.freeze({
+    feeAmount,
+    feeCurrency: currency,
+    taxAmount,
+    taxCurrency: taxAmount == null ? null : currency,
+    trustedPaperCostPolicyId: taxAmount == null ? null : costPolicy?.policyId ?? null,
+    settlementFxEvidence,
+  });
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
@@ -470,11 +704,39 @@ export class TradeExecutionService {
     private verificationSleep: (delayMs: number) => Promise<void> = (delayMs) => new Promise(
       (resolve) => setTimeout(resolve, delayMs),
     ),
+    private tossTokens: Pick<TossTokenManager, 'token'> = processTossTokenManager(),
+    private readonly paperCostEvidenceProviders: ServerPaperCostEvidenceProviders = {},
+    // Server-only revocation fence. It can only remove execution permission;
+    // it never substitutes for policy, account, budget or exact-SHA arm gates.
+    private readonly executionGenerationIsActive: (() => boolean) | null = null,
+    // Background execution supplies a fresh server membership read. This
+    // revocation-only check cannot grant authority or replace any trade gate.
+    private readonly memberAccessIsCurrent: ((userId: string, plan: TradingPlan) => Promise<boolean>) | null = null,
   ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
     this.riskService = new TradePreSubmissionRiskService(repository);
+  }
+
+  private async tossAccessToken(credentials: TossCredentials) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PREFLIGHT_TIMEOUT_MS);
+    try {
+      return await this.tossTokens.token(credentials, controller.signal);
+    } catch (error) {
+      const code = error !== null && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : '';
+      if ((error instanceof Error && error.name === 'AbortError') || code === 'PROVIDER_TIMEOUT') {
+        throw new Error('TOSS_TIMEOUT');
+      }
+      if (code === 'RATE_LIMITED') throw new Error('TOSS_RATE_LIMITED');
+      if (code === 'PROVIDER_UNAVAILABLE') throw new Error('TOSS_UNAVAILABLE');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async previewLiveRiskSnapshot(
@@ -602,7 +864,7 @@ export class TradeExecutionService {
       } else {
         if (!marketOpenInSeoul(now) && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
         const [orderable, unfilled, orderbook] = await Promise.all([
-          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomOrderable(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
           request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
           request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomExecutionOrderbook(token, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
         ]);
@@ -614,8 +876,8 @@ export class TradeExecutionService {
       }
     } else {
       const toss = credentials as TossCredentials;
-      const tokenPayload = await request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossToken(toss), PREFLIGHT_TIMEOUT_MS));
-      const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
+      const token = await request(() => this.tossAccessToken(toss));
+      const authenticated = { ...toss, accessToken: token };
       const market = provisional.market.toUpperCase() as 'KR' | 'US';
       if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
       const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
@@ -740,12 +1002,7 @@ export class TradeExecutionService {
         )));
       } else {
         const toss = credentials as TossCredentials;
-        const tokenPayload = await request(() => sendExchangeRequest(
-          BASE_URLS.toss,
-          prepareTossToken(toss),
-          PREFLIGHT_TIMEOUT_MS,
-        ));
-        const token = tossToken(tokenPayload);
+        const token = await request(() => this.tossAccessToken(toss));
         const authenticated = { ...toss, accessToken: token };
         const accountsPayload = await request(() => sendExchangeRequest(
           BASE_URLS.toss,
@@ -796,6 +1053,7 @@ export class TradeExecutionService {
   }
 
   async execute(userId: string, plan: TradingPlan, candidate: TradingOrder) {
+    this.assertExecutionGenerationActive();
     let order = await this.repository.getOrder(userId, candidate.id);
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     if (order.state === 'RECOVERY_REQUIRED') return this.recovery.reconcile(userId, plan, order);
@@ -820,6 +1078,7 @@ export class TradeExecutionService {
         errorCode: 'REDUCE_ONLY_SIDE_INVALID', orderSubmissionAttempted: false,
       });
     }
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (plan.accountMode !== 'paper') {
       if (!connection?.configured || !connection.encryptedCredentials) {
@@ -887,7 +1146,17 @@ export class TradeExecutionService {
     }
 
     const claimId = randomUUID();
-    const claimed = await this.repository.claimOrderExecution(order, orderVersion(order), claimId);
+    let claimed: TradingOrder | null;
+    if (automaticLiveBudgetRequired(plan)) {
+      try {
+        if (!this.repository.claimAutomaticLiveEntry) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');
+        claimed = await this.repository.claimAutomaticLiveEntry(order, orderVersion(order), claimId);
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : '';
+        const errorCode = /^AUTOMATIC_[A-Z0-9_]+$/u.test(raw) ? raw : 'AUTOMATIC_LIVE_BUDGET_NOT_READY';
+        return this.automation.transition(order, 'REJECTED', errorCode, { errorCode, orderSubmissionAttempted: false });
+      }
+    } else claimed = await this.repository.claimOrderExecution(order, orderVersion(order), claimId);
     if (!claimed) return await this.repository.getOrder(userId, order.id) ?? order;
     order = claimed;
 
@@ -903,20 +1172,70 @@ export class TradeExecutionService {
         const metadata = this.riskMetadata(risk, false);
         const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        const feePercent = Number(risk.snapshot.estimatedFeePercent);
-        const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
-          && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0
-          ? averageFillPrice! * filledQuantity * feePercent / 100
-          : null;
-        const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
-          ? 'KRW'
-          : plan.exchange === 'bitget' ? 'USDT' : 'USD';
+        // Always obtain non-native Paper FX from a *server-owned* public
+        // quote at fill time; never promote a client/entry-time FX snapshot.
+        // A tax/fee cost policy is separately issued by trusted server code,
+        // and absent policy evidence remains unknown rather than zero.
+        const cost = plan.accountMode === 'paper'
+          ? await serverPaperFillCostEvidence(
+            plan, averageFillPrice, filledQuantity,
+            risk.snapshot.estimatedFeePercent, this.paperCostEvidenceProviders,
+          )
+          : { feeAmount: paperSimulatedCostAmount(
+              averageFillPrice, filledQuantity, risk.snapshot.estimatedFeePercent,
+            ), feeCurrency: paperQuoteMarket(plan) === 'US_STOCK' ? 'USD'
+              : paperQuoteMarket(plan) === 'CRYPTO_FUTURES' ? 'USDT' : 'KRW',
+            taxAmount: null, taxCurrency: null,
+            trustedPaperCostPolicyId: null, settlementFxEvidence: null };
+        // Economic simulated fill time precedes bounded public evidence collection.
+        // Never move an exit's price timestamp forward merely due to slow APIs.
+        const paperFundingExitAtMs = Date.now();
+        let fundingReceipt: PaperFundingCertificate | null = null;
+        if (plan.accountMode === 'paper' && plan.executionMode === 'automatic'
+          && plan.exchange === 'bitget' && plan.reduceOnly === true
+          && this.paperCostEvidenceProviders.fundingReceipt) {
+          const refs = Array.isArray(plan.signalReasons)
+            ? plan.signalReasons.filter(x => x.startsWith('AUTO_EXIT_ENTRY_ORDER:')) : [];
+          if (refs.length === 1) {
+            const entryOrder = await this.repository.getOrder(
+              userId, refs[0]!.slice('AUTO_EXIT_ENTRY_ORDER:'.length));
+            const entryPlan = entryOrder
+              ? await this.repository.getPlan(userId, entryOrder.planId) : null;
+            if (entryOrder && entryPlan) {
+              try {
+                fundingReceipt = await this.paperCostEvidenceProviders.fundingReceipt({
+                  entryOrder, entryPlan,
+                  exitOrder: {
+                    ...order, state: 'FILLED', filledQuantity, averageFillPrice,
+                    exchangeOrderId: 'paper-' + order.clientOrderId,
+                  },
+                  exitPlan: plan, exitAtMs: paperFundingExitAtMs,
+                });
+              } catch {
+                // Unknown funding must never mutate or invalidate a safe exit.
+              }
+            }
+          }
+        }
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
+          ...(fundingReceipt ? {
+            paperFundingSettlementEvidence: fundingReceipt,
+            paperFillObservedAt: new Date(paperFundingExitAtMs).toISOString(),
+          } : {}),
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,
-          ...(feeAmount == null ? {} : { feeAmount, feeCurrency }),
+          ...(cost.feeAmount == null ? {} : {
+            feeAmount: cost.feeAmount, feeCurrency: cost.feeCurrency,
+          }),
+          ...(cost.taxAmount == null ? {} : {
+            taxAmount: cost.taxAmount,
+            taxCurrency: cost.taxCurrency,
+            trustedPaperCostPolicyId: cost.trustedPaperCostPolicyId,
+          }),
+          ...(cost.settlementFxEvidence
+            ? { settlementFxEvidence: cost.settlementFxEvidence } : {}),
         });
       }
 
@@ -1004,8 +1323,39 @@ export class TradeExecutionService {
   }
 
   private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
+    this.assertExecutionGenerationActive();
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
     if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
       || isRiskReducingExitPlan(plan)) return;
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+    await this.assertAutomaticLivePositionIsolation(userId, plan);
+    // Private reads can take time. Recheck revocable authority and member caps
+    // AFTER them, rather than trusting a pre-read arm/policy decision.
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
+    this.assertExecutionGenerationActive();
+  }
+
+  private async assertCurrentAutomaticMemberAccess(userId: string, plan: TradingPlan) {
+    if (!this.memberAccessIsCurrent || plan.accountMode !== 'live'
+      || (plan.executionMode !== 'automatic'
+        && !plan.signalReasons.some((reason) => reason === 'CANONICAL_LIVE_AUTO_HANDOFF'
+          || reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))) return;
+    this.assertExecutionGenerationActive();
+    let current = false;
+    try { current = await this.memberAccessIsCurrent(userId, plan) === true; }
+    catch { /* Unknown profile state cannot authorize a financial mutation. */ }
+    this.assertExecutionGenerationActive();
+    if (!current) throw new Error('AUTOMATIC_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
+  }
+
+  private assertExecutionGenerationActive() {
+    if (this.executionGenerationIsActive && this.executionGenerationIsActive() !== true) {
+      throw new Error('AUTOMATIC_WORKER_GENERATION_STOPPED');
+    }
+  }
+
+  private async assertAutomaticLiveEntryControls(userId: string, plan: TradingPlan) {
     // A provider-side margin/leverage mutation is still a financial mutation,
     // even if no order POST follows. Enforce this before EACH mutable call,
     // and recheck after preflight at the actual order intent boundary.
@@ -1034,10 +1384,30 @@ export class TradeExecutionService {
     if (!await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
+    if (!this.repository.assertAutomaticLiveEntryBudget) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');
+    await this.repository.assertAutomaticLiveEntryBudget(plan);
+  }
+
+  private async assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan) {
+    if (plan.accountMode !== 'live' || (plan.executionMode !== 'automatic'
+      && !plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))) return;
+    // A manual trade may occur after the worker's earlier snapshot. Re-read at
+    // EVERY mutation boundary; never sell/adopt ambiguous same-symbol assets.
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(this.repository, userId, plan.exchange),
+      this.repository.listPlans(userId), this.repository.listOrders(userId),
+    ]);
+    assertAutomaticLiveTargetIsolation(snapshot, canonicalAutomaticLivePositions(plans, orders), plan);
   }
 
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
+    if (isRiskReducingExitPlan(risk.plan)) {
+      await this.assertAutomaticLivePositionIsolation(order.userId, risk.plan);
+      if (risk.plan.accountMode === 'live' && (risk.plan.executionMode === 'automatic'
+        || risk.plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))
+        && !await liveEntryArmPresent()) throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+    }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;
@@ -1050,6 +1420,7 @@ export class TradeExecutionService {
       submissionAttemptId,
       executionClaimId: expectedClaimId,
     });
+    this.assertExecutionGenerationActive();
     return order.state === 'SUBMITTED'
       && order.submissionAttemptId === submissionAttemptId
       && order.executionClaimId === expectedClaimId
@@ -1103,6 +1474,7 @@ export class TradeExecutionService {
     });
     if (!plan.reduceOnly && canChangeMarginMode) {
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
+      this.assertExecutionGenerationActive();
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
@@ -1110,21 +1482,24 @@ export class TradeExecutionService {
       const leverage = Number(plan.leverage);
       if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
+      this.assertExecutionGenerationActive();
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
-    const row = assertBitgetOrderAccepted(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
-    void row;
+    this.assertExecutionGenerationActive();
+    let exchangeOrderId = bitgetAcknowledgedOrderId(await sendExchangeRequest(BASE_URLS.bitget,
+      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId, plan.reduceOnly === true);
     let reconciliationRequired = false;
     try {
-      assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
+      const queried = assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetOrderQuery(credentials, plan.symbol, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
+      if (exchangeOrderId && text(queried.orderId) !== exchangeOrderId) throw new Error('BITGET_ORDER_IDENTITY_MISMATCH');
+      exchangeOrderId = text(queried.orderId);
     } catch { reconciliationRequired = true; }
-    return { orderId: order.clientOrderId, reconciliationRequired, risk };
+    return { orderId: exchangeOrderId, reconciliationRequired, risk };
   }
 
   private async executeUpbit(
@@ -1168,11 +1543,13 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('upbit'),
     });
+    this.assertExecutionGenerationActive();
     assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
       prepareUpbitOrderTest(credentials, risk.plan, order.clientOrderId), PREFLIGHT_TIMEOUT_MS));
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
+    this.assertExecutionGenerationActive();
     const accepted = assertUpbitOrderAccepted(await sendExchangeRequest(BASE_URLS.upbit,
       prepareUpbitOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
     let reconciliationRequired = false;
@@ -1226,7 +1603,7 @@ export class TradeExecutionService {
       });
     } else {
       const [orderable, krUnfilled, orderbook] = await Promise.all([
-        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
         sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
         sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
       ]);
@@ -1254,6 +1631,7 @@ export class TradeExecutionService {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
 
+    this.assertExecutionGenerationActive();
     const orderId = assertKiwoomOrderAccepted(await sendExchangeRequest(
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
 
@@ -1276,8 +1654,8 @@ export class TradeExecutionService {
     order: TradingOrder,
     credentials: TossCredentials,
   ) {
-    const tokenPayload = await sendExchangeRequest(BASE_URLS.toss, prepareTossToken(credentials), PREFLIGHT_TIMEOUT_MS);
-    const authenticated = { ...credentials, accessToken: tossToken(tokenPayload) };
+    const token = await this.tossAccessToken(credentials);
+    const authenticated = { ...credentials, accessToken: token };
     const market = plan.market.toUpperCase() as 'KR' | 'US';
     if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
     const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
@@ -1315,6 +1693,7 @@ export class TradeExecutionService {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
 
+    this.assertExecutionGenerationActive();
     const orderId = assertTossOrderAccepted(
       await sendExchangeRequest(BASE_URLS.toss, prepareTossOrder(authenticated, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS),
       order.clientOrderId,

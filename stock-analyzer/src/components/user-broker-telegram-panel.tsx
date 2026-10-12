@@ -80,6 +80,9 @@ type TelegramRuntimeState = {
   marketBriefEnabled: boolean;
   backgroundWorkersEnabled: boolean;
   personalWorkerEnabled: boolean;
+  personalWorkerStarted: boolean;
+  personalWorkerHealthy: boolean;
+  personalWorkerErrorCode: string | null;
   orderAuthority: 'NONE';
   privateTradingApiAllowed: false;
   realOrderAllowed: false;
@@ -99,7 +102,14 @@ type DeliveryHealth = {
 
 type IntegrationState = {
   brokerConnections: BrokerConnection[];
-  telegram: { connected: boolean; status: string; connectedAt: string | null };
+  telegram: {
+    connected: boolean;
+    status: string;
+    connectedAt: string | null;
+    recoveryRequired: boolean;
+    recoveryErrorCode: string | null;
+    recoveryFailedAt: string | null;
+  };
   preferences: Record<PreferenceKey, boolean>;
   alertPolicy: TelegramAlertPolicy;
   alertPolicySource: string;
@@ -215,6 +225,11 @@ function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
     marketBriefEnabled: runtime.marketBriefEnabled === true,
     backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
     personalWorkerEnabled: runtime.personalWorkerEnabled === true,
+    personalWorkerStarted: runtime.personalWorkerStarted === true,
+    personalWorkerHealthy: runtime.personalWorkerHealthy === true,
+    personalWorkerErrorCode: typeof runtime.personalWorkerErrorCode === 'string'
+      ? runtime.personalWorkerErrorCode.slice(0, 120)
+      : null,
     orderAuthority: 'NONE',
     privateTradingApiAllowed: false,
     realOrderAllowed: false,
@@ -304,6 +319,13 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
       connected: telegram.connected === true,
       status: typeof telegram.status === 'string' ? telegram.status : 'DISCONNECTED',
       connectedAt: typeof telegram.connectedAt === 'string' ? telegram.connectedAt : null,
+      recoveryRequired: telegram.recoveryRequired === true,
+      recoveryErrorCode: typeof telegram.recoveryErrorCode === 'string'
+        ? telegram.recoveryErrorCode.slice(0, 120)
+        : null,
+      recoveryFailedAt: typeof telegram.recoveryFailedAt === 'string'
+        ? telegram.recoveryFailedAt
+        : null,
     },
     preferences: Object.fromEntries(
       preferenceKeys.map((key) => [key, preferences[key] === true]),
@@ -431,7 +453,8 @@ export function UserBrokerTelegramPanel() {
   }
 
   async function sendTelegramTest() {
-    if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;
+    if (!state?.telegram.connected || state.telegram.recoveryRequired
+      || !state.telegramRuntime.deliveryReady || testSending) return;
     setTestSending(true);
     setError(null);
     setSyncNotice(null);
@@ -502,12 +525,19 @@ export function UserBrokerTelegramPanel() {
     && state.telegramRuntime.deliveryReady
     && state.telegramRuntime.backgroundWorkersEnabled
     && state.telegramRuntime.personalWorkerEnabled
+    && state.telegramRuntime.personalWorkerStarted
+    && state.telegramRuntime.personalWorkerHealthy
+    && !state.telegram.recoveryRequired
   );
-  const deliveryHasFailure = Boolean(state && (state.deliveryHealth.failed > 0 || state.deliveryHealth.deadLetter > 0));
+  const deliveryHasFailure = Boolean(state?.deliveryHealth.lastFailureAt
+    && (!state.deliveryHealth.lastSentAt
+      || state.deliveryHealth.lastFailureAt > state.deliveryHealth.lastSentAt));
   const deliveryRetrying = Boolean(state && state.deliveryHealth.retryScheduled > 0);
   const telegramStatusLabel = requestState === 'failure'
     ? '확인 실패'
-    : deliveryHasFailure
+    : state?.telegram.recoveryRequired
+      ? '재연결 필요'
+      : deliveryHasFailure
       ? '전송 오류'
       : deliveryRetrying
         ? '재시도 중'
@@ -516,7 +546,7 @@ export function UserBrokerTelegramPanel() {
           : state?.telegram.connected
             ? '확인 필요'
             : '연결 필요';
-  const telegramStatusTone = requestState === 'failure' || deliveryHasFailure
+  const telegramStatusTone = requestState === 'failure' || state?.telegram.recoveryRequired || deliveryHasFailure
     ? 'bg-destructive/10 text-destructive'
     : deliveryRetrying
       ? 'bg-warning/10 text-warning'
@@ -564,6 +594,11 @@ export function UserBrokerTelegramPanel() {
       {syncNotice ? <p role="status" className="mt-3 rounded-xl bg-secondary p-3 text-xs font-bold">{syncNotice}</p> : null}
 
       {state ? <>
+        {state.telegram.recoveryRequired ? (
+          <div role="alert" className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs font-bold text-destructive" data-testid="telegram-recovery-required">
+            Telegram이 메시지 전송을 거부했습니다. Telegram에서 이 봇의 차단을 해제한 뒤 아래 재연결 버튼을 누르고 /start를 완료하세요. 재연결 후 테스트 메시지가 도착해야 정상으로 전환됩니다.
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-wrap gap-2">
           {state.telegram.connected ? (
             <button className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>
@@ -571,13 +606,13 @@ export function UserBrokerTelegramPanel() {
             </button>
           ) : (
             <button className="min-h-11 rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground" type="button" onClick={() => void createTelegramLink()}>
-              텔레그램 연결
+              {state.telegram.recoveryRequired ? '텔레그램 재연결' : '텔레그램 연결'}
             </button>
           )}
           <button
             type="button"
             className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
-            disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}
+            disabled={!state.telegram.connected || state.telegram.recoveryRequired || !state.telegramRuntime.deliveryReady || testSending}
             onClick={() => void sendTelegramTest()}
           >
             {testSending ? '전송 중…' : '테스트 메시지'}
