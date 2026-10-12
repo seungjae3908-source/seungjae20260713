@@ -241,7 +241,10 @@ test('a nominal CANDIDATES_AVAILABLE lane without actual retained page cards nev
    assert.deepEqual(view.allowedIds,[]);
    assert.deepEqual(view.lists.usBuy,[]);
    assert.deepEqual(view.events,[]);
-   assert.equal(currentPublicV3CycleReady(lanes),false);
+   // A genuinely completed no-trade page is source-ready, but cannot
+   // publish a stored candidate. All malformed nominal candidate pages fail.
+   assert.equal(currentPublicV3CycleReady(lanes),
+     lanes[3].status==='VALID_NO_TRADE');
  }
 });
 test('fresh verified candidates take the ten published slots after historical research candidates are removed',()=>{
