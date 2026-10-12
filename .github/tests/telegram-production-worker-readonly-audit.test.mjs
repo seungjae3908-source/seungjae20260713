@@ -5,7 +5,9 @@ import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
-  readSignalV3Units, readSignalV3HealthOnce, morningWindowProcessCoverage,
+  readSignalV3Units, readSignalV3HealthOnce, readSignalV3CycleResult,
+  safeSignalAgeBand, readV3SnapshotFile, v3StalenessHypothesis,
+  morningWindowProcessCoverage,
   sanitizeBriefWorkerHealth,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
@@ -40,8 +42,11 @@ const observed=()=>({
 });
 const safeSignalDiagnostics={
   signalHealth:async()=>({status:'READY',serviceSha:deployed,
-    snapshotReady:true,snapshotFresh:true}),
+    snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'}),
   signalUnits:()=>({server:'ACTIVE',timer:'ACTIVE',cycle:'INACTIVE'}),
+  signalCycle:()=>({unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true,startedAgeBand:'UNDER_5M'}),
+  signalFile:()=>({status:'RECENT_PUBLICATION',serviceSha:deployed,
+    generatedAgeBand:'UNDER_5M',fileAgeBand:'UNDER_5M'}),
 };
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
@@ -102,6 +107,29 @@ test('market and signal ledgers emit only fixed labels/counts and never IDs',()=
   assert.ok(!JSON.stringify(signal).includes('PRIVATE_MEMBER_SIGNAL_IDENTIFIER'));
 });
 
+test('unconfirmed Bot API POST is never a SENT receipt in protected read-only diagnostics',()=>{
+  for (const type of ['market','signal']){
+    const key=type==='market'?marketKey:signalKey;
+    const input=JSON.stringify({version:1,delivered:{},
+      unconfirmed:{[key]:new Date(now-30_000).toISOString()}});
+    const receipt=inspectDeliveryStateText(input,type,now);
+    assert.equal(receipt.status,'UNCONFIRMED_ONLY');
+    assert.equal(receipt.recordCount,0);
+    assert.equal(receipt.unconfirmedCount,1);
+    assert.equal(receipt.unconfirmedRecent24hCount,1);
+    assert.equal(receipt.lastEvidenceAt,null);
+    assert.equal(receipt.lastUnconfirmedAt,new Date(now-30_000).toISOString());
+    assert.equal(JSON.stringify(receipt).includes(key),false);
+    const future=JSON.stringify({version:1,delivered:{},
+      unconfirmed:{[key]:new Date(now+60_000).toISOString()}});
+    assert.equal(inspectDeliveryStateText(future,type,now).status,'INVALID');
+  }
+  const yaml=fs.readFileSync('.github/workflows/telegram-production-worker-readonly-audit.yml','utf8');
+  assert.ok(yaml.includes("'UNCONFIRMED_ONLY'"));
+  assert.ok(yaml.includes("'CYCLE_RUNNING_OVER_60M_SUSPECT'"));
+  assert.ok(yaml.includes('uncertain outcomes (NOT SENT)'));
+});
+
 test('ledger parser fails closed on empty/malformed/future and bounded entries',()=>{
   assert.equal(inspectDeliveryStateText('{bad','market',now).status,'INVALID');
   assert.equal(inspectDeliveryStateText('{"version":2,"delivered":{}}','market',now).status,'INVALID');
@@ -146,7 +174,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
   assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
-  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v3');
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v6');
   assert.equal(result.briefWorker.status,'NOT_AVAILABLE');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
@@ -384,7 +412,7 @@ test('fixed systemd Signal V3 statuses are whitelisted and no service actions oc
 });
 
 test('V3 health only classifies safe loopback snapshot status and never copies error contents',async()=>{
-  const responseFor=(status,ready,fresh)=>(target,opts,respond)=>{
+  const responseFor=(status,ready,fresh,currentPageSourceReady,sourceError='PRIVATE_DO_NOT_PUBLISH')=>(target,opts,respond)=>{
     assert.equal(target.protocol,'http:');
     assert.equal(target.hostname,'127.0.0.1');
     assert.equal(target.pathname,'/health');
@@ -399,8 +427,10 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
         res.emit('data',Buffer.from(JSON.stringify({
           ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
           bindHost:'127.0.0.1',snapshotReady:ready,snapshotFresh:fresh,
+          snapshotCurrentPageSourceReady:currentPageSourceReady,
+          snapshotAgeMs:ready?60_000:null,
           executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
-          snapshotError:'PRIVATE_DO_NOT_PUBLISH',secret:'PRIVATE_TOKEN',
+          snapshotError:sourceError,secret:'PRIVATE_TOKEN',
         })));
         res.emit('end');
       }
@@ -408,11 +438,35 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
     return req;
   };
   const ready=await readSignalV3HealthOnce({getImpl:responseFor(200,true,true)});
-  assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true});
+  assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'});
   const stale=await readSignalV3HealthOnce({getImpl:responseFor(200,true,false)});
   assert.equal(stale.status,'SNAPSHOT_STALE');
+  const blocked=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,false,false),
+  });
+  assert.equal(blocked.status,'SOURCE_DATA_BLOCKED');
+  assert.equal(blocked.snapshotReady,true);
+  assert.equal(blocked.snapshotFresh,false);
+  assert.equal(blocked.snapshotAgeBand,'UNDER_5M');
+  const conflict=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,true,false),
+  });
+  assert.equal(conflict.status,'INVALID_RESPONSE');
+  assert.ok(!JSON.stringify(blocked).includes('PRIVATE_TOKEN'));
   const missing=await readSignalV3HealthOnce({getImpl:responseFor(200,false,false)});
   assert.equal(missing.status,'SNAPSHOT_MISSING');
+  const wrongRelease=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,false,false,null,'SNAPSHOT_SERVICE_SHA_MISMATCH'),
+  });
+  assert.equal(wrongRelease.status,'SNAPSHOT_SHA_MISMATCH');
+  assert.equal(wrongRelease.snapshotFresh,false);
+  assert.equal(wrongRelease.snapshotReady,false);
+  assert.equal(wrongRelease.snapshotAgeBand,'UNKNOWN');
+  assert.ok(!JSON.stringify(wrongRelease).includes('snapshotError'));
+  const contradictory=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,true,null,'SNAPSHOT_SERVICE_SHA_MISMATCH'),
+  });
+  assert.equal(contradictory.status,'INVALID_RESPONSE');
   const notReady=await readSignalV3HealthOnce({getImpl:responseFor(503,false,false)});
   assert.equal(notReady.status,'HTTP_503');
   const refused=await readSignalV3HealthOnce({getImpl:()=>{throw Error('SECRET_ON_ERROR')}});
@@ -445,4 +499,122 @@ test('protected workflow is owner-only and never sends, deploys or restarts',()=
   for(const forbidden of ['sendTelegramAlert','writeFileSync','writeFile(','unlinkSync(','spawnSync(','fetch(']){
     assert.ok(!src.includes(forbidden),forbidden);
   }
+});
+
+
+test('Signal V3 oneshot result includes privacy-safe monotonic age and distinguishes stale last success',()=>{
+  const requested=[];
+  const fake=output=>(command,args)=>{
+    requested.push(args);
+    assert.equal(command,'systemctl');
+    assert.deepEqual(args,[
+      'show','--no-pager',
+      '--property=LoadState,ActiveState,Result,ExecMainStatus,ExecMainStartTimestampMonotonic',
+      'investment-signal-intelligence-v3-cycle.service',
+    ]);
+    return output+'\nEnvironment=PRIVATE_SECRET_DO_NOT_LEAK\n';
+  };
+  const done='LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000';
+  const good=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> '150.00 0'});
+  assert.deepEqual(good,{unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,
+    hasStarted:true,startedAgeBand:'UNDER_5M'});
+  const stale=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> '5100.00 0'});
+  assert.equal(stale.lastResult,'SUCCEEDED');
+  assert.equal(stale.startedAgeBand,'OVER_60M');
+  const failure=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=failed\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000'),
+    uptimeReadImpl:()=> '130.0 0'});
+  assert.equal(failure.lastResult,'FAILED');
+  const never=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=0')});
+  assert.equal(never.lastResult,'NOT_OBSERVED');
+  assert.equal(never.startedAgeBand,'UNKNOWN');
+  const running=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=active\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=120000000'),uptimeReadImpl:()=> '130.0 0'});
+  assert.equal(running.lastResult,'RUNNING');
+  assert.equal(requested.length,5);
+  const unknown=readSignalV3CycleResult({execImpl:fake(done),uptimeReadImpl:()=> {
+    throw Error('CONFIDENTIAL_LOCAL_UPTIME_PATH'); }});
+  assert.equal(unknown.startedAgeBand,'UNKNOWN');
+  assert.ok(!JSON.stringify([good,stale,failure,unknown]).includes('PRIVATE_SECRET'));
+  assert.deepEqual(readSignalV3CycleResult({execImpl:()=>{throw Error('HIDDEN_PATH')}}),
+    {unitState:'UNAVAILABLE',lastResult:'UNKNOWN',exitCode:null,
+      hasStarted:false,startedAgeBand:'UNKNOWN'});
+  assert.equal(safeSignalAgeBand(60_000),'UNDER_5M');
+  assert.equal(safeSignalAgeBand(20*60_000),'UNDER_60M');
+  assert.equal(safeSignalAgeBand(61*60_000),'OVER_60M');
+  assert.equal(safeSignalAgeBand(-1),'UNKNOWN');
+});
+
+test('Signal V3 source /health refuses false-fresh metadata and unsafe age',async()=>{
+  const make=age=>readSignalV3HealthOnce({getImpl:(url,opts,respond)=>{
+    assert.equal(opts.method,'GET');
+    assert.equal(url.pathname,'/health');
+    const req=new EventEmitter();req.destroy=()=>{};
+    queueMicrotask(()=>{
+      const res=new EventEmitter();res.statusCode=200;
+      respond(res);
+      res.emit('data',Buffer.from(JSON.stringify({
+        ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
+        bindHost:'127.0.0.1',snapshotReady:true,snapshotFresh:true,
+        snapshotAgeMs:age,executionAuthority:'NONE',privateTradingApiAllowed:false,
+        realOrderAllowed:false,privateToken:'SECRET_NEVER_LOG',
+      })));
+      res.emit('end');
+    });
+    return req;
+  }});
+  const stale=await make(70*60_000);
+  assert.equal(stale.status,'SNAPSHOT_STALE');
+  assert.equal(stale.snapshotFresh,false);
+  assert.equal(stale.snapshotAgeBand,'OVER_60M');
+  const invalid=await make(null);
+  assert.equal(invalid.status,'INVALID_RESPONSE');
+  assert.ok(!JSON.stringify(stale).includes('SECRET_NEVER_LOG'));
+  assert.ok(!JSON.stringify(invalid).includes('SECRET_NEVER_LOG'));
+});
+
+test('fixed read-only V3 state evidence is safe and classifies stale writer vs timer',()=>{
+  const raw=Buffer.from(JSON.stringify({serviceSha:deployed,
+    generatedAt:new Date(now-120000).toISOString(),publicDataOnly:true,
+    safety:{executionAuthority:'NONE',privateTradingApiAllowed:false,
+      realOrderAllowed:false},events:[{symbol:'PRIVATE_TICKER',secret:'PRIVATE_TOKEN'}]}));
+  let closed=0;
+  const fsOps={
+    openSync(file,flags){
+      assert.equal(file,'/opt/investment-signal-intelligence/state/latest-snapshot.json');
+      assert.ok((flags&fs.constants.O_NOFOLLOW)!==0);return 3;},
+    fstatSync(){return {isFile:()=>true,size:raw.length,mtimeMs:now-60000};},
+    readSync(_fd,b,at,n,pos){return raw.copy(b,at,pos,pos+n);},
+    closeSync(){closed++;},
+  };
+  const data=readV3SnapshotFile({fsOps,nowMs:now});
+  assert.equal(data.status,'RECENT_PUBLICATION');
+  assert.equal(data.serviceSha,deployed);
+  assert.equal(closed,1);
+  assert.equal(JSON.stringify(data).includes('PRIVATE_'),false);
+  assert.equal(readV3SnapshotFile({filePath:'/etc/passwd',fsOps,nowMs:now}).status,
+    'UNSAFE_PATH');
+  const absent={openSync(){const err=Error('SECRET_PATH');err.code='ENOENT';throw err;}};
+  assert.equal(readV3SnapshotFile({fsOps:absent,nowMs:now}).status,'ABSENT');
+  const stale={...data,status:'STALE_PUBLICATION'};
+  const health={status:'SNAPSHOT_STALE',serviceSha:deployed},timer={timer:'ACTIVE'};
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
+    startedAgeBand:'UNDER_5M'},stale,timer),'RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'FAILED'},
+    stale,timer),'CYCLE_FAILED_SUSPECT');
+  assert.equal(v3StalenessHypothesis({status:'SNAPSHOT_SHA_MISMATCH'},
+    {},{status:'UNREADABLE'},{}),'SHA_OR_READ_PATH_MISMATCH_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',
+    startedAgeBand:'OVER_60M'},stale,timer),'CYCLE_RUNNING_OVER_60M_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',
+    startedAgeBand:'UNDER_15M'},stale,timer),'CYCLE_RUNNING_WITH_STALE_SNAPSHOT');
+
+  assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
+    startedAgeBand:'OVER_60M'},stale,timer),'TIMER_NOT_RECENT_SUSPECT');
+  assert.equal(v3StalenessHypothesis(health,{},data,timer),'HTTP_FILE_AGE_DISAGREE');
+  assert.equal(v3StalenessHypothesis(
+    {status:'SOURCE_DATA_BLOCKED',serviceSha:deployed},
+    {lastResult:'SUCCEEDED',startedAgeBand:'UNDER_5M'},
+    data,timer),'CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED');
 });
