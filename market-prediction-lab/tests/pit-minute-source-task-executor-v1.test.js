@@ -385,3 +385,61 @@ test("public-GET fixture -> immutable archive index -> offline 4-market batch re
     }finally{rmSync(t.root,{recursive:true,force:true});}
   }
 });
+
+test("planned PIT native source task retry requires the reviewed existing SHA before any GET",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+   const initial=await execute(request(t,{
+     allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+   }));
+   assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+   assert.equal(calls.length,1);
+   await assert.rejects(()=>execute(request(t,{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     upbitFetchImpl:upbitFetch(calls),
+   })),/PIT_MINUTE_TASK_ARGUMENT_INVALID/);
+   assert.equal(calls.length,1);
+   const old=await derive({
+     root:t.root,market:t.market,symbol:t.planning.candidateTasks[0].symbol,
+     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"],
+   });
+   const wrong=await execute(request(t,{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:SHA,
+     upbitFetchImpl:upbitFetch(calls),
+   }));
+   assert.equal(wrong.status,"BLOCKED_DATA");
+   assert.equal(wrong.reason,"RETRY_SOURCE_REVISION_DIGEST_MISMATCH");
+   assert.equal(calls.length,1);
+   const review=await execute(request(t,{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:old.archiveSourceDigestSha256,
+     upbitFetchImpl:upbitFetch(calls),
+   }));
+   assert.equal(review.reason,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES");
+   assert.equal(review.status,"BLOCKED_DATA");
+   assert.equal(calls.length,2);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("PIT task CLI retry cannot execute without explicit previous SHA and public consent",async()=>{
+ const t=await setup("CRYPTO_SPOT",2);
+ try{
+   const args=["--market",t.market,"--day","2026-09-18",
+     "--manifest",join(t.root,"pit.json"),
+     "--page-index",join(t.root,"index.json"),
+     "--root",t.root,"--task-page-index","0","--task-index","0",
+     "--expected-task-digest",t.planning.candidateTaskDigestSha256,
+     "--output",join(t.root,"result.json")];
+   assert.throws(()=>parse([...args,"--retry-partial"]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--read-public","--retry-partial"]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--expected-existing-sha",SHA]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   const reviewed=parse([...args,"--read-public","--retry-partial",
+     "--expected-existing-sha",SHA]);
+   assert.equal(reviewed.retryPartialSource,true);
+   assert.equal(reviewed.expectedExistingSourceDigestSha256,SHA);
+   assert.equal(reviewed.allowPublicReadOnlyFetch,true);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
