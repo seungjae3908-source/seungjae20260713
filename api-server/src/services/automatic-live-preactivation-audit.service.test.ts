@@ -100,6 +100,97 @@ test('formula-AI live pilot rejects expired or absent per-candidate reviews with
   assert.equal(audit.orderRequests, 0);
 });
 
+
+test('empty READY handoff is transport-only and never proves first signal identity SHA', async () => {
+  const at = Date.parse('2026-10-13T00:00:00Z');
+  const repository = new InMemoryTradingRepository();
+  const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
+    async readHandoff() {
+      return { status: 'READY', evaluatedAtMs: at, entryCount: 0, entries: [], blockers: [] }
+        as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>;
+    },
+    async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
+  };
+  const audit = await auditAutomaticLivePreactivation({
+    userId: 'audit-owner', repository, source, nowMs: at, targetSha: 'a'.repeat(40),
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  });
+  assert.deepEqual(audit.checks.find((c) => c.id === 'SIGNAL_FRESHNESS_AND_SHA')?.codes,
+    ['PREACTIVATION_HANDOFF_CANDIDATE_IDENTITY_MISSING']);
+  assert.ok(audit.lifecycleCoverage.blockedControlIds.includes('FRESH_SIGNAL_SHA'));
+  assert.equal(audit.ready, false);
+  assert.equal(audit.activationReady, false);
+  assert.equal(audit.orderRequests + audit.cancelRequests + audit.amendRequests, 0);
+});
+
+test('handoff invalid count, missing identity or invalid timestamps cannot be reported as source PASS', async () => {
+  const at = Date.parse('2026-10-13T00:00:00Z');
+  for (const sample of [
+    { evaluatedAtMs: at, entryCount: 2, entries: [{ identity: { researchCodeSha: 'a'.repeat(40) } }],
+      code: 'PREACTIVATION_HANDOFF_IDENTITY_COUNT_INVALID' },
+    { evaluatedAtMs: at, entryCount: 1, entries: [{ identity: { researchCodeSha: 'b'.repeat(40) } }],
+      code: 'PREACTIVATION_HANDOFF_SHA_MISMATCH' },
+    { evaluatedAtMs: at, entryCount: 1, entries: [{}],
+      code: 'PREACTIVATION_HANDOFF_SHA_MISMATCH' },
+    { evaluatedAtMs: Number.NaN, entryCount: 1, entries: [{ identity: { researchCodeSha: 'a'.repeat(40) } }],
+      code: 'PREACTIVATION_HANDOFF_STALE' },
+    { evaluatedAtMs: Number.POSITIVE_INFINITY, entryCount: 1,
+      entries: [{ identity: { researchCodeSha: 'a'.repeat(40) } }], code: 'PREACTIVATION_HANDOFF_STALE' },
+    { evaluatedAtMs: at + 1, entryCount: 1, entries: [{ identity: { researchCodeSha: 'a'.repeat(40) } }],
+      code: 'PREACTIVATION_HANDOFF_STALE' },
+  ]) {
+    const repository = new InMemoryTradingRepository();
+    const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
+      async readHandoff() {
+        return { status: 'READY', blockers: [], ...sample }
+          as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>;
+      },
+      async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
+    };
+    const audit = await auditAutomaticLivePreactivation({
+      userId: 'audit-owner', repository, source, nowMs: at, targetSha: 'a'.repeat(40),
+      profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+    });
+    assert.deepEqual(audit.checks.find((c) => c.id === 'SIGNAL_FRESHNESS_AND_SHA')?.codes,
+      [sample.code]);
+    assert.equal(audit.ready, false);
+    assert.equal(audit.autoTradingAuthorityGrantedByAudit, false);
+  }
+});
+
+test('invalid clock never turns stale source or expired formula AI proof into a PASS', async () => {
+  const at = Date.parse('2026-10-13T00:00:00Z');
+  for (const nowMs of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, 0.5]) {
+    const repository = new InMemoryTradingRepository();
+    const oldPolicy = repository.getPolicy.bind(repository);
+    repository.getPolicy = async (userId) =>
+      ({ ...(await oldPolicy(userId)), pilotStage: 'formula-ai-exception' });
+    const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
+      async readHandoff() {
+        return { status: 'READY', evaluatedAtMs: at, entryCount: 1, blockers: [],
+          entries: [{ identity: { signalId: 'clock-test', market: 'CRYPTO_SPOT',
+            researchCodeSha: 'a'.repeat(40) }, evaluatedAtMs: at }] }
+          as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>;
+      },
+      async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
+    };
+    const audit = await auditAutomaticLivePreactivation({
+      userId: 'audit-owner', repository, source, nowMs, targetSha: 'a'.repeat(40),
+      profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+    });
+    assert.deepEqual(audit.checks.find((c) => c.id === 'SIGNAL_FRESHNESS_AND_SHA')?.codes,
+      ['PREACTIVATION_CLOCK_INVALID']);
+    assert.deepEqual(audit.checks.find((c) => c.id === 'CURRENT_AI_EVIDENCE')?.codes,
+      ['PREACTIVATION_CLOCK_INVALID']);
+    assert.ok(Number.isFinite(Date.parse(audit.generatedAt)));
+    assert.equal(audit.activationReady, false);
+    assert.equal(audit.liveTradingAuthorityGrantedByAudit, false);
+    assert.equal(audit.autoTradingAuthorityGrantedByAudit, false);
+    assert.equal(audit.orderRequests + audit.cancelRequests + audit.amendRequests
+      + audit.transferRequests + audit.withdrawalRequests, 0);
+  }
+});
+
 async function historyAudit(plans: TradingPlan[], orders: TradingOrder[]) {
   const repository = new InMemoryTradingRepository();
   repository.listPlans = async () => plans;

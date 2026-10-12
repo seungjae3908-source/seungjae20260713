@@ -99,7 +99,12 @@ export async function auditAutomaticLivePreactivation(input: {
   producerCapability?: Readonly<{ targetSha: string; scannerConnected: boolean; aiReviewConnected: boolean;
     markets: readonly string[]; intervalMs: number }>;
 }) {
-  const nowMs = input.nowMs ?? Date.now();
+  // Never let NaN/Infinity/negative caller clocks bypass stale evidence by
+  // making both timestamp comparisons false. Keep output JSON valid while
+  // preserving an explicit fail-closed code in the signal and AI checks.
+  const requestedNowMs = input.nowMs ?? Date.now();
+  const clockValid = Number.isSafeInteger(requestedNowMs) && requestedNowMs > 0;
+  const nowMs = clockValid ? requestedNowMs : Date.now();
   const checks: PreactivationCheck[] = [];
   const check = async (id: string, collect: () => Promise<readonly string[]> | readonly string[]) => {
     try {
@@ -158,11 +163,23 @@ export async function auditAutomaticLivePreactivation(input: {
   await check('FOUR_PROVIDER_CREDENTIALS', () => liveAllFourConnectionVerificationReady(policy(), value(1), nowMs)
     ? [] : ['PREACTIVATION_PROVIDER_CREDENTIALS_NOT_FRESH_VERIFIED']);
   await check('SIGNAL_FRESHNESS_AND_SHA', () => {
+    // An empty READY transport can prove heartbeat availability but has zero
+    // candidate SHA identities. A real first entry needs separately issued
+    // source and AI evidence; do not promote an empty array's .some(false).
+    if (!clockValid) return ['PREACTIVATION_CLOCK_INVALID'];
     const h = handoff();
     if (!h) return ['PREACTIVATION_HANDOFF_MISSING'];
     if (h.status !== 'READY') return ['PREACTIVATION_HANDOFF_BLOCKED'];
-    if (h.evaluatedAtMs > nowMs || nowMs - h.evaluatedAtMs > 30 * 60_000) return ['PREACTIVATION_HANDOFF_STALE'];
-    return h.entries.some((e) => e.identity.researchCodeSha !== input.targetSha)
+    if (!Number.isSafeInteger(h.evaluatedAtMs) || h.evaluatedAtMs <= 0
+      || h.evaluatedAtMs > nowMs || nowMs - h.evaluatedAtMs > 30 * 60_000) {
+      return ['PREACTIVATION_HANDOFF_STALE'];
+    }
+    if (!Array.isArray(h.entries) || !Number.isSafeInteger(h.entryCount)
+      || h.entryCount !== h.entries.length) {
+      return ['PREACTIVATION_HANDOFF_IDENTITY_COUNT_INVALID'];
+    }
+    if (h.entries.length === 0) return ['PREACTIVATION_HANDOFF_CANDIDATE_IDENTITY_MISSING'];
+    return h.entries.some((entry) => entry?.identity?.researchCodeSha !== input.targetSha)
       ? ['PREACTIVATION_HANDOFF_SHA_MISMATCH'] : [];
   });
   await check('GENUINE_SCANNER_AND_AI_CONNECTION', () => {
@@ -182,6 +199,7 @@ export async function auditAutomaticLivePreactivation(input: {
   });
   await check('CURRENT_AI_EVIDENCE', () => {
     if (policy().pilotStage !== 'formula-ai-exception') return [];
+    if (!clockValid) return ['PREACTIVATION_CLOCK_INVALID'];
     const current = handoff();
     // Optional chaining on a missing handoff (or an empty READY transport)
     // previously returned PASS without a single actual AI review. A live
