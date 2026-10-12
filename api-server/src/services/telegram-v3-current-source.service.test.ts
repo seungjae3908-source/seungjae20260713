@@ -478,7 +478,9 @@ test('Telegram subscriber writes crash-safe reservation before a mocked public s
      async alert=>{
        if(!configured)return {ok:false as const,attempts:0,skipped:'NOT_CONFIGURED' as const};
        const onDisk=JSON.parse(await readFile(ledger,'utf8'));
-       assert.ok(onDisk.unconfirmed[alert.dedupeKey],
+       const dedupeKey=alert.dedupeKey;
+       if(!dedupeKey)throw Error('V3_TEST_DEDUPE_KEY_REQUIRED');
+       assert.ok(onDisk.unconfirmed[dedupeKey],
          'unknown outcome must be DURABLE before any Bot API POST');
        sends+=1;
        return {ok:true as const,attempts:1};
