@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { createManualFourMarketWalletRouter } from './manual-four-market-paper-wallets';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import { sameManualPaperResearchReceipt, type ManualPaperFourMarketCycleInput,
-  type ManualPaperResearchReceiptRow } from '../services/manual-four-market-paper-cycle.service';
+  type ManualPaperResearchReceiptRow, type ManualPaperOrderPathInput } from '../services/manual-four-market-paper-cycle.service';
 import { MANUAL_FOUR_MARKET_CONFIRMATION,
   buildManualFourMarketWalletSeeds } from '../services/manual-four-market-paper-wallets.service';
 const USER='11111111-1111-1111-1111-111111111111';
@@ -16,6 +16,8 @@ async function server(options:{
   failInsert?:boolean;
   previewEnabled?:boolean;
   previewEvidence?:ManualPaperFourMarketCycleInput;
+  orderPreviewEnabled?:boolean;
+  orderPathEvidence?:ManualPaperOrderPathInput;
   receiptEnabled?:boolean; receiptRls?:boolean; receiptFail?:boolean;
 }={}){
   const state={
@@ -34,6 +36,8 @@ async function server(options:{
     bootstrapEnabled:()=>options.enabled===true,
     researchPreviewEnabled:()=>options.previewEnabled===true,
     readResearchCycleEvidence:async()=>options.previewEvidence??null,
+    orderPathPreviewEnabled:()=>options.orderPreviewEnabled===true,
+    readOrderPathEvidence:async()=>options.orderPathEvidence??null,
     researchReceiptWriteEnabled:()=>options.receiptEnabled===true,
     researchReceiptRlsReady:async()=>options.receiptRls!==false,
     appendResearchReceipt:async(_req,receipt)=>{
@@ -431,4 +435,145 @@ test('manual research receipt errors do not expose database failures or mint acc
     assert.equal(s.state.researchWrites,0);
     assert.equal(s.state.writes,0);
   }finally{await s.close()}
+});
+
+
+const orderPath='/api/paper-trading/manual-four-market/order-cycle-preview';
+const simulationMatches=():ManualPaperOrderPathInput=>{
+  const qty=cycleEvidence.selected.requestedNotionalKrw/
+    (cycleEvidence.entryQuote.ask*cycleEvidence.costs.entryFxKrwPerQuote);
+  return {
+    cycle:cycleEvidence,entryRemainderCanceled:false,
+    events:[
+      {eventId:'sim-entry-1',phase:'ENTRY',action:'BUY',
+        quoteSourceId:cycleEvidence.entryQuote.sourceId,
+        observedAtMs:cycleEvidence.entryQuote.observedAtMs,
+        quantity:qty*0.6,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+      {eventId:'sim-entry-2',phase:'ENTRY',action:'BUY',
+        quoteSourceId:cycleEvidence.entryQuote.sourceId,
+        observedAtMs:cycleEvidence.entryQuote.observedAtMs,
+        quantity:qty*0.4,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+      {eventId:'sim-exit-1',phase:'EXIT',action:'SELL',
+        quoteSourceId:cycleEvidence.exitQuote.sourceId,
+        observedAtMs:cycleEvidence.exitQuote.observedAtMs,
+        quantity:qty,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+    ],
+  };
+};
+test('manual four-market simulated order lifecycle is OFF and requires protected owner wallet and source',async()=>{
+  const source=simulationMatches();
+  const cases=[
+    {orderPreviewEnabled:false,existing:seededWallets(),orderPathEvidence:source},
+    {orderPreviewEnabled:true,existing:[] as StoredPaperJournalRecord[],orderPathEvidence:source},
+    {orderPreviewEnabled:true,rls:false,existing:seededWallets(),orderPathEvidence:source},
+    {orderPreviewEnabled:true,existing:seededWallets()},
+  ];
+  for(const options of cases){
+    const fixture=await server(options);
+    try{
+      const response=await post(fixture.host+orderPath,selection);
+      assert.equal(response.status,409);
+      const body=await response.json();
+      assert.equal(body.ok,false);
+      assert.equal(body.orderSubmitted,false);
+      assert.equal(body.exchangeRequestSent,false);
+      assert.equal(body.executionAuthority,'NONE');
+      assert.equal(fixture.state.writes,0);
+      assert.equal(fixture.state.researchWrites,0);
+    }finally{await fixture.close()}
+  }
+});
+test('protected simulated entry->partial match->reducing close is preview only and leaves both ledgers unmodified',async()=>{
+  const fixture=await server({
+    orderPreviewEnabled:true,existing:seededWallets(),
+    orderPathEvidence:simulationMatches(),
+  });
+  try{
+    const r=await post(fixture.host+orderPath,selection);
+    assert.equal(r.status,200);
+    const body=await r.json();
+    assert.equal(body.ok,true);
+    assert.equal(body.previewOnly,true);
+    assert.equal(body.ownerScope,'SELF');
+    assert.equal(body.executionAuthority,'NONE');
+    assert.equal(body.actualPaperOrderCreated,false);
+    assert.equal(body.actualPaperFillsRecorded,false);
+    assert.equal(body.actualPaperLedgerWritten,false);
+    assert.equal(body.realPaperOrderCreated,false);
+    assert.equal(body.financialMutationCount,0);
+    assert.equal(body.profitabilityProven,false);
+    assert.equal(body.simulatedOrderPath.status,'SIMULATED_CLOSED');
+    assert.equal(body.simulatedOrderPath.entryMatchCount,2);
+    assert.equal(body.simulatedOrderPath.exitMatchCount,1);
+    assert.ok(body.simulatedOrderPath.hypotheticalNetPnlKrw>0);
+    assert.equal(fixture.state.rows.length,4);
+    assert.equal(fixture.state.writes,0);
+    assert.equal(fixture.state.researchWrites,0);
+    assert.equal(fixture.state.receipts.length,0);
+  }finally{await fixture.close()}
+});
+test('client may select market and strategy but cannot inject price, quantity, cost, owner or real order rights',async()=>{
+  const fixture=await server({
+    orderPreviewEnabled:true,existing:seededWallets(),
+    orderPathEvidence:simulationMatches(),
+  });
+  try{
+    for(const forged of [
+      {...selection,ownerId:'other'},
+      {...selection,entryMatches:[{quantity:100000}]},
+      {...selection,quote:{bid:1,ask:1}},
+      {...selection,taxKrw:0},
+      {...selection,executionAuthority:'LIVE'},
+      {...selection,accountMode:'live'},
+      {...selection,leverage:126},
+      {...selection,side:'BUY'},
+    ]){
+      const r=await post(fixture.host+orderPath,forged);
+      assert.equal(r.status,400,JSON.stringify(forged));
+    }
+    assert.equal((await post(fixture.host+orderPath+'?userId=other',selection)).status,400);
+    assert.equal(fixture.state.writes,0);
+  }finally{await fixture.close()}
+});
+test('foreign owner, stale source and over-closing must not emit hypothetical profit',async()=>{
+  const baseline={
+    orderPreviewEnabled:true,existing:seededWallets(),
+  };
+  for(const source of [
+    {...simulationMatches(),cycle:{
+      ...cycleEvidence,selected:{
+        ...cycleEvidence.selected,ownerId:'22222222-2222-2222-2222-222222222222',
+      },
+    }},
+    {...simulationMatches(),events:simulationMatches().events.map(event=>
+      event.phase==='EXIT'?{...event,quantity:event.quantity*10}:event)},
+    {...simulationMatches(),events:simulationMatches().events.map(event=>
+      event.phase==='ENTRY'?{...event,quoteSourceId:'client-forged'}:event)},
+  ]){
+    const fixture=await server({...baseline,orderPathEvidence:source as ManualPaperOrderPathInput});
+    try{
+      const res=await post(fixture.host+orderPath,selection);
+      assert.equal(res.status,409);
+      assert.equal((await res.json()).ok,false);
+      assert.equal(fixture.state.writes,0);
+      assert.equal(fixture.state.researchWrites,0);
+    }finally{await fixture.close()}
+  }
+});
+test('open simulated exposure returns no cash, reserve or profit credit',async()=>{
+  const order=simulationMatches();
+  const fixture=await server({
+    orderPreviewEnabled:true,existing:seededWallets(),
+    orderPathEvidence:{...order,events:order.events.slice(0,1)},
+  });
+  try{
+    const r=await post(fixture.host+orderPath,selection);
+    assert.equal(r.status,200);
+    const data=await r.json();
+    assert.equal(data.simulatedOrderPath.status,'OPEN_UNSETTLED');
+    assert.equal(data.simulatedOrderPath.hypotheticalNetPnlKrw,null);
+    assert.equal(data.simulatedOrderPath.hypotheticalNewReserveKrw,null);
+    assert.equal(data.simulatedOrderPath.actualPaperLedgerWritten,false);
+    assert.equal(fixture.state.writes,0);
+  }finally{await fixture.close()}
 });

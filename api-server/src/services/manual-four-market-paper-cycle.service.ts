@@ -469,3 +469,251 @@ export function sameManualPaperResearchReceipt(
     && (actual.receipt as Record<string,unknown>).actualPaperLedgerWritten===false
   );
 }
+
+
+/**
+ * Deterministic, server-evidence-only manual four-market PAPER simulation
+ * lifecycle. This is deliberately NOT a broker order/fill. A quote-simulation
+ * match does not constitute an actual exchange print or a durable trading fill.
+ * Nothing here writes financial tables, transfers funds or sends Telegram.
+ *
+ * A fresh authenticated server adapter must separately attest the strategy,
+ * source quotes and match model. Do not accept match[] from a browser request.
+ */
+export const MANUAL_PAPER_ORDER_PATH_VERSION =
+  'manual-four-market-paper-order-path-v1' as const;
+export type ManualPaperSimulatedMatch = Readonly<{
+  eventId:string;
+  phase:'ENTRY'|'EXIT';
+  action:'BUY'|'SELL';
+  quoteSourceId:string;
+  observedAtMs:number;
+  quantity:number;
+  provenance:'SERVER_PUBLIC_QUOTE_SIMULATION';
+}>;
+export type ManualPaperOrderPathInput = Readonly<{
+  cycle:ManualPaperFourMarketCycleInput;
+  events:readonly ManualPaperSimulatedMatch[];
+  /** Attested in-process simulated cancellation of the unfilled entry part. */
+  entryRemainderCanceled:boolean;
+}>;
+export type ManualPaperOrderPathStatus =
+  'BLOCKED'|'UNMATCHED'|'CANCELED_NO_FILL'|
+  'OPEN_UNSETTLED'|'PARTIALLY_CLOSED_UNSETTLED'|'SIMULATED_CLOSED';
+export type ManualPaperOrderPathResult = Readonly<{
+  schemaVersion:typeof MANUAL_PAPER_ORDER_PATH_VERSION;
+  status:ManualPaperOrderPathStatus;
+  blockers:readonly string[];
+  market:AdminPaperMarket|null;
+  simulatedOrderId:string|null;
+  requestedQuantity:number|null;
+  simulatedEntryQuantity:number;
+  simulatedExitQuantity:number;
+  openQuantity:number;
+  entryRemainderCanceled:boolean;
+  entryMatchCount:number;
+  exitMatchCount:number;
+  hypotheticalNetPnlKrw:number|null;
+  hypotheticalNewOperatingCapitalKrw:number|null;
+  hypotheticalNewReserveKrw:number|null;
+  hypotheticalHighWaterKrw:number|null;
+  journal:Readonly<Record<string,unknown>>|null;
+  ownerScope:'SERVER_EVIDENCE_ONLY';
+  simulationOnly:true;
+  actualPaperOrderCreated:false;
+  actualPaperFillsRecorded:false;
+  actualPaperLedgerWritten:false;
+  realOrderSubmitted:false;
+  executionAuthority:'NONE';
+  profitabilityProven:false;
+  transferAuthority:false;
+}>;
+export function evaluateManualFourMarketPaperOrderPath(
+  input:ManualPaperOrderPathInput,
+):ManualPaperOrderPathResult {
+  const selected=input?.cycle?.selected;
+  const market=selected?.market??null;
+  const base={
+    schemaVersion:MANUAL_PAPER_ORDER_PATH_VERSION,
+    market,
+    ownerScope:'SERVER_EVIDENCE_ONLY' as const,
+    simulationOnly:true as const,
+    actualPaperOrderCreated:false as const,
+    actualPaperFillsRecorded:false as const,
+    actualPaperLedgerWritten:false as const,
+    realOrderSubmitted:false as const,
+    executionAuthority:'NONE' as const,
+    profitabilityProven:false as const,
+    transferAuthority:false as const,
+  };
+  const blocked=(errors:readonly string[]):ManualPaperOrderPathResult=>Object.freeze({
+    ...base,status:'BLOCKED' as const,blockers:Object.freeze([...new Set(errors)]),
+    simulatedOrderId:null,requestedQuantity:null,
+    simulatedEntryQuantity:0,simulatedExitQuantity:0,openQuantity:0,
+    entryRemainderCanceled:false,entryMatchCount:0,exitMatchCount:0,
+    hypotheticalNetPnlKrw:null,hypotheticalNewOperatingCapitalKrw:null,
+    hypotheticalNewReserveKrw:null,hypotheticalHighWaterKrw:null,journal:null,
+  });
+  if(!input||!input.cycle||!Array.isArray(input.events)
+    ||input.events.length>64
+    ||typeof input.entryRemainderCanceled!=='boolean') {
+    return blocked(['MANUAL_PAPER_ORDER_PATH_INPUT_INVALID']);
+  }
+  // The existing fail-closed checker is canonical for the owner, wallet,
+  // verified prospective strategy, public as-of quotes and complete costs.
+  const cycle=evaluateManualFourMarketPaperClosedCycle(input.cycle);
+  if(cycle.status!=='RESEARCH_SIMULATED_CLOSED') {
+    return blocked(cycle.blockers);
+  }
+  const {selected:s,verifiedOwner:o,entryQuote:e,exitQuote:x,costs:c}=input.cycle;
+  const entryPrice=s.side==='SHORT'?e.bid:e.ask;
+  const exitPrice=s.side==='SHORT'?x.ask:x.bid;
+  const entryAction=s.side==='SHORT'?'SELL':'BUY';
+  const exitAction=s.side==='SHORT'?'BUY':'SELL';
+  const requestedQty=s.requestedNotionalKrw/(entryPrice*c.entryFxKrwPerQuote);
+  if(!positive(requestedQty)||!Number.isFinite(requestedQty)
+    ||requestedQty>Number.MAX_SAFE_INTEGER) {
+    return blocked(['MANUAL_PAPER_ORDER_PATH_QUANTITY_INVALID']);
+  }
+  const orderId='manual-paper-order-sim-v1:'+sha([
+    s.ownerId,s.accountId,o.currentEpochId,o.currentRoundNumber,s.candidateId,
+    s.market,s.symbol,s.side,s.leverage,s.signalObservedAtMs,
+  ].join('|'));
+  const tolerance=Math.max(1e-9,requestedQty*1e-9);
+  let entryQty=0;
+  let exitQty=0;
+  let exitStarted=false;
+  let entryCount=0;
+  let exitCount=0;
+  let lastTs=0;
+  const seen=new Set<string>();
+  for(const event of input.events){
+    if(!event||typeof event!=='object'
+      ||!idPattern.test(event.eventId)
+      ||seen.has(event.eventId)
+      ||event.provenance!=='SERVER_PUBLIC_QUOTE_SIMULATION'
+      ||(event.phase!=='ENTRY'&&event.phase!=='EXIT')
+      ||!positive(event.quantity)
+      ||event.quantity>Number.MAX_SAFE_INTEGER) {
+      return blocked(['MANUAL_PAPER_ORDER_PATH_MATCH_INVALID_OR_DUPLICATE']);
+    }
+    seen.add(event.eventId);
+    const isEntry=event.phase==='ENTRY';
+    const quote=isEntry?e:x;
+    if(event.action!==(isEntry?entryAction:exitAction)
+      ||event.quoteSourceId!==quote.sourceId
+      ||event.observedAtMs!==quote.observedAtMs
+      ||event.observedAtMs<lastTs
+      ||(isEntry&&exitStarted)
+      ||(!isEntry&&entryQty<=0)) {
+      return blocked(['MANUAL_PAPER_ORDER_PATH_SOURCE_SIDE_OR_TIME_MISMATCH']);
+    }
+    lastTs=event.observedAtMs;
+    if(isEntry){
+      entryQty+=event.quantity;
+      entryCount++;
+    }else{
+      exitStarted=true;
+      exitQty+=event.quantity;
+      exitCount++;
+    }
+    if(!Number.isFinite(entryQty)||!Number.isFinite(exitQty)
+      ||entryQty>requestedQty+tolerance||exitQty>entryQty+tolerance) {
+      return blocked(['MANUAL_PAPER_ORDER_PATH_OVERFILL_OR_REDUCE_ONLY']);
+    }
+  }
+  // No matched order can ever be reported as a real fill. Not even a
+  // hypothetical realized profit is credited when an entry can still fill
+  // later or a position remains open: wait for cancellation and flatness.
+  const openQty=Math.max(0,entryQty-exitQty);
+  const pendingEntry=requestedQty-entryQty>tolerance
+    &&!input.entryRemainderCanceled;
+  let status:Exclude<ManualPaperOrderPathStatus,'BLOCKED'>;
+  if(entryQty===0){
+    status=input.entryRemainderCanceled?'CANCELED_NO_FILL':'UNMATCHED';
+  }else if(exitQty===0 || openQty>tolerance || pendingEntry){
+    status=exitQty>0?'PARTIALLY_CLOSED_UNSETTLED':'OPEN_UNSETTLED';
+  }else{
+    status='SIMULATED_CLOSED';
+  }
+  const baseResult={
+    ...base,status,blockers:Object.freeze([] as string[]),
+    simulatedOrderId:orderId,requestedQuantity:requestedQty,
+    simulatedEntryQuantity:entryQty,simulatedExitQuantity:exitQty,
+    openQuantity:openQty,entryRemainderCanceled:input.entryRemainderCanceled,
+    entryMatchCount:entryCount,exitMatchCount:exitCount,
+  };
+  const pending=()=>Object.freeze({
+    ...baseResult,hypotheticalNetPnlKrw:null,
+    hypotheticalNewOperatingCapitalKrw:null,
+    hypotheticalNewReserveKrw:null,hypotheticalHighWaterKrw:null,journal:null,
+  });
+  if(status!=='SIMULATED_CLOSED')return pending();
+  const matchedNotionalKrw=entryQty*entryPrice*c.entryFxKrwPerQuote;
+  const exitNotionalKrw=exitQty*exitPrice*c.exitFxKrwPerQuote;
+  const marginKrw=matchedNotionalKrw/s.leverage;
+  const commissionKrw=matchedNotionalKrw*c.entryCommissionRate
+    +exitNotionalKrw*c.exitCommissionRate;
+  const allCostsKrw=commissionKrw+c.spreadAndSlippageKrw+c.taxKrw
+    +c.signedFundingKrw;
+  const direction=s.side==='SHORT'?-1:1;
+  const grossKrw=s.market==='crypto_futures'
+    ?direction*exitQty*(exitPrice-entryPrice)*c.exitFxKrwPerQuote
+    :direction*(exitNotionalKrw-matchedNotionalKrw);
+  const netKrw=grossKrw-allCostsKrw;
+  const totalBefore=o.operatingCapitalKrw+o.lockedReserveKrw;
+  const newProfit=Math.max(0,totalBefore+netKrw-o.highWaterMarkKrw);
+  const newCompound=newProfit*0.5;
+  const newReserve=newProfit*0.5;
+  const nextOperating=o.operatingCapitalKrw+netKrw-newProfit+newCompound;
+  const nextReserve=o.lockedReserveKrw+newReserve;
+  const highWater=Math.max(o.highWaterMarkKrw,totalBefore+netKrw);
+  if(![marginKrw,commissionKrw,allCostsKrw,grossKrw,netKrw,
+    nextOperating,nextReserve,highWater].every(Number.isFinite)
+    ||marginKrw+matchedNotionalKrw*c.entryCommissionRate
+       +c.spreadAndSlippageKrw>o.operatingCapitalKrw+0.01
+    ||nextOperating< -0.01
+    ||(s.market==='crypto_futures'&&netKrw< -marginKrw-0.01)
+    ||Math.abs(netKrw)>Number.MAX_SAFE_INTEGER) {
+    return blocked(['MANUAL_PAPER_ORDER_PATH_SETTLEMENT_OR_LIQUIDATION_UNMODELLED']);
+  }
+  const journal=Object.freeze({
+    schemaVersion:MANUAL_PAPER_ORDER_PATH_VERSION,
+    id:orderId,ownerId:s.ownerId,role:s.role,mode:'manual' as const,
+    accountId:s.accountId,market:s.market,epochId:o.currentEpochId,
+    roundNumber:o.currentRoundNumber,candidateId:s.candidateId,
+    strategyId:s.strategyId,symbol:s.symbol,side:s.side,leverage:s.leverage,
+    entryAction,exitAction,
+    entryQuoteSourceId:e.sourceId,exitQuoteSourceId:x.sourceId,
+    matchEventIds:Object.freeze(input.events.map(event=>event.eventId)),
+    simulatedEntryQuantity:entryQty,simulatedExitQuantity:exitQty,
+    entryRemainderCanceled:input.entryRemainderCanceled,
+    entryObservedAtMs:e.observedAtMs,exitObservedAtMs:x.observedAtMs,
+    entryPrice,exitPrice,quoteCurrency:e.currency,
+    costsSourceId:c.sourceId,entryFxSourceId:c.entryFxSourceId,
+    exitFxSourceId:c.exitFxSourceId,
+    priceMovementKrw:cents(direction*exitQty*(exitPrice-entryPrice)
+      *c.entryFxKrwPerQuote),
+    fxTranslationKrw:cents(s.market==='crypto_futures'
+      ?direction*exitQty*(exitPrice-entryPrice)
+        *(c.exitFxKrwPerQuote-c.entryFxKrwPerQuote)
+      :direction*exitQty*exitPrice*(c.exitFxKrwPerQuote-c.entryFxKrwPerQuote)),
+    grossPnlKrw:cents(grossKrw),commissionKrw:cents(commissionKrw),
+    slippageKrw:cents(c.spreadAndSlippageKrw),taxKrw:cents(c.taxKrw),
+    fundingCostKrw:cents(c.signedFundingKrw),
+    netPnlKrw:cents(netKrw),
+    newCompoundedProfitKrw:cents(newCompound),
+    newReserveProfitKrw:cents(newReserve),
+    nextHighWaterMarkKrw:cents(highWater),
+    simulatedOnly:true,causalImpactProven:false,
+    actualPaperOrderCreated:false,actualPaperFillsRecorded:false,
+    actualPaperLedgerWritten:false,realOrderSubmitted:false,
+    profitabilityProven:false,executionAuthority:'NONE' as const,
+  });
+  return Object.freeze({
+    ...baseResult,hypotheticalNetPnlKrw:cents(netKrw),
+    hypotheticalNewOperatingCapitalKrw:cents(Math.max(0,nextOperating)),
+    hypotheticalNewReserveKrw:cents(nextReserve),
+    hypotheticalHighWaterKrw:cents(highWater),journal,
+  });
+}
