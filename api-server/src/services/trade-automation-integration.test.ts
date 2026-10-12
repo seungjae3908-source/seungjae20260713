@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, bitgetAcknowledgedOrderId } from './trade-execution.service';
 import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -28,6 +28,86 @@ import {
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
+
+test('Bitget stores the actual broker ID, not clientOid, including one-way reducing acknowledgement without ID', () => {
+  const ack = { code: '00000', data: { clientOid: 'app-id', orderId: 'exchange-id' } };
+  assert.equal(bitgetAcknowledgedOrderId(ack, 'app-id'), 'exchange-id');
+  assert.equal(bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id', true), null);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id'), /ORDER_ID_MISSING/);
+  assert.throws(() => bitgetAcknowledgedOrderId(ack, 'other-app-id'), /INVALID_RESPONSE/);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: [ack.data] }, 'app-id'), /INVALID_RESPONSE/);
+});
+
+test('automatic Bitget entries preserve native stop and final target; reducing exits never attach new protection', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const automaticPlan = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105], marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+  assert.equal(body.presetStopLossPrice, '95');
+  assert.equal(body.presetStopSurplusPrice, '105');
+  const short = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, side: 'short',
+    stopPrice: 105, targetPrices: [96.5, 95] }, 'mock-short', '1000').body!);
+  assert.equal(short.presetStopLossPrice, '105');
+  assert.equal(short.presetStopSurplusPrice, '95');
+  const exit = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, reduceOnly: true }, 'mock-exit', '1000').body!);
+  assert.equal(exit.reduceOnly, 'YES');
+  assert.equal('presetStopLossPrice' in exit, false);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, stopPrice: 110 }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, targetPrices: [] }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+});
+test('Bitget native-protection validation covers mode-only and marker-only automatic entries', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const input = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: [], entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105],
+    marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const contract = { pricePlace: '1', priceEndStep: '5', minTradeNum: '0.01', sizeMultiplier: '0.01' };
+  for (const automaticPlan of [
+    { ...input, executionMode: 'automatic' as const },
+    { ...input, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+    { ...input, executionMode: 'automatic' as const, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+  ]) {
+    assert.doesNotThrow(() => validateBitgetContractRules(automaticPlan, contract, 100));
+    for (const invalid of [
+      { ...automaticPlan, stopPrice: 95.1 },
+      { ...automaticPlan, targetPrices: [103.5, 105.1] },
+    ]) {
+      assert.throws(() => validateBitgetContractRules(invalid, contract, 100), /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    }
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, stopPrice: 105 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, targetPrices: [] }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+    assert.equal(body.presetStopLossPrice, '95');
+    assert.equal(body.presetStopSurplusPrice, '105');
+    const short = { ...automaticPlan, side: 'short' as const, stopPrice: 105, targetPrices: [96.5, 95] };
+    assert.doesNotThrow(() => validateBitgetContractRules(short, contract, 100));
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 105.1 }, contract, 100),
+      /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 95 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const shortBody = JSON.parse(prepareBitgetOrder(credentials, short, 'mock-short', '1000').body!);
+    assert.equal(shortBody.presetStopLossPrice, '105');
+    assert.equal(shortBody.presetStopSurplusPrice, '95');
+    const reducing = { ...automaticPlan, reduceOnly: true, stopPrice: 95.1, targetPrices: [105.1] };
+    assert.doesNotThrow(() => validateBitgetContractRules(reducing, contract, 100));
+    const exit = JSON.parse(prepareBitgetOrder(credentials, reducing, 'mock-exit', '1000').body!);
+    assert.equal('presetStopLossPrice' in exit, false);
+    assert.equal('presetStopSurplusPrice' in exit, false);
+  }
+  const manual = { ...input, stopPrice: 95.1, targetPrices: [105.1] };
+  assert.doesNotThrow(() => validateBitgetContractRules(manual, contract, 100));
+  const body = JSON.parse(prepareBitgetOrder(credentials, manual, 'mock-manual', '1000').body!);
+  assert.equal('presetStopLossPrice' in body, false);
+  assert.equal('presetStopSurplusPrice' in body, false);
+});
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const SPOT_LIVE_TEST_KEYS = [
   'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',

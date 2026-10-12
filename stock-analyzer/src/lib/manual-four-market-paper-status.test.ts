@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
   manualPaperBootstrapAuthorized,parseManualFourMarketResearchHistory,
+  parseManualSequentialOrderReadback,
 } from './manual-four-market-paper-status';
 const fixture=()=>({
   ok:true,mode:'MANUAL_PAPER_FOUR_MARKET_SEED_ONLY',
@@ -110,4 +111,127 @@ test('failed/uninstalled manual research archive is not displayed as a zero-PnL 
   for(const v of [null,{},{
     ok:false,mode:'MANUAL_PAPER_RESEARCH_RECEIPT_READ_ONLY',receipts:[],
   }])assert.throws(()=>parseManualFourMarketResearchHistory(v));
+});
+
+
+const mockSequentialReadback=(settled=false)=>{
+  const orderId='manual-paper-seq-order-v1:'+'b'.repeat(64);
+  const entryEvent={
+    eventId:'manual-paper-seq-event-v1:'+'c'.repeat(64),
+    sequence:1,kind:'OPEN_ORDER',observedAtMs:1791800000000,
+  };
+  const entryEvent2={
+    eventId:'manual-paper-seq-event-v1:'+'d'.repeat(64),
+    sequence:2,kind:'ENTRY_MATCH',observedAtMs:1791800000500,
+  };
+  const requestExit={
+    eventId:'manual-paper-seq-event-v1:'+'e'.repeat(64),
+    sequence:3,kind:'REQUEST_EXIT',observedAtMs:1791800000750,
+  };
+  const closeEvent={
+    eventId:'manual-paper-seq-event-v1:'+'f'.repeat(64),
+    sequence:4,kind:'EXIT_MATCH',observedAtMs:1791800001000,
+  };
+  return {
+    ok:true,mode:'PAPER_SEQUENTIAL_SIMULATION_READ_ONLY',ownerScope:'SELF',
+    readOnlyProbe:true,executionAuthority:'NONE',
+    actualBrokerFill:false,actualPaperLedgerWritten:false,
+    actualWalletMutation:false,financialMutationCount:0,
+    realOrders:0,orderSubmitted:false,exchangeRequestSent:false,
+    privateProviderRequests:0,profitabilityProven:false,
+    projection:{
+      schemaVersion:'manual-paper-sequential-events-v1',
+      dataProvenance:'SERVER_EVENTS_ONLY',
+      status:settled?'CLOSED_PROJECTION':'ENTRY_PENDING',
+      blockers:[],orderId,market:'crypto_futures',
+      processedEvents:settled?4:1,entryQuantity:settled?1:0,
+      exitQuantity:settled?1:0,openQuantity:0,
+      entryRemainderCancelled:false,
+      hypotheticalNetPnlKrw:settled?12_000:null,
+      hypotheticalOperatingCapitalKrw:settled?1_006_000:null,
+      hypotheticalLockedReserveKrw:settled?6_000:null,
+      hypotheticalHighWaterMarkKrw:settled?1_012_000:null,
+      journalProjection:settled?{
+        schemaVersion:'manual-paper-sequential-events-v1',
+        actualBrokerFill:false,actualPaperLedgerWritten:false,
+        executionAuthority:'NONE',netPnlKrw:12_000,
+      }:null,
+      executionAuthority:'NONE',actualBrokerFill:false,
+      actualPaperLedgerWritten:false,actualWalletMutation:false,
+      realOrderSubmitted:false,profitabilityProven:false,
+    },
+    eventHistory:settled?[entryEvent,entryEvent2,requestExit,closeEvent]:[entryEvent],
+  };
+};
+
+test('manual sequential order readback preserves owner-scoped simulation only, never claims actual fills',()=>{
+  for(const settled of [false,true]){
+    const raw=mockSequentialReadback(settled);
+    const parsed=parseManualSequentialOrderReadback(raw,raw.projection.orderId);
+    assert.equal(parsed.ownerScope,'SELF');
+    assert.equal(parsed.projection.actualBrokerFill,false);
+    assert.equal(parsed.projection.actualPaperLedgerWritten,false);
+    assert.equal(parsed.projection.executionAuthority,'NONE');
+    assert.equal(parsed.eventHistory.length,settled?4:1);
+    assert.equal(parsed.projection.hypotheticalNetPnlKrw,settled?12_000:null);
+  }
+});
+test('manual sequential readback rejects altered owner, order identity, false profit or authority',()=>{
+  const raw=mockSequentialReadback(true);
+  const orderId=raw.projection.orderId;
+  const tamper=[
+    {...raw,ownerScope:'OTHER'},
+    {...raw,realOrders:1},
+    {...raw,privateProviderRequests:1},
+    {...raw,actualPaperLedgerWritten:true},
+    {...raw,profitabilityProven:true},
+    {...raw,executionAuthority:'LIVE'},
+    {...raw,projection:{...raw.projection,orderId:'manual-paper-seq-order-v1:'+'e'.repeat(64)}},
+    {...raw,projection:{...raw.projection,status:'BLOCKED'}},
+    {...raw,projection:{...raw.projection,entryQuantity:0.1}},
+    {...raw,projection:{...raw.projection,openQuantity:0.1}},
+    {...raw,projection:{...raw.projection,profitabilityProven:true}},
+    {...raw,projection:{...raw.projection,actualBrokerFill:true}},
+    {...raw,projection:{...raw.projection,journalProjection:null}},
+    {...raw,projection:{...raw.projection,hypotheticalNetPnlKrw:Infinity}},
+    {...raw,eventHistory:[raw.eventHistory[0],raw.eventHistory[0]]},
+    {...raw,eventHistory:[raw.eventHistory[0],{
+      ...raw.eventHistory[1],sequence:3,
+    }]},
+  ];
+  for(const attempt of tamper){
+    assert.throws(()=>parseManualSequentialOrderReadback(attempt,orderId));
+  }
+  assert.throws(()=>parseManualSequentialOrderReadback(raw,
+    'manual-paper-seq-order-v1:'+'f'.repeat(64)));
+  assert.throws(()=>parseManualSequentialOrderReadback(null,orderId));
+});
+test('unclosed manual order cannot show simulated realized profit or reserve',()=>{
+  const pending=mockSequentialReadback(false);
+  for(const mutation of [
+    {hypotheticalNetPnlKrw:20},
+    {hypotheticalOperatingCapitalKrw:1_000_020},
+    {hypotheticalLockedReserveKrw:10},
+    {journalProjection:{actualPaperLedgerWritten:false}},
+  ]){
+    const fake={...pending,projection:{...pending.projection,...mutation}};
+    assert.throws(()=>parseManualSequentialOrderReadback(fake,pending.projection.orderId),
+      /MANUAL_SEQ_ORDER_FALSE_SETTLEMENT/);
+  }
+});
+
+test('manual sequential readback rejects false CLOSE without actual sequence-level order stages',()=>{
+  const good=mockSequentialReadback(true);
+  const {orderId}=good.projection;
+  const noEntry=[good.eventHistory[0],{
+    ...good.eventHistory[1],kind:'EXIT_MATCH',
+  },good.eventHistory[2],good.eventHistory[3]];
+  const noExitRequest=[good.eventHistory[0],good.eventHistory[1],{
+    ...good.eventHistory[2],kind:'EXIT_MATCH',
+  },good.eventHistory[3]];
+  for(const events of [noEntry,noExitRequest]){
+    assert.throws(()=>parseManualSequentialOrderReadback({
+      ...good,eventHistory:events,
+    },orderId),/MANUAL_SEQ_ORDER_EVENT_TRANSITION_INVALID/);
+  }
 });
