@@ -9,6 +9,8 @@ on:
       - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-manual-live-receipts.cjs
       - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/scripts/production-auto-live-signal-identity.test.cjs
+      - ops/production-auto-live-signal-identity.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-preactivation-evidence-paths.cjs
@@ -98,6 +100,8 @@ jobs:
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
       - name: Validate non-superuser owner-bound budget proof contracts offline
         run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
+      - name: Validate canonical public-handoff prearm receipt offline
+        run: node --test .github/scripts/production-auto-live-signal-identity.test.cjs
       - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
       - run: node --test .github/scripts/production-manual-live-receipts.test.cjs
 
@@ -525,7 +529,7 @@ jobs:
           // A missing/stale publisher is a known deterministic failure. Refuse
           // to change any PM2 flags or arm files until a fresh public handoff
           // exists; the worker still performs the full digest/evidence check.
-          const requireFreshPublishedHandoff = (env) => {
+          const requireFreshPublishedHandoff = async (env) => {
             const handoffPath = String(env.MEMBER_AUTO_TRADING_HANDOFF_PATH || '').trim()
               || '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
             let h;
@@ -538,24 +542,24 @@ jobs:
             } catch {
               throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID');
             }
-            const nowMs = Date.now();
-            if (h?.schemaVersion !== 'member-auto-trading-paper-handoff-v1'
-              || h?.status !== 'READY' || !Array.isArray(h?.entries)
-              || h?.entryCount !== h.entries.length
-              || !Array.isArray(h?.blockers) || h.blockers.length !== 0
-              || h?.safety?.executionAuthority !== 'NONE'
-              || h?.safety?.publicDataOnly !== true || h?.safety?.orderSubmitted !== false
-              || !/^[a-f0-9]{64}$/u.test(String(h?.handoffDigest ?? ''))
-              || !Number.isFinite(h?.evaluatedAtMs) || h.evaluatedAtMs <= 0
-              || h.evaluatedAtMs > nowMs || nowMs - h.evaluatedAtMs > 30 * 60_000) {
-              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE');
+            // Deploy source includes ops and market-prediction-lab; use their
+            // canonical digest/lineage validator, not a partial inline parser.
+            let prearm;
+            try {
+              const published = await import('file:///opt/stock-app/ops/production-auto-live-signal-identity.cjs');
+              prearm = published.default?.verifyProductionAutoLivePrearmHandoff;
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
             }
-            if (h.entries.some((entry) => entry?.identity?.researchCodeSha !== target)) {
-              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH');
+            if (typeof prearm !== 'function') {
+              throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
             }
-            // This is intentionally only a cheap *pre-mutation* sanity check:
-            // it cannot certify the AI issuer, risk evidence, provider data or
-            // activation. Those independent guards must still pass later.
+            const signal = await prearm(h, target, Date.now());
+            if (signal.producerInvocationVerified !== false || signal.sourceTransportOnly !== true) {
+              throw new Error('AUTOMATIC_TRADING_PREARM_PRODUCER_PROOF_FORBIDDEN');
+            }
+            // Valid source transport is not proof that the real scanner or AI
+            // issuer ran; later 26-control gates remain mandatory.
           };
 
           const before = snapshot();
@@ -581,7 +585,7 @@ jobs:
             process.exit(0);
           }
           assertAllFourManual(before, false);
-          requireFreshPublishedHandoff(before);
+          await requireFreshPublishedHandoff(before);
           const preserved = manualState(before);
           let mutated = false;
           try {

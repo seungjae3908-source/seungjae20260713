@@ -37,4 +37,37 @@ function assertSignalEntryIdentityReceipt(signal, targetSha) {
     throw new Error('POSTDEPLOY_QA_AUTO_LIVE_SIGNAL_IDENTITY_INVALID');
   }
 }
-module.exports = { inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt };
+
+/**
+ * Pre-mutation diagnostic only. Reads a real published public handoff through
+ * the same strict schema, entry provenance, and SHA256 digest validator used by
+ * the running Paper/Live worker. Transport validation never proves an issuer,
+ * authorizes orders, or elevates trading flags.
+ */
+async function verifyProductionAutoLivePrearmHandoff(value, targetSha, nowMs = Date.now()) {
+  if (!/^[a-f0-9]{40}$/u.test(targetSha ?? '') || !Number.isFinite(nowMs) || nowMs <= 0) {
+    throw new Error('AUTOMATIC_TRADING_PREARM_ARGUMENT_INVALID');
+  }
+  let validated;
+  try {
+    const { validateMemberAutoTradingPaperHandoff } =
+      await import('../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
+    validated = validateMemberAutoTradingPaperHandoff(value, nowMs);
+  } catch {
+    // Never surface arbitrary upstream payloads or paths in protected logs.
+    throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID');
+  }
+  if (validated.status !== 'READY' || validated.evaluatedAtMs > nowMs
+    || nowMs - validated.evaluatedAtMs > 30 * 60_000) {
+    throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE');
+  }
+  let identity;
+  try { identity = inspectSignalEntryIdentity(validated.entries, targetSha); }
+  catch { throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH'); }
+  return Object.freeze({ ...identity, entryCount: validated.entryCount });
+}
+
+module.exports = {
+  inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+  verifyProductionAutoLivePrearmHandoff,
+};
