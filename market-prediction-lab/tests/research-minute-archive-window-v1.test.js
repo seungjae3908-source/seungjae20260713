@@ -448,3 +448,120 @@ test("stored multi-year stock sessions validate globally but only selected local
     }finally{rmSync(root,{recursive:true,force:true});}
   }
 });
+
+test("bounded crypto window exposes exact SHA leases for partial native 1m rather than only totals",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const root=tmp();
+  try{
+   const source=sample(market,D0,{count:10});
+   const first=await store({root,source});
+   const report=await audit(inputs(root,market,"2026-09-18","2026-09-19"));
+   assert.equal(report.status,"SOURCE_WINDOW_INCOMPLETE_OR_CONFLICTED");
+   assert.equal(report.missingSessionCount,1);
+   assert.equal(report.sourceLimitedSessionCount,1);
+   assert.equal(report.missingCollectionPlan.length,1);
+   assert.equal(report.partialRetryReviewPlan.length,1);
+   const partial=report.partialRetryReviewPlan[0];
+   assert.equal(partial.expectedExistingSourceDigestSha256,first.sourceDigestSha256);
+   assert.equal(partial.priorOriginalMinuteRows,10);
+   assert.equal(partial.missingUnverifiedMinuteSlots,1430);
+   assert.equal(partial.sessionStartMs,D0);
+   assert.equal(partial.dayUtc,"2026-09-18");
+   assert.equal(partial.sourceReadRequiresExplicitConsent,true);
+   assert.equal(partial.sourceNoTradeGapEvidenceVerified,false);
+   assert.equal(partial.sourceRevisionAutoSelected,false);
+   assert.equal(partial.proposedProvider,market==="CRYPTO_SPOT"
+     ?"UPBIT_PUBLIC_REST":"BITGET_PUBLIC_V2");
+   assert.equal(partial.providerGETCount,0);
+   assert.equal(partial.autoExecuteAllowed,false);
+   assert.equal(report.missingCollectionPlan[0].dayUtc,"2026-09-19");
+   assert.equal(report.missingCollectionPlan[0].autoExecuteAllowed,false);
+   assert.equal(report.sourceLicenseAndReuseRightsIndependentlyVerified,false);
+   assert.equal(report.publicHistoryGETAuthorized,false);
+   assert.equal(report.trueMarketWideRecall,null);
+   assert.equal(report.profitabilityProven,false);
+  }finally{rmSync(root,{recursive:true,force:true});}
+ }
+});
+
+test("four-market stock gaps carry LOCAL session identity and never nominate unlicensed public GET",async()=>{
+ for(const market of ["KR_STOCK","US_STOCK"]){
+  const root=tmp();
+  try{
+   const start=market==="KR_STOCK" ? D0
+     :Date.parse("2026-09-18T13:30:00Z");
+   const original=sample(market,start);
+   const stored=await store({root,source:original});
+   const info=await audit(inputs(root,market,"2026-09-18","2026-09-18",{
+     stockCalendar:calendar(market,[original]),
+   }));
+   assert.equal(info.partialRetryReviewPlan.length,1);
+   assert.equal(info.partialRetryReviewPlan[0].tradingDateLocal,"2026-09-18");
+   assert.equal(info.partialRetryReviewPlan[0].sessionStartMs,start);
+   assert.equal(info.partialRetryReviewPlan[0].sessionKind,"REGULAR");
+   assert.equal(info.partialRetryReviewPlan[0].expectedExistingSourceDigestSha256,
+     stored.sourceDigestSha256);
+   assert.equal(info.partialRetryReviewPlan[0].proposedProvider,null);
+   assert.equal(info.publicHistoryGETAuthorized,false);
+   assert.equal(info.profitabilityProven,false);
+  }finally{rmSync(root,{recursive:true,force:true});}
+ }
+});
+
+test("competing immutable revisions and broken compressed source require manual review, not a retry ticket",async()=>{
+ const root=tmp(),market="CRYPTO_SPOT",src=sample("CRYPTO_SPOT",D0);
+ try{
+  await store({root,source:src});
+  const changed=structuredClone(src);
+  changed.minuteBars[0].high+=11;
+  changed.sourceMinuteRowsSha256=hash(changed.minuteBars);
+  await store({root,source:changed});
+  const summary=await audit(inputs(root,market,"2026-09-18","2026-09-18"));
+  assert.equal(summary.revisionConflictSessionCount,1);
+  assert.deepEqual(summary.partialRetryReviewPlan,[]);
+  assert.equal(summary.revisionReviewPlan.length,1);
+  assert.equal(summary.revisionReviewPlan[0].existingSourceDigestSha256,null);
+  assert.equal(summary.revisionReviewPlan[0].sourceRevisionAutoSelected,false);
+  assert.equal(summary.revisionReviewPlan[0].autoExecuteAllowed,false);
+  assert.equal(summary.providerGETCount,0);
+  assert.equal(summary.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+ const root2=tmp();
+ try{
+  const sampleSource=sample("CRYPTO_SPOT",D0);
+  const stored=await store({root:root2,source:sampleSource});
+  writeFileSync(stored.path,"corrupt native data 123456789012345");
+  const out=await audit(inputs(root2,"CRYPTO_SPOT",
+    "2026-09-18","2026-09-18"));
+  assert.equal(out.unreadableSessionCount,1);
+  assert.equal(out.unreadableSourceReviewPlan.length,1);
+  assert.equal(out.unreadableSourceReviewPlan[0].autoExecuteAllowed,false);
+  assert.deepEqual(out.partialRetryReviewPlan,[]);
+  assert.deepEqual(out.missingCollectionPlan,[]);
+  assert.equal(out.providerGETCount,0);
+ }finally{rmSync(root2,{recursive:true,force:true});}
+});
+
+test("single-day source inventory CLI emits SHA-based partial retry count but never a GET",async()=>{
+ const root=tmp();
+ try{
+  const original=sample("CRYPTO_SPOT",D0);
+  const saved=await store({root,source:original});
+  const path=join(root,"private-source-window.json");
+  const args=["--root",root,"--market","CRYPTO_SPOT",
+    "--symbol","KRW-BTC","--start-date","2026-09-18",
+    "--end-date","2026-09-18","--output",path];
+  const report=await run(parse(args));
+  assert.equal(report.partialRetryReviewCount,1);
+  assert.equal(report.revisionReviewCount,0);
+  assert.equal(report.providerGETCount,0);
+  assert.equal(report.autoExecuteAllowed,false);
+  const file=JSON.parse(readFileSync(path,"utf8"));
+  assert.equal(file.partialRetryReviewPlan.length,1);
+  assert.equal(file.partialRetryReviewPlan[0].expectedExistingSourceDigestSha256,
+    saved.sourceDigestSha256);
+  assert.equal(file.publicHistoryGETAuthorized,false);
+  assert.equal(file.executionAuthority,"NONE");
+  assert.equal(file.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

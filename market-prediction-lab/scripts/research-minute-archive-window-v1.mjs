@@ -114,6 +114,13 @@ export async function runResearchMinuteWindowCliV1(config) {
     archivedSessionCount: result.archivedSessionCount,
     missingSessionCount: result.missingSessionCount,
     sourceLimitedSessionCount: result.sourceLimitedSessionCount,
+    partialRetryReviewCount:Array.isArray(result.partialRetryReviewPlan)
+      ?result.partialRetryReviewPlan.length:null,
+    revisionReviewCount:Array.isArray(result.revisionReviewPlan)
+      ?result.revisionReviewPlan.length:null,
+    unreadableSourceReviewCount:Array.isArray(result.unreadableSourceReviewPlan)
+      ?result.unreadableSourceReviewPlan.length:null,
+    providerGETCount:0,autoExecuteAllowed:false,
     trueMarketWideRecall: null, profitabilityProven: false,
     executionAuthority: "NONE",
   });
