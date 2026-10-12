@@ -29,6 +29,35 @@ const FAILURE_CODES = [
   'VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID', 'VIDEO_DISCOVERY_ONE_SHOT_STALE',
   'VIDEO_DISCOVERY_ONE_SHOT_SAFETY_INVALID',
 ];
+const PROVIDER_FAILURE_CODES = new Set(['FREE_AI_TIMEOUT','FREE_AI_NETWORK_UNAVAILABLE',
+  'FREE_AI_RATE_LIMITED','FREE_AI_AUTH_REJECTED','FREE_AI_REQUEST_REJECTED',
+  'FREE_AI_PROVIDER_UNAVAILABLE','FREE_AI_PROVIDER_ERROR','FREE_AI_PROVIDER_RESPONSE_INVALID','FREE_AI_EMPTY_RESPONSE']);
+
+// Diagnostics can contain both pretty JSON and compact JSON. Scan once rather
+// than treating nested lines or arbitrary stderr as provider failure evidence.
+function jsonRecords(lines) {
+  const records = [];
+  let invalid = false;
+  let buffer = '', depth = 0, quoted = false, escaped = false;
+  for (const line of lines) {
+    if (!buffer && !line.startsWith('{')) continue;
+    buffer += line + '\n';
+    for (const char of line) {
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}') depth -= 1;
+    }
+    if (depth <= 0 && !quoted) {
+      try { records.push(JSON.parse(buffer)); } catch { invalid = true; }
+      buffer = ''; depth = 0; escaped = false;
+    }
+  }
+  return {records, invalid: invalid || buffer.length !== 0};
+}
 
 function validOneShot(value, targetSha) {
   const integer = (n, min, max) => Number.isSafeInteger(n) && n >= min && n <= max;
@@ -54,16 +83,15 @@ function evaluateAiActivationResult({ diagnostics, targetSha, remoteExitCode, ca
   const markers = new Map(lines.filter(x => /^[A-Za-z_]+=/u.test(x)).map(x => {
     const i = x.indexOf('='); return [x.slice(0, i), x.slice(i + 1)];
   }));
-  const proofs = lines.filter(x => x.startsWith('{')).flatMap(line => {
-    try { return [JSON.parse(line)]; } catch { return []; }
-  });
+  const parsed = jsonRecords(lines);
+  const proofs = parsed.records;
   const oneShots = proofs.filter(x => x?.schemaVersion === 'research-ai-one-shot-proof-v1');
   const safetyMarkers = REQUIRED_MARKERS.slice(7);
   const safetyConflict = safetyMarkers.some(marker => {
     const key = marker.slice(0, marker.indexOf('='));
     return lines.some(line => line.startsWith(key + '=') && line !== marker);
   });
-  const completionEvidenceObserved = validInput && !safetyConflict
+  const completionEvidenceObserved = validInput && !safetyConflict && !parsed.invalid
     && REQUIRED_MARKERS.every(x => {
       const i = x.indexOf('='); return markers.get(x.slice(0, i)) === x.slice(i + 1);
     })
@@ -81,8 +109,16 @@ function evaluateAiActivationResult({ diagnostics, targetSha, remoteExitCode, ca
         ?? 'AI_RESEARCH_ACTIVATION_REMOTE_FAILED';
     }
   } else if (!completionEvidenceObserved) failureReason = 'AI_RESEARCH_ACTIVATION_PROOF_INVALID';
+  const diagnostic = proofs.filter(x => x?.schemaVersion === 'research-production-ai-diagnostic-v1'
+    && x.researchSha === targetSha && x.credentialValuesExposed === false && x.executionAuthority === 'NONE').at(-1);
+  const providerFailureReason = validInput && remoteExitCode !== 0 && captureExitCode === 0
+    && ['PARTIAL_AI_UNAVAILABLE','DEFERRED_RETRY'].includes(diagnostic?.status)
+    ? [...(Array.isArray(diagnostic.blockedProfiles) ? diagnostic.blockedProfiles : []),
+      ...(Array.isArray(diagnostic.deferredProfiles) ? diagnostic.deferredProfiles : [])]
+      .slice(0, 6).map(x=>x?.reason).find(code=>PROVIDER_FAILURE_CODES.has(code)) ?? null : null;
   return { schemaVersion: 'research-ai-activation-result-v1',
     activationSucceeded: failureReason === null, failureReason,
+    providerFailureReason,
     completionEvidenceObserved,
     runtimeRecheckRequired: validInput && failureReason !== null,
     grantsExecutionAuthority: false };

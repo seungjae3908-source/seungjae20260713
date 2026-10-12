@@ -5,9 +5,11 @@ import { hasCapability } from '../../../packages/member-access/src/index.js';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
   evaluateManualFourMarketPaperClosedCycle,
+  evaluateManualFourMarketPaperOrderPath,
   buildManualPaperResearchReceipt,
   sameManualPaperResearchReceipt,
   type ManualPaperFourMarketCycleInput,
+  type ManualPaperOrderPathInput,
   type ManualPaperResearchReceiptRow,
 } from '../services/manual-four-market-paper-cycle.service';
 import {
@@ -34,6 +36,10 @@ type ManualFourMarketDeps = {
     selected:ManualPaperPreviewSelection,nowMs:number)
     =>Promise<ManualPaperFourMarketCycleInput|null>;
   researchPreviewEnabled:()=>boolean;
+  orderPathPreviewEnabled:()=>boolean;
+  readOrderPathEvidence:(owner:{id:string;role:ManualWalletRole},
+    selected:ManualPaperPreviewSelection,nowMs:number)
+    =>Promise<ManualPaperOrderPathInput|null>;
   now:()=>Date;
   listSeeds:(request:AuthenticatedRequest,ownerId:string)=>Promise<StoredPaperJournalRecord[]>;
   rlsReady:(request:AuthenticatedRequest)=>Promise<boolean>;
@@ -156,6 +162,11 @@ export function createManualFourMarketWalletRouter(
     ()=>process.env.MANUAL_FOUR_MARKET_PAPER_SEED_BOOTSTRAP_ENABLED==='true');
   const researchPreviewEnabled=deps.researchPreviewEnabled??(
     ()=>process.env.MANUAL_FOUR_MARKET_PAPER_RESEARCH_PREVIEW_ENABLED==='true');
+  const orderPathPreviewEnabled=deps.orderPathPreviewEnabled??(
+    ()=>process.env.MANUAL_FOUR_MARKET_PAPER_ORDER_PATH_PREVIEW_ENABLED==='true');
+  // Product runtime is intentionally unavailable until a certified server
+  // public quote + sizing + model source is independently implemented.
+  const orderPathReader=deps.readOrderPathEvidence??(async()=>null);
   // Fail closed in the product runtime until an independently certified
   // public provider+backtest/OOS+cost source is actually wired.
   const researchReader=deps.readResearchCycleEvidence??(async()=>null);
@@ -403,6 +414,73 @@ export function createManualFourMarketWalletRouter(
       }catch{
         return res.status(503).json(fail('MANUAL_PAPER_RESEARCH_ARCHIVE_UNAVAILABLE',
           '현재 회원의 검증된 연구 기록을 조회할 수 없습니다.'));
+      }
+    });
+
+
+  /**
+   * Server-only four-market simulated order lifecycle diagnostic:
+   * entry matches -> partial-fill preview -> reducing exits -> hypothetical
+   * KRW PnL. No provider, actual Paper order, account debit, wallet settlement
+   * or durable fill. OFF by default. Browser may send SELECTED SYMBOL/STRATEGY
+   * only; never fills, OHLC price, costs, funding or timestamps.
+   */
+  router.post('/paper-trading/manual-four-market/order-cycle-preview',
+    async(req:AuthenticatedRequest,res)=>{
+      res.set('Cache-Control','no-store');
+      const scope=authenticatedOwner(req);
+      if(!scope)return res.status(403).json(fail('CAPABILITY_REQUIRED',
+        '수동모의 주문 흐름 미리보기 권한이 없습니다.'));
+      if(!orderPathPreviewEnabled())
+        return res.status(409).json(fail('MANUAL_PAPER_ORDER_PATH_PREVIEW_OFF',
+          '모의주문 체결 흐름 미리보기는 현재 비활성화입니다.'));
+      const selected:unknown=req.body;
+      if(Object.keys(req.query).length||!validSelection(selected)
+        ||!validModeSelection(selected)
+        ||Buffer.byteLength(JSON.stringify(selected),'utf8')>2048) {
+        return res.status(400).json(fail('MANUAL_PAPER_ORDER_PATH_SELECTION_INVALID',
+          '시장·종목·전략·방향·레버리지 조건을 다시 확인하세요.'));
+      }
+      const nowMs=now().getTime();
+      if(!Number.isSafeInteger(nowMs)||nowMs<=0)
+        return res.status(503).json(fail('MANUAL_PAPER_ORDER_PATH_CLOCK_INVALID',
+          '서버 시각을 확인하지 못했습니다.'));
+      try{
+        const [rls,records]=await Promise.all([
+          rlsReady(req),listSeeds(req,scope.id),
+        ]);
+        const wallet=inspectManualFourMarketWallets(scope.role,records,nowMs);
+        if(!rls||!wallet.ready)
+          return res.status(409).json(fail('MANUAL_PAPER_ORDER_PATH_WALLET_OR_RLS_REQUIRED',
+            '본인 수동모의계좌와 DB 보호가 검증되지 않았습니다.'));
+        const evidence=await orderPathReader(scope,selected,nowMs);
+        if(!evidence)
+          return res.status(409).json(fail('MANUAL_PAPER_ORDER_PATH_SERVER_SOURCE_REQUIRED',
+            '서버 검증 시세와 모의 체결 모델 증거가 준비되지 않았습니다.'));
+        const owner=evidence.cycle?.selected;
+        if(!owner||owner.ownerId!==scope.id
+          ||owner.role!==scope.role||owner.mode!=='manual'
+          ||evidence.cycle.nowMs!==nowMs
+          ||!selectionKeys.every(k=>owner[k]===selected[k])) {
+          return res.status(409).json(fail('MANUAL_PAPER_ORDER_PATH_OWNER_OR_SELECTION_MISMATCH',
+            '본인 전략과 서버 모의주문 증거가 일치하지 않습니다.'));
+        }
+        const evaluation=evaluateManualFourMarketPaperOrderPath(evidence);
+        if(evaluation.status==='BLOCKED')
+          return res.status(409).json(fail('MANUAL_PAPER_ORDER_PATH_EVIDENCE_BLOCKED',
+            '모의 주문·부분체결·청산 증거가 검사를 통과하지 못했습니다.',
+            {blockers:evaluation.blockers}));
+        return res.status(200).json(harmless({
+          ok:true,ownerScope:'SELF',previewOnly:true,
+          simulatedOrderPath:evaluation,
+          actualPaperOrderCreated:false,actualPaperFillsRecorded:false,
+          actualPaperLedgerWritten:false,realPaperOrderCreated:false,
+          financialMutationCount:0,profitabilityProven:false,
+          transferAuthority:false,withdrawalAuthority:false,
+        }));
+      }catch{
+        return res.status(503).json(fail('MANUAL_PAPER_ORDER_PATH_SOURCE_UNAVAILABLE',
+          '모의주문 흐름 검증에 필요한 서버 증거를 조회하지 못했습니다.'));
       }
     });
 
