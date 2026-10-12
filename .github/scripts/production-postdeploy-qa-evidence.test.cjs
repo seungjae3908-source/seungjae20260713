@@ -6,6 +6,7 @@ const {
   isActiveProductionTradingGateRun,
   revalidateProductionTradingGateConflicts,
   assertAutomaticPositionIsolationReceipt,
+  assertAutoLiveSignalReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
@@ -19,6 +20,37 @@ const ZERO = {
   autoTradingAuthorityGranted: false,
 };
 const providers = ['bitget', 'kiwoom', 'toss', 'upbit'];
+test('signal transport receipts reject legacy unbound schema and never accept fabricated producer invocation', () => {
+  const receipt = { schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
+    productionDeployRunId: 42, canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true, maximumAgeMinutes: 30, entryCount: 0,
+    observedMarkets: [], entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true,
+    producerInvocationVerified: false, scheduleActive: true, scheduleEntryCount: 1,
+    disableSentinelPresent: false, publicDataOnly: true, privateRequestCount: 0,
+    financialMutationCount: 0, executionAuthority: 'NONE', realOrderSubmitted: false,
+    secretValuesRecorded: false, accountValuesRecorded: false, ...ZERO };
+  const context = { targetSha: SHA, productionDeployRunId: 42 };
+  assert.doesNotThrow(() => assertAutoLiveSignalReceipt(receipt, context));
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    schemaVersion: 'production-auto-live-signal-source-v1' }, context), /SIGNAL_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    producerInvocationVerified: true }, context), /SIGNAL_IDENTITY_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt, entryCount: 1, entryShaMatch: true,
+    entryResearchCodeShas: ['a'.repeat(40)], observedMarkets: ['KR_STOCK'] }, context), /SIGNAL_IDENTITY_INVALID/);
+});
+const { REQUIRED_CHECKS, ADDITIONAL_CONTROLS } = require('./automatic-live-preactivation-audit.cjs');
+// Synthetic unit evidence only; this fixture must never be emitted as a runtime receipt.
+function memberAccountSignalFixture() {
+  return {
+    schemaVersion: 'automatic-live-preactivation-audit-v1', targetSha: SHA,
+    generatedAt: '2026-10-04T00:01:30.000Z', scope: 'MEMBER_ACCOUNT_AND_SIGNAL_READONLY_REHEARSAL',
+    ready: true, activationReady: false,
+    checks: REQUIRED_CHECKS.map((id) => ({ id, status: 'PASS', codes: [] })),
+    additionalRequiredControls: [...ADDITIONAL_CONTROLS], paperOutOfScope: true, telegramOutOfScope: true,
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    liveTradingAuthorityGrantedByAudit: false, autoTradingAuthorityGrantedByAudit: false,
+  };
+}
 
 test('AUTO isolation proof protects existing manual assets and rejects absent, mixed or mutating evidence', () => {
   const account = fixture().account;
@@ -307,18 +339,19 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.memberAutoPilotStage, 'validated');
 });
 
-test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Comprehensive receipts', () => {
+test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant overall activation readiness', () => {
   const input = fixture();
   input.qaScope = 'auto_live';
   input.comprehensive = null;
   input.autoLive = {
-    schemaVersion: 'production-auto-live-readonly-qa-v2',
+    schemaVersion: 'production-auto-live-readonly-qa-v3',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
     viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
     providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
     markets: {
@@ -328,7 +361,7 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     memberAutoPolicyBlockers: [],
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
-    memberAutoPilotStage: 'limited-50',
+    memberAutoPilotStage: 'formula-ai-exception',
     memberAutoLivePilotReady: true,
     providerVerificationFresh: true,
     marketReadinessBlockersOnlyExpectedPreactivation: true,
@@ -351,7 +384,7 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     ...ZERO,
   };
   input.autoLiveSignal = {
-    schemaVersion: 'production-auto-live-signal-source-v1',
+    schemaVersion: 'production-auto-live-signal-source-v2',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:30.000Z',
@@ -362,6 +395,7 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     maximumAgeMinutes: 30,
     entryCount: 0,
     observedMarkets: [],
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
     scheduleActive: true,
     scheduleEntryCount: 1,
     disableSentinelPresent: false,
@@ -375,15 +409,30 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     ...ZERO,
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.qaComplete, true);
+  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.automaticLiveActivationReady, false);
+  assert.deepEqual(evidence.unprovenAutomaticLiveControls, [
+    ...input.autoLive.memberAccountSignalAudit.additionalRequiredControls,
+    'SCANNER_PRODUCER_CONNECTED', 'AI_PRODUCER_CONNECTED', 'STRATEGY_EXECUTION_LINKAGE']);
   assert.equal(evidence.qaScope, 'auto_live');
   assert.equal(evidence.autoLiveQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
   assert.equal(evidence.memberAutoPolicyReady, true);
   assert.equal(evidence.memberAutoLivePilotReady, true);
-  assert.equal(evidence.canonicalAutoLiveSignalSource, 'PASS');
+  assert.equal(evidence.autoLiveSignalTransport, 'PASS');
+  assert.equal(evidence.canonicalAutoLiveSignalSource, 'NOT_PROVEN');
   assert.equal(evidence.telegramActivationState, 'NOT_EVALUATED');
+  const missing = structuredClone(input);
+  delete missing.autoLive.memberAccountSignalAudit;
+  assert.throws(() => buildProductionPostdeployQaEvidence(missing), /MEMBER_SIGNAL_AUDIT_INVALID/);
+  const disconnected = structuredClone(input);
+  const producer = disconnected.autoLive.memberAccountSignalAudit.checks
+    .find((row) => row.id === 'GENUINE_SCANNER_AND_AI_CONNECTION');
+  producer.status = 'BLOCKED';
+  producer.codes = ['PREACTIVATION_SCANNER_AI_PRODUCER_BINDING_NOT_PROVEN'];
+  assert.throws(() => buildProductionPostdeployQaEvidence(disconnected), /MEMBER_SIGNAL_AUDIT_INVALID/);
 });
 
 test('rejects Automatic LIVE evidence when the canonical signal schedule is not active', () => {
@@ -391,14 +440,15 @@ test('rejects Automatic LIVE evidence when the canonical signal schedule is not 
   input.qaScope = 'auto_live';
   input.comprehensive = null;
   input.autoLive = {
-    schemaVersion: 'production-auto-live-readonly-qa-v2', targetSha: SHA,
+    schemaVersion: 'production-auto-live-readonly-qa-v3', targetSha: SHA,
     productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:00.000Z',
     officialProductionOrigin: true, authenticatedProductionSession: true, identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
     viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
     providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
     markets: { domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS' },
     memberAutoPolicyReady: true, memberAutoPolicyBlockers: [], memberAutoDomesticBroker: 'kiwoom',
-    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'limited-50', memberAutoLivePilotReady: true,
+    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'formula-ai-exception', memberAutoLivePilotReady: true,
     providerVerificationFresh: true, marketReadinessBlockersOnlyExpectedPreactivation: true,
     workerPreactivationSafe: true, workerEnabled: false, liveBackgroundRequested: false,
     liveEntryArmPresent: false, liveEntriesArmed: false, pendingOrderCount: 0,
@@ -408,11 +458,12 @@ test('rejects Automatic LIVE evidence when the canonical signal schedule is not 
     accountValuesRecorded: false, ...ZERO,
   };
   input.autoLiveSignal = {
-    schemaVersion: 'production-auto-live-signal-source-v1', targetSha: SHA,
+    schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
     productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:30.000Z',
     canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
     handoffEvaluatedAfterScheduleActivation: true,
     maximumAgeMinutes: 30, entryCount: 0, observedMarkets: [], scheduleActive: false,
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
     scheduleEntryCount: 0, disableSentinelPresent: false, publicDataOnly: true,
     privateRequestCount: 0, financialMutationCount: 0, executionAuthority: 'NONE',
     secretValuesRecorded: false, accountValuesRecorded: false, realOrderSubmitted: false, ...ZERO,
