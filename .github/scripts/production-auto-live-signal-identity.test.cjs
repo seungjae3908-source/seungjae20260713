@@ -8,8 +8,8 @@ const { readBoundedAutoLiveSourceArtifact, readProductionAutoLiveScheduleActivat
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
-const MANAGED_CRON = '*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock ' +
-  '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule # stock-app-paper-forward-v1';
+const MANAGED_CRON = '*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/auto-live-signal-v1/cron.lock ' +
+  '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal # stock-app-auto-live-public-signal-v1';
 const entry = (market, researchCodeSha = SHA) => ({ identity: { market, researchCodeSha } });
 test('an empty handoff is transport-only and does not prove scanner/AI invocation or candidate SHA', () => {
   const proof = inspectSignalEntryIdentity([], SHA);
@@ -85,6 +85,8 @@ function activationFor(cronLine = MANAGED_CRON, overrides = {}) {
     installedAt: new Date(SCHEDULE_AT).toISOString(),
     scheduleActive: true, pollCadence: 'EVERY_15_MINUTES',
     canonicalCycleIntervalMs: 900_000, autoLivePublicSignalRefreshEnabled: true,
+    independentPaperRoot: true, paperRootMutated: false, paperCronReplaced: false,
+    producerInvocationVerified: false, aiIssuerVerified: false, autoTradingActivationReady: false,
     runtimeDigest: 'b'.repeat(64),
     cronHash: createHash('sha256').update(cronLine).digest('hex'),
     paperTradeOutcomeAccumulationEnabled: false,
@@ -101,9 +103,9 @@ test('only exact installed 15-minute cron and SHA-bound receipt prove schedule c
     activationFor(), SHA, SCHEDULE_AT, SCHEDULE_AT + 15_000);
   assert.deepEqual(result, { exactActiveCommand: true, activationBound: true,
     entryCount: 1, publicOnly: true, refreshIntervalMs: 900_000 });
-  const bin = '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+  const bin = '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal';
   const bad = [
-    '# stock-app-paper-forward-v1', '# ' + MANAGED_CRON,
+    '# stock-app-auto-live-public-signal-v1', '# ' + MANAGED_CRON,
     MANAGED_CRON.replace('*/15 * * * *', '0 * * * *'),
     MANAGED_CRON.replace('/usr/bin/flock', 'echo'),
     MANAGED_CRON.replace(bin, '/tmp/run-paper-forward-schedule'),
@@ -125,7 +127,10 @@ test('cron configuration cannot re-use stale, mismatched or Paper-outcome activa
     { installedAt: new Date(SCHEDULE_AT - 10_000).toISOString() },
     { cronHash: '0'.repeat(64) }, { scheduleActive: false },
     { pollCadence: 'EVERY_60_MINUTES' }, { canonicalCycleIntervalMs: 14_400_000 },
-    { autoLivePublicSignalRefreshEnabled: false }, { paperTradeOutcomeAccumulationEnabled: true },
+    { autoLivePublicSignalRefreshEnabled: false },
+    { independentPaperRoot: false }, { paperRootMutated: true }, { paperCronReplaced: true },
+    { producerInvocationVerified: true }, { aiIssuerVerified: true }, { autoTradingActivationReady: true },
+    { paperTradeOutcomeAccumulationEnabled: true },
     { simulatedFinancialAdaptersEnabled: true }, { externalFinancialMutationAllowed: true },
     { liveTrading: true }, { privateAccountAccess: true }, { orderAuthority: true },
     { runtimeDigest: '' },
@@ -155,6 +160,7 @@ test('audit rejects both disable sentinels and a different source-wrapper identi
   assert.ok(source.includes('inspectManagedPaperForwardSchedule('));
   assert.ok(source.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
   assert.ok(source.includes("PAPER_FORWARD_RESEARCH_SHA='"));
+  assert.ok(source.includes("PAPER_FORWARD_ROOT='/opt/stock-app-data/auto-live-signal-v1/runtime-state'"));
   assert.ok(source.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'"));
   assert.ok(source.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
 });
@@ -170,9 +176,9 @@ test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owne
     aiIssuerVerified: false, liveActivationReady: false,
   });
   const occupied = [
-    '# stock-app-paper-forward-v1',
-    '# */15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock',
-    '*/15 * * * * /usr/bin/flock -n /tmp/x /opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule',
+    '# stock-app-auto-live-public-signal-v1',
+    '# */15 * * * * /usr/bin/flock -n /opt/stock-app-data/auto-live-signal-v1/cron.lock',
+    '*/15 * * * * /usr/bin/flock -n /tmp/x /opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal',
     '0 */4 * * * /usr/bin/node /srv/research/run-paper-forward-schedule.js',
   ];
   for (const crontabText of occupied) {
@@ -202,7 +208,7 @@ test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owne
 
 
 test('disabled schedule sentinels fail closed even when dangling symlinks', () => {
-  const root = '/opt/stock-app-data/paper-forward-v1';
+  const root = '/opt/stock-app-data/auto-live-signal-v1';
   const directory = { isDirectory: () => true, isSymbolicLink: () => false };
   const symlink = { isDirectory: () => false, isSymbolicLink: () => true };
   const marker = { isDirectory: () => false, isSymbolicLink: () => false };
@@ -248,8 +254,8 @@ test('disabled schedule sentinels fail closed even when dangling symlinks', () =
 });
 
 test('a dedicated Auto LIVE public source plan never replaces existing Paper or grants AI authority', () => {
-  const paperCron='*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock ' +
-    '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule # stock-app-paper-forward-v1';
+  const paperCron='*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/auto-live-signal-v1/cron.lock ' +
+    '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal # stock-app-auto-live-public-signal-v1';
   const args={targetSha:SHA,deployedSha:SHA,crontabText:paperCron,isolatedRootPresent:false};
   const plan=inspectIndependentAutoLivePublicSourcePlan(args);
   assert.equal(plan.status,'DRAFT_PLAN_NOT_INSTALLED');
@@ -279,11 +285,11 @@ test('a dedicated Auto LIVE public source plan never replaces existing Paper or 
 
 test('handoff, activation and wrapper artifacts are all anchored and read through bounded NOFOLLOW fd', () => {
   const fixtures=[
-    ['HANDOFF','/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json',
+    ['HANDOFF','/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json',
       '{"status":"READY"}',0o100600],
-    ['ACTIVATION','/opt/stock-app-data/paper-forward-v1/activation.json',
+    ['ACTIVATION','/opt/stock-app-data/auto-live-signal-v1/activation.json',
       '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE"}',0o100600],
-    ['WRAPPER','/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule',
+    ['WRAPPER','/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal',
       '#!/usr/bin/env bash\nset -Eeuo pipefail\n',0o100700],
   ];
   for(const [kind,file,payload,mode] of fixtures){
@@ -344,7 +350,7 @@ test('handoff, activation and wrapper artifacts are all anchored and read throug
   }
 });
 test('malformed pinned JSON errors stay sanitized and descriptors are closed', () => {
-  const file='/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+  const file='/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json';
   const data=Buffer.from('{"private_key":"SECRET"', 'utf8');
   let closes=0;
   const io={
@@ -362,4 +368,41 @@ test('malformed pinned JSON errors stay sanitized and descriptors are closed', (
   assert.throws(()=>readProductionAutoLiveSignalHandoff(file,io),
     /^Error: AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID$/u);
   assert.equal(closes,1);
+});
+
+test('protected scheduler installer isolates independent auto source and preserves the Paper cron', () => {
+  const source = readFileSync('ops/install-paper-forward-schedule.sh', 'utf8');
+  const { spawnSync } = require('node:child_process');
+  const syntax = spawnSync('bash', ['-n', 'ops/install-paper-forward-schedule.sh'], { encoding: 'utf8' });
+  assert.equal(syntax.status, 0, syntax.stderr);
+  for (const fragment of [
+    'AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED',
+    '/opt/stock-app-data/auto-live-signal-v1',
+    '# stock-app-auto-live-public-signal-v1',
+    'run-auto-live-public-signal',
+    'Independent installer cannot replace an earlier schedule',
+    'Preexisting Paper and unrelated cron entries were altered',
+    'independentPaperRoot: Number(cycleIntervalRaw) === 900000',
+    'producerInvocationVerified: false',
+    'paperRootMutated: Number(cycleIntervalRaw) !== 900000',
+    'autoTradingActivationReady: false',
+    'LIVE_TRADING=', 'REAL_ORDER_ENABLED=', 'PRIVATE_TRADING_API_ALLOWED=',
+  ]) assert.ok(source.includes(fragment), 'Missing independent installer fence: ' + fragment);
+  const rejected = spawnSync('bash', ['ops/install-paper-forward-schedule.sh', SHA], {
+    encoding: 'utf8', timeout: 5000,
+    env: {
+      PATH: process.env.PATH, HOME: process.env.HOME,
+      AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED: 'true',
+      PAPER_FORWARD_STATE_ROOT: '/opt/stock-app-data/auto-live-signal-v1',
+      AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED: 'false',
+    },
+  });
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /Independent source installation requires protected owner approval/u);
+  const preflight = readFileSync('ops/production-auto-live-signal-identity.cjs', 'utf8');
+  assert.ok(preflight.includes("process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true'"));
+  assert.ok(preflight.includes('runAutoLiveIndependentPublicSourcePreflight()'));
+  const release = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
+  assert.ok(release.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(!release.includes('bash ops/disable-paper-forward-schedule.sh'));
 });

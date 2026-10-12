@@ -37,29 +37,33 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-qa.json'));
   assert.ok(production.includes('production-auto-live-signal-source.json'));
   assert.ok(production.includes('Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS'));
-  // Independently owned public observation is only a bounded Draft plan;
-  // the existing fail-closed Production financial authority remains intact.
+  // This release installs ONLY a separately owned public observer after
+  // explicit protected Production approval; not automatic trade authority.
   assert.ok(isolatedPlan.includes('inspectIndependentAutoLivePublicSourcePlan('));
-  assert.ok(isolatedPlan.includes("status: 'DRAFT_PLAN_NOT_INSTALLED'"));
+  assert.ok(isolatedPlan.includes('runAutoLiveIndependentPublicSourcePreflight()'));
   assert.ok(isolatedPlan.includes('ownerInstallApprovalRequired: true'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(!production.includes('bash ops/disable-paper-forward-schedule.sh'));
 
-  // AUTO LIVE must not disable or replace a separately owned Natural/Paper
-  // schedule, even when the shared root contains only archived/disabled state.
+  // Bound pre-DB and last-moment checks to the dedicated root. Historical
+  // Paper owner state and cron remain unmodified, even when Paper is ACTIVE.
   const preflight = read('ops/production-auto-live-signal-identity.cjs');
   const earlyOwner = production.indexOf(
-    '- name: Reject shared Paper Forward owner before AUTO LIVE database or application mutation');
+    '- name: Verify independent AUTO LIVE source availability before any database or application mutation');
   const databaseMutation = production.indexOf(
     '- name: Require canonical Production trade schema and journal privileges before application mutation');
-  const lastOwner = production.indexOf('AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA"');
-  const disableOriginal = production.indexOf('bash ops/disable-paper-forward-schedule.sh');
+  const lastOwner = production.indexOf('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA"');
+  const installCall = production.indexOf('bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"');
   assert.ok(earlyOwner > 0 && earlyOwner < databaseMutation);
-  assert.ok(lastOwner > databaseMutation && lastOwner < disableOriginal);
+  assert.ok(lastOwner > databaseMutation && lastOwner < installCall);
   assert.ok(production.includes('< ops/production-auto-live-signal-identity.cjs'));
-  assert.ok(production.includes('AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q'));
-  assert.ok(preflight.includes('AUTO_LIVE_SHARED_PAPER_SCHEDULE_ALREADY_OWNED'));
-  assert.ok(preflight.includes('AUTO_LIVE_SHARED_PAPER_STATE_ALREADY_OWNED'));
-  assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/paper-forward-v1')"));
-  assert.ok(preflight.includes('liveActivationReady: false'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q'));
+  assert.ok(production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/auto-live-signal-v1'));
+  assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED'));
+  assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED'));
+  assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/auto-live-signal-v1')"));
+  assert.ok(preflight.includes('autoTradingActivationReady: false'));
+  assert.ok(!production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1'));
 
   assert.ok(production.includes('PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false'));
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
@@ -80,6 +84,8 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(!signalIdentity.includes("io.readFileSync(fd, 'utf8')"));
   assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleActivation(activationPath)'));
   assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath)'));
+  assert.ok(signalAudit.includes("scheduleRoot = '/opt/stock-app-data/auto-live-signal-v1'"));
+  assert.ok(production.includes('state_root=/opt/stock-app-data/auto-live-signal-v1'));
   assert.ok(!signalAudit.includes("readFileSync(activationPath, 'utf8')"));
   assert.ok(!signalAudit.includes("readFileSync(wrapperPath, 'utf8')"));
   assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_HANDOFF_SHA_MISMATCH'));

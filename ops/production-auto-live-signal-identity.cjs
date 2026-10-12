@@ -78,10 +78,10 @@ function inspectManagedPaperForwardSchedule(crontabText, activation, targetSha, 
     || !Number.isFinite(nowMs) || nowMs < activatedAtMs) {
     throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ARGUMENT_INVALID');
   }
-  const tag = '# stock-app-paper-forward-v1';
-  const wrapperPath = '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+  const tag = '# stock-app-auto-live-public-signal-v1';
+  const wrapperPath = '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal';
   const prefix = '*/15 * * * * ';
-  const suffix = ' -n /opt/stock-app-data/paper-forward-v1/cron.lock ' + wrapperPath + ' ' + tag;
+  const suffix = ' -n /opt/stock-app-data/auto-live-signal-v1/cron.lock ' + wrapperPath + ' ' + tag;
   const lines = crontabText.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
   // A duplicate untagged invocation is also unsafe; tagged comments alone
   // cannot certify that cron will run a real executable.
@@ -103,6 +103,12 @@ function inspectManagedPaperForwardSchedule(crontabText, activation, targetSha, 
     || activation?.pollCadence !== 'EVERY_15_MINUTES'
     || activation?.canonicalCycleIntervalMs !== 900_000
     || activation?.autoLivePublicSignalRefreshEnabled !== true
+    || activation?.independentPaperRoot !== true
+    || activation?.paperRootMutated !== false
+    || activation?.paperCronReplaced !== false
+    || activation?.producerInvocationVerified !== false
+    || activation?.aiIssuerVerified !== false
+    || activation?.autoTradingActivationReady !== false
     || !/^[a-f0-9]{64}$/u.test(String(activation?.runtimeDigest ?? ''))
     || activation?.cronHash !== hash
     || activation?.paperTradeOutcomeAccumulationEnabled !== false
@@ -147,7 +153,7 @@ function inspectAutoLiveSharedPaperForwardOwnership({ targetSha, crontabText, sh
 // Also reject a redirected runtime-state parent: ENOENT on a child below a
 // broken parent is not proof that activation is enabled.
 function assertAutoLiveSignalNotDisabled(root, stat = require('node:fs').lstatSync) {
-  if (root !== '/opt/stock-app-data/paper-forward-v1' || typeof stat !== 'function') {
+  if (root !== '/opt/stock-app-data/auto-live-signal-v1' || typeof stat !== 'function') {
     throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE');
   }
   const rootAndParent = [root, root + '/runtime-state'];
@@ -246,11 +252,11 @@ function inspectIndependentAutoLivePublicSourcePlan({
 
 
 const CANONICAL_AUTO_SIGNAL_HANDOFF_PATH =
-  '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+  '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_AUTO_SIGNAL_HANDOFF_BYTES = 8 * 1024 * 1024;
-const CANONICAL_AUTO_SIGNAL_ACTIVATION_PATH = '/opt/stock-app-data/paper-forward-v1/activation.json';
+const CANONICAL_AUTO_SIGNAL_ACTIVATION_PATH = '/opt/stock-app-data/auto-live-signal-v1/activation.json';
 const CANONICAL_AUTO_SIGNAL_WRAPPER_PATH =
-  '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+  '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal';
 const CANONICAL_AUTO_SIGNAL_FILES = Object.freeze({
   HANDOFF: Object.freeze({ path: CANONICAL_AUTO_SIGNAL_HANDOFF_PATH,
     maxBytes: MAX_AUTO_SIGNAL_HANDOFF_BYTES, minBytes: 2, executable: false }),
@@ -339,7 +345,40 @@ function readProductionAutoLiveScheduleWrapper(path, io = require('node:fs')) {
   return readBoundedAutoLiveSourceArtifact('WRAPPER', path, io);
 }
 
+
+function runAutoLiveIndependentPublicSourcePreflight() {
+  const { lstatSync } = require('node:fs');
+  const { spawnSync } = require('node:child_process');
+  const result = spawnSync('crontab', ['-l'], {
+    encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error || result.signal) {
+    throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE');
+  }
+  let crontabText;
+  if (result.status === 0) crontabText = String(result.stdout ?? '');
+  else if (result.status === 1
+    && /^no crontab for [^\n]+$/iu.test(String(result.stderr ?? '').trim())) crontabText = '';
+  else throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE');
+  let isolatedRootPresent = false;
+  try {
+    lstatSync('/opt/stock-app-data/auto-live-signal-v1');
+    isolatedRootPresent = true;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw new Error('AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE');
+    }
+  }
+  return inspectIndependentAutoLivePublicSourcePlan({
+    targetSha: process.env.AUTO_LIVE_TARGET_SHA,
+    deployedSha: process.env.AUTO_LIVE_DEPLOYED_SHA,
+    crontabText, isolatedRootPresent,
+  });
+}
+
 module.exports = {
+  runAutoLiveIndependentPublicSourcePreflight,
   readBoundedAutoLiveSourceArtifact,
   readProductionAutoLiveScheduleActivation,
   readProductionAutoLiveScheduleWrapper,
@@ -363,5 +402,22 @@ if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
       ? error.message : 'AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE';
     process.stderr.write('[auto-live-shared-paper-preflight] ' + safe + '\n');
     process.exitCode = 1;
+  }
+}
+
+if (process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true') {
+  if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+    process.stderr.write('[auto-live-source-preflight] CONFLICTING_PREFLIGHT_MODES\n');
+    process.exitCode = 1;
+  } else {
+    try {
+      process.stdout.write(JSON.stringify(runAutoLiveIndependentPublicSourcePreflight()) + '\n');
+    } catch (error) {
+      const safe = error instanceof Error
+        && /^AUTO_LIVE_INDEPENDENT_[A-Z0-9_]{1,100}$/u.test(error.message)
+        ? error.message : 'AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE';
+      process.stderr.write('[auto-live-source-preflight] ' + safe + '\n');
+      process.exitCode = 1;
+    }
   }
 }
