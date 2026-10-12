@@ -1031,15 +1031,37 @@ jobs:
               owner,repo,workflow_id:'futures-public-network-smoke.yml',
               branch:'main',per_page:100,
             });
-            const passed = full.data.workflow_runs.some((run) =>
+            const verifiedRun = full.data.workflow_runs.find((run) =>
               run.name === 'Application CI' &&
               run.head_sha === sha &&
               run.event === 'workflow_dispatch' &&
               run.status === 'completed' &&
               run.conclusion === 'success');
-            if (!passed) {
+            if (!verifiedRun) {
               core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED');
               return;
+            }
+            // A successful workflow name is not enough; all six required
+            // commit statuses must belong to the SAME exact-main Full CI run.
+            const requiredContexts = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.rest.repos.listCommitStatusesForRef({
+              owner,repo,ref:sha,per_page:100,
+            });
+            const exactRunUrl = '/actions/runs/' + verifiedRun.id;
+            for (const contextName of requiredContexts) {
+              const current = statuses.data.find((entry) => entry.context === contextName);
+              if (!current || current.state !== 'success' ||
+                !String(current.target_url || '').includes(exactRunUrl)) {
+                core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_REQUIRED_STATUS_PROVENANCE_INVALID');
+                return;
+              }
             }
             for (const workflowId of [
               'production-deploy.yml',
