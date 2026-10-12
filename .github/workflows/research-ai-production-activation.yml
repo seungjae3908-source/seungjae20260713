@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/research-ai-production-activation.yml
+      - .github/scripts/research-ai-activation-result.cjs
       - research-production/deploy/activate-ai-research.sh
       - research-production/deploy/install-ai-research-units.sh
       - research-production/deploy/research-production-ai-review.service
@@ -74,6 +75,8 @@ jobs:
           systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
           node --test \
             research-production/test/research-ai-activation-contract.test.mjs \
+            research-production/test/research-ai-activation-lifecycle.test.mjs \
+            research-production/test/research-ai-activation-result.test.mjs \
             research-production/test/research-free-policy-confirmation.test.mjs \
             research-production/test/research-ai-diagnostic.test.mjs \
             research-production/test/research-forward-runtime-diagnostic.test.mjs \
@@ -306,27 +309,22 @@ jobs:
           remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
           set +e
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate"             < research-production/deploy/activate-ai-research.sh             2>&1 | tee "$RUNNER_TEMP/ai-research-activation.txt"
-          remote_status=${PIPESTATUS[0]}
+          activation_pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          if (( remote_status != 0 )); then
-            failure_reason="$(grep -Eo 'AI_RESEARCH_[-A-Za-z0-9_.:=]+' "$RUNNER_TEMP/ai-research-activation.txt" | grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=' | tail -1 || true)"
-            failure_reason="${failure_reason:-AI_RESEARCH_ACTIVATION_REMOTE_FAILED}"
-            printf 'failure_reason=%s\n' "$failure_reason" >> "$GITHUB_OUTPUT"
-            exit "$remote_status"
-          fi
-          if ! {
-            grep -Fxq 'AI_RESEARCH_ACTIVATED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'AI_REVIEW_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'VIDEO_DISCOVERY_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'AI_REVIEW_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'APPROVED_JOB_INTAKE_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'WORKSPACE_WORKER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
-            grep -Fxq 'REAL_ORDER_SUBMITTED=false' "$RUNNER_TEMP/ai-research-activation.txt"
-          }; then
-            printf 'failure_reason=%s\n' 'AI_RESEARCH_ACTIVATION_PROOF_INVALID' >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
+          node - "$RUNNER_TEMP/ai-research-activation.txt" "$TARGET_SHA" \
+            "${activation_pipeline_status[0]}" "${activation_pipeline_status[1]}" <<'NODE'
+          const fs = require('node:fs');
+          const {evaluateAiActivationResult} = require('./.github/scripts/research-ai-activation-result.cjs');
+          const result = evaluateAiActivationResult({diagnostics: fs.readFileSync(process.argv[2], 'utf8'),
+            targetSha: process.argv[3], remoteExitCode: Number(process.argv[4]), captureExitCode: Number(process.argv[5])});
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            'failure_reason=' + (result.failureReason ?? ''),
+            'completion_evidence_observed=' + result.completionEvidenceObserved,
+            'runtime_recheck_required=' + result.runtimeRecheckRequired, '',
+          ].join('\n'));
+          console.log(JSON.stringify(result));
+          if (!result.activationSucceeded) process.exit(1);
+          NODE
 
       - name: Upload sanitized AI Research activation diagnostics
         if: always()
@@ -345,6 +343,8 @@ jobs:
         uses: actions/github-script@v7
         env:
           FAILURE_REASON: ${{ steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason || 'AI_RESEARCH_ACTIVATION_WORKFLOW_FAILED' }}
+          COMPLETION_EVIDENCE_OBSERVED: ${{ steps.activate_ai.outputs.completion_evidence_observed || 'false' }}
+          RUNTIME_RECHECK_REQUIRED: ${{ steps.activate_ai.outputs.runtime_recheck_required == 'true' || steps.activate_ai.outputs.completion_evidence_observed == 'true' }}
         with:
           script: |
             await github.rest.issues.createComment({
@@ -356,6 +356,8 @@ jobs:
                 'status: failed_closed',
                 'target_sha: ' + process.env.TARGET_SHA,
                 'failure_reason: ' + process.env.FAILURE_REASON,
+                'completion_evidence_observed: ' + process.env.COMPLETION_EVIDENCE_OBSERVED,
+                'runtime_recheck_required: ' + process.env.RUNTIME_RECHECK_REQUIRED,
                 'provider_secret_values_exposed: false',
                 'live_trading: false',
                 'private_trading_api_allowed: false',
