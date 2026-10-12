@@ -13,6 +13,9 @@
  * To explicitly permit only public historical native 1m GET, add
  * --read-public. To retry a PARTIAL existing immutable archive, use
  * --retry-partial --expected-existing-sha <reviewed-archive-sha256>.
+ * For a retry, --expected-task-digest MUST be the exact reviewed
+ * partialRetryReviewDigestSha256, NOT candidateTaskDigestSha256 from the
+ * absent-source list. Both are recalculated against the full PIT day pages.
  * A safe superset is stored as a NEW revision requiring explicit selection;
  * no automatic deployment, promotion, scheduling, Paper or LIVE/orders.
  */
@@ -147,6 +150,7 @@ export async function runPITMinuteTaskCliV1(config,dependencies={}) {
     market:config.market,day:config.day,
     taskPageIndex:config.taskPageIndex,taskIndex:config.taskIndex,
     sourceMinuteCount:result.retainedMinuteRows??null,
+    selectedTaskKind:result.selectedTaskKind??null,
     proposedNewSourceDigestSha256:result.retainedSourceDigestSha256??null,
     priorSourceDigestSha256:result.priorSourceDigestSha256??null,
     sourceRevisionAutoSelected:false,
