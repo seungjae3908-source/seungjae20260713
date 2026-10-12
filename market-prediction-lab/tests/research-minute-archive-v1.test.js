@@ -1,0 +1,328 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync, readFileSync, statSync,
+  chmodSync, symlinkSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  persistResearchMinuteSessionV1 as store,
+  deriveArchivedResearchTimeframesV1 as read,
+  auditResearchMinuteSessionRevisionsV1 as auditRevisions,
+} from "../src/research-minute-archive-v1.js";
+import {
+  parseResearchMinuteArchiveArgsV1 as parseCli,
+  runResearchMinuteArchiveCliV1 as cli,
+} from "../scripts/research-minute-archive-v1.mjs";
+import {parseResearchMinuteRevisionAuditArgsV1 as parseRevisionAudit,
+ runResearchMinuteRevisionAuditCliV1 as runRevisionAudit}
+ from "../scripts/audit-research-minute-revisions-v1.mjs";
+
+const MIN = 60_000, DAY = 86_400_000;
+const sha = v => createHash("sha256").update(v).digest("hex");
+const START = Date.parse("2026-09-18T00:00:00Z");
+const VENUE = {
+  KR_STOCK: "KRX", US_STOCK: "US_SIP",
+  CRYPTO_SPOT: "UPBIT_KRW", CRYPTO_FUTURES: "BITGET_USDT_FUTURES",
+};
+const SYMBOL = {
+  KR_STOCK: "005930", US_STOCK: "AAPL",
+  CRYPTO_SPOT: "KRW-BTC", CRYPTO_FUTURES: "BTCUSDT",
+};
+function fixture(market, options = {}) {
+  const start = options.start ?? (market === "US_STOCK"
+    ? Date.parse("2026-09-18T13:30:00Z") : START);
+  const crypto = market.startsWith("CRYPTO_");
+  const session = {
+    startMs: start, endMs: start + (crypto ? DAY : 30 * MIN),
+    kind: crypto ? "UTC_24H" : "REGULAR",
+    timeZone: market === "KR_STOCK" ? "Asia/Seoul"
+      : market === "US_STOCK" ? "America/New_York" : "UTC",
+    calendarSourceId: "TEST_ONLY_EXCHANGE_SESSION_ATTESTATION",
+  };
+  const sourceId = "TEST_ONLY_NATIVE_ONE_MINUTE_PROVENANCE";
+  const minuteBars = Array.from({ length: 10 }, (_, i) => ({
+    market, venue: VENUE[market], symbol: SYMBOL[market], sourceId,
+    timestampMs: start + i * MIN, availableAtMs: start + (i + 1) * MIN,
+    open: 100 + i, high: 102 + i, low: 99 + i,
+    close: 101 + i, volume: 10 + i,
+  }));
+  if (options.missingMinute != null)
+    minuteBars.splice(options.missingMinute, 1);
+  if (options.delayMinute != null)
+    minuteBars[options.delayMinute].availableAtMs = start + 30 * MIN;
+  return {
+    market, venue: VENUE[market], symbol: SYMBOL[market],
+    sourceId, session, minuteBars,
+    sourceMinuteRowsSha256: sha(JSON.stringify(minuteBars)),
+    asOfMs: start + (options.delayMinute == null ? 10 : 30) * MIN,
+  };
+}
+function temp() { return mkdtempSync(join(tmpdir(), "research-minute-archive-")); }
+function request(root, source, extra = {}) {
+  return {
+    root, market: source.market, symbol: source.symbol,
+    sessionStartMs: source.session.startMs,
+    asOfMs: source.session.startMs + 10 * MIN,
+    timeframes: ["1m", "3m", "5m"], ...extra,
+  };
+}
+
+test("all 4 market sessions preserve immutable original and resample only closed 1m", async () => {
+  const root = temp();
+  try {
+    for (const market of Object.keys(VENUE)) {
+      const source = fixture(market);
+      const first = await store({ root, source });
+      assert.equal(first.status, "STORED_IMMUTABLE_ORIGINAL");
+      assert.equal(first.storedOneMinuteRows, 10);
+      assert.equal(first.wholeHistoricMarketPopulationVerified, false);
+      assert.equal(first.trueMarketWideRecall, null);
+      assert.equal(first.executionAuthority, "NONE");
+      const second = await store({ root, source });
+      assert.equal(second.status, "REUSED_IDENTICAL_ORIGINAL");
+      assert.equal(second.sourceDigestSha256, first.sourceDigestSha256);
+      assert.equal(statSync(first.path).mode & 0o077, 0);
+      const out = await read(request(root, source));
+      assert.equal(out.archiveSourceDigestSha256, first.sourceDigestSha256);
+      assert.equal(out.intervalData["1m"].completeBarCount, 10);
+      assert.equal(out.intervalData["3m"].completeBarCount, 3);
+      assert.equal(out.intervalData["5m"].completeBarCount, 2);
+      assert.equal(out.intervalData["5m"].bars[0].open, 100);
+      assert.equal(out.intervalData["5m"].bars[0].close, 105);
+      assert.equal(out.intervalData["5m"].bars[0].volume, 60);
+      assert.equal(out.historicalWholeMarketSourceCoverageVerified, false);
+      assert.equal(out.originalScannerEarlyDiscoveryVerified, false);
+      assert.equal(out.profitabilityProven, false);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("concurrent same session upload remains idempotent, no overwrite", async () => {
+  const root = temp(), source = fixture("CRYPTO_SPOT");
+  try {
+    const result = await Promise.all([
+      store({ root, source }), store({ root, source }),
+      store({ root, source }),
+    ]);
+    assert.equal(result.filter(x => x.status === "STORED_IMMUTABLE_ORIGINAL").length, 1);
+    assert.equal(result.filter(x => x.status === "REUSED_IDENTICAL_ORIGINAL").length, 2);
+    assert.equal(new Set(result.map(x => x.sourceDigestSha256)).size, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("different source revisions are never guessed or silently overwritten", async () => {
+  const root = temp(), a = fixture("CRYPTO_FUTURES");
+  const b = structuredClone(a);
+  b.minuteBars[0].high += 7;
+  b.sourceMinuteRowsSha256 = sha(JSON.stringify(b.minuteBars));
+  try {
+    const first = await store({ root, source: a });
+    const second = await store({ root, source: b });
+    assert.notEqual(first.sourceDigestSha256, second.sourceDigestSha256);
+    const ambiguous = await read(request(root, a));
+    assert.equal(ambiguous.status, "BLOCKED_DATA");
+    assert.equal(ambiguous.reason,
+      "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+    assert.equal(ambiguous.trueMarketWideRecall, null);
+    const chosen = await read(request(root, a, {
+      sourceDigestSha256: second.sourceDigestSha256,
+    }));
+    assert.equal(chosen.archiveRevisionCount, 2);
+    assert.equal(chosen.intervalData["5m"].bars[0].high, 109);
+    const notFound = await read(request(root, a, {
+      sourceDigestSha256: "f".repeat(64),
+    }));
+    assert.equal(notFound.reason, "ARCHIVED_REVISION_NOT_FOUND");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("missing 1m and delayed availability cannot produce a fake complete 5m", async () => {
+  const root = temp(), a = fixture("CRYPTO_SPOT", { missingMinute: 2 });
+  const b = fixture("CRYPTO_FUTURES", { delayMinute: 4 });
+  try {
+    await store({ root, source: a });
+    await store({ root, source: b });
+    const sparse = await read(request(root, a));
+    assert.equal(sparse.intervalData["5m"].completeBarCount, 1);
+    assert.equal(sparse.intervalData["5m"].missingUnverifiedSourceBuckets, 1);
+    assert.equal(sparse.status, "SOURCE_LIMITED_PARTIAL_MULTI_TIMEFRAME_BARS");
+    const delayed = await read(request(root, b));
+    assert.equal(delayed.intervalData["5m"].completeBarCount, 1);
+    assert.equal(delayed.intervalData["5m"].barDataUnavailableAtCutoffBuckets, 1);
+    assert.equal(delayed.status, "SOURCE_LIMITED_PARTIAL_MULTI_TIMEFRAME_BARS");
+    assert.equal(delayed.actualFillCount, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("raw digest, tampered compressed file and unsafe root fail closed", async () => {
+  const root = temp(), a = fixture("KR_STOCK");
+  try {
+    const bad = structuredClone(a);
+    bad.minuteBars[0].close += 1;
+    await assert.rejects(() => store({ root, source: bad }),
+      /MINUTE_ARCHIVE_ORIGINAL_SOURCE_DIGEST_INVALID/);
+    const inserted = await store({ root, source: a });
+    writeFileSync(inserted.path, Buffer.from("tampered bytes that are not valid gzip"));
+    await assert.rejects(() => read(request(root, a)),
+      /MINUTE_ARCHIVE_COMPRESSED_ORIGINAL_INVALID/);
+    const loose = join(root, "loose");
+    const other = fixture("US_STOCK");
+    writeFileSync(loose, "bad", { mode: 0o644 });
+    await assert.rejects(() => store({ root: loose, source: other }),
+      /MINUTE_ARCHIVE_SYMLINK_OR_PARENT_INVALID/);
+    const alias = root + "-link";
+    symlinkSync(root, alias, "dir");
+    try {
+      await assert.rejects(() => store({ root: alias, source: other }),
+        /MINUTE_ARCHIVE_SYMLINK_OR_PARENT_INVALID/);
+    } finally { rmSync(alias, { force: true }); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("missing archive remains BLOCKED, never claims zero market opportunities", async () => {
+  const root = temp(), a = fixture("CRYPTO_SPOT");
+  try {
+    const missing = await read(request(root, a));
+    assert.equal(missing.status, "BLOCKED_DATA");
+    assert.equal(missing.reason, "ARCHIVED_SESSION_NOT_FOUND");
+    assert.equal(missing.actualMarketWideOpportunityCount, null);
+    assert.equal(missing.trueMarketWideRecall, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("private CLI ingests and queries one session without network, duplicate output blocked", async () => {
+  const root = temp(), a = fixture("CRYPTO_SPOT");
+  const input = join(root, "raw.json"), output = join(root, "derived.json");
+  try {
+    writeFileSync(input, JSON.stringify(a), { mode: 0o600 });
+    const ingested = await cli(parseCli([
+      "--mode", "ingest", "--root", root, "--input", input,
+    ]));
+    assert.equal(ingested.status, "STORED_IMMUTABLE_ORIGINAL");
+    assert.equal(ingested.executionAuthority, "NONE");
+    const params = ["--mode", "derive", "--root", root,
+      "--market", a.market, "--symbol", a.symbol,
+      "--session-start", "2026-09-18T00:00:00Z",
+      "--as-of", "2026-09-18T00:10:00Z",
+      "--timeframes", "1m,5m,15m", "--output", output];
+    const result = await cli(parseCli(params));
+    assert.equal(result.derivedCandleCount, 12);
+    assert.equal(result.profitabilityProven, false);
+    const saved = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(saved.intervalData["5m"].completeBarCount, 2);
+    assert.equal(saved.intervalData["15m"].completeBarCount, 0);
+    assert.equal(statSync(output).mode & 0o077, 0);
+    await assert.rejects(() => cli(parseCli(params)),
+      /MINUTE_ARCHIVE_CLI_OUTPUT_ALREADY_EXISTS/);
+    assert.throws(() => parseCli(params.map(x =>
+      x === "2026-09-18T00:10:00Z" ? "2026-09-18T99:10:00Z" : x)),
+    /MINUTE_ARCHIVE_CLI_EXPLICIT_UTC_TIME_REQUIRED/);
+    chmodSync(input, 0o644);
+    await assert.rejects(() => cli(parseCli([
+      "--mode", "ingest", "--root", root, "--input", input,
+    ])), /MINUTE_ARCHIVE_CLI_PRIVATE_SOURCE_REQUIRED/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bounded read-only immutable revision audit identifies only a strict original-minute superset",async()=>{
+ const root=temp(),older=fixture("CRYPTO_SPOT",{missingMinute:2}),
+   full=fixture("CRYPTO_SPOT");
+ try{
+   const first=await store({root,source:older});
+   const second=await store({root,source:full});
+   const report=await auditRevisions({
+     root,market:older.market,symbol:older.symbol,
+     sessionStartMs:older.session.startMs,
+   });
+   assert.equal(report.status,"STRICT_NATIVE_MINUTE_SUPERSET_REQUIRES_REVIEW");
+   assert.equal(report.suggestedReviewDigestSha256,second.sourceDigestSha256);
+   assert.notEqual(report.suggestedReviewDigestSha256,first.sourceDigestSha256);
+   assert.equal(report.sourceRevisionAutoSelected,false);
+   assert.equal(report.explicitSourceRevisionReviewRequired,true);
+   assert.equal(report.archiveRevisionCount,2);
+   assert.deepEqual(report.revisionCandidates.map(x=>x.originalOneMinuteRows)
+     .sort((a,b)=>a-b),[9,10]);
+   assert.equal(report.rawMinutePricesExposed,false);
+   assert.equal(report.providerGETCount,0);
+   assert.equal(report.profitabilityProven,false);
+   assert.equal(report.executionAuthority,"NONE");
+   const defaultRead=await read(request(root,older));
+   assert.equal(defaultRead.reason,
+     "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+   const explicit=await read(request(root,older,{
+     sourceDigestSha256:second.sourceDigestSha256,
+   }));
+   assert.equal(explicit.intervalData["1m"].completeBarCount,10);
+   assert.equal(explicit.profitabilityProven,false);
+   const tooMany=await auditRevisions({
+     root,market:older.market,symbol:older.symbol,
+     sessionStartMs:older.session.startMs,maxRevisions:1,
+   });
+   assert.equal(tooMany.reason,"ARCHIVE_REVISION_REVIEW_BUDGET_EXCEEDED");
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("revision audit never recommends conflicting or as-of-only duplicate originals",async()=>{
+ const root=temp(),a=fixture("CRYPTO_FUTURES");
+ try{
+   const first=await store({root,source:a});
+   const changed=structuredClone(a);
+   changed.minuteBars[0].high+=7;
+   changed.sourceMinuteRowsSha256=sha(JSON.stringify(changed.minuteBars));
+   await store({root,source:changed});
+   const conflict=await auditRevisions({
+     root,market:a.market,symbol:a.symbol,sessionStartMs:a.session.startMs,
+   });
+   assert.equal(conflict.reason,
+     "ARCHIVE_REVISIONS_CONFLICT_ON_ORIGINAL_OHLCV");
+   assert.equal(conflict.suggestedReviewDigestSha256,null);
+   assert.equal(conflict.sourceRevisionAutoSelected,false);
+   assert.equal(conflict.profitabilityProven,false);
+   assert.equal(conflict.providerGETCount,0);
+   const singleRoot=temp();
+   try{
+     const fresh=fixture("CRYPTO_SPOT");
+     await store({root:singleRoot,source:fresh});
+     const later=structuredClone(fresh);later.asOfMs+=MIN;
+     await store({root:singleRoot,source:later});
+     const equal=await auditRevisions({
+       root:singleRoot,market:fresh.market,symbol:fresh.symbol,
+       sessionStartMs:fresh.session.startMs,
+     });
+     assert.equal(equal.reason,"ARCHIVE_REVISIONS_DIFFER_ONLY_IN_CAPTURE_TIME");
+     assert.equal(equal.suggestedReviewDigestSha256,null);
+     assert.equal(equal.sourceRevisionAutoSelected,false);
+   }finally{rmSync(singleRoot,{recursive:true,force:true});}
+   const chosen=await read(request(root,a,{sourceDigestSha256:first.sourceDigestSha256}));
+   assert.equal(chosen.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("read-only immutable revision audit CLI reports digest candidates and rejects unauthorized syntax",async()=>{
+ const root=temp(),s=fixture("CRYPTO_SPOT");
+ try{
+   await store({root,source:s});
+   const args=["--root",root,"--market","CRYPTO_SPOT",
+     "--symbol","KRW-BTC","--day","2026-09-18"];
+   const parsed=parseRevisionAudit(args);
+   assert.equal(parsed.maxRevisions,16);
+   assert.throws(()=>parseRevisionAudit([...args,"--max-revisions","33"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parseRevisionAudit([...args.slice(0,-1),"2026-02-30"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parseRevisionAudit([...args,"--retry-partial","true"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   const before=await read(request(root,s));
+   const status=await runRevisionAudit(parsed);
+   assert.equal(status.status,"SINGLE_LOCAL_ORIGINAL_REVISION_ONLY");
+   assert.equal(status.archiveRevisionCount,1);
+   assert.equal(status.revisionCandidates.length,1);
+   assert.equal(status.providerGETCount,0);
+   assert.equal(status.executionAuthority,"NONE");
+   assert.equal(status.profitabilityProven,false);
+   const after=await read(request(root,s));
+   assert.equal(after.archiveSourceDigestSha256,before.archiveSourceDigestSha256,
+     "auditor must never modify immutable archive data");
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

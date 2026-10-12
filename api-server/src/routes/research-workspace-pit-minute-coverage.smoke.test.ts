@@ -1,0 +1,388 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import type { AddressInfo } from 'node:net';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AuthenticatedRequest } from '../middleware/auth';
+import { createResearchWorkspaceRouter } from './research-workspace';
+import { sealPITMinuteDayCompactReceiptV1 } from
+  '../../../market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js';
+import { publishResearchOriginalMinuteDiagnosticV1 } from
+  '../../../market-prediction-lab/src/research-original-minute-diagnostic-publisher-v1.js';
+
+const DAY = 86_400_000;
+const D0 = Date.parse('2026-09-18T00:00:00Z');
+const shaA = 'a'.repeat(64);
+const endpoint = '/api/research/video/evidence/workspace/pit-minute-coverage';
+const parameters = '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&chunkDays=7';
+
+function onePrivateCompactReceipt() {
+  const manifest = {
+    sourceClass: 'TEST_FIXTURE', sourceId: 'TEST_ADMIN_READ_ONLY_PROVENANCE',
+    rawMembershipDigestSha256: shaA,
+    coverageStartMs: D0 - 90 * DAY, coverageEndMs: D0 + 90 * DAY,
+  };
+  const summary = {
+    market: 'CRYPTO_SPOT', venue: 'UPBIT_KRW',
+    tradingDate: '2026-09-18', dateBasis: 'UTC_CRYPTO_DAY',
+    status: 'INCOMPLETE_SOURCE_ATTESTED_DAY_MINUTE_INVENTORY',
+    reason: 'HISTORICAL_MEMBER_MINUTE_SOURCE_MISSING_PARTIAL_OR_BLOCKED',
+    pitRosterDigestSha256: shaA,
+    pitRosterSourceId: manifest.sourceId,
+    pitGateStatus: 'TEST_FIXTURE_ONLY', sourceStatus: 'TEST_FIXTURE_ONLY',
+    sessionCalendarDigestSha256: 'b'.repeat(64),
+    pageReceiptDigestsSha256: 'c'.repeat(64),
+    completeDayPageAudit: true,
+    archivedMembers: 0, missingSourceMembers: 2,
+    sourceLimitedMembers: 0, revisedSourceMembers: 0,
+    unreadableMembers: 0, lifecycleBlockedMembers: 0,
+    sourceMinuteRows: 0, sourceSessionsCovered: 0,
+    retrospectiveSourceMembers: 0, retrospectiveMinuteRows: 0,
+    missingSourceSessionCount: 2,
+    inspectedPITMemberCount: 2, archiveReceiptPageCount: 1,
+    localArchiveRowsPresentForEverySelectedPITMember: false,
+    historicallyDelistedMembersPreservedInManifest: true,
+    checkedArchiveSourcesOnly: true,
+    retrospectiveMinutesAreNotAsOfScannerEvidence: true,
+    stockCalendarIndependentlyAuthenticated: false,
+    fullMarketOpportunityDenominatorVerified: false,
+    trueMarketWideRecall: null, actualFillCount: null,
+    profitabilityProven: false, executionAuthority: 'NONE',
+    liveTrading: false, autoTrading: false, realOrders: false,
+  };
+  return sealPITMinuteDayCompactReceiptV1({ summary, manifest });
+}
+async function responseData(r: Response) {
+  const body = await r.text();
+  assert.match(r.headers.get('content-type') ?? '', /application\/json/i);
+  assert.doesNotMatch(body, /(?:api[_-]?key|authorization|password|private.?key|stack|\/root\/|\/home\/|\/var\/)/i);
+  return JSON.parse(body) as Record<string, any>;
+}
+
+test('research minute source admin HTTP: auth, GET only, private compact output, PIT fail closed', async () => {
+  const prior = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+    root: process.env.RESEARCH_PIT_MINUTE_COVERAGE_ROOT,
+  };
+  process.env.SUPABASE_URL = 'http://127.0.0.1:1/TEST_AUTH_CONFIG_ONLY';
+  process.env.SUPABASE_ANON_KEY = 'TEST_ANON_PUBLIC_KEY';
+  delete process.env.RESEARCH_PIT_MINUTE_COVERAGE_ROOT;
+  const root = mkdtempSync(join(tmpdir(), 'pit-minute-http-readonly-'));
+  const app = express();
+  app.use(express.json({ limit: '16kb' }));
+  app.use((req: AuthenticatedRequest, _res, next) => {
+    const role = req.header('x-fixture-role');
+    if (!role || role === 'anonymous') return next();
+    const admin = role === 'admin';
+    req.member = {
+      id: '11111111-1111-1111-1111-111111111111',
+      login_name: 'test', display_name: 'test',
+      role: admin ? 'admin' : 'user',
+      membership_level: admin ? 'admin' : 'regular',
+      status: 'approved', is_active: true,
+    };
+    req.accessToken = 'TEST_ONLY_NO_REMOTE_AUTH';
+    next();
+  });
+  app.use('/api/research/video/evidence/workspace', createResearchWorkspaceRouter());
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+    const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+    const admin = { 'x-fixture-role': 'admin' };
+    const member = { 'x-fixture-role': 'member' };
+
+    // Parent/current profile capability gate must run before touching source.
+    assert.equal((await fetch(base + endpoint + parameters)).status, 401);
+    assert.equal((await fetch(base + endpoint + parameters, {
+      headers: member,
+    })).status, 403);
+
+    const unset = await fetch(base + endpoint + parameters, { headers: admin });
+    assert.equal(unset.status, 200);
+    assert.match(unset.headers.get('cache-control') ?? '', /no-store/);
+    assert.match(unset.headers.get('vary') ?? '', /Authorization/);
+    assert.equal(unset.headers.get('x-content-type-options'), 'nosniff');
+    const blocked = await responseData(unset);
+    assert.equal(blocked.available, false);
+    assert.equal(blocked.reason, 'SERVER_REPORT_ROOT_NOT_CONFIGURED');
+    assert.equal(blocked.executionAuthority, 'NONE');
+    assert.equal(blocked.trueMarketWideRecall, null);
+
+    for (const bad of [
+      '?market=CRYPTO_SPOT&startDate=2026-02-30&endDate=2026-03-01',
+      '?market=CRYPTO_SPOT&startDate=1969-12-31&endDate=1970-01-03',
+      '?market=CRYPTO_SPOT&startDate=2099-12-31&endDate=2100-01-01',
+      '?market=CRYPTO_SPOT&startDate=1970-01-02&endDate=2075-01-01',
+      '?market=CRYPTO_SPOT&startDate=2026-09-20&endDate=2026-09-18',
+      '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&cursorDate=2026-09-20',
+      '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&chunkDays=99',
+      '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&root=%2Fetc%2Fpasswd',
+      '?market=CRYPTO_SPOT&market=KR_STOCK&startDate=2026-09-18&endDate=2026-09-19',
+    ]) {
+      const r = await fetch(base + endpoint + bad, { headers: admin });
+      assert.equal(r.status, 400, bad);
+      assert.equal((await responseData(r)).reason, 'INVALID_SELECTION');
+    }
+    for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+      const r = await fetch(base + endpoint + parameters, { method, headers: admin });
+      assert.equal(r.status, 405, method);
+      assert.equal(r.headers.get('allow'), 'GET');
+    }
+
+    process.env.RESEARCH_PIT_MINUTE_COVERAGE_ROOT = root;
+    const absent = await responseData(await fetch(base + endpoint + parameters, {
+      headers: admin,
+    }));
+    assert.equal(absent.available, false);
+    assert.equal(absent.reason, 'MARKET_COMPACT_REPORTS_NOT_PRESENT');
+
+    const marketDir = join(root, 'CRYPTO_SPOT');
+    mkdirSync(marketDir, { mode: 0o700 });
+    writeFileSync(join(marketDir, '2026-09-18.json'),
+      JSON.stringify(onePrivateCompactReceipt()), { mode: 0o600 });
+
+    const found = await responseData(await fetch(base + endpoint + parameters, {
+      headers: admin,
+    }));
+    assert.equal(found.available, true);
+    assert.equal(found.status, 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK');
+    assert.equal(found.report.expectedHistoricalTradingDays, 2);
+    assert.equal(found.report.missingSourceDays, 1);
+    assert.equal(found.report.dailyReadiness[1].originalMinuteRows, null);
+    assert.equal(found.providerGETCount, 0);
+    assert.equal(found.financialMutationCount, 0);
+    assert.equal(found.profitabilityProven, false);
+    assert.equal(found.executionAuthority, 'NONE');
+    assert.equal(found.trueMarketWideRecall, null);
+
+    chmodSync(join(marketDir, '2026-09-18.json'), 0o644);
+    const invalid = await fetch(base + endpoint + parameters, { headers: admin });
+    assert.equal(invalid.status, 503);
+    const invalidBody = await responseData(invalid);
+    assert.equal(invalidBody.available, false);
+    assert.equal(invalidBody.reason, 'PRIVATE_COMPACT_SOURCE_READ_OR_VALIDATION_FAILED');
+    assert.equal(invalidBody.executionAuthority, 'NONE');
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+    const restore = (key: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore('SUPABASE_URL', prior.url);
+    restore('SUPABASE_ANON_KEY', prior.key);
+    restore('RESEARCH_PIT_MINUTE_COVERAGE_ROOT', prior.root);
+  }
+});
+
+
+test('research original minute model report: admin GET only, sanitized period and FAIL-CLOSED private store', async () => {
+  const prior = {
+    url: process.env.SUPABASE_URL,
+    key: process.env.SUPABASE_ANON_KEY,
+    root: process.env.RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT,
+  };
+  process.env.SUPABASE_URL = 'http://127.0.0.1:1/TEST_AUTH_CONFIG_ONLY';
+  process.env.SUPABASE_ANON_KEY = 'TEST_ANON_PUBLIC_KEY';
+  delete process.env.RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT;
+  const root = mkdtempSync(join(tmpdir(), 'original-minute-admin-readback-'));
+  const endpoint = '/api/research/video/evidence/workspace/original-minute-diagnostics';
+  const query = '?market=CRYPTO_SPOT';
+  const app = express();
+  app.use(express.json({ limit: '16kb' }));
+  app.use((req: AuthenticatedRequest, _res, next) => {
+    const role = req.header('x-fixture-role');
+    if (!role || role === 'anonymous') return next();
+    const admin = role === 'admin';
+    req.member = {
+      id: '11111111-1111-1111-1111-111111111111',
+      login_name: 'test', display_name: 'test',
+      role: admin ? 'admin' : 'user',
+      membership_level: admin ? 'admin' : 'regular',
+      status: 'approved', is_active: true,
+    };
+    req.accessToken = 'TEST_ONLY_NO_REMOTE_AUTH';
+    next();
+  });
+  app.use('/api/research/video/evidence/workspace', createResearchWorkspaceRouter());
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+    const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+    const admin = { 'x-fixture-role': 'admin' };
+    const member = { 'x-fixture-role': 'member' };
+    assert.equal((await fetch(base + endpoint + query)).status, 401);
+    assert.equal((await fetch(base + endpoint + query, {
+      headers: member,
+    })).status, 403);
+    for (const bad of [
+      '?market=CRYPTO_SPOT&root=%2Fetc%2Fpasswd',
+      '?market=CRYPTO_SPOT&market=US_STOCK',
+      '?market=UNSUPPORTED',
+      '?market=CRYPTO_SPOT&file=payload.json',
+      '',
+    ]) {
+      const response = await fetch(base + endpoint + bad, { headers: admin });
+      assert.equal(response.status, 400, bad);
+      assert.equal((await responseData(response)).reason, 'INVALID_MARKET_SELECTION');
+    }
+    for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+      const response = await fetch(base + endpoint + query, {
+        method, headers: admin,
+      });
+      assert.equal(response.status, 405);
+      assert.equal(response.headers.get('allow'), 'GET');
+    }
+    const unset = await fetch(base + endpoint + query, { headers: admin });
+    assert.equal(unset.status, 200);
+    assert.match(unset.headers.get('cache-control') ?? '', /no-store/);
+    assert.match(unset.headers.get('vary') ?? '', /Authorization/);
+    assert.equal(unset.headers.get('x-content-type-options'), 'nosniff');
+    const notConnected = await responseData(unset);
+    assert.equal(notConnected.available, false);
+    assert.equal(notConnected.reason, 'PRIVATE_MODEL_REPORT_ROOT_NOT_CONFIGURED');
+    assert.equal(notConnected.report, null);
+    assert.equal(notConnected.executionAuthority, 'NONE');
+    process.env.RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT = root;
+    const absent = await responseData(await fetch(base + endpoint + query, {
+      headers: admin,
+    }));
+    assert.equal(absent.reason, 'PRIVATE_MODEL_REPORT_NOT_FOUND');
+    const body = {
+      schemaVersion: 'four-market-original-minute-period-v1',
+      market: 'CRYPTO_SPOT', symbol: 'KRW-BTC', timeframe: '5m',
+      status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
+      reason: 'PRIVATE_ORIGINAL_1M_MULTI_SESSION_RESEARCH_ONLY_NOT_OOS',
+      selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
+      indexedPrivateSessions: 350, verifiedNativeMinuteSessions: 350,
+      modeledTradeCount: 12, modeledReturnPercent: 3.25,
+      modeledNetPnlKRW: 32500,
+      executionAuthority: 'NONE', profitabilityProven: false,
+      actualFillCount: null, trueMarketWideRecall: null, OOSPassCount: 0,
+      actualMarketWideOpportunityCount: null, netProfitPct: null,
+      fullMarketOpportunityDenominatorVerified: false,
+      paperAdmissionAllowed: false, realOrders: false,
+      liveTrading: false, autoTrading: false,
+      sourceDirectory: '/root/PRIVATE_UNDISCLOSED',
+      apiKey: 'DO_NOT_LEAK',
+      minuteBars: [{high: 100}],
+    };
+    const file = join(root, 'CRYPTO_SPOT.json');
+    writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
+    const found = await fetch(base + endpoint + query, { headers: admin });
+    assert.equal(found.status, 200);
+    const text = await found.text();
+    assert.doesNotMatch(text, /DO_NOT_LEAK|PRIVATE_UNDISCLOSED|minuteBars/);
+    const out = JSON.parse(text);
+    assert.equal(out.available, true);
+    assert.equal(out.report.kind, 'PERIOD');
+    assert.equal(out.report.modeledReturnPercent, 3.25);
+    assert.equal(out.report.canonicalPaperResearchReview.status, 'RESEARCH_HOLD');
+    assert.equal(out.report.canonicalPaperResearchReview.canonicalProfitabilityStatus, 'RESEARCH_HOLD');
+    assert.equal(out.report.canonicalPaperResearchReview.canonicalPaperBridgeStatus, 'BLOCKED');
+    assert.equal(out.report.canonicalPaperResearchReview.paperAdmissionAllowed, false);
+    assert.ok(out.report.canonicalPaperResearchReview.blockers.includes(
+      'HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED'));
+    assert.ok(out.report.canonicalPaperResearchReview.canonicalPaperBridgeBlockers.includes(
+      'ADMISSION_EVIDENCE_BUNDLE_REQUIRED'));
+    assert.equal(out.report.independentOOSProven, false);
+    assert.equal(out.report.paperCandidatePASS, false);
+    assert.equal(out.financialMutationCount, 0);
+    assert.equal(out.actualFillCount, null);
+    assert.equal(out.profitabilityProven, false);
+    assert.equal(out.executionAuthority, 'NONE');
+    // Full OFFLINE source result --> explicit local publisher --> existing
+    // admin GET, without a direct hand-copy of the final market report.
+    const original = join(root, 'private-completed-model-result.json');
+    writeFileSync(original, JSON.stringify(body), { mode: 0o600 });
+    const published = await publishResearchOriginalMinuteDiagnosticV1({
+      sourceResultPath: original,
+      reportRoot: root,
+      market: 'CRYPTO_SPOT',
+      allowLocalReportPublish: true,
+      allowReplaceExisting: true,
+    });
+    assert.equal(published.published, true);
+    assert.equal(published.reportReplaced, true);
+    const readPublished = await responseData(await fetch(base + endpoint + query, {
+      headers: admin,
+    }));
+    assert.equal(readPublished.available, true);
+    assert.equal(readPublished.report.kind, 'PERIOD');
+    assert.equal(readPublished.report.modeledReturnPercent, 3.25);
+    assert.equal(readPublished.publicationAgeStatus, 'LOCAL_PUBLICATION_ONLY');
+    assert.ok(Number.isSafeInteger(readPublished.reportPublishedAtMs));
+    assert.equal(readPublished.publicationTimeIndependentlyAttested, false);
+    assert.equal(readPublished.actualMarketWideOpportunityCount, null);
+    assert.equal(readPublished.actualFillCount, null);
+    assert.equal(readPublished.profitabilityProven, false);
+    assert.equal(readPublished.executionAuthority, 'NONE');
+    const originalSweep = {
+      schemaVersion: 'four-market-original-minute-sweep-v1',
+      market: 'CRYPTO_SPOT',
+      selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
+      status: 'LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY',
+      reason: 'RETROSPECTIVE_LOCAL_PAGES_NOT_INDEPENDENT_PIT_OOS_OR_FILL',
+      pageCountSelfAttested: 45, sourceOnlyCompletePages: 45,
+      sourceBlockedPages: 0, sourceTasksSelfAttested: 270,
+      sourceOnlyObservedPriceEventLabels: 123,
+      localPageTraversalReachedEnd: true, pageChainSha256: 'a'.repeat(64),
+      executionAuthority: 'NONE', profitabilityProven: false,
+      actualFillCount: null, trueMarketWideRecall: null, OOSPassCount: 0,
+      actualMarketWideOpportunityCount: null, netProfitPct: null,
+      fullMarketOpportunityDenominatorVerified: false,
+      paperAdmissionAllowed: false, realOrders: false,
+      liveTrading: false, autoTrading: false,
+      apiKey: 'PAIRED_PRIVATE_KEY_MUST_NOT_LEAK',
+    };
+    const privateSweepFile = join(root, 'completed-sweep-offline.json');
+    writeFileSync(privateSweepFile, JSON.stringify(originalSweep), { mode: 0o600 });
+    assert.equal((await publishResearchOriginalMinuteDiagnosticV1({
+      sourceResultPath: privateSweepFile, reportRoot: root,
+      market: 'CRYPTO_SPOT', allowLocalReportPublish: true,
+    })).published, true);
+    const pairedResponse = await fetch(base + endpoint + query, { headers: admin });
+    assert.equal(pairedResponse.status, 200);
+    const pairedText = await pairedResponse.text();
+    assert.doesNotMatch(pairedText, /PAIRED_PRIVATE_KEY_MUST_NOT_LEAK/);
+    const paired = JSON.parse(pairedText);
+    assert.equal(paired.report.kind, 'PERIOD');
+    assert.equal(paired.supplementarySweepReport.kind, 'SWEEP');
+    assert.equal(paired.supplementarySweepWindowMatches, true);
+    assert.equal(paired.supplementarySweepReport.sourceOnlyObservedPriceEventLabels, 123);
+    assert.ok(!paired.report.canonicalPaperResearchReview.blockers.includes(
+      'HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED'));
+    assert.equal(paired.report.canonicalPaperResearchReview.paperAdmissionAllowed, false);
+    assert.equal(paired.profitabilityProven, false);
+    const sidecar = join(root, 'CRYPTO_SPOT.SWEEP.json');
+    chmodSync(sidecar, 0o644);
+    assert.equal((await fetch(base + endpoint + query, { headers: admin })).status, 503);
+    chmodSync(sidecar, 0o600);
+    chmodSync(file, 0o644);
+    const denied = await fetch(base + endpoint + query, { headers: admin });
+    assert.equal(denied.status, 503);
+    const error = await responseData(denied);
+    assert.equal(error.reason, 'PRIVATE_NATIVE_MODEL_READ_OR_VALIDATION_FAILED');
+    assert.equal(error.executionAuthority, 'NONE');
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+    const restore = (key: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore('SUPABASE_URL', prior.url);
+    restore('SUPABASE_ANON_KEY', prior.key);
+    restore('RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT', prior.root);
+  }
+});

@@ -24,6 +24,8 @@ import {
 import { BottomNav } from '@/components/bottom-nav';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
+import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';
+import { ResearchOriginalMinuteDiagnosticsPanel } from '@/components/research-original-minute-diagnostics';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -813,6 +815,9 @@ export default function ResearchCenterPage() {
             <button type="button" onClick={refreshAll} className="mt-4 min-h-11 rounded-xl border border-destructive/30 px-4 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive">다시 확인</button>
           </section>
         ) : null}
+
+        {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}
+        {tab === 'evidence' ? <ResearchOriginalMinuteDiagnosticsPanel /> : null}
 
         {overview && cards.length ? (
           <>

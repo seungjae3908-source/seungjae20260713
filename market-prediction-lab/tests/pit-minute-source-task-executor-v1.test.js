@@ -1,0 +1,875 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  mkdtempSync, writeFileSync, readFileSync, statSync, existsSync,
+  mkdirSync, chmodSync, symlinkSync, rmSync,
+} from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { digestPITMembershipRowsV1 } from
+  "../src/historical-pit-venue-universe-gate-v1.js";
+import { auditHistoricalPITMinuteArchiveChunkV1 as audit } from
+  "../src/four-market-pit-minute-archive-join-v1.js";
+import { planPITNativeMinuteSourceGapsV1 as plan } from
+  "../src/four-market-pit-minute-gap-queue-v1.js";
+import { runPlannedPITMinuteSourceTaskV1 as execute } from
+  "../src/pit-minute-source-task-executor-v1.js";
+import { persistResearchMinuteSessionV1 as persist,
+  deriveArchivedResearchTimeframesV1 as derive,
+  listArchivedResearchMinuteSessionsV1 as listArchive } from
+  "../src/research-minute-archive-v1.js";
+import {runFourMarketOriginalMinuteBatchV1 as batch}
+  from "../src/four-market-original-minute-batch-v1.js";
+import { parsePITMinuteTaskArgsV1 as parse,
+  runPITMinuteTaskCliV1 as cli } from
+  "../scripts/run-pit-minute-gap-task-v1.mjs";
+
+const DAY=86_400_000,MIN=60_000,MIB=1024*1024;
+const START=Date.parse("2026-09-18T00:00:00Z");
+const NOW=Date.parse("2026-10-11T00:00:00Z");
+const SHA="a".repeat(64);
+const temp=()=>mkdtempSync(join(tmpdir(),"pit-native-gap-task-"));
+const sha=rows=>createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+const statfsHealthy=async()=>({bsize:1,bavail:6*1024*MIB});
+const statfsFull=async()=>({bsize:1,bavail:0});
+function symbol(market,i){
+  return market==="CRYPTO_SPOT"?"KRW-S"+(i+1):"S"+(i+1)+"USDT";
+}
+function makeManifest(market,count=2){
+  const rows=Array.from({length:count},(_,i)=>({
+    symbol:symbol(market,i),listedAtMs:START-200*DAY,
+    removedAtMs:null,halts:[],
+    sourceId:"SOURCE_ATTESTED_FOR_OFFLINE_TEST_ONLY",
+    evidenceSha256:SHA,
+  }));
+  rows.push({symbol:"ENDED",listedAtMs:START-300*DAY,
+    removedAtMs:START-30*DAY,halts:[],
+    sourceId:"SOURCE_ATTESTED_FOR_OFFLINE_TEST_ONLY",evidenceSha256:SHA});
+  return {
+    schemaVersion:"historical-venue-pit-roster-v1",
+    sourceClass:"EXCHANGE_DATED_ARCHIVE",market,
+    venue:market==="CRYPTO_SPOT"?"UPBIT_KRW":"BITGET_USDT_FUTURES",
+    sourceId:"SOURCE_ATTESTED_FOR_OFFLINE_TEST_ONLY",
+    allListedAndRemovedAttested:true,
+    suspensionsAttested:true,relistedIdentifiersResolved:true,
+    coverageStartMs:START-400*DAY,coverageEndMs:START+DAY,
+    retrievedAtMs:START+2*DAY,memberships:rows,
+    rawMembershipDigestSha256:digestPITMembershipRowsV1(rows),
+  };
+}
+async function makePageReceipts(root,market,manifest){
+  const pages=[];
+  const n=manifest.memberships.length-1;
+  for(let offset=0;offset<n;offset+=20){
+    const page=await audit({
+      root,market,day:"2026-09-18",manifest,
+      expectedRosterDigestSha256:manifest.rawMembershipDigestSha256,
+      offset,limit:20,
+    });
+    assert.equal(page.pitGateStatus,"SOURCE_ATTESTED_PIT_COHORT_ONLY");
+    pages.push(page);
+  }
+  return pages;
+}
+async function setup(market="CRYPTO_SPOT",members=2){
+  const root=temp(),manifest=makeManifest(market,members),
+    pages=await makePageReceipts(root,market,manifest);
+  const planning=plan({
+    market,day:"2026-09-18",manifest,pages,taskPageIndex:0,
+  });
+  assert.equal(planning.status,"PLANNED_EXPLICIT_PUBLIC_READ_ONLY");
+  return {root,market,manifest,pages,planning};
+}
+function request(t,more={}){
+  return {
+    root:t.root,market:t.market,day:"2026-09-18",
+    manifest:t.manifest,pages:t.pages,taskPageIndex:0,taskIndex:0,
+    expectedTaskDigestSha256:t.planning.candidateTaskDigestSha256,
+    allowPublicReadOnlyFetch:false,nowImpl:()=>NOW,
+    statfsImpl:statfsHealthy,...more,
+  };
+}
+function upbitFetch(calls){
+  return async(url,opt)=>{
+    calls.push({url,method:opt?.method??"GET"});
+    const selected=new URL(url).searchParams.get("market");
+    const row=t=>({market:selected,
+      candle_date_time_utc:new Date(t).toISOString().slice(0,19),
+      opening_price:100,high_price:104,low_price:99,
+      trade_price:102,candle_acc_trade_volume:5});
+    return {ok:true,status:200,json:async()=>[
+      row(START+2*MIN),row(START+MIN),row(START),row(START-MIN),
+    ]};
+  };
+}
+function bitget(calls) {
+  return {get:async(path,params)=>{
+    calls.push({path,params});
+    const row=t=>[String(t),"100","104","99","102","5"];
+    return {code:"00000",data:[
+      row(START+2*MIN),row(START+MIN),row(START),row(START-MIN),
+    ]};
+  }};
+}
+function retainedOriginal(market,sym){
+  const venue=market==="CRYPTO_SPOT"?"UPBIT_KRW":"BITGET_USDT_FUTURES";
+  const sourceId="PREEXISTING_PROVIDER_NATIVE_1M";
+  const minuteBars=Array.from({length:3},(_,i)=>({
+    market,venue,symbol:sym,sourceId,
+    timestampMs:START+i*MIN,availableAtMs:START+(i+1)*MIN,
+    open:100,high:101,low:99,close:100,volume:2,
+  }));
+  return {market,venue,symbol:sym,sourceId,
+    session:{startMs:START,endMs:START+DAY,kind:"UTC_24H",
+      timeZone:"UTC",calendarSourceId:"TEST_UNVERIFIED_NATIVE_UTC_DAY"},
+    minuteBars,sourceMinuteRowsSha256:sha(minuteBars),
+    asOfMs:START+3*MIN};
+}
+test("dry run revalidates full PIT receipts, one chosen task, zero GET",async()=>{
+  const t=await setup("CRYPTO_SPOT",24),calls=[];
+  try{
+    assert.equal(t.pages.length,2);
+    const r=await execute(request(t,{upbitFetchImpl:upbitFetch(calls)}));
+    assert.equal(r.status,"BLOCKED_DATA");
+    assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+    assert.equal(r.plannedSymbol,t.planning.candidateTasks[0].symbol);
+    assert.equal(r.maxTasksThisInvocation,1);
+    assert.equal(r.executionAuthority,"NONE");
+    assert.equal(calls.length,0);
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("one Upbit PIT source gap task persists retrospectively without false history-as-of",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  try{
+    const r=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+    }));
+    assert.equal(r.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+    assert.equal(r.retainedMinuteRows,3);
+    assert.equal(r.providerReadAuthorized,true);
+    assert.equal(r.fullMarketOpportunityDenominatorVerified,false);
+    assert.equal(r.historicalScannerAvailabilityProven,false);
+    assert.equal(r.realOrders,false);
+    assert.equal(calls.length,1);
+    assert.equal(calls[0].method,"GET");
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+    const sym=t.planning.candidateTasks[0].symbol;
+    const stored=await derive({
+      root:t.root,market:t.market,symbol:sym,
+      sessionStartMs:START,asOfMs:NOW,timeframes:["1m"],
+    });
+    assert.equal(stored.sourceMinuteRows,3);
+    const past=await derive({
+      root:t.root,market:t.market,symbol:sym,
+      sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"],
+    });
+    assert.equal(past.intervalData["1m"].completeBarCount,0);
+    const again=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+    }));
+    assert.equal(again.status,"BLOCKED_DATA");
+    assert.equal(again.reason,"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY");
+    assert.equal(calls.length,1);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("stale proposed GET cannot redownload full retrospective original 1m source",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  try{
+    const symbol=t.planning.candidateTasks[0].symbol;
+    const source=retainedOriginal(t.market,symbol);
+    source.minuteBars=Array.from({length:1440},(_,i)=>({
+      ...source.minuteBars[0],
+      timestampMs:START+i*MIN,
+      availableAtMs:NOW,
+    }));
+    source.sourceMinuteRowsSha256=sha(source.minuteBars);
+    source.asOfMs=NOW;
+    await persist({root:t.root,source});
+    // The previous page proposal still says "missing"; the native archive
+    // itself is rechecked under the exclusive writer lock before GET.
+    const response=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+    }));
+    assert.equal(response.status,"BLOCKED_DATA");
+    assert.equal(response.reason,"ALREADY_RETAINED_COMPLETE_1M_SOURCE");
+    assert.equal(calls.length,0);
+    assert.equal(response.executionAuthority,"NONE");
+    const old=await derive({root:t.root,market:t.market,symbol,
+      sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
+    assert.equal(old.intervalData["1m"].completeBarCount,0);
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("Bitget USDT futures gap executes the Bitget native public 1m collector only",async()=>{
+  const t=await setup("CRYPTO_FUTURES",2),calls=[];
+  try{
+    const r=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,bitgetClient:bitget(calls),
+    }));
+    assert.equal(r.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+    assert.equal(calls.length,1);
+    assert.equal(calls[0].path,"/api/v2/mix/market/history-candles");
+    assert.equal(calls[0].params.productType,"usdt-futures");
+    assert.equal(calls[0].params.granularity,"1m");
+    assert.equal(calls[0].params.symbol,t.planning.candidateTasks[0].symbol);
+    assert.equal(r.retainedMinuteRows,3);
+    assert.equal(r.actualFillCount,null);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("task page SHA, altered PIT roster, wrong page or index prevent any provider GET",async()=>{
+  const t=await setup("CRYPTO_SPOT",22),calls=[];
+  try{
+    const upbitFetchImpl=upbitFetch(calls);
+    const wrong=await execute(request(t,{allowPublicReadOnlyFetch:true,
+      expectedTaskDigestSha256:"f".repeat(64),upbitFetchImpl}));
+    assert.equal(wrong.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+    const secondPlan=plan({
+      market:t.market,day:"2026-09-18",
+      manifest:t.manifest,pages:t.pages,taskPageIndex:1,
+    });
+    const noTask=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,taskPageIndex:1,taskIndex:19,
+      expectedTaskDigestSha256:secondPlan.candidateTaskDigestSha256,
+      upbitFetchImpl,
+    }));
+    assert.equal(noTask.status,"BLOCKED_DATA");
+    assert.equal(noTask.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+    const changed=structuredClone(t.pages);
+    changed[0].pitRosterDigestSha256="f".repeat(64);
+    const denied=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,pages:changed,upbitFetchImpl,
+    }));
+    assert.equal(denied.reason,"NO_VERIFIED_PUBLIC_SOURCE_TASK");
+    const missing=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,pages:[t.pages[0]],upbitFetchImpl,
+    }));
+    assert.equal(missing.reason,"NO_VERIFIED_PUBLIC_SOURCE_TASK");
+    assert.equal(calls.length,0);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("full-disk, local quota, unsafe archive and existing writer lock block BEFORE GET",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  try{
+    const opts={allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls)};
+    const full=await execute(request(t,{...opts,statfsImpl:statfsFull}));
+    assert.equal(full.reason,"ARCHIVE_MINIMUM_FREE_SPACE_NOT_MET");
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+    await persist({root:t.root,source:retainedOriginal(t.market,"KRW-NOT-IN-ROSTER")});
+    const quota=await execute(request(t,{...opts,maxLocalBytes:3*MIB}));
+    assert.equal(quota.reason,"ARCHIVE_LOCAL_QUOTA_EXCEEDED");
+    writeFileSync(join(t.root,".pit-native-minute-task.lock"),"held",
+      {mode:0o600,flag:"wx"});
+    const held=await execute(request(t,opts));
+    assert.equal(held.reason,"ARCHIVE_WRITER_LOCK_HELD");
+    rmSync(join(t.root,".pit-native-minute-task.lock"));
+    assert.equal(calls.length,0);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+test("one lock prevents concurrent real provider read attempts for the same private archive",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  let began,finish;
+  const started=new Promise(resolve=>{began=resolve;});
+  const suspended=new Promise(resolve=>{finish=resolve;});
+  try{
+    const first=execute(request(t,{
+      allowPublicReadOnlyFetch:true,
+      upbitFetchImpl:async (url,options)=>{
+        began();
+        await suspended;
+        return upbitFetch(calls)(url,options);
+      },
+    }));
+    await started;
+    const second=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+    }));
+    assert.equal(second.reason,"ARCHIVE_WRITER_LOCK_HELD");
+    assert.equal(calls.length,0);
+    finish();
+    const accepted=await first;
+    assert.equal(accepted.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+    assert.equal(calls.length,1);
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+  }finally{
+    finish?.();
+    rmSync(t.root,{recursive:true,force:true});
+  }
+});
+test("CLI private receipts, fixed SHA, dry-run, opt-in and duplicate output safety",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  try{
+    const manifestPath=join(t.root,"pit.json"),indexPath=join(t.root,"index.json");
+    const pagePath=join(t.root,"page-0.json"),output=join(t.root,"dry.json");
+    writeFileSync(manifestPath,JSON.stringify(t.manifest),{mode:0o600});
+    writeFileSync(pagePath,JSON.stringify(t.pages[0]),{mode:0o600});
+    writeFileSync(indexPath,JSON.stringify({pageReceiptFiles:[pagePath]}),
+      {mode:0o600});
+    const args=["--market",t.market,"--day","2026-09-18",
+      "--manifest",manifestPath,"--page-index",indexPath,
+      "--root",t.root,"--task-page-index","0","--task-index","0",
+      "--expected-task-digest",t.planning.candidateTaskDigestSha256,
+      "--output",output];
+    const blocked=await cli(parse(args),{
+      nowImpl:()=>NOW,statfsImpl:statfsHealthy,upbitFetchImpl:upbitFetch(calls),
+    });
+    assert.equal(blocked.status,"BLOCKED_DATA");
+    assert.equal(blocked.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+    assert.equal(calls.length,0);
+    assert.equal(statSync(output).mode&0o077,0);
+    await assert.rejects(()=>cli(parse(args),{}),
+      /PIT_MINUTE_TASK_CLI_OUTPUT_EXISTS/);
+    const liveArgs=[...args.slice(0,-2),"--output",join(t.root,"real.json"),"--read-public"];
+    const accepted=await cli(parse(liveArgs),{
+      nowImpl:()=>NOW,statfsImpl:statfsHealthy,upbitFetchImpl:upbitFetch(calls),
+    });
+    assert.equal(accepted.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+    assert.equal(calls.length,1);
+    const saved=JSON.parse(readFileSync(join(t.root,"real.json"),"utf8"));
+    assert.equal(saved.executionAuthority,"NONE");
+    assert.equal(saved.fullMarketOpportunityDenominatorVerified,false);
+    assert.throws(()=>parse([...args,"--read-public","--read-public"]),
+      /PIT_MINUTE_TASK_CLI_DUPLICATE_READ_FLAG/);
+    chmodSync(pagePath,0o644);
+    const privateErr=[...args.slice(0,-2),"--output",join(t.root,"private-fail.json")];
+    await assert.rejects(()=>cli(parse(privateErr)),
+      /PIT_MINUTE_TASK_CLI_PRIVATE_FILE_REQUIRED/);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+
+
+test("public-GET fixture -> immutable archive index -> offline 4-market batch refuses partial Upbit/Bitget 1m",async()=>{
+  for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+    const t=await setup(market,2),calls=[];
+    try{
+      const fetchOptions=market==="CRYPTO_SPOT"
+        ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+      // No provider call may occur without an explicit per-task opt-in.
+      const noConsent=await execute(request(t,fetchOptions));
+      assert.equal(noConsent.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+      assert.equal(calls.length,0);
+      const collected=await execute(request(t,{
+        ...fetchOptions,allowPublicReadOnlyFetch:true,
+      }));
+      assert.equal(collected.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+      assert.equal(calls.length,1);
+      const symbol=t.planning.candidateTasks[0].symbol;
+      const index=await listArchive({root:t.root,market,symbol,
+        researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+      });
+      assert.equal(index.status,"LOCAL_ORIGINAL_SESSION_INDEX_PAGE_ONLY");
+      assert.equal(index.sessionCount,1);
+      assert.equal(index.sourceSessions[0].nativeMinuteSlotInventoryComplete,false);
+      assert.equal(index.trueMarketWideRecall,null);
+      const replayPage=await batch({
+        root:t.root,market,manifest:t.manifest,
+        researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+        sourceSessions:[],discoverArchivedSessions:true,asOfMs:NOW,
+        direction:"LONG",timeframe:"5m",leverage:1,
+        fxRateKRWPerQuote:market==="CRYPTO_FUTURES"?1300:null,
+      });
+      assert.equal(replayPage.status,"BLOCKED_DATA");
+      assert.equal(replayPage.sourceTasksRequested,2);
+      assert.equal(replayPage.blockedSourceTasks,2);
+      assert.equal(replayPage.sourceOnlyModeledTradeCount,null);
+      assert.equal(replayPage.sourceOnlyEventLabels,null);
+      assert.equal(replayPage.actualMarketWideOpportunityCount,null);
+      assert.equal(replayPage.profitabilityProven,false);
+      assert.equal(replayPage.paperAdmissionAllowed,false);
+      assert.equal(replayPage.executionAuthority,"NONE");
+      assert.equal(replayPage.providerGETCount,0);
+      // The BATCH readback itself must never perform another provider GET.
+      assert.equal(calls.length,1);
+    }finally{rmSync(t.root,{recursive:true,force:true});}
+  }
+});
+
+test("planned partial retry requires a fresh PIT page and the separate SHA-reviewed ticket",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const initial=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  assert.equal(calls.length,1);
+  const source=t.planning.candidateTasks[0].symbol;
+  const prior=await derive({root:t.root,market:t.market,symbol:source,
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const fresh=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  assert.equal(fresh.partialRetryReviewTasks.length,1);
+  assert.equal(fresh.partialRetryReviewTasks[0].symbol,source);
+  assert.equal(fresh.partialRetryReviewTasks[0].expectedExistingSourceDigestSha256,
+   prior.archiveSourceDigestSha256);
+  assert.notEqual(fresh.partialRetryReviewDigestSha256,
+   fresh.candidateTaskDigestSha256);
+
+  const selected={
+   pages,expectedTaskDigestSha256:fresh.partialRetryReviewDigestSha256,
+   retryPartialSource:true,
+   expectedExistingSourceDigestSha256:prior.archiveSourceDigestSha256,
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  };
+  await assert.rejects(()=>execute(request(t,{
+   ...selected,expectedExistingSourceDigestSha256:null,
+  })),/PIT_MINUTE_TASK_ARGUMENT_INVALID/);
+  assert.equal(calls.length,1);
+
+  const stale=await execute(request(t,{
+   ...selected,pages:t.pages,
+  }));
+  assert.equal(stale.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const wrongKind=await execute(request(t,{
+   ...selected,expectedTaskDigestSha256:fresh.candidateTaskDigestSha256,
+  }));
+  assert.equal(wrongKind.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const wrongLease=await execute(request(t,{
+   ...selected,expectedExistingSourceDigestSha256:SHA,
+  }));
+  assert.equal(wrongLease.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+  const wrongIndex=await execute(request(t,{
+   ...selected,taskIndex:1,
+  }));
+  assert.equal(wrongIndex.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+  assert.equal(calls.length,1,"bad page, lease or task index must never GET");
+
+  const noChange=await execute(request(t,selected));
+  assert.equal(noChange.reason,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES");
+  assert.equal(noChange.status,"BLOCKED_DATA");
+  assert.equal(noChange.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(calls.length,2);
+  const after=await derive({root:t.root,market:t.market,symbol:source,
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  assert.equal(after.sourceMinuteRows,3);
+  assert.equal(after.archiveRevisionCount,1);
+  assert.equal(after.profitabilityProven,false);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("reviewed partial re-GET may store only a strict extra-native-minute superset, no auto admission",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),calls=[];
+  try{
+   const provider=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+   const first=await execute(request(t,{
+    ...provider,allowPublicReadOnlyFetch:true,
+   }));
+   assert.equal(first.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+   const previousCalls=calls.length;
+   const symbol=t.planning.candidateTasks[0].symbol;
+   const pages=await makePageReceipts(t.root,market,t.manifest);
+   const current=plan({market,day:"2026-09-18",manifest:t.manifest,
+    pages,taskPageIndex:0});
+   const ticket=current.partialRetryReviewTasks[0];
+   assert.equal(ticket.symbol,symbol);
+   assert.equal(ticket.expectedExistingSourceDigestSha256,first.retainedSourceDigestSha256);
+   const upgraded=market==="CRYPTO_SPOT"?{
+    upbitFetchImpl:async(url,opt)=>{
+     calls.push({url,method:opt?.method??"GET"});
+     const pair=new URL(url).searchParams.get("market");
+     const row=ts=>({market:pair,
+      candle_date_time_utc:new Date(ts).toISOString().slice(0,19),
+      opening_price:100,high_price:104,low_price:99,
+      trade_price:102,candle_acc_trade_volume:5});
+     return{ok:true,status:200,json:async()=>[
+      row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+      row(START),row(START-MIN)]};
+    },
+   }:{
+    bitgetClient:{get:async(path,params)=>{
+     calls.push({path,params});
+     const row=ts=>[String(ts),"100","104","99","102","5"];
+     return{code:"00000",data:[
+      row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+      row(START),row(START-MIN)]};
+    }},
+   };
+   const options=request(t,{
+    pages,taskPageIndex:0,taskIndex:0,
+    retryPartialSource:true,
+    expectedExistingSourceDigestSha256:ticket.expectedExistingSourceDigestSha256,
+    expectedTaskDigestSha256:current.partialRetryReviewDigestSha256,
+    allowPublicReadOnlyFetch:true,
+    ...upgraded,
+   });
+   const recovered=await execute(options);
+   assert.equal(recovered.status,"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW");
+   assert.equal(recovered.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+   assert.equal(recovered.priorSourceDigestSha256,first.retainedSourceDigestSha256);
+   assert.notEqual(recovered.retainedSourceDigestSha256,first.retainedSourceDigestSha256);
+   assert.equal(recovered.sourceRevisionAutoSelected,false);
+   assert.equal(recovered.retainedMinuteRows,4);
+   assert.equal(recovered.fullMarketOpportunityDenominatorVerified,false);
+   assert.equal(recovered.profitabilityProven,false);
+   assert.equal(recovered.executionAuthority,"NONE");
+   assert.equal(calls.length,previousCalls+1,"only a single approved provider page in fixture");
+
+   const blocked=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(blocked.reason,"MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+   const old=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,sourceDigestSha256:first.retainedSourceDigestSha256,
+    asOfMs:NOW,timeframes:["1m"]});
+   const selected=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,sourceDigestSha256:recovered.retainedSourceDigestSha256,
+    asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(old.sourceMinuteRows,3);assert.equal(selected.sourceMinuteRows,4);
+   assert.equal(selected.profitabilityProven,false);
+   // A stale source receipt is no longer actionable after extra revision.
+   const repeat=await execute(options);
+   assert.equal(repeat.reason,"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW");
+   assert.equal(calls.length,previousCalls+1);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
+test("PIT task CLI retry cannot execute without explicit previous SHA and public consent",async()=>{
+ const t=await setup("CRYPTO_SPOT",2);
+ try{
+   const args=["--market",t.market,"--day","2026-09-18",
+     "--manifest",join(t.root,"pit.json"),
+     "--page-index",join(t.root,"index.json"),
+     "--root",t.root,"--task-page-index","0","--task-index","0",
+     "--expected-task-digest",t.planning.candidateTaskDigestSha256,
+     "--output",join(t.root,"result.json")];
+   assert.throws(()=>parse([...args,"--retry-partial"]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--read-public","--retry-partial"]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--expected-existing-sha",SHA]),
+     /PIT_MINUTE_TASK_CLI_SCOPE_INVALID/);
+   const reviewed=parse([...args,"--read-public","--retry-partial",
+     "--expected-existing-sha",SHA]);
+   assert.equal(reviewed.retryPartialSource,true);
+   assert.equal(reviewed.expectedExistingSourceDigestSha256,SHA);
+   assert.equal(reviewed.allowPublicReadOnlyFetch,true);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+
+test("private task CLI selects signed-by-digest partial REVIEW page, never the missing-source page",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const first=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(first.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  const freshPages=await makePageReceipts(t.root,t.market,t.manifest);
+  const reviewed=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages:freshPages,taskPageIndex:0});
+  assert.equal(reviewed.partialRetryReviewCount,1);
+  assert.equal(reviewed.partialRetryReviewTasks[0].expectedExistingSourceDigestSha256,
+   first.retainedSourceDigestSha256);
+  const manifestPath=join(t.root,"pit-reviewed.json");
+  const pagePath=join(t.root,"reviewed-0.json");
+  const pageIndex=join(t.root,"reviewed-index.json");
+  const out=join(t.root,"reviewed-retry.json");
+  writeFileSync(manifestPath,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pagePath,JSON.stringify(freshPages[0]),{mode:0o600});
+  writeFileSync(pageIndex,JSON.stringify({pageReceiptFiles:[pagePath]}),
+   {mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+   "--manifest",manifestPath,"--page-index",pageIndex,
+   "--root",t.root,"--task-page-index","0","--task-index","0",
+   "--expected-task-digest",reviewed.partialRetryReviewDigestSha256,
+   "--output",out,"--read-public","--retry-partial",
+   "--expected-existing-sha",first.retainedSourceDigestSha256];
+  const cliConfig=parse(args);
+  assert.equal(cliConfig.expectedExistingSourceDigestSha256,
+   first.retainedSourceDigestSha256);
+  const newSource=async(url,opt)=>{
+   calls.push({url,method:opt?.method??"GET"});
+   const selected=new URL(url).searchParams.get("market");
+   const row=ts=>({market:selected,
+    candle_date_time_utc:new Date(ts).toISOString().slice(0,19),
+    opening_price:100,high_price:104,low_price:99,
+    trade_price:102,candle_acc_trade_volume:5});
+   return {ok:true,status:200,json:async()=>[
+    row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+    row(START),row(START-MIN),
+   ]};
+  };
+  const report=await cli(cliConfig,{nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:newSource});
+  assert.equal(report.status,"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW");
+  assert.equal(report.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(report.sourceMinuteCount,4);
+  assert.equal(report.priorSourceDigestSha256,first.retainedSourceDigestSha256);
+  assert.notEqual(report.proposedNewSourceDigestSha256,first.retainedSourceDigestSha256);
+  assert.equal(report.sourceRevisionAutoSelected,false);
+  assert.equal(report.readPublicExplicitlyRequested,true);
+  // A real opt-in historical source action must NEVER be misreported as
+  // providerGETCount=0. The exact native provider page count is not tracked
+  // by this legacy summary; mock call accounting belongs to the QA fixture.
+  assert.equal(Object.hasOwn(report,"providerGETCount"),false);
+  assert.equal(report.profitabilityProven,false);
+  assert.equal(calls.length,2);
+  const file=JSON.parse(readFileSync(out,"utf8"));
+  assert.equal(file.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(file.archiveWriterLockUsed,true);
+  assert.equal(file.executionAuthority,"NONE");
+  assert.equal(file.profitabilityProven,false);
+  assert.equal(statSync(out).mode&0o077,0);
+  await assert.rejects(()=>cli(cliConfig,{nowImpl:()=>NOW,
+   statfsImpl:statfsHealthy,upbitFetchImpl:newSource}),
+   /PIT_MINUTE_TASK_CLI_OUTPUT_EXISTS/);
+  assert.equal(calls.length,2,"an occupied output forbids a second read");
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("source task mode confusion cannot read a review ticket as missing-source GET",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const first=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const reviewed=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  assert.equal(reviewed.candidateTasks.length,1);
+  assert.equal(reviewed.partialRetryReviewTasks.length,1);
+  const wrong=await execute(request(t,{
+   pages,expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+   retryPartialSource:false,allowPublicReadOnlyFetch:true,
+   upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(wrong.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const changed=structuredClone(pages);
+  changed[0].partialSourcePlan[0].priorOriginalMinuteRows=0;
+  const invalid=await execute(request(t,{
+   pages:changed,
+   expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+   retryPartialSource:true,allowPublicReadOnlyFetch:true,
+   expectedExistingSourceDigestSha256:first.retainedSourceDigestSha256,
+   upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(invalid.reason,"NO_VERIFIED_PUBLIC_SOURCE_TASK");
+  assert.equal(calls.length,1);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("reviewed partial 1m PIT task has a zero-GET preflight for both crypto markets",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),calls=[];
+  try{
+   const provider=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+   const initial=await execute(request(t,{allowPublicReadOnlyFetch:true,...provider}));
+   assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+   const previousCalls=calls.length;
+   const pages=await makePageReceipts(t.root,market,t.manifest);
+   const reviewed=plan({market,day:"2026-09-18",manifest:t.manifest,pages,taskPageIndex:0});
+   const sourceDigest=initial.retainedSourceDigestSha256;
+   const cfg=request(t,{pages,expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+    retryPartialSource:true,expectedExistingSourceDigestSha256:sourceDigest,
+    allowPublicReadOnlyFetch:false,
+    upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");},
+    bitgetClient:{get:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}},
+   });
+   const r=await execute(cfg);
+   assert.equal(r.status,"BLOCKED_DATA");
+   assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+   assert.equal(r.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+   assert.equal(r.reviewedExistingSourceDigestSha256,sourceDigest);
+   assert.equal(r.reviewedExistingNativeMinuteCount,3);
+   assert.equal(r.reviewSourceOnly,true);
+   assert.equal(r.providerGETCount,0);
+   assert.equal(r.publicGETAttempted,false);
+   assert.equal(r.profitabilityProven,false);
+   assert.equal(calls.length,previousCalls);
+   assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+   const stale=await execute({...cfg,expectedExistingSourceDigestSha256:SHA});
+   assert.equal(stale.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+   assert.equal(calls.length,previousCalls);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
+test("missing-source task dry-run rechecks current archive and refuses stale preview",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  await execute(request(t,{allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls)}));
+  const stale=await execute(request(t,{allowPublicReadOnlyFetch:false,
+   upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}}));
+  assert.equal(stale.reason,"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY");
+  assert.equal(stale.providerGETCount,0);
+  assert.equal(stale.selectedTaskKind,"MISSING_SOURCE");
+  assert.equal(calls.length,1);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("private PIT task CLI permits reviewed partial dry-run without public read opt-in",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const initial=await execute(request(t,{allowPublicReadOnlyFetch:true,
+   upbitFetchImpl:upbitFetch(calls)}));
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const review=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  const manifestFile=join(t.root,"review-roster.json");
+  const pageFile=join(t.root,"review-page.json");
+  const indexFile=join(t.root,"review-index.json");
+  const receipt=join(t.root,"review-preflight.json");
+  writeFileSync(manifestFile,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pageFile,JSON.stringify(pages[0]),{mode:0o600});
+  writeFileSync(indexFile,JSON.stringify({pageReceiptFiles:[pageFile]}),{mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+   "--manifest",manifestFile,"--page-index",indexFile,
+   "--root",t.root,"--task-page-index","0","--task-index","0",
+   "--expected-task-digest",review.partialRetryReviewDigestSha256,
+   "--output",receipt,"--retry-partial","--expected-existing-sha",
+   initial.retainedSourceDigestSha256];
+  const cfg=parse(args);
+  assert.equal(cfg.retryPartialSource,true);
+  assert.equal(cfg.allowPublicReadOnlyFetch,false);
+  const r=await cli(cfg,{nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:async()=>{throw Error("PUBLIC_FETCH_FORBIDDEN");}});
+  assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(r.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(r.readPublicExplicitlyRequested,false);
+  assert.equal(r.profitabilityProven,false);
+  assert.equal(calls.length,1);
+  const saved=JSON.parse(readFileSync(receipt,"utf8"));
+  assert.equal(saved.reviewedExistingSourceDigestSha256,
+   initial.retainedSourceDigestSha256);
+  assert.equal(saved.providerGETCount,0);
+  assert.equal(saved.publicGETAttempted,false);
+  assert.equal(statSync(receipt).mode&0o077,0);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+
+test("source-limited one-candle PIT crypto capture is a stored UNKNOWN history, never false full coverage",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),seen=[],at=START+720*MIN;
+  try{
+   const source=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:async(url,opt)=>{
+      seen.push(new URL(url).searchParams.get("to"));
+      return {ok:true,status:200,json:async()=>
+        Date.parse(new URL(url).searchParams.get("to"))>at
+         ?[{market:new URL(url).searchParams.get("market"),
+            candle_date_time_utc:new Date(at).toISOString().slice(0,19),
+            opening_price:100,high_price:104,low_price:99,
+            trade_price:102,candle_acc_trade_volume:5}]:[]};
+     }}
+    :{bitgetClient:{get:async(path,params)=>{
+      seen.push(Number(params.endTime));
+      return {code:"00000",data:Number(params.endTime)>at
+        ?[[String(at),"100","104","99","102","5"]]:[]};
+     }}};
+   const denied=await execute(request(t,{
+    ...source,allowSourceLimitedArchive:true,
+   }));
+   assert.equal(denied.status,"BLOCKED_DATA");
+   assert.equal(denied.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+   assert.equal(seen.length,0);
+   const done=await execute(request(t,{
+    ...source,allowPublicReadOnlyFetch:true,
+    allowSourceLimitedArchive:true,
+   }));
+   assert.equal(done.status,"RETROSPECTIVE_SOURCE_LIMITED_STORED_WITHIN_LOCAL_BUDGET");
+   assert.equal(done.selectedTaskKind,"MISSING_SOURCE");
+   assert.equal(done.retainedMinuteRows,1);
+   assert.equal(done.requestedProviderPages,2);
+   assert.equal(done.providerRequestWindowVerified,false);
+   assert.equal(done.missingUnverifiedMinuteSlots,1439);
+   assert.equal(done.sourceLimitedOnly,true);
+   assert.equal(done.sourceArchiveCompletenessProven,false);
+   assert.equal(done.independentlyAuthenticatedPITAndPriceData,false);
+   assert.equal(done.profitabilityProven,false);
+   assert.equal(done.actualFillCount,null);
+   assert.equal(done.executionAuthority,"NONE");
+   assert.equal(seen.length,2);
+   const symbol=t.planning.candidateTasks[0].symbol;
+   const fromDisk=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(fromDisk.sourceMinuteRows,1);
+   assert.equal(fromDisk.intervalData["1m"].sourceSessionCoverageComplete,false);
+   const asOf=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
+   assert.equal(asOf.intervalData["1m"].bars.length,0);
+   const blocked=await execute(request(t,{
+    ...source,allowPublicReadOnlyFetch:true,allowSourceLimitedArchive:true,
+   }));
+   assert.equal(blocked.reason,"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY");
+   assert.equal(seen.length,2);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
+test("source-limited flag in bounded private task CLI is separate from consent",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const manifestFile=join(t.root,"limit-manifest.json");
+  const pageFile=join(t.root,"limit-page.json");
+  const indexFile=join(t.root,"limit-index.json");
+  const out=join(t.root,"limit-preview.json");
+  writeFileSync(manifestFile,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pageFile,JSON.stringify(t.pages[0]),{mode:0o600});
+  writeFileSync(indexFile,JSON.stringify({pageReceiptFiles:[pageFile]}),{mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+    "--manifest",manifestFile,"--page-index",indexFile,
+    "--root",t.root,"--task-page-index","0","--task-index","0",
+    "--expected-task-digest",t.planning.candidateTaskDigestSha256,
+    "--output",out,"--retain-source-limited"];
+  const config=parse(args);
+  assert.equal(config.allowSourceLimitedArchive,true);
+  assert.equal(config.allowPublicReadOnlyFetch,false);
+  assert.throws(()=>parse([...args,"--retain-source-limited"]),
+    /PIT_MINUTE_TASK_CLI_DUPLICATE_SOURCE_LIMITED_FLAG/);
+  const status=await cli(config,{
+   nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:async()=>{calls.push(1);throw Error("NO_UNAPPROVED_GET");}});
+  assert.equal(status.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(status.executionAuthority,"NONE");
+  assert.equal(calls.length,0);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+
+test("all-members PIT one-task picker retains a dated Han named Bitget USDT contract without fake full coverage",async()=>{
+ const root=temp(),market="CRYPTO_FUTURES",calls=[];
+ try{
+  const manifest=makeManifest(market,2);
+  manifest.memberships[0].symbol="龙虾USDT";
+  manifest.rawMembershipDigestSha256=
+    digestPITMembershipRowsV1(manifest.memberships);
+  const pages=await makePageReceipts(root,market,manifest);
+  const planning=plan({market,day:"2026-09-18",manifest,pages,taskPageIndex:0});
+  assert.equal(planning.status,"PLANNED_EXPLICIT_PUBLIC_READ_ONLY");
+  const hanTaskIndex=planning.candidateTasks
+    .findIndex(task=>task.symbol==="龙虾USDT");
+  assert.ok(hanTaskIndex>=0,"the Han contract is represented in the source plan");
+  const t={root,market,manifest,pages,planning};
+  const r=await execute(request(t,{
+   taskIndex:hanTaskIndex,
+   allowPublicReadOnlyFetch:true,
+   bitgetClient:{get:async(path,params)=>{
+     calls.push({path,params});
+     assert.equal(params.symbol,"龙虾USDT");
+     return {code:"00000",data:[
+       [String(START+2*MIN),"100","104","99","102","5"],
+       [String(START+MIN),"100","104","99","102","5"],
+       [String(START),"100","104","99","102","5"],
+     ]};
+   }},
+  }));
+  assert.equal(r.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  assert.equal(r.plannedSymbol,"龙虾USDT");
+  assert.equal(r.retainedMinuteRows,3);
+  assert.equal(r.fullMarketOpportunityDenominatorVerified,false);
+  assert.equal(r.profitabilityProven,false);
+  assert.equal(r.executionAuthority,"NONE");
+  assert.equal(calls.length,1);
+  const review=await derive({root,market,symbol:"龙虾USDT",
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  assert.equal(review.sourceMinuteRows,3);
+  assert.equal(review.intervalData["1m"].sourceSessionCoverageComplete,false);
+  assert.equal(review.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

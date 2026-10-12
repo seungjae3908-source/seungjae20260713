@@ -1,0 +1,73 @@
+name: Prediction Lab KRX Bounded Archive Intake QA V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/krx-readonly-archive-batch-v1.js
+      - market-prediction-lab/tests/krx-readonly-archive-batch-v1.test.js
+      - market-prediction-lab/scripts/report-krx-readonly-archive-batch-readiness-v1.mjs
+      - .github/workflows/prediction-lab-krx-bounded-archive-intake-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-krx-bounded-archive-intake-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  krx-dated-archive-intake:
+    name: Official market-data no-key and PIT archive-gap contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify research-only execution authority
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Read-only KRX source/identity and bounded intake unit QA
+        run: |
+          node --test \
+            market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js \
+            market-prediction-lab/tests/krx-dated-roster-timeline-v1.test.js \
+            market-prediction-lab/tests/krx-readonly-archive-batch-v1.test.js
+      - name: Produce no-auth KRX dated archival source readiness receipt
+        run: |
+          node market-prediction-lab/scripts/report-krx-readonly-archive-batch-readiness-v1.mjs \
+            market-prediction-lab/docs/krx-readonly-archive-batch-readiness-v1.json
+      - name: Fail closed if absent market data was counted as a market with zero listings
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/krx-readonly-archive-batch-readiness-v1.json","utf8"));
+          if(r.status!=="BLOCKED_MARKET_DATA_ENTITLEMENT" ||
+             r.requestsPerformed!==0 || r.observedDateCount!==0 ||
+             r.missingDateCount!==3 || r.sourceDayReceipts.length!==0 ||
+             r.sourceKeyPersisted!==false ||
+             r.historicalIdentityTimeline.confirmedDelistingCount!==null ||
+             r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.trueMarketWideRecall!==null || r.netProfitPct!==null ||
+             r.executionAuthority!=="NONE" || r.profitabilityProven!==false ||
+             r.liveTrading!==false || r.realOrders!==false) process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krx-bounded-archive-intake-readiness-${{ github.sha }}
+          path: market-prediction-lab/docs/krx-readonly-archive-batch-readiness-v1.json
+          retention-days: 14
+          if-no-files-found: error

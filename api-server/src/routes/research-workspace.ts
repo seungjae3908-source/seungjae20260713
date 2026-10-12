@@ -8,6 +8,14 @@ import { readResearchOrchestratorStatusV10 } from '../../../packages/external-re
 import { readResearchOneShotReviewV15 } from '../../../packages/external-research/src/research-workspace-one-shot-review-v15.js';
 import { createStoredWorkspaceHandler } from '../../../packages/external-research/src/research-workspace-store-v2.js';
 import { loadVideoResearchRuntimeEvidenceSnapshot, sanitizeVideoResearchRuntimeEvidence } from './video-research-source-evidence';
+import {
+  readResearchPITMinuteCoverageV1,
+  type ResearchPITMarket,
+} from '../../../market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js';
+import {
+  readResearchOriginalMinuteDiagnosticV1,
+  type ResearchOriginalMinuteMarket,
+} from '../../../market-prediction-lab/src/research-original-minute-diagnostic-readonly-v1.js';
 
 /** Research results are admin-shared, not member/account records. No data root is accepted from HTTP. */
 export function createResearchWorkspaceRouter(): IRouter {
@@ -52,6 +60,153 @@ export function createResearchWorkspaceRouter(): IRouter {
     }
     try { return res.status(200).json(await readResearchOneShotReviewV15(root)); }
     catch { return res.status(503).json({schemaVersion:'research-one-shot-review-v15',available:false,reason:'ONE_SHOT_REVIEW_UNAVAILABLE'}); }
+  });
+  // Research 1m original-source COVERAGE ONLY. This does not use the existing
+  // POST /backtests/run engine, create Paper handoffs or touch trading routes.
+  // The only file root is server env; browser query never accepts paths.
+  router.all('/pit-minute-coverage', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Vary', 'Authorization, Cookie');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return res.status(405).json({
+        error: 'READ_ONLY', executionAuthority: 'NONE',
+      });
+    }
+    const query = req.query as Record<string, unknown>;
+    const allowed = new Set([
+      'market', 'startDate', 'endDate', 'cursorDate', 'chunkDays',
+    ]);
+    const market = query.market, startDate = query.startDate,
+      endDate = query.endDate, cursorDate = query.cursorDate,
+      chunkDaysInput = query.chunkDays;
+    const markets = new Set<ResearchPITMarket>([
+      'KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES',
+    ]);
+    const dateMs = (value: unknown): number | null => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+      const ms = Date.parse(value + 'T00:00:00.000Z');
+      return Number.isSafeInteger(ms)
+        && new Date(ms).toISOString().slice(0, 10) === value ? ms : null;
+    };
+    const startMs = dateMs(startDate);
+    const endMs = dateMs(endDate);
+    const cursorMs = cursorDate == null ? null : dateMs(cursorDate);
+    // Match the source reader's explicit 1970-01-02 .. 2099-12-31
+    // and 36,600-day maximum BEFORE checking the server data root.
+    // An invalid HTTP selection must return 400, not a misleading
+    // "root not configured" 200 or a private-source 503.
+    const requestedDays = startMs == null || endMs == null
+      ? Number.NaN : (endMs - startMs) / 86_400_000 + 1;
+    const validResearchWindow = startMs != null && endMs != null
+      && startMs >= Date.parse('1970-01-02T00:00:00.000Z')
+      && endMs < Date.parse('2100-01-01T00:00:00.000Z')
+      && startMs <= endMs
+      && Number.isSafeInteger(requestedDays)
+      && requestedDays >= 1 && requestedDays <= 36_600;
+    const chunkDays = chunkDaysInput == null ? 7 :
+      typeof chunkDaysInput === 'string'
+        && /^(?:[1-9]|[12][0-9]|3[01])$/.test(chunkDaysInput)
+        ? Number(chunkDaysInput) : Number.NaN;
+    if (Object.keys(query).some(key => !allowed.has(key))
+      || typeof market !== 'string'
+      || !markets.has(market as ResearchPITMarket)
+      || typeof startDate !== 'string' || typeof endDate !== 'string'
+      || (cursorDate != null && typeof cursorDate !== 'string')
+      || !validResearchWindow
+      || (cursorDate != null && (
+        cursorMs == null || cursorMs < startMs || cursorMs > endMs))
+      || !Number.isSafeInteger(chunkDays) || chunkDays < 1 || chunkDays > 31) {
+      return res.status(400).json({
+        schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+        available: false, reason: 'INVALID_SELECTION',
+        executionAuthority: 'NONE', profitabilityProven: false,
+      });
+    }
+    const root = process.env.RESEARCH_PIT_MINUTE_COVERAGE_ROOT?.trim() ?? '';
+    if (!root || !isAbsolute(root) || resolve(root) !== root) {
+      return res.status(200).json({
+        schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+        available: false, status: 'BLOCKED_DATA',
+        reason: 'SERVER_REPORT_ROOT_NOT_CONFIGURED',
+        providerGETCount: 0, financialMutationCount: 0,
+        historicalPITUniverseIndependentlyAuthenticated: false,
+        fullMarketOpportunityDenominatorVerified: false,
+        trueMarketWideRecall: null, actualFillCount: null,
+        profitabilityProven: false, executionAuthority: 'NONE',
+        liveTrading: false, autoTrading: false, realOrders: false,
+      });
+    }
+    try {
+      const report = await readResearchPITMinuteCoverageV1({
+        root, market: market as ResearchPITMarket,
+        startDate, endDate,
+        cursorDate: cursorDate == null ? null : cursorDate as string,
+        chunkDays,
+      });
+      return res.status(200).json(report);
+    } catch {
+      // Never echo filesystem paths, parsing failures or raw source material.
+      return res.status(503).json({
+        schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+        available: false, status: 'BLOCKED_DATA',
+        reason: 'PRIVATE_COMPACT_SOURCE_READ_OR_VALIDATION_FAILED',
+        providerGETCount: 0, financialMutationCount: 0,
+        trueMarketWideRecall: null, actualFillCount: null,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      });
+    }
+  });
+  // READ-ONLY admin observation of a completed OFFLINE native 1m replay.
+  // This DOES NOT run the backtester, collect provider data, return strategy
+  // parameters or admit simulated/real orders. The server alone chooses root.
+  router.all('/original-minute-diagnostics', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Vary', 'Authorization, Cookie');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return res.status(405).json({
+        error: 'READ_ONLY', executionAuthority: 'NONE',
+      });
+    }
+    const query = req.query as Record<string, unknown>;
+    const market = query.market;
+    const markets = new Set<ResearchOriginalMinuteMarket>([
+      'KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES',
+    ]);
+    if (Object.keys(query).length !== 1
+      || typeof market !== 'string'
+      || !markets.has(market as ResearchOriginalMinuteMarket)) {
+      return res.status(400).json({
+        schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+        available: false, status: 'BLOCKED_DATA',
+        reason: 'INVALID_MARKET_SELECTION',
+        executionAuthority: 'NONE', profitabilityProven: false,
+        actualFillCount: null,
+      });
+    }
+    const root =
+      process.env.RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT?.trim() ?? '';
+    try {
+      const safeReport = await readResearchOriginalMinuteDiagnosticV1({
+        root, market: market as ResearchOriginalMinuteMarket,
+      });
+      return res.status(200).json(safeReport);
+    } catch {
+      // Deliberately suppress private paths, SHA inputs, raw strategy
+      // parameters, permissions and filesystem validation errors.
+      return res.status(503).json({
+        schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+        market, available: false, status: 'BLOCKED_DATA',
+        reason: 'PRIVATE_NATIVE_MODEL_READ_OR_VALIDATION_FAILED',
+        report: null,executionAuthority:'NONE',profitabilityProven:false,
+        paperAdmissionAllowed:false,actualFillCount:null,
+        trueMarketWideRecall:null,providerGETCount:0,
+        financialMutationCount:0,realOrders:false,
+      });
+    }
   });
   // .all intentionally rejects HEAD and all write verbs before touching research files.
   router.all('/', (req, res) => { void read(req, res); });
