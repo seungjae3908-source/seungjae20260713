@@ -352,3 +352,34 @@ classified as an expected blocked original-source coverage failure by the
 Research Center's public-source error registry, **not** a software-internal
 exception or zero market opportunities. Unknown implementation errors still
 surface distinctly for developer repair.
+
+
+### 2026-10-12 — 신규 상장·저유동성 원본 1분봉의 별도 보관 모드 (Draft)
+
+일반 \`collectPITNativeCryptoMinuteSourceV1\`의 기본 엄격 정책은 변경하지
+않았다. 기존의 \`minCandles:2\`, \`requireFullWindow:true\`는 상장
+직후 하루에 1개 캔들만 발생하거나 요청 가능한 최오래된 캔들이
+해당 일자의 중간에 있는 경우, 확보할 수 있는 원본 1분봉도
+\`BLOCKED_DATA\`로 종료해 개인 원본 저장소에 보존하지 못했다.
+
+\`--retain-source-limited\`는 **별도 명시 요청**으로 이 경우만 원본을
+부분 보관한다. 실제 Upbit/Bitget 과거 API GET은 여전히 별도
+\`--read-public\`을 지정한 단일 종목/하루 요청에서만 가능하다.
+신규 보관 상태는
+\`RETROSPECTIVE_SOURCE_LIMITED_RETAINED_REVIEW_ONLY\`
+(일별 PIT task에서는 \`RETROSPECTIVE_SOURCE_LIMITED_STORED_WITHIN_LOCAL_BUDGET\`)
+이며, 확인된 원본 캔들 수, 읽은 API 페이지 수, 첫날 나머지 미검증
+분봉 수와 \`providerRequestWindowVerified=false\`를 표기한다.
+
+이 자료가 의미하는 것은 **과거 거래소에서 실제로 관측된 가격
+1분봉이 저장되었다**는 것뿐이다. 거래가 없던 분인지, 이미 상장됐던
+종목인지, 당시 스캐너가 확인할 수 있었는지, 독립 OOS나 실제
+체결 비용을 통과했는지를 뜻하지 않는다. 본래 백테스터의
+누락 원본 차단을 해제하지 않으며, 자동 신호 게시·Paper·실거래로
+승격하지 않는다.
+
+수집기는 원본 종료 시점으로 조회한 공개 데이터의 빈 마지막
+페이지까지 포함해 \`requestedProviderPages\`를 논리 호출 수로
+기록한다. 네트워크 라이브러리 내부의 HTTP 재시도 횟수까지
+증명하는 값은 아니다. 이 Draft에서는 운영 공급원 GET을 실행하지
+않고 모의 응답과 개인 임시 저장소로 검증한다.
