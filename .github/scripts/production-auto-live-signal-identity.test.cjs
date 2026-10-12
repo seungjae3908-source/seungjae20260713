@@ -2,7 +2,7 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { readProductionAutoLiveSignalHandoff, inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
@@ -273,4 +273,62 @@ test('a dedicated Auto LIVE public source plan never replaces existing Paper or 
     /AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED/u);
   assert.throws(()=>inspectIndependentAutoLivePublicSourcePlan({...args,isolatedRootPresent:true}),
     /AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED/u);
+});
+
+test('source handoff path is pinned and opened nofollow, bounded, private and closed on every outcome', () => {
+  const handoffPath =
+    '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+  const parent = { isDirectory: () => true, isSymbolicLink: () => false };
+  const regular = { isFile: () => true, size: 32, mode: 0o100600 };
+  const reads = [];
+  const base = {
+    constants: { O_RDONLY: 0, O_NOFOLLOW: 131072, O_NONBLOCK: 2048 },
+    lstatSync(path) { reads.push(['parent', path]); return parent; },
+    openSync(path, flags) { reads.push(['open', path, flags]); return 71; },
+    fstatSync(fd) { assert.equal(fd, 71); return regular; },
+    readFileSync(fd, encoding) {
+      assert.equal(fd, 71);
+      assert.equal(encoding, 'utf8');
+      return '{"status":"READY"}';
+    },
+    closeSync(fd) { reads.push(['close', fd]); },
+  };
+  assert.deepEqual(readProductionAutoLiveSignalHandoff(handoffPath, base), { status: 'READY' });
+  assert.equal(reads.filter(row => row[0] === 'parent').length, 4);
+  const open = reads.find(row => row[0] === 'open');
+  assert.equal(open[1], handoffPath);
+  assert.ok((open[2] & base.constants.O_NOFOLLOW) !== 0);
+  assert.ok((open[2] & base.constants.O_NONBLOCK) !== 0);
+  assert.equal(reads.at(-1)[0], 'close');
+  for (const bad of [handoffPath + '/extra', '/tmp/secrets.json',
+    '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json']) {
+    assert.throws(() => readProductionAutoLiveSignalHandoff(bad, base),
+      /AUTO_LIVE_SIGNAL_HANDOFF_PATH_INVALID/u);
+  }
+  const unsafeStats = [
+    { ...regular, mode: 0o100644 },
+    { ...regular, size: 0 },
+    { ...regular, size: 9 * 1024 * 1024 },
+    { ...regular, size: Number.NaN },
+    { ...regular, isFile: () => false },
+  ];
+  for (const stat of unsafeStats) {
+    let closed = false;
+    assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
+      ...base, fstatSync: () => stat, closeSync: () => { closed = true; },
+    }), /AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE/u);
+    assert.equal(closed, true);
+  }
+  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
+    ...base, lstatSync: () => ({ isDirectory: () => false, isSymbolicLink: () => true }),
+  }), /AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID/u);
+  let closed = false;
+  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
+    ...base, readFileSync: () => '{"private_key":"TOP_SECRET" invalid',
+    closeSync: () => { closed = true; },
+  }), /AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID/u);
+  assert.equal(closed, true);
+  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
+    ...base, openSync: () => { throw new Error('SENSITIVE_KEY_MUST_NOT_ESCAPE'); },
+  }), /^Error: AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FAILED$/u);
 });
