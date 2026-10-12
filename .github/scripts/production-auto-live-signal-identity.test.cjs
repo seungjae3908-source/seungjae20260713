@@ -489,9 +489,10 @@ test('protected independent source Bash is syntax-valid and sealed tar smoke is 
     assert.equal(parsed.stderr,'',name+': invalid heredoc or Bash syntax');
   }
   const script=step(names[0]);
-  const boundary=script.indexOf('remote_env="$(printf');
+  const boundary=script.indexOf('# Check real server dependencies with READ-ONLY commands');
   assert.ok(boundary>0,'offline packaging must precede any SSH');
   const offline=script.slice(0,boundary);
+  assert.doesNotMatch(offline,/\\bssh\\s+-i\\b/u,'offline test must never invoke remote SSH');
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'auto-live-sealed-bundle-'));
   try {
     const ref=spawnSync('git',['rev-parse','HEAD'],{encoding:'utf8',timeout:5000});
