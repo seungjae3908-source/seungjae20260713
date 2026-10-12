@@ -113,7 +113,7 @@ function assertCurrent(value,input){
   assert.equal(value.sessionClosePolicy,"CLOSE_EACH_SOURCE_SESSION");
 }
 
-test("current captures cannot replace the unchanged default historical PIT contract",async t=>{
+test("current captures cannot replace default historical PIT evidence for ASCII or Han identities",async t=>{
   const root=await temporary(t),input=request(root);
   await assert.rejects(replay({...input,evidenceScope:undefined}),
     /CURRENT_ROSTER_REQUIRES_EXPLICIT_SOURCE_SCOPE/);
@@ -122,11 +122,33 @@ test("current captures cannot replace the unchanged default historical PIT contr
     /PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED/);
   await assert.rejects(replay({...legacy,manifest:undefined}),
     /PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED/);
-  await assert.rejects(replay({...legacy,symbol:"龙虾USDT",
-    manifest:pitManifest("CRYPTO_FUTURES","龙虾USDT")}),
-  /PRIVATE_REPLAY_MARKET_OR_RISK_POLICY_INVALID/);
+  await assert.rejects(replay({...legacy,symbol:"龙虾USDT",manifest:currentRosterCapture.roster}),
+    /PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED/);
+  const historicHan=await replay({...legacy,symbol:"龙虾USDT",
+    manifest:pitManifest("CRYPTO_FUTURES","龙虾USDT")});
+  assert.equal(historicHan.status,"BLOCKED_DATA");
+  assert.equal(historicHan.evidenceScope,"HISTORICAL_PIT_ROSTER");
+  assert.equal(historicHan.sourceOnlyMode,false);
+  assert.equal(historicHan.sourceMinuteRowsRead,0);
+  assert.equal(historicHan.modeledReturnPercent,null);
+  assertNoAuthority(historicHan);
   await assert.rejects(period({...input,evidenceScope:"SOURCE_ATTESTED_PIT_COHORT_ONLY"}),
     /PRIVATE_REPLAY_EVIDENCE_SCOPE_INVALID/);
+});
+
+test("dated historical Han fixture replays exact native archive but cannot establish real PIT or OOS",async t=>{
+  const root=await temporary(t),market="CRYPTO_FUTURES",symbol="龙虾USDT";
+  const session=await retain(root,source(market,symbol));
+  const {currentRosterCapture,expectedCurrentRosterDigestSha256,evidenceScope,...legacy}=
+    request(root,market,symbol);
+  const result=await replay({...legacy,manifest:pitManifest(market,symbol),sessionSources:[session]});
+  assert.equal(result.status,"RETROSPECTIVE_SOURCE_ONLY_STRATEGY_DIAGNOSTIC");
+  assert.equal(result.symbol,symbol);
+  assert.equal(result.evidenceScope,"HISTORICAL_PIT_ROSTER");
+  assert.equal(result.fixtureOnly,true);
+  assert.equal(result.sourceMinuteRowsRead,1440);
+  assert.equal(result.originalHistoricalScannerAvailabilityVerified,false);
+  assertNoAuthority(result);
 });
 
 test("complete current crypto archives reuse LONG/SHORT replay and preserve all Han contract names",async t=>{
