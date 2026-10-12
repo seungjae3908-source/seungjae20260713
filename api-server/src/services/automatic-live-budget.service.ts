@@ -50,6 +50,67 @@ function charge(plan: TradingPlan, orderId: string, fraction = 1): AutomaticLive
     riskKrw: Math.ceil(plan.estimatedKrw * fraction * Math.abs(reference - plan.stopPrice) / reference * 100) / 100 };
 }
 
+function filledCharge(plan: TradingPlan, order: TradingOrder, remainingQuantity: number): AutomaticLiveBudgetCharge {
+  if (!quantity(order.filledQuantity) || !quantity(order.averageFillPrice)
+    || !quantity(remainingQuantity) || remainingQuantity > order.filledQuantity + 1e-8) {
+    throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_INVALID');
+  }
+  const market = rulePackPilotMarketForPlan(plan);
+  const currency = market === 'us_stock' ? 'USD' : market === 'crypto_futures' ? 'USDT' : 'KRW';
+  if (market === 'crypto_spot' && plan.market !== 'KRW') {
+    throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_FX_UNVERIFIED');
+  }
+  let fx = 1;
+  if (currency !== 'KRW') {
+    const evidence = order.settlementFxEvidence;
+    const at = Date.parse(evidence?.observedAt ?? '');
+    const fillAt = Date.parse(order.exchangeUpdatedAt ?? order.updatedAt);
+    const maxAge = currency === 'USD' ? 24 * 60 * 60_000 : 10 * 60_000;
+    const source = currency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+    if (!positive(evidence?.krwPerQuoteCurrency) || evidence?.source !== source
+      || !Number.isFinite(at) || !Number.isFinite(fillAt) || at > fillAt + 5_000 || fillAt - at > maxAge) {
+      // An editable plan estimate is not an actual fill-time conversion.
+      throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_FX_UNVERIFIED');
+    }
+    fx = evidence.krwPerQuoteCurrency;
+  }
+  const knownCost = (amount: unknown, denomination: unknown) => nonnegative(amount)
+    && (amount === 0 || denomination === currency);
+  let fee = order.feeAmount;
+  const fills = order.fills ?? [];
+  if (fills.length) {
+    if (fills.some((fill) => !quantity(fill.quantity) || !quantity(fill.price)
+      || !knownCost(fill.feeAmount, fill.feeCurrency))) {
+      throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_COST_UNVERIFIED');
+    }
+    const filled = fills.reduce((sum, fill) => sum + fill.quantity, 0);
+    const average = fills.reduce((sum, fill) => sum + fill.quantity * fill.price, 0) / filled;
+    const fees = fills.reduce((sum, fill) => sum + Number(fill.feeAmount), 0);
+    if (!quantity(filled) || Math.abs(filled - order.filledQuantity) > Math.max(1e-8, order.filledQuantity * 1e-6)
+      || Math.abs(average - order.averageFillPrice) > Math.max(1e-8, order.averageFillPrice * 1e-6)
+      || fee != null && (!knownCost(fee, order.feeCurrency)
+        || Math.abs(fees - fee) > Math.max(0.01, fee * 1e-6))) {
+      throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_COST_UNVERIFIED');
+    }
+    fee = fees;
+  } else if (!knownCost(fee, order.feeCurrency)) {
+    throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_COST_UNVERIFIED');
+  }
+  const tax = market === 'domestic_stock' ? order.taxAmount : order.taxAmount ?? 0;
+  if (!knownCost(tax, order.taxCurrency)) throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_COST_UNVERIFIED');
+  const fraction = order.state === 'PARTIALLY_FILLED' ? 1 : remainingQuantity / order.filledQuantity;
+  const baseline = charge(plan, order.id, fraction);
+  const paidCosts = (Number(fee) + Number(tax)) * fx;
+  // Keep all paid entry costs until final close, even after a partial exit.
+  // A pending remainder retains the full original reservation. Never multiply
+  // gross notional by leverage: estimatedKrw already represents full notional.
+  const actualAmount = remainingQuantity * order.averageFillPrice * fx + paidCosts;
+  const actualRisk = remainingQuantity * Math.abs(order.averageFillPrice - plan.stopPrice) * fx + paidCosts;
+  if (!positive(actualAmount) || !nonnegative(actualRisk)) throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_INVALID');
+  return { ...baseline, amountKrw: Math.ceil(Math.max(baseline.amountKrw, actualAmount) * 100) / 100,
+    riskKrw: Math.ceil(Math.max(baseline.riskKrw, actualRisk) * 100) / 100 };
+}
+
 function assertSnapshot(snapshot: AutomaticLiveBudgetSnapshot, userId: string) {
   if (!snapshot || !Array.isArray(snapshot.plans) || !Array.isArray(snapshot.orders)
     || !Array.isArray(snapshot.holds) || typeof snapshot.emergencyStopped !== 'boolean'
@@ -105,7 +166,6 @@ export async function projectAutomaticLiveBudget(
   };
   const effective = await resolveRulePackPilotDynamicCapPolicy(ledger, userId, plan, policy);
   const releases: string[] = [];
-  const heldIds = new Set(snapshot.holds.map((hold) => hold.orderId));
   const ownedByPlan = new Map(owned.map((row) => [row.plan.id, row]));
   for (const hold of snapshot.holds) {
     const heldOrder = orders.find((row) => row.id === hold.orderId)!;
@@ -133,16 +193,15 @@ export async function projectAutomaticLiveBudget(
   }
   const baseCharges: AutomaticLiveBudgetCharge[] = [];
   for (const row of orders) {
-    if (row.id === orderId || heldIds.has(row.id)) continue;
+    if (row.id === orderId) continue;
     const parent = plans.find((entry) => entry.id === row.planId);
     if (!parent || !automaticLiveBudgetRequired(parent)) continue;
     const position = ownedByPlan.get(parent.id);
     if (position) {
       if (!quantity(row.filledQuantity)) throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_INVALID');
-      // An older open position without a reservation is still charged. Never
-      // release a pending remainder simply because one partial fill arrived.
-      baseCharges.push(charge(parent, row.id, row.state === 'PARTIALLY_FILLED'
-        ? 1 : position.remainingQuantity / row.filledQuantity));
+      // Revalue every actual fill, including already-held orders. The RPC
+      // combines these with immutable holds using MAX per order, not SUM.
+      baseCharges.push(filledCharge(parent, row, position.remainingQuantity));
     } else if (['ACCEPTED', 'RECOVERY_REQUIRED'].includes(row.state)
       || row.state === 'SUBMITTED' && (row.submissionStartedAt || row.executionClaimId)) {
       baseCharges.push(charge(parent, row.id));
@@ -164,8 +223,18 @@ export async function projectAutomaticLiveBudget(
 export function assertAutomaticLiveBudgetProjection(
   projection: AutomaticLiveBudgetProjection, holds: readonly AutomaticLiveBudgetCharge[],
 ) {
-  const charges = [...projection.baseCharges,
+  const candidates = [...projection.baseCharges,
     ...holds.filter((row) => row.orderId !== projection.orderId && !projection.releases.includes(row.orderId)), projection];
+  const byOrder = new Map<string, AutomaticLiveBudgetCharge>();
+  for (const row of candidates) {
+    const prior = byOrder.get(row.orderId);
+    if (prior && (prior.market !== row.market || prior.instrument !== row.instrument || prior.strategy !== row.strategy)) {
+      throw new Error('AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT');
+    }
+    byOrder.set(row.orderId, prior ? { ...prior, amountKrw: Math.max(prior.amountKrw, row.amountKrw),
+      riskKrw: Math.max(prior.riskKrw, row.riskKrw) } : row);
+  }
+  const charges = [...byOrder.values()];
   const sum = (predicate: (row: AutomaticLiveBudgetCharge) => boolean, key: 'amountKrw' | 'riskKrw') =>
     charges.filter(predicate).reduce((total, row) => total + Math.round(row[key] * 100), 0) / 100;
   const checks: [boolean, string][] = [

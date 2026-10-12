@@ -600,7 +600,7 @@ function createScopedTradingRepository(
     },
     async readAutomaticLiveBudgetGuard() {
       const result = await secureClient().rpc('read_automatic_live_budget_guard');
-      if (result.error || result.data?.version !== 'automatic-live-atomic-budget-v1'
+      if (result.error || result.data?.version !== 'automatic-live-atomic-budget-v2'
         || result.data?.ready !== true) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY');
       return { ready: true, version: result.data.version };
     },
