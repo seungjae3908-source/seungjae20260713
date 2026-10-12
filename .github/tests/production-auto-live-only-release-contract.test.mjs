@@ -18,6 +18,7 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
   const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
+  const dedicatedInstaller = read('ops/install-auto-live-public-signal-schedule.sh');
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
@@ -36,6 +37,11 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-qa.json'));
   assert.ok(production.includes('production-auto-live-signal-source.json'));
   assert.ok(production.includes('Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS'));
+  // Dedicated source is available for a separately approved future migration
+  // but the shared release path remains fail-closed until genuine validation.
+  assert.ok(production.includes('node --test .github/tests/auto-live-public-signal-schedule-contract.test.mjs'));
+  assert.ok(dedicatedInstaller.includes("ROOT='/opt/stock-app-data/auto-live-signal-v1'"));
+  assert.ok(dedicatedInstaller.includes('AUTO_LIVE_PUBLIC_SIGNAL_INSTALL_APPROVED'));
 
   // AUTO LIVE must not disable or replace a separately owned Natural/Paper
   // schedule, even when the shared root contains only archived/disabled state.
@@ -111,7 +117,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
   assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID'));
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
-  assert.ok(signalAudit.includes("scheduleRoot + '/runtime-state/DISABLED'"));
+  // The strict dangling-symlink-aware check moved to a shared helper.
+  assert.ok(signalAudit.includes('signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot)'));
+  assert.ok(signalIdentity.includes("root + '/runtime-state/DISABLED'"));
+  assert.ok(signalIdentity.includes("root + '/DISABLED'"));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED'));
+  assert.ok(read('.github/scripts/production-auto-live-signal-identity.test.cjs')
+    .includes('disabled schedule sentinels fail closed even when dangling symlinks'));
   assert.ok(read('.github/scripts/production-auto-live-signal-identity.test.cjs')
     .includes("only exact installed 15-minute cron and SHA-bound receipt prove schedule configuration"));
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_HANDOFF_PREDATES_EXACT_SHA_SCHEDULE'));
