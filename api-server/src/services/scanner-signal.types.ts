@@ -186,6 +186,29 @@ export interface ScannerSignalCard {
   aiValidation?: ScannerAiValidationSummary;
   backtestQuality?: ScannerBacktestQualitySummary;
   candidateRanking?: ScannerCandidateRankingSummary;
+  /**
+   * Server-produced evidence for the four owner-selected LIVE strategies.
+   * This is advisory until the Trading Risk Engine and provider preflight pass.
+   */
+  ownerSelectedStrategy?: Readonly<{
+    schemaVersion: 'owner-selected-live-strategy-evidence-v1';
+    strategyId:
+      | 'KR_PRESSURE_BREAKOUT_V1'
+      | 'US_STOCKS_IN_PLAY_ORB_RETEST_V1'
+      | 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1'
+      | 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1';
+    market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+    direction: 'BUY' | 'LONG' | 'SHORT';
+    status: 'READY' | 'NO_TRADE';
+    parameterHash: string;
+    evidenceDigest: string;
+    observedAt: string;
+    ruleEvidence: Readonly<Record<string, boolean>>;
+    metrics: Readonly<Record<string, number | null>>;
+    reasons: readonly string[];
+    ownerSelected: true;
+    profitabilityClaimAllowed: false;
+  }>;
 }
 
 export interface ScannerDiscoveryCard {
