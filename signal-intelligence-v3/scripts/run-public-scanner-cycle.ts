@@ -17,6 +17,9 @@ import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
 import { summarizeV3BlockerTriage } from '../src/public-v3-blocker-triage.mjs';
+import { planV3FourMarketDataRecovery } from '../src/public-v3-data-recovery-plan.mjs';
+import { loadV3SignedResearchBundle, attachV3SignedResearchEvidence }
+ from '../src/public-v3-certified-profit-bridge.mjs';
 import { summarizeV3RawCryptoQuality } from '../src/public-v3-crypto-quality-diagnostic.mjs';
 import { selectV3TrustedSpotResearchOnly } from '../src/public-v3-spot-blocked-page-research.mjs';
 import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
@@ -571,6 +574,16 @@ async function main() {
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
   const sourceCycleId = randomUUID(); // new each cycle, including wrapped cursors
+  // Independent signed evidence is OFF in every generated service unit.
+  // No public provider/account requests or economic PASS without receipts.
+  const profitBridge = await loadV3SignedResearchBundle({
+    enabled:process.env.SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED==='true',
+    root:process.env.SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ROOT,
+    fileName:process.env.SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_FILE,
+    expectedResearchSha:process.env.SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_RESEARCH_SHA,
+    publicKeyPem:process.env.SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_SIGNER_PUBLIC_KEY,
+    nowMs,
+  });
   // Explicit opt-in. Read ONLY the sealed local Research Watch public event
   // receipts; absence, SHA mismatch or stale data preserves normal V3 scan.
   const stageOneWatch = await readV3StageOneWatch({
@@ -631,7 +644,8 @@ async function main() {
       }
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
         clearScannedWindow(state, lane.id, cursor);
-        adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: lane.timeframe })), { nowMs });
+        adapted = adaptCanonicalScannerCards(response.cards.map(card =>
+          attachV3SignedResearchEvidence(card,{lane,bridge:profitBridge})),{ nowMs });
         if (lane.market === 'CRYPTO_FUTURES' && adapted.length > 0) {
           const enriched = await enrichFuturesLeverageInputs(adapted, response.cards, {
             maxCandidates: 2,
@@ -757,6 +771,7 @@ async function main() {
   // Aggregate current source/economic dependency diagnosis; no admission
   // change, no extra provider requests or profitability credit.
   const blockerTriage = summarizeV3BlockerTriage(coverage,economicReadiness);
+  const originalDataRecovery = planV3FourMarketDataRecovery(coverage);
   // Retained earlier research rows remain inspectable in rows/stateById,
   // but only the exact verified current source page can publish fresh lists
   // or Telegram candidate events. An invalid receipt returns empty outputs.
@@ -772,6 +787,8 @@ async function main() {
     publicDataOnly: true,
     economicReadiness,
     blockerTriage,
+    originalDataRecovery,
+    publicResearchProfitBridge:profitBridge.diagnostic,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     publicStageTwoOffPageResearch:offPageResearch,
@@ -795,6 +812,8 @@ async function main() {
     releaseStateReset: releaseChanged,
     economicReadiness,
     blockerTriage,
+    originalDataRecovery,
+    publicResearchProfitBridge:profitBridge.diagnostic,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     publicStageTwoOffPageResearch:offPageResearch,
