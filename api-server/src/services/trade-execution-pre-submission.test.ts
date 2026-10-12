@@ -545,6 +545,10 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
     exchange: 'bitget' as const,
     symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long' as const,
     quantity: 1, quoteAmount: null, leverage: 2, marginMode: 'isolated' as const,
+    // Valid Futures protection reaches the Arm boundary instead of using the
+    // unrelated Upbit KRW protection inherited from planInput.
+    entryPrice: 100, stopPrice: 95, targetPrices: [110],
+    marketSnapshot: { ...marketSnapshot(now), currentPrice: 100, plannedPrice: 100 },
     reduceOnly: false, executionMode: 'automatic' as const,
     id: 'bitget-pre-arm-plan', userId: USER_ID, idempotencyKey: 'bitget-pre-arm-plan-key',
     state: 'SUBMITTED' as const, version: 1, approvedAt: now.toISOString(),

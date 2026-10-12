@@ -60,6 +60,54 @@ test('automatic Bitget entries preserve native stop and final target; reducing e
   assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, targetPrices: [] }, 'bad', '1000'),
     /NATIVE_PROTECTION_INVALID/);
 });
+test('Bitget native-protection validation covers mode-only and marker-only automatic entries', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const input = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: [], entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105],
+    marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const contract = { pricePlace: '1', priceEndStep: '5', minTradeNum: '0.01', sizeMultiplier: '0.01' };
+  for (const automaticPlan of [
+    { ...input, executionMode: 'automatic' as const },
+    { ...input, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+    { ...input, executionMode: 'automatic' as const, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+  ]) {
+    assert.doesNotThrow(() => validateBitgetContractRules(automaticPlan, contract, 100));
+    for (const invalid of [
+      { ...automaticPlan, stopPrice: 95.1 },
+      { ...automaticPlan, targetPrices: [103.5, 105.1] },
+    ]) {
+      assert.throws(() => validateBitgetContractRules(invalid, contract, 100), /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    }
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, stopPrice: 105 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, targetPrices: [] }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+    assert.equal(body.presetStopLossPrice, '95');
+    assert.equal(body.presetStopSurplusPrice, '105');
+    const short = { ...automaticPlan, side: 'short' as const, stopPrice: 105, targetPrices: [96.5, 95] };
+    assert.doesNotThrow(() => validateBitgetContractRules(short, contract, 100));
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 105.1 }, contract, 100),
+      /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 95 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const shortBody = JSON.parse(prepareBitgetOrder(credentials, short, 'mock-short', '1000').body!);
+    assert.equal(shortBody.presetStopLossPrice, '105');
+    assert.equal(shortBody.presetStopSurplusPrice, '95');
+    const reducing = { ...automaticPlan, reduceOnly: true, stopPrice: 95.1, targetPrices: [105.1] };
+    assert.doesNotThrow(() => validateBitgetContractRules(reducing, contract, 100));
+    const exit = JSON.parse(prepareBitgetOrder(credentials, reducing, 'mock-exit', '1000').body!);
+    assert.equal('presetStopLossPrice' in exit, false);
+    assert.equal('presetStopSurplusPrice' in exit, false);
+  }
+  const manual = { ...input, stopPrice: 95.1, targetPrices: [105.1] };
+  assert.doesNotThrow(() => validateBitgetContractRules(manual, contract, 100));
+  const body = JSON.parse(prepareBitgetOrder(credentials, manual, 'mock-manual', '1000').body!);
+  assert.equal('presetStopLossPrice' in body, false);
+  assert.equal('presetStopSurplusPrice' in body, false);
+});
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const SPOT_LIVE_TEST_KEYS = [
   'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
