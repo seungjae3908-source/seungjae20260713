@@ -53,6 +53,33 @@ test('refusal and unverified or fabricated provider/evidence fail closed', () =>
   ]) expect(() => parseStockAnalysisReply({ ...good(), ...bad }, target)).toThrow('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
 });
 
+test('stock AI refuses missing, future or internally inconsistent collection evidence before displaying a provider answer', () => {
+  const dayAhead = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  const invalid = [
+    { data: { ...good().data, asOf: null } },
+    { data: { ...good().data, asOf: dayAhead } },
+    { data: { ...good().data, status: 'partial', missing: [] } },
+    { data: { ...good().data, status: 'complete', missing: [] } },
+  ];
+  for (const candidate of invalid) {
+    // Full time-frame OHLCV is not supplied by this stock-detail endpoint.
+    expect(() => parseStockAnalysisReply({ ...good(), ...candidate }, target))
+      .toThrow('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
+  }
+  const unavailable = parseStockAnalysisReply({
+    ...good(), data: { ...good().data, status: 'unavailable', asOf: null, sources: [], missing: ['공개자료 없음'] },
+  }, target);
+  expect(unavailable.data.status).toBe('unavailable');
+});
+
+test('stock AI front-end symbol limit matches the existing authenticated server context validator', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/tabs/ai-tab.tsx'), 'utf8');
+  expect(source).toContain("/^[A-Z][A-Z0-9.-]{0,11}$/.test(symbol)");
+  expect(source).toContain('analysisFailureText(cause)');
+  expect(source).toContain('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
+});
+
+
 test('stock AI tab never requests the nonexistent legacy /analysis or /overview routes or executes orders', () => {
   const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/tabs/ai-tab.tsx'), 'utf8');
   expect(source).toContain("authorizedFetch('/api/ai/chat'");
