@@ -54,7 +54,7 @@ async function installMocks(context: BrowserContext) {
   });
 }
 
-test('mobile AI signal badge stays visible below the candle canvas instead of covering it', async ({ page, context }) => {
+test('mobile judgment is isolated in its tab and never covers the candle canvas', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installMocks(context);
   await page.goto(chartUrl);
@@ -62,20 +62,16 @@ test('mobile AI signal badge stays visible below the candle canvas instead of co
   await page.getByRole('tab', { name: '차트', exact: true }).click();
 
   const canvas = page.getByTestId('unified-chart-canvas');
-  const overlay = page.getByTestId('ai-chart-v2-signal-overlay');
+  const judgment = page.getByTestId('ai-chart-mobile-judgment');
   await expect(canvas).toBeVisible();
-  await expect(overlay).toBeVisible();
-  await expect(overlay).toContainText('SCALPING');
-  await expect(overlay).toContainText('5m');
-  await expect(overlay).toHaveAttribute('data-signal-status', /ACTIVE|WEAKENED|INVALIDATED|EXPIRED/);
-
-  const canvasBox = await canvas.boundingBox();
-  const overlayBox = await overlay.boundingBox();
-  expect(canvasBox).not.toBeNull();
-  expect(overlayBox).not.toBeNull();
-
-  const canvasBottom = canvasBox!.y + canvasBox!.height;
-  expect(overlayBox!.y).toBeGreaterThanOrEqual(canvasBottom - 1);
+  await expect(judgment).toBeHidden();
+  await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
+  await expect(judgment).toBeVisible();
+  await expect(canvas).toBeHidden();
+  await expect(canvas).toHaveCount(1);
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  await expect(canvas).toBeVisible();
+  await expect(judgment).toBeHidden();
 
   const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(horizontalOverflow).toBeLessThanOrEqual(1);

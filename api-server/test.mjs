@@ -8,6 +8,15 @@ const root = process.cwd();
 const repositoryRoot = path.resolve(root, '..');
 const mode = process.argv[2] ?? 'all';
 const groups = {
+  chart: [
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-feed.test.ts'),
+    path.join(root, 'src/services/manual-order-authority.service.test.ts'),
+    path.join(root, 'src/services/chart-manual-order.service.test.ts'),
+    path.join(root, 'src/lib/frontend-static-cache.test.ts'),
+    path.join(root, 'src/providers/yahoo-historical-cursor.test.ts'),
+    path.join(root, 'src/routes/chart-historical-public.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/unified-asset-search.test.ts'),
+  ],
   phase2: [
     path.join(root, 'src/services/futures-market-data.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/futures-market-format.test.ts'),
@@ -99,6 +108,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/asset-navigation.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-feed.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/signal-scanner-profile.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
@@ -218,6 +228,8 @@ const groups = {
 };
 
 groups.unit = [
+  path.join(root, 'src/services/manual-order-authority.service.test.ts'),
+  path.join(root, 'src/services/chart-manual-order.service.test.ts'),
   ...groups.phase2,
   ...groups.risk,
   ...groups.phase4,
@@ -231,7 +243,7 @@ groups.unit = [
   groups.search[1],
   groups.search[2],
 ];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke', 'telegram'];
+const allowedModes = ['all', 'unit', 'chart', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke', 'telegram'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];

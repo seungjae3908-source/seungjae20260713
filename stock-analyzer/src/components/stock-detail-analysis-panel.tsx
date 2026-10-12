@@ -30,7 +30,7 @@ export function StockDetailAnalysisPanel({ ticker, market }: { ticker: string; m
         />
       </div>
 
-      <div className="min-h-0 min-w-0" data-testid={`stock-detail-analysis-${tab}`}>
+      <div key={`${market}:${ticker.trim().toUpperCase()}`} className="min-h-0 min-w-0" data-testid={`stock-detail-analysis-${tab}`}>
         {tab === 'ai' ? <AiTab ticker={ticker} currency={currency} active /> : null}
         {tab === 'financials' ? <FinancialTab ticker={ticker} currency={currency} active /> : null}
         {tab === 'filings' ? <DisclosureTab ticker={ticker} active /> : null}

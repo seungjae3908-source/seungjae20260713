@@ -317,6 +317,7 @@ export type TradingRiskEnvelope = {
 
 export type TradingPlan = TradingPlanInput & {
   executionMode?: 'manual' | 'automatic';
+  manualOrderAuthority?: string;
   id: string;
   userId: string;
   idempotencyKey: string;

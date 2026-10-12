@@ -72,3 +72,18 @@ export async function loadFreePublicFxQuotes(fetchImpl: FetchLike = fetch): Prom
   });
   return { quotes, missing };
 }
+
+type ChartFxSnapshot = { quotes: FxQuote[]; missing: string[]; fetchedAt: string };
+let chartCache: ChartFxSnapshot | null = null;
+let chartPending: Promise<ChartFxSnapshot> | null = null;
+
+export async function loadChartPublicFxQuotes(): Promise<ChartFxSnapshot> {
+  if (chartCache && Date.now() - Date.parse(chartCache.fetchedAt) < 60_000) return chartCache;
+  if (!chartPending) {
+    chartPending = loadFreePublicFxQuotes().then(result => {
+      chartCache = { ...result, fetchedAt: new Date().toISOString() };
+      return chartCache;
+    }).finally(() => { chartPending = null; });
+  }
+  return chartPending!;
+}
