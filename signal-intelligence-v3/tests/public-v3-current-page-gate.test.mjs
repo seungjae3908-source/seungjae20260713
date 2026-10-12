@@ -117,8 +117,11 @@ test('source completeness, provider identity, epoch and cursor mismatches fail c
  ]){
    const lanes=receipt();mutate(lanes);
    const z=currentPagePublication(s,lanes);
-   assert.equal(z.events.length,0);
+   assert.equal(z.events.some(e=>e.id===s.rows[0].id),false,
+     'a failed US source must not publish the US candidate');
    assert.equal(z.lists.usBuy.length,0);
+   // Other market lanes with fully independent verified receipts may still
+   // publish: a partial or failed US page is not a global shutdown.
  }
 });
 test('missing, partial, replayed or globally blocked source never produces current alerts',()=>{
@@ -203,7 +206,9 @@ test('list copies and events must exactly match canonical row; no cross-market o
  const initial={rows:[row],lists:{krBuy:[],usBuy:[row],
    spotBuy:[],futuresLong:[],futuresShort:[]},events:[e]};
  const copies=structuredClone(initial);
- copies.lists.usBuy[0].utilityR=99;
+ // structuredClone preserves aliases between rows and list entries. Replace
+ // just the listed copy to model a truly altered serialized-list payload.
+ copies.lists.usBuy[0]={...copies.lists.usBuy[0],utilityR:99};
  const z=currentPagePublication(copies,receipt());
  assert.equal(z.lists.usBuy.length,0);
  assert.equal(z.events.length,0);
