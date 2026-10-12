@@ -177,9 +177,9 @@ test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owne
     aiIssuerVerified: false, liveActivationReady: false,
   });
   const occupied = [
-    '# stock-app-auto-live-public-signal-v1',
-    '# */15 * * * * /usr/bin/flock -n /opt/stock-app-data/auto-live-signal-v1/cron.lock',
-    '*/15 * * * * /usr/bin/flock -n /tmp/x /opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal',
+    '# stock-app-paper-forward-v1',
+    '# */15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock',
+    '*/15 * * * * /usr/bin/flock -n /tmp/x /opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule',
     '0 */4 * * * /usr/bin/node /srv/research/run-paper-forward-schedule.js',
   ];
   for (const crontabText of occupied) {
@@ -255,8 +255,8 @@ test('disabled schedule sentinels fail closed even when dangling symlinks', () =
 });
 
 test('a dedicated Auto LIVE public source plan never replaces existing Paper or grants AI authority', () => {
-  const paperCron='*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/auto-live-signal-v1/cron.lock ' +
-    '/opt/stock-app-data/auto-live-signal-v1/bin/run-auto-live-public-signal # stock-app-auto-live-public-signal-v1';
+  const paperCron='*/15 * * * * /usr/bin/flock -n /opt/stock-app-data/paper-forward-v1/cron.lock ' +
+    '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule # stock-app-paper-forward-v1';
   const args={targetSha:SHA,deployedSha:SHA,crontabText:paperCron,isolatedRootPresent:false};
   const plan=inspectIndependentAutoLivePublicSourcePlan(args);
   assert.equal(plan.status,'DRAFT_PLAN_NOT_INSTALLED');
