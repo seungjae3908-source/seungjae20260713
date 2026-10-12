@@ -75,3 +75,39 @@ test('manual research receipt schema is owner-scoped, append-only, immutable and
   assert.doesNotMatch(migration,/security\s+definer/iu);
   assert.doesNotMatch(migration,/update\s+public\.paper_accounts\s+set\s+(?:cashBalance|equity)/iu);
 });
+
+
+test('sequential manual PAPER event table has per-owner RLS, atomic sequence/request CAS and no mutation grants',()=>{
+  for(const fragment of [
+    'paper_manual_four_market_order_events',
+    'paper_manual_order_event_pkey',
+    'paper_manual_order_event_unique_id',
+    'paper_manual_order_event_unique_request',
+    'paper_manual_order_event_wallet_fk',
+    'paper_manual_order_event_identity',
+    'paper_manual_order_event_server_only_claims',
+    'paper_manual_order_event_owner_index',
+    'paper_manual_order_events_owner_select_v1',
+    'paper_manual_order_event_no_change',
+    'paper_manual_order_event_immutable_v1',
+    'manual_four_market_paper_sequential_guard_ready',
+    "event->>'executionAuthority'='NONE'",
+    "event->>'walletMutation'='false'",
+    "event->>'actualPaperLedgerWritten'='false'",
+    "event->>'actualBrokerFill'='false'",
+    "event->>'source'='SERVER_ISSUED_PAPER_EVENT'",
+  ])assert.ok(migration.includes(fragment),fragment);
+  assert.match(migration,/primary key \(user_id,order_id,sequence_number\)/u);
+  assert.match(migration,/unique \(user_id,order_id,event_id\)/u);
+  assert.match(migration,/unique \(user_id,order_id,request_key\)/u);
+  assert.match(migration,/foreign key \(user_id,wallet_id\) references public\.paper_accounts\(user_id,id\)/u);
+  assert.match(migration,/paper_manual_four_market_order_events\s+enable row level security;[\s\S]*force row level security;/u);
+  assert.match(migration,/for select to authenticated\s+using \(\(select auth\.uid\(\)\)=user_id\)/u);
+  assert.match(migration,/grant insert on public\.paper_manual_four_market_order_events\s+to service_role;/u);
+  assert.match(migration,/revoke update,delete,truncate,references,trigger[\s\S]*from public,anon,authenticated,service_role;/u);
+  assert.match(migration,/before update or delete on public\.paper_manual_four_market_order_events/u);
+  assert.match(migration,/if public\.manual_four_market_paper_sequential_guard_ready\(\) is not true/u);
+  assert.doesNotMatch(migration,/grant insert on public\.paper_manual_four_market_order_events\s+to authenticated/u);
+  assert.doesNotMatch(migration,/security definer/u);
+  assert.doesNotMatch(migration,/update public\.paper_accounts\s+set/u);
+});
