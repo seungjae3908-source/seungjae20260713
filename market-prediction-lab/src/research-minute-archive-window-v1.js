@@ -20,6 +20,11 @@ const MARKETS = Object.freeze({
   CRYPTO_SPOT: "UPBIT_KRW", CRYPTO_FUTURES: "BITGET_USDT_FUTURES",
 });
 const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
+const FUTURES_HAN=/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u;
+const acceptedSymbol=(market,symbol)=>
+  typeof symbol==="string"&&symbol===symbol.normalize("NFC")
+  &&(SYMBOL.test(symbol)
+    ||(market==="CRYPTO_FUTURES"&&FUTURES_HAN.test(symbol)));
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const MINUTE = 60_000;
@@ -127,7 +132,7 @@ export async function auditResearchMinuteArchiveWindowV1({
   chunkUtcDays = 7, stockCalendar = null,
 } = {}) {
   if (!Object.prototype.hasOwnProperty.call(MARKETS, market)
-    || typeof symbol !== "string" || !SYMBOL.test(symbol)
+    || !acceptedSymbol(market,symbol)
     || typeof root !== "string" || !isAbsolute(root)
     || resolve(root) !== root)
     fail("MINUTE_WINDOW_SCOPE_INVALID");

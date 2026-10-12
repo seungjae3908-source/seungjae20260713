@@ -30,7 +30,7 @@ const MARKET = Object.freeze({
     sourceId: "BITGET_PUBLIC_V2_RETROSPECTIVE_1M",
   }),
 });
-const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
+const SYMBOL = /^[A-Z0-9\p{Script=Han}][A-Z0-9\p{Script=Han}._:-]{0,39}$/u;
 const SHA = /^[0-9a-f]{64}$/u;
 const digest = rows => createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 const stop = (market, symbol, dayStartMs, reason, extra = {}) => Object.freeze({
@@ -49,8 +49,10 @@ const stop = (market, symbol, dayStartMs, reason, extra = {}) => Object.freeze({
 function validate(input) {
   if (!input || !Object.hasOwn(MARKET, input.market)
     || typeof input.symbol !== "string" || !SYMBOL.test(input.symbol)
+    || input.symbol!==input.symbol.normalize("NFC")
     || (input.market === "CRYPTO_SPOT" && !/^KRW-[A-Z0-9]{1,20}$/u.test(input.symbol))
-    || (input.market === "CRYPTO_FUTURES" && !/^[A-Z0-9]{2,30}USDT$/u.test(input.symbol))
+    || (input.market === "CRYPTO_FUTURES"
+      && !/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u.test(input.symbol))
     || !Number.isSafeInteger(input.dayStartMs) || input.dayStartMs <= 0
     || input.dayStartMs % DAY !== 0
     || !SHA.test(input.expectedRosterDigestSha256 ?? "")
