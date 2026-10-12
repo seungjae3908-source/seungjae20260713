@@ -179,7 +179,9 @@ create table public.paper_manual_four_market_research_receipts (
     and length(epoch_id) between 1 and 150
     and round_number between 1 and 100000
   ),
-  constraint paper_manual_research_receipt_claims check (
+  -- PostgreSQL CHECK accepts UNKNOWN: coalesce every missing mandatory
+  -- JSONB field to false so {} cannot pass as an immutable research receipt.
+  constraint paper_manual_research_receipt_claims check (coalesce((
     jsonb_typeof(receipt) = 'object'
     and receipt->>'schemaVersion' = 'manual-four-market-research-receipt-v1'
     and receipt->>'cycleId' = cycle_id
@@ -195,7 +197,7 @@ create table public.paper_manual_four_market_research_receipts (
     and receipt->>'realOrderSubmitted' = 'false'
     and receipt->>'profitabilityProven' = 'false'
     and receipt->>'financialMutationCount' = '0'
-  )
+  ),false))
 );
 create index paper_manual_research_receipt_owner_recent
   on public.paper_manual_four_market_research_receipts
@@ -316,6 +318,11 @@ create table public.paper_manual_four_market_order_events (
     unique (user_id,order_id,event_id),
   constraint paper_manual_order_event_unique_request
     unique (user_id,order_id,request_key),
+  -- Opening an order has no orderId in the HTTP input. Its request key must
+  -- be unique across *all* owner markets/orders, not only inside one order:
+  -- otherwise a retry racing a new signal could fund a second order.
+  constraint paper_manual_order_event_global_request_unique
+    unique (user_id,request_key),
   constraint paper_manual_order_event_wallet_fk
     foreign key (user_id,wallet_id) references public.paper_accounts(user_id,id),
   constraint paper_manual_order_event_identity check (
@@ -328,7 +335,9 @@ create table public.paper_manual_four_market_order_events (
     and owner_role in ('admin','member')
     and wallet_id=('manual-paper-'||owner_role||'-v1:'||market)
   ),
-  constraint paper_manual_order_event_server_only_claims check (
+  -- Coalesce the entire source/owner/non-execution claim. SQL UNKNOWN is
+  -- not a valid server-issued Paper event, even on a service-role write.
+  constraint paper_manual_order_event_server_only_claims check (coalesce((
     jsonb_typeof(event)='object'
     and event->>'schemaVersion'='manual-paper-sequential-events-v1'
     and event->>'ownerId'=user_id::text
@@ -350,7 +359,7 @@ create table public.paper_manual_four_market_order_events (
         'ENTRY_MATCH','CANCEL_ENTRY','REQUEST_EXIT','EXIT_MATCH','CANCEL_EXIT'
       ))
     )
-  )
+  ),false))
 );
 create index paper_manual_order_event_owner_index
   on public.paper_manual_four_market_order_events
@@ -416,11 +425,12 @@ set search_path=public,pg_temp as $manual_seq_ready$
           'paper_manual_order_event_pkey',
           'paper_manual_order_event_unique_id',
           'paper_manual_order_event_unique_request',
+          'paper_manual_order_event_global_request_unique',
           'paper_manual_order_event_wallet_fk',
           'paper_manual_order_event_identity',
           'paper_manual_order_event_server_only_claims'
         )
-    )=6
+    )=7
     and not exists (
       select 1 from information_schema.role_table_grants
       where table_schema='public'
