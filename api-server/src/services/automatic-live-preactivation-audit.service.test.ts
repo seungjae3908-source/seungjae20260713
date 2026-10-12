@@ -22,7 +22,9 @@ test('one read-only audit collects all policy, missing-source and four-provider 
   assert.equal(audit.ready, false);
   assert.equal(providerReads, 4, 'one provider rejection cannot hide failures in another provider');
   assert.equal(writes, 0);
-  assert.equal(audit.checks.length, 16);
+  assert.equal(audit.checks.length, 17);
+  assert.deepEqual(audit.checks.find((row) => row.id === 'ATOMIC_BUDGET_GUARD_INSTALLED')!.codes,
+    ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY']);
   assert.deepEqual(audit.checks.find((row) => row.id === 'SIGNAL_FRESHNESS_AND_SHA')!.codes, ['HANDOFF_ENTRY_STALE']);
   assert.equal(audit.checks.filter((row) => row.id.startsWith('ACCOUNT_')).every((row) => row.codes[0] === 'AUTH_REVOKED'), true);
   assert.equal(audit.checks.find((row) => row.id === 'GENUINE_SCANNER_AND_AI_CONNECTION')!.status, 'BLOCKED');
