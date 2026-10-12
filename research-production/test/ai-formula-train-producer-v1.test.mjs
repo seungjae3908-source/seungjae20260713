@@ -100,9 +100,14 @@ function sourceVerifier(args) {
     datasetIdentity: args.dataset.datasetIdentity,
     datasetDigest: args.datasetDigest,
     datasetRole: 'TRAIN',
+    reviewIdentityDigest: args.reviewIdentityDigest,
+    reviewedAssociationDigest: args.reviewedAssociationDigest,
+    formulaCandidateId: args.formulaCandidate.candidateId,
+    formulaHash: args.formulaCandidate.formulaHash,
+    formulaReviewedForAiHypothesis: true,
     sourceRightsVerified: true,
     sourceProvenanceVerified: true,
-    observedAtMs: NOW - 1000,
+    observedAtMs: NOW - 120_000,
   };
 }
 
@@ -150,8 +155,9 @@ test('approved 1-candidate bounded TRAIN producer feeds existing canonical queue
   assert.equal(recorded.itemDigest, first.proposals[0].itemDigest);
   assert.equal(recorded.researchCodeSha, SHA);
   assert.equal((await lstat(join(outbox, names[0]))).mode & 0o077, 0);
-  const again = await prepareAiFormulaTrainProposalsV1(args);
+  const again = await prepareAiFormulaTrainProposalsV1({ ...args, now: NOW + 2 * 60_000 });
   assert.equal(again.proposals[0].state, 'ALREADY_STAGED_TRAIN_ONLY');
+  assert.equal(again.proposals[0].itemDigest, first.proposals[0].itemDigest);
   assert.equal((await readdir(outbox)).length, 1);
 
   const imported = await ingestFormulaProducedTrainInputsV1({ stateRoot: root, researchCodeSha: SHA });
@@ -217,7 +223,13 @@ test('rejects unverified source digest, out-of-window proof, duplicate identitie
   for (const override of [
     { datasetDigest: '0'.repeat(64) },
     { observedAtMs: NOW + 86_400_000 },
-    { sourceRightsVerified: false },
+    { observedAtMs: NOW - 1000 }, // source fetched after AI review: future-looking association
+    { formulaCandidateId: 'not-the-reviewed-formula' },
+    { formulaHash: 'c'.repeat(64) },
+    { reviewedAssociationDigest: 'c'.repeat(64) },
+    { formulaReviewedForAiHypothesis: false },
+    { reviewIdentityDigest: 'c'.repeat(64) },
+    { sourceRightsVerified: false }
     { sourceProvenanceVerified: false },
     { datasetRole: 'OOS' },
     { researchSha: 'e'.repeat(40) },
