@@ -216,7 +216,8 @@ test("short listing-edge source retains a single real minute without claiming a 
     const fetchImpl=async()=>{
       calls++;
       const payload=market==="CRYPTO_SPOT"?(calls===1?[upbitRow("KRW-BTC",start+13*60*MIN)]:[])
-        :{code:"00000",data:[[start+13*60*MIN,"100","102","99","101","12","1200"]]};
+        :{code:"00000",data:calls===1
+          ?[[start+13*60*MIN,"100","102","99","101","12","1200"]]:[]};
       return new Response(JSON.stringify(payload),{headers:{"content-type":"application/json"}});
     };
     const x=await collect(config(root,r,{allowPublicReadOnlyFetch:true,fetchImpl}));

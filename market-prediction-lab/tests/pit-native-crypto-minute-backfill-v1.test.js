@@ -200,7 +200,12 @@ test("one-candle native collectors require explicit source-only opt-in while can
   assert.equal(spot.candles.length, 1);
   assert.equal(spot.reachedRequestedStart, false);
   assert.equal(spot.rawPageWindowTraversed, false);
-  const futuresConfig = { client: { get: async () => ({ code: "00000", data: [[String(ts), "100", "104", "99", "102", "2.5"]] }) },
+  const futuresConfig = { client: { get: async (_path,params) => ({
+      code: "00000",
+      // endTime is exclusive. The prior single candle is NOT a new response.
+      data: Number(params.endTime)>ts
+        ?[[String(ts), "100", "104", "99", "102", "2.5"]]:[],
+    }) },
     market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "1m", startTime: START, endTime: START + DAY,
     minCandles: 1, requireFullWindow: false,
   };
