@@ -27,8 +27,11 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
-import SearchPage from '@/pages/search';
 import RecommendationsPage from '@/pages/recommendations';
+// Market rankings are independent of the AI Chart cold-start graph. Keep the
+// existing recommendations route eager and load only rankings on demand.
+const loadMarketRankingsPage = () => import('@/pages/search');
+const SearchPage = lazy(loadMarketRankingsPage);
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);

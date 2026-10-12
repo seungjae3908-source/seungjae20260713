@@ -7,7 +7,7 @@ const allowedConfigs = new Set([
 ]);
 
 const config = process.argv[2] ?? 'vite.config.ts';
-const port = Number(process.env.RESEARCH_E2E_PORT ?? 4173);
+const port = Number(process.env.RESEARCH_E2E_PORT ?? process.env.APP_E2E_PORT ?? 4173);
 if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid isolated E2E port');
 
 if (!allowedConfigs.has(config)) {

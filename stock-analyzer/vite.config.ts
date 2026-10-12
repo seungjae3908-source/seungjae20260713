@@ -61,10 +61,38 @@ function phase9MarketIntelligenceUnavailableFixture(): Plugin {
 
 export default defineConfig({
   base: basePath,
+  // Both servers optimize the same external libraries. Keep a stable plugin
+  // set/hash so a restored-auth server reuses these artifacts rather than
+  // rebundling them alongside the fixture server. The legacy directory name
+  // is retained; this cache contains dependencies, not auth/data responses.
+  cacheDir: path.resolve(
+    import.meta.dirname, 'node_modules/.vite/stock-analyzer/phase9-fixtures',
+  ),
+  // Avoid crawling old production output and every lazy feature before the
+  // first source request can finish. These are the app's external runtime
+  // dependencies; a regression test checks coverage when imports change.
+  // Linked workspace modules remain normal on-demand ESM source transforms.
+  optimizeDeps: {
+    entries: ['index.html'],
+    noDiscovery: true,
+    holdUntilCrawlEnd: false,
+    include: [
+      '@radix-ui/react-toast', '@radix-ui/react-tooltip',
+      '@supabase/supabase-js', '@tanstack/react-query',
+      'class-variance-authority', 'clsx', 'lightweight-charts', 'lucide-react',
+      'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime',
+      'recharts', 'tailwind-merge', 'wouter',
+    ],
+  },
   plugins: [
-    react(),
+    // The entry only schedules dynamic imports: it has no JSX or component
+    // exports. Avoid loading Babel/Fast Refresh before that scheduler can run;
+    // every actual React component retains the normal refresh transform.
+    react({ exclude: /[\\/]src[\\/]main\.tsx(?:\?.*)?$/ }),
     tailwindcss(),
-    ...(process.env.VITE_PHASE9_E2E === 'true' ? [phase9MarketIntelligenceUnavailableFixture()] : []),
+    // Its configureServer guard keeps the handler absent outside fixture QA;
+    // registration alone performs no request, fallback, or environment write.
+    phase9MarketIntelligenceUnavailableFixture(),
     runtimeErrorOverlay(),
     VitePWA({
       registerType: 'autoUpdate',
@@ -155,6 +183,16 @@ export default defineConfig({
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
+    // Prime shared bootstrap, the read-only chart and the login screen module.
+    // This does not evaluate client code, fetch APIs, or wait for page-specific
+    // data. The first browser request must not pay this compiler waterfall.
+    warmup: {
+      clientFiles: [
+        './src/main.tsx', './src/App.tsx', './src/app-runtime.tsx',
+        './src/pages/ai-chart.tsx', './src/components/unified-analysis-chart.tsx',
+        './src/pages/account.tsx',
+      ],
+    },
     proxy: {
       '/api': {
         target: process.env.API_SERVER_URL ?? 'http://127.0.0.1:8080',
