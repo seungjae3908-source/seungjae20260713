@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
-import { currentPublicV3CycleReady } from './public-v3-current-page-gate.mjs';
+import { currentPublicV3CycleReady, currentPagePublication } from './public-v3-current-page-gate.mjs';
 import {v3PublicCycleLockCommand,V3_PUBLIC_CYCLE_CONFLICT_EXIT} from './public-cycle-singleflight.mjs';
 import { readV3StableSnapshot } from './public-snapshot-safe-read.mjs';
 
@@ -21,7 +21,25 @@ if (!Number.isSafeInteger(MAX_STATE_AGE_MS) || MAX_STATE_AGE_MS < 1000 || MAX_ST
 if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mjs'))) throw new Error('SIGNAL_INTELLIGENCE_PRODUCER_PATH_INVALID');
 
 const EMPTY_STAT = Object.freeze({mtimeMs:-1,ctimeMs:-1,ino:null,size:null});
-let cache = {...EMPTY_STAT,snapshot:null,loadedAt:null,error:'SNAPSHOT_NOT_READY'};
+let cache={...EMPTY_STAT,snapshot:null,loadedAt:null,
+  publicationIntegrity:false,error:'SNAPSHOT_NOT_READY'};
+/** Read boundary revalidates the exact producer's current-public lists/events
+ * against its research rows and source page. A saved file is not a trusted
+ * recommendation just because its policyVersion and SHA parse correctly.
+ */
+function validatePublicationReadback(snapshot){
+  const trusted= currentPagePublication(snapshot,snapshot.coverage);
+  const safeSnapshot={...snapshot,lists:trusted.lists,events:trusted.events};
+  const actual=snapshot.lists;
+  const publicationIntegrity=snapshot.profile?.fullStrategyCoverage===true
+    &&Array.isArray(snapshot.coverage)&&snapshot.coverage.length===12
+    &&actual&&typeof actual==='object'
+    &&Object.entries(trusted.lists).every(([k,rows])=>
+      JSON.stringify(rows)===JSON.stringify(actual[k]))
+    &&JSON.stringify(trusted.events)===JSON.stringify(snapshot.events);
+  return Object.freeze({snapshot:safeSnapshot,
+    publicationIntegrity:publicationIntegrity===true});
+}
 function safeSnapshotError(error){
   if(error?.code==='ENOENT')return 'SNAPSHOT_NOT_READY';
   if(error?.code==='EACCES'||error?.code==='EPERM')
@@ -52,12 +70,18 @@ async function loadSnapshot() {
     assertSignalIntelligenceV3Snapshot(parsed);
     // Never present a previous release's snapshot under this service SHA.
     // The current public producer stamps every snapshot with its exact head.
-    if (parsed.serviceSha !== SERVICE_SHA) throw new Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
-    cache = {mtimeMs:verified.mtimeMs,ctimeMs:verified.ctimeMs,ino:verified.ino,size:verified.size,snapshot:parsed,loadedAt:new Date().toISOString(),error:null};
+    if(parsed.serviceSha!==SERVICE_SHA)throw Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
+    const normalized=validatePublicationReadback(parsed);
+    cache={mtimeMs:verified.mtimeMs,ctimeMs:verified.ctimeMs,
+      ino:verified.ino,size:verified.size,
+      snapshot:normalized.snapshot,
+      publicationIntegrity:normalized.publicationIntegrity,
+      loadedAt:new Date().toISOString(),error:null};
     return cache;
   } catch (error) {
     cache = {
-      ...EMPTY_STAT,snapshot:null,loadedAt:new Date().toISOString(),
+      ...EMPTY_STAT,snapshot:null,publicationIntegrity:false,
+      loadedAt:new Date().toISOString(),
       // Never expose raw JSON snippets, filesystem paths or private contents.
       error:safeSnapshotError(error),
     };
@@ -178,10 +202,12 @@ const server = createServer(async (req, res) => {
     const sourceComplete = state.snapshot?.profile?.fullStrategyCoverage === true
       ? currentPublicV3CycleReady(state.snapshot.coverage) : null;
     const clockReady = ageMs != null && ageMs <= MAX_STATE_AGE_MS;
-    const dataBlocker = !state.snapshot ? (state.error ?? 'SNAPSHOT_NOT_READY')
-      : !clockReady ? 'SNAPSHOT_AGE_EXPIRED'
-      : sourceComplete===false ? 'CURRENT_SOURCE_PAGES_BLOCKED'
-      : sourceComplete===null ? 'FULL_STRATEGY_SOURCE_NOT_VERIFIED' : null;
+    const dataBlocker=!state.snapshot?(state.error??'SNAPSHOT_NOT_READY')
+      :!clockReady?'SNAPSHOT_AGE_EXPIRED'
+      :sourceComplete===false?'CURRENT_SOURCE_PAGES_BLOCKED'
+      :sourceComplete===null?'FULL_STRATEGY_SOURCE_NOT_VERIFIED'
+      :state.publicationIntegrity!==true?'CURRENT_PUBLICATION_PROOF_MISMATCH'
+        :null;
     return json(res, 200, {
       ok: true,
       service: 'signal-intelligence-v3',
@@ -191,9 +217,12 @@ const server = createServer(async (req, res) => {
       port: PORT,
       snapshotReady: Boolean(state.snapshot),
       snapshotAgeMs: ageMs,
-      snapshotFresh: clockReady && sourceComplete !== false,
+      snapshotFresh: clockReady && sourceComplete===true
+        &&state.publicationIntegrity===true,
       snapshotClockReady: clockReady,
-      snapshotPublicationReady: clockReady && sourceComplete===true,
+      snapshotPublicationReady: clockReady && sourceComplete===true
+        &&state.publicationIntegrity===true,
+      snapshotPublicationIntegrity:state.publicationIntegrity===true,
       snapshotBlockedReason: dataBlocker,
       // Current-page health is separate from full-roster historical coverage.
       snapshotCurrentPageSourceReady: sourceComplete,
