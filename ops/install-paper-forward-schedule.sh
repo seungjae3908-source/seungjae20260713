@@ -88,7 +88,17 @@ trap restore_on_error EXIT
 [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" || "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "false" ]] || fail "AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED must be true or false" 2
 if [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]]; then
   [[ "$OUTCOME_ACCUMULATION_ENABLED" == "false" ]] || fail "Auto signal refresh cannot enable Paper outcome authority" 2
+  [[ "$STATE_ROOT" == /opt/stock-app-data/auto-live-signal-v1 ]] || fail "Automatic signal must use independent state root" 7
+  [[ "${AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED:-false}" == "true" ]] || fail "Independent source installation requires protected owner approval" 7
+  [[ ! -e "$STATE_ROOT" && ! -L "$STATE_ROOT" ]] || fail "Existing independent source state must be preserved" 7
+  [[ -d /opt/stock-app-data && ! -L /opt/stock-app-data ]] || fail "Independent state parent invalid" 7
+  [[ -z "${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}" && -z "${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"
+    && -z "${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}" ]] || fail "Independent source cannot bind Paper financial evidence" 7
+  WRAPPER="$BIN_DIR/run-auto-live-public-signal"
+  TAG="# stock-app-auto-live-public-signal-v1"
   CANONICAL_CYCLE_MS="900000"
+else
+  [[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]] || fail "unexpected persistent state root" 7
 fi
 [[ -r "$DEPLOY_MARKER" ]] || fail "production deploy marker missing" 3
 DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
@@ -98,7 +108,6 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ -r "$SOURCE_LAB/src/authoritative-natural-paper-accounting-v1.js" ]] || fail "authoritative Natural Paper accounting runtime missing" 6
 [[ -r "$SOURCE_STRATEGY_HYPOTHESIS/package.json" && -r "$SOURCE_STRATEGY_HYPOTHESIS/src/index.js" ]] || fail "strategy-hypothesis pinned dependency missing" 6
 [[ -r "$SOURCE_EXTERNAL_RESEARCH/package.json" && -r "$SOURCE_EXTERNAL_RESEARCH/src/index.js" ]] || fail "external-research pinned dependency missing" 6
-[[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]] || fail "unexpected persistent state root" 7
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 [[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
 [[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_ROOT/publisher/paper-state-v2.json" ]] || fail "Paper snapshot path escaped persistent state root" 8
@@ -146,6 +155,13 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
+if [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]]; then
+  # A dedicated but untagged Cron invocation is also an existing owner:
+  # never rewrite or adopt it, and never touch the old Paper Forward tag.
+  CURRENT_SCHEDULE="$(crontab -l 2>/dev/null || true)"
+  [[ "$CURRENT_SCHEDULE" != *"$TAG"* && "$CURRENT_SCHEDULE" != *"$WRAPPER"* ]] \
+    || fail "Independent public source schedule already owned" 7
+fi
 # Read-only mode identity preflight precedes every installer filesystem mutation.
 # SHA equality alone cannot authorize reusing a different cadence/authority.
 STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
@@ -466,6 +482,9 @@ printf '%s' "$PREVIOUS_CRONTAB" > "$BACKUP_PATH"
 chmod 600 "$BACKUP_PATH"
 
 FILTERED="$(printf '%s\n' "$PREVIOUS_CRONTAB" | grep -vF "$TAG" || true)"
+if [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]]; then
+  [[ "$FILTERED" == "$PREVIOUS_CRONTAB" ]] || fail "Independent installer cannot replace an earlier schedule" 12
+fi
 CRON_LINE="$CRON_EXPRESSION $FLOCK_BIN -n $CRON_LOCK $WRAPPER $TAG"
 {
   printf '%s\n' "$FILTERED"
@@ -474,8 +493,12 @@ CRON_LINE="$CRON_EXPRESSION $FLOCK_BIN -n $CRON_LOCK $WRAPPER $TAG"
 CRONTAB_MUTATED=1
 rm -f "$STATE_ROOT/DISABLED" "$RUNTIME_STATE_ROOT/DISABLED"
 
-MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
-[[ "$MATCH_COUNT" == 1 ]] || fail "exactly one Paper Forward cron entry is required" 12
+READBACK_CRONTAB="$(crontab -l)"
+MATCH_COUNT="$(printf '%s\n' "$READBACK_CRONTAB" | grep -Fxc "$CRON_LINE" || true)"
+[[ "$MATCH_COUNT" == 1 ]] || fail "exactly one managed cron entry is required" 12
+if [[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]]; then
+  if [[ -n "$PREVIOUS_CRONTAB" ]]; then
+    [[ "$READBACK_CRONTAB" == "$PREVIOUS_CRONTAB"
 
 RUNTIME_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
@@ -494,6 +517,12 @@ const value = {
   pollCadence: 'EVERY_15_MINUTES',
   canonicalCycleIntervalMs: Number(cycleIntervalRaw),
   autoLivePublicSignalRefreshEnabled: Number(cycleIntervalRaw) === 900000,
+  independentPaperRoot: Number(cycleIntervalRaw) === 900000,
+  paperRootMutated: Number(cycleIntervalRaw) !== 900000,
+  paperCronReplaced: Number(cycleIntervalRaw) !== 900000,
+  producerInvocationVerified: false,
+  aiIssuerVerified: false,
+  autoTradingActivationReady: false,
   runtimeDigest,
   cronHash,
   crontabBackupPath: backupPath,
@@ -530,5 +559,73 @@ NODE
 CRONTAB_MUTATED=0
 SNAPSHOT_BRIDGE_COMMITTED=0
 trap - EXIT
-printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"targetSnapshotBridgeApplied":%s,"snapshotEconomicStatePreserved":true,"snapshotMetadataMutationCount":%s,"naturalCycleCredit":0,"naturalSampleCredit":0,"naturalSettlementCredit":0,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
-  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$([[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]] && printf 1 || printf 0)" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"targetSnapshotBridgeApplied":%s,"snapshotEconomicStatePreserved":true,"snapshotMetadataMutationCount":%s,"naturalCycleCredit":0,"naturalSampleCredit":0,"naturalSettlementCredit":0,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"independentPaperRoot":%s,"paperRootMutated":%s,"paperCronReplaced":%s,"producerInvocationVerified":false,"aiIssuerVerified":false,"autoTradingActivationReady":false,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$([[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]] && printf 1 || printf 0)" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS" "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" "$([[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]] && printf false || printf true)" "$([[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]] && printf false || printf true)"
+\n'"$CRON_LINE" ]] \
+      || fail "Preexisting Paper and unrelated cron entries were altered" 12
+  else
+    [[ "$READBACK_CRONTAB" == "$CRON_LINE" ]] || fail "Unexpected independent crontab entries" 12
+  fi
+fi
+
+RUNTIME_DIGEST="$(find "$PINNED_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
+CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$SNAPSHOT_SOURCE_SHA_BEFORE" "$SNAPSHOT_BRIDGE_ARCHIVE_PATH" "$CANONICAL_CYCLE_MS" <<'NODE'
+const fs = require('node:fs');
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw, snapshotBridgeRaw, snapshotSourceShaBeforeRaw, snapshotArchivePathRaw, cycleIntervalRaw] = process.argv.slice(2);
+const outcomeAccumulationEnabled = outcomeAccumulationRaw === 'true';
+const snapshotBridgeApplied = snapshotBridgeRaw === 'true';
+const value = {
+  schemaVersion: 'paper-forward-schedule-activation-v2',
+  status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
+  targetSha,
+  deployedSha,
+  activationAtMs: Number(activationAtMs),
+  installedAt: new Date(Number(activationAtMs)).toISOString(),
+  pollCadence: 'EVERY_15_MINUTES',
+  canonicalCycleIntervalMs: Number(cycleIntervalRaw),
+  autoLivePublicSignalRefreshEnabled: Number(cycleIntervalRaw) === 900000,
+  independentPaperRoot: Number(cycleIntervalRaw) === 900000,
+  paperRootMutated: Number(cycleIntervalRaw) !== 900000,
+  paperCronReplaced: Number(cycleIntervalRaw) !== 900000,
+  producerInvocationVerified: false,
+  aiIssuerVerified: false,
+  autoTradingActivationReady: false,
+  runtimeDigest,
+  cronHash,
+  crontabBackupPath: backupPath,
+  identityCutover: identityCutoverRaw === 'true',
+  archivedResearchSha: archivedResearchShaRaw || null,
+  predecessorStatePreserved: true,
+  predecessorPerformanceMixed: false,
+  scheduleActive: true,
+  publicDataOnly: true,
+  paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
+  simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+  externalFinancialMutationAllowed: false,
+  paperStatePublisherBindingConfigured: outcomeAccumulationEnabled,
+  paperStateSnapshotPathConfigured: outcomeAccumulationEnabled,
+  paperStatePublisherAccountBindingConfigured: outcomeAccumulationEnabled,
+  targetSnapshotBridgeApplied: snapshotBridgeApplied,
+  snapshotSourceShaBefore: snapshotSourceShaBeforeRaw || targetSha,
+  snapshotSourceShaAfter: targetSha,
+  snapshotArchivePath: snapshotBridgeApplied ? snapshotArchivePathRaw : null,
+  snapshotEconomicStatePreserved: true,
+  snapshotMetadataMutationCount: snapshotBridgeApplied ? 1 : 0,
+  naturalCycleCredit: 0,
+  naturalSampleCredit: 0,
+  naturalSettlementCredit: 0,
+  liveTrading: false,
+  privateAccountAccess: false,
+  orderAuthority: false,
+};
+const temp = `${path}.tmp-${process.pid}`;
+fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+fs.renameSync(temp, path);
+NODE
+
+CRONTAB_MUTATED=0
+SNAPSHOT_BRIDGE_COMMITTED=0
+trap - EXIT
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"paperStatePublisherBindingConfigured":%s,"paperStateSnapshotPathConfigured":%s,"paperStatePublisherAccountBindingConfigured":%s,"targetSnapshotBridgeApplied":%s,"snapshotEconomicStatePreserved":true,"snapshotMetadataMutationCount":%s,"naturalCycleCredit":0,"naturalSampleCredit":0,"naturalSettlementCredit":0,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"independentPaperRoot":%s,"paperRootMutated":%s,"paperCronReplaced":%s,"producerInvocationVerified":false,"aiIssuerVerified":false,"autoTradingActivationReady":false,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$SNAPSHOT_BRIDGE_APPLIED" "$([[ "$SNAPSHOT_BRIDGE_APPLIED" == "true" ]] && printf 1 || printf 0)" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS" "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" "$([[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]] && printf false || printf true)" "$([[ "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" == "true" ]] && printf false || printf true)"
