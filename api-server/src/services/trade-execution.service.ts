@@ -220,13 +220,30 @@ function bitgetRow(data: unknown) {
 }
 
 function assertBitgetOrderAccepted(payload: ExchangePayload, expectedClientOid: string) {
-  const row = bitgetRow(assertBitgetSuccess(payload));
+  const data = assertBitgetSuccess(payload);
+  // The official acknowledgement is one object, never the first element of
+  // an arbitrary response list. clientOid is not the exchange orderId.
+  if (!isRecord(data)) throw new Error('BITGET_INVALID_RESPONSE');
+  const row = data;
   if (text(row.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
   return row;
 }
 
+export function bitgetAcknowledgedOrderId(
+  payload: ExchangePayload, expectedClientOid: string, reduceOnly = false,
+): string | null {
+  const row = assertBitgetOrderAccepted(payload, expectedClientOid);
+  const orderId = text(row.orderId);
+  // Bitget documents an absent orderId for some one-way reduce-only orders.
+  // Resolve it by a read-only clientOid lookup; never persist clientOid as
+  // an invented exchange ID, and never submit the order again.
+  if (!orderId && !reduceOnly) throw new Error('BITGET_ORDER_ID_MISSING');
+  return orderId;
+}
+
 function assertBitgetOrderLookup(payload: ExchangePayload, expectedClientOid: string) {
   const row = assertBitgetOrderAccepted(payload, expectedClientOid);
+  if (!text(row.orderId)) throw new Error('BITGET_ORDER_ID_MISSING');
   const status = String(row.status ?? row.state ?? '').toLowerCase();
   if (!BITGET_RECOGNIZED_STATES.has(status)) throw new Error('BITGET_INVALID_RESPONSE');
   return row;
@@ -843,7 +860,7 @@ export class TradeExecutionService {
       } else {
         if (!marketOpenInSeoul(now) && process.env.KIWOOM_ALLOW_OFF_HOURS !== 'true') throw new Error('KIWOOM_MARKET_CLOSED');
         const [orderable, unfilled, orderbook] = await Promise.all([
-          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
+          request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomOrderable(authenticated, provisional), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
           request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
           request(() => sendExchangeRequest(BASE_URLS.kiwoom, prepareKiwoomExecutionOrderbook(token, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess)),
         ]);
@@ -1428,15 +1445,16 @@ export class TradeExecutionService {
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
     }
-    const row = assertBitgetOrderAccepted(await sendExchangeRequest(BASE_URLS.bitget,
-      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId);
-    void row;
+    let exchangeOrderId = bitgetAcknowledgedOrderId(await sendExchangeRequest(BASE_URLS.bitget,
+      prepareBitgetOrder(credentials, risk.plan, order.clientOrderId), ORDER_TIMEOUT_MS), order.clientOrderId, plan.reduceOnly === true);
     let reconciliationRequired = false;
     try {
-      assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
+      const queried = assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetOrderQuery(credentials, plan.symbol, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
+      if (exchangeOrderId && text(queried.orderId) !== exchangeOrderId) throw new Error('BITGET_ORDER_IDENTITY_MISMATCH');
+      exchangeOrderId = text(queried.orderId);
     } catch { reconciliationRequired = true; }
-    return { orderId: order.clientOrderId, reconciliationRequired, risk };
+    return { orderId: exchangeOrderId, reconciliationRequired, risk };
   }
 
   private async executeUpbit(
@@ -1538,7 +1556,7 @@ export class TradeExecutionService {
       });
     } else {
       const [orderable, krUnfilled, orderbook] = await Promise.all([
-        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+        sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated, plan), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
         sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
         sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
       ]);

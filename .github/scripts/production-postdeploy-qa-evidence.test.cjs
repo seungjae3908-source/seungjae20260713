@@ -19,6 +19,19 @@ const ZERO = {
   autoTradingAuthorityGranted: false,
 };
 const providers = ['bitget', 'kiwoom', 'toss', 'upbit'];
+const { REQUIRED_CHECKS, ADDITIONAL_CONTROLS } = require('./automatic-live-preactivation-audit.cjs');
+// Synthetic unit evidence only; this fixture must never be emitted as a runtime receipt.
+function memberAccountSignalFixture() {
+  return {
+    schemaVersion: 'automatic-live-preactivation-audit-v1', targetSha: SHA,
+    generatedAt: '2026-10-04T00:01:30.000Z', scope: 'MEMBER_ACCOUNT_AND_SIGNAL_READONLY_REHEARSAL',
+    ready: true, activationReady: false,
+    checks: REQUIRED_CHECKS.map((id) => ({ id, status: 'PASS', codes: [] })),
+    additionalRequiredControls: [...ADDITIONAL_CONTROLS], paperOutOfScope: true, telegramOutOfScope: true,
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    liveTradingAuthorityGrantedByAudit: false, autoTradingAuthorityGrantedByAudit: false,
+  };
+}
 
 test('AUTO isolation proof protects existing manual assets and rejects absent, mixed or mutating evidence', () => {
   const account = fixture().account;
@@ -312,13 +325,14 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
   input.qaScope = 'auto_live';
   input.comprehensive = null;
   input.autoLive = {
-    schemaVersion: 'production-auto-live-readonly-qa-v2',
+    schemaVersion: 'production-auto-live-readonly-qa-v3',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
     viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
     providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
     markets: {
@@ -328,7 +342,7 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     memberAutoPolicyBlockers: [],
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
-    memberAutoPilotStage: 'limited-50',
+    memberAutoPilotStage: 'formula-ai-exception',
     memberAutoLivePilotReady: true,
     providerVerificationFresh: true,
     marketReadinessBlockersOnlyExpectedPreactivation: true,
@@ -384,6 +398,15 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
   assert.equal(evidence.memberAutoLivePilotReady, true);
   assert.equal(evidence.canonicalAutoLiveSignalSource, 'PASS');
   assert.equal(evidence.telegramActivationState, 'NOT_EVALUATED');
+  const missing = structuredClone(input);
+  delete missing.autoLive.memberAccountSignalAudit;
+  assert.throws(() => buildProductionPostdeployQaEvidence(missing), /MEMBER_SIGNAL_AUDIT_INVALID/);
+  const disconnected = structuredClone(input);
+  const producer = disconnected.autoLive.memberAccountSignalAudit.checks
+    .find((row) => row.id === 'GENUINE_SCANNER_AND_AI_CONNECTION');
+  producer.status = 'BLOCKED';
+  producer.codes = ['PREACTIVATION_SCANNER_AI_PRODUCER_BINDING_NOT_PROVEN'];
+  assert.throws(() => buildProductionPostdeployQaEvidence(disconnected), /MEMBER_SIGNAL_AUDIT_INVALID/);
 });
 
 test('rejects Automatic LIVE evidence when the canonical signal schedule is not active', () => {
@@ -391,14 +414,15 @@ test('rejects Automatic LIVE evidence when the canonical signal schedule is not 
   input.qaScope = 'auto_live';
   input.comprehensive = null;
   input.autoLive = {
-    schemaVersion: 'production-auto-live-readonly-qa-v2', targetSha: SHA,
+    schemaVersion: 'production-auto-live-readonly-qa-v3', targetSha: SHA,
     productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:00.000Z',
     officialProductionOrigin: true, authenticatedProductionSession: true, identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
     viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
     providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
     markets: { domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS' },
     memberAutoPolicyReady: true, memberAutoPolicyBlockers: [], memberAutoDomesticBroker: 'kiwoom',
-    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'limited-50', memberAutoLivePilotReady: true,
+    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'formula-ai-exception', memberAutoLivePilotReady: true,
     providerVerificationFresh: true, marketReadinessBlockersOnlyExpectedPreactivation: true,
     workerPreactivationSafe: true, workerEnabled: false, liveBackgroundRequested: false,
     liveEntryArmPresent: false, liveEntriesArmed: false, pendingOrderCount: 0,

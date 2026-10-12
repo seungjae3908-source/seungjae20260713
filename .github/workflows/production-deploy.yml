@@ -751,6 +751,7 @@ jobs:
           LIVE_DIR=/opt/stock-app \
             PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
             PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false \
+            AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED=true \
             bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"
           REMOTE
           node - "$activation" <<'NODE'
@@ -766,6 +767,9 @@ jobs:
             || value?.financialMutationCount !== 0
             || value?.liveTrading !== false) {
             throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_SCHEDULE_INVALID');
+          }
+          if (value?.canonicalCycleIntervalMs !== 900000) {
+            throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_REFRESH_CADENCE_INVALID');
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `activation_at_ms=${value.activationAtMs}\n`);
           NODE
