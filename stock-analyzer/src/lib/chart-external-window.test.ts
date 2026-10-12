@@ -157,7 +157,7 @@ test('strict selection validation enforces market, asset type, symbol, timeframe
   assert.deepEqual(snapshot, selection);
 });
 
-test('route timeframe changes preserve evidence only for the same validated instrument', () => {
+test('route timeframe changes do not inherit a different scanner evidence identity', () => {
   const stored: AnalysisSelection = {
     ...selection,
     timeframe: '5m',
@@ -168,10 +168,51 @@ test('route timeframe changes preserve evidence only for the same validated inst
   };
   const merged = mergeChartRouteSelection({ ...selection, timeframe: '30m' }, stored);
   assert.equal(merged?.timeframe, '30m');
-  assert.equal(merged?.signalScore, 88);
-  assert.equal(merged?.searchRunId, 'scan-1');
+  assert.equal(merged?.signalScore, undefined);
+  assert.equal(merged?.searchRunId, undefined);
+  const exactMatch = mergeChartRouteSelection({ ...selection, timeframe: '5m' }, stored);
+  assert.equal(exactMatch?.signalScore, 88);
+  assert.equal(exactMatch?.searchRunId, 'scan-1');
   assert.equal(mergeChartRouteSelection({ ...selection, ticker: 'ETHUSDT', symbol: 'ETHUSDT' }, stored)?.signalScore, undefined);
   assert.equal(chartSelectionKey(selection), 'coin_futures:BITGET:BTCUSDT:15m');
+});
+
+test('same symbol and timeframe cannot inherit older price plan for a different scanner run or signal', () => {
+  const stored: AnalysisSelection = {
+    ...selection,
+    searchRunId: 'scan-before',
+    signalId: 'signal:before',
+    signalScore: 91,
+    action: 'LONG',
+    pricePlan: {
+      entryZone: { from: 100, to: 101 }, invalidation: 95, stopLoss: 96,
+      targets: [108, 111], riskReward: 2.3,
+    },
+  };
+  const same = mergeChartRouteSelection({ ...selection, searchRunId: 'scan-before', signalId: 'signal:before' }, stored);
+  assert.deepEqual(same?.pricePlan, stored.pricePlan);
+  assert.equal(same?.signalId, 'signal:before');
+
+  const nextRun = mergeChartRouteSelection(
+    { ...selection, searchRunId: 'scan-after', signalId: 'signal:after' }, stored,
+  );
+  assert.equal(nextRun?.searchRunId, 'scan-after');
+  assert.equal(nextRun?.signalId, 'signal:after');
+  assert.equal(nextRun?.pricePlan, undefined);
+  assert.equal(nextRun?.signalScore, undefined);
+  assert.equal(nextRun?.action, undefined);
+  const newSignalSameRun = mergeChartRouteSelection(
+    { ...selection, searchRunId: 'scan-before', signalId: 'signal:after' }, stored,
+  );
+  assert.equal(newSignalSameRun?.pricePlan, undefined);
+  assert.equal(newSignalSameRun?.signalId, 'signal:after');
+
+  const search = '?assetType=coin_futures&market=BITGET&ticker=BTCUSDT&symbol=BTCUSDT&name=BTCUSDT&timeframe=15m&searchRunId=scan-after&signalId=signal%3Aafter';
+  const parsed = chartSelectionFromSearch(search, selection.selectedAt);
+  assert.equal(parsed?.signalId, 'signal:after');
+  assert.equal(parsed?.searchRunId, 'scan-after');
+  assert.equal(chartSelectionFromSearch(search + '&signalId=duplicate', selection.selectedAt), null);
+  assert.equal(chartSelectionFromSearch(search.replace('signal%3Aafter', '%3Cscript%3E'), selection.selectedAt), null);
 });
 
 test('message clocks remain strictly increasing even within one millisecond', () => {

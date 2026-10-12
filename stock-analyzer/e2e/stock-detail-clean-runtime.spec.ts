@@ -143,7 +143,7 @@ for (const viewport of [
   { width: 390, height: 844 },
   { width: 1440, height: 960 },
 ] as const) {
-  test(`clean stock detail loads summary first and optional tabs on demand at ${viewport.width}px`, async ({ page }) => {
+  test(`canonical detail opens AI analysis first, while summary and optional tabs remain available at ${viewport.width}px`, async ({ page }) => {
     const requests: string[] = [];
     await page.setViewportSize(viewport);
     await installApprovedSession(page);
@@ -153,6 +153,11 @@ for (const viewport of [
     await expect(page.getByRole('heading', { name: '삼성전자', exact: true })).toBeVisible();
     const tabs = page.getByTestId('stock-detail-tabs');
     await expect(tabs.getByRole('tab')).toHaveCount(4);
+    await expect(tabs.getByRole('tab', { name: '상세분석', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('stock-ai-analysis-readonly')).toBeVisible();
+    expect(requests).not.toContain('/api/stocks/005930/quote');
+    expect(requests).not.toContain('/api/stocks/005930/profile');
+    await tabs.getByRole('tab', { name: '요약', exact: true }).click();
     await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
     await expect(page.getByText('반도체', { exact: true })).toBeVisible();
     await expect(page.getByTestId('stock-detail-health-status')).toHaveText('정상');
@@ -191,7 +196,10 @@ test('malformed stock profile fails closed instead of reporting the summary as n
   await installApprovedSession(page);
   await mockDetail(page, requests, { profileBody: { ticker: '005930', name: '삼성전자' } });
   await page.goto('/stock-info/analysis?back=%2Fstocks&asset=stock&market=KR&ticker=005930');
-
+  const tabs = page.getByTestId('stock-detail-tabs');
+  await expect(tabs.getByRole('tab', { name: '상세분석', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('stock-ai-analysis-readonly')).toBeVisible();
+  await tabs.getByRole('tab', { name: '요약', exact: true }).click();
   await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
   await expect(page.getByText('기업 정보 확인 실패', { exact: true })).toBeVisible();
   await expect(page.getByTestId('stock-detail-health-status')).toHaveText('부분');

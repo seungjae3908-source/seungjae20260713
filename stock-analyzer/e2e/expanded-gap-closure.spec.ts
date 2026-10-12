@@ -32,7 +32,11 @@ test('scanner manual polling visibility and unchanged-condition consumers share 
   expect(source).toMatch(/window\.setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) setRefreshToken\(\(value\) => value \+ 1\);\s*\}, 30_000\);/);
   expect(source).toContain("document.addEventListener('visibilitychange', refreshWhenVisible)");
   expect(source).toContain('onClick={() => setRefreshToken((value) => value + 1)}');
-  expect(source).toContain('fetchSignalScanner(request, controller.signal)');
+  // The scanner request owner is scoped to the authenticated member now;
+  // never regress to URL-only coalescing/last-good cache across users.
+  expect(source).toContain('const memberScope = auth.user?.id ?? null;');
+  expect(source).toContain('JSON.stringify([request, memberScope])');
+  expect(source).toContain('fetchSignalScanner(request, controller.signal, memberScope)');
 
   await page.goto('/');
   const result = await page.evaluate(async () => {

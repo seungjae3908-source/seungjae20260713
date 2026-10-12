@@ -65,9 +65,12 @@ test('코인 현물은 canonical Upbit spot 요청과 현물 상태 전환을 �
   expect(scanner).toContain("assetMode.setCoinMarket(view === 'FUTURES' ? 'futures' : 'spot')");
 });
 
-test('종목 상세는 요약 우선 로딩과 canonical AI 차트 및 focused 상세분석 연결을 유지한다', () => {
+test('종목 상세는 요약 분리 로딩과 canonical AI 차트 및 focused 상세분석 연결을 유지한다', () => {
   const detail = source('src/pages/detail.tsx');
-  expect(detail).toContain("type DetailTab = 'summary' | 'chart' | 'news' | 'analysis'");
+  const routeTab = source('src/lib/stock-detail-route-tab.ts');
+  expect(detail).toContain('type DetailTab = StockDetailRouteTab;');
+  expect(detail).toContain("resolveStockDetailTab(window.location.pathname, params.get('tab'))");
+  expect(routeTab).toContain("=== '/stock-info/analysis' ? 'analysis' : 'summary'");
   expect(detail).toContain("lazy(() => import('@/pages/ai-chart'))");
   expect(detail).toContain("lazy(() => import('@/components/stock-detail-analysis-panel'))");
   expect(detail).not.toContain("lazy(() => import('@/pages/detail-legacy'))");
