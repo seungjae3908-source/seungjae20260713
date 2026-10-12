@@ -303,3 +303,16 @@ manifest 계약 예시:
 5. source-gap 복원이나 모델 회귀 테스트 성공은 실제 수익성 PASS 또는 24h 운영 증거가 아니다. executionAuthority=NONE, profitabilityProven=false.
 
 NO Replit, NO Ready/Merge/Deploy/Production, NO Vultr/PM2/systemd changes, NO live/private broker API or Paper orders.
+
+
+### 2026-10-13 — 수집 처리량·시간제한 통합 사전점검(읽기 전용)
+
+- 상태 명령 `node research-production/bin/four-market-minute-backfill.mjs --capacity`는 **기존 0600 로컬 범위 파일을 읽는 것 외에 파일 저장/네트워크 요청/운영 활성화가 없습니다**. `pacingPreflight` 필드는 독립 산술 사전검사로, 실행 설정을 바꾸지 않습니다.
+- 신규 `research-minute-collector-pace-preflight/v1` 계산은 기존 `16회/5분` 현재값, 120분 원본 수집 페이지, `20%` 여유 요구, 개별 HTTP 최악 `8초`, 요청 사이 `300ms`, `flock` 하위 작업 `210초`, systemd `240초`, 마지막 중단·상태 기록용 `15초` 예비 시간을 **동시에** 적용합니다.
+- **가상 예시** (현재 실제 전체 종목 수/활성 세션/거래소 IP 여유의 보증 아님): 코인현물 294개 + 선물 466개 = 760개가 매일 24시간 완전 1분봉을 발행하면 최소 `9,120`개 120분 창이 필요합니다. 20% 재시도 여유 포함 `10,944`창/일, 이론상 **5분당 38회 이상** 필요. 현재 최대 `4,608`회/일로 부족합니다.
+- **중요한 두 번째 병목**: 38회 순차 수집 요청이 각각 8초 최악 지연이면 전송 간격 포함 약 `315,100ms`가 필요해 하위 worker 210초보다 깁니다. 현 설정으로는 15초 비상 예비 시간을 제외해 **순차 최대 약 23회/회차**만 최악 조건을 견딥니다. 요청 예외/락 충돌/재기동을 PASS로 숨겨서는 안 됩니다.
+- 별도의 2분 타이머도 16회 × 8초 최대 지연(약 `132,500ms`)이 2분 주기를 초과할 수 있어, 주기 단축만으로 해결되지 않습니다.
+- Upbit 공식 공개시세 분봉 `candle` 그룹 [요청 제한](https://docs.upbit.com/kr/reference/rate-limits)은 공개문서상 최대 초당 10회/IP, Bitget [역사 캔들](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market) 문서상 초당 20회/IP입니다. 이 숫자는 거래소 문서의 상한이지 **Vultr 공용 IP 남은 할당량·상업적 재배포 권한·실제 24시간 처리량** 확인이 아닙니다. 문서 정책은 변경될 수 있으므로 활성화 전 최신 원문과 응답 헤더·약관을 다시 확인해야 합니다.
+- 이 테스트는 `MINUTE_QUEUE_LIMITS.maxActionsPerCycle=16`과 실제 5분 timer, systemd 자원 한도, enabled=false 기본값을 변경하지 않습니다. 38회 동시/병렬 처리 작업도 허용하거나 실행하지 않습니다. 앞으로 필요할 수 있는 병렬성 수치는 **산술적인 하한**이며 락/큐 원장 일관성·저장소 IOPS·provider 429·공용 IP 권한·실제 Vultr 사용량 측정 전에는 설계 승인으로 간주하지 않습니다.
+- 주식 KR/US는 24시간 코인 전제를 사용하지 않으며, 별도 공식 장 일정·법적 원본 공급원·과거 PIT 상장폐지·기업행위/환율 사용 조건이 확보되지 않으면 `STOCK_SESSION_NOT_MODELLED`로 계속 차단합니다.
+- 모든 경로 `profitabilityProven=false`, `continuous24hProven=false`, `executionAuthority=NONE`, 리프릿 사용 0, Ready/Merge/Staging/Production/systemd/PM2/cron/개인 거래소 API/실주문 0.
