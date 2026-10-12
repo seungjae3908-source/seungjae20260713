@@ -15,7 +15,8 @@ test('retry one atomic replacement without reusing a stale snapshot',async()=>{
   const result=await readV3StableSnapshot('snapshot.json',{
     fileStat:async()=>stats.shift(),
     fileRead:async()=>reads.shift(),
-    cached:{...original,snapshot:{previous:true}},
+    // A different prior cache forces the first read while publication rotates.
+    cached:{...metadata(0),snapshot:{previous:true}},
   });
   assert.equal(result.cached,false);
   assert.equal(result.content,'replacement');
