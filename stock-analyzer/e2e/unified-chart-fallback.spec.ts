@@ -180,3 +180,28 @@ test('canonical response tags preserve valid stock, Bitget and Upbit 1H/60m alia
     expect(result.symbol).toBe(item.symbol);
   }
 });
+
+test('a failed primary cannot be laundered into success by an empty HTTP 200 alternate', async () => {
+  const calls: string[] = [];
+  await expect(fetchUnifiedChartData({
+    market: 'KR', symbol: '005930', timeframe: '5m', timeoutMs: 5_000,
+    fetcher: async input => {
+      const url = String(input); calls.push(url);
+      if (url.includes('/candles?')) return new Response(JSON.stringify({ ok: false, error: 'UPSTREAM_503' }), { status: 503 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    },
+  })).rejects.toMatchObject({ kind: 'server', status: 503 });
+  expect(calls).toEqual([
+    '/api/stocks/005930/candles?tf=5m',
+    '/api/stocks/005930/chart?tf=5m',
+    '/api/stocks/005930/chart?tf=5m',
+  ]);
+});
+
+test('a legitimate completed empty provider response without a primary error remains visibly insufficient', async () => {
+  const result = await fetchUnifiedChartData({
+    market: 'US', symbol: 'AAPL', timeframe: '5m', timeoutMs: 5_000,
+    fetcher: async () => new Response(JSON.stringify({ ok: true, candles: [] }), { status: 200 }),
+  });
+  expect(result.normalization.candles).toHaveLength(0);
+});
