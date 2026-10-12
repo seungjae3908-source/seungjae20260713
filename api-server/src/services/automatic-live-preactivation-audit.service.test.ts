@@ -1,7 +1,8 @@
 import test from 'node:test';
 import './automatic-live-owner-policy.service.test';
 import assert from 'node:assert/strict';
-import { auditAutomaticLivePreactivation } from './automatic-live-preactivation-audit.service';
+import { readFileSync } from 'node:fs';
+import { automaticLiveLifecycleCoverage, auditAutomaticLivePreactivation } from './automatic-live-preactivation-audit.service';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import type { MemberAutoTradingBackgroundSource } from './member-auto-trading-background-worker.service';
 import type { TradingPlan, TradingOrder } from './trade-automation.types';
@@ -105,4 +106,36 @@ test('unknown parent or wrong LIVE provider/owner is not silently classified as 
         ['PREACTIVATION_ORDER_PARENT_UNRESOLVED']);
     }
   }
+});
+
+test('uppercase credentials and arbitrary provider errors never become sanitized audit codes', async () => {
+  const secret = 'API_KEY_PASSPHRASE_SIGNATURE_MUST_NOT_ESCAPE';
+  const repository = new InMemoryTradingRepository();
+  repository.getPolicy = async () => { throw new Error(secret); };
+  const source = { readHandoff: async () => { throw new Error(secret); },
+    readLiveAccountSnapshot: async () => { throw new Error(secret); } };
+  const audit = await auditAutomaticLivePreactivation({ userId: 'audit-owner', repository, source,
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+    targetSha: 'a'.repeat(40), nowMs: Date.parse('2026-10-12T01:00:00Z') });
+  assert.equal(JSON.stringify(audit).includes(secret), false);
+  assert.ok(audit.checks.filter((check) => check.id.startsWith('ACCOUNT_'))
+    .every((check) => check.codes[0] === 'PREACTIVATION_EVIDENCE_UNAVAILABLE'));
+});
+
+test('one coverage report retains all 26 lifecycle controls and never promotes unobserved operations', async () => {
+  const audit = await historyAudit([], []);
+  const manifest = JSON.parse(readFileSync('.github/config/automatic-live-preactivation-checklist.json', 'utf8'));
+  assert.deepEqual(audit.lifecycleCoverage.controls.map(({ id, phase }) => ({ id, phase })),
+    manifest.requiredChecks.map(({ id, phase }: { id: string; phase: string }) => ({ id, phase })));
+  assert.equal(audit.lifecycleCoverage.controls.length, 26);
+  for (const id of ['MAIN_PRODUCTION_IDENTITY', 'FRESH_MARKET_SESSION', 'ATOMIC_AGGREGATE_BUDGET',
+    'NATIVE_FUTURES_PROTECTION', 'RECOVERY_WORKER_HEALTH', 'PM2_PERSISTENCE_AND_ROLLBACK', 'POST_ARM_HEALTH']) {
+    assert.ok(audit.lifecycleCoverage.unobservedControlIds.includes(id));
+  }
+  assert.ok(audit.lifecycleCoverage.blockedControlIds.includes('SCANNER_PRODUCER_CONNECTED'));
+  const passingSubset = automaticLiveLifecycleCoverage(audit.checks.map((check) => ({ ...check, status: 'PASS', codes: [] })));
+  assert.ok(passingSubset.unobservedControlIds.length > 0);
+  assert.equal(passingSubset.activationReady, false);
+  assert.equal(passingSubset.liveTradingAuthorityGranted, false);
+  assert.equal(passingSubset.autoTradingAuthorityGranted, false);
 });
