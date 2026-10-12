@@ -33,6 +33,30 @@ const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
 
+test('stopped worker generation cannot execute any provider, inspect credentials or claim a real order', async () => {
+  const repository = new InMemoryTradingRepository();
+  let calls = 0;
+  repository.getPlan = async () => { calls += 1; throw new Error('NO_DATABASE_EXECUTION'); };
+  const service = new TradeExecutionService(repository, undefined, undefined, undefined, () => false);
+  for (const exchange of ['bitget', 'upbit', 'kiwoom', 'toss'] as const) {
+    await assert.rejects(service.execute(USER_ID, { exchange, accountMode: 'live', executionMode: 'automatic' } as TradingPlan,
+      { userId: USER_ID, exchange } as TradingOrder), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+  }
+  assert.equal(calls, 0);
+});
+
+test('late successful ownership reads cannot restore a stopped worker generation', async () => {
+  let active = true;
+  const service = new TradeExecutionService(new InMemoryTradingRepository(), undefined, undefined, undefined, () => active);
+  Object.assign(service, { async assertAutomaticLiveEntryControls() {},
+    async assertAutomaticLivePositionIsolation() { active = false; } });
+  const boundary = service as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    accountMode: 'live', executionMode: 'automatic', reduceOnly: false } as TradingPlan), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+});
+
 test('AUTO authority revoked during the ownership read blocks at the final provider boundary', async () => {
   const execution = new TradeExecutionService(new InMemoryTradingRepository());
   const events: string[] = [];
