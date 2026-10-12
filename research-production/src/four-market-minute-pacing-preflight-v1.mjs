@@ -1,7 +1,7 @@
 // Pure, read-only throughput/deadline admission forecast. Never an activation.
 // Provider documentation is contextual: shared-IP quotas and host disk/inodes
 // require independent operator evidence before changing a collector's pace.
-import { assessMinuteManifestCapacity } from './four-market-minute-roster-capacity-v1.mjs';
+import { assessMinuteManifestCapacity, assessMinuteArchiveCapacity } from './four-market-minute-roster-capacity-v1.mjs';
 import { QUEUE_LIMITS, validateBackfillScope } from './four-market-minute-backfill-queue-v1.mjs';
 import { MINUTE_ARCHIVE_LIMITS } from './four-market-minute-archive-intake-v1.mjs';
 
@@ -151,5 +151,97 @@ export function assessMinuteCollectorPacingPreflightV1({
     realOrders: false, privateAccountApiCalls: 0,
     providerCalls: 0, filesWritten: 0,
     executionAuthority: 'NONE',
+  });
+}
+
+// DORMANT dual-venue plan: one bounded sequential lane per independent
+// public provider, with the two lanes hypothetically overlapping in time.
+// This is not a real host/API budget measurement or an enabled worker.
+export function assessMinuteDualVenuePacingPreflightV1({
+  manifest,
+  perVenueActionsPerCycle = QUEUE_LIMITS.maxActionsPerCycle,
+  cycleMinutes = 5,
+  headroomPercent = 20,
+  worstCaseRequestMs = MINUTE_ARCHIVE_LIMITS.networkTimeoutMs,
+  requestSpacingMs = MINUTE_ARCHIVE_LIMITS.minRequestIntervalMs,
+  lockChildTimeoutMs = 210_000,
+  serviceTimeoutMs = 240_000,
+  safeShutdownReserveMs = 15_000,
+} = {}) {
+  const entries = [
+    ['perVenueActionsPerCycle',perVenueActionsPerCycle,1,QUEUE_LIMITS.maxActionsPerCycle],
+    ['cycleMinutes',cycleMinutes,1,1440],
+    ['headroomPercent',headroomPercent,0,200],
+    ['worstCaseRequestMs',worstCaseRequestMs,100,60_000],
+    ['requestSpacingMs',requestSpacingMs,0,60_000],
+    ['lockChildTimeoutMs',lockChildTimeoutMs,1_000,600_000],
+    ['serviceTimeoutMs',serviceTimeoutMs,1_000,600_000],
+    ['safeShutdownReserveMs',safeShutdownReserveMs,0,120_000],
+  ];
+  if(entries.some(([,v,min,max])=>!bounded(v,min,max))||1440%cycleMinutes!==0)
+    fail('MINUTE_DUAL_VENUE_PREFLIGHT_INPUT_INVALID');
+  const scope=validateBackfillScope(manifest);
+  const limit=Math.min(lockChildTimeoutMs,serviceTimeoutMs,cycleMinutes*60_000);
+  if(safeShutdownReserveMs>=limit)
+    fail('MINUTE_DUAL_VENUE_PREFLIGHT_RESERVE_INVALID');
+  const usableMs=limit-safeShutdownReserveMs;
+  const perLaneWorstCaseMs=perVenueActionsPerCycle*worstCaseRequestMs
+    +Math.max(0,perVenueActionsPerCycle-1)*requestSpacingMs;
+  const lanes=['CRYPTO_SPOT','CRYPTO_FUTURES'].map(market=>{
+    const continuousCount=scope.ranges.filter(r=>r.market===market
+      &&r.mode==='CONTINUOUS').length;
+    const capacity=assessMinuteArchiveCapacity({
+      cryptoSpotSymbols:market==='CRYPTO_SPOT'?continuousCount:0,
+      cryptoFuturesSymbols:market==='CRYPTO_FUTURES'?continuousCount:0,
+      actionsPerCycle:perVenueActionsPerCycle,cycleMinutes,
+      windowMinutes:scope.pageWindowMinutes,headroomPercent,
+    });
+    return frozen({
+      market,source:market==='CRYPTO_SPOT'?'UPBIT_PUBLIC_1M'
+        :'BITGET_PUBLIC_FUTURES_1M',
+      continuousSymbols:continuousCount,
+      dailyRequired:capacity.dailyRequired,
+      dailyRequiredWithHeadroom:capacity.requiredWithHeadroom,
+      dailyAvailable:capacity.dailyAvailable,
+      minimumActionsPerCycleWithHeadroom:capacity.minActionsPerCycleWithHeadroom,
+      modeledLaneRateSufficient:continuousCount>0
+        && capacity.status==='CAPACITY_MODEL_POSSIBLE',
+      perVenueActionsPerCycle,perLaneWorstCaseMs,
+      fitsConservativeDeadline:perLaneWorstCaseMs<=usableMs,
+      actualSharedIpQuotaVerified:false,
+      actualHostLatencyAndIOVerified:false,
+    });
+  });
+  const stockRanges=scope.ranges.filter(r=>
+    r.market==='KR_STOCK'||r.market==='US_STOCK').length;
+  const modeledCapacityPossible=stockRanges===0
+    && lanes.every(l=>l.modeledLaneRateSufficient
+      &&l.fitsConservativeDeadline);
+  const reasons=[];
+  if(stockRanges)reasons.push('STOCK_SOURCE_SESSIONS_AND_LICENSE_NOT_MODELLED');
+  if(lanes.some(l=>!l.continuousSymbols))
+    reasons.push('BOTH_INDEPENDENT_CRYPTO_PROVIDERS_REQUIRED');
+  if(lanes.some(l=>!l.modeledLaneRateSufficient))
+    reasons.push('SINGLE_VENUE_RATE_CAPACITY_INSUFFICIENT');
+  if(perLaneWorstCaseMs>usableMs)
+    reasons.push('SINGLE_VENUE_DEADLINE_EXCEEDED');
+  reasons.push('SHARED_IP_REMAINING_QUOTA_UNVERIFIED');
+  reasons.push('VULTR_HOST_CPU_STORAGE_INODES_BACKUP_UNVERIFIED');
+  reasons.push('LIVE_WORKER_DUAL_LANE_NOT_ENABLED');
+  return frozen({
+    contract:'research-minute-dual-venue-pacing-preflight/v1',
+    status:'DRAFT_THEORETICAL_ONLY',actionable:false,
+    modeledCapacityPossible,
+    pageWindowMinutes:scope.pageWindowMinutes,
+    cycleMinutes,headroomPercent,perVenueActionsPerCycle,
+    maxConcurrentIndependentProviders:2,
+    modeledTotalActionsPerCycle:perVenueActionsPerCycle*2,
+    conservativeUsableWorkerMs:usableMs,
+    modeledWallClockWorstCaseMs:perLaneWorstCaseMs,
+    stockRanges,lanes:frozen(lanes),reasons:frozen(reasons),
+    automaticActivation:false,workerEnabled:false,
+    providerCalls:0,filesWritten:0,hostAttested:false,
+    independentOosProven:false,profitabilityProven:false,
+    executionAuthority:'NONE',
   });
 }
