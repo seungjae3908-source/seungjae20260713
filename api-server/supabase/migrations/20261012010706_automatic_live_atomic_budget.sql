@@ -159,10 +159,12 @@ begin
       or h.strategy is distinct from c->>'strategy') then
     raise exception 'AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT';
   end if;
-  with candidates as (
+  with release_ids as materialized (
+    select value order_id from jsonb_array_elements_text(p_projection->'releases')
+  ), candidates as (
     select order_id::text order_id,market,instrument,strategy,amount_krw,risk_krw from public.trade_live_budget_reservations
       where user_id=p_user_id and state='HELD' and order_id<>p_order_id
-        and not (p_projection->'releases' ? order_id::text)
+        and not exists(select 1 from release_ids r where r.order_id=trade_live_budget_reservations.order_id::text)
     union all
     select c->>'orderId',c->>'market',c->>'instrument',c->>'strategy',(c->>'amountKrw')::numeric,(c->>'riskKrw')::numeric
       from jsonb_array_elements(p_projection->'baseCharges') c
@@ -189,8 +191,9 @@ begin
     else null end;
   if code is not null then return jsonb_build_object('status','BLOCKED','blockCode','AUTOMATIC_LIVE_BUDGET_'||code||'_EXCEEDED'); end if;
   if p_verify_only then return jsonb_build_object('status','RESERVED','order',current_order.payload); end if;
-  update public.trade_live_budget_reservations set state='RELEASED',released_at=clock_timestamp()
-    where user_id=p_user_id and state='HELD' and p_projection->'releases' ? order_id::text;
+  update public.trade_live_budget_reservations h set state='RELEASED',released_at=clock_timestamp()
+    from jsonb_array_elements_text(p_projection->'releases') r
+    where h.user_id=p_user_id and h.state='HELD' and h.order_id::text=r.value;
   insert into public.trade_live_budget_reservations(user_id,order_id,plan_id,market,instrument,strategy,amount_krw,risk_krw)
     values(p_user_id,p_order_id,current_order.plan_id,p_projection->>'market',p_projection->>'instrument',p_projection->>'strategy',
       (p_projection->>'amountKrw')::numeric,(p_projection->>'riskKrw')::numeric)
@@ -270,14 +273,63 @@ begin
   end loop;
 end $ledger_policies$;
 
+-- Catalog-only proof of the installed definitions. No trading/user/credential
+-- values are read or hashed. Include the proof function itself, all five ledger
+-- policy bodies, routine ACLs and GUCs; exclude only the expected digest slot to
+-- avoid a self-referential hash. A policy/function drift is not a ready schema.
+create or replace function public.automatic_live_budget_schema_fingerprint()
+returns text language sql stable security invoker set search_path=pg_catalog,public,pg_temp
+as $fingerprint$
+  select md5(jsonb_build_object(
+    'routines',(select jsonb_agg(jsonb_build_object(
+      'name',p.proname,'args',pg_get_function_identity_arguments(p.oid),'source',p.prosrc,
+      'result',pg_get_function_result(p.oid),
+      'volatile',p.provolatile,'definer',p.prosecdef,'owner',p.proowner,'acl',p.proacl::text,
+      'settings',array(select cfg from unnest(p.proconfig) cfg
+        where cfg not like 'automatic_live_guard.expected_schema_fingerprint=%' order by cfg)
+    ) order by p.proname,pg_get_function_identity_arguments(p.oid))
+      from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+      and p.proname in ('read_automatic_live_budget_snapshot','reserve_automatic_live_entry_budget','claim_trade_order_execution',
+        'read_automatic_live_budget_guard','is_automatic_live_ledger_payload','automatic_live_budget_schema_fingerprint')),
+    'relations',(select jsonb_agg(jsonb_build_object(
+      'name',c.relname,'kind',c.relkind,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
+      'owner',c.relowner,'acl',c.relacl::text,
+      'constraints',array(select pg_get_constraintdef(k.oid) from pg_constraint k
+        where k.conrelid=c.oid order by k.conname)
+    ) order by c.relname) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relname in ('trade_live_budget_reservations','trade_order_plans',
+        'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders')),
+    'policies',(select jsonb_agg(jsonb_build_object(
+      'relation',c.relname,'name',p.polname,'command',p.polcmd,'permissive',p.polpermissive,
+      'roles',p.polroles,'using',pg_get_expr(p.polqual,p.polrelid),
+      'check',pg_get_expr(p.polwithcheck,p.polrelid)
+    ) order by c.relname,p.polname)
+      from pg_policy p join pg_class c on c.oid=p.polrelid join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relname in ('trade_order_plans','trade_orders','trade_order_events',
+        'trade_order_legs','trade_protection_orders')
+      and p.polname in ('auto_live_server_insert_guard','auto_live_server_update_guard','auto_live_server_delete_guard'))
+  )::text);
+$fingerprint$;
+revoke all on function public.automatic_live_budget_schema_fingerprint() from public,anon,authenticated;
+grant execute on function public.automatic_live_budget_schema_fingerprint() to service_role;
+
 create or replace function public.read_automatic_live_budget_guard()
 returns jsonb language sql stable security invoker set search_path=pg_catalog,public,pg_temp
 set default_transaction_isolation='serializable'
 as $guard$
-  select jsonb_build_object('version','automatic-live-atomic-budget-v2','ready',coalesce(
+  select jsonb_build_object('version','automatic-live-atomic-budget-v3','ready',coalesce(
     current_setting('transaction_isolation')='serializable'
     and
     (select relrowsecurity from pg_class where oid='public.trade_live_budget_reservations'::regclass)
+    and (select count(*)=6 and bool_and(c.relrowsecurity) from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='public' and c.relname in ('trade_live_budget_reservations','trade_order_plans',
+        'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders'))
+    and (select count(*)=1 from pg_constraint where conrelid='public.trade_live_budget_reservations'::regclass
+      and contype='p' and pg_get_constraintdef(oid)='PRIMARY KEY (user_id, order_id)')
+    and (select count(*)=2 from pg_constraint where conrelid='public.trade_live_budget_reservations'::regclass
+      and contype='f' and pg_get_constraintdef(oid) in (
+        'FOREIGN KEY (user_id, order_id) REFERENCES trade_orders(user_id, id) ON DELETE RESTRICT',
+        'FOREIGN KEY (user_id, plan_id) REFERENCES trade_order_plans(user_id, id) ON DELETE RESTRICT'))
     and not has_table_privilege('anon','public.trade_live_budget_reservations','SELECT,INSERT,UPDATE,DELETE')
     and not has_table_privilege('authenticated','public.trade_live_budget_reservations','SELECT,INSERT,UPDATE,DELETE')
     and has_table_privilege('service_role','public.trade_live_budget_reservations','SELECT')
@@ -295,9 +347,20 @@ as $guard$
       from pg_policy where polrelid in ('public.trade_order_plans'::regclass,'public.trade_orders'::regclass,
         'public.trade_order_events'::regclass,'public.trade_order_legs'::regclass,'public.trade_protection_orders'::regclass)
         and polname in ('auto_live_server_insert_guard','auto_live_server_update_guard','auto_live_server_delete_guard'))
+    and (select count(*)=1 and bool_and(split_part(cfg,'=',2)=public.automatic_live_budget_schema_fingerprint())
+      from pg_proc p cross join lateral unnest(p.proconfig) cfg
+      where p.oid='public.read_automatic_live_budget_guard()'::regprocedure
+      and cfg like 'automatic_live_guard.expected_schema_fingerprint=%')
   ,false));
 $guard$;
 revoke all on function public.read_automatic_live_budget_guard() from public,anon,authenticated;
 grant execute on function public.read_automatic_live_budget_guard() to service_role;
+-- Capture only after this migration has installed all canonical definitions and
+-- ACLs. Ordinary callers cannot ALTER the function-owned setting, and changing
+-- a session GUC cannot replace the expected value read from pg_proc.proconfig.
+do $bind_schema$ begin
+  execute format('alter function public.read_automatic_live_budget_guard() set automatic_live_guard.expected_schema_fingerprint to %L',
+    public.automatic_live_budget_schema_fingerprint());
+end $bind_schema$;
 notify pgrst,'reload schema';
 commit;
