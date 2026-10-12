@@ -322,3 +322,39 @@ test("full-day ledger filters out old and future sessions from the archived stoc
     }finally{rmSync(root,{recursive:true,force:true});}
   }
 });
+
+test("PIT day receipt includes SHA-leased partial source recovery for all 4 markets",async()=>{
+ for(const market of Object.keys(POLICY)){
+  const root=temp(),manifest=make(market,1),sym=symbol(market,0);
+  try{
+   const stored=await store({root,source:minuteSource(market,sym,10)});
+   const entries=await pages(root,market,manifest);
+   assert.equal(entries.length,1);
+   assert.equal(entries[0].partialSourcePlan.length,1);
+   const ticket=entries[0].partialSourcePlan[0];
+   assert.equal(ticket.market,market);
+   assert.equal(ticket.symbol,sym);
+   assert.equal(ticket.expectedExistingSourceDigestSha256,stored.sourceDigestSha256);
+   assert.equal(ticket.priorOriginalMinuteRows,10);
+   assert.equal(ticket.autoExecuteAllowed,false);
+   const whole=aggregate(market,manifest,entries);
+   assert.equal(whole.status,"INCOMPLETE_SOURCE_ATTESTED_DAY_MINUTE_INVENTORY");
+   assert.equal(whole.partialSourceSessionReviewCount,1);
+   assert.equal(whole.partialSourceReviewPreview.length,1);
+   assert.equal(whole.partialSourceReviewPreview[0].symbol,sym);
+   assert.equal(whole.partialSourceReviewPreview[0].expectedExistingSourceDigestSha256,
+     stored.sourceDigestSha256);
+   assert.equal(whole.partialSourceReviewCannotAuthorizeProviderGET,true);
+   assert.equal(whole.profitabilityProven,false);
+   assert.equal(whole.actualFillCount,null);
+   const bad=structuredClone(entries);
+   bad[0].partialSourcePlan[0].missingUnverifiedMinuteSlots=2;
+   const refused=aggregate(market,manifest,bad);
+   assert.equal(refused.reason,"PIT_MINUTE_DAY_PARTIAL_SOURCE_PLAN_INVALID");
+   const absent=structuredClone(entries);
+   absent[0].partialSourcePlan=[];
+   assert.equal(aggregate(market,manifest,absent).reason,
+     "PIT_MINUTE_DAY_PARTIAL_SOURCE_PLAN_INVALID");
+  }finally{rmSync(root,{recursive:true,force:true});}
+ }
+});
