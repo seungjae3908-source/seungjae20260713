@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildConfirmedResearchPolicies } from '../src/research-free-policy-confirmation.mjs';
 import test from 'node:test';
 
 const scriptUrl = new URL('../deploy/activate-ai-research.sh', import.meta.url);
@@ -98,6 +99,13 @@ test('actual activation Node preflight admits legacy defaults and blocks invalid
     assert.equal(legacy.status, 0, legacy.stderr || String(legacy.error ?? ''));
     assert.equal(JSON.parse(legacy.stdout).video.queryCount, 8);
     assert.equal(JSON.parse(legacy.stdout).executionAuthority, 'NONE');
+    const queries = ['#topic', "research's \"quoted\" path\\topic", 'VWAP 연구'];
+    const plan = buildConfirmedResearchPolicies({ aiText: '',
+      videoText: "RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON='" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'\n",
+      targetSha: 'a'.repeat(40), ownerCommentId: '1234', observedAt: Date.now() });
+    const confirmed = invoke(plan.videoText);
+    assert.equal(confirmed.status, 0, confirmed.stderr || String(confirmed.error ?? ''));
+    assert.equal(JSON.parse(confirmed.stdout).video.queryCount, queries.length);
     for (const extra of ['RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=[]',
       'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["same"," same "]',
       'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["secret=TEST_ONLY_NO_KEY"]',
