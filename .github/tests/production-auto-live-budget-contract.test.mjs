@@ -86,6 +86,8 @@ test('owner-bound baseline needs no custom-parameter privilege and cannot become
   assert.ok(harness.includes('phase8_budget_owner nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls'));
   assert.ok(harness.includes("has_parameter_privilege(current_user,'automatic_live_guard.expected_schema_fingerprint','SET')"));
   assert.ok(harness.includes('set role phase8_budget_owner;'));
+  assert.ok(harness.includes("to_regclass('public.'||relation)"));
+  assert.ok(harness.includes("execute format('alter function %s owner to phase8_budget_owner',routine)"));
   assert.ok(gate.includes('node --test .github/tests/production-auto-live-budget-contract.test.mjs'));
   for (const path of [migration, migration.replace('.sql', '.down.sql'),
     'api-server/supabase/test/automatic_live_atomic_budget_integration.sql', 'api-server/scripts/verify-phase8-db.sh']) {
