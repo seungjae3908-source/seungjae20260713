@@ -2,7 +2,7 @@
 // Provider documentation is contextual: shared-IP quotas and host disk/inodes
 // require independent operator evidence before changing a collector's pace.
 import { assessMinuteManifestCapacity } from './four-market-minute-roster-capacity-v1.mjs';
-import { QUEUE_LIMITS } from './four-market-minute-backfill-queue-v1.mjs';
+import { QUEUE_LIMITS, validateBackfillScope } from './four-market-minute-backfill-queue-v1.mjs';
 import { MINUTE_ARCHIVE_LIMITS } from './four-market-minute-archive-intake-v1.mjs';
 
 export const MINUTE_PACING_PREFLIGHT_CONTRACT_V1 =
@@ -37,6 +37,17 @@ export function assessMinuteCollectorPacingPreflightV1({
     serviceTimeoutMs, cycleMinutes * 60_000);
   if (safeShutdownReserveMs >= limit)
     fail('MINUTE_PACING_PREFLIGHT_TIME_RESERVE_INVALID');
+  // Reject malformed/duplicate Backfill and Continuous tasks before they
+  // influence an operator-facing forecast. This reads no queue state.
+  const scope = validateBackfillScope(manifest);
+  const declaredBackfill = scope.ranges.filter(r => r.mode === 'BACKFILL');
+  const backfillPagesFromOrigin = windowMinutes => {
+    const pages = declaredBackfill.reduce((sum, r) =>
+      sum + Math.ceil((r.endMs - r.startMs) / (windowMinutes * 60_000)), 0);
+    if (!Number.isSafeInteger(pages))
+      fail('MINUTE_PACING_PREFLIGHT_BACKFILL_ESTIMATE_OVERFLOW');
+    return pages;
+  };
   const capacity = assessMinuteManifestCapacity(manifest, {
     actionsPerCycle: proposedActionsPerCycle,
     cycleMinutes, headroomPercent,
@@ -54,6 +65,42 @@ export function assessMinuteCollectorPacingPreflightV1({
   // needs IP quota, lock ordering, network and disk benchmarks first.
   const theoreticalConcurrentSlots = requiredWorstCaseMs === 0
     ? 0 : Math.ceil(requiredWorstCaseMs / usableMs);
+
+  // Both public REST endpoints document up to 200 returned 1m candles, but
+  // our immutable page writer / cursor / replay consumer accept only 120m.
+  // This is an OFFLINE alternative estimate, never a runtime-cap change.
+  const alternatePageMinutes = 200;
+  const alternateCapacity = assessMinuteManifestCapacity(manifest, {
+    actionsPerCycle: QUEUE_LIMITS.maxActionsPerCycle, cycleMinutes,
+    headroomPercent, windowMinutes: alternatePageMinutes,
+  });
+  const alternateActions = alternateCapacity.minActionsPerCycleWithHeadroom;
+  const alternateWorstMs = alternateActions * worstCaseRequestMs
+    + Math.max(0, alternateActions - 1) * requestSpacingMs;
+  const alternatePage200Scenario = frozen({
+    contract: 'research-minute-collector-alternate-page-size/v1',
+    status: 'HYPOTHETICAL_NOT_EXECUTABLE',
+    pageMinutes: alternatePageMinutes,
+    apiMaximumCandlesPerPage: 200,
+    activeArchivePageMinutes: MINUTE_ARCHIVE_LIMITS.maxWindowMinutes,
+    requiresArchiveCursorRollupAndNativeReplayContractRevision: true,
+    dailyRequiredPages: alternateCapacity.dailyRequired,
+    dailyRequiredWithHeadroom: alternateCapacity.requiredWithHeadroom,
+    minActionsPerCycleWithHeadroom: alternateActions,
+    currentHardCapActionsPerCycle: QUEUE_LIMITS.maxActionsPerCycle,
+    sequentialWorstCaseRequiredMs: alternateWorstMs,
+    usableSequentialWorkerMs: usableMs,
+    minTheoreticalConcurrentSlots: alternateWorstMs === 0
+      ? 0 : Math.ceil(alternateWorstMs / usableMs),
+    hardCapWouldBlock: alternateActions > QUEUE_LIMITS.maxActionsPerCycle,
+    worstCaseDeadlineWouldBlock: alternateWorstMs > usableMs,
+    stockExchangeSessionsAndRightsUnverified: alternateCapacity.stockSymbols > 0,
+    declaredBackfillPagesFromOrigin: backfillPagesFromOrigin(alternatePageMinutes),
+    providerRateBudgetVerified: false, hostCapacityVerified: false,
+    continuityAndGapSemanticsVerified: false, enabled: false,
+    operatorApproved: false, providerCalls: 0, filesWritten: 0,
+    executionAuthority: 'NONE',
+  });
   const reasons = [];
   if (capacity.stockSymbols > 0)
     reasons.push('STOCK_EXCHANGE_SESSION_AND_LICENSE_BUDGET_NOT_MODELLED');
@@ -85,6 +132,11 @@ export function assessMinuteCollectorPacingPreflightV1({
     minimumActionsPerCycleWithHeadroom: actionsWithHeadroom,
     requiredSequentialWorstCaseMs: requiredWorstCaseMs,
     theoreticalConcurrentSlots,
+    declaredBackfillRanges: declaredBackfill.length,
+    declaredBackfillPagesFromOrigin: backfillPagesFromOrigin(
+      MINUTE_ARCHIVE_LIMITS.maxWindowMinutes),
+    backfillQueueCursorAndCurrentOutstandingPagesNotInspected: true,
+    alternatePage200Scenario,
     currentTimerActivated: false,
     providerRateBudgetVerified: false,
     sharedIpBudgetVerified: false,

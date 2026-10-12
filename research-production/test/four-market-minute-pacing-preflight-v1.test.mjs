@@ -16,7 +16,7 @@ const manifest = (spot, futures, stocks = 0) => ({
       mode: 'CONTINUOUS', startMs: NOW,
     })),
     ...Array.from({ length: stocks }, (_, i) => ({
-      market: 'KR_STOCK', symbol: 'S' + String(i).padStart(6, '0'),
+      market: 'KR_STOCK', symbol: 'S' + String(i).padStart(5, '0'),
       mode: 'CONTINUOUS', startMs: NOW,
     })),
   ],
@@ -30,6 +30,18 @@ test('original 16/5-minute budget is insufficient for 760 continuously traded cr
   assert.equal(x.minimumActionsPerCycleWithHeadroom, 38);
   assert.equal(x.maxSequentialActionsWithReserve, 23);
   assert.equal(x.proposedSequentialWorstCaseMs, 132_500);
+  assert.equal(x.alternatePage200Scenario.dailyRequiredPages, 6080);
+  assert.equal(x.alternatePage200Scenario.dailyRequiredWithHeadroom, 7296);
+  assert.equal(x.alternatePage200Scenario.minActionsPerCycleWithHeadroom, 26);
+  assert.equal(x.alternatePage200Scenario.sequentialWorstCaseRequiredMs, 215_500);
+  assert.equal(x.alternatePage200Scenario.minTheoreticalConcurrentSlots, 2);
+  assert.equal(x.alternatePage200Scenario.activeArchivePageMinutes, 120);
+  assert.equal(x.alternatePage200Scenario.status, 'HYPOTHETICAL_NOT_EXECUTABLE');
+  assert.equal(x.alternatePage200Scenario.hardCapWouldBlock, true);
+  assert.equal(x.alternatePage200Scenario.worstCaseDeadlineWouldBlock, true);
+  assert.equal(x.alternatePage200Scenario.enabled, false);
+  assert.equal(x.alternatePage200Scenario.providerCalls, 0);
+  assert.equal(x.alternatePage200Scenario.executionAuthority, 'NONE');
   assert.ok(x.reasons.includes('CONTINUOUS_DAY_CAPTURE_RATE_INSUFFICIENT'));
   assert.equal(x.actionable, false);
   assert.equal(x.providerCalls, 0);
@@ -68,6 +80,42 @@ test('hypothetically shorter requests cannot manufacture quota or 24h readiness'
   assert.equal(x.actionable, false);
   assert.equal(x.hostCapacityVerified, false);
   assert.equal(x.profitabilityProven, false);
+});
+
+test('backfill from declared origin is disclosed separately from 24h steady-state', () => {
+  const m = manifest(1, 0);
+  m.ranges.push({
+    market: 'CRYPTO_SPOT', symbol: 'T0000', mode: 'BACKFILL',
+    startMs: NOW - 1440 * 60_000, endMs: NOW,
+  });
+  const x = plan({ manifest: m });
+  assert.equal(x.capacity.dailyRequired, 12);
+  assert.equal(x.declaredBackfillRanges, 1);
+  assert.equal(x.declaredBackfillPagesFromOrigin, 12);
+  assert.equal(x.alternatePage200Scenario.declaredBackfillPagesFromOrigin, 8);
+  assert.equal(x.backfillQueueCursorAndCurrentOutstandingPagesNotInspected, true);
+  assert.equal(x.actionable, false);
+  assert.equal(x.providerCalls, 0);
+});
+
+test('2-minute, 200-page model may be arithmetically possible but never authorized', () => {
+  const x = plan({ manifest: manifest(294, 466), cycleMinutes: 2 });
+  assert.equal(x.alternatePage200Scenario.minActionsPerCycleWithHeadroom, 11);
+  assert.equal(x.alternatePage200Scenario.sequentialWorstCaseRequiredMs, 91_000);
+  assert.equal(x.alternatePage200Scenario.hardCapWouldBlock, false);
+  assert.equal(x.alternatePage200Scenario.worstCaseDeadlineWouldBlock, false);
+  assert.equal(x.alternatePage200Scenario.enabled, false);
+  assert.equal(x.alternatePage200Scenario.hostCapacityVerified, false);
+  assert.equal(x.alternatePage200Scenario.continuityAndGapSemanticsVerified, false);
+});
+
+test('manifest duplicate / forged backfill fails closed before capacity numbers', () => {
+  const m = manifest(1, 0);
+  assert.throws(() => plan({manifest: { ...m, ranges: [m.ranges[0],m.ranges[0]] }}),
+    /MINUTE_QUEUE_DUPLICATE_SYMBOL/);
+  assert.throws(() => plan({manifest: { ...m, ranges: [...m.ranges,
+    {market:'CRYPTO_SPOT',symbol:'BTC',mode:'BACKFILL',
+      startMs:NOW,endMs:NOW-60_000}] }}),/MINUTE_QUEUE_RANGE_INVALID/);
 });
 
 test('stock sources never inherit crypto 24h timing assumptions', () => {
