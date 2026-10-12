@@ -149,7 +149,7 @@ test('real symbol and name queries resolve the same canonical assets', async ({ 
   }
 });
 
-test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE', async ({ page }) => {
+test('search distinguishes no match, partial provider failure, and unavailable data', async ({ page }) => {
   await page.route('**/api/search/suggest**', async (route) => {
     const q = new URL(route.request().url()).searchParams.get('q') ?? '';
     if (q === 'data-down') {
@@ -188,11 +188,11 @@ test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE'
   await page.goto('/__phase11-unified-search-e2e');
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
   await input.fill('no-match');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('NO_MATCH');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('일치하는 종목이나 코인이 없습니다');
   await input.fill('provider-down');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('PROVIDER_UNAVAILABLE');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('일부 시장의 검색 결과를 확인할 수 없습니다');
   await input.fill('data-down');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('DATA_UNAVAILABLE');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('검색 결과를 불러오지 못했습니다');
 });
 
 test('watchlist and recent searches prioritize equal-tier suggestions', async ({ page }) => {
@@ -239,7 +239,7 @@ test('IME composition defers search, touch selection navigates, and errors can r
   const errorInput = page.getByRole('combobox', { name: '통합 자산 검색' });
   await errorInput.fill('오류');
   await expect(page.getByText('검색 인덱스를 준비하지 못했습니다.')).toBeVisible();
-  await expect(page.getByRole('button', { name: '재시도' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '다시 검색' })).toBeVisible();
 });
 
 test('search browser diagnostics remain zero on a healthy flow', async ({ page }) => {

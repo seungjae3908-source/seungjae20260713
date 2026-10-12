@@ -6,11 +6,11 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('ordinary cards stay translucent while modal surfaces are fully opaque', () => {
+test('white-theme cards and modal surfaces stay fully opaque', () => {
   const settings = source('src/lib/settings.tsx');
   const surface = source('src/components/ui/modal-surface.ts');
 
-  expect(settings).toContain("root.style.setProperty('--card-alpha', '0.72')");
+  expect(settings).toContain("root.style.setProperty('--card-alpha', effectiveTheme === 'light' ? '1' : '0.72')");
   expect(surface).toContain("backgroundColor: 'hsl(var(--card))'");
   expect(surface).toContain("borderColor: 'hsl(var(--card-border))'");
   expect(surface).toContain("color: 'hsl(var(--card-foreground))'");
