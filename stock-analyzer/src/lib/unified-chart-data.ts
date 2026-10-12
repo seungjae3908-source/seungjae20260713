@@ -457,6 +457,12 @@ export async function fetchUnifiedChartData(input: {
           alternateGate?.release();
           continue;
         }
+        // A healthy-looking HTTP 200 with 0–1 valid candles cannot erase a
+        // prior primary 5xx/timeout/network failure. Both public endpoints
+        // failed to provide usable evidence; preserve the original outage
+        // error so chart/AI/live judgments fail closed instead of claiming
+        // a successfully loaded empty market.
+        if (normalization.candles.length < 2 && lastError) throw lastError;
         alternateHedge?.abort();
         return {
           market: input.market,
