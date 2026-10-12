@@ -587,3 +587,46 @@ test('new independent day after confirmed legacy v1 send is not silenced by SHA 
    await rm(dir,{recursive:true,force:true});
  }
 });
+
+test('explicit Telegram 429 rejection releases only the failed reservation and permits retry',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-explicit-429-'));
+ const ledger=path.join(dir,'ledger.json');
+ const oldUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const oldRoom=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const source:any=fixture();
+ let attempts=0;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async()=>{
+       attempts++;
+       return attempts===1
+         ?{ok:false as const,attempts:1,skipped:'DELIVERY_FAILED' as const,
+           errorCode:'TELEGRAM_HTTP_429'}
+         :{ok:true as const,attempts:1};
+     },
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:source.serviceSha,
+       executionAuthority:'NONE',snapshot:source}),{status:200}),
+     async()=>({eligible:false,matched:0,attempted:0,delivered:0,
+       queued:0,deduped:0,skipped:0,failed:0,reason:'DISABLED' as const}));
+   const failed=await subscriber.runOnce(new Date(NOW));
+   assert.equal(failed.sourceStatus,'READY');
+   assert.equal(failed.failed,1);assert.equal(attempts,1);
+   const first=JSON.parse(await readFile(ledger,'utf8'));
+   assert.equal(Object.keys(first.unconfirmed).length,0,
+     'an explicit rejected 429 cannot create a permanent ambiguous tombstone');
+   const succeeded=await subscriber.runOnce(new Date(NOW+1000));
+   assert.equal(succeeded.publicDelivered,1);
+   assert.equal(attempts,2);
+   const repeated=await subscriber.runOnce(new Date(NOW+2000));
+   assert.equal(repeated.deduped,1);assert.equal(attempts,2);
+ }finally{
+   if(oldUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=oldUrl;
+   if(oldRoom===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=oldRoom;
+   await rm(dir,{recursive:true,force:true});
+ }
+});
