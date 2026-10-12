@@ -386,41 +386,147 @@ test("public-GET fixture -> immutable archive index -> offline 4-market batch re
   }
 });
 
-test("planned PIT native source task retry requires the reviewed existing SHA before any GET",async()=>{
+test("planned partial retry requires a fresh PIT page and the separate SHA-reviewed ticket",async()=>{
  const t=await setup("CRYPTO_SPOT",2),calls=[];
  try{
-   const initial=await execute(request(t,{
-     allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
-   }));
-   assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
-   assert.equal(calls.length,1);
-   await assert.rejects(()=>execute(request(t,{
-     allowPublicReadOnlyFetch:true,retryPartialSource:true,
-     upbitFetchImpl:upbitFetch(calls),
-   })),/PIT_MINUTE_TASK_ARGUMENT_INVALID/);
-   assert.equal(calls.length,1);
-   const old=await derive({
-     root:t.root,market:t.market,symbol:t.planning.candidateTasks[0].symbol,
-     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"],
-   });
-   const wrong=await execute(request(t,{
-     allowPublicReadOnlyFetch:true,retryPartialSource:true,
-     expectedExistingSourceDigestSha256:SHA,
-     upbitFetchImpl:upbitFetch(calls),
-   }));
-   assert.equal(wrong.status,"BLOCKED_DATA");
-   assert.equal(wrong.reason,"RETRY_SOURCE_REVISION_DIGEST_MISMATCH");
-   assert.equal(calls.length,1);
-   const review=await execute(request(t,{
-     allowPublicReadOnlyFetch:true,retryPartialSource:true,
-     expectedExistingSourceDigestSha256:old.archiveSourceDigestSha256,
-     upbitFetchImpl:upbitFetch(calls),
-   }));
-   assert.equal(review.reason,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES");
-   assert.equal(review.status,"BLOCKED_DATA");
-   assert.equal(calls.length,2);
+  const initial=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(initial.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  assert.equal(calls.length,1);
+  const source=t.planning.candidateTasks[0].symbol;
+  const prior=await derive({root:t.root,market:t.market,symbol:source,
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const fresh=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  assert.equal(fresh.partialRetryReviewTasks.length,1);
+  assert.equal(fresh.partialRetryReviewTasks[0].symbol,source);
+  assert.equal(fresh.partialRetryReviewTasks[0].expectedExistingSourceDigestSha256,
+   prior.archiveSourceDigestSha256);
+  assert.notEqual(fresh.partialRetryReviewDigestSha256,
+   fresh.candidateTaskDigestSha256);
+
+  const selected={
+   pages,expectedTaskDigestSha256:fresh.partialRetryReviewDigestSha256,
+   retryPartialSource:true,
+   expectedExistingSourceDigestSha256:prior.archiveSourceDigestSha256,
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  };
+  await assert.rejects(()=>execute(request(t,{
+   ...selected,expectedExistingSourceDigestSha256:null,
+  })),/PIT_MINUTE_TASK_ARGUMENT_INVALID/);
+  assert.equal(calls.length,1);
+
+  const stale=await execute(request(t,{
+   ...selected,pages:t.pages,
+  }));
+  assert.equal(stale.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const wrongKind=await execute(request(t,{
+   ...selected,expectedTaskDigestSha256:fresh.candidateTaskDigestSha256,
+  }));
+  assert.equal(wrongKind.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const wrongLease=await execute(request(t,{
+   ...selected,expectedExistingSourceDigestSha256:SHA,
+  }));
+  assert.equal(wrongLease.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+  const wrongIndex=await execute(request(t,{
+   ...selected,taskIndex:1,
+  }));
+  assert.equal(wrongIndex.reason,"SELECTED_TASK_NOT_ELIGIBLE");
+  assert.equal(calls.length,1,"bad page, lease or task index must never GET");
+
+  const noChange=await execute(request(t,selected));
+  assert.equal(noChange.reason,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES");
+  assert.equal(noChange.status,"BLOCKED_DATA");
+  assert.equal(noChange.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(calls.length,2);
+  const after=await derive({root:t.root,market:t.market,symbol:source,
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  assert.equal(after.sourceMinuteRows,3);
+  assert.equal(after.archiveRevisionCount,1);
+  assert.equal(after.profitabilityProven,false);
  }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+
+test("reviewed partial re-GET may store only a strict extra-native-minute superset, no auto admission",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),calls=[];
+  try{
+   const provider=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:upbitFetch(calls)}:{bitgetClient:bitget(calls)};
+   const first=await execute(request(t,{
+    ...provider,allowPublicReadOnlyFetch:true,
+   }));
+   assert.equal(first.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+   const previousCalls=calls.length;
+   const symbol=t.planning.candidateTasks[0].symbol;
+   const pages=await makePageReceipts(t.root,market,t.manifest);
+   const current=plan({market,day:"2026-09-18",manifest:t.manifest,
+    pages,taskPageIndex:0});
+   const ticket=current.partialRetryReviewTasks[0];
+   assert.equal(ticket.symbol,symbol);
+   assert.equal(ticket.expectedExistingSourceDigestSha256,first.retainedSourceDigestSha256);
+   const upgraded=market==="CRYPTO_SPOT"?{
+    upbitFetchImpl:async(url,opt)=>{
+     calls.push({url,method:opt?.method??"GET"});
+     const pair=new URL(url).searchParams.get("market");
+     const row=ts=>({market:pair,
+      candle_date_time_utc:new Date(ts).toISOString().slice(0,19),
+      opening_price:100,high_price:104,low_price:99,
+      trade_price:102,candle_acc_trade_volume:5});
+     return{ok:true,status:200,json:async()=>[
+      row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+      row(START),row(START-MIN)]};
+    },
+   }:{
+    bitgetClient:{get:async(path,params)=>{
+     calls.push({path,params});
+     const row=ts=>[String(ts),"100","104","99","102","5"];
+     return{code:"00000",data:[
+      row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+      row(START),row(START-MIN)]};
+    }},
+   };
+   const options=request(t,{
+    pages,taskPageIndex:0,taskIndex:0,
+    retryPartialSource:true,
+    expectedExistingSourceDigestSha256:ticket.expectedExistingSourceDigestSha256,
+    expectedTaskDigestSha256:current.partialRetryReviewDigestSha256,
+    allowPublicReadOnlyFetch:true,
+    ...upgraded,
+   });
+   const recovered=await execute(options);
+   assert.equal(recovered.status,"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW");
+   assert.equal(recovered.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+   assert.equal(recovered.priorSourceDigestSha256,first.retainedSourceDigestSha256);
+   assert.notEqual(recovered.retainedSourceDigestSha256,first.retainedSourceDigestSha256);
+   assert.equal(recovered.sourceRevisionAutoSelected,false);
+   assert.equal(recovered.retainedMinuteRows,4);
+   assert.equal(recovered.fullMarketOpportunityDenominatorVerified,false);
+   assert.equal(recovered.profitabilityProven,false);
+   assert.equal(recovered.executionAuthority,"NONE");
+   assert.equal(calls.length,previousCalls+1,"only a single approved provider page in fixture");
+
+   const blocked=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(blocked.reason,"MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+   const old=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,sourceDigestSha256:first.retainedSourceDigestSha256,
+    asOfMs:NOW,timeframes:["1m"]});
+   const selected=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,sourceDigestSha256:recovered.retainedSourceDigestSha256,
+    asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(old.sourceMinuteRows,3);assert.equal(selected.sourceMinuteRows,4);
+   assert.equal(selected.profitabilityProven,false);
+   // A stale source receipt is no longer actionable after extra revision.
+   const repeat=await execute(options);
+   assert.equal(repeat.reason,"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW");
+   assert.equal(calls.length,previousCalls+1);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
 test("PIT task CLI retry cannot execute without explicit previous SHA and public consent",async()=>{
  const t=await setup("CRYPTO_SPOT",2);
  try{
