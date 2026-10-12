@@ -42,7 +42,8 @@ test('budget DDL is server-only and durable; no provider execution or expiration
   assert.ok(source.includes('automatic-live-atomic-budget-v3'));
   assert.ok(source.includes('automatic_live_budget_schema_fingerprint'));
   assert.ok(source.includes('pg_get_expr(p.polwithcheck,p.polrelid)'));
-  assert.ok(source.includes('automatic_live_guard.expected_schema_fingerprint'));
+  assert.ok(source.includes('automatic_live_budget_expected_schema_fingerprint'));
+  assert.ok(!source.includes('automatic_live_guard.expected_schema_fingerprint'));
   assert.ok(source.includes('max(amount_krw) amount_krw,max(risk_krw) risk_krw'));
   assert.ok(source.includes('AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT'));
   assert.ok(installer.includes("is distinct from 'automatic-live-atomic-budget-v3'"));
@@ -58,4 +59,47 @@ test('budget DDL is server-only and durable; no provider execution or expiration
   assert.ok(deploy.includes('ops/apply-production-auto-live-budget.mjs'));
   assert.ok(deploy.includes('production-auto-live-budget-${{ env.TARGET_SHA }}'));
   assert.ok(deploy.indexOf('budget_command=') < deploy.indexOf('Destroy deployment authority before read-only QA'));
+});
+
+test('owner-bound baseline needs no custom-parameter privilege and cannot become a dynamic proof', () => {
+  const source = readFileSync(migration, 'utf8');
+  const rollback = readFileSync(migration.replace('.sql', '.down.sql'), 'utf8');
+  const integration = readFileSync('api-server/supabase/test/automatic_live_atomic_budget_integration.sql', 'utf8');
+  const harness = readFileSync('api-server/scripts/verify-phase8-db.sh', 'utf8');
+  const gate = readFileSync('.github/workflows/production-automatic-trading-gate.yml', 'utf8');
+  assert.ok(source.includes("regexp_replace(p.prosrc,'^select ''[0-9a-f]{32}''::text;$'"));
+  assert.ok(source.includes("substring(p.prosrc from '^select ''([0-9a-f]{32})''::text;$')"));
+  for (const role of ['service_role', 'authenticated', 'anon']) {
+    assert.ok(source.includes(`not pg_has_role('${role}',p.proowner,'MEMBER')`));
+  }
+  assert.ok(source.includes("'language',p.prolang"));
+  assert.ok(source.includes("to_regprocedure('public.automatic_live_budget_expected_schema_fingerprint()')"));
+  assert.ok(!/grant\s+(?:set|all).*on\s+parameter/iu.test(source));
+  assert.ok(!/alter\s+(?:role|user).*superuser/iu.test(source));
+  assert.ok(rollback.includes('drop function if exists public.automatic_live_budget_expected_schema_fingerprint()'));
+  for (const probe of ['ROLLBACK_BASELINE_LITERAL_PROBE', 'ROLLBACK_DYNAMIC_BASELINE_PROBE',
+    'ROLLBACK_BASELINE_ACL_PROBE', 'ROLLBACK_MISSING_BASELINE_PROBE', 'ROLLBACK_BASELINE_OWNER_PROBE']) {
+    assert.ok(integration.includes(probe));
+  }
+  assert.ok(integration.includes('server replaced owner-bound baseline'));
+  assert.ok(integration.includes('authenticated obtained owner-bound baseline'));
+  assert.ok(harness.includes('phase8_budget_owner nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls'));
+  assert.ok(harness.includes("has_parameter_privilege(current_user,'automatic_live_guard.expected_schema_fingerprint','SET')"));
+  assert.ok(harness.includes('set role phase8_budget_owner;'));
+  assert.ok(gate.includes('node --test .github/tests/production-auto-live-budget-contract.test.mjs'));
+  for (const path of [migration, migration.replace('.sql', '.down.sql'),
+    'api-server/supabase/test/automatic_live_atomic_budget_integration.sql', 'api-server/scripts/verify-phase8-db.sh']) {
+    assert.ok(gate.includes(`      - ${path}`));
+  }
+});
+
+test('sealed schema proof reads catalog metadata only, never account rows or credentials', () => {
+  const source = readFileSync(migration, 'utf8');
+  const proof = source.slice(source.indexOf('create or replace function public.automatic_live_budget_expected_schema_fingerprint()'));
+  assert.ok(proof.includes('from pg_proc'));
+  assert.ok(proof.includes('from pg_class'));
+  assert.doesNotMatch(proof, /\bfrom\s+public\.(?:trade_|\w*credential|\w*vault)/iu);
+  assert.doesNotMatch(proof, /\b(?:encrypted_credentials|api_key|apikey|passphrase|authorization|access_sign)\b/iu);
+  assert.ok(proof.includes('from public,anon,authenticated'));
+  assert.doesNotMatch(proof, /\b(?:raise\s+notice|copy\b|http_|net\.http|dblink)/iu);
 });
