@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants as fileConstants } from 'node:fs';
+import { lstat, mkdir, open, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {
   dueTelegramIntelligenceReports,
@@ -23,36 +24,78 @@ import {
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const MAX_STATE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_LEDGER_BYTES = 1_048_576;
 
 export interface TelegramIntelligenceStateStore {
   has(key: string): Promise<boolean>;
+  hasUnconfirmed(key: string): Promise<boolean>;
   markDelivered(key: string, deliveredAt: Date): Promise<void>;
+  markUnconfirmed(key: string, attemptedAt: Date): Promise<void>;
+  releaseExplicitNoSend(key: string, attemptedAt: Date): Promise<void>;
 }
 
 type PersistedState = {
   version: 1;
   delivered: Record<string, string>;
+  unconfirmed?: Record<string, string>;
 };
 
 export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   private loaded = false;
   private blocked = false;
+  private loading: Promise<void> | null = null;
   private delivered = new Map<string, string>();
+  private unconfirmed = new Map<string, string>();
 
   constructor(private readonly statePath: string) {}
 
   private async ensureLoaded(): Promise<void> {
     if (this.blocked) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     if (this.loaded) return;
-    this.loaded = true;
+    if (this.loading) return this.loading;
+    this.loading = this.initializeLedger();
+    try {
+      await this.loading;
+      this.loaded = true;
+    } finally { this.loading = null; }
+  }
+
+  private async initializeLedger(): Promise<void> {
+    let originalLedgerObserved = false;
     try {
       const details = await lstat(this.statePath);
-      if (!details.isFile() || details.isSymbolicLink() || details.size > 1_048_576) {
+      originalLedgerObserved = true;
+      if (!details.isFile() || details.isSymbolicLink()
+        || details.size > MAX_LEDGER_BYTES) {
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       }
-      const raw = await readFile(this.statePath, 'utf8');
-      if (Buffer.byteLength(raw, 'utf8') > 1_048_576) {
-        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const fd = await open(this.statePath,
+        fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW);
+      let raw: string;
+      try {
+        const actual = await fd.stat();
+        if (!actual.isFile() || actual.size > MAX_LEDGER_BYTES
+          || actual.dev !== details.dev || actual.ino !== details.ino) {
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        }
+        // Bounded fd-only read: never follow a swapped pathname and never
+        // load an unbounded file if it grows during the observation.
+        const buffer = Buffer.alloc(MAX_LEDGER_BYTES + 1);
+        let offset = 0;
+        while (offset < buffer.length) {
+          const { bytesRead } = await fd.read(buffer, offset,
+            buffer.length - offset, offset);
+          if (!Number.isSafeInteger(bytesRead) || bytesRead < 0
+            || bytesRead > buffer.length - offset)
+            throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+        if (offset > MAX_LEDGER_BYTES)
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        raw = buffer.subarray(0, offset).toString('utf8');
+      } finally {
+        await fd.close();
       }
       const parsed = JSON.parse(raw) as Partial<PersistedState>;
       if (parsed.version !== 1 || !parsed.delivered || typeof parsed.delivered !== 'object'
@@ -64,11 +107,27 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
         key.length > 1024 || typeof value !== 'string' || !Number.isFinite(Date.parse(value)))) {
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       }
+      const pending = parsed.unconfirmed === undefined ? {} : parsed.unconfirmed;
+      if (!pending || typeof pending !== 'object' || Array.isArray(pending))
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const unconfirmedEntries = Object.entries(pending);
+      if (entries.length + unconfirmedEntries.length > 10000
+        || unconfirmedEntries.some(([key, value]) =>
+          !key.startsWith('telegram-intelligence:') || key.length > 1024
+          || typeof value !== 'string' || !Number.isFinite(Date.parse(value))
+          || Object.prototype.hasOwnProperty.call(parsed.delivered, key)))
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       for (const [key, value] of entries) this.delivered.set(key, value);
+      for (const [key, value] of unconfirmedEntries) this.unconfirmed.set(key, value);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      // An initially absent ledger can legitimately start empty. But a
+      // ledger that disappears AFTER a successful lstat is a dangerous
+      // swap/race, not proof that no prior Telegram send occurred.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT'
+        && !originalLedgerObserved) return;
       this.blocked = true;
       this.delivered.clear();
+      this.unconfirmed.clear();
       logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
         'telegram intelligence persisted dedupe state unreadable; scheduled sends blocked');
       throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
@@ -79,36 +138,71 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
     await this.ensureLoaded();
     return this.delivered.has(key);
   }
-
+  async hasUnconfirmed(key: string): Promise<boolean> {
+    await this.ensureLoaded();
+    return this.unconfirmed.has(key);
+  }
   async markDelivered(key: string, deliveredAt: Date): Promise<void> {
+    return this.persist(key, deliveredAt, true);
+  }
+  async markUnconfirmed(key: string, attemptedAt: Date): Promise<void> {
+    return this.persist(key, attemptedAt, false);
+  }
+  /** Only a documented local skip or explicit Bot API rejection may release a
+   * pre-send reservation; an uncertain POST must stay permanently blocked. */
+  async releaseExplicitNoSend(key: string, attemptedAt: Date): Promise<void> {
+    return this.persist(key, attemptedAt, null);
+  }
+  private async persist(key: string, at: Date, confirmed: boolean | null): Promise<void> {
     await this.ensureLoaded();
     try {
       if (!key.startsWith('telegram-intelligence:') || key.length > 1024
-        || !Number.isFinite(deliveredAt.getTime())) {
+        || !Number.isFinite(at.getTime())) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const nextDelivered = new Map(this.delivered);
+      const nextUnconfirmed = new Map(this.unconfirmed);
+      const cutoff = at.getTime() - MAX_STATE_AGE_MS;
+      // Confirmed receipts have a bounded dedupe lifetime, but an ambiguous
+      // remote POST is never made retry-safe solely by the passage of time.
+      for (const [candidate, timestamp] of nextDelivered)
+        if (Date.parse(timestamp) < cutoff) nextDelivered.delete(candidate);
+      if (confirmed === true) {
+        nextUnconfirmed.delete(key);
+        nextDelivered.set(key, at.toISOString());
+      } else if (confirmed === false) {
+        if (nextDelivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        nextUnconfirmed.set(key, at.toISOString());
+      } else {
+        if (nextDelivered.has(key) || !nextUnconfirmed.has(key))
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        nextUnconfirmed.delete(key);
+      }
+      if (nextDelivered.size + nextUnconfirmed.size > 10000)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
-      }
-      // Never mutate the active in-memory dedupe state before durable rename.
-      // If Bot API already accepted the message but persistence fails, the
-      // worker must stop rather than silently claim a successful receipt.
-      const next = new Map(this.delivered);
-      const cutoff = deliveredAt.getTime() - MAX_STATE_AGE_MS;
-      for (const [candidate, timestamp] of next) {
-        if (Date.parse(timestamp) < cutoff) next.delete(candidate);
-      }
-      next.set(key, deliveredAt.toISOString());
-      if (next.size > 10000) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
-      const payload: PersistedState = { version: 1, delivered: Object.fromEntries(next) };
+      const payload: PersistedState = { version: 1,
+        delivered: Object.fromEntries(nextDelivered),
+        unconfirmed: Object.fromEntries(nextUnconfirmed) };
       const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-      if (Buffer.byteLength(serialized, 'utf8') > 1_048_576)
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_LEDGER_BYTES)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       await mkdir(path.dirname(this.statePath), { recursive: true });
       const temporary = `${this.statePath}.${process.pid}.tmp`;
-      await writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
+      const fd = await open(temporary,
+        fileConstants.O_WRONLY | fileConstants.O_CREAT
+          | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
+      try {
+        await fd.writeFile(serialized, { encoding: 'utf8' });
+        await fd.sync();
+      } finally { await fd.close(); }
       await rename(temporary, this.statePath);
-      this.delivered = next;
+      // The rename itself must survive a host crash before the POST starts.
+      const directory = await open(path.dirname(this.statePath), fileConstants.O_RDONLY);
+      try { await directory.sync(); } finally { await directory.close(); }
+      this.delivered = nextDelivered;
+      this.unconfirmed = nextUnconfirmed;
     } catch {
       this.blocked = true;
       this.delivered.clear();
+      this.unconfirmed.clear();
       logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
         'telegram intelligence dedupe write failed; further scheduled sends blocked');
       throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
@@ -118,13 +212,21 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
 
 export class MemoryTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   readonly delivered = new Set<string>();
-
-  async has(key: string): Promise<boolean> {
-    return this.delivered.has(key);
-  }
-
+  readonly unconfirmed = new Set<string>();
+  async has(key: string): Promise<boolean> { return this.delivered.has(key); }
+  async hasUnconfirmed(key: string): Promise<boolean> { return this.unconfirmed.has(key); }
   async markDelivered(key: string): Promise<void> {
+    this.unconfirmed.delete(key);
     this.delivered.add(key);
+  }
+  async markUnconfirmed(key: string): Promise<void> {
+    if (this.delivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
+    this.unconfirmed.add(key);
+  }
+  async releaseExplicitNoSend(key: string): Promise<void> {
+    if (this.delivered.has(key) || !this.unconfirmed.has(key))
+      throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
+    this.unconfirmed.delete(key);
   }
 }
 
@@ -135,6 +237,13 @@ function reportLabel(kind: TelegramIntelligenceReportKind): string {
     case 'US_PREMARKET': return '미국장 프리마켓 브리핑';
     case 'WEEKLY': return '주간 브리핑';
   }
+}
+
+export function safeTelegramBriefFailureCode(error: unknown):
+  'TELEGRAM_BRIEF_TIMEOUT' | 'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE' {
+  // Never expose provider exception strings (may include tokens/URLs).
+  return error instanceof Error && error.name === 'AbortError'
+    ? 'TELEGRAM_BRIEF_TIMEOUT' : 'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE';
 }
 
 function reportDetails(kind: TelegramIntelligenceReportKind, localDate: string): string {
@@ -207,7 +316,7 @@ export class TelegramIntelligenceWorker {
           briefSnapshot = await this.collectBrief();
         } catch (error) {
           logger.warn(
-            { error: error instanceof Error ? error.message : 'unknown' },
+            { code: safeTelegramBriefFailureCode(error) },
             'telegram rich market brief unavailable; using safety fallback',
           );
         }
@@ -230,7 +339,10 @@ export class TelegramIntelligenceWorker {
             result.deduped += 1;
             continue;
           }
-          result.attempted += 1;
+          if (await this.store.hasUnconfirmed(deliveryKey)) {
+            result.failed += 1;
+            continue;
+          }
           const alert = briefSnapshot
             ? buildTelegramMarketBriefInput({
                 kind: plan.kind,
@@ -251,16 +363,34 @@ export class TelegramIntelligenceWorker {
                 duplicateWindowMs: 24 * 60 * 60 * 1000,
                 cooldownMs: 0,
               };
+          // Checkpoint an UNKNOWN outcome *before* the non-idempotent Bot API
+          // POST, not after it. A crash following remote acceptance must not
+          // cause the next process to retransmit this report.
+          await this.store.markUnconfirmed(deliveryKey, now);
+          result.attempted += 1;
           const delivered = await this.deliver(alert);
           if (delivered.ok) {
             await this.store.markDelivered(deliveryKey, now);
             result.delivered += 1;
-          } else if (delivered.skipped === 'DUPLICATE') {
-            await this.store.markDelivered(deliveryKey, now);
-            result.deduped += 1;
-          } else if (delivered.skipped === 'NOT_CONFIGURED') {
+          } else if (delivered.attempts === 0
+            && delivered.skipped === 'NOT_CONFIGURED') {
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.notConfigured += 1;
+          } else if (delivered.attempts === 0
+            && delivered.skipped === 'COOLDOWN') {
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
+            result.deduped += 1;
+          } else if (delivered.skipped === 'DELIVERY_FAILED'
+            && (delivered.errorCode === 'TELEGRAM_API_REJECTED'
+              || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
+                .test(delivered.errorCode ?? ''))) {
+            // A specific rejection proves that Telegram did not accept this
+            // POST. Other transport errors must retain the reservation.
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
+            result.failed += 1;
           } else {
+            // DUPLICATE is not a remote receipt (the other call may still be
+            // in-flight). Unknown/failed results require reconciliation.
             result.failed += 1;
           }
         }
