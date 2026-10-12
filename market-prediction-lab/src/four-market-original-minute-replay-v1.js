@@ -35,9 +35,16 @@ const DATES=/^\d{4}-\d{2}-\d{2}$/;
 const SHA=/^[a-f0-9]{64}$/;
 const CURRENT_SCOPE="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
 const PIT_SCOPE="HISTORICAL_PIT_ROSTER";
+// Preserve existing current-source contracts and recognize the equivalent
+// raw public 1-minute collector identities from #1859. This is not a claim
+// of historical source authenticity, PIT coverage, fills, or profitability.
 const CURRENT_SOURCE_IDS=Object.freeze({
-  CRYPTO_SPOT:"UPBIT_PUBLIC_REST_RETROSPECTIVE_1M",
-  CRYPTO_FUTURES:"BITGET_PUBLIC_V2_RETROSPECTIVE_1M",
+  CRYPTO_SPOT:Object.freeze([
+    "UPBIT_PUBLIC_REST_RETROSPECTIVE_1M", "UPBIT_PUBLIC_1M",
+  ]),
+  CRYPTO_FUTURES:Object.freeze([
+    "BITGET_PUBLIC_V2_RETROSPECTIVE_1M", "BITGET_PUBLIC_FUTURES_1M",
+  ]),
 });
 const FRAMES=new Set(["1m","3m","5m","15m","30m","1h","4h","1d"]);
 const STATUS=Object.freeze({
@@ -96,15 +103,20 @@ export function resolveOriginalMinuteEvidenceScopeV1(input={}){
     ||input.manifest!=null||input.stockCalendar!=null
     ||typeof input.symbol!=="string"
     ||!(input.market==="CRYPTO_SPOT"
-      ?/^KRW-[A-Z0-9]{1,32}$/u.test(input.symbol)
+      ?/^(?:KRW-[A-Z0-9]{1,32}|[A-Z0-9]{1,20})$/u.test(input.symbol)
       :/^[A-Z0-9\p{Script=Han}]{1,36}USDT$/u.test(input.symbol))
     ||!SHA.test(input.expectedCurrentRosterDigestSha256??""))
     fail("PRIVATE_REPLAY_CURRENT_SOURCE_SCOPE_INVALID");
   const checked=validatePublicNativeCryptoRosterCaptureV1(
     input.currentRosterCapture,input.expectedCurrentRosterDigestSha256);
   const roster=input.currentRosterCapture?.roster;
+  // The public collector stores BTC while Upbit's signed roster identifies
+  // the very same KRW market as KRW-BTC. Match roster only, never rewrite
+  // immutable source candles, timestamps, prices, digests, or sourceId.
+  const rosterSymbol=input.market==="CRYPTO_SPOT"
+    &&!input.symbol.startsWith("KRW-")?"KRW-"+input.symbol:input.symbol;
   if(checked.ok!==true||roster.market!==input.market
-    ||roster.venue!==VENUES[input.market]||!roster.symbols.includes(input.symbol)
+    ||roster.venue!==VENUES[input.market]||!roster.symbols.includes(rosterSymbol)
     ||!integer(input.asOfMs,1,8_000_000_000_000)
     ||roster.observedAtMs>input.asOfMs)
     fail("PRIVATE_REPLAY_CURRENT_ROSTER_CAPTURE_OR_MEMBER_INVALID");
@@ -572,7 +584,7 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
         modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
     if(cfg.sourceOnlyMode&&(data.market!==cfg.market||data.symbol!==cfg.symbol
       ||data.venue!==VENUES[cfg.market]
-      ||data.sourceId!==CURRENT_SOURCE_IDS[cfg.market]))
+      ||!CURRENT_SOURCE_IDS[cfg.market].includes(data.sourceId)))
       return safe({...response,reason:"CURRENT_SOURCE_NATIVE_PROVIDER_OR_VENUE_MISMATCH",
         modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
     const frame=data.intervalData?.[cfg.timeframe];
