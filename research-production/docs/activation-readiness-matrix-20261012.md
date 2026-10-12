@@ -7,7 +7,7 @@
 - Base main: `032efa64ccd09d3c1049167c0009121a826596a9`
 - Original 1-minute intake/gap/backfill/capacity: source Draft #1859 `895a9f0d4e031307bdded65e29a9096655832975` (29 exact blob paths).
 - AI research review → bounded canonical formula TRAIN: source Draft #1860 `d6049a6291365adc9a15d6434bce199928c50f06` (9 exact blob paths).
-- Production Natural evidence truth (three forward tasks, stale cycle/release): source Draft #1756 `f7300c8f84b192885d98ae065c796b5dd7a4fa8a` (4 paths). Each file was independently verified unchanged on main compared with its source base before copying.
+- Natural Production three-task/stale-release observer owner Draft #1756 `f7300c8f84b192885d98ae065c796b5dd7a4fa8a` is **explicitly excluded**. Its Paper Forward Schedule protected scope rejects mixing read-only observer changes with original-data/AI changes. Do not weaken this gate; owner #1756 requires separate source-scoped integration/QA and separate permission.
 - Changes from these source owners are retained on their own Drafts. This QA integration is not authority to merge any source owner or activate its worker.
 
 ## One-batch predeploy GO/NO-GO matrix
@@ -25,11 +25,11 @@
 | App Research Center UI | Authenticated admin PIT-minute evidence readback and selectable-window original 1m Backtester, PC/mobile Staging journeys | **NO_GO**; separate source owner #1832 remains unmerged |
 | Release control | Frozen exact main, Required 6/6 in one coherent successful run; approved source PRs merged; approved protected Staging runtime + read-only QA | **NO_GO** until separately approved |
 
-Prior read-only Production observation: natural Run #38258127017 observed timers enabled, 3 forward tasks BLOCKED_DATA, UNIVERSE=825 → SCANNER=20 → CANDIDATE=9 → EVIDENCE_COMPLETE=0 (`P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING`), Paper state `PAPER_STATE_SOURCE_SHA_MISMATCH`, supplemental costs MISSING, Paper positions/settlements 0. An older observed runtime is not a report that this Draft was deployed.
+Prior read-only Production observation (separate source observer remains unmerged): natural Run #38258127017 observed timers enabled, 3 forward tasks BLOCKED_DATA, UNIVERSE=825 → SCANNER=20 → CANDIDATE=9 → EVIDENCE_COMPLETE=0 (`P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING`), Paper state `PAPER_STATE_SOURCE_SHA_MISMATCH`, supplemental costs MISSING, Paper positions/settlements 0. An older observed runtime is not a report that this Draft was deployed.
 
 ## Safe staging order
 
-1. Keep this PR Draft. Verify exact frozen paths and all focused tests before invoking one exact-head required Full CI. Do not count an older head's green run.
+1. Keep this PR Draft and keep #1756 on its separately protected owner. Verify exact frozen paths and all focused tests before invoking one exact-head required Full CI. Do not count an older head's green run.
 2. Run read-only original source/provider rights/capacity/storage audit. Do **not** silently increase API budget or synthesize missing candles; distinguish normal no-trade minutes from source outages.
 3. Complete and independently review the app PIT UI/API source owner's protected scope separately; do not circumvent its unrelated-owner guard to produce a green integration CI.
 4. With independently approved provider/source rights and real server resources, create signed source receipts. Independently inspect fresh forward research, AI PROPOSER/CRITIC, TRAIN, OOS/WF, cost and Paper-state identity; `BLOCKED_DATA` and `UNKNOWN` are not PASS.
