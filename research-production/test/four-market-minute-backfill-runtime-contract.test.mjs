@@ -70,6 +70,12 @@ test('capacity-only CLI reads protected scope and performs zero provider calls/w
     assert.equal(payload.pacingPreflight.status,'OPERATOR_REVIEW_REQUIRED');
     assert.equal(payload.pacingPreflight.maxSequentialActionsWithReserve,23);
     assert.equal(payload.pacingPreflight.actualRuntimeMaximumActionsPerCycle,16);
+    assert.equal(payload.pacingPreflight.alternatePage200Scenario.dailyRequiredPages,3200);
+    assert.equal(payload.pacingPreflight.alternatePage200Scenario.minActionsPerCycleWithHeadroom,14);
+    assert.equal(payload.pacingPreflight.alternatePage200Scenario.status,
+      'HYPOTHETICAL_NOT_EXECUTABLE');
+    assert.equal(payload.pacingPreflight.alternatePage200Scenario.enabled,false);
+    assert.equal(payload.pacingPreflight.declaredBackfillRanges,0);
     assert.equal(payload.pacingPreflight.actionable,false);
     assert.equal(payload.pacingPreflight.providerRateBudgetVerified,false);
     assert.equal(payload.providerCalls,0);

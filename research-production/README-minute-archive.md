@@ -316,3 +316,49 @@ NO Replit, NO Ready/Merge/Deploy/Production, NO Vultr/PM2/systemd changes, NO li
 - 이 테스트는 `MINUTE_QUEUE_LIMITS.maxActionsPerCycle=16`과 실제 5분 timer, systemd 자원 한도, enabled=false 기본값을 변경하지 않습니다. 38회 동시/병렬 처리 작업도 허용하거나 실행하지 않습니다. 앞으로 필요할 수 있는 병렬성 수치는 **산술적인 하한**이며 락/큐 원장 일관성·저장소 IOPS·provider 429·공용 IP 권한·실제 Vultr 사용량 측정 전에는 설계 승인으로 간주하지 않습니다.
 - 주식 KR/US는 24시간 코인 전제를 사용하지 않으며, 별도 공식 장 일정·법적 원본 공급원·과거 PIT 상장폐지·기업행위/환율 사용 조건이 확보되지 않으면 `STOCK_SESSION_NOT_MODELLED`로 계속 차단합니다.
 - 모든 경로 `profitabilityProven=false`, `continuous24hProven=false`, `executionAuthority=NONE`, 리프릿 사용 0, Ready/Merge/Staging/Production/systemd/PM2/cron/개인 거래소 API/실주문 0.
+
+
+### 2026-10-13 — Read-only 200-minute alternative and historical backfill origin budget
+
+This is `--capacity` arithmetic only. The ACTIVE collector still accepts
+**120-minute immutable pages, 16 actions / 5 minutes**, with a 210-second
+flock child timeout and 15-second shutdown reserve. Nothing is installed or
+enabled. No public-provider GET is sent by this preflight.
+
+- Official public references: Upbit minute-candle API
+  https://docs.upbit.com/kr/reference/list-candles-minutes and Bitget **v2**
+  history-candles
+  https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market
+  each document at most **200 returned 1m candles per request**. A documented
+  response cap is NOT validation of 200-minute source-window continuity,
+  historical availability, gap absence or trading/backtester authorization.
+- New `pacingPreflight.alternatePage200Scenario` reports a deliberately
+  **HYPOTHETICAL_NOT_EXECUTABLE** model. At the *example only* 294 Upbit KRW +
+  466 Bitget USDT-futures symbols, it shows 6,080 pages/day at 200 minutes
+  per page; with 20% headroom, 7,296 actions/day or at least 26/5min;
+  the 16/5min hard cap still fails. If each request takes 8 seconds plus
+  300 ms spacing, 26 sequential calls cost 215,500 ms, exceeding the
+  current conservative 195,000 ms worker allowance. These are planning
+  bounds, not host/IP throughput measurements.
+- Another *hypothetical* 2-minute cadence would need 11 actions / 2min
+  under this simple 200m model, but no 2-minute timer has been installed.
+  Current 120-minute collector, immutable archive layout, durable cursor,
+  day rollup and #1848 native replay/prewire (minimum 12 source page digests)
+  are **not contract-compatible with a silent 200-minute switch**. A separate
+  versioned migration, sealed source receipts, overlapping-page/cross-day
+  verification and exact-head offline/browser regression are prerequisites.
+- The preflight also reports `declaredBackfillRanges` and
+  `declaredBackfillPagesFromOrigin` (120m) plus the hypothetical 200m
+  origin estimate. These counts describe manifest-origin historical requests,
+  NOT current outstanding work: the protected on-server cursor is *not*
+  read, and its true remaining pages and shared-provider retry/429 load are
+  unverified. Continuous 24h capacity MUST NOT silently include claimed
+  catch-up/backfill throughput.
+- Malformed/duplicate manifest scopes are rejected before computing a
+  seemingly authoritative budget. Stock exchange session-specific throughput,
+  current and delisted PIT membership, vendor licenses, corporate actions,
+  historical FX, actual provider restrictions, Vultr disk/inodes/backup,
+  24-hour continuity, OOS/full-cost/Paper profit remain UNKNOWN/BLOCKED.
+- No real vendor GET, no server credentials/DB mutation, no systemd/PM2,
+  Staging/Production, Merge/Ready, orders or Telegram sends. Replit/Replit
+  Agent is prohibited. This is not an authorization or release receipt.
