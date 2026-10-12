@@ -12,6 +12,8 @@
 2. 역할 `PROPOSER`이며 `RESEARCH_PROPOSAL_ONLY`인 항목만 다음 단계. 실제 초기 AI 활성화에서 확인된 `forward/CRITIC`은 제안 검토만 하고 자동 수식 큐를 생성하지 않습니다.
 3. 별도로 원본 연구가설 승인 이력과 해시가 존재하는 *기존* FormulaCandidate만 허용. 모델이 임의로 반환한 JavaScript, 매매코드, AST, 가격, 포지션/주문 필드는 받아들이지 않습니다.
 4. 4시장 정책: KR/US/Spot LONG만, Futures LONG/SHORT. 원본 TRAIN dataset 날짜/분봉/방향/신원·비용 입력을 기존 정식 큐 Validator로 검증합니다.
+   - AI 원본 검토의 `observedAt`을 불변 `queuedAt` 기준으로 바인딩하여 동일한 AI 가설·수식·데이터를 훗날 재실행해도 새 digest를 발급하지 않습니다.
+   - 외부 source verifier는 원본 자료가 AI 평가 시점 **이전에 실제 확보**됐고, 해당 AI 평가·정식 수식 ID/hash·원본 데이터의 검토 매핑 digest를 독립 검토한 사실을 명시해야 합니다. 사후 확보 데이터나 잘못된 관계는 HOLD 처리합니다.
 5. 검증된 원본 아카이브의 **외부 소유권이 있는 verifier**가 정확한 dataset hash·연구 SHA·권리·시각·출처를 확인해야 TRAIN outbox 등록 후보가 됩니다. 기본 verifier 없음 → HOLD. 외부 verifier의 서명/신뢰성 자체는 이 코드만으로 증명되지 않으므로 실제 데이터 인증 완료로 보고하지 않습니다.
 6. 기본값은 **순수 미리보기**. 쓰기를 요청해도 `RESEARCH_AI_FORMULA_TRAIN_STAGE_ENABLED=true`가 별도로 설정되지 않으면 거부합니다. 연결부를 호출하는 새 timer/systemd/cron은 추가하지 않았으며 이 환경변수를 운영에 설정하지 않았습니다.
 7. opt-in Staging은 서비스 외부 계좌/DB가 아닌 격리 연구 state에만 0600 불변 digest 파일을 독점 생성합니다. 일치 재시도는 중복으로 보존, 다른 내용을 동일 digest 이름에 덮어쓰지 않습니다. 부모 폴더 0700, 연구 root 0700/0750, no-symlink/no-hardlink 경계 및 fsync 검증.
