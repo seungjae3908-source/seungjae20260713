@@ -125,6 +125,9 @@ jobs:
           if (!config.includes("screenshot: 'off'")) {
             throw new Error('Authenticated Production QA must not retain raw screenshots');
           }
+          if (/\bpage\.screenshot\s*\(/u.test(comprehensiveSpec + researchSpec)) {
+            throw new Error('Explicit authenticated screenshots bypass the structured-only evidence policy');
+          }
           if (!uploadStep.includes('stock-analyzer/production-comprehensive-artifacts')) {
             throw new Error('Structured Production QA evidence must remain uploaded');
           }

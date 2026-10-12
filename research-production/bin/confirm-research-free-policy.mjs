@@ -1,6 +1,7 @@
 import { lstat, open, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { buildConfirmedResearchPolicies } from '../src/research-free-policy-confirmation.mjs';
+import { readBoundedPrivateFile } from '../../ops/research-activation-preflight.mjs';
 
 // Called only by the protected owner/exact-main activation workflow. No credentials are read.
 if (process.platform !== 'linux' || process.getuid?.() !== 0) throw new Error('RESEARCH_CONFIRMATION_ROOT_REQUIRED');
@@ -20,7 +21,9 @@ async function policyText(name) {
 }
 const plan = buildConfirmedResearchPolicies({
   aiText: await policyText('research-ai.env'), videoText: await policyText('research-video.env'),
-  targetSha: process.env.TARGET_SHA, ownerCommentId: process.env.RESEARCH_FREE_ONLY_OWNER_COMMENT_ID, observedAt: Date.now(),
+  targetSha: process.env.TARGET_SHA,
+  appSha: readBoundedPrivateFile('/opt/stock-app/.deploy/current-sha').trim(),
+  ownerCommentId: process.env.RESEARCH_FREE_ONLY_OWNER_COMMENT_ID, observedAt: Date.now(),
 });
 async function atomicWrite(name, value, mode) {
   const path = join(root, name), temp = path + '.' + process.pid + '.tmp';

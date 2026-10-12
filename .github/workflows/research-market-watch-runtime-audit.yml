@@ -48,6 +48,7 @@ jobs:
       startsWith(github.event.comment.body, '/audit-market-watch ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: production
     env:
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
