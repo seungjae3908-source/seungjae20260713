@@ -3,6 +3,7 @@ import {
   resolveSelectedResearchWindowV1, UTC_DAY_MS_V1 as DAY,
 } from "./research-selected-window-v1.js";
 import { inspectArchivedResearchMinuteSessionV1 } from "./research-minute-archive-v1.js";
+import { isHistoricalNativeSymbolV1 } from "./historical-native-symbol-v1.js";
 
 /**
  * Read-only, bounded source-inventory audit for ONE market/symbol per call.
@@ -19,7 +20,6 @@ const MARKETS = Object.freeze({
   KR_STOCK: "KRX", US_STOCK: "US_SIP",
   CRYPTO_SPOT: "UPBIT_KRW", CRYPTO_FUTURES: "BITGET_USDT_FUTURES",
 });
-const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const SESSION_KINDS = new Set(["REGULAR", "PREMARKET", "AFTERMARKET"]);
 const utc = ms => new Date(ms).toISOString().slice(0, 10);
@@ -121,7 +121,7 @@ export async function auditResearchMinuteArchiveWindowV1({
   chunkUtcDays = 7, stockCalendar = null,
 } = {}) {
   if (!Object.prototype.hasOwnProperty.call(MARKETS, market)
-    || typeof symbol !== "string" || !SYMBOL.test(symbol)
+    || typeof symbol !== "string" || !isHistoricalNativeSymbolV1(market,symbol)
     || typeof root !== "string" || !isAbsolute(root)
     || resolve(root) !== root)
     fail("MINUTE_WINDOW_SCOPE_INVALID");

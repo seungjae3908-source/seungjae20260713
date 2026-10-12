@@ -5,6 +5,7 @@ import {reviewOriginalMinuteForCanonicalPaperV1,validOriginalMinuteEvidenceScope
   "./four-market-original-minute-candidate-review-v1.js";
 import {isOriginalMinuteBacktestSymbolV1} from
   "../../packages/strategy-hypothesis/src/original-minute-backtest.js";
+import {isHistoricalNativeSymbolV1} from "./historical-native-symbol-v1.js";
 
 /**
  * Admin-only source of SANITIZED local research-diagnostic readback.
@@ -20,7 +21,6 @@ const PERIOD="four-market-original-minute-period-v1";
 const SWEEP="four-market-original-minute-sweep-v1";
 const WINDOW=/^\d{4}-\d{2}-\d{2}$/u;
 const STATUS=/^[A-Z][A-Z0-9_]{0,119}$/u;
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const NONE="NONE";
 const SHA=/^[a-f0-9]{64}$/u;
 const MAX_PUBLICATION_AGE_MS=7*86_400_000;
@@ -108,7 +108,7 @@ function verifyRaw(raw,market,sweepResult=null){
     if(available&&raw.status!=="SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY")
       throw new TypeError("NATIVE_DIAGNOSTIC_PERIOD_STATUS_SCHEMA_MISMATCH");
     const current=raw.evidenceScope==="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
-    if(!(current?isOriginalMinuteBacktestSymbolV1(market,raw.symbol):SYMBOL.test(raw.symbol??""))
+    if(!(current?isOriginalMinuteBacktestSymbolV1(market,raw.symbol):isHistoricalNativeSymbolV1(market,raw.symbol))
       ||(available&&(!count(raw.indexedPrivateSessions)
         ||!count(raw.verifiedNativeMinuteSessions)
         ||raw.verifiedNativeMinuteSessions!==raw.indexedPrivateSessions
