@@ -30,3 +30,16 @@ test('history detects same-count backdated transitions and incomplete/duplicate 
     async page() { return [{ id: 'same', updated_at: 'now', payload: {} }, { id: 'same', updated_at: 'now', payload: {} }]; },
     project: (v) => v }), /CURSOR_INVALID/);
 });
+
+test('out-of-order, oversized and malformed-time pages cannot certify complete history', async () => {
+  const row = (id: string, at = '2026-10-12T00:00:00Z') => ({ id, updated_at: at, payload: {} });
+  for (const rows of [[row('b'), row('a')], [row('a', 'INVALID_TIMESTAMP')],
+    Array.from({ length: 501 }, (_, index) => row(String(index).padStart(8, '0')))]) {
+    let reads = 0;
+    await assert.rejects(readCompleteTradingHistory({
+      snapshot: async () => ({ count: rows.length, lastUpdatedAt: '2026-10-12T00:00:00Z' }),
+      page: async () => { reads += 1; return rows; }, project: (value) => value,
+    }), /TRADE_HISTORY_CURSOR_INVALID/);
+    assert.equal(reads, 1, 'invalid traversal is rejected before confirmation, without retry');
+  }
+});

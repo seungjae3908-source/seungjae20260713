@@ -71,3 +71,17 @@ test('pre-aborted body is cancelled and invalid limits or raw-text error codes a
     await assert.rejects(readBoundedTradingProviderJson(new Response('{}'), input), /CONFIG_INVALID/);
   }
 });
+
+test('a midstream socket rejection never exposes raw exception text or an arbitrary thrown value', async () => {
+  for (const cause of [new Error('PROVIDER_API_KEY_SECRET'), new TypeError('SOCKET_PASSPHRASE_SECRET'), 'RAW_SIGNATURE_SECRET']) {
+    let pulls = 0;
+    const response = new Response(new ReadableStream({ pull(stream) {
+      pulls += 1;
+      if (pulls === 1) stream.enqueue(new TextEncoder().encode('{"ok":'));
+      else stream.error(cause);
+    } }));
+    await assert.rejects(readBoundedTradingProviderJson(response, config()),
+      (error: unknown) => error instanceof Error && error.message === 'FAKE_PROVIDER_RESPONSE_INVALID');
+    assert.equal(response.body!.locked, false);
+  }
+});

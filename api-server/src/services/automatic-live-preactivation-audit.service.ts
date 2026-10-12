@@ -10,9 +10,83 @@ import { isFormulaAiLiveExceptionStrategyId } from './formula-ai-live-exception.
 
 export type PreactivationCheck = Readonly<{ id: string; status: 'PASS' | 'BLOCKED'; codes: readonly string[] }>;
 const providers: readonly AccountProvider[] = ['toss', 'kiwoom', 'upbit', 'bitget'];
+// Letter casing is not sanitization: provider exceptions can contain uppercase
+// API keys. Preserve only known internal causes; never return arbitrary text.
+const SAFE_AUDIT_ERRORS = new Set([
+  'ACCOUNT_NOT_CONFIGURED', 'CREDENTIALS_UNAVAILABLE', 'ACCOUNT_READONLY_USER_SCOPE_MISMATCH',
+  'ACCOUNT_READONLY_CREDENTIAL_STORAGE_UNAVAILABLE', 'AUTH_REVOKED', 'AUTH_FAILED',
+  'TOSS_AUTH_FAILED', 'TOSS_TOKEN_AUTH_FAILED', 'TOSS_ACCOUNT_API_AUTH_FAILED', 'TOSS_IP_NOT_ALLOWED',
+  'UPBIT_AUTH_FAILED', 'UPBIT_IP_NOT_ALLOWED', 'UPBIT_PERMISSION_DENIED',
+  'BITGET_AUTH_FAILED', 'BITGET_IP_NOT_ALLOWED', 'BITGET_PERMISSION_DENIED', 'BITGET_TIMESTAMP_REJECTED',
+  'KIWOOM_AUTH_OR_IP_REJECTED', 'RATE_LIMITED', 'PROVIDER_TIMEOUT', 'PROVIDER_UNAVAILABLE',
+  'HANDOFF_ENTRY_STALE', 'TRADE_HISTORY_BOUND_EXCEEDED', 'TRADE_HISTORY_CURSOR_INVALID',
+  'TRADE_HISTORY_CHANGED_DURING_READ', 'USER_SCOPE_MISMATCH',
+  'AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY',
+  'BACKGROUND_LIVE_OWNERSHIP_HISTORY_INCOMPLETE', 'BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS',
+  'BACKGROUND_LIVE_CANONICAL_PLAN_MISSING', 'BACKGROUND_LIVE_CANONICAL_FILL_RECONCILIATION_REQUIRED',
+  'BACKGROUND_LIVE_CANONICAL_EXIT_PARENT_MISMATCH', 'BACKGROUND_LIVE_CANONICAL_EXIT_DIRECTION_INVALID',
+  'BACKGROUND_LIVE_CANONICAL_EXIT_QUANTITY_DRIFT', 'BACKGROUND_LIVE_ACCOUNT_SNAPSHOT_NOT_FRESH',
+  'BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE', 'BACKGROUND_LIVE_OPEN_ORDERS_UNRECONCILED',
+  'BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED', 'BITGET_NATIVE_PROTECTION_CREDENTIAL_REQUIRED',
+  'BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED',
+]);
 function safeCode(error: unknown) {
   const code = error instanceof Error ? error.message.split(':')[0] : '';
-  return /^[A-Z][A-Z0-9_]{0,120}$/u.test(code) ? code : 'PREACTIVATION_EVIDENCE_UNAVAILABLE';
+  return SAFE_AUDIT_ERRORS.has(code)
+    || /^(?:BITGET|UPBIT|KIWOOM|TOSS)_(?:AUTH_FAILED|AUTH_OR_IP_REJECTED|TIMEOUT|CONFLICT|RATE_LIMITED|UNAVAILABLE|NETWORK_ERROR|HTTP_[1-5]\d{2})$/u.test(code)
+    ? code : 'PREACTIVATION_EVIDENCE_UNAVAILABLE';
+}
+
+type LifecyclePhase = 'release' | 'activation' | 'preflight' | 'execution' | 'runtime' | 'all';
+type LifecycleControl = Readonly<{ id: string; phase: LifecyclePhase; observedBy?: readonly string[] }>;
+const LIFECYCLE_CONTROLS: readonly LifecycleControl[] = [
+  { id: 'MAIN_PRODUCTION_IDENTITY', phase: 'release' },
+  { id: 'REQUIRED_CI_AND_STAGING', phase: 'release' },
+  { id: 'FRESH_QA_ARTIFACTS', phase: 'release' },
+  { id: 'EXACT_MANUAL_RECEIPTS', phase: 'activation' },
+  { id: 'NO_GATE_CONFLICT', phase: 'activation' },
+  { id: 'OWNER_POLICY', phase: 'preflight', observedBy: ['FOUR_MARKET_POLICY', 'OWNER_APPROVED_POLICY_ALIGNMENT'] },
+  { id: 'MEMBER_AND_GLOBAL_STOPS', phase: 'preflight', observedBy: ['MEMBER_CAPABILITY', 'GLOBAL_AND_MEMBER_STOP'] },
+  { id: 'FOUR_PROVIDER_CREDENTIALS', phase: 'preflight', observedBy: ['FOUR_PROVIDER_CREDENTIALS', ...providers.map((p) => `ACCOUNT_${p.toUpperCase()}`)] },
+  { id: 'SCANNER_PRODUCER_CONNECTED', phase: 'preflight', observedBy: ['GENUINE_SCANNER_AND_AI_CONNECTION'] },
+  { id: 'AI_PRODUCER_CONNECTED', phase: 'preflight', observedBy: ['GENUINE_SCANNER_AND_AI_CONNECTION', 'CURRENT_AI_EVIDENCE'] },
+  { id: 'STRATEGY_EXECUTION_LINKAGE', phase: 'preflight', observedBy: ['STRATEGY_ALLOWLIST_SERVER_LINKAGE'] },
+  { id: 'FRESH_SIGNAL_SHA', phase: 'preflight', observedBy: ['SIGNAL_FRESHNESS_AND_SHA', 'CURRENT_AI_EVIDENCE'] },
+  { id: 'COMPLETE_CANONICAL_HISTORY', phase: 'preflight', observedBy: ['CANONICAL_OWNERSHIP_AND_DUPLICATES'] },
+  { id: 'MANUAL_AUTO_ASSET_ISOLATION', phase: 'preflight', observedBy: ['CANONICAL_OWNERSHIP_AND_DUPLICATES', ...providers.map((p) => `ACCOUNT_${p.toUpperCase()}`)] },
+  { id: 'OPEN_ORPHAN_STALE_ORDERS', phase: 'preflight', observedBy: ['LIVE_PENDING_AND_RECOVERY', ...providers.map((p) => `ACCOUNT_${p.toUpperCase()}`)] },
+  // Current policy/positions do not prove future submission or recovery behavior.
+  { id: 'DIRECTION_LEVERAGE_MARGIN', phase: 'preflight', observedBy: ['OWNER_APPROVED_POLICY_ALIGNMENT', ...providers.map((p) => `ACCOUNT_${p.toUpperCase()}`)] },
+  { id: 'FRESH_MARKET_SESSION', phase: 'execution' },
+  { id: 'PROVIDER_PRECISION_AND_RISK', phase: 'execution' },
+  { id: 'ATOMIC_AGGREGATE_BUDGET', phase: 'execution' },
+  { id: 'SUBMISSION_IDEMPOTENCY', phase: 'execution' },
+  { id: 'NATIVE_FUTURES_PROTECTION', phase: 'execution' },
+  { id: 'EXISTING_POSITION_EXIT_INDEPENDENCE', phase: 'runtime' },
+  { id: 'RECOVERY_WORKER_HEALTH', phase: 'runtime' },
+  { id: 'PM2_PERSISTENCE_AND_ROLLBACK', phase: 'runtime' },
+  { id: 'POST_ARM_HEALTH', phase: 'runtime' },
+  { id: 'ZERO_QA_FINANCIAL_MUTATION', phase: 'all' },
+];
+
+/** Phase-aware coverage, not an activation certificate. Report every remaining
+ * control at once; account reads cannot certify deployment, DB race, future
+ * exchange fills, recovery, saved PM2 flags or post-human-arm health. */
+export function automaticLiveLifecycleCoverage(checks: readonly PreactivationCheck[]) {
+  const byId = new Map(checks.map((check) => [check.id, check]));
+  const controls = LIFECYCLE_CONTROLS.map((control) => {
+    const evidence = control.observedBy?.map((id) => byId.get(id));
+    const observed = evidence?.length && evidence.every((check) => check !== undefined);
+    const codes = [...new Set((evidence ?? []).flatMap((check) => check?.codes ?? []))];
+    const status = !observed ? 'NOT_OBSERVED' : evidence!.every((check) => check!.status === 'PASS') ? 'PASS' : 'BLOCKED';
+    return { id: control.id, phase: control.phase, status, codes,
+      observationScope: observed ? 'CURRENT_MEMBER_ACCOUNT_AND_SIGNAL' : 'SEPARATE_OPERATIONAL_EVIDENCE_REQUIRED' };
+  });
+  return { schemaVersion: 'automatic-live-lifecycle-coverage-v1', controls,
+    unobservedControlIds: controls.filter((control) => control.status === 'NOT_OBSERVED').map((control) => control.id),
+    blockedControlIds: controls.filter((control) => control.status === 'BLOCKED').map((control) => control.id),
+    activationReady: false, humanFinancialActivationRequired: true,
+    liveTradingAuthorityGranted: false, autoTradingAuthorityGranted: false } as const;
 }
 
 /** GET-only rehearsal: no execution service, order builder, Paper DB, Telegram,
@@ -154,6 +228,7 @@ export async function auditAutomaticLivePreactivation(input: {
   })));
   checks.sort((a, b) => a.id.localeCompare(b.id));
   return { schemaVersion: 'automatic-live-preactivation-audit-v1', targetSha: input.targetSha,
+    lifecycleCoverage: automaticLiveLifecycleCoverage(checks),
     scope: 'MEMBER_ACCOUNT_AND_SIGNAL_READONLY_REHEARSAL',
     // This endpoint cannot attest GitHub receipts, distributed budget claims,
     // market calendars, native protection readback or post-arm runtime. Never

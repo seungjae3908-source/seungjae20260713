@@ -124,14 +124,17 @@ function assertSnapshot(snapshot: AutomaticLiveBudgetSnapshot, userId: string) {
     }
   }
   const ids = new Set<string>();
+  const plansById = new Map(snapshot.plans.map((row) => [row.id, row]));
+  const ordersById = new Map(snapshot.orders.map((row) => [row.id, row]));
   for (const hold of snapshot.holds) {
     if (!hold?.orderId || ids.has(hold.orderId) || !positive(hold.amountKrw)
       || !nonnegative(hold.riskKrw) || !hold.market || !hold.instrument || !hold.strategy
-      || !snapshot.orders.some((row) => row.id === hold.orderId)) {
+      || !ordersById.has(hold.orderId)) {
       throw new Error('AUTOMATIC_LIVE_BUDGET_HOLD_INVALID');
     }
     ids.add(hold.orderId);
   }
+  return { plansById, ordersById };
 }
 
 /** Derive caps from the exact database snapshot, including real settlement-backed
@@ -141,9 +144,9 @@ export async function projectAutomaticLiveBudget(
   snapshot: AutomaticLiveBudgetSnapshot, userId: string, orderId: string,
   normalizePolicy: (policy: TradingPolicy | null) => TradingPolicy,
 ): Promise<AutomaticLiveBudgetProjection> {
-  assertSnapshot(snapshot, userId);
-  const order = snapshot.orders.find((row) => row.id === orderId);
-  const plan = snapshot.plans.find((row) => row.id === order?.planId);
+  const { plansById, ordersById } = assertSnapshot(snapshot, userId);
+  const order = ordersById.get(orderId);
+  const plan = order ? plansById.get(order.planId) : undefined;
   if (!order || !plan || !automaticLiveBudgetRequired(plan) || order.exchange !== plan.exchange
     || order.state !== 'SUBMITTED' || plan.state !== 'SUBMITTED'
     || !Number.isSafeInteger(order.version) || Number(order.version) < 0) {
@@ -167,9 +170,22 @@ export async function projectAutomaticLiveBudget(
   const effective = await resolveRulePackPilotDynamicCapPolicy(ledger, userId, plan, policy);
   const releases: string[] = [];
   const ownedByPlan = new Map(owned.map((row) => [row.plan.id, row]));
+  // A long-running account can retain 100k rows. Index closure lineage once
+  // instead of rescanning the whole plan/order history for every held budget.
+  const exitsByEntryId = new Map<string, TradingPlan[]>();
+  for (const exit of plans) {
+    if (exit.accountMode !== 'live' || !exit.reduceOnly) continue;
+    for (const reason of new Set(exit.signalReasons)) {
+      if (!reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')) continue;
+      const parentId = reason.slice('AUTO_EXIT_ENTRY_PLAN:'.length);
+      const exits = exitsByEntryId.get(parentId) ?? [];
+      exits.push(exit);
+      exitsByEntryId.set(parentId, exits);
+    }
+  }
   for (const hold of snapshot.holds) {
-    const heldOrder = orders.find((row) => row.id === hold.orderId)!;
-    const heldPlan = plans.find((row) => row.id === heldOrder.planId);
+    const heldOrder = ordersById.get(hold.orderId)!;
+    const heldPlan = plansById.get(heldOrder.planId);
     if (!heldPlan || !automaticLiveBudgetRequired(heldPlan)) throw new Error('AUTOMATIC_LIVE_BUDGET_HOLD_LINEAGE_INVALID');
     if (heldOrder.filledQuantity === 0 && heldOrder.state === 'REJECTED' && !heldOrder.submissionStartedAt) {
       releases.push(hold.orderId); // Local rejection before any financial POST.
@@ -181,8 +197,7 @@ export async function projectAutomaticLiveBudget(
       // canonicalAutomaticLivePositions already checked exact parent lineage,
       // provider, symbol, quantities and duplicate fills. Additionally reject a
       // forged cash/futures exit direction before releasing capital.
-      const exits = plans.filter((row) => row.accountMode === 'live' && row.reduceOnly
-        && row.signalReasons.includes(`AUTO_EXIT_ENTRY_PLAN:${heldPlan.id}`));
+      const exits = exitsByEntryId.get(heldPlan.id) ?? [];
       if (exits.some((row) => row.side !== (heldPlan.exchange === 'bitget'
         ? heldPlan.side === 'long' ? 'short' : 'long' : 'sell'))) {
         throw new Error('AUTOMATIC_LIVE_BUDGET_EXIT_DIRECTION_INVALID');
@@ -194,7 +209,7 @@ export async function projectAutomaticLiveBudget(
   const baseCharges: AutomaticLiveBudgetCharge[] = [];
   for (const row of orders) {
     if (row.id === orderId) continue;
-    const parent = plans.find((entry) => entry.id === row.planId);
+    const parent = plansById.get(row.planId);
     if (!parent || !automaticLiveBudgetRequired(parent)) continue;
     const position = ownedByPlan.get(parent.id);
     if (position) {
