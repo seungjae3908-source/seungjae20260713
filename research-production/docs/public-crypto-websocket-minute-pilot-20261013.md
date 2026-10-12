@@ -29,7 +29,7 @@ Hub #1102 · Workroom #1775 · Release Control #1555.
 1. New `public-crypto-websocket-minute-v1.mjs` verifies the existing sealed,
    current Upbit/Bitget rosters, rejects >15min stale membership, and computes
    bounded 40-symbol-per-socket, max 32 socket plans. Example 760 symbols
-   => 19 proposed public sockets. This is **NOT a vendor limit attestation**,
+   => 20 proposed public sockets (8 Upbit, 12 Bitget). This is **NOT a vendor limit attestation**,
    or a claim the host can handle the actual message rate. Restricted roster
    members remain research-visible but cannot get trading authorization.
 2. Upbit uses the true UTC candle start
