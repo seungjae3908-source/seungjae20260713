@@ -147,6 +147,16 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${HOST}:${PORT}`);
 
   if (req.method === 'POST' && url.pathname === '/internal/rescan') {
+    // A localhost-bound daemon is not permission for arbitrary websites to
+    // trigger rate-limited public scans through browser cross-site requests.
+    // No CORS response headers, no credential, no remote/public re-scan.
+    const origin=req.headers.origin;
+    const fetchSite=req.headers['sec-fetch-site'];
+    const expectedOrigin='http://'+HOST+':'+PORT;
+    if((origin!=null&&origin!==expectedOrigin)
+      ||fetchSite==='cross-site'||fetchSite==='same-site')
+      return json(res,403,{ok:false,error:'INTERNAL_RESCAN_ORIGIN_FORBIDDEN',
+        executionAuthority:'NONE'});
     const result = triggerPublicRescan();
     if (result.reason === 'PRODUCER_NOT_CONFIGURED') return json(res, 503, { ok: false, error: result.reason, executionAuthority: 'NONE' });
     return json(res, 202, {

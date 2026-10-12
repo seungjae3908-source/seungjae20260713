@@ -186,6 +186,17 @@ test('manual read-only public rescan inherits the same writable state directory 
   const port=25000+Math.floor(Math.random()*1000);
   const instance=await startServer(state,port,producer);
   try{
+    const crossOrigin=await fetch('http://127.0.0.1:'+port+'/internal/rescan',{
+      method:'POST',headers:{Origin:'https://unrelated.example'},
+    });
+    assert.equal(crossOrigin.status,403);
+    assert.equal((await crossOrigin.json()).error,'INTERNAL_RESCAN_ORIGIN_FORBIDDEN');
+    const crossSite=await fetch('http://127.0.0.1:'+port+'/internal/rescan',{
+      method:'POST',headers:{'Sec-Fetch-Site':'cross-site'},
+    });
+    assert.equal(crossSite.status,403);
+    const noLaunch=await(await fetch('http://127.0.0.1:'+port+'/health')).json();
+    assert.equal(noLaunch.rescan.lastStartedAt,null);
     const response=await fetch(`http://127.0.0.1:${port}/internal/rescan`,{method:'POST'});
     assert.equal(response.status,202);
     assert.equal((await response.json()).publicDataRescan,true);
