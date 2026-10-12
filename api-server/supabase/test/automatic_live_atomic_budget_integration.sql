@@ -20,17 +20,17 @@ on conflict(user_id) do update set payload=excluded.payload;
 
 insert into public.trade_order_plans(user_id,id,idempotency_key,state,version,approval_expires_at,payload)
 select 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',('47000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,
-  'atomic-budget-probe-'||n,'SUBMITTED',0,clock_timestamp()+interval '10 minutes',
+  'atomic-budget-probe-'||n,'SUBMITTED',0,transaction_timestamp()+interval '10 minutes',
   jsonb_build_object('id','47000000-0000-0000-0000-'||lpad(n::text,12,'0'),
     'userId','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','state','SUBMITTED','version',0,
     'accountMode','live','executionMode','automatic','exchange','upbit','market','KRW',
     'symbol','BUDGET'||n,'strategyId','budget-test','signalReasons','[]'::jsonb,
-    'reduceOnly',false,'estimatedKrw',70000,'approvedAt',clock_timestamp()::text,
-    'approvalExpiresAt',(clock_timestamp()+interval '10 minutes')::text,'splitRatios','[100]'::jsonb,
+    'reduceOnly',false,'estimatedKrw',70000,'approvedAt',transaction_timestamp()::text,
+    'approvalExpiresAt',(transaction_timestamp()+interval '10 minutes')::text,'splitRatios','[100]'::jsonb,
     'riskEnvelope',jsonb_build_object('version',1,'investmentKrw',70000,'maxLossKrw',700,
       'maxSlippagePercent',0.25,'maxSplitCount',1,'allowCancelUnfilled',true,'stopMethod','fixed_stop',
-      'emergencyExitScope','cancel_unfilled_and_reduce_only','approvedAt',clock_timestamp()::text,
-      'expiresAt',(clock_timestamp()+interval '10 minutes')::text))
+      'emergencyExitScope','cancel_unfilled_and_reduce_only','approvedAt',transaction_timestamp()::text,
+      'expiresAt',(transaction_timestamp()+interval '10 minutes')::text))
 from generate_series(1,2) n;
 
 insert into public.trade_orders(user_id,id,plan_id,exchange,client_order_id,state,version,payload)
