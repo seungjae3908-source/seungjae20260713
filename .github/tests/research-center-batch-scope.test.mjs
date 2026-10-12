@@ -128,21 +128,21 @@ test('production membership denial uses the actual basic-info capability and saf
   assert.ok(config.includes("screenshot: 'off'"));
 });
 
-test('Paper allowlist preserves frozen legacy 268 and pins exact 52 reviewed four-mode additions', () => {
+test('Paper allowlist preserves legacy 268 plus exact 48 unique four-mode paths; 4 are covered by separately approved live supplement', () => {
   const legacy = PAPER_FORWARD_REVIEWED_PATHS.slice(0, 268);
   const approvedFourMode = PAPER_FORWARD_REVIEWED_PATHS.slice(268);
   assert.equal(legacy.length, 268);
-  assert.equal(approvedFourMode.length, 52);
-  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 320);
-  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 320);
+  assert.equal(approvedFourMode.length, 48);
+  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 316);
+  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 316);
   const legacyDigest = createHash('sha256').update([...legacy].sort().join('\n')).digest('hex');
   assert.equal(legacyDigest, '7b991a3b55c36ce644a7fdeedb037a7cc80fbfb7732fb1c811e51cf0ddcacd14');
-  // Git blob identity pins the reviewed 52 literal paths; a new wildcard or
+  // Git blob identity pins the reviewed 48 disjoint literal paths; a new wildcard or
   // unreviewed Paper/Research/LIVE exception cannot silently pass this test.
   const supplemental = Buffer.from([...approvedFourMode].sort().join('\n'), 'utf8');
   const supplementalBlobSha = createHash('sha1')
     .update('blob ' + supplemental.byteLength + '\0').update(supplemental).digest('hex');
-  assert.equal(supplementalBlobSha, 'b65674e03f51394f65ef0ff010755039d5c354b2');
+  assert.equal(supplementalBlobSha, '8dc0b54855c5e53df1961b0322b9695c3456118e');
   for (const path of PAPER_FORWARD_REVIEWED_PATHS) {
     assert.ok(!path.includes('*') && !path.includes('..'), path);
   }
