@@ -105,7 +105,7 @@ async function main() {
     maxActions:QUEUE_LIMITS.maxActionsPerCycle,freeBytes,
   });
   emit(result);
-  if(['HOLD_DISK','HOLD_CAPACITY','NEEDS_REVIEW'].includes(result.status))
+  if(['HOLD_DISK','HOLD_CAPACITY','HOLD_PROVIDER_RATE_LIMIT','NEEDS_REVIEW'].includes(result.status))
     process.exitCode=2;
 }
 main().catch(e=>{
