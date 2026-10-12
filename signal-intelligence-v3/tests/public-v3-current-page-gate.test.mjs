@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {
   currentPagePublication,currentPublicV3CycleReady,
 } from '../src/public-v3-current-page-gate.mjs';
@@ -219,4 +220,69 @@ test('list copies and events must exactly match canonical row; no cross-market o
  const duplicated=structuredClone(initial);
  duplicated.rows.push(structuredClone(row));
  assert.equal(currentPagePublication(duplicated,receipt()).allowedIds.length,0);
+});
+
+test('a nominal CANDIDATES_AVAILABLE lane without actual retained page cards never publishes an old row',()=>{
+ const original=freshRow('AAPL','US_SCALPING_15M');
+ const state={rows:[original],lists:{krBuy:[],usBuy:[original],
+   spotBuy:[],futuresLong:[],futuresShort:[]},events:[eventFor(original)]};
+ const bad=[
+   x=>{x.scannedCards=0;x.retainedFromBatch=0;},
+   x=>{x.retainedFromBatch=0;},
+   x=>{x.scannedCards=0;},
+   x=>{x.strategy='SWING';},
+   x=>{x.market='KR_STOCK';},
+   x=>{x.timeframe='1D';},
+   x=>{x.status='VALID_NO_TRADE';x.scannedCards=0;x.retainedFromBatch=0;},
+ ];
+ for(const change of bad){
+   const lanes=receipt();change(lanes[3]);
+   const view=currentPagePublication(state,lanes);
+   assert.deepEqual(view.allowedIds,[]);
+   assert.deepEqual(view.lists.usBuy,[]);
+   assert.deepEqual(view.events,[]);
+   assert.equal(currentPublicV3CycleReady(lanes),false);
+ }
+});
+test('fresh verified candidates take the ten published slots after historical research candidates are removed',()=>{
+ const old=Array.from({length:11},(_,i)=>{
+   const row=freshRow('OLD'+String(i).padStart(2,'0'),'US_SCALPING_15M',0);
+   row.provenance.sourceCycleId=PRIOR;
+   row.utilityR=100-i;
+   return row;
+ });
+ const fresh=Array.from({length:12},(_,i)=>{
+   const row=freshRow('NEW'+String(i).padStart(2,'0'),'US_SCALPING_15M');
+   row.utilityR=50-i;
+   return row;
+ });
+ const all=[...old,...fresh]; // all already sorted by descending utility
+ const events=fresh.map(row=>eventFor(row));
+ const lanes=receipt();
+ const us=lanes[3];
+ us.scannedCards=12;us.retainedFromBatch=12;us.cursorAfter=30;
+ us.publicExecutionDiagnostic={
+   ...us.publicExecutionDiagnostic,requested:20,started:20,completed:20,
+ };
+ const state={rows:all,lists:{krBuy:[],usBuy:all,
+   spotBuy:[],futuresLong:[],futuresShort:[]},events};
+ const out=currentPagePublication(state,lanes);
+ assert.deepEqual(out.lists.usBuy.map(x=>x.symbol),
+   fresh.slice(0,10).map(x=>x.symbol));
+ assert.equal(out.lists.usBuy.length,10);
+ assert.equal(out.events.length,10,'an eleventh candidate cannot bypass the list cap as an alert');
+ assert.ok(out.events.every(e=>out.lists.usBuy.some(x=>x.id===e.id)));
+ assert.equal(out.allowedIds.length,12,
+   'research audit can still count all source-qualified rows, beyond display cap');
+ const previouslyTruncated={...state,lists:{...state.lists,usBuy:all.slice(0,10)}};
+ assert.equal(currentPagePublication(previouslyTruncated,lanes).lists.usBuy.length,0,
+   'old top-ten selection before source proof makes this new chance invisible');
+});
+test('producer passes the full in-memory research pool before current-page top-ten truncation',()=>{
+ const source=readFileSync(new URL('../scripts/run-public-scanner-cycle.ts',import.meta.url),'utf8');
+ assert.match(source,/maxCandidatesPerList:Math\.max\(1,inputs\.length\)/u,
+   'do not rank out real current candidates behind stale retained rows');
+ assert.match(source,/currentPagePublication\(baseSnapshot, coverage\)/u);
+ assert.match(source,/lists: publication\.lists/u,
+   'only post-source-proof lists may persist');
 });

@@ -746,7 +746,13 @@ async function main() {
   );
   pruneRetained(state, nowMs);
   const inputs = Object.values(state.retained).map((row) => row.input);
-  const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
+  // Historical research rows must never fill the engine's default top-ten
+  // slots before the exact current-cycle publication filter runs.
+  // Keep the complete, bounded in-memory ranking pool. Only the verified
+  // ten current candidates per market/direction are persisted as lists.
+  const baseSnapshot = runSignalIntelligenceV3(inputs, {
+    previousSnapshot,maxCandidatesPerList:Math.max(1,inputs.length),
+  });
   const economicReadiness = summarizeV3EconomicReadiness(baseSnapshot.rows);
   // Aggregate current source/economic dependency diagnosis; no admission
   // change, no extra provider requests or profitability credit.

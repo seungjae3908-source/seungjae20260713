@@ -78,8 +78,17 @@ function identity(candidate) {
   ].join('|');
 }
 
+const PUBLIC_V3_CYCLE_UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 function directionalIdentity(candidate) {
-  return [candidate.market, candidate.symbol, candidate.strategy, candidate.timeframe].join('|');
+  // Only same-cycle LONG/SHORT proposals can compete in the direction
+  // auction. A prior retained research epoch cannot veto a current source
+  // page merely because its old utility was higher. Without a verified epoch
+  // retain the legacy conservative same-symbol auction.
+  const supplied=candidate?.provenance?.sourceCycleId;
+  const epoch=typeof supplied==='string'&&PUBLIC_V3_CYCLE_UUID.test(supplied)
+    ?supplied:'NO_VERIFIED_SOURCE_CYCLE';
+  return [candidate.market,candidate.symbol,candidate.strategy,
+    candidate.timeframe,epoch].join('|');
 }
 
 function array(value) {

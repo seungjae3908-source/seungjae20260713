@@ -574,3 +574,34 @@ tampering / same-mtime inode replacement regression checks.
 This does **not** prove real independent OOS/walk-forward/full-cost profit;
 no Telegram Bot API send, real order, live enablement, main merge,
 Staging or Production change is authorized by this Draft.
+
+## Draft: no historical-score suppression of current four-market opportunities
+
+The public-only V3 producer now gives its in-memory engine the complete
+retained research ranking pool. Only **after** checking every new source
+candidate against the exact current-cycle 12-lane source receipts does
+`currentPagePublication` apply the policy's ten-candidate per-list cap.
+Historical research remains in `snapshot.rows` for audit, but cannot
+occupy all ten published slots and suppress a verified current opportunity.
+No extra public requests, new strategy PASS, historical market denominator,
+or automatic order is inferred from this change.
+
+The public gate also requires the current lane's actual
+`scannedCards>0` and `retainedFromBatch>0` for candidate admission,
+along with its exact market, strategy/timeframe, valid source identity,
+cursor and completed execution counts. A green label alone cannot mint
+a candidate or Telegram event.
+
+The futures direction auction now compares LONG vs SHORT **only within
+the same valid v4 public source cycle**. An older retained LONG with higher
+utility cannot defeat a new SHORT solely by a historical score, while
+opposing same-cycle directions continue to be compared or abstained.
+Unknown/unverified source epochs retain the conservative existing auction.
+Publication still requires the independent current public source proof
+and separate economic/OOS/cost receipts.
+
+**Not yet resolved by this Draft**: 2,496 unsupported KRX alphanumeric
+symbols in the Yahoo-only public stock adapter, unverified real
+US intraday bar gaps, Upbit sparse/no-trade 15m, full historical PIT 1m
+archives, and valid independent OOS/walk-forward/full cost profitability
+receipts. No active Telegram/public trade signal is inferred without them.
