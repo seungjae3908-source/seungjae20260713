@@ -631,3 +631,88 @@ export function buildNaturalPaperFirstZeroTraceFromRuntime(runtimeResult = {}) {
     }),
   });
 }
+
+// Read-only Production observer: scheduled three-task forward verdict.
+/**
+ * Fail-closed, read-only interpretation of the deployed Research forward
+ * cycle. "Observed" means the scheduled tasks ran; it does not imply a
+ * profitable strategy or a Production Paper fill.
+ */
+export const EXPECTED_FORWARD_TASK_IDS = Object.freeze([
+  'formula-backtest-queue',
+  'shadow-forward',
+  'paper-forward',
+]);
+
+export const MAX_FRESH_FORWARD_CYCLE_AGE_MS = 150 * 60_000;
+const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+
+/** Parse systemd UTC/KST LastTriggerUSec (underscored by read-only probe) or ISO.
+ * Unknown timezones are never guessed to be UTC.
+ */
+function naturalCycleTimestampMs(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  const systemd = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)_(\d{4}-\d{2}-\d{2})_(\d{2}:\d{2}:\d{2})_(UTC|KST)$/.exec(raw);
+  const stamp = systemd
+    ? `${systemd[1]}T${systemd[2]}${systemd[3] === 'KST' ? '+09:00' : 'Z'}`
+    : raw;
+  const parsed = Date.parse(stamp);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+export function assessForwardCycleEvidence({ expectedSha, timer, cycle, tasks, nowMs = Date.now() } = {}) {
+  const forward = Array.isArray(tasks)
+    ? tasks.filter((row) => row?.profile === 'forward')
+    : [];
+  const exactTasks = forward.length === EXPECTED_FORWARD_TASK_IDS.length
+    && EXPECTED_FORWARD_TASK_IDS.every((id) =>
+      forward.filter((row) => row.id === id).length === 1);
+  const trigger = String(timer?.last_trigger ?? '').trim();
+  const lastTriggerPresent = Boolean(trigger)
+    && !/^(?:n\/a|null|unknown|none|0)$/i.test(trigger);
+  const triggerMs = naturalCycleTimestampMs(timer?.last_trigger);
+  const cycleMs = naturalCycleTimestampMs(cycle?.generated_at);
+  // An hourly timer with an old successful cycle cannot prove present health.
+  const clockFresh = Number.isFinite(nowMs) && triggerMs !== null && cycleMs !== null
+    && nowMs - triggerMs >= -MAX_CLOCK_SKEW_MS
+    && nowMs - triggerMs <= MAX_FRESH_FORWARD_CYCLE_AGE_MS
+    && nowMs - cycleMs >= -MAX_CLOCK_SKEW_MS
+    && nowMs - cycleMs <= MAX_FRESH_FORWARD_CYCLE_AGE_MS
+    && cycleMs >= triggerMs - MAX_CLOCK_SKEW_MS;
+  const sourceExact = typeof expectedSha === 'string'
+    && /^[0-9a-f]{40}$/.test(expectedSha)
+    && cycle?.research_sha === expectedSha;
+  const allowedStatuses = forward.every((row) =>
+    row.status === 'success' || row.status === 'blocked_data');
+  const observed = Boolean(lastTriggerPresent
+    && cycle?.present === 'true'
+    && cycle?.failed_count === '0'
+    && sourceExact && exactTasks && allowedStatuses && clockFresh);
+  return Object.freeze({
+    observed,
+    sourceExact,
+    exactTasks,
+    clockFresh,
+    hasBlockedData: observed && forward.some((row) => row.status === 'blocked_data'),
+    allSucceeded: observed && forward.every((row) => row.status === 'success'),
+  });
+}
+
+export function classifyNaturalCycleEvidence({
+  releaseMatch, timersHealthy, forward, paperSafe,
+  historicalComplete, historicalRunning,
+} = {}) {
+  // A stale server can yield useful diagnostics, but is NEVER a current
+  // release PASS even when its timers and old Paper state are healthy.
+  if (releaseMatch !== true) return 'stale_release';
+  if (forward?.clockFresh === false) return 'stale_cycle';
+  if (timersHealthy !== true || paperSafe !== true || forward?.observed !== true) {
+    return 'failed';
+  }
+  // A completed timer with blocked tasks is NOT a healthy Research/Paper cycle.
+  if (forward.hasBlockedData === true) return 'blocked_data';
+  if (forward.allSucceeded !== true) return 'failed';
+  if (historicalComplete === true) return 'passed';
+  if (historicalRunning === true) return 'forward_pass_historical_running';
+  return 'forward_pass_historical_unproven';
+}
