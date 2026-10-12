@@ -78,3 +78,23 @@ test('history prepend keeps the same real candle dates on screen', () => {
   expect(canvas).toContain('retainLogicalViewportOnHistoryPrepend(');
   expect(canvas).toContain('previouslyRenderedOldestTimeRef.current = candles[0]?.time ?? null;');
 });
+
+test('historical backfill rejects explicit wrong-source identity before adding older bars', async () => {
+  const beforeTime = Math.floor(Date.now() / 1000) - 60;
+  const candles = [
+    { time: beforeTime - 600, open: 100, high: 105, low: 95, close: 101, volume: 3 },
+    { time: beforeTime - 300, open: 101, high: 106, low: 100, close: 102, volume: 4 },
+  ];
+  for (const sourceCase of [
+    { market: 'KR' as const, symbol: '005930', meta: { ticker: '000660', timeframe: '5m' } },
+    { market: 'US' as const, symbol: 'AAPL', meta: { ticker: 'MSFT', timeframe: '5m' } },
+    { market: 'UPBIT' as const, symbol: 'BTC', meta: { market: 'KRW-ETH', unit: '5m' } },
+    { market: 'BITGET' as const, symbol: 'BTCUSDT', meta: { symbol: 'ETHUSDT', timeframe: '5m' } },
+  ]) {
+    await expect(fetchUnifiedChartHistoryPage({
+      market: sourceCase.market, symbol: sourceCase.symbol, timeframe: '5m', beforeTime,
+      fetcher: async () => new Response(JSON.stringify({ ok: true, candles, ...sourceCase.meta }), { status: 200 }),
+    })).rejects.toMatchObject({ kind: 'malformed-response', retryable: false });
+  }
+  expect(source('../../api-server/src/routes/stocks.ts')).toContain('provider: "yahoo-history", ticker, timeframe, candles');
+});
