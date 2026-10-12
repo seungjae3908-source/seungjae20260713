@@ -99,11 +99,16 @@ test('source staleness halts new opinions even with fresh updatedAt; recovery is
   fixture.ageSeconds = 86_400;
   await refresh(page, fixture);
   await expect(feed.getByTestId('chart-live-halted')).toContainText('오래된 데이터 · 새 판단 중단');
+  await expect(page.getByTestId('ai-chart-drawing-historical')).toContainText('과거 관측');
   await expect(feed.locator('[data-event-kind="analysis"]')).toHaveCount(1);
   await expect(feed.locator('[data-event-kind="bar"]')).toHaveCount(0);
   fixture.ageSeconds = 0;
   await refresh(page, fixture);
   await expect(feed.getByTestId('chart-live-halted')).toHaveCount(0);
+  await expect(page.getByTestId('ai-chart-drawing-historical')).toHaveCount(0);
+  // A jump from the stale candle to the recovered snapshot is a new baseline,
+  // not a continuously observed live candle close.
+  await expect(feed.locator('[data-event-kind="bar"]')).toHaveCount(0);
   await expect(feed.locator('[data-event-kind="data"]').first()).toContainText(/정상|지연/);
   expect(pageErrors).toEqual([]);
   expect(orderWrites).toEqual([]);
@@ -116,6 +121,7 @@ test('a failed provider refresh clears current judgment and marks old log as his
   await refresh(page, fixture);
   await expect(page.getByTestId('chart-error-state')).toBeVisible();
   await expect(feed.getByTestId('chart-live-halted')).toContainText('연결 오류 · 새 판단 중단');
+  await expect(page.getByTestId('ai-chart-drawing-historical')).toContainText('현재 돌파·매매 신호가 아닙니다');
   const currentJudgment = page.getByTestId('ai-chart-current-judgment');
   await expect(currentJudgment.locator('p')).toHaveText('차트 데이터 확인 후 표시됩니다.');
   await expect(currentJudgment).not.toContainText('기술 강도');
@@ -124,6 +130,7 @@ test('a failed provider refresh clears current judgment and marks old log as his
   await page.getByRole('button', { name: '다시 시도', exact: true }).click();
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
   await expect(feed.getByTestId('chart-live-halted')).toHaveCount(0);
+  await expect(page.getByTestId('ai-chart-drawing-historical')).toHaveCount(0);
   await expect(currentJudgment).toContainText('기술 강도');
   expect(pageErrors).toEqual([]);
   expect(orderWrites).toEqual([]);

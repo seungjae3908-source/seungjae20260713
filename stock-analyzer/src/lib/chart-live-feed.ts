@@ -43,6 +43,11 @@ export function buildChartLiveEvents(previous: ChartLiveSnapshot | null, snapsho
       kind, at, title, detail, source: snapshot.source, market: snapshot.market, ...extra });
   };
   const usable = isChartLiveSnapshotUsable(snapshot, now);
+  // An outage/reconnect or provider switch is a new observation baseline.
+  // Never turn bars that accumulated while disconnected into live-completed
+  // candles or volume-surges just because a fresh snapshot has arrived.
+  const continuousSource = usable && prior != null && isChartLiveSnapshotUsable(prior, now)
+    && prior.source === snapshot.source && prior.transport === snapshot.transport;
   if (!prior || prior.dataState !== snapshot.dataState || prior.source !== snapshot.source || prior.transport !== snapshot.transport
     || isChartLiveSnapshotUsable(prior, now) !== usable) {
     const status = ['ok', 'delayed'].includes(snapshot.dataState) && !usable ? '가격 기준 시각 미확인' : snapshot.status;
@@ -61,7 +66,7 @@ export function buildChartLiveEvents(previous: ChartLiveSnapshot | null, snapsho
         confirmation: analysis.confirmationConditions.slice(0, 2), invalidation: analysis.invalidationConditions.slice(0, 2),
       });
   }
-  if (prior?.closedTime != null && snapshot.closedTime != null && safeTime(snapshot.closedTime * 1000, now)
+  if (continuousSource && prior?.closedTime != null && snapshot.closedTime != null && safeTime(snapshot.closedTime * 1000, now)
     && snapshot.closedTime > prior.closedTime) {
     add('bar', String(snapshot.closedTime), '새 완료봉 · 판단 갱신', '완료봉만 확정 판단에 사용합니다.',
       { at: snapshot.closedTime * 1000, price: safePrice(snapshot.price) });
@@ -80,7 +85,7 @@ export function buildChartLiveEvents(previous: ChartLiveSnapshot | null, snapsho
     add('wave', `${wave.id}:${signature}`, `${wave.name}${last.label === 'C' ? ' · A–B–C 후보' : ''}`,
       '관측된 스윙 기반 후보 · 미래 파동을 확정하지 않습니다.', { at: last.confirmedAt * 1000 });
   }
-  if (prior && ['ok', 'delayed'].includes(prior.dataState) && prior.volumeRatio != null && Number.isFinite(prior.volumeRatio)
+  if (continuousSource && prior?.volumeRatio != null && Number.isFinite(prior.volumeRatio)
     && Number.isFinite(snapshot.volumeRatio) && snapshot.volumeRatio! >= 1.8 && prior.volumeRatio < 1.8) {
     add('bar', `volume:${snapshot.closedTime}:${at}`, `거래량 증가 · ${snapshot.volumeRatio!.toFixed(1)}배`, '최근 평균 대비 거래량입니다. 방향이나 수익을 보장하지 않습니다.');
   }

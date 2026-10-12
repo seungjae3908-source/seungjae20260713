@@ -114,3 +114,41 @@ test('changing identities starts a fresh observation without prior market histor
   assert.ok(events.every(event => event.identity === 'US:TSLA:5m'));
   assert.ok(events.some(event => event.kind === 'analysis'));
 });
+
+test('recovery does not report disconnected candles or threshold changes as newly observed live events', () => {
+  const disconnected = snapshot({
+    dataState: 'stale', status: '오래된 데이터', asOf: now - 86_400_000,
+    closedTime: barTime, volumeRatio: 1.2,
+  });
+  const recovered = snapshot({ closedTime: barTime + 300, volumeRatio: 2.3 });
+  const events = buildChartLiveEvents(disconnected, recovered, now);
+  assert.deepEqual(events.map((event) => event.kind), ['data', 'analysis']);
+  assert.ok(!events.some((event) => /새 완료봉|거래량 증가/.test(event.title)));
+});
+
+test('provider / transport switch resets the live bar baseline without removing the new source status', () => {
+  const original = snapshot({ closedTime: barTime, volumeRatio: 1.2 });
+  const newProvider = snapshot({
+    source: 'UPSTREAM_PUBLIC_WS:PUBLIC_WS_VERIFIED', transport: '공개 WS 검증',
+    closedTime: barTime + 300, volumeRatio: 2.3,
+  });
+  const changed = buildChartLiveEvents(original, newProvider, now);
+  assert.deepEqual(changed.map((event) => event.kind), ['data']);
+  assert.match(changed[0].detail, /PUBLIC_WS_VERIFIED/);
+
+  // Once the same verified provider is continuously observed, genuine new
+  // closed-bar and volume-transition events are allowed again.
+  const continuous = buildChartLiveEvents(newProvider, snapshot({
+    source: newProvider.source, transport: newProvider.transport,
+    closedTime: barTime + 600, volumeRatio: 1.0,
+  }), now);
+  assert.deepEqual(continuous.map((event) => event.kind), ['bar']);
+  const rising = buildChartLiveEvents(snapshot({
+    source: newProvider.source, transport: newProvider.transport,
+    closedTime: barTime + 600, volumeRatio: 1.0,
+  }), snapshot({
+    source: newProvider.source, transport: newProvider.transport,
+    closedTime: barTime + 900, volumeRatio: 2.0,
+  }), now);
+  assert.deepEqual(rising.map((event) => event.kind), ['bar', 'bar']);
+});
