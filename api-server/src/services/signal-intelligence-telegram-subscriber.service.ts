@@ -9,7 +9,7 @@ import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
 } from './telegram-market-room.service';
-import { sendTelegramAlert, type TelegramAlertInput } from './telegram-notification.service';
+import { sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
   type MemberWatchlistTelegramProducerResult,
@@ -60,6 +60,27 @@ export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
   | 'HTTP_ERROR' | 'INVALID_RESPONSE' | 'UNREACHABLE' | 'TIMEOUT'
   | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED'
   | 'SOURCE_DATA_BLOCKED' | 'OVERLAP';
+/** A local dedupe skip is not evidence of Bot API acceptance. An unresolved
+ * pre-send reservation must survive any duplicate/ambiguous transport result
+ * instead of being mislabeled as a confirmed SENT receipt. */
+export function classifyTelegramSubscriberSend(result: TelegramAlertResult):
+  'ACCEPTED' | 'KNOWN_NO_SEND' | 'UNCONFIRMED' {
+  if (result.ok) return 'ACCEPTED';
+  if (result.skipped === 'DUPLICATE'
+    || result.skipped === 'OUTCOME_UNCONFIRMED'
+    || result.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED')
+    return 'UNCONFIRMED';
+  if (result.attempts === 0
+    && (result.skipped === 'NOT_CONFIGURED' || result.skipped === 'COOLDOWN'))
+    return 'KNOWN_NO_SEND';
+  if (result.skipped === 'DELIVERY_FAILED'
+    && (result.errorCode === 'TELEGRAM_API_REJECTED'
+      || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
+        .test(result.errorCode ?? '')))
+    return 'KNOWN_NO_SEND';
+  return 'UNCONFIRMED';
+}
+
 export type SignalTelegramRunResult = {
   attempted: number; delivered: number; queued: number;
   publicDelivered: number; personalDelivered: number; personalQueued: number;
@@ -600,30 +621,23 @@ export class SignalIntelligenceTelegramSubscriber {
         await this.store.markUnconfirmed(alert.dedupeKey,now);
         result.attempted += 1;
         const sent = await this.deliver(alert);
-        if (sent.ok || sent.skipped === 'DUPLICATE') {
+        const classification = classifyTelegramSubscriberSend(sent);
+        if (classification === 'ACCEPTED') {
           await this.store.mark(alert.dedupeKey, now);
-          if (sent.ok) {
-            result.delivered += 1;
-            result.publicDelivered += 1;
-          } else result.deduped += 1;
-        } else if (sent.attempts === 0
-          && ['NOT_CONFIGURED','COOLDOWN'].includes(sent.skipped)) {
-          // No Bot API attempt occurred, so a later retry is safe.
+          result.delivered += 1;
+          result.publicDelivered += 1;
+        } else if (classification === 'KNOWN_NO_SEND') {
+          // Only a proven rejection or local non-attempt releases the durable
+          // reservation. In-flight DUPLICATE remains unresolved, never SENT.
           await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
-          result.skipped += 1;
-        } else if (sent.skipped === 'DELIVERY_FAILED'
-          && (sent.errorCode === 'TELEGRAM_API_REJECTED'
-            || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
-              .test(sent.errorCode ?? ''))) {
-          // Telegram explicitly refused this POST: no message was accepted.
-          // Preserve failure visibility while releasing only its no-send
-          // marker for a later bounded retry or repaired room permissions.
-          await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
+          if (sent.skipped === 'NOT_CONFIGURED' || sent.skipped === 'COOLDOWN')
+            result.skipped += 1;
+          else result.failed += 1;
+        } else {
+          // Ambiguous Bot API POST and duplicate-in-flight both retain the
+          // persistent unconfirmed tombstone. Never retransmit automatically.
           result.failed += 1;
-        } else if (sent.skipped === 'OUTCOME_UNCONFIRMED'
-          || sent.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
-          result.failed += 1;
-        } else result.failed += 1;
+        }
       }
       return result;
     } catch (error) {

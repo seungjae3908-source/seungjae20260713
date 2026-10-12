@@ -7,7 +7,38 @@ import {
   resolveSignalIntelligenceTelegramEndpoint,
   SignalIntelligenceTelegramDeliveryState,
   SignalIntelligenceTelegramSubscriber,
+  classifyTelegramSubscriberSend,
 } from './signal-intelligence-telegram-subscriber.service';
+
+test('Signal V3 market alert requires confirmed Bot API receipt before SENT', () => {
+  assert.equal(classifyTelegramSubscriberSend({ok:true,attempts:1}),'ACCEPTED');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'DUPLICATE',
+  }),'UNCONFIRMED','duplicate-in-flight has no delivery receipt');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:1,skipped:'OUTCOME_UNCONFIRMED',
+    errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+  }),'UNCONFIRMED');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'DELIVERY_FAILED',
+  }),'UNCONFIRMED','unclassified failure cannot release pre-send tombstone');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'NOT_CONFIGURED',
+  }),'KNOWN_NO_SEND');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'COOLDOWN',
+  }),'KNOWN_NO_SEND');
+  for(const status of [400,403,429]) {
+    assert.equal(classifyTelegramSubscriberSend({
+      ok:false,attempts:1,skipped:'DELIVERY_FAILED',
+      errorCode:`TELEGRAM_HTTP_${status}`,
+    }),'KNOWN_NO_SEND');
+  }
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:1,skipped:'DELIVERY_FAILED',
+    errorCode:'TELEGRAM_HTTP_500',
+  }),'UNCONFIRMED');
+});
 
 test('V3 Telegram source is local exact public endpoint only', () => {
   assert.equal(resolveSignalIntelligenceTelegramEndpoint('http://127.0.0.1:8790/v1/signals'),
