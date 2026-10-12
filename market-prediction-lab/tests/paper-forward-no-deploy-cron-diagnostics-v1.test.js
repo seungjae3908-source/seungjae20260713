@@ -405,16 +405,19 @@ const permissionFlag = process.allowedNodeEnvironmentFlags.has('--permission')
 // valid Risk Policy record are created, and no scheduled cycle is run.
 async function withRiskPolicyTransport(run) {
   return withProductionShapedPinnedRelease(async ({ root, release }) => {
-    const installer = await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8');
+    const installer = (await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8'))
+      .replaceAll('\r\n', '\n');
     const assignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_RECORD_PATH=.*$/mu)?.[0];
+    const autoSignalAssignment = installer.match(/^AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED=.*$/mu)?.[0];
     const decisionAssignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_DECISION_PATH=.*$/mu)?.[0];
     const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" \]\]; then[\s\S]*?RISK_POLICY_SOURCE_MODE="APPROVED_DECISION"\n  fi\nfi/u)?.[0];
     const costAssignment = installer.match(/^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=.*$/mu)?.[0];
     const costGuard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" \]\]; then[\s\S]*?\nfi/u)?.[0];
     const whitelist = installer.match(/exec \/usr\/bin\/env -i[\s\S]*?(?=\nWRAPPER)/u)?.[0];
-    assert.ok(assignment && decisionAssignment && guard && costAssignment && costGuard && whitelist,
+    assert.ok(assignment && autoSignalAssignment && decisionAssignment && guard && costAssignment && costGuard && whitelist,
       'execute the actual installer config, preflight and env-i contract');
     assert.equal(assignment, 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"');
+    assert.equal(autoSignalAssignment, 'AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED="${AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED:-false}"');
     assert.equal(decisionAssignment, 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"');
     assert.equal(costAssignment, 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"');
     assert.doesNotMatch(installer, /GENERIC_RISK_POLICY_LIVE_RECORD_PATH|generic-risk-policy-live-v1\.json/u);
@@ -507,6 +510,7 @@ async function withRiskPolicyTransport(run) {
         PUBLISHER_ACCOUNT_ID_SHA256=''
         fail() { printf '%s\\n' "$1" >&2; exit "$2"; }
         ${assignment}
+        ${autoSignalAssignment}
         ${decisionAssignment}
         ${preflight ? guard : ''}
         ${costAssignment}
