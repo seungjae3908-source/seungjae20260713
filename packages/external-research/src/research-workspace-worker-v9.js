@@ -13,8 +13,12 @@ const digest=x=>typeof x==='string'&&/^[a-f0-9]{64}$/.test(x);
 const integer=(x,a,b)=>Number.isSafeInteger(x)&&x>=a&&x<=b;
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const safeCode=x=>typeof x==='string'&&/^[A-Z][A-Z0-9_]{1,95}$/.test(x);
-const kinds=new Set(['VIDEO_PREPARE','VIDEO_EXECUTE_APPROVED']);
-const runner='EXISTING_PROVIDER_VIDEO_V8';
+const kinds=new Set(['VIDEO_PREPARE','VIDEO_EXECUTE_APPROVED','VIDEO_DUAL_REVIEW_APPROVED']);
+const runners=Object.freeze({
+  VIDEO_PREPARE:'EXISTING_PROVIDER_VIDEO_V8',
+  VIDEO_EXECUTE_APPROVED:'EXISTING_PROVIDER_VIDEO_V8',
+  VIDEO_DUAL_REVIEW_APPROVED:'RESEARCH_ONE_SHOT_V12',
+});
 const networkModes=new Set(['NONE','APPROVED_ONE_SHOT']);
 const terminal=new Set(['SUCCEEDED','FAILED','BLOCKED_UNCERTAIN']);
 const claims=new WeakMap();
@@ -24,12 +28,21 @@ function clone(x){return structuredClone(x);}
 function canonical(x){if(Array.isArray(x))return x.map(canonical);if(object(x))return Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])]));return x;}
 function jsonDigest(x){return sha(JSON.stringify(canonical(x)));}
 function taskValid(task){
-  if(!exact(task,['kind','runner','networkMode','argv'])||!kinds.has(task.kind)||task.runner!==runner||!networkModes.has(task.networkMode)||
-    !Array.isArray(task.argv)||task.argv.length<4||task.argv.length>20||!task.argv.every(safeArg))return false;
+  if(!exact(task,['kind','runner','networkMode','argv'])||!kinds.has(task.kind)||task.runner!==runners[task.kind]||!networkModes.has(task.networkMode)||
+    !Array.isArray(task.argv)||task.argv.length<4||task.argv.length>24||!task.argv.every(safeArg))return false;
   if(task.argv.includes('--existing-env')||task.argv.includes('--preflight'))return false;
   const execute=task.argv.includes('--execute'),approval=task.argv.includes('--approval');
   if(task.kind==='VIDEO_PREPARE'&&(task.networkMode!=='NONE'||execute||approval))return false;
   if(task.kind==='VIDEO_EXECUTE_APPROVED'&&(task.networkMode!=='APPROVED_ONE_SHOT'||!execute||!approval))return false;
+  if(task.kind==='VIDEO_DUAL_REVIEW_APPROVED'){
+    if(task.networkMode!=='APPROVED_ONE_SHOT'||execute||approval)return false;
+    for(const required of ['--source','--spec','--manifest','--video-approval','--groq-approval','--output-root']){
+      const index=task.argv.indexOf(required);if(index<0||index===task.argv.length-1||task.argv[index+1].startsWith('--'))return false;
+    }
+    const allowed=new Set(['--source','--spec','--manifest','--video-approval','--groq-approval','--output-root']);
+    for(let i=0;i<task.argv.length;i+=2)if(!allowed.has(task.argv[i]))return false;
+    return true;
+  }
   for(const required of ['--spec','--output-root'])if(!task.argv.includes(required))return false;
   return true;
 }
@@ -235,7 +248,8 @@ export async function runResearchWorkerOnce(queue,{workerId,handler,retryableCod
     if(job.task.networkMode==='APPROVED_ONE_SHOT')await queue.reserveExternal(lease,job.jobDigest);
     const result=await handler(clone(job));
     if(!exact(result,['status','resultDigest'])||!digest(result.resultDigest))fail('WORKER_HANDLER_RESULT_INVALID');
-    const outcome=result.status==='PREPARED_NOT_EXECUTED'?'PREPARED':result.status==='RESPONSE_RECEIVED_REVIEW_REQUIRED'?'REVIEW_REQUIRED':
+    const outcome=result.status==='PREPARED_NOT_EXECUTED'?'PREPARED':
+      result.status==='RESPONSE_RECEIVED_REVIEW_REQUIRED'||result.status==='REVIEW_REQUIRED'?'REVIEW_REQUIRED':
       result.status==='INSUFFICIENT_EVIDENCE'?'INSUFFICIENT_EVIDENCE':null;
     if(!outcome)fail('WORKER_HANDLER_RESULT_INVALID');
     await queue.complete(lease,{resultDigest:result.resultDigest,outcome});

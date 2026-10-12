@@ -10,6 +10,10 @@ import vm from 'node:vm';
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'ops/deploy-production.sh'), 'utf8').replaceAll('\r\n', '\n');
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+const shellPath = (value) => process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
+const windowsReadlinkDouble = process.platform === 'win32'
+  ? 'readlink() { [[ "$1" == "-m" || "$1" == "-f" ]] || return 2; printf "%s\\n" "$2"; }\n'
+  : '';
 const between = (start, end, offset = 0) => {
   const first = source.indexOf(start, offset);
   const last = source.indexOf(end, first + start.length);
@@ -124,8 +128,8 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
     const runtimeRows = structuredClone(rows);
     if (Array.isArray(runtimeRows) && runtimeRows[0]?.pm2_env && typeof runtimeRows[0].pm2_env === 'object') {
       runtimeRows[0].pid = Number(runtimeRows[0].pid || 4242);
-      runtimeRows[0].pm2_env.pm_cwd ??= path.join(temp, 'live');
-      runtimeRows[0].pm2_env.pm_exec_path ??= path.join(temp, 'live/api-server/dist/index.mjs');
+      runtimeRows[0].pm2_env.pm_cwd ??= shellPath(path.join(temp, 'live'));
+      runtimeRows[0].pm2_env.pm_exec_path ??= shellPath(path.join(temp, 'live/api-server/dist/index.mjs'));
       runtimeRows[0].pm2_env.watch ??= false;
       runtimeRows[0].pm2_env.LIVE_TRADING ??= 'false';
       runtimeRows[0].pm2_env.AUTO_TRADING ??= 'false';
@@ -151,16 +155,16 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
       env: {
         PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
         TEMP: temp, TMP: temp, TMPDIR: temp,
-        PM2_FIXTURE: path.join(temp, 'pm2.json'), PM2_EVENTS: path.join(temp, 'events.jsonl'),
+        PM2_FIXTURE: shellPath(path.join(temp, 'pm2.json')), PM2_EVENTS: shellPath(path.join(temp, 'events.jsonl')),
         PM2_NAME: 'stock-app', TARGET_SHA: target, CURRENT_SHA: same ? target : previous,
-        LIVE_DIR: path.join(temp, 'live'), RELEASE_DIR: path.join(temp, 'release'),
-        BACKUP_DIR: path.join(temp, 'backup'), DEPLOY_STATE_DIR: path.join(temp, 'live/.deploy'),
-        LIVE_PORT: '8080', CANARY_PORT: '18081', CANARY_ENV: path.join(temp, 'canary.env'),
+        LIVE_DIR: shellPath(path.join(temp, 'live')), RELEASE_DIR: shellPath(path.join(temp, 'release')),
+        BACKUP_DIR: shellPath(path.join(temp, 'backup')), DEPLOY_STATE_DIR: shellPath(path.join(temp, 'live/.deploy')),
+        LIVE_PORT: '8080', CANARY_PORT: '18081', CANARY_ENV: shellPath(path.join(temp, 'canary.env')),
         PUBLIC_BASE_URL: '', STALE_FIRST_HEALTH: String(stale), FAIL_TARGET_HEALTH: String(failTarget),
         // A caller's true values must never override the recorded PM2 false state.
         LIVE_TELEGRAM_ACTIVATION_APPROVED: ambient, TELEGRAM_INTELLIGENCE_WORKER_ENABLED: ambient,
       },
-      input: `set -Eeuo pipefail\n${doubles}\n${helpers}\n${rollback}\n${canary ? '' : capture}${before}\n${fragment}\n`,
+      input: `set -Eeuo pipefail\n${windowsReadlinkDouble}${doubles}\n${helpers}\n${rollback}\n${canary ? '' : capture}${before}\n${fragment}\n`,
     });
     assert.ifError(result.error);
     return { ...result, marker: fs.readFileSync(marker, 'utf8').trim(),
@@ -312,10 +316,16 @@ const completeTelegramRuntime = {
   TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
   ...Object.fromEntries(telegramFeatureFlags.map((key) => [key, 'true'])),
 };
-function activation(runtime, { sha = target, marker = target, commentId = '123' } = {}) {
+function activation(runtime, { sha = target, marker = target, commentId = '123', freshRuntime = runtime } = {}) {
   const calls = [];
   const activate = vm.runInNewContext(`(${activationFunction.trim()})`, {
-    process: { env: {} }, execFileSync: (...args) => { calls.push(args); return ''; },
+    process: { env: {} },
+    execFileSync: (...args) => {
+      if (args[0] === 'pm2' && args[1]?.[0] === 'jlist')
+        return JSON.stringify([{ name:'stock-app',pm2_env:freshRuntime }]);
+      calls.push(args);
+      return '';
+    },
   });
   let result, error;
   try { result = activate(runtime, sha, marker, commentId); } catch (caught) { error = caught; }
@@ -340,7 +350,7 @@ check('only canonical Telegram seam creates activation after exact approval iden
   for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) assert.equal(env[key], 'false');
   assert.equal(env.executionAuthority, 'NONE');
 });
-check('Telegram seam rejects missing approval, wrong identity, mixed state and any missing runtime configuration before mutation', () => {
+check('Telegram seam rejects missing approval, wrong identity, mixed state and missing core runtime configuration before mutation', () => {
   const invalid = [
     [readyRuntime, { commentId: '' }], [readyRuntime, { sha: 'main' }], [readyRuntime, { marker: previous }],
     [{ ...readyRuntime, DEPLOY_SHA: previous }, {}], [{ ...readyRuntime, status: 'stopped' }, {}],
@@ -350,15 +360,81 @@ check('Telegram seam rejects missing approval, wrong identity, mixed state and a
   ];
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID',
     'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) invalid.push([{ ...readyRuntime, [key]: '' }, {}]);
   for (const [runtime, options] of invalid) {
     const result = activation(runtime, options);
     assert(result.error); assert.equal(result.calls.length, 0);
   }
+});
+check('Telegram seam accepts absent optional market overrides and owner mapping while preserving the required AUTO room', () => {
+  const runtime = { ...readyRuntime };
+  for (const key of [
+    'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+    'TELEGRAM_OWNER_MEMBER_ID',
+  ]) delete runtime[key];
+  const result = activation(runtime);
+  assert.ifError(result.error); assert.equal(result.result, true); assert.equal(result.calls.length, 2);
+  const env = result.calls[0][2].env;
+  assert.equal(env.TELEGRAM_STOCK_CHAT_ID, readyRuntime.TELEGRAM_STOCK_CHAT_ID);
+  assert.equal(env.TELEGRAM_CRYPTO_CHAT_ID, readyRuntime.TELEGRAM_CRYPTO_CHAT_ID);
+  assert.equal(env.TELEGRAM_AUTO_TRADING_CHAT_ID, readyRuntime.TELEGRAM_AUTO_TRADING_CHAT_ID);
+  assert.equal(env.TELEGRAM_KR_STOCK_CHAT_ID, undefined);
+  assert.equal(env.TELEGRAM_OWNER_MEMBER_ID, undefined);
+});
+check('Telegram seam converts PM2 restart and persistence failures into sanitized stable diagnostics', () => {
+  const restartFailure = vm.runInNewContext(`(${activationFunction.trim()})`, {
+    process: { env: {} },
+    execFileSync: (...args) => {
+      if (args[0] === 'pm2' && args[1]?.[0] === 'jlist')
+        return JSON.stringify([{ name:'stock-app',pm2_env:readyRuntime }]);
+      throw new Error('sensitive child-process detail must not escape');
+    },
+  });
+  assert.throws(
+    () => restartFailure(readyRuntime, target, target, '123'),
+    error => error?.message === 'TELEGRAM_PM2_RESTART_FAILED',
+  );
+
+  let calls = 0;
+  const saveFailure = vm.runInNewContext(`(${activationFunction.trim()})`, {
+    process: { env: {} },
+    execFileSync: (...args) => {
+      if (args[0] === 'pm2' && args[1]?.[0] === 'jlist')
+        return JSON.stringify([{ name:'stock-app',pm2_env:readyRuntime }]);
+      calls += 1;
+      if (calls === 2) throw new Error('sensitive persistence detail must not escape');
+      return '';
+    },
+  });
+  assert.throws(
+    () => saveFailure(readyRuntime, target, target, '123'),
+    error => error?.message === 'TELEGRAM_PM2_SAVE_FAILED',
+  );
+});
+check('Telegram activation blocks active trading and rechecks PM2 before mutation', () => {
+  const unsafe = [
+    { LIVE_TRADING: 'true' }, { AUTO_TRADING: 'true' },
+    { MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'true' },
+    { BITGET_LIVE_ORDER_ENABLED: 'true' },
+    { UPBIT_LIVE_ORDER_ENABLED: 'true' },
+    { SPOT_LIVE_CAPABILITY_ALLOWLIST: 'KR_STOCK' },
+    { SPOT_LIVE_MARKET_ALLOWLIST: 'CRYPTO_SPOT' },
+    { executionAuthority: 'BROKER' },
+  ];
+  for (const flags of unsafe) {
+    const result = activation({ ...readyRuntime, ...flags });
+    assert.equal(result.error?.message, 'TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE');
+    assert.equal(result.calls.length, 0, 'no PM2 restart or save with active trading');
+  }
+  const raced = activation(readyRuntime, {
+    freshRuntime: { ...readyRuntime, LIVE_TRADING: 'true' },
+  });
+  assert.equal(raced.error?.message, 'TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE');
+  assert.equal(raced.calls.length, 0, 'fresh PM2 state vetoes an outdated initial snapshot');
 });
 check('Telegram-specific repeat approval does not restart fully active state', () => {
   const result = activation(completeTelegramRuntime);
@@ -382,7 +458,12 @@ check('Telegram activation preserves PM2-owned configuration over conflicting am
       TELEGRAM_BOT_USERNAME: '',
       TELEGRAM_WEBHOOK_SECRET: '',
     } },
-    execFileSync: (...args) => { calls.push(args); return ''; },
+    execFileSync: (...args) => {
+      if (args[0] === 'pm2' && args[1]?.[0] === 'jlist')
+        return JSON.stringify([{ name:'stock-app',pm2_env:readyRuntime }]);
+      calls.push(args);
+      return '';
+    },
   });
   const result = activate(readyRuntime, target, target, '123');
   assert.equal(result, true);

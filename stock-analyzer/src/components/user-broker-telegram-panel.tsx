@@ -78,19 +78,44 @@ type TelegramRuntimeState = {
   signalFollowupEnabled: boolean;
   memberHoldingsEnabled: boolean;
   marketBriefEnabled: boolean;
+  backgroundWorkersEnabled: boolean;
+  personalWorkerEnabled: boolean;
+  personalWorkerStarted: boolean;
+  personalWorkerHealthy: boolean;
+  personalWorkerErrorCode: string | null;
   orderAuthority: 'NONE';
   privateTradingApiAllowed: false;
   realOrderAllowed: false;
 };
 
+type DeliveryHealth = {
+  pending: number;
+  retryScheduled: number;
+  failed: number;
+  deadLetter: number;
+  sent: number;
+  lastSentAt: string | null;
+  lastFailureAt: string | null;
+  lastErrorCode: string | null;
+  lastActivityAt: string | null;
+};
+
 type IntegrationState = {
   brokerConnections: BrokerConnection[];
-  telegram: { connected: boolean; status: string; connectedAt: string | null };
+  telegram: {
+    connected: boolean;
+    status: string;
+    connectedAt: string | null;
+    recoveryRequired: boolean;
+    recoveryErrorCode: string | null;
+    recoveryFailedAt: string | null;
+  };
   preferences: Record<PreferenceKey, boolean>;
   alertPolicy: TelegramAlertPolicy;
   alertPolicySource: string;
   alertPolicyStorageAvailable: boolean;
   telegramRuntime: TelegramRuntimeState;
+  deliveryHealth: DeliveryHealth;
 };
 
 const preferenceLabels: Record<PreferenceKey, string> = {
@@ -134,7 +159,7 @@ const essentialExecutionPreferenceKeys: PreferenceKey[] = [
 const policyMarkets = Object.keys(marketLabels) as TelegramPolicyMarket[];
 const policySignalTypes = Object.keys(signalLabels) as TelegramPolicySignalType[];
 const policyPriorities = Object.keys(priorityLabels) as TelegramPolicyPriority[];
-const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'upbit', 'bitget']);
+const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
 const DEFAULT_POLICY_WINDOW_MS = 5 * 60 * 1000;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -198,10 +223,73 @@ function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
     signalFollowupEnabled: runtime.signalFollowupEnabled === true,
     memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
     marketBriefEnabled: runtime.marketBriefEnabled === true,
+    backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
+    personalWorkerEnabled: runtime.personalWorkerEnabled === true,
+    personalWorkerStarted: runtime.personalWorkerStarted === true,
+    personalWorkerHealthy: runtime.personalWorkerHealthy === true,
+    personalWorkerErrorCode: typeof runtime.personalWorkerErrorCode === 'string'
+      ? runtime.personalWorkerErrorCode.slice(0, 120)
+      : null,
     orderAuthority: 'NONE',
     privateTradingApiAllowed: false,
     realOrderAllowed: false,
   };
+}
+
+function normalizeDeliveryHealth(value: unknown): DeliveryHealth {
+  const rows = Array.isArray(value) ? value : [];
+  const health: DeliveryHealth = {
+    pending: 0,
+    retryScheduled: 0,
+    failed: 0,
+    deadLetter: 0,
+    sent: 0,
+    lastSentAt: null,
+    lastFailureAt: null,
+    lastErrorCode: null,
+    lastActivityAt: null,
+  };
+  let latestFailureMs = -1;
+  for (const item of rows) {
+    const row = record(item);
+    if (!row || typeof row.state !== 'string') continue;
+    const state = row.state;
+    if (state === 'PENDING' || state === 'SENDING') health.pending += 1;
+    else if (state === 'RETRY_SCHEDULED') health.retryScheduled += 1;
+    else if (state === 'FAILED') health.failed += 1;
+    else if (state === 'DEAD_LETTER') health.deadLetter += 1;
+    else if (state === 'SENT') health.sent += 1;
+    else continue;
+
+    const updatedAt = typeof row.updatedAt === 'string' && Number.isFinite(Date.parse(row.updatedAt))
+      ? new Date(Date.parse(row.updatedAt)).toISOString()
+      : null;
+    if (updatedAt && (!health.lastActivityAt || updatedAt > health.lastActivityAt)) health.lastActivityAt = updatedAt;
+    if (state === 'SENT' && updatedAt && (!health.lastSentAt || updatedAt > health.lastSentAt)) health.lastSentAt = updatedAt;
+    if (['FAILED', 'RETRY_SCHEDULED', 'DEAD_LETTER'].includes(state) && updatedAt) {
+      const failureMs = Date.parse(updatedAt);
+      if (failureMs > latestFailureMs) {
+        latestFailureMs = failureMs;
+        health.lastFailureAt = updatedAt;
+        health.lastErrorCode = typeof row.lastErrorCode === 'string' && row.lastErrorCode.trim()
+          ? row.lastErrorCode.trim().slice(0, 120)
+          : null;
+      }
+    }
+  }
+  return health;
+}
+
+function deliveryHealthTime(value: string | null) {
+  if (!value) return '없음';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(value));
 }
 
 function normalizeIntegrationState(value: unknown): IntegrationState {
@@ -231,6 +319,13 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
       connected: telegram.connected === true,
       status: typeof telegram.status === 'string' ? telegram.status : 'DISCONNECTED',
       connectedAt: typeof telegram.connectedAt === 'string' ? telegram.connectedAt : null,
+      recoveryRequired: telegram.recoveryRequired === true,
+      recoveryErrorCode: typeof telegram.recoveryErrorCode === 'string'
+        ? telegram.recoveryErrorCode.slice(0, 120)
+        : null,
+      recoveryFailedAt: typeof telegram.recoveryFailedAt === 'string'
+        ? telegram.recoveryFailedAt
+        : null,
     },
     preferences: Object.fromEntries(
       preferenceKeys.map((key) => [key, preferences[key] === true]),
@@ -239,6 +334,7 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
     alertPolicySource: typeof root.alertPolicySource === 'string' ? root.alertPolicySource : 'DEFAULT_MISSING',
     alertPolicyStorageAvailable: root.alertPolicyStorageAvailable !== false,
     telegramRuntime: normalizeTelegramRuntime(root.telegramRuntime),
+    deliveryHealth: normalizeDeliveryHealth(root.deliveries),
   };
 }
 
@@ -357,7 +453,8 @@ export function UserBrokerTelegramPanel() {
   }
 
   async function sendTelegramTest() {
-    if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;
+    if (!state?.telegram.connected || state.telegram.recoveryRequired
+      || !state.telegramRuntime.deliveryReady || testSending) return;
     setTestSending(true);
     setError(null);
     setSyncNotice(null);
@@ -423,19 +520,39 @@ export function UserBrokerTelegramPanel() {
   const cryptoAlertsOn = Boolean(state?.alertPolicy.markets.includes('CRYPTO_SPOT') && state.alertPolicy.markets.includes('CRYPTO_FUTURES'));
   const holdingAlertsOn = Boolean(state?.alertPolicy.signalTypes.includes('PRICE_TARGET'));
   const executionAlertsOn = Boolean(state && essentialExecutionPreferenceKeys.every((key) => state.preferences[key]));
-  const telegramHealthy = Boolean(state?.telegram.connected && state.telegramRuntime.deliveryReady);
+  const telegramHealthy = Boolean(
+    state?.telegram.connected
+    && state.telegramRuntime.deliveryReady
+    && state.telegramRuntime.backgroundWorkersEnabled
+    && state.telegramRuntime.personalWorkerEnabled
+    && state.telegramRuntime.personalWorkerStarted
+    && state.telegramRuntime.personalWorkerHealthy
+    && !state.telegram.recoveryRequired
+  );
+  const deliveryHasFailure = Boolean(state?.deliveryHealth.lastFailureAt
+    && (!state.deliveryHealth.lastSentAt
+      || state.deliveryHealth.lastFailureAt > state.deliveryHealth.lastSentAt));
+  const deliveryRetrying = Boolean(state && state.deliveryHealth.retryScheduled > 0);
   const telegramStatusLabel = requestState === 'failure'
     ? '확인 실패'
-    : telegramHealthy
-      ? '정상'
-      : state?.telegram.connected
-        ? '확인 필요'
-        : '연결 필요';
-  const telegramStatusTone = requestState === 'failure'
+    : state?.telegram.recoveryRequired
+      ? '재연결 필요'
+      : deliveryHasFailure
+      ? '전송 오류'
+      : deliveryRetrying
+        ? '재시도 중'
+        : telegramHealthy
+          ? '정상'
+          : state?.telegram.connected
+            ? '확인 필요'
+            : '연결 필요';
+  const telegramStatusTone = requestState === 'failure' || state?.telegram.recoveryRequired || deliveryHasFailure
     ? 'bg-destructive/10 text-destructive'
-    : telegramHealthy
-      ? 'bg-positive/10 text-positive'
-      : 'bg-warning/10 text-warning';
+    : deliveryRetrying
+      ? 'bg-warning/10 text-warning'
+      : telegramHealthy
+        ? 'bg-positive/10 text-positive'
+        : 'bg-warning/10 text-warning';
 
   const toggleMarketGroup = async (markets: TelegramPolicyMarket[], value: boolean) => {
     if (!state) return;
@@ -477,6 +594,11 @@ export function UserBrokerTelegramPanel() {
       {syncNotice ? <p role="status" className="mt-3 rounded-xl bg-secondary p-3 text-xs font-bold">{syncNotice}</p> : null}
 
       {state ? <>
+        {state.telegram.recoveryRequired ? (
+          <div role="alert" className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs font-bold text-destructive" data-testid="telegram-recovery-required">
+            Telegram이 메시지 전송을 거부했습니다. Telegram에서 이 봇의 차단을 해제한 뒤 아래 재연결 버튼을 누르고 /start를 완료하세요. 재연결 후 테스트 메시지가 도착해야 정상으로 전환됩니다.
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-wrap gap-2">
           {state.telegram.connected ? (
             <button className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>
@@ -484,19 +606,43 @@ export function UserBrokerTelegramPanel() {
             </button>
           ) : (
             <button className="min-h-11 rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground" type="button" onClick={() => void createTelegramLink()}>
-              텔레그램 연결
+              {state.telegram.recoveryRequired ? '텔레그램 재연결' : '텔레그램 연결'}
             </button>
           )}
           <button
             type="button"
             className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
-            disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}
+            disabled={!state.telegram.connected || state.telegram.recoveryRequired || !state.telegramRuntime.deliveryReady || testSending}
             onClick={() => void sendTelegramTest()}
           >
             {testSending ? '전송 중…' : '테스트 메시지'}
           </button>
         </div>
         {link ? <p className="mt-2 text-xs"><a className="font-bold underline" href={link} target="_blank" rel="noreferrer">텔레그램에서 연결 완료</a></p> : null}
+
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="telegram-delivery-health">
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">대기</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.pending}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">재시도</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.retryScheduled}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">실패</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.failed + state.deliveryHealth.deadLetter}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">마지막 성공</p>
+            <p className="mt-1 text-xs font-extrabold">{deliveryHealthTime(state.deliveryHealth.lastSentAt)}</p>
+          </div>
+        </div>
+        {state.deliveryHealth.lastErrorCode ? (
+          <p className="mt-2 break-all rounded-xl border border-warning/30 bg-warning/10 p-2.5 text-[10px] font-bold text-warning" data-testid="telegram-delivery-last-error">
+            최근 전송 오류 · {state.deliveryHealth.lastErrorCode} · {deliveryHealthTime(state.deliveryHealth.lastFailureAt)}
+          </p>
+        ) : null}
 
         <div className="mt-4 divide-y divide-card-border overflow-hidden rounded-2xl border border-card-border bg-background" data-testid="telegram-simple-settings">
           <ToggleRow
@@ -735,13 +881,16 @@ export function UserBrokerTelegramPanel() {
               ))}
             </ul>
           ) : <p className="mt-3 text-xs text-muted-foreground">연결된 계좌 없음</p>}
+          <p className="mt-3 rounded-xl bg-secondary/60 p-3 text-[10px] font-bold leading-5 text-muted-foreground">
+            자동매매 체결 이벤트는 백그라운드에서 매매일지·회원 이벤트·텔레그램 알림 대기열로 자동 동기화됩니다. 아래 버튼은 누락 복구용입니다.
+          </p>
           <button
             type="button"
             onClick={() => void syncExecutionState()}
             disabled={syncing || !state}
-            className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
+            className="mt-2 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
           >
-            {syncing ? '동기화 중…' : '주문 결과 동기화'}
+            {syncing ? '재동기화 중…' : '체결 결과 재동기화'}
           </button>
         </details>
 

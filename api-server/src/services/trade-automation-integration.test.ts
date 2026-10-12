@@ -3,16 +3,22 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, bitgetAcknowledgedOrderId } from './trade-execution.service';
 import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
-  buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
+  buildBitgetSignature, buildUpbitJwt, prepareBitgetLeverage, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
   prepareUpbitOrder, redactPreparedRequest, validateBitgetContractRules,
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
-import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingPlanInput,
+} from './trade-automation.types';
+import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
   SPOT_LIVE_HARD_DENIED_CAPABILITIES,
   spotLiveCapabilityDecision,
@@ -22,6 +28,86 @@ import {
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
+
+test('Bitget stores the actual broker ID, not clientOid, including one-way reducing acknowledgement without ID', () => {
+  const ack = { code: '00000', data: { clientOid: 'app-id', orderId: 'exchange-id' } };
+  assert.equal(bitgetAcknowledgedOrderId(ack, 'app-id'), 'exchange-id');
+  assert.equal(bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id', true), null);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id'), /ORDER_ID_MISSING/);
+  assert.throws(() => bitgetAcknowledgedOrderId(ack, 'other-app-id'), /INVALID_RESPONSE/);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: [ack.data] }, 'app-id'), /INVALID_RESPONSE/);
+});
+
+test('automatic Bitget entries preserve native stop and final target; reducing exits never attach new protection', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const automaticPlan = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105], marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+  assert.equal(body.presetStopLossPrice, '95');
+  assert.equal(body.presetStopSurplusPrice, '105');
+  const short = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, side: 'short',
+    stopPrice: 105, targetPrices: [96.5, 95] }, 'mock-short', '1000').body!);
+  assert.equal(short.presetStopLossPrice, '105');
+  assert.equal(short.presetStopSurplusPrice, '95');
+  const exit = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, reduceOnly: true }, 'mock-exit', '1000').body!);
+  assert.equal(exit.reduceOnly, 'YES');
+  assert.equal('presetStopLossPrice' in exit, false);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, stopPrice: 110 }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, targetPrices: [] }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+});
+test('Bitget native-protection validation covers mode-only and marker-only automatic entries', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const input = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: [], entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105],
+    marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const contract = { pricePlace: '1', priceEndStep: '5', minTradeNum: '0.01', sizeMultiplier: '0.01' };
+  for (const automaticPlan of [
+    { ...input, executionMode: 'automatic' as const },
+    { ...input, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+    { ...input, executionMode: 'automatic' as const, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+  ]) {
+    assert.doesNotThrow(() => validateBitgetContractRules(automaticPlan, contract, 100));
+    for (const invalid of [
+      { ...automaticPlan, stopPrice: 95.1 },
+      { ...automaticPlan, targetPrices: [103.5, 105.1] },
+    ]) {
+      assert.throws(() => validateBitgetContractRules(invalid, contract, 100), /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    }
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, stopPrice: 105 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, targetPrices: [] }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+    assert.equal(body.presetStopLossPrice, '95');
+    assert.equal(body.presetStopSurplusPrice, '105');
+    const short = { ...automaticPlan, side: 'short' as const, stopPrice: 105, targetPrices: [96.5, 95] };
+    assert.doesNotThrow(() => validateBitgetContractRules(short, contract, 100));
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 105.1 }, contract, 100),
+      /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 95 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const shortBody = JSON.parse(prepareBitgetOrder(credentials, short, 'mock-short', '1000').body!);
+    assert.equal(shortBody.presetStopLossPrice, '105');
+    assert.equal(shortBody.presetStopSurplusPrice, '95');
+    const reducing = { ...automaticPlan, reduceOnly: true, stopPrice: 95.1, targetPrices: [105.1] };
+    assert.doesNotThrow(() => validateBitgetContractRules(reducing, contract, 100));
+    const exit = JSON.parse(prepareBitgetOrder(credentials, reducing, 'mock-exit', '1000').body!);
+    assert.equal('presetStopLossPrice' in exit, false);
+    assert.equal('presetStopSurplusPrice' in exit, false);
+  }
+  const manual = { ...input, stopPrice: 95.1, targetPrices: [105.1] };
+  assert.doesNotThrow(() => validateBitgetContractRules(manual, contract, 100));
+  const body = JSON.parse(prepareBitgetOrder(credentials, manual, 'mock-manual', '1000').body!);
+  assert.equal('presetStopLossPrice' in body, false);
+  assert.equal('presetStopSurplusPrice' in body, false);
+});
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const SPOT_LIVE_TEST_KEYS = [
   'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
@@ -89,6 +175,46 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
+  assert.equal(policy.totalCapitalKrw, 1_000_000);
+  assert.equal(policy.maxOrderKrw, 500_000);
+});
+
+test('member entry is capped at 500k while administrator entry accepts 1M and both fail closed above tier', () => {
+  const memberPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  });
+  assert.equal(memberPolicy.maxOrderKrw, 500_000);
+  assert.equal(evaluateTradingPlan(plan({
+    quoteAmount: 500_000,
+    estimatedKrw: 500_000,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+  assert.ok(evaluateTradingPlan(plan({
+    quoteAmount: 500_001,
+    estimatedKrw: 500_001,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'));
+
+  const administratorPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.equal(administratorPolicy.maxOrderKrw, 1_000_000);
+
+  const exact = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_000,
+    estimatedKrw: 1_000_000,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.equal(exact.blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+
+  const exceeded = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_001,
+    estimatedKrw: 1_000_001,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.ok(exceeded.blockCodes.includes('MAX_ORDER_AMOUNT'));
 });
 
 test('spot live create is capability allowlisted and exact-authority bound', () => {
@@ -144,12 +270,12 @@ test('spot live permanently rejects futures, margin, short, leverage, and denied
   assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
 });
 
-test('spot live supports only the three spot market/provider combinations', () => {
+test('spot live supports KR Toss/Kiwoom, US Kiwoom, and Upbit spot only', () => {
   const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
     [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
-    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, false],
     [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
   ];
@@ -194,6 +320,12 @@ test('spot live runtime status publishes every permanent deny as false', () => {
 test('stock broker selection is per market, backward compatible, and enforced for automatic stock Paper plans', () => {
   const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
   assert.deepEqual(legacy.stockBrokerByMarket, { domestic_stock: 'kiwoom', us_stock: 'kiwoom' });
+
+  const legacyUsToss = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+  });
+  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'kiwoom' });
 
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -294,18 +426,86 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
-test('Bitget allows only 2x/3x, blocks opposite duplicate positions, and keeps reduce-only explicit', () => {
-  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+test('zero daily order quota stays opportunity-driven while an explicit positive quota remains fail-closed', () => {
+  const opportunityDriven = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 0,
+  });
+  const afterManyValidOpportunities = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 500 },
+  }), opportunityDriven, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(afterManyValidOpportunities.blockCodes.includes('DAILY_ORDER_LIMIT'), false);
+
+  const explicitlyBounded = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 10,
+  });
+  const bounded = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
+  }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
+test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
+  for (const leverage of [2, 3] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      leverage,
+    );
+  }
+  for (const leverage of [4, 5, 6, 7] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      3,
+    );
+    assert.equal(
+      normalizeTradingPolicy(
+        { ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage },
+        PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).bitgetLeverage,
+      leverage,
+    );
+  }
+  assert.throws(
+    () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 8 as 7 }),
+    /BITGET_LEVERAGE_POLICY_INVALID/,
+  );
+  assert.throws(
+    () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
+    /BITGET_LEVERAGE_POLICY_INVALID/,
+  );
+  const policy = normalizeTradingPolicy(
+    { ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  );
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
-    quoteAmount: null, estimatedKrw: 100_000, leverage: 4, marginMode: 'isolated',
+    quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
   const decision = evaluateTradingPlan(input, policy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(decision.blockCodes.includes('BITGET_LEVERAGE_LIMIT'));
   assert.ok(decision.blockCodes.includes('BITGET_OPPOSITE_POSITION_DUPLICATE'));
+  const maxAllowed = evaluateTradingPlan({ ...input, leverage: 7,
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(maxAllowed.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), false);
+  assert.equal(maxAllowed.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'), false);
+  const memberPolicyLimit = evaluateTradingPlan({ ...input, leverage: 7,
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 3 }),
+  { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(memberPolicyLimit.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'));
   const liquidationRisk = evaluateTradingPlan({ ...input, leverage: 3,
     marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null, liquidationDistancePercent: 4 } },
   policy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(liquidationRisk.blockCodes.includes('BITGET_LIQUIDATION_RISK'));
+  const crossedMargin = evaluateTradingPlan({ ...input, leverage: 3, marginMode: 'crossed',
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(crossedMargin.blockCodes.includes('BITGET_ISOLATED_MARGIN_REQUIRED'));
+  const isolatedMargin = evaluateTradingPlan({ ...input, leverage: 3, marginMode: 'isolated',
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(isolatedMargin.blockCodes.includes('BITGET_ISOLATED_MARGIN_REQUIRED'), false);
   const request = prepareBitgetOrder({ apiKey: 'key', secretKey: 'secret', passphrase: 'pass' }, { ...input, leverage: 3 }, 'client-1', '1000');
   assert.match(request.body ?? '', /"reduceOnly":"NO"/);
   assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 0.02, leverage: 3 }, {
@@ -320,6 +520,16 @@ test('Bitget allows only 2x/3x, blocks opposite duplicate positions, and keeps r
   const ticker = prepareBitgetTicker('BTCUSDT');
   assert.equal(ticker.path, '/api/v2/mix/market/ticker');
   assert.equal(Object.keys(ticker.headers).some((key) => key.startsWith('ACCESS-')), false);
+  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+    const prepared = prepareBitgetLeverage(
+      { apiKey: 'key', secretKey: 'secret', passphrase: 'pass' },
+      'BTCUSDT',
+      leverage,
+      '1000',
+    );
+    assert.equal(prepared.path, '/api/v2/mix/account/set-leverage');
+    assert.equal(JSON.parse(prepared.body ?? '{}').leverage, String(leverage));
+  }
 });
 
 test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell units', () => {
@@ -490,7 +700,8 @@ test('automatic live plans require separate global automatic-live authority', as
       false,
     );
     assert.equal(authorizedGate.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'), false);
-    assert.ok(authorizedGate.decision.blockCodes.includes('AUTOMATIC_ECONOMICS_REQUIRED'));
+    assert.equal(authorizedGate.plan, null);
+    assert.ok(authorizedGate.decision.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
   } finally {
     setTradingPlanMarketIntelligenceRunnerForTests(null);
     for (const [key, value] of Object.entries(previous)) {
@@ -917,12 +1128,14 @@ test('live connection verification authenticates the three spot providers with z
         });
       }
       if (url.includes('openapi.tossinvest.com/oauth2/token')) {
-        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+        return new Response(JSON.stringify({ access_token: 'toss-token', expires_in: 3600 }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }
       if (url.includes('openapi.tossinvest.com/api/v1/accounts')) {
-        return new Response(JSON.stringify({ result: [] }), {
+        return new Response(JSON.stringify({
+          result: [{ accountSeq: 'account-1', accountType: 'brokerage' }],
+        }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }
@@ -959,6 +1172,39 @@ test('live connection verification authenticates the three spot providers with z
   }
 });
 
+test('FILLED state transition rejects missing execution evidence before storing a false terminal fill', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const created = await automation.createPlan(USER_A, plan({ signalId: 'no-fake-fill-signal' }), policy, false);
+  assert.ok(created.plan);
+  const approved = await automation.approvePlan(USER_A, created.plan.id);
+  const order = (await automation.createOrder(USER_A, approved)).order;
+  const accepted = await automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED');
+
+  await assert.rejects(
+    automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED'),
+    /TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED/,
+  );
+  await assert.rejects(
+    automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED', {
+      filledQuantity: 0, averageFillPrice: 100_000,
+    }),
+    /TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED/,
+  );
+  const persisted = await repository.getOrder(USER_A, accepted.id);
+  assert.equal(persisted?.state, 'ACCEPTED');
+  assert.equal(persisted?.filledQuantity, 0);
+  assert.ok((await repository.listEvents(USER_A)).every((event) => event.toState !== 'FILLED'));
+
+  const completed = await automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED', {
+    filledQuantity: 1, averageFillPrice: 100_000, feeAmount: 50, feeCurrency: 'KRW',
+  });
+  assert.equal(completed.state, 'FILLED');
+  assert.equal(completed.filledQuantity, 1);
+  assert.equal((await repository.getOrder(USER_A, accepted.id))?.filledQuantity, 1);
+});
+
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);
@@ -979,7 +1225,18 @@ test('paper execution has zero outbound calls and restart scan marks an accepted
   try {
     const executed = await new TradeExecutionService(repository).execute(USER_A, approved, order);
     assert.equal(executed.state, 'FILLED');
+    assert.equal(executed.filledQuantity, 1);
+    assert.equal(executed.averageFillPrice, 100_000);
     assert.equal(outbound, 0);
+    const payloads = await readTradeAutomationJournalPayloads(repository, USER_A);
+    const journal = buildUnifiedTradeJournal(payloads, {
+      range: '30D',
+      source: 'APP_PAPER',
+      strategy: 'breakout-v1',
+    });
+    assert.equal(journal.trades.length, 1);
+    assert.equal(journal.trades[0]?.strategy, 'breakout-v1');
+    assert.deepEqual(journal.trades[0]?.canonicalLineage?.signalIds, ['signal-1']);
   } finally {
     globalThis.fetch = nativeFetch;
     if (previous == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
@@ -1017,4 +1274,59 @@ test('signal invalidation cancels only the unfilled remainder and preserves part
     assert.equal(canceled.filledQuantity, 4);
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; }
+});
+
+
+test('malformed reduceOnly cash BUY fails closed before bypassing stop, new-entry or amount gates', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    newEntriesStopped: true,
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: true, toss: true },
+  });
+  for (const [exchange, market, symbol] of [
+    ['upbit', 'KRW', 'BTC'],
+    ['kiwoom', 'KR', '005930'],
+    ['toss', 'KR', '005930'],
+  ] as const) {
+    const decision = evaluateTradingPlan(plan({
+      exchange, market, symbol, side: 'buy', reduceOnly: true,
+      stockBroker: exchange === 'upbit' ? null : exchange,
+      quantity: exchange === 'upbit' ? 0.01 : 1,
+      quoteAmount: null, estimatedKrw: 150_000,
+      targetPrices: [], stopPrice: 0,
+    }), policy, { emergencyStopped: true, serverLiveEnabled: true });
+    assert.ok(decision.blockCodes.includes('REDUCE_ONLY_SIDE_INVALID'), exchange);
+    assert.ok(decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'), exchange);
+    assert.ok(decision.blockCodes.includes('NEW_ENTRIES_STOPPED'), exchange);
+    assert.equal(decision.allowed, false);
+  }
+});
+
+test('canonical trading risk never treats an empty automatic allowlist as unrestricted authority', () => {
+  const active = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode:'automatic', automaticEnabled:true,
+    marketEnabled:{domestic_stock:false,us_stock:false,crypto_spot:true,crypto_futures:false},
+    exchangeEnabled:{toss:false,kiwoom:false,upbit:true,bitget:false},
+    enabledStrategies:[],
+  });
+  const simulated = plan({
+    accountMode:'paper',exchange:'upbit',market:'KRW',side:'buy',
+    symbol:'BTC',strategyId:'unapproved-strategy',
+  });
+  const blocked = evaluateTradingPlan(simulated,active,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.ok(blocked.blockCodes.includes('STRATEGY_NOT_ENABLED'));
+  assert.equal(blocked.allowed,false);
+
+  const allowedPolicy=normalizeTradingPolicy({
+    ...active,enabledStrategies:[simulated.strategyId],
+  });
+  const reviewed=evaluateTradingPlan(simulated,allowedPolicy,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.equal(reviewed.blockCodes.includes('STRATEGY_NOT_ENABLED'),false);
 });

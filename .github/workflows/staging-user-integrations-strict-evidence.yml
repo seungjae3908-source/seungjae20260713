@@ -62,64 +62,49 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Require exact current main and Required CI 6/6
+      - name: Require verified post-merge release provenance
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         with:
           script: |
-            const target = process.env.TARGET_SHA;
+            const {
+              evaluatePostMergeStatusProvenance,
+              inspectPostMergeStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/release-candidate-provenance.cjs`);
+            const targetSha = process.env.TARGET_SHA;
             const main = await github.rest.repos.getBranch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               branch: 'main',
             });
-            if (main.data.commit.sha !== target) {
-              core.setFailed(`Strict-evidence target is stale: target=${target} main=${main.data.commit.sha}`);
-              return;
-            }
-            const required = new Set([
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ]);
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: target,
+              ref: targetSha,
               per_page: 100,
             });
-            const latest = new Map();
-            for (const status of statuses) {
-              if (!latest.has(status.context)) latest.set(status.context, status);
-            }
-            const accepted = [...required].map((name) => latest.get(name));
-            if (accepted.length !== 6 || accepted.some((status) => status?.state !== 'success')) {
-              core.setFailed('Exact current main does not have all six successful Required statuses.');
+            const evidence = inspectPostMergeStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed(`Post-merge release provenance unavailable: ${evidence.reason}.`);
               return;
             }
-            const provenance = new Set(accepted.map((status) => {
-              const match = /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''));
-              return match?.[1] ?? null;
-            }));
-            if (provenance.size !== 1 || provenance.has(null)) {
-              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
-              return;
-            }
-            const runId = Number([...provenance][0]);
-            const run = await github.rest.actions.getWorkflowRun({
+            const run = (await github.rest.actions.getWorkflowRun({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              run_id: runId,
+              run_id: evidence.runId,
+            })).data;
+            const verified = evaluatePostMergeStatusProvenance({
+              targetSha,
+              currentMainSha: main.data.commit.sha,
+              statuses,
+              run,
             });
-            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
-              core.setFailed('Required status provenance is not an exact successful target run.');
+            if (!verified.ok) {
+              core.setFailed(`Post-merge release provenance rejected: ${verified.reason}.`);
               return;
             }
-            core.info(`Required CI 6/6 accepted from Run ${runId}.`);
+            core.info(`Pre-merge Required CI 6/6 + exact merged-tree identity accepted from provenance Run ${verified.runId}.`);
 
       - name: Locate successful exact-SHA Staging Readiness evidence
         id: staging

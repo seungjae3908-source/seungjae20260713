@@ -126,21 +126,27 @@ elif name == 'curl':
     event()
     assert '-X' not in args and '--request' not in args
     url = next(a for a in args if a.startswith('http:'))
-    assert url in ('http://127.0.0.1:18090/api/health', 'http://127.0.0.1:18090/api/research/overview')
+    assert url in ('http://127.0.0.1:18090/api/health', 'http://127.0.0.1:18090/api/research/overview', 'http://127.0.0.1:18090/api/research/video/evidence')
     output = safe(args[args.index('-o') + 1])
     health = url.endswith('/api/health')
+    video = url.endswith('/api/research/video/evidence')
+    overview_call = url.endswith('/api/research/overview')
     if opts.get('health_timeout') and health: sys.exit(28)
-    if opts.get('overview_http_fail') and not health: sys.exit(22)
+    if opts.get('overview_http_fail') and overview_call: sys.exit(22)
     if health:
         data = dict(ok=True, service='investment-research-dashboard', readOnly=True,
                     liveTrading=False, privateApi=False, orderAuthority=False)
         if opts.get('unsafe_health'): data['liveTrading'] = True
+    elif video:
+        data = dict(ok=True, available=True, dataState='MEASURED', sourceCount=0,
+                    automation=None, aiReview=None, economicEvidenceCredit=0,
+                    profitabilityCredit=0, executionAuthority='NONE')
     else:
         data = json.loads((root / 'overview.json').read_text())
         if Path(s['runtime']).name != 'a' * 40: data['research'].pop('liquidityIndependence', None)
-    output.write_text('invalid-json' if opts.get('invalid_json') and not health else json.dumps(data))
-    if not health and opts.get('pid_drift'): start()
-    if not health and opts.get('symlink_drift'):
+    output.write_text('invalid-json' if opts.get('invalid_json') and overview_call else json.dumps(data))
+    if overview_call and opts.get('pid_drift'): start()
+    if overview_call and opts.get('symlink_drift'):
         current = root / 'dashboard/current'
         current.unlink()
         current.symlink_to(root / 'dashboard/releases' / ('b' * 40))
@@ -192,6 +198,7 @@ function runScenario(options = {}, response = overview(), mode = 'activate') {
       mkdirSync(join(release, 'research-dashboard/public'), { recursive: true });
       writeFileSync(join(release, '.sha'), release === newRelease ? target : previous);
       writeFileSync(join(release, 'research-dashboard/server.py'), '# fixture only\n');
+      writeFileSync(join(release, 'research-dashboard/video_research_readback.py'), '# fixture only\n');
       writeFileSync(join(release, 'research-dashboard/v3_independence.py'), '# fixture only\n');
       writeFileSync(join(release, 'research-dashboard/public/index.html'), 'fixture');
       writeFileSync(join(release, 'research-dashboard/deploy/research-dashboard.service'), 'new-unit');

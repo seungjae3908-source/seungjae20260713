@@ -1,0 +1,27 @@
+[Unit]
+Description=Investment Research Production bounded state maintenance
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-production.env
+ExecStart=/usr/bin/env node research-production/bin/research-maintenance.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=10m

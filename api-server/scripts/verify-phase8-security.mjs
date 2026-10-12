@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { kiwoomReadonlyRecoverySecurityFailures } from './kiwoom-readonly-recovery-security-contract.mjs';
 
 const repositoryRoot = path.resolve(process.cwd(), '..');
 const failures = [];
@@ -28,7 +29,7 @@ const cryptoAuto = await text('api-server/src/routes/crypto-auto.ts');
 const normalizedCryptoAuto = cryptoAuto.replace(/\r\n/g, '\n');
 const cryptoAutoBlob = createHash('sha1')
   .update(`blob ${Buffer.byteLength(normalizedCryptoAuto)}\0${normalizedCryptoAuto}`).digest('hex');
-assert(cryptoAutoBlob === '4b964ddf329c58da3a43cd6024c1130fd3527b61', 'crypto-auto.ts changed from the verified baseline');
+assert(cryptoAutoBlob === '0f5ade3143235ff7112c455ee5ab517ccdf425d4', 'crypto-auto.ts changed from the safety-hardened verified baseline');
 
 const routes = await text('api-server/src/routes/index.ts');
 const disabledIndex = routes.indexOf("router.use('/crypto/futures/auto', privateExchangeDisabled)");
@@ -66,8 +67,8 @@ assert(recoveryWorker.includes('ordersSubmitted: 0')
   && recoveryWorker.includes('ordersCancelled: 0')
   && recoveryWorker.includes('privateMutationRequests: 0'),
   'trade recovery worker does not expose zero mutation counters');
-assert(orderRecovery.includes('KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT'),
-  'Kiwoom recovery is not fail-closed while the official status contract is unverified');
+failures.push(...kiwoomReadonlyRecoverySecurityFailures(orderRecovery,
+  await text('api-server/src/services/kiwoom-readonly-order-recovery.service.ts')));
 assert(automationRoute.includes('encryptTradingCredentials'), 'member exchange credentials are not encrypted before storage');
 assert(automationRepository.includes('hasSupabaseServerKey') && automationRepository.includes('secureClient()'),
   'encrypted exchange credentials are not restricted to the server Supabase client');
@@ -108,6 +109,7 @@ const phase8SensitiveFiles = [
   'api-server/src/services/spot-live-limited-capability.service.ts',
   'api-server/src/services/trade-execution.service.ts',
   'api-server/src/services/trade-order-recovery.service.ts',
+  'api-server/src/services/kiwoom-readonly-order-recovery.service.ts',
   'api-server/src/services/trade-recovery-worker.service.ts',
   'api-server/src/services/trade-automation.repository.ts',
   'api-server/src/routes/trade-automation.ts',

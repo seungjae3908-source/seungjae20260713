@@ -1,0 +1,49 @@
+name: Trading Ops Consolidated Preflight
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'stock-analyzer/src/components/brokerage-account-connections.tsx'
+      - 'stock-analyzer/src/components/trade-approval-queue.tsx'
+      - 'stock-analyzer/src/components/unified-trade-journal-panel.tsx'
+      - 'stock-analyzer/src/pages/auto-trading.tsx'
+      - 'stock-analyzer/src/lib/paper-journal-sync.ts'
+      - 'stock-analyzer/src/lib/labels.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/features/account-readonly/account-readonly.journal-history.ts'
+      - 'api-server/src/features/account-readonly/account-readonly.journal-history.toss.test.ts'
+      - 'api-server/src/services/trade-automation-unified-journal-adapter.ts'
+      - 'api-server/src/services/trade-automation-unified-journal-adapter.test.ts'
+      - 'api-server/src/services/trade-automation.service.ts'
+      - 'api-server/src/services/trade-automation.types.ts'
+      - 'api-server/src/services/unified-trade-journal.service.ts'
+      - 'api-server/src/services/member-auto-trading-background-worker.service.ts'
+      - 'api-server/src/services/trade-execution.service.ts'
+      - 'api-server/src/index.ts'
+      - 'market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js'
+      - '.github/workflows/production-automatic-trading-gate.yml'
+      - 'api-server/scripts/verify-production-automatic-trading-gate.mjs'
+      - '.github/tests/trading-ops-consolidated-preflight.test.mjs'
+      - '.github/workflows/trading-ops-consolidated-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Pre-merge account, journal, paper-auto and live-auto contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify consolidated trading operations contract
+        run: node --test .github/tests/trading-ops-consolidated-preflight.test.mjs
+      - name: Verify existing four-market automatic gate contract
+        run: node api-server/scripts/verify-production-automatic-trading-gate.mjs

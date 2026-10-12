@@ -1,22 +1,140 @@
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { AlertTriangle, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
 import { PaperTradingPanel } from '@/components/paper-trading-panel';
+import { FormulaAiAutoRehearsalPanel } from '@/components/formula-ai-auto-rehearsal-panel';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
+import { AdminFourMarketPaperPanel } from '@/components/admin-four-market-paper-panel';
+import { TradingHoldingsPanel, type TradingHolding } from '@/components/trading-holdings-panel';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
 import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
+import { getJournalSnapshot, syncJournalRecords } from '@/lib/paper-journal-sync';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
 type TradingMode = 'auto' | 'paper';
+type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'restricted' | 'fixture';
+const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m';
+const AUTO_PAPER_INITIAL_KRW = 1_000_000;
+
+type AutomaticPaperRuntimeReadiness = {
+  readyForPaperEvaluation: boolean;
+  blockers: string[];
+  workerMode: 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND';
+  paperWalletReady: boolean;
+  paperCapitalPolicyReady: boolean;
+  strategyAllowlistReady: boolean;
+  workerTickFresh: boolean;
+  handoffReady: boolean;
+  executionProjectionReady: boolean;
+};
+
+const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
+  BACKGROUND_PAPER_WALLET_REQUIRED: '100만원 자동모의매매 전용 계좌가 없습니다.',
+  BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW: '저장된 자동매매 운용자본이 100만원 기준보다 낮습니다.',
+  BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED: '관리자 4시장 독립 가상계좌 4개를 준비해야 합니다.',
+  BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED: '관리자 정책의 시장별 운용자본이 100만원 기준에 미달합니다.',
+  BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED: '관리자 4시장/Provider 설정이 모두 활성화되지 않았습니다.',
+  BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED: '관리자 가상계좌·주문원장 DB 보호가 검증되지 않았습니다.',
+  ADMIN_PAPER_MARKET_WALLET_MISSING: '시장별 가상계좌가 아직 준비되지 않았습니다.',
+  ADMIN_PAPER_WALLET_INVALID: '시장별 계좌 검증에 실패했습니다.',
+  BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED: '허용된 자동매매 전략이 없습니다.',
+  BACKGROUND_MEMBER_AUTO_POLICY_OFF: '회원 자동매매 설정이 꺼져 있습니다.',
+  BACKGROUND_TRADING_STOP_ACTIVE: '비상정지 또는 신규진입 차단 상태입니다.',
+  BACKGROUND_MEMBER_MARKETS_DISABLED: '자동매매에 허용된 시장이 없습니다.',
+  BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED: '시장과 연결된 Provider의 자동매매 설정이 꺼져 있습니다.',
+  BACKGROUND_PAPER_ONLY_WORKER_REQUIRED: '서버가 Paper 전용 Worker 모드로 실행되지 않았습니다.',
+  BACKGROUND_WORKER_TICK_NOT_HEALTHY: '자동모의 Worker의 최근 정상 실행이 확인되지 않았습니다.',
+  BACKGROUND_NEW_ENTRIES_FAIL_CLOSED: '서버 안전 차단 때문에 신규 Paper 진입이 불가능합니다.',
+  BACKGROUND_CANONICAL_HANDOFF_NOT_READY: '서버의 최신 자동매매 신호 전달이 준비되지 않았습니다.',
+  BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY: '체결·매매일지 동기화 상태의 검증이 필요합니다.',
+};
+
+async function readAutomaticPaperRuntimeReadiness(signal?: AbortSignal): Promise<AutomaticPaperRuntimeReadiness> {
+  const response = await authorizedFetch('/api/trade-automation/paper-runtime-readiness', { signal });
+  const data = await response.json().catch(() => null) as
+    (AutomaticPaperRuntimeReadiness & { ok?: boolean; readOnlyProbe?: boolean;
+      memberScope?: string; realOrderAuthorityGranted?: boolean;
+      privateProviderRequests?: number; financialMutationCount?: number;
+      orderSubmitted?: boolean; exchangeRequestSent?: boolean }) | null;
+  if (!response.ok || data?.ok !== true || data.readOnlyProbe !== true
+    || data.memberScope !== 'SELF' || data.realOrderAuthorityGranted !== false
+    || data.privateProviderRequests !== 0 || data.financialMutationCount !== 0
+    || data.orderSubmitted !== false || data.exchangeRequestSent !== false
+    || typeof data.readyForPaperEvaluation !== 'boolean'
+    || !Array.isArray(data.blockers) || data.blockers.some((code) => typeof code !== 'string')
+    || data.readyForPaperEvaluation !== (data.blockers.length === 0)) {
+    throw new Error('서버 Paper Worker 준비도 검증을 완료하지 못했습니다.');
+  }
+  return data;
+}
+
+type AutomaticPaperWalletPreflight = {
+  state: 'READY_FRESH' | 'READY_ISOLATE_LEGACY' | 'ALREADY_EXISTS' | 'BLOCKED';
+  safeToPrepare: boolean;
+  requiresHistoryPreservationConfirmation: boolean;
+  historical: { automaticPaperPlanCount: number; executedAutomaticPaperOrderCount: number;
+    missingFilledQuantityEvidence: number; missingFeeEvidence: number };
+};
+
+async function readAutomaticPaperWalletPreflight(signal?: AbortSignal): Promise<AutomaticPaperWalletPreflight> {
+  const response = await authorizedFetch('/api/paper-journal/automatic-wallet-readiness', { signal });
+  const data = await response.json().catch(() => null) as
+    (AutomaticPaperWalletPreflight & { ok?: boolean; readOnlyProbe?: boolean; initialCapitalKrw?: number }) | null;
+  if (!response.ok || data?.ok !== true || data?.readOnlyProbe !== true
+    || data?.initialCapitalKrw !== AUTO_PAPER_INITIAL_KRW
+    || !['READY_FRESH', 'READY_ISOLATE_LEGACY', 'ALREADY_EXISTS', 'BLOCKED'].includes(data?.state ?? '')
+    || typeof data?.safeToPrepare !== 'boolean') {
+    throw new Error('가상계좌 사전 안전검증을 확인하지 못했습니다.');
+  }
+  return data;
+}
+
+async function automaticPaperHistoryAllowsNewWallet(signal?: AbortSignal): Promise<boolean> {
+  const response = await authorizedFetch('/api/trade-automation/status', { signal });
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean;
+    automaticPaperWalletBootstrap?: { safeToInitialize?: boolean };
+  } | null;
+  // Missing or stale backend preflight is not permission to reset Paper capital.
+  return response.ok && body?.ok === true
+    && body.automaticPaperWalletBootstrap?.safeToInitialize === true;
+}
+
+async function inspectAutomaticPaperAccount(signal?: AbortSignal): Promise<AutomaticPaperAccountStatus> {
+  let cursor: string | null = null;
+  let anyRows = false;
+  for (let page = 0; page < 50; page += 1) {
+    const snapshot = await getJournalSnapshot(cursor, 100, signal);
+    anyRows ||= snapshot.records.length > 0;
+    const wallet = snapshot.records.find((row) =>
+      row.kind === 'account' && row.id === AUTO_PAPER_ACCOUNT_ID);
+    if (wallet) {
+      const payload = wallet.payload;
+      return wallet.deletedAt == null
+        && payload.id === AUTO_PAPER_ACCOUNT_ID
+        && Number(payload.initialBalance) === AUTO_PAPER_INITIAL_KRW
+        && Number.isFinite(Number(payload.equity)) && Number(payload.equity) > 0
+        && Number.isFinite(Number(payload.cashBalance)) && Number(payload.cashBalance) >= 0
+        ? 'ready' : 'blocked';
+    }
+    if (!snapshot.nextCursor) {
+      const historySafe = await automaticPaperHistoryAllowsNewWallet(signal);
+      return anyRows || !historySafe ? 'blocked' : 'missing';
+    }
+    cursor = snapshot.nextCursor;
+  }
+  return 'blocked';
+}
+
 type TradingMarket = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 type TradingSection = 'dashboard' | 'orders' | 'journal' | 'settings';
 
@@ -24,6 +142,8 @@ type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
   embedded?: boolean;
   initialMode?: TradingMode;
+  paperOrigin?: 'automatic' | 'manual';
+  holdingsFixture?: readonly TradingHolding[];
 };
 
 const MARKETS: Array<{
@@ -34,28 +154,73 @@ const MARKETS: Array<{
   provider: string;
 }> = [
   { value: 'domestic_stock', label: '국내주식', journalMarket: 'KR_STOCK', selectionMarket: 'KR', provider: 'Toss / Kiwoom' },
-  { value: 'us_stock', label: '미국주식', journalMarket: 'US_STOCK', selectionMarket: 'US', provider: 'Toss / Kiwoom' },
+  { value: 'us_stock', label: '미국주식', journalMarket: 'US_STOCK', selectionMarket: 'US', provider: 'Kiwoom' },
   { value: 'crypto_spot', label: '코인현물', journalMarket: 'CRYPTO_SPOT', selectionMarket: 'UPBIT', provider: 'Upbit' },
   { value: 'crypto_futures', label: '코인선물', journalMarket: 'CRYPTO_FUTURES', selectionMarket: 'BITGET', provider: 'Bitget' },
 ];
 
 const SECTIONS: Array<{ value: TradingSection; label: string }> = [
-  { value: 'dashboard', label: '대시보드' },
-  { value: 'orders', label: '포지션·주문' },
-  { value: 'journal', label: '매매일지' },
+  { value: 'dashboard', label: '상태' },
+  { value: 'orders', label: '주문' },
+  { value: 'journal', label: '일지' },
   { value: 'settings', label: '설정' },
 ];
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+function tradingRouteState(): { market: TradingMarket; section: TradingSection } {
+  if (typeof window === 'undefined') return { market: 'domestic_stock', section: 'dashboard' };
+  const params = new URLSearchParams(window.location.search);
+  const market = params.get('market') as TradingMarket | null;
+  const section = params.get('section') as TradingSection | null;
+  return {
+    market: MARKETS.some((item) => item.value === market) ? market! : 'domestic_stock',
+    section: SECTIONS.some((item) => item.value === section) ? section! : 'dashboard',
+  };
+}
+
+function StatusItem({
+  label,
+  value,
+  tone = 'ok',
+}: {
+  label: string;
+  value: string;
+  tone?: 'ok' | 'warn' | 'neutral';
+}) {
+  const Icon = tone === 'warn' ? AlertTriangle : CheckCircle2;
+  const iconClass = tone === 'ok'
+    ? 'text-emerald-500'
+    : tone === 'warn'
+      ? 'text-amber-500'
+      : 'text-muted-foreground';
   return (
     <div className="min-w-0 rounded-xl border border-card-border bg-background p-2.5 text-center">
       <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
       <div className="mt-1 flex min-w-0 items-center justify-center gap-1.5 text-xs font-semibold">
-        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${iconClass}`} />
         <span className="truncate">{value}</span>
       </div>
     </div>
   );
+}
+
+function runtimeHealthFresh(value: string | null | undefined, nowMs = Date.now()) {
+  if (!value) return false;
+  const tickMs = Date.parse(value);
+  return Number.isFinite(tickMs)
+    && tickMs <= nowMs + 5_000
+    && nowMs - tickMs <= 360_000;
+}
+
+function kstActivityTime(value: string | null | undefined) {
+  if (!value) return '없음';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '확인 필요';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(time));
 }
 
 function SegmentedButton({
@@ -79,7 +244,7 @@ function SegmentedButton({
       onClick={onClick}
       data-testid={testId}
       className={[
-        'min-h-11 min-w-0 rounded-xl border px-3 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+        'min-h-10 min-w-0 rounded-lg border px-2.5 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40',
         active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-foreground',
       ].join(' ')}
     >
@@ -88,58 +253,248 @@ function SegmentedButton({
   );
 }
 
-export default function AutoTradingPage({ fixture, embedded = false, initialMode = 'auto' }: AutoTradingPageProps) {
+export default function AutoTradingPage({ fixture, embedded = false, initialMode = 'auto', paperOrigin = 'automatic', holdingsFixture }: AutoTradingPageProps) {
   const auth = useAuth();
   const { selection } = useAnalysisSelection();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const userId = auth.user?.id ?? auth.profile?.id ?? '';
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
-  const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
+  const canJournalSync = testFixtureAccess || auth.can('canAccessJournalSync');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
-  const [mode, setMode] = useState<TradingMode>(initialMode);
-  const [market, setMarket] = useState<TradingMarket>('domestic_stock');
-  const [section, setSection] = useState<TradingSection>('dashboard');
+  const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
+  const canManagePilot = testFixtureAccess || auth.can('canManageMembers');
+  const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
+  const canChart = testFixtureAccess || auth.can('canAccessAiChart');
+  const mode = initialMode;
+  const initialRouteState = useMemo(tradingRouteState, []);
+  const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
+  const [section, setSection] = useState<TradingSection>(initialRouteState.section);
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
+  const [runtimeReadError, setRuntimeReadError] = useState(false);
+  const [runtimeClockMs, setRuntimeClockMs] = useState(() => Date.now());
+  const runtimeRefreshInFlight = useRef(false);
+  const receiveSettingsStatus = useCallback((status: TradeAutomationFixture | null) => {
+    if (status) setRuntimeStatus(status);
+    setRuntimeReadError(status == null);
+    setRuntimeLoading(false);
+    setRuntimeClockMs(Date.now());
+  }, []);
   const [paperRevision, setPaperRevision] = useState(0);
+  const [autoPaperStatus, setAutoPaperStatus] = useState<AutomaticPaperAccountStatus>(
+    fixture ? 'fixture' : 'checking',
+  );
+  const [autoPaperMessage, setAutoPaperMessage] = useState('');
+  const [autoPaperBusy, setAutoPaperBusy] = useState(false);
+  const [autoPaperPreflight, setAutoPaperPreflight] = useState<AutomaticPaperWalletPreflight | null>(null);
+  const [autoPaperRuntimeReadiness, setAutoPaperRuntimeReadiness] = useState<AutomaticPaperRuntimeReadiness | null>(null);
+  const [autoPaperRuntimeError, setAutoPaperRuntimeError] = useState(false);
+  const [autoPaperRuntimeRefresh, setAutoPaperRuntimeRefresh] = useState(0);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
   );
 
   useEffect(() => {
-    if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
-    if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
-  }, [canAuto, canPaper, mode]);
+    const next = tradingRouteState();
+    setMarket(next.market === 'crypto_futures' && !canFutures ? 'domestic_stock' : next.market);
+    setSection(next.section);
+  }, [canFutures, location]);
 
   useEffect(() => {
     if (fixture) {
       setRuntimeStatus(fixture);
       setRuntimeLoading(false);
+      setRuntimeReadError(false);
       return;
     }
-    if (!canAuto) return;
+    if (!canAuto) {
+      setRuntimeLoading(false);
+      setRuntimeReadError(true);
+      return;
+    }
+    // Settings owns the same read while mounted; do not start a second poller.
+    if (mode === 'auto' && section === 'settings') return;
     const controller = new AbortController();
-    setRuntimeLoading(true);
-    void authorizedFetch('/api/trade-automation/status', { signal: controller.signal })
-      .then(async (response) => {
+    const loadRuntimeStatus = async (initial: boolean) => {
+      if (runtimeRefreshInFlight.current) return;
+      runtimeRefreshInFlight.current = true;
+      if (initial) setRuntimeLoading(true);
+      try {
+        const response = await authorizedFetch('/api/trade-automation/status', { signal: controller.signal });
         const payload = await response.json() as TradeAutomationFixture & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? '자동매매 상태를 불러오지 못했습니다.');
-        if (!controller.signal.aborted) setRuntimeStatus(payload);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setRuntimeStatus(null);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setRuntimeLoading(false);
-      });
+        if (!controller.signal.aborted) {
+          setRuntimeStatus(payload);
+          setRuntimeReadError(false);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setRuntimeReadError(true);
+          if (initial) setRuntimeStatus(null);
+        }
+      } finally {
+        runtimeRefreshInFlight.current = false;
+        if (initial && !controller.signal.aborted) setRuntimeLoading(false);
+      }
+    };
+    void loadRuntimeStatus(true);
+    const timer = window.setInterval(() => {
+      setRuntimeClockMs(Date.now());
+      void loadRuntimeStatus(false);
+    }, 15_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+      runtimeRefreshInFlight.current = false;
+    };
+  }, [canAuto, fixture, userId, mode, section]);
+
+  useEffect(() => {
+    if (mode !== 'paper' || paperOrigin !== 'automatic') {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return;
+    }
+    if (fixture) {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('fixture');
+      return;
+    }
+    if (canManagePilot) {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return; // Admin V2 uses its own four-market wallet inspection.
+    }
+    if (!userId || !canAuto) return;
+    // Associate members can view automatic/Paper trading but cannot read
+    // journal snapshots. Do not produce an intentional 403 as a background
+    // browser request; keep the backend capability/RLS restriction intact.
+    if (!canJournalSync) {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return;
+    }
+    const controller = new AbortController();
+    setAutoPaperStatus('checking');
+    setAutoPaperPreflight(null);
+    void (async () => {
+      const status = await inspectAutomaticPaperAccount(controller.signal);
+      const preflight = status === 'blocked' || status === 'missing'
+        ? await readAutomaticPaperWalletPreflight(controller.signal)
+        : null;
+      if (controller.signal.aborted) return;
+      setAutoPaperPreflight(preflight);
+      setAutoPaperStatus(status);
+    })().catch(() => {
+      if (!controller.signal.aborted) {
+        setAutoPaperPreflight(null);
+        setAutoPaperStatus('failed');
+      }
+    });
     return () => controller.abort();
-  }, [canAuto, fixture]);
+  }, [userId, canAuto, canJournalSync, fixture, canManagePilot, mode, paperOrigin]);
+
+  useEffect(() => {
+    if (mode !== 'paper' || paperOrigin !== 'automatic' || fixture || !userId || !canAuto || !canJournalSync) {
+      setAutoPaperRuntimeReadiness(null);
+      setAutoPaperRuntimeError(false);
+      return;
+    }
+    const controller = new AbortController();
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const readiness = await readAutomaticPaperRuntimeReadiness(controller.signal);
+        if (!controller.signal.aborted) {
+          setAutoPaperRuntimeReadiness(readiness);
+          setAutoPaperRuntimeError(false);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setAutoPaperRuntimeReadiness(null);
+          setAutoPaperRuntimeError(true);
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [userId, canAuto, canJournalSync, fixture, autoPaperRuntimeRefresh, mode, paperOrigin]);
+
+  async function prepareAutomaticPaperAccount(isolateLegacy = false) {
+    const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
+    if (autoPaperBusy || !userId || !canAuto || !canJournalSync || fixture || autoPaperStatus !== expectedStatus) return;
+    if (isolateLegacy && !window.confirm(
+      '과거 자동모의 거래와 미청산 연구용 포지션은 그대로 보존합니다. 새 100만원 계좌와는 분리하며 과거 손익을 0원이나 청산 완료로 변경하지 않습니다. 계속할까요?',
+    )) return;
+    setAutoPaperBusy(true);
+    setAutoPaperMessage('');
+    try {
+      const before = await inspectAutomaticPaperAccount();
+      if (before !== expectedStatus) {
+        setAutoPaperStatus(before);
+        setAutoPaperMessage('계좌 상태가 변경되어 다시 확인이 필요합니다.');
+        return;
+      }
+      // Re-evaluate the server-owned preflight immediately before any write.
+      const latest = await readAutomaticPaperWalletPreflight();
+      setAutoPaperPreflight(latest);
+      const expectedPreflightState = isolateLegacy ? 'READY_ISOLATE_LEGACY' : 'READY_FRESH';
+      if (!latest.safeToPrepare || latest.state !== expectedPreflightState
+        || latest.requiresHistoryPreservationConfirmation !== isolateLegacy) {
+        setAutoPaperMessage('서버 사전 안전검증에서 계좌 준비가 차단되었습니다. 기존 기록은 보존됩니다.');
+        return;
+      }
+      const at = new Date().toISOString();
+      const result = await syncJournalRecords({
+        idempotencyKey: `automatic-paper-start-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        clientTime: at,
+        ...(isolateLegacy ? {
+          legacyEpochConfirmation: 'START_NEW_1M_PAPER_EPOCH_PRESERVE_HISTORY',
+        } : {}),
+        records: [{
+          kind: 'account', id: AUTO_PAPER_ACCOUNT_ID, version: 1,
+          updatedAt: at, deletedAt: null,
+          payload: {
+            id: AUTO_PAPER_ACCOUNT_ID,
+            initialBalance: AUTO_PAPER_INITIAL_KRW,
+            cashBalance: AUTO_PAPER_INITIAL_KRW,
+            realizedPnl: 0, unrealizedPnl: 0, equity: AUTO_PAPER_INITIAL_KRW,
+            usedMargin: 0, availableMargin: AUTO_PAPER_INITIAL_KRW,
+            createdAt: at, updatedAt: at,
+          },
+        }],
+      });
+      if (result.orderSubmitted !== false || result.exchangeRequestSent !== false
+        || result.failed.length > 0 || result.conflicts.length > 0) {
+        throw new Error('모의계좌 동기화 결과가 안전하게 확인되지 않았습니다.');
+      }
+      const after = await inspectAutomaticPaperAccount();
+      setAutoPaperStatus(after);
+      if (after !== 'ready') throw new Error('서버 모의계좌 저장·조회 검증이 완료되지 않았습니다.');
+      setAutoPaperPreflight(null);
+      setAutoPaperRuntimeRefresh((current) => current + 1);
+      setAutoPaperMessage('100만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
+    } catch (error) {
+      setAutoPaperStatus('failed');
+      setAutoPaperMessage(error instanceof Error ? error.message : '모의계좌 준비에 실패했습니다.');
+    } finally {
+      setAutoPaperBusy(false);
+    }
+  }
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   const policy = runtimeStatus?.policy;
+  const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)
+    && policy.enabledStrategies.length > 0;
+  const walletAudit = runtimeStatus?.automaticPaperWalletBootstrap;
   const marketEnabled = Boolean(policy?.marketEnabled?.[market]);
   const selectedProvider = market === 'crypto_spot'
     ? 'upbit'
@@ -147,17 +502,53 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
   const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
-  const lastOrder = runtimeStatus?.lastOrder;
+  const liveReadiness = runtimeStatus?.liveAutomaticReadinessByMarket?.[market]
+    ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const providerVerified = liveReadiness?.providerVerified === true;
+  const autoWorker = runtimeStatus?.autoTradingBackground;
+  const runtimeNowMs = runtimeClockMs;
+  const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
+  const automaticRuntimeReady = liveStrategyConfigured
+    && autoWorker?.enabled === true
+    && autoWorker.liveModeRequested === true
+    && autoWorker.tickOk === true
+    && autoWorkerFresh
+    && autoWorker.handoffReady === true
+    && autoWorker.newEntriesFailClosed === false
+    && autoWorker.liveEntryWarmupComplete === true
+    && autoWorker.liveEntriesArmed === true
+    && autoWorker.globalEmergencyStopActive === false;
+  const liveAuthorityLabel = runtimeLoading
+    ? '확인 중'
+    : runtimeReadError
+      ? '상태 조회 실패'
+      : !canPlaceOrders
+      ? '계정 주문 권한 없음'
+      : !liveStrategyConfigured
+        ? '실자동매매 전략 미등록'
+      : !liveReadiness?.automaticServerGateEnabled
+        ? '자동 Gate OFF'
+        : !liveReadiness?.readyForAutomaticOrderEvaluation
+          ? '자동 Gate 차단'
+          : autoWorker?.enabled !== true || autoWorker.liveModeRequested !== true
+            ? '자동 워커 OFF'
+            : autoWorker.tickOk !== true || autoWorker.handoffReady !== true || autoWorker.newEntriesFailClosed === true
+              ? '자동 워커 차단'
+              : !autoWorkerFresh
+                ? '자동 워커 상태 지연'
+                : autoWorker.liveEntriesArmed !== true
+                  ? '안전대기 · Arm 준비 중'
+                : automaticRuntimeReady
+                  ? '자동 실거래 작동 준비됨'
+                  : '자동 워커 점검 필요';
+  const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
+  const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
+  const newEntriesStopped = policy?.newEntriesStopped === true;
+  const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
+  const showLegacyPaperReadinessInsideAutoDashboard = mode === 'paper' && paperOrigin === 'automatic';
 
-  const changeMode = (next: TradingMode) => {
-    if (next === 'auto' && !canAuto) return;
-    if (next === 'paper' && !canPaper) return;
-    setMode(next);
-    setSection('dashboard');
-  };
-
-  const dashboard = mode === 'auto' ? (
+  const liveDashboard = (
     <div className="space-y-3">
       <section
         aria-label="자동매매 실행 상태"
@@ -178,9 +569,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="시장 제어" value="4시장" />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
-        <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-          4시장 개별 ON/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
-        </p>
       </section>
 
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
@@ -191,27 +579,165 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </div>
           <span className={[
             'rounded-full px-2.5 py-1 text-xs font-bold',
-            marketEnabled && !emergencyStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
+            'bg-muted text-muted-foreground',
           ].join(' ')}>
-            {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
+            {marketEnabled && !effectiveEntryStopped ? '시장 설정 ON' : '시장 설정 OFF'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
-          <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
-          <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
+          <StatusItem
+            label="연결"
+            value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'}
+            tone={providerVerified ? 'ok' : 'warn'}
+          />
+          <StatusItem
+            label="최근 주문"
+            value={lastOrder?.state ?? '없음'}
+            tone={lastOrder && ['REJECTED', 'RECOVERY_REQUIRED'].includes(lastOrder.state) ? 'warn' : lastOrder ? 'ok' : 'neutral'}
+          />
+          <StatusItem
+            label="비상정지"
+            value={emergencyStopped ? '작동 중' : newEntriesStopped ? '신규진입 차단' : '정상'}
+            tone={effectiveEntryStopped ? 'warn' : 'ok'}
+          />
+          <StatusItem
+            label="실거래 권한"
+            value={liveAuthorityLabel}
+            tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}
+          />
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
+          <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
+          <StatusItem label="복구 필요" value={`${marketActivity?.recoveryRequiredOrders ?? 0}건`} />
+          <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
+          <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건 · ${kstActivityTime(marketActivity?.lastActivityAt)}`} />
         </div>
       </section>
+
     </div>
-  ) : (
+  );
+  const automaticPaperReadiness = showLegacyPaperReadinessInsideAutoDashboard ? <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="optional-paper-readiness"
+        open
+      >
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-xs font-semibold [&::-webkit-details-marker]:hidden">
+          <span>선택 기능 · 모의매매 준비 상태</span>
+          <span aria-hidden className="text-muted-foreground">실자동매매와 독립 ⌄</span>
+        </summary>
+        <div className="space-y-3 border-t border-card-border p-3 sm:p-4">
+      {canManagePilot && !fixture ? (
+        <AdminFourMarketPaperPanel />
+      ) : (
+      <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-wallet-readiness">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold">자동모의매매 가상계좌</h2>
+          <span className="text-xs font-semibold">
+            {autoPaperStatus === 'ready' ? '서버 계좌 확인됨'
+              : autoPaperStatus === 'missing' ? '계좌 준비 필요'
+                : autoPaperStatus === 'blocked'
+                  ? autoPaperPreflight?.state === 'READY_ISOLATE_LEGACY'
+                    ? '기존 이력 보존 후 준비 가능' : '기존 기록 확인 필요'
+                  : autoPaperStatus === 'restricted' ? '모의계좌 관리 권한 없음'
+                  : autoPaperStatus === 'failed' ? '계좌 점검 실패'
+                    : autoPaperStatus === 'fixture' ? '테스트 화면' : '확인 중'}
+          </span>
+        </div>
+        <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+          자동모의매매 전용 100만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
+          기존 수동 모의거래 기록이 있으면 자동으로 덮어쓰지 않습니다.
+        </p>
+        {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
+        {autoPaperStatus === 'blocked' && walletAudit?.safeToInitialize === false ? (
+          <p className="mt-2 break-keep text-xs leading-5 text-amber-700" data-testid="automatic-paper-history-audit">
+            과거 자동모의 계획 {walletAudit.automaticPaperPlanCount}건 · 체결 이력 {walletAudit.executedAutomaticPaperOrderCount}건
+            {walletAudit.missingFilledQuantityEvidence > 0 ? ` · 수량 증거 누락 ${walletAudit.missingFilledQuantityEvidence}건` : ''}
+            {walletAudit.missingFeeEvidence > 0 ? ` · 비용 증거 누락 ${walletAudit.missingFeeEvidence}건` : ''}
+            . 과거 기록은 보존하며 서버 사전검증이 승인한 경우에만 새 계좌를 분리 생성할 수 있습니다.
+          </p>
+        ) : null}
+        {autoPaperStatus === 'blocked' && policy ? (
+          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground" data-testid="automatic-current-risk-policy">
+            현재 저장된 자동매매 정책: 총 운용 {policy.totalCapitalKrw.toLocaleString('ko-KR')}원,
+            1회 주문 상한 {policy.maxOrderKrw.toLocaleString('ko-KR')}원,
+            코인선물 레버리지 {policy.bitgetLeverage}배. 이 화면에서 운용 한도를 변경하지 않습니다.
+          </p>
+        ) : null}
+        {autoPaperStatus === 'blocked' && autoPaperPreflight?.state === 'BLOCKED' ? (
+          <p className="mt-2 text-xs text-amber-700" data-testid="automatic-paper-legacy-preflight-blocked">
+            기존 거래 이력의 안전 분리 조건이 충족되지 않아 계좌 준비를 차단했습니다.
+          </p>
+        ) : null}
+        {autoPaperStatus === 'blocked'
+          && autoPaperPreflight?.safeToPrepare === true
+          && autoPaperPreflight.state === 'READY_ISOLATE_LEGACY' ? (
+          <button
+            type="button"
+            className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
+            disabled={autoPaperBusy || !canAuto || !canJournalSync || Boolean(fixture)}
+            onClick={() => void prepareAutomaticPaperAccount(true)}
+            data-testid="prepare-isolated-automatic-paper-epoch"
+          >
+            과거 기록 보존 후 신규 100만원 모의계좌 준비
+          </button>
+        ) : null}
+        {autoPaperStatus === 'missing'
+          && autoPaperPreflight?.state === 'READY_FRESH'
+          && autoPaperPreflight.safeToPrepare === true ? (
+          <button
+            type="button"
+            className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
+            disabled={autoPaperBusy || !canAuto || !canJournalSync || Boolean(fixture)}
+            onClick={() => void prepareAutomaticPaperAccount()}
+            data-testid="prepare-automatic-paper-account"
+          >
+            {autoPaperBusy ? '가상계좌 검증 중' : '100만원 모의계좌 준비'}
+          </button>
+        ) : null}
+      </section>
+      )}
+      {!fixture && canAuto && canJournalSync ? (
+        <section className="rounded-2xl border border-card-border bg-card p-4"
+          data-testid="automatic-paper-worker-readiness">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold">자동모의매매 서버 실행 점검</h2>
+            <span className="text-xs font-semibold">
+              {autoPaperRuntimeError ? '확인 실패'
+                : autoPaperRuntimeReadiness?.readyForPaperEvaluation === true ? '준비 완료'
+                  : autoPaperRuntimeReadiness ? '추가 설정 필요' : '확인 중'}
+            </span>
+          </div>
+          {autoPaperRuntimeReadiness && !autoPaperRuntimeReadiness.readyForPaperEvaluation ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-amber-700"
+              data-testid="automatic-paper-worker-blockers">
+              {autoPaperRuntimeReadiness.blockers.map((code) => (
+                <li key={code}>{PAPER_RUNTIME_BLOCKER_LABELS[code] ?? '서버 운영 준비도 점검이 필요합니다.'}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              {autoPaperRuntimeError
+                ? '서버의 읽기 전용 운영 검사가 완료되지 않았습니다. 이 상태는 준비 완료로 처리하지 않습니다.'
+                : autoPaperRuntimeReadiness?.readyForPaperEvaluation
+                  ? canManagePilot
+                    ? '관리자 4시장 독립계좌·전략·Paper Worker·신호·매매일지 연결을 확인했습니다.'
+                    : '100만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
+                  : '회원의 Paper Worker 운영 상태를 조회 중입니다.'}
+            </p>
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            이 검사는 실거래 권한을 부여하거나 실주문을 실행하지 않습니다.
+          </p>
+        </section>
+      ) : null}
+        </div>
+      </details> : null;
+  const dashboard = mode === 'auto' ? liveDashboard : (
+    <div className="space-y-3">
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold">Canonical 모의매매 · {marketMeta.label}</h2>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            국내주식·미국주식·코인현물·코인선물 모두 동일한 서버 검증형 Paper 경로를 사용합니다.
-          </p>
+          <h2 className="text-sm font-bold">{paperOrigin === 'automatic' ? '자동모의매매' : '수동모의매매'} · {marketMeta.label}</h2>
         </div>
         <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
           실제 주문 0
@@ -224,6 +750,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <StatusItem label="경제적 증거" value="Settlement 후 판정" />
       </div>
     </section>
+    {automaticPaperReadiness}
+    </div>
   );
 
   const orders = mode === 'auto' ? (
@@ -234,18 +762,23 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatusItem label="최근 상태" value={lastOrder?.state ?? '주문 없음'} />
-        <StatusItem label="Provider" value={marketMeta.provider} />
-        <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
-        <StatusItem label="자동 실행" value={policy?.automaticEnabled && marketEnabled ? 'ON' : 'OFF'} />
+        <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
+        <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
+        <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건`} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/scanner')}>신호 확인</button>
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/ai-chart')}>AI 차트·포지션</button>
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
       </div>
-      <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-        주문·취소·정정은 기존 canonical OMS와 서버 Gate를 그대로 사용합니다. 이 화면은 별도 실행 권한을 만들지 않습니다.
-      </p>
+    </section>
+  ) : paperOrigin === 'automatic' ? (
+    <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-orders">
+      <h2 className="text-sm font-bold">{marketMeta.label} · 자동모의 주문</h2>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <StatusItem label="최근 상태" value={lastOrder?.state ?? '없음'} />
+        <StatusItem label="실행 상태" value={autoPaperRuntimeReadiness?.readyForPaperEvaluation ? '준비됨' : '점검 필요'} tone="neutral" />
+      </div>
     </section>
   ) : (
     <div className="space-y-3" data-testid="paper-trading-orders">
@@ -292,13 +825,29 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <span aria-hidden className="text-muted-foreground">⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
-          <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+          <TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot}
+            onStatusRead={receiveSettingsStatus} />
         </div>
       </details>
-      <details className="rounded-2xl border border-card-border bg-card">
+      <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="auto-trading-rehearsal-settings"
+      >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-          <span>알림 · 텔레그램</span>
-          <span aria-hidden className="text-muted-foreground">⌄</span>
+          <span>전략 리허설</span>
+          <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
+        </summary>
+        <div className="border-t border-card-border p-3 sm:p-4">
+          <FormulaAiAutoRehearsalPanel />
+        </div>
+      </details>
+      <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="auto-trading-telegram-settings"
+      >
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+          <span>선택 알림 · 텔레그램</span>
+          <span aria-hidden className="text-muted-foreground">자동매매와 독립 ⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
           <UserBrokerTelegramPanel />
@@ -323,9 +872,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     <div className="space-y-3" data-testid="trading-workspace-journal">
       <UnifiedTradeJournalPanel
         forcedMarket={marketMeta.journalMarket}
-        forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}
-        title={mode === 'auto' ? '자동매매 매매일지' : '모의매매 매매일지'}
-        description={marketMeta.label + ' 거래만 표시합니다. 비용 근거가 없으면 순손익을 임의로 0으로 만들지 않습니다.'}
+        title="매매일지"
+        description={marketMeta.label + ' · 직접매매/자동매매/자동모의매매'}
       />
       {mode === 'paper' && userId ? (
         <details className="rounded-2xl border border-card-border bg-card" data-testid="paper-journal-sync-tools">
@@ -362,20 +910,51 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         ? 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4'
         : 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4'}>
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
-          <div className="grid grid-cols-2 gap-2" data-testid="trading-mode-tabs">
-            <SegmentedButton active={mode === 'auto'} disabled={!canAuto} onClick={() => changeMode('auto')} testId="trading-mode-auto">자동매매</SegmentedButton>
-            <SegmentedButton active={mode === 'paper'} disabled={!canPaper} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
+          <div className="grid grid-cols-2 gap-2" aria-label="기술매매 모드" data-testid="technical-trading-modes">
+            <SegmentedButton active={mode === 'auto'} disabled={!canAuto}
+              onClick={() => navigate('/auto-trading')} testId="technical-mode-live">자동매매</SegmentedButton>
+            <SegmentedButton active={mode === 'paper'} disabled={!canPaper}
+              onClick={() => navigate('/paper-trading')} testId="technical-mode-paper">모의매매</SegmentedButton>
+          </div>
+          {mode === 'paper' ? <div className="grid grid-cols-2 gap-2" aria-label="모의매매 방식" data-testid="trading-paper-modes">
+            <SegmentedButton active={paperOrigin === 'automatic'} disabled={!canAuto}
+              onClick={() => navigate('/paper-trading?kind=automatic')} testId="paper-mode-automatic">자동모의매매</SegmentedButton>
+            <SegmentedButton active={paperOrigin === 'manual'}
+              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual">수동모의매매</SegmentedButton>
+          </div> : null}
+          <div className="rounded-xl border border-card-border bg-card p-2.5 sm:p-3" data-testid="trading-market-tabs">
+            <label className="flex items-center gap-3 sm:hidden">
+              <span className="shrink-0 text-xs font-semibold text-muted-foreground">시장</span>
+              <select
+                aria-label="매매 시장 선택"
+                data-testid="trading-market-select"
+                value={market}
+                onChange={(event) => setMarket(event.target.value as TradingMarket)}
+                className="min-h-10 min-w-0 flex-1 rounded-lg border border-card-border bg-background px-3 text-sm font-semibold"
+              >
+                {MARKETS.map((item) => (
+                  <option key={item.value} value={item.value} disabled={item.value === 'crypto_futures' && !canFutures}>
+                    {item.label} · {item.provider}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="hidden grid-cols-4 gap-2 sm:grid" aria-label="매매 시장 선택">
+              {MARKETS.map((item) => (
+                <SegmentedButton
+                  key={item.value}
+                  active={market === item.value}
+                  disabled={item.value === 'crypto_futures' && !canFutures}
+                  onClick={() => setMarket(item.value)}
+                  testId={'trading-market-' + item.value}
+                >
+                  {item.label}
+                </SegmentedButton>
+              ))}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
-            {MARKETS.map((item) => (
-              <SegmentedButton key={item.value} active={market === item.value} onClick={() => setMarket(item.value)} testId={'trading-market-' + item.value}>
-                {item.label}
-              </SegmentedButton>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
+          <div className="grid grid-cols-4 gap-1.5" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
             {SECTIONS.map((item) => (
               <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value}>
                 {item.label}
@@ -385,14 +964,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           {sectionContent}
 
-          <section className="rounded-2xl border border-card-border bg-card p-3 text-xs text-muted-foreground" data-testid="trading-workspace-safety-note">
-            <div className="flex items-start gap-2">
-              <BookOpenCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <p className="break-keep leading-5">
-                자동매매와 모의매매는 같은 4시장 UI와 매매일지를 사용하지만 실행 권한은 분리됩니다. LIVE/AUTO/REAL/Private API Gate는 이 UI 변경으로 켜지지 않습니다.
-              </p>
-            </div>
-          </section>
+          <TradingHoldingsPanel market={marketMeta.selectionMarket}
+            providers={(runtimeStatus?.connections ?? []).filter(row => row.accountMode === 'live' && row.configured
+              && (market === 'domestic_stock' ? row.exchange === 'kiwoom' || row.exchange === 'toss' : row.exchange === selectedProvider))
+              .map(row => row.exchange)}
+            accountMode={mode === 'auto' ? 'live' : 'paper'} origin={paperOrigin}
+            userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : canPaper}
+            fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} />
         </div>
       </main>
       {!embedded ? <BottomNav /> : null}

@@ -348,7 +348,11 @@ function pricePlan(alert: ScannerAlertCandidate): string {
   ].join('\n');
 }
 
-function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliveryContext): TelegramUrlButton[][] {
+export function buildTelegramSignalAppButtons(
+  alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market' | 'symbol' | 'direction'>,
+  context: TelegramSignalDeliveryContext,
+  options: { orderEnabled?: boolean } = {},
+): TelegramUrlButton[][] {
   const base = normalizeTelegramHttpUrl(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL);
   if (!base) return [];
   const url = new URL(base);
@@ -385,7 +389,7 @@ function appButtons(alert: ScannerAlertCandidate, context: TelegramSignalDeliver
 
   return [
     [
-      { text: '🛒 주문하기', url: order.toString() },
+      ...(options.orderEnabled === false ? [] : [{ text: '🛒 주문하기', url: order.toString() }]),
       { text: '📊 AI차트', url: chart.toString() },
     ],
     [
@@ -423,7 +427,7 @@ export function buildTelegramSignalIntelligenceInput(
   }
   if (evidence.warnings.length) lines.push(`⚠️ ${[...new Set(evidence.warnings.map(warningLabel))].join(' · ')}`);
 
-  const buttons = appButtons(alert, context);
+  const buttons = buildTelegramSignalAppButtons(alert, context);
   const linkedEvents = events.filter((item): item is TelegramMarketEventEvidence & { url: string } => Boolean(item.url)).slice(0, 2);
   if (linkedEvents.length) {
     linkedEvents.forEach((item, index) => buttons.push([{

@@ -20,7 +20,7 @@ function environment(overrides: Record<string, string> = {}) {
     FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED',
     FUTURES_LIVE_CAPABILITY_ALLOWLIST: 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
     FUTURES_LIVE_MARKET_ALLOWLIST: 'CRYPTO_FUTURES',
-    FUTURES_LIVE_MAX_LEVERAGE: '3',
+    FUTURES_LIVE_MAX_LEVERAGE: '7',
     FUTURES_LIVE_MARGIN_MODE: 'isolated',
     ...overrides,
   };
@@ -56,7 +56,7 @@ test('futures live create requires exact Bitget limited authority and read prere
   assert.ok(missingRead.blockCodes.includes('FUTURES_LIVE_CAPABILITY_MISSING_OPEN_ORDER_READ'));
 });
 
-test('futures live rejects non-Bitget, crossed margin, and leverage outside 2x/3x', () => {
+test('futures live rejects non-Bitget, crossed margin, and leverage outside 2x-7x', () => {
   const nonBitget = futuresLiveCapabilityDecision({
     exchange: 'upbit',
     capability: 'ORDER_CREATE',
@@ -74,8 +74,15 @@ test('futures live rejects non-Bitget, crossed margin, and leverage outside 2x/3
   assert.equal(crossed.allowed, false);
   assert.ok(crossed.blockCodes.includes('FUTURES_LIVE_ISOLATED_MARGIN_REQUIRED'));
 
+  const maxAllowed = futuresLivePlanCapabilityDecision(
+    plan({ leverage: 7 }),
+    'ORDER_CREATE',
+    environment(),
+  );
+  assert.equal(maxAllowed.allowed, true);
+
   const leverage = futuresLivePlanCapabilityDecision(
-    plan({ leverage: 4 }),
+    plan({ leverage: 8 }),
     'ORDER_CREATE',
     environment(),
   );
@@ -107,7 +114,7 @@ test('futures live runtime publishes transfer/withdraw/external-wallet hard deni
   const status = futuresLiveRuntimeStatus(environment());
   assert.equal(status.executionAuthority, 'FUTURES_LIVE_LIMITED');
   assert.equal(status.providerCapabilities.ORDER_CREATE, true);
-  assert.equal(status.maxLeverage, 3);
+  assert.equal(status.maxLeverage, 7);
   assert.equal(status.marginMode, 'isolated');
   for (const capability of FUTURES_LIVE_HARD_DENIED_CAPABILITIES) {
     assert.equal(status.hardDeniedCapabilities[capability], false);

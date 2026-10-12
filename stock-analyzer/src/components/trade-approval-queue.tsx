@@ -406,6 +406,7 @@ export function TradeApprovalQueue({
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'TRADE_APPROVAL_FAILED');
       setConfirmationId(null);
       setMessage(`승인 처리 완료 · ${orderStateLabel(payload.order?.state)}`);
+      window.dispatchEvent(new CustomEvent('trade-execution-completed', { detail: { planId: item.id, state: payload.order?.state ?? null } }));
       await load(true);
     } catch (error) {
       const text = error instanceof Error && error.name === 'AbortError'

@@ -33,13 +33,15 @@ test('critical browser suite covers the primary product journeys without replaci
   assert.doesNotMatch(critical, /testIgnore/u);
 });
 
-test('Fast CI requires critical browser journeys for frontend or CI changes', async () => {
+test('Fast CI requires the full critical browser journeys in four retry-free shards for frontend or CI changes', async () => {
   const workflow = await readFile('.github/workflows/application-fast-ci.yml', 'utf8');
   assert.match(workflow, /^  browser-critical:/mu);
   assert.match(workflow, /Critical browser journeys before Ready/u);
-  assert.match(workflow, /test:e2e:critical/u);
+  assert.match(workflow, /shard: \[1, 2, 3, 4\]/u);
+  assert.match(workflow, /playwright test -c playwright\.critical\.config\.ts --shard=\$\{\{ matrix\.shard \}\}\/4/u);
   assert.match(workflow, /steps\.impact\.outputs\.frontend == 'true' \|\| steps\.impact\.outputs\.ci == 'true'/u);
   assert.match(workflow, /playwright-\$\{\{ runner\.os \}\}-chromium-1\.61\.1/u);
+  assert.match(workflow, /All four shards must succeed/u);
   assert.doesNotMatch(workflow, /browser-ui\/verified/u);
 });
 

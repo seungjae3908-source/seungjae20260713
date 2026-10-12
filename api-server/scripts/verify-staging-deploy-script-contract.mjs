@@ -7,12 +7,17 @@ import {
 
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
-const deployScript = await readFile(path.join(root, 'ops/deploy-staging.sh'), 'utf8');
-const stagingWorkflow = await readFile(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8');
-const adminAuthPreflight = await readFile(
+const normalizeLineEndings = (source) => source.replace(/\r\n/gu, '\n');
+const deployScript = normalizeLineEndings(await readFile(path.join(root, 'ops/deploy-staging.sh'), 'utf8'));
+const stagingWorkflow = normalizeLineEndings(await readFile(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8'));
+const stagingVerifier = normalizeLineEndings(await readFile(
+  path.join(root, 'api-server/scripts/verify-phase10-staging-readiness.mjs'),
+  'utf8',
+));
+const adminAuthPreflight = normalizeLineEndings(await readFile(
   path.join(root, 'api-server/scripts/verify-staging-admin-auth-preflight.mjs'),
   'utf8',
-);
+));
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-deploy-contract] ${message}`);
@@ -60,7 +65,7 @@ assert(
   'the isolated staging runtime must disable background workers during release validation',
 );
 assert(
-  deployScript.includes('BACKGROUND_WORKERS_ENABLED=false \\\n'),
+  deployScript.includes('"BACKGROUND_WORKERS_ENABLED=false"'),
   'the isolated staging canary must disable background workers during release validation',
 );
 
@@ -69,8 +74,14 @@ assert(
   'snapshot-v2 publisher binding must enter through one explicit staging-only digest input',
 );
 assert(
-  deployScript.includes("[[ \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" =~ ^[0-9a-f]{64}$ ]]"),
+  deployScript.includes('STAGING_RELEASE_SCOPE="${STAGING_RELEASE_SCOPE:-automation_research}"')
+    && deployScript.includes('if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]')
+    && deployScript.includes("[[ \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" =~ ^[0-9a-f]{64}$ ]]"),
   'snapshot-v2 publisher binding must fail closed unless it is a lowercase SHA-256 digest',
+);
+assert(
+  deployScript.includes("[[ -z \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" ]] || fail 'auto_live staging must not receive a Paper snapshot publisher binding'"),
+  'auto_live Staging must fail closed if a Paper publisher binding crosses the scope boundary',
 );
 assert(
   deployScript.includes('PAPER_STATE_DIR="$STATE_DIR/paper-forward"'),
@@ -88,8 +99,8 @@ for (const marker of [
   "printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\\n' \"$PAPER_STATE_SNAPSHOT_PATH\"",
   "printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\\n' \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\"",
   "printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=%s\\n' \"$PAPER_STATE_MAXIMUM_AGE_MS\"",
-  'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH"',
-  'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
+  '"PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=$PAPER_STATE_SNAPSHOT_PATH"',
+  '"PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
 ]) {
   assert(deployScript.includes(marker), `snapshot-v2 runtime binding is missing marker: ${marker}`);
 }
@@ -113,6 +124,21 @@ for (const marker of [
   'Paper schedule remains inactive',
 ]) {
   assert(stagingWorkflow.includes(marker), `staging workflow snapshot-v2 contract is missing marker: ${marker}`);
+}
+const recoveryStepStart = stagingWorkflow.indexOf('- name: Assess and run required staging database and recovery validation');
+const recoveryStepEnd = stagingWorkflow.indexOf('- name: Build final staging release verdict', recoveryStepStart);
+const recoveryStep = stagingWorkflow.slice(recoveryStepStart, recoveryStepEnd);
+assert(recoveryStepStart >= 0 && recoveryStepEnd > recoveryStepStart, 'staging recovery validation step must remain present');
+assert(
+  recoveryStep.includes('STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ steps.paper_publisher.outputs.publisher_sha256 }}'),
+  'staging recovery validation must receive the exact masked publisher digest resolved for the deployment',
+);
+for (const marker of [
+  "publisherBinding: encode(publisherBinding)",
+  "STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=\"$(decode '${encodedSecrets.publisherBinding}')\"",
+  'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
+]) {
+  assert(stagingVerifier.includes(marker), `staging recovery verifier is missing publisher binding marker: ${marker}`);
 }
 assert(
   stagingWorkflow.indexOf('Verify staging admin password authentication before deployment path')

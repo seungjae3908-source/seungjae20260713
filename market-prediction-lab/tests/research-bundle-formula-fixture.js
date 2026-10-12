@@ -161,4 +161,128 @@ function compiledMomentumFormula() {
 
 
 
-export { compiledMomentumFormula };
+
+function compiledFuturesMomentumFormula({ direction = "LONG" } = {}) {
+  if (!["LONG", "SHORT"].includes(direction)) throw new Error("TEST_FUTURES_DIRECTION_INVALID");
+  const source = paper();
+  const hypothesis = createStrategyHypothesisV1({
+    title: "Evidence backed futures momentum evaluator hypothesis",
+    statement: "Directional momentum with relative volume may support bounded futures research.",
+    marketScope: ["CRYPTO_FUTURES"],
+    assetClass: "CRYPTO_FUTURES",
+    timeframeScope: ["15m"],
+    directionality: direction === "SHORT" ? "NEGATIVE" : "POSITIVE",
+    rationale: "Fixture validates safe FormulaCandidate futures execution plumbing only.",
+    supportingPaperIds: [source.paperId],
+    contradictoryPaperIds: [],
+    evidenceStrength: { supporting: "STRONG", contradictory: "NONE" },
+    expectedEffect: {
+      observable: "NEXT_WINDOW_EXCESS_RETURN",
+      direction: direction === "SHORT" ? "DECREASE" : "INCREASE",
+      minimumMagnitude: null,
+      unit: "DECIMAL_RETURN",
+      evaluationWindow: "15m",
+    },
+    falsificationCriteria: {
+      observable: "NEXT_WINDOW_EXCESS_RETURN",
+      metric: "MEAN_CONDITIONAL_EXCESS_RETURN",
+      operator: direction === "SHORT" ? "GTE" : "LTE",
+      threshold: 0,
+      unit: "DECIMAL_RETURN",
+      evaluationWindow: "15m",
+      minimumObservations: 200,
+      rejectionStatement: "Reject when measured conditional mean contradicts the requested direction.",
+    },
+    requiredData: [{
+      dataset: "PUBLIC_CRYPTO_FUTURES_BARS",
+      fields: ["open", "high", "low", "close", "volume"],
+      frequency: "15m",
+      provenanceRequired: true,
+      licenseRequired: true,
+    }],
+    knownLimitations: ["Funding and derivatives-state robustness require separate point-in-time evidence."],
+    createdAt: "2026-08-25T00:00:00.000Z",
+    generator: { name: "futures-evaluator-test", version: "1.0.0" },
+    evidencePolicy: { requireKnownContentLicense: true, requireResolvedCorrections: true },
+  }, [source]);
+  const decision = createHypothesisDecisionV1({
+    hypothesis,
+    papers: [source],
+    verdict: "APPROVE_FOR_RESEARCH",
+    rationale: "Research-only futures approval.",
+    decidedAt: "2026-08-25T01:00:00.000Z",
+    committee: { name: "Research Committee", version: "1.0.0", members: ["reviewer-a", "reviewer-b"] },
+  });
+  const param = (name, domain, valueType, min, max, step) => ({ name, domain, valueType, min, max, step });
+  const rawIndicator = (name, input, periodName) => ({ kind: "INDICATOR", name, input, parameters: { period: periodName } });
+  const rocRule = direction === "SHORT"
+    ? operator("LT", [rawIndicator("ROC", "close", "rocPeriod"), parameter("rocMin")])
+    : operator("GT", [rawIndicator("ROC", "close", "rocPeriod"), parameter("rocMin")]);
+  const datasetIdentity = `dataset:train:futures-evaluator-${direction.toLowerCase()}-v1`;
+  const template = {
+    templateId: `evidence-backed-futures-${direction.toLowerCase()}-momentum-rvol-v1`,
+    hypothesisBinding: {
+      hypothesisId: hypothesis.hypothesisId,
+      hypothesisConfigHash: hypothesis.configHash,
+      decisionId: decision.decisionId,
+      decisionHash: decision.decisionHash,
+    },
+    strategyFamily: "MOMENTUM_RVOL",
+    market: "CRYPTO_FUTURES",
+    timeframe: "15m",
+    direction,
+    entryDsl: {
+      action: direction,
+      rules: [
+        rocRule,
+        operator("GT", [rawIndicator("RVOL", "volume", "rvolPeriod"), parameter("rvolMin")]),
+      ],
+    },
+    exitDsl: {
+      rules: [
+        { type: "ATR_STOP", atrIndicator: rawIndicator("ATR", "ohlc", "atrPeriod"), multiplierParameter: "atrStop" },
+        { type: "TARGET", distanceParameter: "targetDistance" },
+        { type: "TIME_EXIT", barsParameter: "timeBars" },
+      ],
+    },
+    parameterSpace: [
+      param("atrPeriod", "PERIOD", "INTEGER", 2, 2, 1),
+      param("atrStop", "POSITIVE_MULTIPLIER", "NUMBER", 1, 1, 0.5),
+      param("rocPeriod", "PERIOD", "INTEGER", 2, 2, 1),
+      param("rocMin", "SIGNED_VALUE", "NUMBER", direction === "SHORT" ? -0.02 : 0, direction === "SHORT" ? 0 : 0.02, 0.01),
+      param("rvolPeriod", "PERIOD", "INTEGER", 2, 2, 1),
+      param("rvolMin", "NON_NEGATIVE_VALUE", "NUMBER", 1.2, 1.2, 0.1),
+      param("targetDistance", "PRICE_FRACTION", "NUMBER", 0.02, 0.02, 0.01),
+      param("timeBars", "BAR_COUNT", "INTEGER", 2, 2, 1),
+    ],
+    limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
+  };
+  const formula = compileStrategyHypothesisToFormulaCandidatesV1({
+    hypothesis,
+    decision,
+    templates: [template],
+    policy: {
+      compilerId: "safe-hypothesis-formula-compiler",
+      compilerVersion: "1.0.0",
+      costPolicyIdentity: "FUTURES_INTRADAY_COST_V1",
+      riskPolicyIdentity: "RESEARCH_FUTURES_RISK_V1",
+      datasetIdentity,
+      datasetRole: "TRAIN",
+      budget: generationBudget(),
+    },
+  })[0];
+  const generated = generateBoundedFormulaCandidatesV1({
+    formulaCandidates: [formula],
+    budget: generationBudget(),
+    search: {
+      method: "BOUNDED_GRID",
+      seed: 11,
+      requestedCandidates: 1,
+      datasetIdentity,
+      finalHoldoutAccess: false,
+    },
+  }).generatedCandidates[0];
+  return { formula, generated, datasetIdentity };
+}
+
+export { compiledMomentumFormula, compiledFuturesMomentumFormula };

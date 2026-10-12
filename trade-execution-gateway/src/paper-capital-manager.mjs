@@ -10,6 +10,7 @@ export const PAPER_COMPOUNDING_CAPITAL_POLICY = Object.freeze({
 });
 
 const MODE = "PAPER_COMPOUNDING_CAPITAL_ONLY";
+const VIRTUAL_SEED_ID = "paper-virtual-wallet-krw-1m-v1";
 const SCHEMA_VERSION = 1;
 const MAX_RECENT_RESERVE_EVENTS = 256;
 
@@ -87,6 +88,7 @@ function emptyState() {
     reserveEventCount: 0,
     recentReserveEvents: [],
     lastSettlement: null,
+    initialVirtualSeed: null,
     externalWithdrawalPerformed: false,
     liveAuthorityGranted: false,
     autoTradingEnabled: false,
@@ -142,6 +144,23 @@ function validateRestoredState(snapshot) {
     timestamp(lastSettlement.observedAt, "CAPITAL_STATE_INVALID", "settlement observedAt is invalid");
   }
 
+  const seed = snapshot.initialVirtualSeed ?? null;
+  if (seed != null) {
+    if (!initialized || typeof seed !== "object" || Array.isArray(seed)
+      || seed.seedId !== VIRTUAL_SEED_ID
+      || seed.mode !== "PAPER_VIRTUAL_FUNDING"
+      || seed.currency !== "KRW"
+      || seed.initialCapitalKrw !== PAPER_COMPOUNDING_CAPITAL_POLICY.initialCapitalLimitKrw
+      || !Number.isFinite(Date.parse(seed.createdAt))
+      || seed.simulated !== true
+      || seed.externalFinancialMutation !== false
+      || seed.privateApiUsed !== false
+      || seed.liveTrading !== false
+      || seed.executionAuthority !== "NONE"
+      || snapshot.compoundBaseKrw < PAPER_COMPOUNDING_CAPITAL_POLICY.initialCapitalLimitKrw) {
+      throw new GatewayError("CAPITAL_VIRTUAL_SEED_INVALID", "virtual KRW seed may only represent an unchanged Paper-only 1M funding target", 503);
+    }
+  }
   return {
     ...emptyState(),
     ...structuredClone(snapshot),
@@ -236,6 +255,71 @@ export class PaperCompoundingCapitalManager {
     }
   }
 
+
+  /**
+   * Local simulated-only bootstrap. Never writes bank/exchange assets.
+   * Does NOT create a canonical settled-account receipt; the admission gate
+   * keeps refusing new exposure until a genuine PAPER_SETTLEMENT_ENGINE
+   * snapshot has been bound independently.
+   */
+  async initializeVirtualPaperWallet({ nowMs = Date.now() } = {}) {
+    if (!this.#admissionGateEnabled) {
+      throw new GatewayError(
+        "PAPER_VIRTUAL_SEED_ADMISSION_GATE_REQUIRED",
+        "virtual Paper funding must not be initialized while the admission gate is disabled",
+        403,
+      );
+    }
+    if (!Number.isSafeInteger(nowMs) || nowMs <= 0) {
+      throw new GatewayError("CAPITAL_VIRTUAL_SEED_TIME_INVALID", "virtual seed timestamp must be a positive integer", 400);
+    }
+    if (this.#state.initialized) {
+      if (this.#state.initialVirtualSeed?.seedId === VIRTUAL_SEED_ID) {
+        return Object.freeze({ ...this.getState(), idempotentReplay: true, paperOrderAuthorityGranted: false });
+      }
+      throw new GatewayError("CAPITAL_WALLET_ALREADY_INITIALIZED", "existing Paper balances, reservations and journal-related equity cannot be reset", 409);
+    }
+    const capital = PAPER_COMPOUNDING_CAPITAL_POLICY.initialCapitalLimitKrw;
+    const initialVirtualSeed = Object.freeze({
+      seedId: VIRTUAL_SEED_ID,
+      mode: "PAPER_VIRTUAL_FUNDING",
+      currency: "KRW",
+      initialCapitalKrw: capital,
+      createdAt: new Date(nowMs).toISOString(),
+      simulated: true,
+      externalFinancialMutation: false,
+      privateApiUsed: false,
+      liveTrading: false,
+      executionAuthority: "NONE",
+    });
+    const previous = this.#state;
+    this.#state = {
+      ...emptyState(),
+      initialized: true,
+      compoundBaseKrw: capital,
+      highWatermarkBaseKrw: capital,
+      reportedAccountEquityKrw: capital,
+      managedActiveEquityKrw: capital,
+      effectiveTradingCapitalKrw: capital,
+      nextProfitTriggerKrw: nextTrigger(capital),
+      initialVirtualSeed,
+    };
+    try {
+      await this.#persist("PAPER_VIRTUAL_1M_KRW_INITIALIZATION");
+    } catch (error) {
+      this.#state = previous;
+      throw error;
+    }
+    return Object.freeze({
+      ...this.getState(),
+      idempotentReplay: false,
+      paperOrderAuthorityGranted: false,
+      canonicalSettlementVerified: false,
+      financialMutationCount: 0,
+      privateRequestCount: 0,
+    });
+  }
+
   async applySettlement(input, options = {}) {
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const settlement = normalizeSettlement(input, nowMs);
@@ -315,6 +399,7 @@ export class PaperCompoundingCapitalManager {
     }
 
     const effectiveTradingCapitalKrw = initialized ? Math.min(base, active) : 0;
+    const previousState = this.#state;
     this.#state = {
       schemaVersion: SCHEMA_VERSION,
       mode: MODE,
@@ -331,6 +416,7 @@ export class PaperCompoundingCapitalManager {
       nextProfitTriggerKrw: initialized ? nextTrigger(base) : null,
       reserveEventCount,
       recentReserveEvents,
+      initialVirtualSeed: this.#state.initialVirtualSeed ?? null,
       lastSettlement: {
         settlementId: settlement.settlementId,
         sequence: settlement.sequence,
@@ -344,7 +430,14 @@ export class PaperCompoundingCapitalManager {
       autoTradingEnabled: false,
       privateTradingApiAllowed: false,
     };
-    await this.#persist(createdSteps.length > 0 ? "PAPER_CAPITAL_RESERVE_MILESTONE" : "PAPER_CAPITAL_SETTLEMENT");
+    try {
+      await this.#persist(createdSteps.length > 0 ? "PAPER_CAPITAL_RESERVE_MILESTONE" : "PAPER_CAPITAL_SETTLEMENT");
+    } catch (error) {
+      // No unpersisted settlement or reserve milestone may be credited,
+      // including after a virtual 1M seed has been initialized.
+      this.#state = previousState;
+      throw error;
+    }
     return Object.freeze({ ...this.getState(), idempotentReplay: false, reserveStepsCreated: createdSteps.length, reserveSteps: Object.freeze(createdSteps) });
   }
 

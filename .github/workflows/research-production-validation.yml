@@ -76,6 +76,28 @@ jobs:
         working-directory: research-production
         run: npm test
 
+      - name: Verify every isolated activation lifecycle before Production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for script in research-production/deploy/activate-server.sh \
+            research-production/deploy/activate-ai-research.sh \
+            research-production/deploy/activate-lightweight-market-watch.sh \
+            research-dashboard/deploy/activate-server.sh
+          do
+            bash -n "$script"
+          done
+          systemd-analyze verify \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service \
+            research-production/deploy/research-production-approved-job-intake.service \
+            research-production/deploy/research-production-workspace-worker.service \
+            research-production/deploy/research-production-market-watch.service \
+            research-dashboard/deploy/research-dashboard.service
+          # Dashboard uses sandbox-only process/socket/rollback fixtures.
+          # No credentials, SSH, Production or provider calls are available.
+          npm --prefix research-dashboard test
+
       - name: Validate missing-policy runtime status
         shell: bash
         run: |
@@ -106,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           node research-production/bin/research-cycle.mjs plan             --profile all             --repo-root "$GITHUB_WORKSPACE"             --state-root "$RUNNER_TEMP/investment-research-production"             --research-sha "$RESEARCH_VALIDATION_SHA" > "$RUNNER_TEMP/research-plan.json"
-          node -e "const p=require(process.argv[1]); if(p.taskCount !== 10 || p.stepCount !== 21 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
+          node -e "const p=require(process.argv[1]); if(p.taskCount !== 11 || p.stepCount !== 22 || p.liveTrading || p.privateApi || p.orderAuthority) process.exit(1)" "$RUNNER_TEMP/research-plan.json"
 
       - name: Safety summary
         run: |

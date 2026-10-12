@@ -30,19 +30,19 @@ const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
   { value: 'chart', label: 'AI 차트' },
   { value: 'backtest', label: '백테스트' },
-  { value: 'trade', label: '자동매매' },
+  { value: 'trade', label: '기술매매' },
 ] as const;
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   signal: 'AI 검색기',
   chart: 'AI 차트',
   backtest: '백테스트',
-  trade: '자동매매',
+  trade: '기술매매',
 };
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '매매 화면에서 자동매매와 모의매매를 전환하고 국내주식·미국주식·코인현물·코인선물을 같은 구조로 확인합니다. UI 전환만으로 실거래는 활성화하지 않습니다.',
+  '자동매매 화면은 국내주식·미국주식·코인현물·코인선물의 LIVE 상태와 설정만 보여 줍니다. 모의매매와 텔레그램은 별도 기능이며 자동매매 Gate를 대신하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
@@ -177,16 +177,16 @@ function MobileWorkspace({ workspace }: { workspace: Workspace }) {
 function DesktopWorkspace({
   workspace,
   builderLayout,
-  canAccessRiskPreview,
+  canAccessAiChart,
 }: {
   workspace: Workspace;
   builderLayout: LoadedScannerLayout;
-  canAccessRiskPreview: boolean;
+  canAccessAiChart: boolean;
 }) {
   if (workspace === 'chart') return <Suspense fallback={<WorkspaceFallback />}><AiChartPage embedded /></Suspense>;
   if (workspace === 'backtest') return <Suspense fallback={<WorkspaceFallback />}><BacktestResearchPanel compact /></Suspense>;
   if (workspace === 'trade') return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage embedded /></Suspense>;
-  if (!canAccessRiskPreview) {
+  if (!canAccessAiChart) {
     return <Suspense fallback={<WorkspaceFallback />}><ScannerSurface desktop showSectionHeader /></Suspense>;
   }
 
@@ -220,13 +220,13 @@ export default function TechnicalWorkspacePage() {
   const [workspace, setWorkspace] = useState<Workspace>('signal');
   const phase11FullCapabilityFixture = import.meta.env.VITE_PHASE11_E2E === 'true'
     && location.startsWith('/__phase11-technical-workspace-e2e');
-  const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview');
+  const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessAiChart');
   const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests');
   const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading');
 
   const workspaceAllowed = (value: Workspace) => {
     if (value === 'signal') return true;
-    if (value === 'chart') return canAccessRiskPreview;
+    if (value === 'chart') return canAccessAiChart;
     if (value === 'backtest') return canAccessBacktests;
     return canAccessAutoTrading;
   };
@@ -245,7 +245,7 @@ export default function TechnicalWorkspacePage() {
 
   useEffect(() => {
     if (!workspaceAllowed(workspace)) setWorkspace('signal');
-  }, [canAccessAutoTrading, canAccessBacktests, canAccessRiskPreview, workspace]);
+  }, [canAccessAutoTrading, canAccessBacktests, canAccessAiChart, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
@@ -300,7 +300,7 @@ export default function TechnicalWorkspacePage() {
           <DesktopWorkspace
             workspace={workspace}
             builderLayout={desktopLayout}
-            canAccessRiskPreview={canAccessRiskPreview}
+            canAccessAiChart={canAccessAiChart}
           />
         ) : <MobileWorkspace workspace={workspace} />}
       </div>
