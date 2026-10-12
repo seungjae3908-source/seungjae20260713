@@ -22,7 +22,11 @@ test('client execution labels and AUTO ownership, exit parent or pilot receipts 
   for (const executionMode of ['automatic', 'AUTOMATIC', null, true]) {
     assert.throws(() => assertPublicLivePlanOrigin({ ...input, executionMode }), /PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN/);
   }
-  for (const reason of ['CANONICAL_LIVE_AUTO_HANDOFF', ' AUTO_EXIT_ENTRY_PLAN:owned ', 'PILOT_DYNAMIC_CAP_V1:forged']) {
+  for (const reason of ['CANONICAL_LIVE_AUTO_HANDOFF', ' AUTO_EXIT_ENTRY_PLAN:owned ', 'PILOT_DYNAMIC_CAP_V1:forged',
+    'CANONICAL_PAPER_HANDOFF', 'STRATEGY_RULE_PACK:TREND_PULLBACK_REACCEL_V1',
+    'STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE', 'AI_REVIEW_DECISION:PASS',
+    'AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE', 'AI_REVIEW_EVIDENCE:' + 'a'.repeat(64),
+    'AI_REVIEW_EXPIRES:2099-01-01T00:00:00Z']) {
     assert.throws(() => assertPublicLivePlanOrigin({ ...input, signalReasons: [reason] }), /PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN/);
   }
   for (const signalReasons of [null, 1, {}, [true]]) {
@@ -33,7 +37,8 @@ test('client execution labels and AUTO ownership, exit parent or pilot receipts 
 test('HTTP approval cannot start a background AUTO Live plan or reclassify its owned exit as manual', () => {
   const plan = { accountMode: 'live', executionMode: 'automatic', signalReasons: [] } as unknown as TradingPlan;
   assert.throws(() => assertPublicPlanApprovalOrigin(plan), /BACKGROUND_EXECUTION_REQUIRED/);
-  for (const reason of ['CANONICAL_LIVE_AUTO_HANDOFF', 'AUTO_EXIT_ENTRY_PLAN:owned']) {
+  for (const reason of ['CANONICAL_LIVE_AUTO_HANDOFF', 'AUTO_EXIT_ENTRY_PLAN:owned',
+    'CANONICAL_PAPER_HANDOFF', 'AI_REVIEW_DECISION:PASS', 'STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE']) {
     assert.throws(() => assertPublicPlanApprovalOrigin({ ...plan, executionMode: 'manual', signalReasons: [reason] }), /BACKGROUND_EXECUTION_REQUIRED/);
   }
   assert.doesNotThrow(() => assertPublicPlanApprovalOrigin({ ...plan, executionMode: 'manual' }));
@@ -44,4 +49,15 @@ test('public Paper remains independent and trusted internal AUTO services are no
   const input = { accountMode: 'paper', signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlanInput;
   assert.equal(publicPlanPolicy(input, stored), stored);
   assert.doesNotThrow(() => assertPublicPlanApprovalOrigin({ ...input, executionMode: 'automatic' } as TradingPlan));
+});
+
+test('unknown/case-coerced account mode cannot inherit a non-live policy or skip origin validation', () => {
+  const policy = { ...structuredClone(DEFAULT_TRADING_POLICY), mode: 'automatic' as const, automaticEnabled: true };
+  for (const accountMode of [undefined, null, 'LIVE', ' live ', 'unknown', 0, {}, []]) {
+    const input = { accountMode, signalReasons: [] } as unknown as TradingPlanInput;
+    assert.throws(() => publicPlanPolicy(input, policy), /PUBLIC_TRADING_ACCOUNT_MODE_INVALID/);
+    assert.throws(() => assertPublicPlanApprovalOrigin(input as TradingPlan), /PUBLIC_TRADING_ACCOUNT_MODE_INVALID/);
+  }
+  const mock = { accountMode: 'mock', signalReasons: [] } as unknown as TradingPlanInput;
+  assert.equal(publicPlanPolicy(mock, policy), policy, 'explicit broker mock remains non-LIVE and unchanged');
 });
