@@ -19,6 +19,25 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
   const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
   const isolatedPlan = read('ops/production-auto-live-signal-identity.cjs');
+
+  // The PUBLIC-only collector must have a separate protected owner action,
+  // never a hidden side effect of the four-market automatic order gate.
+  const autoTradingGate = read('.github/workflows/production-automatic-trading-gate.yml');
+  const sourceOnlyStart = autoTradingGate.indexOf('  install-public-signal:');
+  assert.ok(sourceOnlyStart > autoTradingGate.indexOf('  disable:'));
+  const sourceOnly = autoTradingGate.slice(sourceOnlyStart);
+  assert.ok(sourceOnly.includes("startsWith(github.event.comment.body, '/install-auto-live-public-signal ')"));
+  assert.ok(sourceOnly.includes('environment: production'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(sourceOnly.includes('producer_invocation_verified: false'));
+  assert.ok(sourceOnly.includes('live_auto_authority_granted: false'));
+  assert.ok(sourceOnly.includes('24_hour_uninterrupted_collection_verified: false'));
+  assert.equal(sourceOnly.includes('bash ops/disable-paper-forward-schedule.sh'), false);
+  assert.equal(sourceOnly.includes('pm2 restart'), false);
+
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));

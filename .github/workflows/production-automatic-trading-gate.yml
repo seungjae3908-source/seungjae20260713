@@ -77,7 +77,8 @@ concurrency:
         && github.event.comment.user.login == 'seungjae3908-source'
         && github.event.comment.author_association == 'OWNER'
         && (startsWith(github.event.comment.body, '/activate-production-auto-trading ')
-            || startsWith(github.event.comment.body, '/disable-production-auto-trading '))
+            || startsWith(github.event.comment.body, '/disable-production-auto-trading ')
+            || startsWith(github.event.comment.body, '/install-auto-live-public-signal '))
         && 'production-automatic-trading-gate'
         || format('production-automatic-trading-validation-{0}', github.run_id) }}
   cancel-in-progress: false
@@ -965,3 +966,208 @@ jobs:
                 'workflow_run: ' + context.runId,
               ].join('\n'),
             });
+
+  install-public-signal:
+    name: Owner-approved independent PUBLIC data collector only (no automatic trading)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/install-auto-live-public-signal ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Parse owner-only independent source install command
+        id: source_command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY || '').trim();
+          const match = /^\/install-auto-live-public-signal ([0-9a-f]{40})$/u.exec(body);
+          if (!match) throw new Error('AUTO_LIVE_PUBLIC_INSTALL_EXACT_SHA_COMMAND_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Require exact protected main, successful current-main Full CI, and no active operations
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source_command.outputs.sha }}
+        with:
+          script: |
+            const sha = String(process.env.SOURCE_SHA ?? '');
+            const {owner,repo} = context.repo;
+            const main = await github.rest.repos.getBranch({owner,repo,branch:'main'});
+            if (sha !== String(main.data.commit.sha).toLowerCase()) {
+              core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_REQUIRES_EXACT_CURRENT_MAIN');
+              return;
+            }
+            // PR contract runs, stale HEADs, old deploy receipts and skipped
+            // checks are not a live-host installation certificate.
+            const full = await github.rest.actions.listWorkflowRuns({
+              owner,repo,workflow_id:'futures-public-network-smoke.yml',
+              branch:'main',per_page:100,
+            });
+            const passed = full.data.workflow_runs.some((run) =>
+              run.name === 'Application CI' &&
+              run.head_sha === sha &&
+              run.event === 'workflow_dispatch' &&
+              run.status === 'completed' &&
+              run.conclusion === 'success');
+            if (!passed) {
+              core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED');
+              return;
+            }
+            for (const workflowId of [
+              'production-deploy.yml',
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-postdeploy-qa.yml',
+              'production-automatic-trading-gate.yml',
+            ]) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,repo,workflow_id:workflowId,per_page:100,
+              });
+              const conflict = runs.data.workflow_runs.some((run) =>
+                run.id !== context.runId &&
+                run.status !== 'completed' &&
+                ['workflow_dispatch','issue_comment'].includes(run.event));
+              if (conflict) {
+                core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT');
+                return;
+              }
+            }
+            core.info('Exact main Full CI and zero conflicting active operation runs verified.');
+
+      - name: Configure protected pinned SSH for public source only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Verify exact deployed revision and independent-root-only preflight
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'tr -d "[:space:]" < /opt/stock-app/.deploy/current-sha')"
+          [[ "$remote_sha" == "$TARGET_SHA" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH' >&2
+            exit 1
+          }
+          env_args="$(printf 'AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_DEPLOYED_SHA=%q' "$TARGET_SHA" "$TARGET_SHA")"
+          # Source comes from immutable current main; preflight is READ ONLY.
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$env_args node -" \
+            < ops/production-auto-live-signal-identity.cjs > "$RUNNER_TEMP/public-source-preflight.json"
+          node - "$RUNNER_TEMP/public-source-preflight.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const proof = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (proof.status !== 'DRAFT_PLAN_NOT_INSTALLED'
+            || proof.targetSha !== process.argv[3]
+            || proof.ownerInstallApprovalRequired !== true
+            || proof.paperRootMutated !== false
+            || proof.paperCronReplaced !== false
+            || proof.autoTradingActivationReady !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_PREFLIGHT_RECEIPT_INVALID');
+          }
+          NODE
+
+      - name: Install only isolated public data collection schedule with zero order authority
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          # This is NOT the Application deployment pipeline: no DB/RLS,
+          # PM2, provider credentials, Paper-state mutation or live-order calls.
+          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /opt/stock-app && $remote_env node ops/production-auto-live-signal-identity.cjs" \
+            > "$RUNNER_TEMP/public-source-install.json"
+          node - "$RUNNER_TEMP/public-source-install.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const receipt = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (receipt.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+            || receipt.targetSha !== process.argv[3]
+            || receipt.scheduleActive !== true
+            || receipt.canonicalCycleIntervalMs !== 900000
+            || receipt.independentPaperRoot !== true
+            || receipt.paperRootMutated !== false
+            || receipt.paperCronReplaced !== false
+            || receipt.producerInvocationVerified !== false
+            || receipt.aiIssuerVerified !== false
+            || receipt.autoTradingActivationReady !== false
+            || receipt.liveTrading !== false
+            || receipt.externalFinancialMutationAllowed !== false
+            || receipt.financialMutationCount !== 0
+            || receipt.privateRequestCount !== 0) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID');
+          }
+          NODE
+
+      - name: Record source-only installation without asserting scanner, AI, or LIVE readiness
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source_command.outputs.sha }}
+        with:
+          script: |
+            const receipt = [
+              '[AUTO_LIVE_INDEPENDENT_PUBLIC_SOURCE_INSTALL]',
+              'status: INSTALLED_WAITING_FOR_GENUINE_PUBLIC_CYCLE',
+              'sha: ' + process.env.SOURCE_SHA,
+              'root: /opt/stock-app-data/auto-live-signal-v1',
+              'cron: every 15 minutes, independent Paper tag and lock',
+              'paper_root_mutated: false',
+              'paper_cron_replaced: false',
+              'private_provider_calls: 0',
+              'financial_mutations: 0',
+              'live_auto_authority_granted: false',
+              'producer_invocation_verified: false',
+              'ai_issuer_verified: false',
+              '24_hour_uninterrupted_collection_verified: false',
+              'real_order_submitted_by_install: false',
+              'workflow_run: ' + context.runId,
+            ].join('\n');
+            for (const issue_number of [1555,1102]) {
+              await github.rest.issues.createComment({
+                owner:context.repo.owner,repo:context.repo.repo,issue_number,body:receipt,
+              });
+            }
