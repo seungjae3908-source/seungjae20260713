@@ -1193,8 +1193,15 @@ router.get('/live-preactivation-readiness', async (req: AuthenticatedRequest, re
   if (!requireLiveOrderCapability(req, res)) return;
   try {
     const { userId, repository } = context(req);
+    // The standalone public AUTO collector is not the historical Paper
+    // Forward producer. A read-only readiness audit must inspect exactly the
+    // same source the protected LIVE worker would consume on activation.
+    const independentAutoLiveSource = new SupabaseMemberAutoTradingBackgroundSource(
+      undefined,
+      '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json',
+    );
     const audit = await auditAutomaticLivePreactivation({ userId, repository, profile: req.member!,
-      source: new SupabaseMemberAutoTradingBackgroundSource(), targetSha: String(process.env.DEPLOY_SHA ?? '') });
+      source: independentAutoLiveSource, targetSha: String(process.env.DEPLOY_SHA ?? '') });
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ ok: true, ...audit });
   } catch (error) { return errorResponse(res, error); }

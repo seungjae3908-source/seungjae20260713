@@ -18,6 +18,30 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
   const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
+  const isolatedPlan = read('ops/production-auto-live-signal-identity.cjs');
+
+  // The PUBLIC-only collector must have a separate protected owner action,
+  // never a hidden side effect of the four-market automatic order gate.
+  const autoTradingGate = read('.github/workflows/production-automatic-trading-gate.yml');
+  const sourceOnlyStart = autoTradingGate.indexOf('  install-public-signal:');
+  assert.ok(sourceOnlyStart > autoTradingGate.indexOf('  disable:'));
+  const sourceOnly = autoTradingGate.slice(sourceOnlyStart);
+  assert.ok(sourceOnly.includes("startsWith(github.event.comment.body, '/install-auto-live-public-signal ')"));
+  assert.ok(sourceOnly.includes('environment: production'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_CHECKOUT_SHA_MISMATCH'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID'));
+  assert.ok(sourceOnly.includes("status:'CONFIGURATION_VERIFIED_ONLY'"));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(sourceOnly.includes('producer_invocation_verified: false'));
+  assert.ok(sourceOnly.includes('live_auto_authority_granted: false'));
+  assert.ok(sourceOnly.includes('24_hour_uninterrupted_collection_verified: false'));
+  assert.equal(sourceOnly.includes('bash ops/disable-paper-forward-schedule.sh'), false);
+  assert.equal(sourceOnly.includes('pm2 restart'), false);
+
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
@@ -36,7 +60,66 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-qa.json'));
   assert.ok(production.includes('production-auto-live-signal-source.json'));
   assert.ok(production.includes('Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS'));
-  assert.ok(production.includes('PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false'));
+  // This release installs ONLY a separately owned public observer after
+  // explicit protected Production approval; not automatic trade authority.
+  assert.ok(isolatedPlan.includes('inspectIndependentAutoLivePublicSourcePlan('));
+  assert.ok(isolatedPlan.includes('runAutoLiveIndependentPublicSourcePreflight()'));
+  assert.ok(isolatedPlan.includes('ownerInstallApprovalRequired: true'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(signalIdentity.includes('buildIndependentAutoLivePublicInstallScript()'));
+  assert.ok(signalIdentity.includes('installIndependentAutoLivePublicSource('));
+  assert.ok(!production.includes('bash ops/disable-paper-forward-schedule.sh'));
+  // The exact LIVE activation gate must bind PM2 and pre-arm to the
+  // independent collector, never to the historical Paper handoff.
+  const autoGate = read('.github/workflows/production-automatic-trading-gate.yml');
+  assert.ok(autoGate.includes('const automaticLiveHandoffPath ='));
+  assert.ok(autoGate.includes('/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json'));
+  assert.ok(autoGate.includes('const handoffPath = automaticLiveHandoffPath;'));
+  assert.ok(autoGate.includes('published.default?.readProductionAutoLiveSignalHandoff'));
+  assert.ok(autoGate.includes('h = readTrustedHandoff(handoffPath);'));
+  assert.ok(autoGate.includes('MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath'));
+  assert.ok(autoGate.includes('AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID'));
+  assert.ok(autoGate.includes("MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')"));
+  assert.ok(!autoGate.includes('/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json'));
+  const tradeRoute = read('api-server/src/routes/trade-automation.ts');
+  const auditPath = tradeRoute.indexOf("router.get('/live-preactivation-readiness'");
+  const nextRoute = tradeRoute.indexOf("router.get('/status'", auditPath);
+  assert.ok(auditPath >= 0 && nextRoute > auditPath);
+  const readOnlyAudit = tradeRoute.slice(auditPath, nextRoute);
+  assert.ok(readOnlyAudit.includes("source: independentAutoLiveSource"));
+  assert.ok(readOnlyAudit.includes("new SupabaseMemberAutoTradingBackgroundSource("));
+  assert.ok(readOnlyAudit.includes("'/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json'"));
+  assert.ok(!readOnlyAudit.includes("new SupabaseMemberAutoTradingBackgroundSource()"));
+
+  // Bound pre-DB and last-moment checks to the dedicated root. Historical
+  // Paper owner state and cron remain unmodified, even when Paper is ACTIVE.
+  const preflight = read('ops/production-auto-live-signal-identity.cjs');
+  const earlyOwner = production.indexOf(
+    '- name: Verify independent AUTO LIVE source availability before any database or application mutation');
+  const databaseMutation = production.indexOf(
+    '- name: Require canonical Production trade schema and journal privileges before application mutation');
+  const lastOwner = production.indexOf('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA"');
+  const installCall = production.indexOf('node ops/production-auto-live-signal-identity.cjs');
+  assert.ok(earlyOwner > 0 && earlyOwner < databaseMutation);
+  assert.ok(lastOwner > databaseMutation && lastOwner < installCall);
+  assert.ok(production.includes('< ops/production-auto-live-signal-identity.cjs'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
+  assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED'));
+  assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED'));
+  assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/auto-live-signal-v1')"));
+  assert.ok(preflight.includes('autoTradingActivationReady: false'));
+  assert.ok(!production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1'));
+  assert.ok(!production.includes('bash ops/install-paper-forward-schedule.sh'));
+
+  // Public source is now installed through the separately gated owner CLI.
+  // Verify the actual pinned installer, not a retired workflow inline env.
+  assert.ok(signalIdentity.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'"));
+  assert.ok(signalIdentity.includes("RESEARCH_PRODUCTION='false'"));
+  assert.ok(signalIdentity.includes("LIVE_TRADING='false'"));
+  assert.ok(signalIdentity.includes("REAL_ORDER_ENABLED='false'"));
+  assert.ok(signalIdentity.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
   assert.ok(production.includes('tail -n 1 "$state_root/logs/cron.log"'));
   assert.ok(production.includes('value?.naturalRuntimeSha !== process.env.TARGET_SHA'));
@@ -44,6 +127,21 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('targetSha: process.env.TARGET_SHA, productionDeployRunId: Number(process.env.GITHUB_RUN_ID)'));
   assert.ok(evidenceBuilder.includes('signal?.handoffEvaluatedAfterScheduleActivation !== true'));
   assert.ok(signalAudit.includes('signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha)'));
+  assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveSignalHandoff(handoffPath)'));
+  assert.ok(!signalAudit.includes("JSON.parse(readFileSync(handoffPath, 'utf8'))"));
+  assert.ok(signalIdentity.includes('CANONICAL_AUTO_SIGNAL_HANDOFF_PATH'));
+  assert.ok(signalIdentity.includes('MAX_AUTO_SIGNAL_HANDOFF_BYTES'));
+  assert.ok(signalIdentity.includes('O_NOFOLLOW'));
+  assert.ok(signalIdentity.includes('O_NONBLOCK'));
+  assert.ok(signalIdentity.includes('readBoundedAutoLiveSourceArtifact('));
+  assert.ok(signalIdentity.includes('io.readSync(fd, bytes,'));
+  assert.ok(!signalIdentity.includes("io.readFileSync(fd, 'utf8')"));
+  assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleActivation(activationPath)'));
+  assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath)'));
+  assert.ok(signalAudit.includes("scheduleRoot = '/opt/stock-app-data/auto-live-signal-v1'"));
+  assert.ok(production.includes('state_root=/opt/stock-app-data/auto-live-signal-v1'));
+  assert.ok(!signalAudit.includes("readFileSync(activationPath, 'utf8')"));
+  assert.ok(!signalAudit.includes("readFileSync(wrapperPath, 'utf8')"));
   assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_HANDOFF_SHA_MISMATCH'));
   assert.ok(signalAudit.includes("from './production-auto-live-signal-identity.cjs'"));
   assert.ok(!signalAudit.includes("from '../.github/"), 'runtime signal audit cannot import the excluded .github directory');
@@ -86,7 +184,21 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(evidenceBuilder.includes('autoLive.memberAutoLivePilotReady === true'));
   assert.ok(evidenceBuilder.includes('assertAutoLiveSignalReceipt'));
   assert.ok(signalAudit.includes('validateMemberAutoTradingPaperHandoff'));
-  assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
+  // The count guard now belongs to the shared canonical schedule inspector,
+  // not the CLI wrapper; require both its runtime call and strict verdict.
+  assert.ok(signalAudit.includes('signalIdentity.inspectManagedPaperForwardSchedule('));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID'));
+  assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
+  // The strict dangling-symlink-aware check moved to a shared helper.
+  assert.ok(signalAudit.includes('signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot)'));
+  assert.ok(signalIdentity.includes("root + '/runtime-state/DISABLED'"));
+  assert.ok(signalIdentity.includes("root + '/DISABLED'"));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED'));
+  assert.ok(read('.github/scripts/production-auto-live-signal-identity.test.cjs')
+    .includes('disabled schedule sentinels fail closed even when dangling symlinks'));
+  assert.ok(read('.github/scripts/production-auto-live-signal-identity.test.cjs')
+    .includes("only exact installed 15-minute cron and SHA-bound receipt prove schedule configuration"));
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_HANDOFF_PREDATES_EXACT_SHA_SCHEDULE'));
   assert.ok(policySpec.includes("'/api/trade-automation/policy', 'PUT'"));
   assert.ok(!policySpec.includes("'/api/trade-automation/resume', 'POST'"), 'QA preparation cannot implicitly remove a sticky owner stop');
