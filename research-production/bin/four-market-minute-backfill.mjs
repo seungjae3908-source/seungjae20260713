@@ -47,8 +47,10 @@ async function main() {
     // Read a private operator scope only; absolutely no network, queue
     // state, API credentials, disk writes or trading authority.
     const manifest=await privateManifest(process.env.RESEARCH_MINUTE_QUEUE_MANIFEST);
+    const scope=validateBackfillScope(manifest);
     const capacity=assessMinuteManifestCapacity(manifest,{
       actionsPerCycle:QUEUE_LIMITS.maxActionsPerCycle,
+      windowMinutes:scope.pageWindowMinutes,
     });
     return emit({
       status:'CAPACITY_AUDIT_ONLY',capacity,
@@ -56,6 +58,7 @@ async function main() {
       storageEstimate:forecastPublicMinuteArchiveFootprintV1({
         cryptoSpotSymbols:capacity.cryptoSpotSymbols,
         cryptoFuturesSymbols:capacity.cryptoFuturesSymbols,
+        pageWindowMinutes:scope.pageWindowMinutes,
       }),
       providerCalls:0,filesWritten:0,
       archiveTimerActivated:false,executionAuthority:'NONE',

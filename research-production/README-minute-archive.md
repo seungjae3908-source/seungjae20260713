@@ -362,3 +362,40 @@ enabled. No public-provider GET is sent by this preflight.
 - No real vendor GET, no server credentials/DB mutation, no systemd/PM2,
   Staging/Production, Merge/Ready, orders or Telegram sends. Replit/Replit
   Agent is prohibited. This is not an authorization or release receipt.
+
+
+## 2026-10-13 — Opt-in immutable 180-minute source pages (DRAFT, inactive)
+
+Official Upbit minute candles and Bitget V2 history-candles support up to
+200 **returned** rows per request. Because the futures endpoint may return an
+extra boundary interval, and Upbit may omit no-trade minutes, the experimental
+source window chooses **180 UTC minutes**, keeping up to 20 rows of slack and
+exactly 8 nominal source pages per 24-hour crypto day. This is NOT evidence of
+a complete original day; missing minutes remain blocked and are never filled.
+
+- The existing protected manifest (v1) with no `pageWindowMinutes` remains
+  **exactly 120m** with the unchanged prior scopeDigest. This is the default.
+- An owner-reviewed research-only *new* manifest may specify the top-level
+  `"pageWindowMinutes":180` and **only** 120 or 180 is allowed. The 180
+  selection is bound into a different scopeDigest and sealed queue state.
+  Existing 120m cursors do not automatically migrate; an attempt to point the
+  new manifest at a legacy queue is BLOCKED with a scope mismatch. Never
+  delete, rewrite or reset prior queue receipts to evade this protection.
+- New pages still use the same SHA-bound immutable original records, per-bar
+  source retrieval times, O_NOFOLLOW/private 0700 roots, atomic fsync and
+  bounded response/body size. The 180m scoped source page can be rechecked
+  with immutable supplements, and 8 complete original source pages can feed
+  the UTC daily rollup (1440 real slots) and the private source-only prewire.
+  Native archive bridge #1848 needs corresponding >=8 real page receipt
+  contract alignment before use. There is no automatic bridge import.
+- 760 continuously trading crypto pairs *still* need about 6,080 REST pages
+  per day at 180m plus a 20% retry budget, or about 26 actions per 5 minutes.
+  Current 16/5m, sequential host/timeout limit and 24h source rights leave
+  all-crypto continuous production collection **HOLD_CAPACITY**. Runtime
+  timer/service, CLI approval flag, operations, provider quotas and account
+  authority have NOT been changed.
+- This is a testable dormant path, not permission to run production or create
+  new queues on Vultr. Staging, Production, live/Paper orders, secrets,
+  private APIs, actual 24h provider reads, historic PIT/delistings,
+  stock-source licensing, OOS and profitability remain unverified. Replit
+  and Replit Agent prohibited.
