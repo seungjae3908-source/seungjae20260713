@@ -14,6 +14,7 @@ export type MemberWatchlistSignalEvent = {
   type: 'NEW_CANDIDATE' | 'STATE_CHANGED' | 'RESCAN_REQUESTED';
   id: string;
   serviceSha: string;
+  occurrenceKey?: string;
   market: MemberWatchlistMarket;
   symbol: string;
   strategy: string;
@@ -108,6 +109,9 @@ export async function deliverMemberWatchlistTelegramForSignal(
   if (!memberWatchlistTelegramProducerEnabled(env)) return empty('DISABLED');
   const contract = signalContract(event);
   if (!contract) return empty('INELIGIBLE');
+  if(event.occurrenceKey !== undefined &&
+    !/^signal-intelligence-v3:episode-v2:[0-9a-f]{64}$/u.test(event.occurrenceKey))
+    return empty('INELIGIBLE');
 
   const findSubscribers = dependencies.findSubscribers ?? findMemberWatchlistSubscribers;
   const deliver = dependencies.deliver ?? deliverPersonalTelegramAlert;
@@ -129,7 +133,9 @@ export async function deliverMemberWatchlistTelegramForSignal(
     failed: 0,
     reason: 'COMPLETE',
   };
-  const eventId = `member-watchlist:${event.serviceSha}:${event.id}`;
+  const eventId = event.occurrenceKey
+    ? 'member-watchlist:'+event.occurrenceKey
+    : `member-watchlist:${event.serviceSha}:${event.id}`;
   const details = [
     '관심종목 신호',
     `${event.strategy}/${event.timeframe} · ${event.direction}`,
