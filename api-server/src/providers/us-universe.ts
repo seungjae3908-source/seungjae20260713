@@ -13,8 +13,8 @@ interface FinnhubSymbolRow {
 export interface UsUniverseEntry extends CatalogEntry {
   assetType: AssetType;
   exchange: 'NASDAQ' | 'NYSE' | 'AMEX' | 'US';
-  listingStatus: 'LISTED';
-  source: 'finnhub-symbol-master' | 'static-catalog';
+  listingStatus: 'LISTED' | 'UNKNOWN';
+  source: 'finnhub-symbol-master' | 'static-catalog' | 'last-good-cache';
   rawType: string;
 }
 
@@ -108,7 +108,7 @@ function staticCatalogUniverse(): UsUniverseEntry[] {
       currency: 'USD',
       assetType: detectedAssetType,
       exchange: 'US',
-      listingStatus: 'LISTED',
+      listingStatus: 'UNKNOWN',
       source: 'static-catalog',
       rawType: 'STATIC_CATALOG',
     });
@@ -117,7 +117,17 @@ function staticCatalogUniverse(): UsUniverseEntry[] {
 }
 
 function fallbackUniverse(lastGood: UsUniverseEntry[]): UsUniverseEntry[] {
-  return lastGood.length > 0 ? lastGood : staticCatalogUniverse();
+  // A previous live listing does not prove that the provider still lists the
+  // symbol after an outage/credential expiry. Never label fallback LISTED.
+  // Keep all known symbols available for manual lookup but mark every
+  // fallback entry as unverified and do not let a scanner claim full coverage.
+  return lastGood.length > 0
+    ? lastGood.map((row) => ({
+        ...row,
+        listingStatus: 'UNKNOWN' as const,
+        source: 'last-good-cache' as const,
+      }))
+    : staticCatalogUniverse();
 }
 
 function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {

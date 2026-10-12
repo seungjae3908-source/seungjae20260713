@@ -139,6 +139,16 @@ jobs:
         run: |
           node .signal-intelligence/public-cycle.mjs | tee "$RUNNER_TEMP/signal-intelligence-live-cycle.log"
           node .signal-intelligence/provider-diagnostic.mjs | tee "$RUNNER_TEMP/signal-intelligence-provider-diagnostic.json"
+          node - <<'NODE' "$RUNNER_TEMP/signal-intelligence-provider-diagnostic.json"
+          const fs=require('node:fs');
+          const d=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const gate=d.releaseReadiness;
+          if (!gate || gate.ready!==false || gate.status!=='BLOCKED') process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Scanner product readiness: BLOCKED (contract tests only)\n\n'
+            + gate.blockers.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('SCANNER_PRODUCT_NOT_READY '+gate.blockers.join(','));
+          NODE
           node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
           const fs = require('node:fs');
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -162,7 +172,38 @@ jobs:
           }
           const krRows = p.coverage.filter((row) => row.market === 'KR_STOCK');
           if (krRows.length !== 3) process.exit(1);
-          if (krRows.some((row) => row.status === 'SEARCH_FAILURE' || Number(row.providerErrors ?? 0) > 0 || Number(row.timeouts ?? 0) > 0)) process.exit(1);
+          NODE
+          # The public-only research SOURCE failure is real and must remain a
+          # SEARCH_FAILURE/held cursor. Require explicit invalid-OHLC evidence,
+          # no provider errors, no candidates, and a BLOCKED product verdict;
+          # never convert a source deficit into VALID_NO_TRADE or profitable PASS.
+          node ../signal-intelligence-v3/scripts/verify-kr-source-truth.mjs "$SIGNAL_INTELLIGENCE_STATE_FILE"
+      - name: Run a single public KR alpha historical daily Scanner canary without signal promotion
+        working-directory: api-server
+        env:
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          BANNER='import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'
+          pnpm exec esbuild ../signal-intelligence-v3/scripts/qa-kr-alpha-stock-bridge.ts \
+            --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
+            --outfile=./.signal-intelligence/qa-kr-alpha-stock-bridge.mjs
+          node .signal-intelligence/qa-kr-alpha-stock-bridge.mjs > "$RUNNER_TEMP/qa-kr-alpha-stock-bridge.json"
+          node - <<'NODE' "$RUNNER_TEMP/qa-kr-alpha-stock-bridge.json"
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(r.executionAuthority!=='NONE'||r.fullKrUniverseVerified!==false||
+            r.licenseVerified!==false||r.liveTradingAllowed!==false||
+            r.continuous24hVerified!==false||r.evidence?.orderSubmitted!==false||
+            r.evidence?.exchangeRequestSent!==false||
+            r.evidence?.candidatePromotionAllowed!==false||
+            r.evidence?.listedConstituentVerified!==false)process.exit(1);
+          console.log('KR_ALPHA_SCANNER_CANARY '+r.evidence.result+
+            (r.evidence.errorClass?' reason='+r.evidence.errorClass:''));
+          if(r.evidence.result!=='PUBLIC_ALPHA_SCANNER_BARS_VALID')process.exit(2);
           NODE
       - name: Build self-contained deploy artifact
         shell: bash
@@ -190,4 +231,244 @@ jobs:
           name: signal-intelligence-v3-deploy-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/deploy
           retention-days: 30
+          if-no-files-found: error
+
+  # Exact-member-timeframe smoke. This is separate from the canonical 15m/60m
+  # research service and cannot assert authenticated UI, Williams overlay,
+  # 24h whole-universe coverage, Paper, profitability or any trade authority.
+  member-timeframe-public-qa:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'drift/scanner-stock-roster-v3-integration-20261011' }}
+    needs: producer-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact commit for independent continuation verification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Download exact-head read-only producer
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-intelligence-v3-deploy-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/member-timeframe
+      - name: Run bounded member-timeframe 5m 4H 1D public-only scanner
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-member-qa
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+          SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE: MEMBER_UI
+          SIGNAL_INTELLIGENCE_MEMBER_UI_QA: 'true'
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          set -Eeuo pipefail
+          test "$(cat "$RUNNER_TEMP/member-timeframe/SERVICE_SHA")" = "$SIGNAL_INTELLIGENCE_SERVICE_SHA"
+          node "$RUNNER_TEMP/member-timeframe/public-cycle.mjs" | tee "$RUNNER_TEMP/member-timeframe-public-cycle.log"
+          node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
+          const fs=require('node:fs');
+          const data=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(data.serviceSha!==process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || data.publicDataOnly!==true
+            || data.safety?.executionAuthority!=='NONE'
+            || data.profile?.surface!=='MEMBER_UI'
+            || JSON.stringify(data.profile.timeframes)!==JSON.stringify(['5m','4H','1D'])
+            || data.coverage?.length!==12
+            || data.coverage.some(x=>!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE','BLOCKED_DATA'].includes(x.status)))
+            process.exit(1);
+          const summary=data.coverage.map(x=>({market:x.market,strategy:x.strategy,timeframe:x.timeframe,status:x.status,providerErrors:x.providerErrors,timeouts:x.timeouts,insufficientDataCount:x.insufficientDataCount}));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Member timeframes: read-only first-page QA (not app acceptance)\\n\\n'
+            + 'Status: not certified for deployment\\n');
+          console.log(JSON.stringify({memberTimeframeProbeOnly:true,fullMarketVerified:false,memberAuthVerified:false,summary},null,2));
+          NODE
+      # Two observed cycles, not 24h. Reuse the exact prior state file and
+      # identify data failures and partial rosters without fabricating success.
+      - name: Verify exact-head member scan resumes the next real source batch
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-member-qa
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+          SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE: MEMBER_UI
+          SIGNAL_INTELLIGENCE_MEMBER_UI_QA: 'true'
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
+          LIVE_TRADING: 'false'
+          AUTO_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          set -Eeuo pipefail
+          test "$(cat "$RUNNER_TEMP/member-timeframe/SERVICE_SHA")" = "$SIGNAL_INTELLIGENCE_SERVICE_SHA"
+          cp "$SIGNAL_INTELLIGENCE_STATE_FILE" "$SIGNAL_INTELLIGENCE_STATE_DIR/first-member-snapshot.json"
+          cp "$SIGNAL_INTELLIGENCE_STATE_DIR/cycle-state.json" "$SIGNAL_INTELLIGENCE_STATE_DIR/first-cycle-state.json"
+          node "$RUNNER_TEMP/member-timeframe/public-cycle.mjs" | tee -a "$RUNNER_TEMP/member-timeframe-public-cycle.log"
+          node signal-intelligence-v3/scripts/verify-public-cycle-continuity.mjs \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/first-member-snapshot.json" \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/first-cycle-state.json" \
+            "$SIGNAL_INTELLIGENCE_STATE_FILE" \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/cycle-state.json" \
+            > "$RUNNER_TEMP/public-two-cycle-continuity.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-two-cycle-continuity.json"
+          const fs=require('node:fs');
+          const evidence=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if (evidence.head!==process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || evidence.executionAuthority!=='NONE'
+            || evidence.ordersSent!==false
+            || evidence.observedTwoConsecutiveSourceCycles!==true
+            || evidence.exactCursorContinuationVerified!==true
+            || evidence.completeSourceIndexAcrossMarketsProven!==false
+            || evidence.realContinuous24hProven!==false
+            || evidence.lanes?.length!==12)
+            process.exit(1);
+          const rows=Object.entries(evidence.markets)
+            .map(([market,row])=>market+' continued='+row.continued
+              +' advanced='+row.advanced+' held='+row.held+' blocked='+row.blocked);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Two consecutive real public-member source batches (no production proof)\n\n'
+            + rows.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('PUBLIC_TWO_CYCLE_CURSOR_CONTINUATION_PASS '+rows.join(' | '));
+          NODE
+      - name: Upload member-timeframe observation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-intelligence-v3-member-timeframe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-member-qa/cycle-state.json
+            ${{ runner.temp }}/member-timeframe-public-cycle.log
+            ${{ runner.temp }}/signal-intelligence-member-qa/first-member-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-member-qa/first-cycle-state.json
+            ${{ runner.temp }}/public-two-cycle-continuity.json
+          retention-days: 30
+          if-no-files-found: warn
+
+
+  source-capabilities-public-qa:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'drift/scanner-stock-roster-v3-integration-20261011' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Exact revision checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run small offline contracts
+        run: node --test signal-intelligence-v3/tests/public-stock-source-capabilities.test.mjs
+      - name: Run public KR alpha daily normalization offline contract
+        run: node --test signal-intelligence-v3/tests/public-kr-alpha-daily.test.mjs
+      - name: Exercise one public KR alphanumeric daily source, no redistributable data
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-kr-alpha-daily.mjs > "$RUNNER_TEMP/public-kr-alpha-daily.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-kr-alpha-daily.json"
+          const fs=require('node:fs');
+          const evidence=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(evidence.executionAuthority!=='NONE'||evidence.wholeKrMarketProven!==false
+            ||evidence.licensedMarketRedistribution!==false
+            ||evidence.intradayAlphanumericSupported!==false)process.exit(1);
+          console.log('KR_ALPHA_DAILY_CANARY '+evidence.alphanumericDailyCanary.result+' reason='+(evidence.alphanumericDailyCanary.reason??'NONE'));
+          console.log('KR_ALPHA_DAILY_SOURCE_SHAPE '+JSON.stringify(evidence.sourceShapeIntegrity??null));
+          NODE
+      - name: Verify one-session 1m and derived 5m strict source contracts
+        run: node --test signal-intelligence-v3/tests/public-kr-alpha-intraday.test.mjs
+      - name: Diagnose one alphanumeric ETF minute feed without activating app
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-kr-alpha-intraday.mjs > "$RUNNER_TEMP/public-kr-alpha-intraday.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-kr-alpha-intraday.json"
+          const fs=require('node:fs');
+          const o=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(o.executionAuthority!=='NONE'||o.productionActivated!==false
+            ||o.fullEligibleRosterVerified!==false||o.noOrderApis!==true)
+            process.exit(1);
+          console.log('KR_ALPHA_1M5M_PROBE '+JSON.stringify(o.firstSessionProbe));
+          if(o.safeSourceShape?.executionAuthority!=='NONE'||o.safeSourceShape?.sourcePricesRedacted!==true
+            ||o.safeSourceShape?.fullMarketSupported!==false)process.exit(1);
+          console.log('KR_ALPHA_1M5M_SANITIZED_SHAPE '+JSON.stringify(o.safeSourceShape));
+          NODE
+      - name: Validate true historical daily source normalization
+        run: node --test signal-intelligence-v3/tests/public-kr-alpha-historical-daily.test.mjs
+      - name: Read one exact KR alphanumeric historical dayCandle source
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-kr-alpha-historical-daily.mjs > "$RUNNER_TEMP/public-kr-alpha-history.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-kr-alpha-history.json"
+          const fs = require('node:fs');
+          const report=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(report.executionAuthority!=='NONE'||report.fullMarketVerified!==false
+            ||report.licensedForDistribution!==false
+            ||report.actualContinuous24hVerified!==false
+            ||report.privateApi!==false
+            ||report.rawBarsPublished!==false)process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Korean alphanumeric historical dayCandle canary — sample only\\n\\n'
+            + 'Status: '+report.outcome.status+'\\n'
+            + 'Bars: '+(report.outcome.candles??0)+'\\n');
+          console.log(JSON.stringify(report));
+          NODE
+      - name: Diagnose a few public read-only sources, never promote result
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-stock-source-capabilities.mjs > "$RUNNER_TEMP/public-stock-sources.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-stock-sources.json"
+          const fs=require('node:fs');
+          const file=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(file.executionAuthority!=='NONE'||file.licensedForPublicRedistribution!==false
+            ||file.fullMarketCoverageProven!==false||file.samples?.length!==11)process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Public stock source capacity probe (NOT release approval)\n\n'
+            +file.samples.map(s=>'- '+s.id+': '+s.status+' (HTTP '+(s.httpStatus??'?')+')\n').join('')+'\n');
+          console.log(file.samples.map(s=>JSON.stringify({
+            id:s.id,status:s.status,count:s.discoveredCount??null,
+            rootKeys:s.rootKeys??[],firstDailyRowKeys:s.firstDailyRowKeys??[],distinctTradingDates:s.distinctTradingDates??null,dailyTimestampFormat:s.dailyTimestampFormat??null,dailyValueTypes:s.dailyValueTypes??null
+          })).join('\n'));
+          NODE
+      # One bounded public-only observation of ALL three Upbit quote markets
+      # and three Bitget futures product types. A green code/test result never
+      # certifies 24h, licensed whole-market feed or member trade signals.
+      - name: Verify all-quote venue coverage without member/trading authority
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-public-crypto-all-venues.mjs > "$RUNNER_TEMP/public-crypto-all-venues.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-crypto-all-venues.json"
+          const fs=require('node:fs');
+          const p=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(p.executionAuthority!=='NONE'||p.publicReadOnly!==true
+            ||p.publicRedistributionLicensed!==false
+            ||p.wholeVenueTradingSignalReady!==false
+            ||p.allExchangeVenuesCertified!==false
+            ||p.historicalOneMinuteVerified!==false
+            ||p.memberSignalPromotionAllowed!==false
+            ||JSON.stringify(Object.keys(p.upbit.quoteGroups))!==JSON.stringify(['KRW','BTC','USDT'])
+            ||JSON.stringify(Object.keys(p.bitget.productTypes))!==JSON.stringify(
+              ['USDT-FUTURES','COIN-FUTURES','USDC-FUTURES']))
+            process.exit(1);
+          const summary=Object.entries(p.upbit.quoteGroups).map(([name,x])=>
+            'Upbit '+name+': '+x.status+' roster='+x.rosterCount
+            +' quoted='+x.matchedTickerCount+' missing='+x.missingTickerCount)
+            .concat(Object.entries(p.bitget.productTypes).map(([name,x])=>
+              'Bitget '+name+': '+x.status+' roster='+x.rosterCount
+              +' quoted='+x.matchedTickerCount+' missing='+x.missingTickerCount));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### All quote-currency futures/spot read-only breadth (NO license/trading authority)\n\n'
+            +summary.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('PUBLIC_VENUE_SCOPE_ONLY '+JSON.stringify(summary));
+          NODE
+      - name: Upload bounded diagnostic metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-stock-source-capabilities-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/public-stock-sources.json
+            ${{ runner.temp }}/public-crypto-all-venues.json
+          retention-days: 7
           if-no-files-found: error

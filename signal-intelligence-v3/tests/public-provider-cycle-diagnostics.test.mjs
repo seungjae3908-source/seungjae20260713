@@ -1,0 +1,237 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  PUBLIC_PROVIDER_CYCLE_DIAGNOSTIC_VERSION,
+  inspectExactPublicProviderCycle,
+  summarizePublicProviderFailureReasons,
+} from '../src/public-provider-cycle-diagnostics.mjs';
+const NOW=Date.parse('2026-10-11T00:00:00.000Z');
+const SHA='a'.repeat(40);
+const MARKETS=['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'];
+const STRATEGIES=['SCALPING','SWING','MID_LONG'];
+function snapshot() {
+  return {
+    generatedAt:new Date(NOW-1000).toISOString(),
+    serviceSha:SHA,publicDataOnly:true,
+    safety:{executionAuthority:'NONE'},
+    profile:{fullStrategyCoverage:true},
+    coverage:MARKETS.flatMap(market=>STRATEGIES.map((strategy,i)=>({
+      market,strategy,status:'VALID_NO_TRADE',
+      totalUniverse:market==='KR_STOCK'?4010:market==='US_STOCK'?12322:market==='CRYPTO_SPOT'?294:820,
+      cursorBefore:0,cursorAfter:i===0?20:20,
+      universeSource:market==='KR_STOCK'?'krx-symbol-master':'public',
+      universePartial:false,providerErrors:0,timeouts:0,
+    }))),
+  };
+}
+test('read-only projection has all four markets without extra provider calls or fake economic proof',()=>{
+  const actual=inspectExactPublicProviderCycle(snapshot(),SHA,NOW);
+  assert.equal(actual.schemaVersion,PUBLIC_PROVIDER_CYCLE_DIAGNOSTIC_VERSION);
+  assert.equal(actual.rows.length,4);
+  assert.deepEqual(actual.rows.map(row=>row.universe),[4010,12322,294,820]);
+  assert.equal(actual.independentNewProviderRequests,0);
+  assert.equal(actual.executionAuthority,'NONE');
+  assert.equal(actual.formulaPassProven,false);
+  assert.equal(actual.paperFillProven,false);
+  assert.equal(actual.fullUniverseQuotesProven,false);
+  assert.ok(actual.rows.every(row=>row.failures===null&&row.symbolFailureDetailsNotCaptured));
+});
+test('429s, timeouts and partial coverage survive projection as blockers, never PASS',()=>{
+  const s=snapshot();
+  const kr=s.coverage.find(row=>row.market==='KR_STOCK'&&row.strategy==='SCALPING');
+  kr.status='BLOCKED_DATA';kr.cursorRotatedBlockedOnly=true;kr.universePartial=true;
+  const spot=s.coverage.find(row=>row.market==='CRYPTO_SPOT'&&row.strategy==='SWING');
+  spot.status='SEARCH_FAILURE';spot.providerErrors=10;
+  const us=s.coverage.find(row=>row.market==='US_STOCK'&&row.strategy==='MID_LONG');
+  us.status='SEARCH_FAILURE';us.timeouts=2;
+  const d=inspectExactPublicProviderCycle(s,SHA,NOW);
+  assert.equal(d.rows.find(x=>x.market==='KR_STOCK').status,'PARTIAL_OR_UNTRUSTED');
+  assert.equal(d.rows.find(x=>x.market==='KR_STOCK').lanes[0].cursorRotatedBlockedOnly,true);
+  assert.equal(d.rows.find(x=>x.market==='CRYPTO_SPOT').status,'PROVIDER_BLOCKED');
+  assert.equal(d.rows.find(x=>x.market==='CRYPTO_SPOT').providerErrorCount,10);
+  assert.equal(d.rows.find(x=>x.market==='US_STOCK').timeoutCount,2);
+});
+test('missing source proof cannot silently become zero provider failures',()=>{
+  const s=snapshot();
+  s.coverage[0].providerErrors=undefined;
+  const d=inspectExactPublicProviderCycle(s,SHA,NOW);
+  assert.equal(d.rows[0].providerErrorCount,null);
+  assert.equal(d.rows[0].failures,null);
+});
+test('wrong release, stale/future report or incomplete 12-lane evidence is rejected',()=>{
+  const s=snapshot();
+  assert.throws(()=>inspectExactPublicProviderCycle(s,'b'.repeat(40),NOW),/EXACT_CYCLE_REQUIRED/);
+  assert.throws(()=>inspectExactPublicProviderCycle(s,SHA,NOW+11*60_000),/STALE_OR_FUTURE/);
+  assert.throws(()=>inspectExactPublicProviderCycle(s,SHA,NOW-10000),/STALE_OR_FUTURE/);
+  assert.throws(()=>inspectExactPublicProviderCycle({...s,coverage:s.coverage.slice(1)},SHA,NOW),/EXACT_CYCLE_REQUIRED/);
+  s.coverage[0].strategy='WRONG';
+  assert.throws(()=>inspectExactPublicProviderCycle(s,SHA,NOW),/LANES_INVALID/);
+});
+
+test('same-cycle reason buckets identify futures HTTP and exchange codes without exposing symbols or raw messages', () => {
+  const raw = [
+    { symbol: 'BTCUSDT', reason: 'provider_error', message: 'HTTP_429' },
+    { symbol: 'ETHUSDT', reason: 'provider_error', message: 'BITGET_40034 sensitive source details' },
+    { symbol: 'BTCUSDT', reason: 'provider_error', message: 'HTTP_502 arbitrary host' },
+    { symbol: 'SOLUSDT', reason: 'provider_error', message: 'CIRCUIT_OPEN internal metadata' },
+    { symbol: 'AVAXUSDT', reason: 'timeout', message: 'connection timeout on hidden host' },
+    { symbol: 'DOTUSDT', reason: 'invalid_data', message: 'no primary candles' },
+  ];
+  const result = summarizePublicProviderFailureReasons(raw);
+  assert.equal(result.failuresObserved, 6);
+  assert.equal(result.categories.HTTP_429, 1);
+  assert.equal(result.categories.BITGET_REST_CODE, 1);
+  assert.equal(result.categories.HTTP_5XX, 1);
+  assert.equal(result.categories.PROVIDER_ADMISSION, 1);
+  assert.equal(result.categories.TIMEOUT, 1);
+  assert.equal(result.categories.INVALID_DATA, 1);
+  assert.deepEqual(result.bitgetNumericCodes, ['40034']);
+  assert.equal(JSON.stringify(result).includes('BTCUSDT'), false);
+  assert.equal(JSON.stringify(result).includes('sensitive source details'), false);
+  assert.equal(result.symbolsRedacted,true);
+});
+
+test('provider failures missing or overflowing cannot be misreported as an empty-success reason list', () => {
+  assert.equal(summarizePublicProviderFailureReasons(undefined), null);
+  assert.equal(summarizePublicProviderFailureReasons(Array.from({length:81},()=>({reason:'provider_error',message:'HTTP_429'}))), null);
+  const rows = [{reason:'provider_error', message:'BITGET_bad_secret_001'}];
+  const diagnostic = summarizePublicProviderFailureReasons(rows);
+  assert.equal(diagnostic.categories.PROVIDER_OTHER, 1);
+  assert.deepEqual(diagnostic.bitgetNumericCodes, []);
+  const shot = snapshot();
+  const last = shot.coverage.find(x => x.market==='CRYPTO_FUTURES' && x.strategy==='MID_LONG');
+  last.status = 'SEARCH_FAILURE';
+  last.providerErrors = 6;
+  last.publicProviderFailureSummary = summarizePublicProviderFailureReasons([
+    {reason:'provider_error',message:'HTTP_429'},
+    {reason:'provider_error',message:'BITGET_40034'},
+  ]);
+  const result = inspectExactPublicProviderCycle(shot,SHA,NOW);
+  const lane = result.rows.find(x=>x.market==='CRYPTO_FUTURES').lanes.find(x=>x.strategy==='MID_LONG');
+  assert.equal(lane.publicProviderFailureSummary.categories.HTTP_429, 1);
+  assert.deepEqual(lane.publicProviderFailureSummary.bitgetNumericCodes, ['40034']);
+  assert.equal(lane.publicProviderFailureSummary.failuresObserved, 2);
+  assert.equal(result.rows.find(x=>x.market==='CRYPTO_FUTURES').providerErrorCount, 6);
+});
+
+test('explicit product readiness remains blocked even if all contract lanes are nominal',()=>{
+  const d=inspectExactPublicProviderCycle(snapshot(),SHA,NOW);
+  assert.equal(d.releaseReadiness.status,'BLOCKED');
+  assert.equal(d.releaseReadiness.ready,false);
+  assert.equal(d.releaseReadiness.fullUniverseRealQuotesVerified,false);
+  assert.equal(d.releaseReadiness.continuous24hVerified,false);
+  assert.ok(d.releaseReadiness.blockers.includes('WHOLE_UNIVERSE_QUOTE_ROUNDTRIP_NOT_PROVEN'));
+  assert.ok(d.releaseReadiness.blockers.includes('MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED'));
+  const corrupt=snapshot();
+  const row=corrupt.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='MID_LONG');
+  row.publicProviderFailureSummary=summarizePublicProviderFailureReasons([{symbol:'REDACT_ME',reason:'invalid_data',message:'missing bars'}]);
+  const blocked=inspectExactPublicProviderCycle(corrupt,SHA,NOW);
+  assert.equal(blocked.rows.find(x=>x.market==='CRYPTO_SPOT').status,'DATA_QUALITY_BLOCKED');
+  assert.equal(JSON.stringify(blocked.releaseReadiness).includes('REDACT_ME'),false);
+});
+test('member UI first-page evidence does not certify a whole-market release',()=>{
+  const shot=snapshot();
+  shot.profile.surface='MEMBER_UI';
+  shot.profile.timeframes=['5m','4H','1D'];
+  const d=inspectExactPublicProviderCycle(shot,SHA,NOW);
+  assert.equal(d.releaseReadiness.memberUiFirstBatchObserved,true);
+  assert.equal(d.releaseReadiness.ready,false);
+  assert.ok(!d.releaseReadiness.blockers.includes('MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED'));
+});
+
+test('insufficient stock candles are preserved apart from network failures in the same-cycle report',()=>{
+  const s=snapshot();
+  const us=s.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+  us.status='SEARCH_FAILURE';
+  us.providerErrors=0;us.timeouts=0;
+  us.requestedCount=20;us.startedCount=20;us.completedCount=20;
+  us.insufficientDataCount=7;us.invalidDataFailureCount=0;
+  const diag=inspectExactPublicProviderCycle(s,SHA,NOW);
+  const lane=diag.rows.find(x=>x.market==='US_STOCK').lanes[0];
+  assert.equal(lane.insufficientDataCount,7);
+  assert.equal(lane.requestedCount,20);
+  assert.equal(lane.completedCount,20);
+  assert.equal(diag.rows.find(x=>x.market==='US_STOCK').providerErrorCount,0);
+  assert.equal(diag.releaseReadiness.authenticatedMemberRouteVerified,false);
+  assert.ok(diag.releaseReadiness.blockers.includes('AUTHENTICATED_MEMBER_ROUTE_AND_WILLIAMS_OVERLAY_NOT_PROVEN'));
+});
+
+test('provider HTTP errors and data-quality missing bars receive different top-level reason classes',()=>{
+  const a=snapshot();
+  const spot=a.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='MID_LONG');
+  spot.status='SEARCH_FAILURE';spot.insufficientDataCount=2;spot.invalidDataFailureCount=2;
+  const us=a.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+  us.status='SEARCH_FAILURE';us.providerErrors=1;
+  const d=inspectExactPublicProviderCycle(a,SHA,NOW);
+  assert.equal(d.rows.find(x=>x.market==='CRYPTO_SPOT').status,'DATA_QUALITY_BLOCKED');
+  assert.equal(d.rows.find(x=>x.market==='US_STOCK').status,'PROVIDER_BLOCKED');
+});
+
+test('global lane deadline is separately visible even with zero item timeout counters',()=>{
+ const s=snapshot();
+ const futures=s.coverage.find(x=>x.market==='CRYPTO_FUTURES'&&x.strategy==='SWING');
+ futures.status='SEARCH_FAILURE';
+ futures.providerErrors=0;futures.timeouts=0;
+ futures.batchDeadlineExceeded=true;futures.partialExecution=true;
+ const out=inspectExactPublicProviderCycle(s,SHA,NOW);
+ const row=out.rows.find(x=>x.market==='CRYPTO_FUTURES');
+ assert.equal(row.status,'BATCH_DEADLINE_BLOCKED');
+ assert.equal(row.providerErrorCount,0);
+ assert.equal(row.timeoutCount,0);
+ assert.equal(row.lanes[1].batchDeadlineExceeded,true);
+ assert.ok(out.releaseReadiness.blockers.includes('MARKET_CRYPTO_FUTURES_BATCH_DEADLINE_BLOCKED'));
+});
+
+test('same-cycle stock sources expose sanitized depth and expired quotes without raw URLs or false readiness',()=>{
+ const shot=snapshot();
+ const lane=shot.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+ lane.status='SEARCH_FAILURE';lane.providerErrors=10;
+ lane.timeframe='5m';
+ const counters={fetched:0,errors:0,empty:0,shortLt20:0,shortLt40:0,
+   invalidOhlc:0,hasLateOrFuture:0,lastBarLagGteOneDay:0,lastBarLagGteFiveDays:0};
+ lane.publicStockSourceAudit={
+  version:'public-stock-source-audit-v1',symbolsRedacted:true,
+  fullMarketVerified:false,executionAuthority:'NONE',
+  quote:{fetched:10,errors:0,invalidPrice:0,missingTimestamp:0,
+   expiredTimestamp:10,futureTimestamp:0,rawUrl:'https://private.example/secret'},
+  candles:Object.fromEntries(['1m','3m','5m','15m','60m','4H','1D']
+   .map(tf=>[tf,{...counters, ...(tf==='5m'
+     ?{fetched:10,empty:2,shortLt20:3,shortLt40:4,lastBarLagGteOneDay:10}:{}),
+     rawSymbol:'REDACT_THIS'}])),
+  sanitizedProviderFailures:{HTTP_429:0,HTTP_4XX:0,HTTP_5XX:0,TIMEOUT:0,OTHER:0,
+   rawText:'sensitive'},
+  accountIdentifier:'must-not-propagate',
+ };
+ const result=inspectExactPublicProviderCycle(shot,SHA,NOW);
+ const item=result.rows.find(x=>x.market==='US_STOCK');
+ const audit=item.lanes[0].publicStockSourceAudit;
+ const diagnosis=item.lanes[0].publicStockSourceFailureDiagnosis;
+ assert.equal(audit.candles['5m'].empty,2);
+ assert.equal(audit.fullMarketVerified,false);
+ assert.equal(diagnosis.category,'ALL_OBSERVED_QUOTES_EXPIRED');
+ assert.equal(diagnosis.candidatePromotionAllowed,false);
+ assert.equal(item.status,'PROVIDER_BLOCKED');
+ for(const secret of ['accountIdentifier','sensitive','REDACT_THIS','private.example'])
+   assert.equal(JSON.stringify(result).includes(secret),false);
+});
+
+test('same-cycle Spot candle source quality is sanitized separately from profitable/24h claims',()=>{
+ const s=snapshot();
+ const spot=s.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='SCALPING');
+ spot.publicCryptoCandleQuality={
+  schemaVersion:'public-v3-crypto-candle-quality-v1',
+  observedSeries:3,rejectedSourceSeries:1,invalidOhlcBars:2,
+  malformedSourceBars:0,conflictingDuplicateBars:0,
+  incompleteCurrentBarsExcluded:1,sourceOnly:true,fullMarketVerified:false,
+  tradeAuthority:'NONE',symbol:'SECRET_SYMBOL',apiKey:'HIDDEN',
+ };
+ const d=inspectExactPublicProviderCycle(s,SHA,NOW);
+ const q=d.rows.find(x=>x.market==='CRYPTO_SPOT').lanes[0].publicCryptoCandleQuality;
+ assert.equal(q.invalidOhlcBars,2);
+ assert.equal(q.incompleteCurrentBarsExcluded,1);
+ assert.equal(q.fullMarketVerified,false);
+ assert.equal(q.tradeAuthority,'NONE');
+ assert.equal(JSON.stringify(q).includes('SECRET_SYMBOL'),false);
+ assert.equal(JSON.stringify(q).includes('HIDDEN'),false);
+ assert.equal(d.releaseReadiness.ready,false);
+});
