@@ -61,6 +61,20 @@ test('0600 sealed current roster permits READ-ONLY proposal without sockets',asy
     assert.equal(r.socketConnectionsOpened,0);
     assert.equal(r.archiveFilesWritten,0);
     assert.equal(r.executionAuthority,'NONE');
+    const simulated=run(['--simulate'],{
+      RESEARCH_PUBLIC_WS_PLAN_ENABLED:'true',
+      RESEARCH_PUBLIC_WS_ROSTER_MANIFEST:file,
+    });
+    assert.equal(simulated.status,0,simulated.stdout+' '+simulated.stderr);
+    const dry=JSON.parse(simulated.stdout);
+    assert.equal(dry.status,'SIMULATION_ONLY');
+    assert.equal(dry.plannedConnections,2);
+    assert.equal(dry.proposedFirstAction,'CONNECT_PUBLIC_ONLY_INTENT');
+    assert.equal(dry.simulatedIntentCount,1);
+    assert.equal(dry.actualPublicWebsocketsOpened,0);
+    assert.equal(dry.providerCalls,0);
+    assert.equal(dry.archiveFilesWritten,0);
+    assert.equal(dry.executionAuthority,'NONE');
     await chmod(file,0o644);
     const blocked=run(['--plan'],{
       RESEARCH_PUBLIC_WS_PLAN_ENABLED:'true',
