@@ -60,3 +60,61 @@ RESEARCH_MINUTE_ARCHIVE_ENABLED=true.
 공식 문서:
 - https://docs.upbit.com/kr/reference/list-candles-minutes
 - https://www.bitget.com/api-doc/classic/contract/market/Get-History-Candle-Data
+
+
+## 후속 Draft v2: 영속 작업 큐 + 5분 간격 스케줄러 틀 (서버 미설치)
+
+새 구현:
+- src/four-market-minute-backfill-queue-v1.mjs: 2,048개까지 운영자 명시 범위를 받아 모든 기간을 **120분 이하 창**으로 지연 분할하고, 종목별 cursor·완료 페이지 수·마지막 오류를 전용 0600 파일에 내구적으로 기록합니다. 최대 16회 요청/주기, 종목별 round-robin 공정 순회, 매회 저장·독립 readback 검증.
+- BACKFILL(고정 과거 기간) 및 CONTINUOUS(시간이 흐르면 안전하게 완료된 UTC 분까지만 새 창 생성) 모드를 지원합니다. 같은 시장·종목을 두 모드에서 구분하여 선언할 수 있습니다. 과거 복구 중 새 시세 수집이 영원히 뒤처지는 것을 줄일 수 있지만 **수집 용량·전 종목 24h 보장은 아직 입증하지 않았습니다.**
+- HTTP 429는 최소 15분, 네트워크/시간초과·5xx는 최소 5분 재시도 대기. 같은 구간 최대 5회 실패 시 NEEDS_REVIEW로 남겨 무한 재요청/누락 은폐를 금지합니다. 비정상 OHLC, 미완성 봉, 무거래로 빈 페이지, 주식 공급원 미구성은 실증 전 자동 PASS가 아니라 NEEDS_REVIEW.
+- 네트워크 성공 후 cursor 저장 직전에 전원이 꺼져도, 다음 실행이 이미 봉인된 원본을 읽어 중복 공급원 요청 없이 건너뜁니다. 연구 코드 SHA가 바뀌어도 **원래 생산 SHA는 유지**하고 검증된 동일 캔들만 재사용합니다.
+- bin/four-market-minute-backfill.mjs는 --dry-run 기본 비활성화, 단독 --execute도 운영 환경파일의 **명시적 true**, exact git SHA, 0600 작업 manifest, 두 사유(private root와 archive root), 5GiB 여유 용량이 없으면 차단합니다. Linux flock 비차단 잠금으로 동시에 두 작업이 cursor를 덮어쓰지 않도록 합니다.
+- deploy/research-production-minute-backfill.service/.timer: 연구 전용 서비스/5분 timer **정의만 추가**, 실제 systemctl enable/start/운영 설치는 **0회**. 기존 market-watch(120초)·Paper/Auto/Telegram 서비스는 변경하지 않습니다.
+- 상태 JSON의 완료란 선언한 **페이지가 보관됐다는 의미만**입니다. 빈 시간의 실제 거래 부재/다운타임·상장폐지 PIT·원본 사용권·4시장 전체 커버리지·수익성·OOS·Paper admission은 모두 미검증입니다.
+
+### 범위 manifest (운영자 준비, 루트 내부 권한 0600)
+
+아래 두 시작 시각은 예시이며, 유효한 UTC 1분 경계의 Unix 밀리초를 사용합니다.
+
+    {
+      "schemaVersion": "research-minute-backfill-scope/v1",
+      "ranges": [
+        {
+          "market": "CRYPTO_SPOT",
+          "symbol": "BTC",
+          "mode": "CONTINUOUS",
+          "startMs": 1791626400000
+        },
+        {
+          "market": "CRYPTO_SPOT",
+          "symbol": "BTC",
+          "mode": "BACKFILL",
+          "startMs": 1791540000000,
+          "endMs": 1791626400000
+        },
+        {
+          "market": "CRYPTO_FUTURES",
+          "symbol": "BTCUSDT",
+          "mode": "CONTINUOUS",
+          "startMs": 1791626400000
+        }
+      ]
+    }
+
+실제 period/end는 현재 운영자가 승인한 범위를 사용하며, 이 예시는 서버 실행에 사용하지 않습니다. 구성 변경 시 기존 cursor와 scopeDigest가 일치하지 않아 자동 초기화하지 않고 차단합니다. 우회·기존 상태 삭제 대신 **사람 검토를 거친 범위 확장/상태 이전 절차**가 필요합니다.
+
+추가 실행 환경:
+- RESEARCH_MINUTE_QUEUE_ROOT: 기존에 준비된 연구용 0700 진행상태 디렉터리
+- RESEARCH_MINUTE_QUEUE_MANIFEST: 미리 구성된 0600 범위 JSON
+- RESEARCH_MINUTE_ARCHIVE_ROOT: 기존에 준비된 연구용 0700 원본 디렉터리
+- RESEARCH_MINUTE_ARCHIVE_ENABLED=true, RESEARCH_CODE_SHA=정확한 현재 checkout SHA
+- node research-production/bin/four-market-minute-backfill.mjs --dry-run : 항상 네트워크·파일 변형 0. --execute와 timer는 GitHub Production 보호 승인 및 Vultr 조건 확인 후에만 운영자가 별도 승인해야 합니다.
+
+검증(네트워크/실주문 없음):
+
+    node --test research-production/test/four-market-minute-archive-intake-v1.test.mjs
+    node --test research-production/test/four-market-minute-backfill-queue-v1.test.mjs
+    node --test research-production/test/four-market-minute-backfill-runtime-contract.test.mjs
+
+**아직 남은 운영 P0:** 실제 Vultr의 디스크/CPU/RAM, 데이터 보관·상업 재제공 약관, KR/US 인증된 분봉 제공사 및 거래일/기업행위, 전시장 PIT roster, 유효한 종료·무거래 증거, 수집 source-gap 복구, 24시간 연속 표본, 원본에서 연구센터/백테스터로의 합법적 연결, OOS·경제적 PASS. 이 PR의 green CI는 이 운영 증거를 대신하지 않습니다.
