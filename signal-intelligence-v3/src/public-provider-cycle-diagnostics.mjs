@@ -60,6 +60,53 @@ export function summarizePublicProviderFailureReasons(failures) {
   });
 }
 
+
+const YAHOO_CLASSES=Object.freeze([
+  'HTTP_429','HTTP_4XX','HTTP_5XX','TIMEOUT','EMPTY_SOURCE',
+  'INVALID_RESPONSE','UNSUPPORTED_TIMEFRAME','PROVIDER_OTHER',
+]);
+/** Exact V3 Yahoo public fetch exceptions, grouped by bounded reason class.
+ * No extra HTTP attempts, symbols, URLs, exception text or timestamps.
+ * These are terminal FETCH failures, not counts of distinct instruments.
+ */
+export function createV3PublicYahooTerminalFailureCounter(){
+  const counters=Object.fromEntries(YAHOO_CLASSES.map(key=>[key,0]));
+  let terminalFetches=0;
+  return Object.freeze({
+    observe(error){
+      const raw=error instanceof Error?error.message:
+        typeof error==='string'?error:'';
+      let key='PROVIDER_OTHER';
+      if(/PUBLIC_STOCK_RATE_LIMITED|YAHOO_CHART_HTTP_429/u.test(raw))
+        key='HTTP_429';
+      else if(/YAHOO_CHART_HTTP_5\d\d/u.test(raw))
+        key='HTTP_5XX';
+      else if(/YAHOO_CHART_HTTP_4\d\d/u.test(raw))
+        key='HTTP_4XX';
+      else if(/YAHOO_CHART_BUDGET_EXCEEDED|ETIMEDOUT|TIMEOUT|AbortError/u.test(raw))
+        key='TIMEOUT';
+      else if(/PUBLIC_STOCK_EMPTY_CANDLES/u.test(raw))
+        key='EMPTY_SOURCE';
+      else if(/PUBLIC_STOCK_INVALID_PROVIDER_RESPONSE|YAHOO_CHART_EMPTY_RESULT/u.test(raw))
+        key='INVALID_RESPONSE';
+      else if(/YAHOO_UNSUPPORTED_TIMEFRAME/u.test(raw))
+        key='UNSUPPORTED_TIMEFRAME';
+      terminalFetches=Math.min(1_000_000,terminalFetches+1);
+      counters[key]=Math.min(1_000_000,counters[key]+1);
+    },
+    snapshot(){
+      return Object.freeze({
+        schemaVersion:'public-v3-yahoo-terminal-failures-v1',
+        terminalFailedFetches:terminalFetches,
+        categories:Object.freeze({...counters}),
+        source:'YAHOO_PUBLIC_V3_ONLY',instrumentCountProven:false,
+        symbolsRedacted:true,rawErrorsIncluded:false,
+        addedProviderRequests:0,economicAuthority:'NONE',
+      });
+    },
+  });
+}
+
 function statusFor(rows) {
   if (rows.some(row => row.status === 'SEARCH_FAILURE')) return 'PROVIDER_BLOCKED';
   if (rows.some(row => row.status === 'BLOCKED_DATA')) return 'PARTIAL_OR_UNTRUSTED';
@@ -104,6 +151,19 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
       status: statusFor(scope),
       lanes: Object.freeze(scope.map(row => Object.freeze({
         strategy:row.strategy,status:row.status,
+        publicStockTerminalFailureSummary:row.publicStockTerminalFailureSummary?.schemaVersion
+          ==='public-v3-yahoo-terminal-failures-v1'
+          &&row.publicStockTerminalFailureSummary.symbolsRedacted===true
+          &&row.publicStockTerminalFailureSummary.rawErrorsIncluded===false
+          ? Object.freeze({
+              schemaVersion:'public-v3-yahoo-terminal-failures-v1',
+              terminalFailedFetches:count(row.publicStockTerminalFailureSummary.terminalFailedFetches)
+                ?row.publicStockTerminalFailureSummary.terminalFailedFetches:null,
+              categories:Object.freeze(Object.fromEntries(YAHOO_CLASSES.map(key=>
+                [key,count(row.publicStockTerminalFailureSummary.categories?.[key])
+                  ?row.publicStockTerminalFailureSummary.categories[key]:null]))),
+              symbolsRedacted:true,
+            }) : null,
         cursorBefore:count(row.cursorBefore)?row.cursorBefore:null,
         cursorAfter:count(row.cursorAfter)?row.cursorAfter:null,
         cursorRotatedBlockedOnly:row.cursorRotatedBlockedOnly===true,
