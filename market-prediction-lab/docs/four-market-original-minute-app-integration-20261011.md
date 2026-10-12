@@ -299,3 +299,19 @@ PASS는 0건이다.
 이번 작업에서는 **코드와 격리된 공급원 mock QA만 실행**하며
 실제 거래소 GET, 운영 서버의 과거 데이터 다운로드·보관,
 텔레그램·Paper·실주문을 실행하지 않았다.
+
+
+### 2026-10-12: partial 1m archive no-network preflight (Draft)
+
+The existing native source task previously required the public-read flag even
+when an operator only wanted to inspect a previously reviewed partial source.
+The single-task executor now verifies the selected PIT day/page digest,
+current immutable archive SHA, source revision count and native 1m counts
+before permission for ANY Upbit/Bitget GET. The private PIT task CLI and
+single-symbol native CLI both support retry-partial + expected-existing-sha
+without read-public. Such a run returns a blocked no-consent receipt with
+providerGETCount=0, publicGETAttempted=false and the reviewed source SHA.
+
+A real native market GET still requires the explicit read-public flag. The
+same immutable-only semantics and no-Paper/no-Live/no-economic-proof gate
+remain. Stock markets still require licensed original-minute sources.
