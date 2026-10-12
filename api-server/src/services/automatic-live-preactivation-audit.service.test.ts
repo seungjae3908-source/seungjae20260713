@@ -106,8 +106,7 @@ test('empty READY handoff is transport-only and never proves first signal identi
   const repository = new InMemoryTradingRepository();
   const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
     async readHandoff() {
-      return ({ status: 'READY', evaluatedAtMs: at, entryCount: 0, entries: [], blockers: [] }
-        as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
+      return ({ status: 'READY', evaluatedAtMs: at, entryCount: 0, entries: [], blockers: [] } as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
     },
     async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
   };
@@ -142,8 +141,7 @@ test('handoff invalid count, missing identity or invalid timestamps cannot be re
     const repository = new InMemoryTradingRepository();
     const source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'> = {
       async readHandoff() {
-        return ({ status: 'READY', blockers: [], ...sample }
-          as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
+        return ({ status: 'READY', blockers: [], ...sample } as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
       },
       async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
     };
@@ -169,8 +167,7 @@ test('invalid clock never turns stale source or expired formula AI proof into a 
       async readHandoff() {
         return ({ status: 'READY', evaluatedAtMs: at, entryCount: 1, blockers: [],
           entries: [{ identity: { signalId: 'clock-test', market: 'CRYPTO_SPOT',
-            researchCodeSha: 'a'.repeat(40) }, evaluatedAtMs: at }] }
-          as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
+            researchCodeSha: 'a'.repeat(40) }, evaluatedAtMs: at }] } as unknown as Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>);
       },
       async readLiveAccountSnapshot() { throw new Error('CREDENTIALS_UNAVAILABLE'); },
     };
