@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt } = require('../../ops/production-auto-live-signal-identity.cjs');
+const { inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+  verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const entry = (market, researchCodeSha = SHA) => ({ identity: { market, researchCodeSha } });
 test('an empty handoff is transport-only and does not prove scanner/AI invocation or candidate SHA', () => {
@@ -30,4 +31,41 @@ test('current candidate identities are bound exactly, never promoted into all-ma
     { entryCount: 1 }, { entryCount: Number.NaN }]) {
     assert.throws(() => assertSignalEntryIdentityReceipt({ ...proof, entryCount: 2, ...patch }, SHA), /IDENTITY_INVALID/);
   }
+});
+
+test('prearm validates published schema and SHA256 without fabricating scanner/AI capability', async () => {
+  const { buildMemberAutoTradingPaperHandoff } =
+    await import('../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
+  const nowMs = Date.parse('2026-10-12T23:00:00.000Z');
+  const makeEmpty = (evaluatedAtMs = nowMs) => buildMemberAutoTradingPaperHandoff({
+    cycleId: 'prearm-transport-only', evaluatedAtMs, lanes: [],
+  });
+  const published = makeEmpty();
+  const safe = await verifyProductionAutoLivePrearmHandoff(published, SHA, nowMs);
+  assert.equal(safe.entryCount, 0);
+  assert.equal(safe.producerInvocationVerified, false);
+  assert.equal(safe.sourceTransportOnly, true);
+  assert.equal(safe.entryShaMatch, null);
+  assert.deepEqual(safe.observedMarkets, []);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    { ...published, handoffDigest: 'b'.repeat(64) }, SHA, nowMs),
+  /AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    { ...published, safety: { ...published.safety, liveTrading: true } }, SHA, nowMs),
+  /AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    { ...published, status: 'BLOCKED_DATA', blockers: ['PUBLIC_DATA_MISSING'] }, SHA, nowMs),
+  /AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    makeEmpty(nowMs - 30 * 60_000 - 1), SHA, nowMs),
+  /AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    makeEmpty(nowMs + 1), SHA, nowMs),
+  /AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    published, 'not-a-valid-sha', nowMs),
+  /AUTOMATIC_TRADING_PREARM_ARGUMENT_INVALID/u);
+  await assert.rejects(() => verifyProductionAutoLivePrearmHandoff(
+    published, SHA, Number.NaN),
+  /AUTOMATIC_TRADING_PREARM_ARGUMENT_INVALID/u);
 });

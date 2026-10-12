@@ -41,6 +41,7 @@ const memberPaperMigration = read('api-server/supabase/migrations/2026101001_mem
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const budgetMigration = read('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql');
+const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -197,10 +198,18 @@ forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
   'AUTO_GATE_OPTIONAL_FEATURE_COUPLING_FORBIDDEN');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
-requireText(workflow, 'requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'await requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'ops/production-auto-live-signal-identity.cjs', 'AUTO_GATE_PREARM_CANONICAL_SOURCE_NOT_IMPORTED');
+requireText(workflow, 'verifyProductionAutoLivePrearmHandoff', 'AUTO_GATE_PREARM_CANONICAL_CHECK_NOT_CALLED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE', 'AUTO_GATE_PREARM_MODULE_MISSING_BLOCK');
+requireText(workflow, "signal.producerInvocationVerified !== false", 'AUTO_GATE_PREARM_NO_FAKE_ISSUER_MISSING');
+requireText(workflow, 'node --test .github/scripts/production-auto-live-signal-identity.test.cjs', 'AUTO_GATE_PREARM_TEST_WIRING_MISSING');
+requireText(signalIdentity, 'validateMemberAutoTradingPaperHandoff(value, nowMs)', 'AUTO_GATE_PREARM_CANONICAL_DIGEST_VALIDATION_MISSING');
+requireText(signalIdentity, 'sourceTransportOnly', 'AUTO_GATE_PREARM_TRANSPORT_ONLY_PROOF_MISSING');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID', 'AUTO_GATE_PREARM_DIGEST_FAILURE_NOT_BLOCKED');
 requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID', 'AUTO_GATE_PREARM_HANDOFF_MISSING_BLOCK');
-requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE', 'AUTO_GATE_PREARM_HANDOFF_FRESHNESS_BLOCK');
-requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH', 'AUTO_GATE_PREARM_HANDOFF_SHA_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE', 'AUTO_GATE_PREARM_HANDOFF_FRESHNESS_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH', 'AUTO_GATE_PREARM_HANDOFF_SHA_BLOCK');
 const preArmCall = workflow.indexOf('requireFreshPublishedHandoff(before);');
 const pm2Enable = workflow.indexOf('restartAutomatic(true, before);', preArmCall);
 if (preArmCall < 0 || pm2Enable < 0 || preArmCall >= pm2Enable) {
