@@ -127,24 +127,12 @@ test('production membership denial uses the actual basic-info capability and saf
   assert.ok(config.includes("screenshot: 'off'"));
 });
 
-test('Paper allowlist preserves frozen legacy 268 and pins exact 52 reviewed four-mode additions', () => {
-  const legacy = PAPER_FORWARD_REVIEWED_PATHS.slice(0, 268);
-  const approvedFourMode = PAPER_FORWARD_REVIEWED_PATHS.slice(268);
-  assert.equal(legacy.length, 268);
-  assert.equal(approvedFourMode.length, 52);
-  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 320);
-  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 320);
-  const legacyDigest = createHash('sha256').update([...legacy].sort().join('\n')).digest('hex');
-  assert.equal(legacyDigest, '7b991a3b55c36ce644a7fdeedb037a7cc80fbfb7732fb1c811e51cf0ddcacd14');
-  // Git blob identity pins the reviewed 52 literal paths; a new wildcard or
-  // unreviewed Paper/Research/LIVE exception cannot silently pass this test.
-  const supplemental = Buffer.from([...approvedFourMode].sort().join('\n'), 'utf8');
-  const supplementalBlobSha = createHash('sha1')
-    .update('blob ' + supplemental.byteLength + '\0').update(supplemental).digest('hex');
-  assert.equal(supplementalBlobSha, 'b65674e03f51394f65ef0ff010755039d5c354b2');
-  for (const path of PAPER_FORWARD_REVIEWED_PATHS) {
-    assert.ok(!path.includes('*') && !path.includes('..'), path);
-  }
+test('extracted Paper allowlist preserves the exact legacy set plus its own data file', () => {
+  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 268);
+  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 268);
+  const digest = createHash('sha256').update([...PAPER_FORWARD_REVIEWED_PATHS].sort().join('\n')).digest('hex');
+  assert.equal(digest, '7b991a3b55c36ce644a7fdeedb037a7cc80fbfb7732fb1c811e51cf0ddcacd14');
+  for (const path of PAPER_FORWARD_REVIEWED_PATHS) assert.ok(!path.includes('*') && !path.includes('..'));
 });
 
 test('Paper run expressions stay below the GitHub 21000 character limit', () => {
@@ -154,4 +142,12 @@ test('Paper run expressions stay below the GitHub 21000 character limit', () => 
     assert.ok(run.length < 21000, 'oversized run expression: ' + run.length);
   }
   assert.ok(workflow.includes('mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)'));
+});
+
+test('bounded AI provider recovery tests are scoped exactly without adding execution or secret paths',()=>{
+  assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes('research-production/test/research-ai-review-worker.test.mjs'),true);
+  for(const path of ['research-production/test/research-ai-review-worker.test.mjs.new',
+    'api-server/src/services/trade-execution.service.ts.new','ops/restart-production.sh']){
+    assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes(path),false,path);
+  }
 });

@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluateManualFourMarketPaperClosedCycle,
+  evaluateManualFourMarketPaperOrderPath,
+  MANUAL_PAPER_ORDER_PATH_VERSION,
+  type ManualPaperOrderPathInput,
+  type ManualPaperSimulatedMatch,
   buildManualPaperResearchReceipt,
   sameManualPaperResearchReceipt,
   MANUAL_PAPER_RESEARCH_RECEIPT_VERSION,
@@ -368,4 +372,202 @@ test('manual research receipt refuses blocker and foreign-owner calculations',()
   assert.equal(mismatched.status,'BLOCKED');
   assert.throws(()=>buildManualPaperResearchReceipt(other,mismatched),
     /MANUAL_PAPER_RESEARCH_RECEIPT_INVALID_EVIDENCE/);
+});
+
+
+function orderPath(market:AdminPaperMarket='crypto_futures',
+  edits:Partial<ManualPaperOrderPathInput>={}):ManualPaperOrderPathInput {
+  const cycle=fixture(market);
+  const side=cycle.selected.side;
+  const entryAction=side==='SHORT'?'SELL':'BUY';
+  const exitAction=side==='SHORT'?'BUY':'SELL';
+  const price=side==='SHORT'?cycle.entryQuote.bid:cycle.entryQuote.ask;
+  const qty=cycle.selected.requestedNotionalKrw
+    /(price*cycle.costs.entryFxKrwPerQuote);
+  const events:ManualPaperSimulatedMatch[]=[
+    {eventId:'entry-a',phase:'ENTRY',action:entryAction,
+      quoteSourceId:cycle.entryQuote.sourceId,
+      observedAtMs:cycle.entryQuote.observedAtMs,
+      quantity:qty*0.6,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+    {eventId:'entry-b',phase:'ENTRY',action:entryAction,
+      quoteSourceId:cycle.entryQuote.sourceId,
+      observedAtMs:cycle.entryQuote.observedAtMs,
+      quantity:qty*0.4,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+    {eventId:'exit-a',phase:'EXIT',action:exitAction,
+      quoteSourceId:cycle.exitQuote.sourceId,
+      observedAtMs:cycle.exitQuote.observedAtMs,
+      quantity:qty*0.4,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+    {eventId:'exit-b',phase:'EXIT',action:exitAction,
+      quoteSourceId:cycle.exitQuote.sourceId,
+      observedAtMs:cycle.exitQuote.observedAtMs,
+      quantity:qty*0.6,provenance:'SERVER_PUBLIC_QUOTE_SIMULATION'},
+  ];
+  return {cycle,events,entryRemainderCanceled:false,...edits};
+}
+test('all 4 markets replay staged simulated entry partial-match close with matching economic proof',()=>{
+  for(const market of ['domestic_stock','us_stock','crypto_spot','crypto_futures'] as const){
+    const input=orderPath(market);
+    const result=evaluateManualFourMarketPaperOrderPath(input);
+    assert.equal(result.status,'SIMULATED_CLOSED',JSON.stringify(result.blockers));
+    assert.equal(result.schemaVersion,MANUAL_PAPER_ORDER_PATH_VERSION);
+    assert.equal(result.entryMatchCount,2);
+    assert.equal(result.exitMatchCount,2);
+    assert.ok(Math.abs(result.simulatedEntryQuantity-result.simulatedExitQuantity)<1e-8);
+    assert.equal(result.openQuantity,0);
+    const original=evaluateManualFourMarketPaperClosedCycle(input.cycle);
+    assert.equal(original.status,'RESEARCH_SIMULATED_CLOSED');
+    assert.ok(Math.abs(result.hypotheticalNetPnlKrw!-original.netPnlKrw!)<=0.02);
+    assert.equal(result.hypotheticalNewReserveKrw,original.updatedLockedReserveKrw);
+    assert.equal(result.hypotheticalHighWaterKrw,original.updatedHighWaterMarkKrw);
+    assert.equal(result.actualPaperOrderCreated,false);
+    assert.equal(result.actualPaperFillsRecorded,false);
+    assert.equal(result.actualPaperLedgerWritten,false);
+    assert.equal(result.realOrderSubmitted,false);
+    assert.equal(result.profitabilityProven,false);
+    assert.equal(result.executionAuthority,'NONE');
+    assert.equal(result.journal?.simulatedOnly,true);
+    assert.equal(result.journal?.market,market);
+    assert.equal(result.journal?.causalImpactProven,false);
+  }
+});
+test('SHORT isolated simulated futures use SELL entries and BUY reducing closes',()=>{
+  const input=orderPath('crypto_futures');
+  const cycle=change(input.cycle,'selected',{side:'SHORT'});
+  // Short entry uses bid=99 rather than long ask=100. Re-size all
+  // server-simulated matches to the short's exact selected notional.
+  const shortRatio=input.cycle.entryQuote.ask/input.cycle.entryQuote.bid;
+  const events=input.events.map(event=>({
+    ...event,quantity:event.quantity*shortRatio,
+    action:event.phase==='ENTRY'?'SELL' as const:'BUY' as const,
+  }));
+  const result=evaluateManualFourMarketPaperOrderPath({...input,cycle,events});
+  assert.equal(result.status,'SIMULATED_CLOSED',JSON.stringify(result.blockers));
+  assert.ok(result.hypotheticalNetPnlKrw!<0);
+  assert.equal(result.journal?.entryAction,'SELL');
+  assert.equal(result.journal?.exitAction,'BUY');
+  assert.equal(result.hypotheticalNewReserveKrw,0);
+  const stock=orderPath('domestic_stock');
+  const bad=evaluateManualFourMarketPaperOrderPath({...stock,
+    cycle:change(stock.cycle,'selected',{side:'SHORT'})});
+  assert.equal(bad.status,'BLOCKED');
+  assert.ok(bad.blockers.includes('PAPER_CYCLE_NONFUTURES_LONG_ONLY'));
+});
+test('simulated partial entry and partial close never claim settled profit or cash',()=>{
+  const input=orderPath();
+  for(const events of [
+    [],input.events.slice(0,1),
+    [input.events[0],input.events[2]],
+  ]){
+    const result=evaluateManualFourMarketPaperOrderPath({
+      ...input,events,entryRemainderCanceled:false,
+    });
+    assert.ok(['UNMATCHED','OPEN_UNSETTLED','PARTIALLY_CLOSED_UNSETTLED']
+      .includes(result.status));
+    assert.equal(result.hypotheticalNetPnlKrw,null);
+    assert.equal(result.hypotheticalNewReserveKrw,null);
+    assert.equal(result.journal,null);
+    assert.equal(result.actualPaperLedgerWritten,false);
+  }
+  const cancelled=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[],entryRemainderCanceled:true,
+  });
+  assert.equal(cancelled.status,'CANCELED_NO_FILL');
+  assert.equal(cancelled.simulatedEntryQuantity,0);
+  assert.equal(cancelled.hypotheticalNetPnlKrw,null);
+});
+test('partial entry can close only after simulated cancellation of unmatched remainder',()=>{
+  const input=orderPath('crypto_spot');
+  const qty=input.events[0].quantity;
+  const matchingClose={...input.events[2],quantity:qty};
+  const open=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[input.events[0],matchingClose],
+    entryRemainderCanceled:false,
+  });
+  assert.equal(open.status,'PARTIALLY_CLOSED_UNSETTLED');
+  assert.equal(open.hypotheticalNetPnlKrw,null);
+  const settled=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[input.events[0],matchingClose],
+    entryRemainderCanceled:true,
+  });
+  assert.equal(settled.status,'SIMULATED_CLOSED',JSON.stringify(settled.blockers));
+  assert.ok(settled.simulatedEntryQuantity<settled.requestedQuantity!);
+  assert.equal(settled.entryRemainderCanceled,true);
+  assert.ok(settled.hypotheticalNetPnlKrw!==null);
+  assert.equal(settled.actualPaperFillsRecorded,false);
+});
+test('duplicate, excess entry and reduce-only overclose refuse simulation settlement',()=>{
+  const input=orderPath();
+  const corrupt=[
+    [input.events[0],{...input.events[0]}],
+    [{...input.events[0],quantity:input.events[0].quantity*100}],
+    [input.events[0],{...input.events[2],quantity:input.events[0].quantity*2}],
+  ];
+  for(const events of corrupt){
+    const result=evaluateManualFourMarketPaperOrderPath({...input,events});
+    assert.equal(result.status,'BLOCKED',JSON.stringify(result.blockers));
+    assert.equal(result.hypotheticalNetPnlKrw,null);
+  }
+  const duplicate=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[input.events[0],{...input.events[0]}],
+  });
+  assert.ok(duplicate.blockers.includes('MANUAL_PAPER_ORDER_PATH_MATCH_INVALID_OR_DUPLICATE'));
+});
+test('source, side, time, provenance and out-of-order matches fail closed',()=>{
+  const input=orderPath();
+  const modifications=[
+    {eventId:'entry-a',action:'SELL'},
+    {eventId:'entry-a',quoteSourceId:'client-owned-quote'},
+    {eventId:'entry-a',observedAtMs:input.cycle.entryQuote.observedAtMs+100},
+    {eventId:'entry-a',provenance:'BROKER_FILL'},
+    {eventId:'entry-a',quantity:Number.NaN},
+    {eventId:'entry-a',quantity:-1},
+  ];
+  for(const patch of modifications){
+    const first={...input.events[0],...patch};
+    const outcome=evaluateManualFourMarketPaperOrderPath({
+      ...input,events:[first,input.events[1],input.events[2],input.events[3]]
+        as ManualPaperSimulatedMatch[],
+    });
+    assert.equal(outcome.status,'BLOCKED',JSON.stringify(patch));
+    assert.equal(outcome.journal,null);
+  }
+  const outOfOrder=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[input.events[2],input.events[0]],
+  });
+  assert.equal(outOfOrder.status,'BLOCKED');
+  const lateEntry=evaluateManualFourMarketPaperOrderPath({
+    ...input,events:[input.events[0],input.events[2],input.events[1]],
+  });
+  assert.equal(lateEntry.status,'BLOCKED');
+});
+test('unknown verified owner, changed strategy and zero available capital forbid a simulated cycle',()=>{
+  const input=orderPath();
+  const variants=[
+    change(input.cycle,'verifiedOwner',{ownerRlsReady:false}),
+    change(input.cycle,'verifiedOwner',{walletReadbackReady:false}),
+    change(input.cycle,'verifiedOwner',{operatingCapitalKrw:0}),
+    change(input.cycle,'verifiedOwner',{strategyCandidateId:'client'}),
+    change(input.cycle,'costs',{status:'UNKNOWN'}),
+  ];
+  for(const cycle of variants){
+    const result=evaluateManualFourMarketPaperOrderPath({...input,cycle});
+    assert.equal(result.status,'BLOCKED');
+    assert.equal(result.actualPaperOrderCreated,false);
+    assert.equal(result.hypotheticalNetPnlKrw,null);
+  }
+});
+test('isolated future simulated loss beyond margin never fabricates an exit/settlement',()=>{
+  const input=orderPath('crypto_futures');
+  const lossExit=change(input.cycle,'exitQuote',{
+    sourceId:'stop-like-public-quote',bid:1,ask:2,
+  });
+  const changedEvents=input.events.map(event=>event.phase==='EXIT'
+    ?{...event,quoteSourceId:'stop-like-public-quote'}:event);
+  const result=evaluateManualFourMarketPaperOrderPath({
+    ...input,cycle:lossExit,events:changedEvents,
+  });
+  assert.equal(result.status,'BLOCKED');
+  assert.equal(result.hypotheticalNetPnlKrw,null);
+  assert.ok(result.blockers.some(code=>code.includes('LIQUIDATION')));
+  assert.equal(result.transferAuthority,false);
 });
