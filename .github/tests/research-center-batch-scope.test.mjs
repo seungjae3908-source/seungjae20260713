@@ -143,3 +143,11 @@ test('Paper run expressions stay below the GitHub 21000 character limit', () => 
   }
   assert.ok(workflow.includes('mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)'));
 });
+
+test('bounded AI provider recovery tests are scoped exactly without adding execution or secret paths',()=>{
+  assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes('research-production/test/research-ai-review-worker.test.mjs'),true);
+  for(const path of ['research-production/test/research-ai-review-worker.test.mjs.new',
+    'api-server/src/services/trade-execution.service.ts.new','ops/restart-production.sh']){
+    assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes(path),false,path);
+  }
+});
