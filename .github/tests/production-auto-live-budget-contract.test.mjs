@@ -54,6 +54,14 @@ test('budget DDL is server-only and durable; no provider execution or expiration
   assert.ok(installer.includes('autoTradingBackground?.enabled !== false'));
   assert.ok(installer.includes('USER_TRADING_ROWS_MUTATED'));
   assert.ok(installer.includes('BUDGET_RESERVATION_ROWS_MUTATED'));
+  assert.ok(installer.includes('create temporary table pg_temp.auto_live_budget_install_snapshot'));
+  assert.ok(installer.includes('on commit drop;'));
+  assert.ok(installer.includes('if snapshot_count <> 1'));
+  assert.ok(installer.includes('trading_before is distinct from'));
+  assert.ok(installer.includes('reservation_before is distinct from'));
+  // The installer and DDL must both work with a restricted DB owner. A custom
+  // parameter SET privilege cannot be required by the preflight or installer.
+  assert.doesNotMatch(installer, /(?:set_config|current_setting)\\(\\s*'app\\./iu);
   const deploy = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
   assert.ok(deploy.includes('environment: production'));
   assert.ok(deploy.includes('ops/apply-production-auto-live-budget.mjs'));
