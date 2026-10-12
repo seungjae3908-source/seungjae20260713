@@ -458,6 +458,74 @@ test('separately approved standalone installer verifies sealed main source and k
   assert.doesNotMatch(script, /(?:pm2|psql|supabase)\s+(?:start|restart|exec|db|migration|run|sql)/u);
 });
 
+test('protected independent source Bash is syntax-valid and sealed tar smoke is immutable offline', () => {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const yaml = readFileSync('.github/workflows/production-automatic-trading-gate.yml', 'utf8');
+  function step(name) {
+    const anchor='      - name: '+name+'\n';
+    const idx=yaml.indexOf(anchor);
+    assert.ok(idx>=0, 'protected step missing: '+name);
+    const next=yaml.indexOf('\n      - name: ',idx+anchor.length);
+    const chunk=yaml.slice(idx,next<0?yaml.length:next);
+    const run=chunk.indexOf('        run: |\n');
+    assert.ok(run>=0, 'protected Bash run missing: '+name);
+    return chunk.slice(run+'        run: |\n'.length).split('\n')
+      .map(line=>line.startsWith('          ')?line.slice(10):line).join('\n');
+  }
+  const names=[
+    'Prepare exact-main sealed PUBLIC source and verify independent-root preflight',
+    'Transfer sealed PUBLIC source into private isolated scratch only',
+    'Install only isolated public data collection schedule with zero order authority',
+    'Read back exact scheduled public source without scanner or trading claims',
+    'Delete only private GitHub public-source scratch (never application or Paper)',
+  ];
+  for(const name of names) {
+    const parsed=spawnSync('bash',['-n'],{input:step(name),encoding:'utf8',timeout:5000});
+    assert.equal(parsed.status,0,name+': '+parsed.stderr);
+    assert.equal(parsed.stderr,'',name+': invalid heredoc or Bash syntax');
+  }
+  const script=step(names[0]);
+  const boundary=script.indexOf('remote_env="$(printf');
+  assert.ok(boundary>0,'offline packaging must precede any SSH');
+  const offline=script.slice(0,boundary);
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'auto-live-sealed-bundle-'));
+  try {
+    const ref=spawnSync('git',['rev-parse','HEAD'],{encoding:'utf8',timeout:5000});
+    assert.equal(ref.status,0);
+    const sha=ref.stdout.trim();
+    const envFile=path.join(temp,'github-env');
+    const packed=spawnSync('bash',['-Eeuo','pipefail'],{
+      input:offline,encoding:'utf8',timeout:25000,maxBuffer:1024*1024,
+      env:{...process.env,TARGET_SHA:sha,RUNNER_TEMP:temp,GITHUB_ENV:envFile},
+    });
+    assert.equal(packed.status,0,(packed.stderr??'').slice(0,2000));
+    const vars=Object.fromEntries(fs.readFileSync(envFile,'utf8').trim().split('\n')
+      .map(line=>[line.slice(0,line.indexOf('=')),line.slice(line.indexOf('=')+1)]));
+    for(const key of ['PUBLIC_BUNDLE_PATH','PUBLIC_BUNDLE_SHA256','PUBLIC_MANIFEST_SHA256','PUBLIC_HELPER_SHA256']){
+      assert.ok(vars[key],key+' missing');
+    }
+    const actualBundleHash=createHash('sha256').update(fs.readFileSync(vars.PUBLIC_BUNDLE_PATH)).digest('hex');
+    assert.equal(actualBundleHash,vars.PUBLIC_BUNDLE_SHA256);
+    const extract=path.join(temp,'extracted');
+    fs.mkdirSync(extract);
+    const tar=spawnSync('tar',['-xzf',vars.PUBLIC_BUNDLE_PATH,'-C',extract],{encoding:'utf8',timeout:25000});
+    assert.equal(tar.status,0,tar.stderr);
+    assert.equal(fs.readFileSync(path.join(extract,'.source-sha'),'utf8').trim(),sha);
+    assert.equal(createHash('sha256').update(fs.readFileSync(path.join(extract,'SHA256SUMS'))).digest('hex'),
+      vars.PUBLIC_MANIFEST_SHA256);
+    assert.equal(createHash('sha256').update(fs.readFileSync(path.join(extract,'ops/production-auto-live-signal-identity.cjs'))).digest('hex'),
+      vars.PUBLIC_HELPER_SHA256);
+    const check=spawnSync('sha256sum',['--status','-c','SHA256SUMS'],{cwd:extract,encoding:'utf8',timeout:15000});
+    assert.equal(check.status,0,check.stderr);
+    fs.appendFileSync(path.join(extract,'.source-sha'),'\ntamper\n');
+    const bad=spawnSync('sha256sum',['--status','-c','SHA256SUMS'],{cwd:extract,encoding:'utf8',timeout:15000});
+    assert.notEqual(bad.status,0,'modified exact-SHA source marker must fail closed');
+  } finally { fs.rmSync(temp,{recursive:true,force:true}); }
+});
+
 test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
   const script = buildIndependentAutoLivePublicInstallScript();
