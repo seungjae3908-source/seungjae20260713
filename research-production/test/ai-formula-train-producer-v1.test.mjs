@@ -229,7 +229,7 @@ test('rejects unverified source digest, out-of-window proof, duplicate identitie
     { reviewedAssociationDigest: 'c'.repeat(64) },
     { formulaReviewedForAiHypothesis: false },
     { reviewIdentityDigest: 'c'.repeat(64) },
-    { sourceRightsVerified: false }
+    { sourceRightsVerified: false },
     { sourceProvenanceVerified: false },
     { datasetRole: 'OOS' },
     { researchSha: 'e'.repeat(40) },
