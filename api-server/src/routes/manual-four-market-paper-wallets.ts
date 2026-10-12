@@ -5,7 +5,10 @@ import { hasCapability } from '../../../packages/member-access/src/index.js';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
   evaluateManualFourMarketPaperClosedCycle,
+  buildManualPaperResearchReceipt,
+  sameManualPaperResearchReceipt,
   type ManualPaperFourMarketCycleInput,
+  type ManualPaperResearchReceiptRow,
 } from '../services/manual-four-market-paper-cycle.service';
 import {
   MANUAL_FOUR_MARKET_CONFIRMATION,
@@ -37,8 +40,40 @@ type ManualFourMarketDeps = {
   insertSeeds:(request:AuthenticatedRequest,ownerId:string,role:ManualWalletRole,
     records:ReturnType<typeof buildManualFourMarketWalletSeeds>)=>Promise<StoredPaperJournalRecord[]>;
   bootstrapEnabled:()=>boolean;
+  researchReceiptWriteEnabled:()=>boolean;
+  researchReceiptRlsReady:(request:AuthenticatedRequest)=>Promise<boolean>;
+  appendResearchReceipt:(request:AuthenticatedRequest,receipt:ManualPaperResearchReceiptRow)
+    =>Promise<'INSERTED'|'DUPLICATE'>;
+  listResearchReceipts:(request:AuthenticatedRequest,ownerId:string)
+    =>Promise<Array<{cycle_id:string;market:string;receipt_sha256:string;
+      receipt:Record<string,unknown>;created_at:string}>>;
 };
 const READ_ONLY='MANUAL_PAPER_FOUR_MARKET_SEED_ONLY';
+const RESEARCH_LEDGER_TABLE='paper_manual_four_market_research_receipts' as const;
+export const MANUAL_RESEARCH_RECEIPT_CONFIRMATION =
+  'RECORD_MANUAL_PAPER_RESEARCH_ONLY_PRESERVE_LOSSES' as const;
+const selectionKeys=['market','symbol','strategyId','candidateId','side',
+  'leverage','requestedNotionalKrw'] as const;
+function validSelection(raw:unknown):raw is ManualPaperPreviewSelection {
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return false;
+  const p=raw as Record<string,unknown>,keys=Object.keys(p);
+  return keys.length===selectionKeys.length
+    &&keys.every(key=>selectionKeys.includes(key as typeof selectionKeys[number]))
+    &&['domestic_stock','us_stock','crypto_spot','crypto_futures'].includes(String(p.market))
+    &&typeof p.symbol==='string'&&/^[A-Z0-9._-]{2,35}$/u.test(p.symbol)
+    &&typeof p.strategyId==='string'&&/^[A-Za-z0-9:._-]{1,120}$/u.test(p.strategyId)
+    &&typeof p.candidateId==='string'&&/^[A-Za-z0-9:._-]{1,120}$/u.test(p.candidateId)
+    &&['BUY','LONG','SHORT'].includes(String(p.side))
+    &&typeof p.leverage==='number'&&Number.isInteger(p.leverage)&&p.leverage>=1&&p.leverage<=125
+    &&typeof p.requestedNotionalKrw==='number'
+    &&Number.isFinite(p.requestedNotionalKrw)
+    &&p.requestedNotionalKrw>0&&p.requestedNotionalKrw<=125_000_000;
+}
+function validModeSelection(p:ManualPaperPreviewSelection):boolean {
+  return p.market==='crypto_futures'
+    ?(p.side==='LONG'||p.side==='SHORT')
+    :(p.side==='BUY'&&p.leverage===1);
+}
 const fail=(code:string,message:string,extra:Record<string,unknown>={})=>({
   ok:false, mode:READ_ONLY, code,message,
   executionAuthority:'NONE', orderSubmitted:false,exchangeRequestSent:false,
@@ -124,6 +159,46 @@ export function createManualFourMarketWalletRouter(
   // Fail closed in the product runtime until an independently certified
   // public provider+backtest/OOS+cost source is actually wired.
   const researchReader=deps.readResearchCycleEvidence??(async()=>null);
+  const researchReceiptWriteEnabled=deps.researchReceiptWriteEnabled??(
+    ()=>process.env.MANUAL_FOUR_MARKET_PAPER_RESEARCH_RECEIPT_WRITE_ENABLED==='true');
+  const researchReceiptRlsReady=deps.researchReceiptRlsReady??(async req=>{
+    if(!req.accessToken)return false;
+    const {data,error}=await getUserSupabase(req.accessToken)
+      .rpc('manual_four_market_paper_receipt_rls_guard_ready');
+    return !error&&data===true;
+  });
+  const appendResearchReceipt=deps.appendResearchReceipt??(async(req,receipt)=>{
+    if(!req.accessToken||req.member?.id!==receipt.user_id
+      ||!hasSupabaseServerKey())throw new Error('PAPER_RESEARCH_RECEIPT_OWNER_OR_SERVER_KEY_REQUIRED');
+    const client=getSupabase();
+    const {data,error}=await client.from(RESEARCH_LEDGER_TABLE)
+      .insert(receipt).select('user_id,cycle_id,wallet_id,owner_role,market,epoch_id,round_number,receipt_sha256,receipt')
+      .maybeSingle();
+    if(error?.code==='23505'){
+      // Unique collision is idempotent ONLY when the persisted owner, epoch,
+      // exact receipt digest and non-execution claims all match.
+      const read=await client.from(RESEARCH_LEDGER_TABLE)
+        .select('user_id,cycle_id,wallet_id,owner_role,market,epoch_id,round_number,receipt_sha256,receipt')
+        .eq('user_id',receipt.user_id).eq('cycle_id',receipt.cycle_id).maybeSingle();
+      if(read.error || !read.data || !sameManualPaperResearchReceipt(receipt,read.data))
+        throw new Error('PAPER_RESEARCH_RECEIPT_DUPLICATE_EVIDENCE_CONFLICT');
+      return 'DUPLICATE' as const;
+    }
+    if(error||!data||!sameManualPaperResearchReceipt(receipt,data))
+      throw new Error('PAPER_RESEARCH_RECEIPT_DB_READBACK_UNVERIFIED');
+    return 'INSERTED' as const;
+  });
+  const listResearchReceipts=deps.listResearchReceipts??(async(req,ownerId)=>{
+    if(req.member?.id!==ownerId||!req.accessToken)
+      throw new Error('PAPER_RESEARCH_RECEIPT_OWNER_SCOPE_REQUIRED');
+    const {data,error}=await getUserSupabase(req.accessToken)
+      .from(RESEARCH_LEDGER_TABLE)
+      .select('cycle_id,market,receipt_sha256,receipt,created_at')
+      .eq('user_id',ownerId)
+      .order('created_at',{ascending:false}).limit(100);
+    if(error||!Array.isArray(data))throw new Error('PAPER_RESEARCH_RECEIPT_READ_UNAVAILABLE');
+    return data;
+  });
 
   // Owner-scoped pure research preview, never a trade execution endpoint.
   // All economic numbers come from injected SERVER evidence. No client-supplied
@@ -205,6 +280,131 @@ export function createManualFourMarketWalletRouter(
         '인증된 수동모의매매 근거를 읽지 못했습니다.'));
     }
   });
+
+
+  // Research-only durable receipt: never an actual Paper fill, wallet credit,
+  // 50/50 reserve settlement, or real provider order. Both server guard and
+  // independent feature flag default OFF until separate approved deployment.
+  router.post('/paper-trading/manual-four-market/research-cycle-record',
+    async(req:AuthenticatedRequest,res)=>{
+      res.set('Cache-Control','no-store');
+      const owner=authenticatedOwner(req);
+      if(!owner)return res.status(403).json(fail('CAPABILITY_REQUIRED',
+        '수동모의 연구 회차 기록 권한이 없습니다.'));
+      if(!researchPreviewEnabled()||!researchReceiptWriteEnabled())
+        return res.status(409).json(fail('MANUAL_PAPER_RESEARCH_RECEIPT_WRITE_OFF',
+          '모의연구 회차 기록은 아직 활성화되지 않았습니다.'));
+      const body=req.body;
+      if(Object.keys(req.query).length || !body || typeof body!=='object'
+        || Array.isArray(body)||Object.keys(body).length!==2
+        || body.confirmation!==MANUAL_RESEARCH_RECEIPT_CONFIRMATION
+        || !validSelection(body.selection)
+        || Buffer.byteLength(JSON.stringify(body),'utf8')>2300
+        || !validModeSelection(body.selection)) {
+        return res.status(400).json(fail('MANUAL_PAPER_RESEARCH_RECEIPT_SELECTION_INVALID',
+          '모의연구 확인문구·종목·수식·레버리지를 다시 확인하세요.'));
+      }
+      const selected=body.selection as ManualPaperPreviewSelection;
+      const currentMs=now().getTime();
+      if(!Number.isSafeInteger(currentMs)||currentMs<=0)
+        return res.status(503).json(fail('MANUAL_PAPER_RESEARCH_SERVER_CLOCK_INVALID',
+          '서버 시각 증거가 유효하지 않습니다.'));
+      try {
+        const [walletGuard,receiptGuard,seeds]=await Promise.all([
+          rlsReady(req),researchReceiptRlsReady(req),listSeeds(req,owner.id),
+        ]);
+        const wallet=inspectManualFourMarketWallets(owner.role,seeds,currentMs);
+        if(!walletGuard || !receiptGuard || !wallet.ready){
+          return res.status(409).json(fail('MANUAL_PAPER_RESEARCH_LEDGER_OR_WALLET_NOT_READY',
+            '본인 4시장 모의계좌 및 불변 연구 원장 보호가 확인되지 않았습니다.'));
+        }
+        const evidence=await researchReader(owner,selected,currentMs);
+        if(!evidence)return res.status(409).json(fail('MANUAL_PAPER_CERTIFIED_RESEARCH_DATA_REQUIRED',
+          '독립적으로 검증된 서버 전략·시세·비용·환율 자료가 없습니다.'));
+        const s=evidence.selected;
+        if(evidence.nowMs!==currentMs||s?.ownerId!==owner.id
+          ||s.role!==owner.role||s.mode!=='manual'
+          ||!selectionKeys.every(k=>s[k]===selected[k])){
+          return res.status(409).json(fail('MANUAL_PAPER_EVIDENCE_OWNER_OR_SELECTION_MISMATCH',
+            '현재 회원의 서버 연구 증거와 선택 조건이 일치하지 않습니다.'));
+        }
+        const calculation=evaluateManualFourMarketPaperClosedCycle(evidence);
+        if(calculation.status!=='RESEARCH_SIMULATED_CLOSED'){
+          return res.status(409).json(fail('MANUAL_PAPER_EVIDENCE_BLOCKED',
+            '모의연구의 안전·시간·원가 증거 검증에 실패했습니다.',
+            {blockers:calculation.blockers}));
+        }
+        const receipt=buildManualPaperResearchReceipt(evidence,calculation);
+        if(receipt.user_id!==owner.id||receipt.owner_role!==owner.role)
+          throw new Error('PAPER_RESEARCH_RECEIPT_SCOPE_MISMATCH');
+        const outcome=await appendResearchReceipt(req,receipt);
+        if(outcome!=='INSERTED'&&outcome!=='DUPLICATE')
+          throw new Error('PAPER_RESEARCH_RECEIPT_WRITE_UNVERIFIED');
+        return res.status(outcome==='INSERTED'?201:200).json(harmless({
+          ok:true,mode:'MANUAL_PAPER_RESEARCH_RECEIPT_ONLY',ownerScope:'SELF',
+          researchReceiptRecorded:true,duplicateResearchReceipt:outcome==='DUPLICATE',
+          cycleId:receipt.cycle_id,receiptSha256:receipt.receipt_sha256,
+          researchReceiptInsertionsByThisRequest:outcome==='INSERTED'?1:0,
+          actualPaperLedgerWritten:false,realPaperOrderCreated:false,
+          hypotheticalOnly:true,profitabilityProven:false,
+          financialMutationCount:0,automaticWithdrawalEnabled:false,
+        }));
+      }catch{
+        // Do not disclose service-role, schema, private data, or a conflicting
+        // historical receipt. A conflict is NEVER an authorization to rewrite.
+        return res.status(409).json(fail('MANUAL_PAPER_RESEARCH_RECEIPT_NOT_RECORDED',
+          '중복·원장 무결성·서버 증거를 확인할 수 없어 연구 회차를 기록하지 않았습니다.'));
+      }
+    });
+
+  // Owner-only, bounded archive. A missing migration is an error, not a
+  // fabricated empty history; receipt payload never authorizes live trading.
+  router.get('/paper-trading/manual-four-market/research-cycle-history',
+    async(req:AuthenticatedRequest,res)=>{
+      res.set('Cache-Control','no-store');
+      const owner=authenticatedOwner(req);
+      if(!owner)return res.status(403).json(fail('CAPABILITY_REQUIRED',
+        '본인 수동모의 연구 이력 권한이 없습니다.'));
+      if(Object.keys(req.query).length)
+        return res.status(400).json(fail('MANUAL_PAPER_RESEARCH_QUERY_FORBIDDEN',
+          '다른 회원 또는 임의 조회 조건을 지정할 수 없습니다.'));
+      try{
+        if(!await researchReceiptRlsReady(req))
+          return res.status(409).json(fail('MANUAL_PAPER_RESEARCH_LEDGER_NOT_READY',
+            '연구 원장 DB 읽기 권한 및 불변 보호를 확인할 수 없습니다.'));
+        const rows=await listResearchReceipts(req,owner.id);
+        if(!Array.isArray(rows)||rows.length>100)
+          throw new Error('PAPER_RESEARCH_ARCHIVE_TOO_LARGE');
+        const records=rows.map(row=>{
+          const v=row.receipt;
+          if(!v||typeof v!=='object'
+            ||v.ownerId!==owner.id||v.role!==owner.role
+            ||v.cycleId!==row.cycle_id||v.market!==row.market
+            ||v.executionAuthority!=='NONE'
+            ||v.actualPaperLedgerWritten!==false
+            ||v.realOrderSubmitted!==false||v.profitabilityProven!==false
+            ||typeof v.hypotheticalNetPnlKrw!=='number'
+            ||!Number.isFinite(v.hypotheticalNetPnlKrw)
+            ||typeof row.receipt_sha256!=='string'
+            ||!/^[a-f0-9]{64}$/u.test(row.receipt_sha256))
+            throw new Error('PAPER_RESEARCH_ARCHIVE_EVIDENCE_INVALID');
+          return {
+            cycleId:row.cycle_id,market:row.market,receiptSha256:row.receipt_sha256,
+            recordedAt:row.created_at,status:'RESEARCH_SIMULATED_CLOSED',
+            hypotheticalNetPnlKrw:v.hypotheticalNetPnlKrw,
+            actualPaperLedgerWritten:false,profitabilityProven:false,
+          };
+        });
+        return res.json(harmless({ok:true,
+          mode:'MANUAL_PAPER_RESEARCH_RECEIPT_READ_ONLY',ownerScope:'SELF',
+          readOnlyProbe:true,receipts:records,hasMoreThan100:rows.length===100,
+          financialMutationCount:0,actualPaperLedgerWritten:false,
+          profitabilityProven:false}));
+      }catch{
+        return res.status(503).json(fail('MANUAL_PAPER_RESEARCH_ARCHIVE_UNAVAILABLE',
+          '현재 회원의 검증된 연구 기록을 조회할 수 없습니다.'));
+      }
+    });
 
   const statusPath='/paper-trading/manual-four-market/status';
   const bootstrapPath='/paper-trading/manual-four-market/bootstrap';

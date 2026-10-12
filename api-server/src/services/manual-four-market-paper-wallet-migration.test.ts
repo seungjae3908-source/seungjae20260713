@@ -44,3 +44,34 @@ test('manual Paper never grants client direct mutation or a broader privileged R
   assert.doesNotMatch(migration,/security definer/i);
   assert.doesNotMatch(migration,/update\s+public\.paper_accounts\s+set\s+equity/i);
 });
+
+
+test('manual research receipt schema is owner-scoped, append-only, immutable and does not mint 50/50 capital',()=>{
+  for(const name of [
+    'paper_manual_four_market_research_receipts',
+    'paper_manual_research_receipt_wallet_fk',
+    'paper_manual_research_receipt_identity',
+    'paper_manual_research_receipt_claims',
+    'paper-manual-cycle-v1:',
+    'receipt_sha256',
+    'RESEARCH_SIMULATED_CLOSED',
+    'paper_manual_research_receipt_owner_read_v1',
+    'paper_manual_research_receipt_no_update_delete',
+    'manual_four_market_paper_receipt_rls_guard_ready',
+    "receipt->>'actualPaperLedgerWritten' = 'false'",
+    "receipt->>'realOrderSubmitted' = 'false'",
+    "receipt->>'profitabilityProven' = 'false'",
+    "receipt->>'financialMutationCount' = '0'",
+  ])assert.ok(migration.includes(name),name);
+  assert.match(migration,/primary key \(user_id, cycle_id\)/iu);
+  assert.match(migration,/foreign key \(user_id, wallet_id\)[\s\S]*references public\.paper_accounts\(user_id, id\)/iu);
+  assert.match(migration,/enable row level security;[\s\S]*force row level security;/iu);
+  assert.match(migration,/for select to authenticated[\s\S]*using \(\(select auth\.uid\(\)\) = user_id\)/iu);
+  assert.match(migration,/grant insert on public\.paper_manual_four_market_research_receipts[\s\S]*to service_role;/iu);
+  assert.match(migration,/revoke truncate,update,delete on table[\s\S]*from public,anon,authenticated,service_role;/iu);
+  assert.match(migration,/before update or delete on public\.paper_manual_four_market_research_receipts/iu);
+  assert.match(migration,/if public\.manual_four_market_paper_receipt_rls_guard_ready\(\) is not true/iu);
+  assert.doesNotMatch(migration,/grant\s+insert\s+on\s+public\.paper_manual_four_market_research_receipts\s+to\s+authenticated/iu);
+  assert.doesNotMatch(migration,/security\s+definer/iu);
+  assert.doesNotMatch(migration,/update\s+public\.paper_accounts\s+set\s+(?:cashBalance|equity)/iu);
+});

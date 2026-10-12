@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
-  manualPaperBootstrapAuthorized,
+  manualPaperBootstrapAuthorized,parseManualFourMarketResearchHistory,
 } from './manual-four-market-paper-status';
 const fixture=()=>({
   ok:true,mode:'MANUAL_PAPER_FOUR_MARKET_SEED_ONLY',
@@ -66,4 +66,48 @@ test('manual four-market bootstrap confirmation expires at owner switch and cann
   assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,noRls),false);
   const existing={...checked,ready:true,canCreate:false};
   assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,existing),false);
+});
+
+
+test('manual research history remains hypothetical, never real trades or current account equity',()=>{
+  const good={
+    ok:true,mode:'MANUAL_PAPER_RESEARCH_RECEIPT_READ_ONLY',
+    ownerScope:'SELF',readOnlyProbe:true,
+    financialMutationCount:0,privateProviderRequests:0,realOrders:0,
+    orderSubmitted:false,exchangeRequestSent:false,executionAuthority:'NONE',
+    actualPaperLedgerWritten:false,profitabilityProven:false,
+    hasMoreThan100:false,receipts:[{
+      cycleId:'paper-manual-cycle-v1:'+'a'.repeat(64),
+      market:'crypto_futures',receiptSha256:'b'.repeat(64),
+      recordedAt:'2026-10-12T00:00:00.000Z',
+      status:'RESEARCH_SIMULATED_CLOSED',hypotheticalNetPnlKrw:-15000,
+      actualPaperLedgerWritten:false,profitabilityProven:false,
+    }],
+  };
+  const read=parseManualFourMarketResearchHistory(good);
+  assert.equal(read.receipts.length,1);
+  assert.equal(read.receipts[0].hypotheticalNetPnlKrw,-15000);
+  assert.equal(read.receipts[0].actualPaperLedgerWritten,false);
+  assert.equal(read.receipts[0].profitabilityProven,false);
+  assert.equal(read.ownerScope,'SELF');
+  for(const change of [
+    {ownerScope:'OTHER'},{financialMutationCount:1},{profitabilityProven:true},
+    {executionAuthority:'LIVE'},{orderSubmitted:true},{realOrders:1},
+    {actualPaperLedgerWritten:true},
+  ])assert.throws(()=>parseManualFourMarketResearchHistory({...good,...change}));
+  for(const rowChange of [
+    {market:'invalid'},{hypotheticalNetPnlKrw:Infinity},
+    {status:'FILLED'},{actualPaperLedgerWritten:true},
+    {profitabilityProven:true},{cycleId:'arbitrary'},{receiptSha256:'oops'},
+  ])assert.throws(()=>parseManualFourMarketResearchHistory({
+    ...good,receipts:[{...good.receipts[0],...rowChange}],
+  }));
+  assert.throws(()=>parseManualFourMarketResearchHistory({
+    ...good,receipts:[good.receipts[0],good.receipts[0]],
+  }));
+});
+test('failed/uninstalled manual research archive is not displayed as a zero-PnL ledger',()=>{
+  for(const v of [null,{},{
+    ok:false,mode:'MANUAL_PAPER_RESEARCH_RECEIPT_READ_ONLY',receipts:[],
+  }])assert.throws(()=>parseManualFourMarketResearchHistory(v));
 });

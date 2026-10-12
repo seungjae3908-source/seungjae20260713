@@ -151,4 +151,145 @@ begin
 end
 $verify$;
 
+
+-- Four-market manual Paper RESEARCH receipts are not executed orders or wallet
+-- settlements. Append-only receipts preserve historical loss/profit arithmetic,
+-- never authorize funding, withdrawals, LIVE orders or 50/50 reserve transfers.
+create table public.paper_manual_four_market_research_receipts (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  cycle_id text not null,
+  wallet_id text not null,
+  owner_role text not null,
+  market text not null,
+  epoch_id text not null,
+  round_number integer not null,
+  receipt_sha256 text not null,
+  receipt jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (user_id, cycle_id),
+  constraint paper_manual_research_receipt_wallet_fk
+    foreign key (user_id, wallet_id)
+    references public.paper_accounts(user_id, id),
+  constraint paper_manual_research_receipt_identity check (
+    cycle_id ~ '^paper-manual-cycle-v1:[0-9a-f]{64}
+    and receipt_sha256 ~ '^[0-9a-f]{64}
+    and owner_role in ('admin','member')
+    and market in ('domestic_stock','us_stock','crypto_spot','crypto_futures')
+    and wallet_id = ('manual-paper-' || owner_role || '-v1:' || market)
+    and length(epoch_id) between 1 and 150
+    and round_number between 1 and 100000
+  ),
+  constraint paper_manual_research_receipt_claims check (
+    jsonb_typeof(receipt) = 'object'
+    and receipt->>'schemaVersion' = 'manual-four-market-research-receipt-v1'
+    and receipt->>'cycleId' = cycle_id
+    and receipt->>'ownerId' = user_id::text
+    and receipt->>'role' = owner_role
+    and receipt->>'market' = market
+    and receipt->>'walletId' = wallet_id
+    and receipt->>'epochId' = epoch_id
+    and (receipt->>'roundNumber')::integer = round_number
+    and receipt->>'status' = 'RESEARCH_SIMULATED_CLOSED'
+    and receipt->>'executionAuthority' = 'NONE'
+    and receipt->>'actualPaperLedgerWritten' = 'false'
+    and receipt->>'realOrderSubmitted' = 'false'
+    and receipt->>'profitabilityProven' = 'false'
+    and receipt->>'financialMutationCount' = '0'
+  )
+);
+create index paper_manual_research_receipt_owner_recent
+  on public.paper_manual_four_market_research_receipts
+  (user_id, created_at desc);
+
+alter table public.paper_manual_four_market_research_receipts
+  enable row level security;
+alter table public.paper_manual_four_market_research_receipts
+  force row level security;
+-- Explicit grants are distinct from RLS: browser may read its own receipts,
+-- but NEVER mint, alter, remove, truncate or convert a receipt into capital.
+revoke all on table public.paper_manual_four_market_research_receipts
+  from public,anon,authenticated,service_role;
+grant select on public.paper_manual_four_market_research_receipts
+  to authenticated,service_role;
+grant insert on public.paper_manual_four_market_research_receipts
+  to service_role;
+create policy "paper_manual_research_receipt_owner_read_v1"
+  on public.paper_manual_four_market_research_receipts
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+create function public.paper_manual_research_receipt_immutable_v1()
+returns trigger language plpgsql security invoker
+set search_path=public,pg_temp as $receipt_immutable$
+begin
+  raise exception 'PAPER_MANUAL_RESEARCH_RECEIPT_IMMUTABLE'
+    using errcode = '23514';
+end
+$receipt_immutable$;
+create trigger paper_manual_research_receipt_no_update_delete
+before update or delete on public.paper_manual_four_market_research_receipts
+for each row execute function public.paper_manual_research_receipt_immutable_v1();
+revoke truncate,update,delete on table
+  public.paper_manual_four_market_research_receipts
+  from public,anon,authenticated,service_role;
+
+create function public.manual_four_market_paper_receipt_rls_guard_ready()
+returns boolean language sql stable security invoker
+set search_path=public,pg_temp as $receipt_ready$
+  select public.manual_four_market_paper_wallet_rls_guard_ready() is true
+    and exists(
+      select 1 from pg_catalog.pg_class
+      where oid='public.paper_manual_four_market_research_receipts'::regclass
+        and relrowsecurity and relforcerowsecurity
+    )
+    and exists(
+      select 1 from pg_catalog.pg_policies
+      where schemaname='public'
+        and tablename='paper_manual_four_market_research_receipts'
+        and policyname='paper_manual_research_receipt_owner_read_v1'
+        and cmd='SELECT' and permissive='PERMISSIVE'
+        and 'authenticated'::name=any(roles)
+        and qual like '%auth.uid()%'
+        and qual like '%user_id%'
+    )
+    and not exists(
+      select 1 from information_schema.role_table_grants
+      where table_schema='public'
+        and table_name='paper_manual_four_market_research_receipts'
+        and grantee in ('PUBLIC','anon','authenticated','service_role')
+        and privilege_type in ('UPDATE','DELETE','TRUNCATE')
+    )
+    and not exists(
+      select 1 from information_schema.role_table_grants
+      where table_schema='public'
+        and table_name='paper_manual_four_market_research_receipts'
+        and grantee in ('PUBLIC','anon','authenticated')
+        and privilege_type='INSERT'
+    )
+    and exists(
+      select 1 from pg_catalog.pg_trigger
+      where tgrelid='public.paper_manual_four_market_research_receipts'::regclass
+        and tgname='paper_manual_research_receipt_no_update_delete'
+        and tgenabled='O'
+    )
+    and exists(
+      select 1 from pg_catalog.pg_constraint
+      where conrelid='public.paper_manual_four_market_research_receipts'::regclass
+        and conname='paper_manual_research_receipt_wallet_fk'
+        and contype='f'
+    )
+$receipt_ready$;
+revoke all on function public.manual_four_market_paper_receipt_rls_guard_ready()
+  from public,anon,authenticated;
+grant execute on function public.manual_four_market_paper_receipt_rls_guard_ready()
+  to authenticated,service_role;
+
+do $verify_receipt$
+begin
+  if public.manual_four_market_paper_receipt_rls_guard_ready() is not true then
+    raise exception 'MANUAL_PAPER_RESEARCH_RECEIPT_RLS_NOT_READY';
+  end if;
+end
+$verify_receipt$;
+
 commit;

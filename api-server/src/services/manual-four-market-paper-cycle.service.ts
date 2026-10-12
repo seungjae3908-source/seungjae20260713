@@ -337,3 +337,135 @@ export function evaluateManualFourMarketPaperClosedCycle(
     oosProfitabilityProven:false,actualPaperLedgerWritten:false,
   });
 }
+
+
+/**
+ * Immutable research-only receipt for a separately authenticated server source.
+ * Never promote this into a canonical filled order, settled capital, a real
+ * broker trade, a backtest PASS, or an automatic 50/50 reserve credit.
+ */
+export const MANUAL_PAPER_RESEARCH_RECEIPT_VERSION =
+  'manual-four-market-research-receipt-v1' as const;
+export type ManualPaperResearchReceipt = Readonly<{
+  schemaVersion:typeof MANUAL_PAPER_RESEARCH_RECEIPT_VERSION;
+  cycleId:string;
+  ownerId:string;
+  role:ManualWalletRole;
+  market:AdminPaperMarket;
+  walletId:string;
+  epochId:string;
+  roundNumber:number;
+  candidateId:string;
+  strategyId:string;
+  status:'RESEARCH_SIMULATED_CLOSED';
+  sourceEvidenceSha256:string;
+  journal:Readonly<Record<string,unknown>>;
+  hypotheticalNetPnlKrw:number;
+  hypotheticalOperatingCapitalKrw:number;
+  hypotheticalReserveKrw:number;
+  hypotheticalHighWaterMarkKrw:number;
+  executionAuthority:'NONE';
+  actualPaperLedgerWritten:false;
+  realOrderSubmitted:false;
+  profitabilityProven:false;
+  financialMutationCount:0;
+}>;
+export type ManualPaperResearchReceiptRow = Readonly<{
+  user_id:string;
+  cycle_id:string;
+  wallet_id:string;
+  owner_role:ManualWalletRole;
+  market:AdminPaperMarket;
+  epoch_id:string;
+  round_number:number;
+  receipt_sha256:string;
+  receipt:ManualPaperResearchReceipt;
+}>;
+export function buildManualPaperResearchReceipt(
+  input:ManualPaperFourMarketCycleInput,
+  calculation:ManualPaperFourMarketCycle,
+):ManualPaperResearchReceiptRow {
+  const s=input?.selected, o=input?.verifiedOwner;
+  if(!s || !o || calculation?.status!=='RESEARCH_SIMULATED_CLOSED'
+    || calculation.actualPaperLedgerWritten!==false
+    || calculation.executionAuthority!=='NONE'
+    || calculation.liveOrderSubmitted!==false
+    || calculation.exchangeRequestSent!==false
+    || calculation.oosProfitabilityProven!==false
+    || !calculation.journal
+    || !/^[a-zA-Z0-9:._-]{1,150}$/u.test(o.currentEpochId)
+    || !Number.isInteger(o.currentRoundNumber)||o.currentRoundNumber<1
+    || !/^[a-zA-Z0-9:._-]{1,150}$/u.test(s.candidateId)
+    || !/^[a-zA-Z0-9:._-]{1,150}$/u.test(s.strategyId)
+    || !/^paper-manual-cycle-v1:[0-9a-f]{64}$/u.test(calculation.closedCycleId??'')
+    || !ADMIN_FOUR_PAPER_MARKETS.includes(s.market)
+    || !['admin','member'].includes(s.role)
+    || s.ownerId!==o.ownerId
+    || s.accountId!==manualPaperWalletId(s.role,s.market)
+    || o.accountId!==s.accountId || o.market!==s.market
+    || o.walletReadbackReady!==true || o.ownerRlsReady!==true
+    || calculation.market!==s.market || calculation.mode!=='manual'
+    || calculation.journal.id!==calculation.closedCycleId
+    || calculation.journal.accountId!==s.accountId
+    || calculation.journal.ownerId!==s.ownerId
+    || calculation.journal.roundNumber!==o.currentRoundNumber
+    || calculation.journal.epochId!==o.currentEpochId
+    || !Number.isFinite(calculation.netPnlKrw)
+    || !Number.isFinite(calculation.updatedOperatingCapitalKrw)
+    || !Number.isFinite(calculation.updatedLockedReserveKrw)
+    || !Number.isFinite(calculation.updatedHighWaterMarkKrw)) {
+    throw new Error('MANUAL_PAPER_RESEARCH_RECEIPT_INVALID_EVIDENCE');
+  }
+  // Hash the complete server-owned research input, not just the symbol/date.
+  // A repeat of the same cycle ID with a revised price/fee/FX must conflict,
+  // never silently count as a second gain or overwrite immutable research.
+  const sourceEvidenceSha256=sha(JSON.stringify({
+    selected:s, verifiedOwner:o, entryQuote:input.entryQuote,
+    exitQuote:input.exitQuote, costs:input.costs,
+  }));
+  const receipt:ManualPaperResearchReceipt=Object.freeze({
+    schemaVersion:MANUAL_PAPER_RESEARCH_RECEIPT_VERSION,
+    cycleId:calculation.closedCycleId!,
+    ownerId:s.ownerId,role:s.role,market:s.market,walletId:s.accountId,
+    epochId:o.currentEpochId,roundNumber:o.currentRoundNumber,
+    candidateId:s.candidateId,strategyId:s.strategyId,
+    status:'RESEARCH_SIMULATED_CLOSED',
+    sourceEvidenceSha256,
+    journal:Object.freeze(structuredClone(calculation.journal)),
+    hypotheticalNetPnlKrw:calculation.netPnlKrw!,
+    hypotheticalOperatingCapitalKrw:calculation.updatedOperatingCapitalKrw!,
+    hypotheticalReserveKrw:calculation.updatedLockedReserveKrw!,
+    hypotheticalHighWaterMarkKrw:calculation.updatedHighWaterMarkKrw!,
+    executionAuthority:'NONE',actualPaperLedgerWritten:false,
+    realOrderSubmitted:false,profitabilityProven:false,
+    financialMutationCount:0,
+  });
+  return Object.freeze({
+    user_id:s.ownerId,cycle_id:receipt.cycleId,
+    wallet_id:s.accountId,owner_role:s.role,market:s.market,
+    epoch_id:o.currentEpochId,round_number:o.currentRoundNumber,
+    receipt_sha256:sha(JSON.stringify(receipt)),receipt,
+  });
+}
+export function sameManualPaperResearchReceipt(
+  expected:ManualPaperResearchReceiptRow,
+  actual:Record<string,unknown>,
+):boolean {
+  return Boolean(actual&&typeof actual==='object'
+    && actual.user_id===expected.user_id
+    && actual.cycle_id===expected.cycle_id
+    && actual.wallet_id===expected.wallet_id
+    && actual.owner_role===expected.owner_role
+    && actual.market===expected.market
+    && actual.epoch_id===expected.epoch_id
+    && actual.round_number===expected.round_number
+    && actual.receipt_sha256===expected.receipt_sha256
+    && actual.receipt!==null
+    && typeof actual.receipt==='object'
+    && (actual.receipt as Record<string,unknown>).cycleId===expected.cycle_id
+    && (actual.receipt as Record<string,unknown>).sourceEvidenceSha256
+      ===expected.receipt.sourceEvidenceSha256
+    && (actual.receipt as Record<string,unknown>).executionAuthority==='NONE'
+    && (actual.receipt as Record<string,unknown>).actualPaperLedgerWritten===false
+  );
+}
