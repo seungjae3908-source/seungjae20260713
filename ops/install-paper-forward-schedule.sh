@@ -146,6 +146,34 @@ fi
 
 NODE_BIN="$(command -v node)"
 FLOCK_BIN="$(command -v flock)"
+# Read-only mode identity preflight precedes every installer filesystem mutation.
+# SHA equality alone cannot authorize reusing a different cadence/authority.
+STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
+if [[ -r "$STATE_FILE" ]]; then
+  "$NODE_BIN" --input-type=module - "$SOURCE_LAB" "$STATE_FILE" "$TARGET_SHA" "$OUTCOME_ACCUMULATION_ENABLED" "$AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED" <<'NODE'
+import fs from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [sourceLab, statePath, targetSha, outcome, autoRefresh] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  if (!/^[0-9a-f]{40}$/.test(String(state?.identity?.researchCodeSha ?? ''))) throw new Error();
+  if (state.identity.researchCodeSha === targetSha) {
+    const { assertPaperForwardScheduleStateMode } = await import(
+      pathToFileURL(join(sourceLab, 'src', 'paper-forward-schedule-runtime-base-v1.js')).href);
+    assertPaperForwardScheduleStateMode(state, {
+      researchCodeSha: targetSha,
+      outcomeAccumulationEnabled: outcome === 'true',
+      authoritativeAccountRequired: outcome === 'true',
+      autoLiveSignalRefresh: autoRefresh === 'true',
+    });
+  }
+} catch {
+  process.stderr.write('[paper-forward-activate] PAPER_FORWARD_EXISTING_STATE_MODE_INCOMPATIBLE\n');
+  process.exit(11);
+}
+NODE
+fi
 mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR" "$PUBLISHER_SNAPSHOT_ARCHIVE_ROOT"
 
