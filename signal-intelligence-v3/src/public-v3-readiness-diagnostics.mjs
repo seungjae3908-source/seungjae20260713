@@ -13,6 +13,7 @@ function blank(){
     dataNotReady:0,quantNotEligible:0,profitNotEligible:0,
     riskNotReady:0,utilityMissing:0,canonicalProofAbsent:0,
     identityMissing:0,costPolicyMissing:0,
+    backtestIdentityMissing:0,
     backtestEvidenceMissing:0,backtestLineageMismatch:0,
     backtestOosOrWalkForwardMissing:0,backtestFullCostIncomplete:0,
     backtestPointInTimeUnproven:0,backtestSamplesInvalid:0,
@@ -42,6 +43,8 @@ export function summarizeV3EconomicReadiness(rows){
     if(blockers.includes(PROOFS[0]))target.identityMissing+=1;
     if(blockers.includes(PROOFS[1]))target.canonicalProofAbsent+=1;
     if(blockers.includes(PROOFS[2]))target.costPolicyMissing+=1;
+    if(blockers.includes('BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE'))
+      target.backtestIdentityMissing+=1;
     if(blockers.includes('BACKTEST_QUALITY_VERIFICATION_REQUIRED'))
       target.backtestEvidenceMissing+=1;
     if(blockers.includes('BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED'))
