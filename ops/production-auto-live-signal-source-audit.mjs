@@ -41,8 +41,15 @@ if (handoff.safety.executionAuthority !== 'NONE'
   throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_AUTHORITY_INVALID');
 }
 
-const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8' });
-if (cron.status !== 0 && cron.status !== 1) throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
+// Read-only command: bound execution time and output size, fail closed on
+// stderr/exit errors rather than deriving schedule proof from partial output.
+const cron = spawnSync('crontab', ['-l'], {
+  encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+  env: { ...process.env, LC_ALL: 'C' },
+});
+if (cron.error || cron.signal || cron.status !== 0 || typeof cron.stdout !== 'string') {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
+}
 const scheduleRoot = '/opt/stock-app-data/paper-forward-v1';
 const activationPath = scheduleRoot + '/activation.json';
 const wrapperPath = scheduleRoot + '/bin/run-paper-forward-schedule';
@@ -60,10 +67,7 @@ try {
 signalIdentity.inspectManagedPaperForwardSchedule(
   String(cron.stdout ?? ''), activation, targetSha, scheduleActivatedAtMs, nowMs,
 );
-if (existsSync(scheduleRoot + '/DISABLED')
-  || existsSync(scheduleRoot + '/runtime-state/DISABLED')) {
-  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED');
-}
+signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot);
 try {
   const wrapperStat = lstatSync(wrapperPath);
   if (!wrapperStat.isFile() || wrapperStat.isSymbolicLink()
