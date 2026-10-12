@@ -143,3 +143,25 @@ test('read-only archive refuses unsafe source permissions, symlink and tampered 
     .status,'NOT_CONFIGURED');
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('signed profit admission is not writable or spoofable after verification',()=>{
+ const {privateKey,pem}=keys(),{bundle,card}=fixture();
+ const signed=seal(bundle,privateKey);
+ const linked=inspectV3SignedResearchBundle(signed,
+  {enabled:true,publicKeyPem:pem,expectedResearchSha:SHA,nowMs:NOW});
+ assert.equal(linked.status,'SIGNED_EVIDENCE_AVAILABLE');
+ const proofKey=['US_STOCK','AAPL','1D','BUY','scanner:AAPL:one'].join('|');
+ assert.equal(typeof linked.records.set,'undefined');
+ const accepted=attachV3SignedResearchEvidence(card,{lane:LANE,bridge:linked});
+ assert.equal(accepted.profitEvidence.expectedNetEdge,1);
+ signed.entries[0].profitEvidence.expectedNetEdge=999;
+ assert.equal(linked.records.get(proofKey).profitEvidence.expectedNetEdge,1,
+   'an original in-memory object changed post-signature cannot alter verified evidence');
+ assert.throws(()=>{linked.records.get(proofKey).profitEvidence.expectedNetEdge=111;},
+   TypeError);
+ const forged={status:'SIGNED_EVIDENCE_AVAILABLE',
+   records:new Map([[proofKey,signed.entries[0]]])};
+ assert.equal(attachV3SignedResearchEvidence(card,
+   {lane:LANE,bridge:forged}).profitEvidence,undefined,
+   'a forged bridge object must not promote a scanner candidate');
+});

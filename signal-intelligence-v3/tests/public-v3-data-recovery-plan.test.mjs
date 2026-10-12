@@ -66,3 +66,10 @@ test('producer contains real optional economic join and environment is forced OF
  assert.match(service,/export SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false/u);
  assert.equal((service.match(/Environment=SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false/gu)||[]).length,2);
 });
+
+test('unrelated source cycles may not be merged into a purported healthy four-market result',()=>{
+ const lanes=receipts();
+ lanes[1].sourceCycleId='22222222-2222-4222-8222-222222222222';
+ assert.throws(()=>planV3FourMarketDataRecovery(lanes),
+   /V3_RECOVERY_MIXED_SOURCE_CYCLES/);
+});
