@@ -77,6 +77,7 @@ test('crosshair exposes a live OHLCV legend without intercepting chart interacti
   expect(await legend.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe('none');
 
   const latestTime = await legend.getAttribute('data-candle-time');
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * 0.3, box!.y + box!.height * 0.45);
@@ -135,6 +136,7 @@ test('five-thousand-candle history keeps crosshair, pan, and zoom responsive', a
   await expect(legend).toHaveAttribute('data-candle-time', String(BASE_TIME + 4_999 * 300));
   const interactiveAt = performance.now();
   const initialRange = await page.getByTestId('unified-chart-wrapper').getAttribute('data-visible-logical-range');
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 

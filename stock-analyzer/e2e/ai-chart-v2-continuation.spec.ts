@@ -50,6 +50,10 @@ async function installReadOnlyChartMocks(context: BrowserContext) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
       return;
     }
+    if (url.pathname.startsWith('/api/')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, quotes: [], items: [], results: [] }) });
+      return;
+    }
     await route.continue();
   });
   return privateTradingRequests;
@@ -135,6 +139,10 @@ async function installFuturesChartMocks(context: BrowserContext) {
     }
     if (url.pathname === '/api/quotes') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [] }) });
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, quotes: [], items: [], results: [] }) });
       return;
     }
     await route.continue();
@@ -223,17 +231,18 @@ test('AI Chart 2.0 remains usable with no horizontal overflow at 320/360/390/412
   for (const width of [320, 360, 390, 412, 430]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(directSignalUrl);
-    await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
+    await expect(page.getByTestId('ai-chart-mobile-tabs').getByRole('tab', { name: '차트', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole('tab', { name: '차트', exact: true }).click();
     await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
-    await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
     await expect(page.getByRole('button', { name: '5분', exact: true })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    await page.getByRole('tab', { name: '상세', exact: true }).click();
+    await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
+    await expect(page.getByTestId('ai-chart-mobile-judgment')).toBeVisible();
     await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
+    await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toContainText('scanner-signal-42');
     await expect(page.getByTestId('strategy-mode-SCALPING')).toBeVisible();
     await expect(page.getByTestId('load-multi-timeframe')).toBeVisible();
     await expectNoHorizontalOverflow(page);
