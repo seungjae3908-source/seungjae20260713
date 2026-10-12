@@ -21,6 +21,12 @@ const MARKETS = Object.freeze({
 });
 const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const SHA = /^[a-f0-9]{64}$/u;
+const MINUTE = 60_000;
+const PROPOSED_PROVIDERS = Object.freeze({
+  KR_STOCK: null, US_STOCK: null,
+  CRYPTO_SPOT: "UPBIT_PUBLIC_REST", CRYPTO_FUTURES: "BITGET_PUBLIC_V2",
+});
 const SESSION_KINDS = new Set(["REGULAR", "PREMARKET", "AFTERMARKET"]);
 const utc = ms => new Date(ms).toISOString().slice(0, 10);
 // Market-local trading dates, not arbitrary UTC-midnight calendar dates.
@@ -141,7 +147,9 @@ export async function auditResearchMinuteArchiveWindowV1({
       sourceLimitedSessionCount: 0, missingSessionCount: null,
       revisionConflictSessionCount: 0, unreadableSessionCount: 0,
       noTradeMinuteEvidenceVerified: false,
-      missingCollectionPlan: null, monthlyCoverage: {},
+      missingCollectionPlan: null, partialRetryReviewPlan: null,
+      revisionReviewPlan: null, unreadableSourceReviewPlan: null,
+      monthlyCoverage: {},
     });
   }
   if (isCrypto && stockCalendar != null) fail("MINUTE_WINDOW_CRYPTO_CALENDAR_UNEXPECTED");
@@ -162,7 +170,9 @@ export async function auditResearchMinuteArchiveWindowV1({
       requestedSessionCount: null, archivedSessionCount: 0,
       sourceLimitedSessionCount: 0, missingSessionCount: null,
       revisionConflictSessionCount: 0, unreadableSessionCount: 0,
-      missingCollectionPlan: null, monthlyCoverage: {},
+      missingCollectionPlan: null, partialRetryReviewPlan: null,
+      revisionReviewPlan: null, unreadableSourceReviewPlan: null,
+      monthlyCoverage: {},
       noTradeMinuteEvidenceVerified: false,
     });
   }
@@ -174,7 +184,18 @@ export async function auditResearchMinuteArchiveWindowV1({
     retrospectiveSourceSessionCount: 0,
     retrospectiveUnavailableOneMinuteRows: 0,
   };
-  const missingCollectionPlan = [], warnings = [], monthly = Object.create(null);
+  const missingCollectionPlan = [], partialRetryReviewPlan = [];
+  const revisionReviewPlan = [], unreadableSourceReviewPlan = [];
+  const warnings = [], monthly = Object.create(null);
+  const planIdentity = session => ({
+    selectionDate: session.selectionDate,
+    sessionStartMs: session.startMs, sessionEndMs: session.endMs,
+    sessionKind: session.kind,
+    ...(isCrypto ? { dayUtc: session.dayUtc }
+      : { tradingDateLocal: session.tradingDateLocal }),
+    market, symbol,
+  });
+  const proposedProvider=PROPOSED_PROVIDERS[market];
   for (const session of selectedSessions) {
     const month = session.selectionDate.slice(0, 7);
     const bucket = monthly[month] ??= {
@@ -190,31 +211,48 @@ export async function auditResearchMinuteArchiveWindowV1({
       });
     } catch (error) {
       totals.unreadableSessionCount++; bucket.unreadable++;
-      warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
-        reason: "ARCHIVED_ORIGINAL_UNREADABLE_OR_INVALID",
-        errorCode: String(error?.message ?? "ERROR").slice(0, 100) });
+      const warning={...planIdentity(session),
+        reason:"ARCHIVED_ORIGINAL_UNREADABLE_OR_INVALID",
+        errorCode:String(error?.message??"ERROR").slice(0,100)};
+      warnings.push(warning);
+      unreadableSourceReviewPlan.push(Object.freeze({...warning,
+        action:"REVIEW_UNREADABLE_ORIGINAL_BEFORE_ANY_REDOWNLOAD",
+        providerGETCount:0,autoExecuteAllowed:false}));
       continue;
     }
     if (result.status === "BLOCKED_DATA") {
       if (result.reason === "ARCHIVED_SESSION_NOT_FOUND"
         || result.reason === "ARCHIVED_REVISION_NOT_FOUND") {
         totals.missingSessionCount++; bucket.missing++;
-        missingCollectionPlan.push({
-          selectionDate: session.selectionDate, sessionStartMs: session.startMs,
-          sessionEndMs: session.endMs, sessionKind: session.kind,
-          ...(isCrypto ? { dayUtc: session.dayUtc }
-            : { tradingDateLocal: session.tradingDateLocal }),
-          reason: "MISSING_ORIGINAL_ONE_MINUTE_SESSION",
-        });
+        missingCollectionPlan.push(Object.freeze({
+          ...planIdentity(session),
+          reason:"MISSING_ORIGINAL_ONE_MINUTE_SESSION",
+          proposedProvider,sourceReadRequiresExplicitConsent:true,
+          independentPITRosterRequired:true,
+          historicalNoTradeEvidenceVerified:false,
+          providerGETCount:0,autoExecuteAllowed:false,
+        }));
       } else if (result.reason ===
         "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION") {
         totals.revisionConflictSessionCount++; bucket.revisionConflict++;
         warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
-          reason: "REVISIONS_REQUIRE_EXPLICIT_SOURCE_SELECTION" });
+          reason:"REVISIONS_REQUIRE_EXPLICIT_SOURCE_SELECTION" });
+        revisionReviewPlan.push(Object.freeze({
+          ...planIdentity(session),
+          action:"AUDIT_IMMUTABLE_REVISIONS_MANUALLY",
+          reason:"REVISIONS_REQUIRE_EXPLICIT_SOURCE_SELECTION",
+          sourceRevisionAutoSelected:false,
+          existingSourceDigestSha256:null,
+          providerGETCount:0,autoExecuteAllowed:false,
+        }));
       } else {
         totals.unreadableSessionCount++; bucket.unreadable++;
-        warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
-          reason: "ARCHIVE_BLOCKED", errorCode: String(result.reason).slice(0, 100) });
+        const warning={...planIdentity(session),
+          reason:"ARCHIVE_BLOCKED",errorCode:String(result.reason).slice(0,100)};
+        warnings.push(warning);
+        unreadableSourceReviewPlan.push(Object.freeze({...warning,
+          action:"REVIEW_UNTRUSTED_ORIGINAL_BEFORE_ANY_REDOWNLOAD",
+          providerGETCount:0,autoExecuteAllowed:false}));
       }
       continue;
     }
@@ -226,10 +264,23 @@ export async function auditResearchMinuteArchiveWindowV1({
       || !Number.isSafeInteger(result.missingUnverifiedSourceMinuteSlots)
       || !Number.isSafeInteger(result.originalRowsUnavailableBySessionEnd)
       || result.missingUnverifiedSourceMinuteSlots < 0
-      || result.originalRowsUnavailableBySessionEnd > result.sourceMinuteRows) {
+      || result.originalRowsUnavailableBySessionEnd > result.sourceMinuteRows
+      || result.archivedRevisionCount !== 1
+      || !SHA.test(result.archiveSourceDigestSha256??"")
+      || !Number.isSafeInteger(result.sourceMinuteRows)
+      || result.sourceMinuteRows < 1
+      || result.sourceMinuteRows > 1440
+      || result.sessionExpectedMinuteSlots !==
+         (session.endMs-session.startMs)/MINUTE
+      || result.sourceMinuteRows + result.missingUnverifiedSourceMinuteSlots
+         !== result.sessionExpectedMinuteSlots) {
       totals.unreadableSessionCount++; bucket.unreadable++;
       warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
-        reason: "ARCHIVE_SESSION_PROVENANCE_MISMATCH" });
+        reason:"ARCHIVE_SESSION_PROVENANCE_MISMATCH" });
+      unreadableSourceReviewPlan.push(Object.freeze({
+        ...planIdentity(session),action:"REVIEW_SOURCE_PROVENANCE_MISMATCH",
+        providerGETCount:0,autoExecuteAllowed:false,
+      }));
       continue;
     }
     totals.archivedSessionCount++; bucket.sourcePresent++;
@@ -246,6 +297,22 @@ export async function auditResearchMinuteArchiveWindowV1({
     }
     if (!result.nativeMinuteSlotInventoryComplete) {
       totals.sourceLimitedSessionCount++; bucket.sourceLimited++;
+      // The existing --retry-partial requires this exact immutable SHA.
+      // Missing minute slots are not independently proven zero-trade gaps.
+      partialRetryReviewPlan.push(Object.freeze({
+        ...planIdentity(session),
+        action:"REVIEW_PARTIAL_NATIVE_MINUTE_RETRY",
+        reason:"UNVERIFIED_MISSING_NATIVE_MINUTE_SLOTS",
+        expectedExistingSourceDigestSha256:result.archiveSourceDigestSha256,
+        priorOriginalMinuteRows:result.sourceMinuteRows,
+        missingUnverifiedMinuteSlots:result.missingUnverifiedSourceMinuteSlots,
+        captureIsRetrospective:result.originalMinuteObservationTimesRetrospective,
+        proposedProvider,sourceReadRequiresExplicitConsent:true,
+        independentPITRosterRequired:true,
+        sourceNoTradeGapEvidenceVerified:false,
+        sourceRevisionAutoSelected:false,
+        providerGETCount:0,autoExecuteAllowed:false,
+      }));
     }
   }
   const issues = totals.missingSessionCount + totals.revisionConflictSessionCount
@@ -258,7 +325,17 @@ export async function auditResearchMinuteArchiveWindowV1({
       ? "CRYPTO_UTC_DATES_ONLY_NOT_PIT_MEMBERSHIP"
       : "CALLER_PROVIDED_STOCK_SESSIONS_UNAUTHENTICATED",
     requestedSessionCount: selectedSessions.length,
-    ...totals, missingCollectionPlan,
+    ...totals, missingCollectionPlan:Object.freeze(missingCollectionPlan),
+    partialRetryReviewPlan:Object.freeze(partialRetryReviewPlan),
+    revisionReviewPlan:Object.freeze(revisionReviewPlan),
+    unreadableSourceReviewPlan:Object.freeze(unreadableSourceReviewPlan),
+    incrementalRecoveryStatus:issues
+      ?"REVIEW_MISSING_PARTIAL_OR_CONFLICTED_ORIGINALS"
+      :"NO_MISSING_NATIVE_MINUTE_SLOTS_ON_REPORTED_SESSIONS",
+    proposedProvider,
+    publicHistoryGETAuthorized:false,
+    providerGETCount:0,autoExecuteAllowed:false,
+    sourceLicenseAndReuseRightsIndependentlyVerified:false,
     warningsPreview: warnings.slice(0, 50),
     additionalWarningsOmitted: Math.max(0, warnings.length - 50),
     monthlyCoverage: Object.fromEntries(Object.entries(monthly)),
