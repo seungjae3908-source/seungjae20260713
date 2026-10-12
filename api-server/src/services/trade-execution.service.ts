@@ -1,4 +1,5 @@
 import type { PaperFundingCertificate } from './paper-futures-funding-certificate.service';
+import { readBoundedTradingProviderJson } from './trading-provider-response.service';
 import { randomUUID } from 'node:crypto';
 import type {
   MemberAutoTradingFxMarket,
@@ -168,15 +169,11 @@ async function fetchExchangeJson(
       headers: request.headers,
       body: request.body,
       signal: controller.signal,
+      redirect: 'error',
     });
     if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
-    const raw = await response.text();
-    if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      throw new Error(invalidResponseCode(baseUrl));
-    }
+    return await readBoundedTradingProviderJson(response, { signal: controller.signal,
+      invalidCode: invalidResponseCode(baseUrl), boundCode: 'TRADING_PROVIDER_RESPONSE_BOUND_EXCEEDED' });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
     if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));

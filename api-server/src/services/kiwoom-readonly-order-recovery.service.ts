@@ -11,6 +11,10 @@ const READ_CONTRACTS = new Map([
   ['ust21050', { path: '/api/us/acnt', rows: 'result_list' }],
   ['ust21150', { path: '/api/us/acnt', rows: 'result_list' }],
 ]);
+export function kiwoomReadonlyRecoveryRequestValid(request: PreparedExchangeRequest): boolean {
+  const contract = READ_CONTRACTS.get(request.headers['api-id'] ?? '');
+  return request.method === 'POST' && Boolean(contract) && request.path === contract!.path && request.query === '';
+}
 function record(value: unknown): value is Row {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

@@ -1,5 +1,6 @@
 import type { AutomaticLiveOwnedPosition } from './automatic-live-position-isolation.service';
 import type { TradingOrder } from './trade-automation.types';
+import { readBoundedTradingProviderJson } from './trading-provider-response.service';
 import { prepareBitgetSinglePosition, prepareBitgetPendingProtection,
   type BitgetCredentials, type PreparedExchangeRequest } from './trade-exchange-adapters.service';
 import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
@@ -40,10 +41,8 @@ export async function sendBitgetNativeProtectionReadonly(request: PreparedExchan
       method: 'GET', body: null, headers: request.headers, redirect: 'error', signal: controller.signal,
     });
     if (!response.ok) fail(tradingProviderHttpErrorCode(base, response.status));
-    const body = await response.text();
-    if (body.length > 1_000_000) fail('BITGET_NATIVE_PROTECTION_RESPONSE_BOUND_EXCEEDED');
-    try { return JSON.parse(body) as unknown; }
-    catch { return fail('BITGET_NATIVE_PROTECTION_RESPONSE_INVALID'); }
+    return await readBoundedTradingProviderJson(response, { signal: controller.signal,
+      invalidCode: 'BITGET_NATIVE_PROTECTION_RESPONSE_INVALID', boundCode: 'BITGET_NATIVE_PROTECTION_RESPONSE_BOUND_EXCEEDED' });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') fail(tradingProviderTimeoutCode(base));
     if (error instanceof TypeError) fail(tradingProviderNetworkErrorCode(base));
