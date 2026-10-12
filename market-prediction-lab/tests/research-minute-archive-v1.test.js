@@ -14,6 +14,9 @@ import {
   parseResearchMinuteArchiveArgsV1 as parseCli,
   runResearchMinuteArchiveCliV1 as cli,
 } from "../scripts/research-minute-archive-v1.mjs";
+import {parseResearchMinuteRevisionAuditArgsV1 as parseRevisionAudit,
+ runResearchMinuteRevisionAuditCliV1 as runRevisionAudit}
+ from "../scripts/audit-research-minute-revisions-v1.mjs";
 
 const MIN = 60_000, DAY = 86_400_000;
 const sha = v => createHash("sha256").update(v).digest("hex");
@@ -238,8 +241,8 @@ test("bounded read-only immutable revision audit identifies only a strict origin
    assert.equal(report.sourceRevisionAutoSelected,false);
    assert.equal(report.explicitSourceRevisionReviewRequired,true);
    assert.equal(report.archiveRevisionCount,2);
-   assert.deepEqual(report.revisionCandidates.map(x=>x.originalOneMinuteRows),[9,10]
-     .sort((a,b)=>a-b));
+   assert.deepEqual(report.revisionCandidates.map(x=>x.originalOneMinuteRows)
+     .sort((a,b)=>a-b),[9,10]);
    assert.equal(report.rawMinutePricesExposed,false);
    assert.equal(report.providerGETCount,0);
    assert.equal(report.profitabilityProven,false);
@@ -293,5 +296,33 @@ test("revision audit never recommends conflicting or as-of-only duplicate origin
    }finally{rmSync(singleRoot,{recursive:true,force:true});}
    const chosen=await read(request(root,a,{sourceDigestSha256:first.sourceDigestSha256}));
    assert.equal(chosen.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("read-only immutable revision audit CLI reports digest candidates and rejects unauthorized syntax",async()=>{
+ const root=temp(),s=fixture("CRYPTO_SPOT");
+ try{
+   await store({root,source:s});
+   const args=["--root",root,"--market","CRYPTO_SPOT",
+     "--symbol","KRW-BTC","--day","2026-09-18"];
+   const parsed=parseRevisionAudit(args);
+   assert.equal(parsed.maxRevisions,16);
+   assert.throws(()=>parseRevisionAudit([...args,"--max-revisions","33"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parseRevisionAudit([...args.slice(0,-1),"2026-02-30"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parseRevisionAudit([...args,"--retry-partial","true"]),
+     /MINUTE_REVISION_AUDIT_CLI_SCOPE_INVALID/);
+   const before=await read(request(root,s));
+   const status=await runRevisionAudit(parsed);
+   assert.equal(status.status,"SINGLE_LOCAL_ORIGINAL_REVISION_ONLY");
+   assert.equal(status.archiveRevisionCount,1);
+   assert.equal(status.revisionCandidates.length,1);
+   assert.equal(status.providerGETCount,0);
+   assert.equal(status.executionAuthority,"NONE");
+   assert.equal(status.profitabilityProven,false);
+   const after=await read(request(root,s));
+   assert.equal(after.archiveSourceDigestSha256,before.archiveSourceDigestSha256,
+     "auditor must never modify immutable archive data");
  }finally{rmSync(root,{recursive:true,force:true});}
 });

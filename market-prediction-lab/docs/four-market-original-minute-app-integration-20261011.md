@@ -184,3 +184,20 @@ Upbit 공식 문서상 거래가 없으면 1분 캔들이 생성되지 않을 �
 증거를 동일시하지 않는다. 운영 서버에 실행하거나 실제 시장
 데이터를 새로 수집하지 않았다. 별도의 명시 승인/운영 설정 전까지
 `executionAuthority=NONE`, `profitabilityProven=false`.
+
+### 여러 원본 수정본 읽기 전용 확인
+
+새 `auditResearchMinuteSessionRevisionsV1` API와 전용 CLI는 디스크에 이미 보관한
+각 수정본의 해시·1분봉 개수·취득 시각을 검증하고, 중복 구간 OHLCV 가격 충돌을
+찾아낸다. 어느 수정본이 다른 모든 버전의 봉을 완전하게 포함하는 경우에만
+`STRICT_NATIVE_MINUTE_SUPERSET_REQUIRES_REVIEW` 상태로 **검토용 SHA**를 보여준다.
+
+```bash
+node market-prediction-lab/scripts/audit-research-minute-revisions-v1.mjs \
+  --root /private/minute-archive --market CRYPTO_SPOT \
+  --symbol KRW-BTC --day 2026-09-18
+```
+
+이 도구는 네트워크 GET·파일 쓰기·금융 주문을 수행하지 않는다. 캔들 값은
+출력하지 않으며, 과거 source/PIT/이용권 인증이나 독립 OOS 증명으로
+승격하지 않는다. 기존 조회는 다중 수정본을 자동 선택하지 않는다.
