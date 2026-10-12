@@ -86,7 +86,15 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(evidenceBuilder.includes('autoLive.memberAutoLivePilotReady === true'));
   assert.ok(evidenceBuilder.includes('assertAutoLiveSignalReceipt'));
   assert.ok(signalAudit.includes('validateMemberAutoTradingPaperHandoff'));
-  assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
+  // The count guard now belongs to the shared canonical schedule inspector,
+  // not the CLI wrapper; require both its runtime call and strict verdict.
+  assert.ok(signalAudit.includes('signalIdentity.inspectManagedPaperForwardSchedule('));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_PROOF_INVALID'));
+  assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
+  assert.ok(signalAudit.includes("scheduleRoot + '/runtime-state/DISABLED'"));
+  assert.ok(read('.github/scripts/production-auto-live-signal-identity.test.cjs')
+    .includes("only exact installed 15-minute cron and SHA-bound receipt prove schedule configuration"));
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_HANDOFF_PREDATES_EXACT_SHA_SCHEDULE'));
   assert.ok(policySpec.includes("'/api/trade-automation/policy', 'PUT'"));
   assert.ok(!policySpec.includes("'/api/trade-automation/resume', 'POST'"), 'QA preparation cannot implicitly remove a sticky owner stop');
