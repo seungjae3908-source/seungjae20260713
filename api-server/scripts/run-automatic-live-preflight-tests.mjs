@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { collectOfflinePreflightStages } from './automatic-live-preflight-stages.mjs';
 
 const apiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = path.resolve(apiRoot, '..');
@@ -18,9 +19,13 @@ const entries = [
   'trade-kiwoom-readonly-contract.test.ts',
   'kiwoom-readonly-order-recovery.service.test.ts',
   'trade-order-recovery.test.ts',
+  'trade-execution-pre-submission.test.ts',
   'automatic-live-budget.service.test.ts',
+  'trading-provider-response.service.test.ts',
+  'bitget-native-protection-readonly.service.test.ts',
 ];
 const contracts = [
+  'api-server/scripts/automatic-live-preflight-stages.test.mjs',
   '.github/scripts/automatic-live-preactivation-audit.test.cjs',
   '.github/scripts/production-manual-live-receipts.test.cjs',
   '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
@@ -37,14 +42,21 @@ function run(args, cwd) {
 const output = await mkdtemp(path.join(tmpdir(), 'auto-live-preflight-tests-'));
 try {
   const files = [];
-  for (const [index, entry] of entries.entries()) {
-    const outfile = path.join(output, `${index}.test.cjs`);
-    await build({ entryPoints: [path.join(apiRoot, 'src/services', entry)], outfile,
-      bundle: true, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'warning' });
-    files.push(outfile);
-  }
-  run(['--test', '--test-concurrency=1', ...files], repositoryRoot);
-  run(['--test', '--test-concurrency=1', ...contracts], repositoryRoot);
+  const result = await collectOfflinePreflightStages([
+    ...entries.map((entry, index) => ({ id: `compile:${entry}`, async run() {
+      const outfile = path.join(output, `${index}.test.cjs`);
+      await build({ entryPoints: [path.join(apiRoot, 'src/services', entry)], outfile,
+        bundle: true, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'warning' });
+      files.push(outfile);
+    } })),
+    { id: 'component-tests', run() {
+      if (!files.length) throw new Error('AUTO_LIVE_PREFLIGHT_COMPONENTS_UNAVAILABLE');
+      run(['--test', '--test-concurrency=1', ...files], repositoryRoot);
+    } },
+    { id: 'release-contracts', run() { run(['--test', '--test-concurrency=1', ...contracts], repositoryRoot); } },
+  ]);
+  console.log(JSON.stringify(result));
+  if (!result.ready) throw new Error('AUTO_LIVE_PREFLIGHT_ALL_DEFECTS_COLLECTED');
   console.log('AUTO_LIVE_OFFLINE_PREFLIGHT_COMPONENTS_PASS; PRODUCTION_ACTIVATION_NOT_ATTESTED; FINANCIAL_API_CALLS=0');
 } finally {
   // Only the unique directory returned by mkdtemp is removed, never a workspace.
