@@ -1199,8 +1199,31 @@ jobs:
             const main = await github.rest.repos.getBranch({owner,repo,branch:'main'});
             if (main.data.commit.sha !== sha) {
               core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_MAIN_CHANGED_BEFORE_CRON');
+              return;
+            }
+            // Recheck operator exclusivity immediately before the independent
+            // Cron mutation; the initial preflight may now be several minutes old.
+            for (const workflowId of [
+              'production-deploy.yml',
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-postdeploy-qa.yml',
+              'production-automatic-trading-gate.yml',
+            ]) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,repo,workflow_id:workflowId,per_page:100,
+              });
+              const conflict = runs.data.workflow_runs.some((run) =>
+                run.id !== context.runId
+                && run.status !== 'completed'
+                && ['workflow_dispatch','issue_comment'].includes(run.event));
+              if (conflict) {
+                core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_LATE_OPERATION_CONFLICT');
+                return;
+              }
             }
       - name: Install only isolated public data collection schedule with zero order authority
+        id: public_install
         shell: bash
         env:
           TARGET_SHA: ${{ steps.source_command.outputs.sha }}
@@ -1239,6 +1262,7 @@ jobs:
 
 
       - name: Read back exact scheduled public source without scanner or trading claims
+        id: source_readback
         shell: bash
         env:
           TARGET_SHA: ${{ steps.source_command.outputs.sha }}
@@ -1309,6 +1333,39 @@ jobs:
             throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID');
           }
           NODE
+
+      - name: Disable only the newly installed public observer if postinstall readback fails
+        if: failure() && steps.public_install.outcome == 'success' && steps.source_readback.outcome != 'success'
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'BASH'
+          set -Eeuo pipefail
+          root='/opt/stock-app-data/auto-live-signal-v1'
+          [[ -d "$root" && ! -L "$root" && -f "$root/activation.json" && ! -L "$root/activation.json" ]]
+          node - "$root/activation.json" "$TARGET_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const value=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(value.targetSha!==process.argv[3]
+            || value.independentPaperRoot!==true
+            || value.paperRootMutated!==false
+            || value.paperCronReplaced!==false
+            || value.liveTrading!==false
+            || value.externalFinancialMutationAllowed!==false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_SCOPE_INVALID');
+          }
+          NODE
+          # Only the new independent observer is disabled, not old Paper Cron.
+          : > "$root/DISABLED"
+          chmod 600 "$root/DISABLED"
+          printf '%s\n' 'AUTO_LIVE_PUBLIC_INSTALL_POSTAUDIT_FAILED_CLOSED_DISABLED'
+          BASH
 
       - name: Delete only private GitHub public-source scratch (never application or Paper)
         if: always()
