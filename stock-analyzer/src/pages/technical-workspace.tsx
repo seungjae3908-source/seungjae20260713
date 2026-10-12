@@ -288,7 +288,7 @@ export default function TechnicalWorkspacePage() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
       <h1 className="sr-only sm:hidden" data-testid="technical-mobile-accessible-title">{WORKSPACE_TITLES[workspace]}</h1>
-      <div className="hidden shrink-0 border-b border-card-border bg-background px-5 pb-4 pt-5 sm:block lg:px-7" data-testid="technical-desktop-header">
+      <div className="hidden shrink-0 border-b border-card-border bg-background px-5 pb-4 pt-5 min-[1200px]:block lg:px-7" data-testid="technical-desktop-header">
         <div className="mx-auto w-full max-w-[96rem]">
           <div className="mb-4 flex items-end justify-between gap-6">
             <div className="min-w-0">
@@ -335,7 +335,7 @@ export default function TechnicalWorkspacePage() {
           </div>
         </div>
       </div>
-      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:hidden">
+      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 min-[1200px]:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <div className="min-w-0 flex-1">
             <ResponsiveTabs
