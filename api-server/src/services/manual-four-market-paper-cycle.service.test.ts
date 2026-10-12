@@ -4,6 +4,15 @@ import {
   evaluateManualFourMarketPaperClosedCycle,
   evaluateManualFourMarketPaperOrderPath,
   MANUAL_PAPER_ORDER_PATH_VERSION,
+  MANUAL_PAPER_SEQUENTIAL_LEDGER_VERSION,
+  manualPaperSequentialOrderId,
+  manualPaperSequentialEventId,
+  manualPaperSequentialRow,
+  sameManualPaperSequentialRow,
+  projectManualPaperSequentialEvents,
+  type ManualPaperSequentialEvent,
+  type ManualPaperSequentialSession,
+  type ManualPaperSequentialQuote,
   type ManualPaperOrderPathInput,
   type ManualPaperSimulatedMatch,
   buildManualPaperResearchReceipt,
@@ -569,4 +578,247 @@ test('isolated future simulated loss beyond margin never fabricates an exit/sett
   assert.equal(result.hypotheticalNetPnlKrw,null);
   assert.ok(result.blockers.some(code=>code.includes('LIQUIDATION')));
   assert.equal(result.transferAuthority,false);
+});
+
+
+/** Sequential Paper events arrive over time, not from a future closed-cycle
+ * payload. These are server-only fixtures; the browser cannot mint fills.
+ */
+const SEQ_AT=Date.parse('2026-10-12T08:00:00.000Z');
+function seqSession(
+  market:AdminPaperMarket='crypto_spot',
+  side:ManualPaperSequentialSession['side']=market==='crypto_futures'?'LONG':'BUY',
+):ManualPaperSequentialSession {
+  return {
+    ownerId:OWNER,role:'member',market,
+    walletId:manualPaperWalletId('member',market),
+    epochId:'manual-four-epoch-one',roundNumber:1,
+    symbol:symbols[market],strategyId:'verified-manual-strategy',
+    candidateId:'candidate-validated-1',
+    strategyReceiptSha256:'a'.repeat(64),
+    strategyValidatedAtMs:SEQ_AT-90_000,signalObservedAtMs:SEQ_AT-5_000,
+    side,leverage:market==='crypto_futures'?7:1,
+    requestedNotionalKrw:200_000,operatingCapitalKrw:1_000_000,
+    lockedReserveKrw:0,highWaterMarkKrw:1_000_000,
+    initialWalletReadbackVerified:true,
+    independentStrategyEvidenceVerified:true,
+  };
+}
+function seqQuote(s:ManualPaperSequentialSession,phase:'ENTRY'|'EXIT',
+  extra:Partial<ManualPaperSequentialQuote>={}):ManualPaperSequentialQuote {
+  const qcur=currency[s.market], fx=qcur==='KRW'?1:1400;
+  return {
+    provenance:'SERVER_PUBLIC_QUOTE_SIMULATION',
+    quoteSourceId:phase==='ENTRY'?'verified-entry-quote':'verified-exit-quote',
+    observedAtMs:SEQ_AT+(phase==='ENTRY'?1_000:4_000),
+    currency:qcur,bid:phase==='ENTRY'?99:108,ask:phase==='ENTRY'?100:109,
+    fxKrwPerUnit:fx,fxSourceId:phase==='ENTRY'?'entry-fx-proof':'exit-fx-proof',
+    fxObservedAtMs:SEQ_AT+(phase==='ENTRY'?800:3_800),
+    feeKrw:5,taxKrw:0,slippageKrw:10,signedFundingKrw:0,
+    fundingCoverageVerified:true,
+    ...extra,
+  };
+}
+function seqEvent(
+  s:ManualPaperSequentialSession,
+  kind:ManualPaperSequentialEvent['kind'],
+  sequence:number,
+  observedAtMs:number,
+  addition:Partial<ManualPaperSequentialEvent>={},
+):ManualPaperSequentialEvent {
+  const unsig:Omit<ManualPaperSequentialEvent,'eventId'>={
+    schemaVersion:MANUAL_PAPER_SEQUENTIAL_LEDGER_VERSION,
+    orderId:manualPaperSequentialOrderId(s),requestKey:'rq-seq-'+sequence,
+    sequence,ownerId:s.ownerId,walletId:s.walletId,role:s.role,
+    market:s.market,kind,observedAtMs,source:'SERVER_ISSUED_PAPER_EVENT',
+    executionAuthority:'NONE',actualBrokerFill:false,walletMutation:false,
+    actualPaperLedgerWritten:false,
+    ...Object.fromEntries(Object.entries(addition).filter(([key])=>key!=='eventId')),
+  } as Omit<ManualPaperSequentialEvent,'eventId'>;
+  return {
+    ...unsig,eventId:manualPaperSequentialEventId(unsig),
+  };
+}
+function sequenceFor(
+  market:AdminPaperMarket='crypto_spot',
+  side:ManualPaperSequentialSession['side']=market==='crypto_futures'?'LONG':'BUY',
+){
+  const s=seqSession(market,side);
+  const eq=seqQuote(s,'ENTRY'),xq=seqQuote(s,'EXIT');
+  const entryPrice=side==='SHORT'?eq.bid:eq.ask;
+  const qty=s.requestedNotionalKrw/(entryPrice*eq.fxKrwPerUnit);
+  const events:ManualPaperSequentialEvent[]=[
+    seqEvent(s,'OPEN_ORDER',1,SEQ_AT,{session:s}),
+    seqEvent(s,'ENTRY_MATCH',2,SEQ_AT+1_200,{
+      quantity:qty*0.6,quote:eq,
+    }),
+    seqEvent(s,'ENTRY_MATCH',3,SEQ_AT+1_600,{
+      quantity:qty*0.4,quote:eq,
+    }),
+    seqEvent(s,'REQUEST_EXIT',4,SEQ_AT+3_000,{quantity:qty}),
+    seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+      quantity:qty*0.4,quote:xq,
+    }),
+    seqEvent(s,'EXIT_MATCH',6,SEQ_AT+4_600,{
+      quantity:qty*0.6,quote:xq,
+    }),
+  ];
+  return {s,events,qty,entry:eq,exit:xq};
+}
+const seqProject=(e:readonly ManualPaperSequentialEvent[])=>
+  projectManualPaperSequentialEvents(e,SEQ_AT+12_000);
+
+test('4-market prospective Paper orders unfold chronologically without knowing a future exit quote at OPEN',()=>{
+  for(const market of ['domestic_stock','us_stock','crypto_spot','crypto_futures'] as const){
+    const {events}=sequenceFor(market);
+    const opened=seqProject(events.slice(0,1));
+    assert.equal(opened.status,'ENTRY_PENDING',market);
+    assert.equal(opened.journalProjection,null);
+    assert.equal(opened.hypotheticalNetPnlKrw,null);
+    const partial=seqProject(events.slice(0,2));
+    assert.equal(partial.status,'ENTRY_PARTIAL',market);
+    assert.ok(partial.entryQuantity>0);
+    assert.equal(partial.hypotheticalLockedReserveKrw,null);
+    const open=seqProject(events.slice(0,3));
+    assert.equal(open.status,'OPEN',market);
+    const pending=seqProject(events.slice(0,4));
+    assert.equal(pending.status,'EXIT_PENDING',market);
+    const reducing=seqProject(events.slice(0,5));
+    assert.equal(reducing.status,'PARTIALLY_CLOSED',market);
+    assert.equal(reducing.hypotheticalNetPnlKrw,null);
+    const closed=seqProject(events);
+    assert.equal(closed.status,'CLOSED_PROJECTION',JSON.stringify(closed.blockers));
+    assert.equal(closed.entryQuantity,closed.exitQuantity);
+    assert.equal(closed.openQuantity,0);
+    assert.ok(closed.hypotheticalNetPnlKrw!>0);
+    assert.equal(closed.executionAuthority,'NONE');
+    assert.equal(closed.actualPaperLedgerWritten,false);
+    assert.equal(closed.actualBrokerFill,false);
+    assert.equal(closed.realOrderSubmitted,false);
+    assert.equal(closed.profitabilityProven,false);
+    assert.equal(closed.journalProjection?.actualBrokerFill,false);
+    assert.equal(closed.journalProjection?.simulatedMatchIds instanceof Array,true);
+    assert.equal(closed.journalProjection?.market,market);
+    assert.equal(closed.hypotheticalOperatingCapitalKrw!+
+      closed.hypotheticalLockedReserveKrw!,
+      Math.round((1_000_000+closed.hypotheticalNetPnlKrw!)*100)/100);
+  }
+});
+test('sequential entry remainder cancellation and repeated reduce-only exit orders preserve flatness',()=>{
+  const {s,events,qty,exit:exitQuote}=sequenceFor('crypto_spot');
+  const extra:ManualPaperSequentialEvent[]=[
+    events[0],events[1],
+    seqEvent(s,'CANCEL_ENTRY',3,SEQ_AT+2_000),
+    seqEvent(s,'REQUEST_EXIT',4,SEQ_AT+3_000,{quantity:qty*0.6}),
+    seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{quantity:qty*0.25,quote:exitQuote}),
+    seqEvent(s,'CANCEL_EXIT',6,SEQ_AT+4_300),
+    seqEvent(s,'REQUEST_EXIT',7,SEQ_AT+4_400,{quantity:qty*0.35}),
+    seqEvent(s,'EXIT_MATCH',8,SEQ_AT+4_600,{quantity:qty*0.35,quote:exitQuote}),
+  ];
+  const projected=seqProject(extra);
+  assert.equal(projected.status,'CLOSED_PROJECTION',JSON.stringify(projected.blockers));
+  assert.equal(projected.entryRemainderCancelled,true);
+  assert.ok(projected.entryQuantity<qty);
+  assert.equal(projected.openQuantity,0);
+  assert.ok(projected.hypotheticalNetPnlKrw!>0);
+  const withoutCancel=seqProject([
+    events[0],events[1],
+    seqEvent(s,'REQUEST_EXIT',3,SEQ_AT+3_000,{quantity:qty*0.6}),
+    seqEvent(s,'EXIT_MATCH',4,SEQ_AT+4_600,{quantity:qty*0.6,quote:exitQuote}),
+  ]);
+  assert.equal(withoutCancel.status,'PARTIALLY_CLOSED');
+  assert.equal(withoutCancel.hypotheticalNetPnlKrw,null);
+});
+test('sequential Paper LONG/SHORT PnL avoids USDT notional FX phantom gain',()=>{
+  const {s,events}=sequenceFor('crypto_futures','LONG');
+  const staticFx=events.map(e=>e.kind==='EXIT_MATCH'?seqEvent(s,e.kind,e.sequence,
+    e.observedAtMs,{quantity:e.quantity,quote:seqQuote(s,'EXIT',{
+      bid:100,ask:101,fxKrwPerUnit:1500,fxSourceId:'changed-fx',
+    })}):e);
+  const flat=seqProject(staticFx);
+  assert.equal(flat.status,'CLOSED_PROJECTION',JSON.stringify(flat.blockers));
+  assert.equal(flat.hypotheticalGrossPnlKrw,0);
+});
+test('sequential short reduces through BUY and never extends exposure',()=>{
+  const a=sequenceFor('crypto_futures','SHORT');
+  const result=seqProject(a.events);
+  assert.equal(result.status,'CLOSED_PROJECTION',JSON.stringify(result.blockers));
+  assert.ok(result.hypotheticalNetPnlKrw!<0);
+  assert.equal(result.hypotheticalLockedReserveKrw,0);
+  const nonFutures=sequenceFor('domestic_stock');
+  const invalid=seqSession('domestic_stock','SHORT');
+  const bad=seqEvent(invalid,'OPEN_ORDER',1,SEQ_AT,{session:invalid});
+  assert.equal(seqProject([bad]).status,'BLOCKED');
+  assert.equal(nonFutures.events[0].role,'member');
+});
+test('sequential owner, event sequence, request key and duplicate identity are fail-closed',()=>{
+  const {events,s}=sequenceFor();
+  const forged=[
+    [events[0],{...events[1],ownerId:'other'}],
+    [events[0],events[1],events[1]],
+    [events[0],{...events[2]}],
+    [events[0],{...events[1],sequence:6}],
+    [events[0],{...events[1],requestKey:events[0].requestKey}],
+  ];
+  for(const set of forged) {
+    assert.equal(seqProject(set).status,'BLOCKED');
+    assert.equal(seqProject(set).hypotheticalNetPnlKrw,null);
+  }
+  const replayed=seqProject([...events,events[5]]);
+  assert.equal(replayed.status,'BLOCKED');
+  const empty=seqProject([]);
+  assert.equal(empty.status,'EMPTY');
+  const future=seqEvent(s,'OPEN_ORDER',1,SEQ_AT+20_000,{session:s});
+  assert.equal(seqProject([future]).status,'BLOCKED');
+});
+test('sequential Paper underfunded entry and over-close cannot credit reserve',()=>{
+  const {events,s,qty}=sequenceFor();
+  const inflated=seqEvent(s,'ENTRY_MATCH',2,SEQ_AT+1_200,{
+    quote:seqQuote(s,'ENTRY'),quantity:qty*5,
+  });
+  assert.equal(seqProject([events[0],inflated]).status,'BLOCKED');
+  const excess=seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+    quantity:qty*2,quote:seqQuote(s,'EXIT'),
+  });
+  assert.equal(seqProject([...events.slice(0,4),excess]).status,'BLOCKED');
+  const unknownCost=seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+    quantity:qty*0.4,quote:seqQuote(s,'EXIT',{taxKrw:Number.NaN}),
+  });
+  assert.equal(seqProject([...events.slice(0,4),unknownCost]).status,'BLOCKED');
+  const falseFx=seqEvent(s,'ENTRY_MATCH',2,SEQ_AT+1_200,{
+    quote:seqQuote(s,'ENTRY',{fxKrwPerUnit:0}),quantity:qty,
+  });
+  assert.equal(seqProject([events[0],falseFx]).status,'BLOCKED');
+});
+test('futures funding receipt is mandatory and entry funding cannot fake free margin',()=>{
+  const {s,events,qty}=sequenceFor('crypto_futures');
+  const missing=seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+    quantity:qty*0.4,
+    quote:seqQuote(s,'EXIT',{fundingCoverageVerified:false}),
+  });
+  assert.equal(seqProject([...events.slice(0,4),missing]).status,'BLOCKED');
+  const injected=seqEvent(s,'ENTRY_MATCH',2,SEQ_AT+1_200,{
+    quantity:qty,quote:seqQuote(s,'ENTRY',{signedFundingKrw:-50_000}),
+  });
+  assert.equal(seqProject([events[0],injected]).status,'BLOCKED');
+});
+test('sequential Paper event hash and JSONB-normalized duplicate readback agree by content',()=>{
+  const {events}=sequenceFor('us_stock');
+  const row=manualPaperSequentialRow(events[1]);
+  assert.match(row.event_sha256,/^[a-f0-9]{64}$/);
+  assert.ok(sameManualPaperSequentialRow(row,structuredClone(row) as unknown as Record<string,unknown>));
+  // PostgreSQL JSONB reorders object properties. Hashing insertion order
+  // would corrupt all legitimate duplicate acknowledgements.
+  const sortKeys=(v:any):any=>Array.isArray(v)?v.map(sortKeys)
+    :v!==null&&typeof v==='object'
+      ?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sortKeys(v[k])]))
+      :v;
+  const fromJsonb=sortKeys(structuredClone(row));
+  assert.equal(sameManualPaperSequentialRow(row,fromJsonb),true);
+  assert.equal(sameManualPaperSequentialRow(row,{
+    ...fromJsonb,event_sha256:'0'.repeat(64),
+  }),false);
+  assert.equal(sameManualPaperSequentialRow(row,{
+    ...fromJsonb,event:{...fromJsonb.event,quantity:99999},
+  }),false);
 });

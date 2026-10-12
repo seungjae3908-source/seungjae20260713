@@ -292,4 +292,161 @@ begin
 end
 $verify_receipt$;
 
+
+-- Sequential, owner-scoped four-market MANUAL PAPER order simulation events.
+-- Distinct from research receipts, canonical/live trade orders, wallets and
+-- financial settlement journals. One immutable event per monotonic sequence:
+-- concurrent clients cannot write two different transitions at the same index.
+-- No browser INSERT or UPDATE, including on owner-authenticated sessions.
+create table public.paper_manual_four_market_order_events (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  wallet_id text not null,
+  order_id text not null,
+  event_id text not null,
+  request_key text not null,
+  sequence_number integer not null,
+  market text not null,
+  owner_role text not null,
+  event_sha256 text not null,
+  event jsonb not null,
+  created_at timestamptz not null default now(),
+  constraint paper_manual_order_event_pkey
+    primary key (user_id,order_id,sequence_number),
+  constraint paper_manual_order_event_unique_id
+    unique (user_id,order_id,event_id),
+  constraint paper_manual_order_event_unique_request
+    unique (user_id,order_id,request_key),
+  constraint paper_manual_order_event_wallet_fk
+    foreign key (user_id,wallet_id) references public.paper_accounts(user_id,id),
+  constraint paper_manual_order_event_identity check (
+    order_id ~ '^manual-paper-seq-order-v1:[a-f0-9]{64}
+    and event_id ~ '^manual-paper-seq-event-v1:[a-f0-9]{64}
+    and request_key ~ '^[A-Za-z0-9:._-]{1,150}
+    and event_sha256 ~ '^[a-f0-9]{64}
+    and sequence_number between 1 and 1000
+    and market in ('domestic_stock','us_stock','crypto_spot','crypto_futures')
+    and owner_role in ('admin','member')
+    and wallet_id=('manual-paper-'||owner_role||'-v1:'||market)
+  ),
+  constraint paper_manual_order_event_server_only_claims check (
+    jsonb_typeof(event)='object'
+    and event->>'schemaVersion'='manual-paper-sequential-events-v1'
+    and event->>'ownerId'=user_id::text
+    and event->>'walletId'=wallet_id
+    and event->>'orderId'=order_id
+    and event->>'eventId'=event_id
+    and event->>'requestKey'=request_key
+    and (event->>'sequence')::integer=sequence_number
+    and event->>'market'=market
+    and event->>'role'=owner_role
+    and event->>'source'='SERVER_ISSUED_PAPER_EVENT'
+    and event->>'executionAuthority'='NONE'
+    and event->>'actualBrokerFill'='false'
+    and event->>'walletMutation'='false'
+    and event->>'actualPaperLedgerWritten'='false'
+    and (
+      (sequence_number=1 and event->>'kind'='OPEN_ORDER')
+      or (sequence_number>1 and event->>'kind' in (
+        'ENTRY_MATCH','CANCEL_ENTRY','REQUEST_EXIT','EXIT_MATCH','CANCEL_EXIT'
+      ))
+    )
+  )
+);
+create index paper_manual_order_event_owner_index
+  on public.paper_manual_four_market_order_events
+  (user_id,created_at desc,order_id);
+
+alter table public.paper_manual_four_market_order_events
+  enable row level security;
+alter table public.paper_manual_four_market_order_events
+  force row level security;
+revoke all on public.paper_manual_four_market_order_events
+  from public,anon,authenticated,service_role;
+grant select on public.paper_manual_four_market_order_events
+  to authenticated,service_role;
+grant insert on public.paper_manual_four_market_order_events
+  to service_role;
+create policy "paper_manual_order_events_owner_select_v1"
+  on public.paper_manual_four_market_order_events
+  for select to authenticated
+  using ((select auth.uid())=user_id);
+
+-- Even a service-role accident must not revise or discard the audit trail.
+create function public.paper_manual_order_event_immutable_v1()
+returns trigger language plpgsql security invoker
+set search_path=public,pg_temp as $manual_order_immutable$
+begin
+  raise exception 'MANUAL_PAPER_ORDER_EVENT_IMMUTABLE'
+    using errcode='23514';
+end
+$manual_order_immutable$;
+create trigger paper_manual_order_event_no_change
+before update or delete on public.paper_manual_four_market_order_events
+for each row execute function public.paper_manual_order_event_immutable_v1();
+revoke update,delete,truncate,references,trigger
+  on public.paper_manual_four_market_order_events
+  from public,anon,authenticated,service_role;
+
+create function public.manual_four_market_paper_sequential_guard_ready()
+returns boolean language sql stable security invoker
+set search_path=public,pg_temp as $manual_seq_ready$
+  select public.manual_four_market_paper_wallet_rls_guard_ready() is true
+    and exists (
+      select 1 from pg_catalog.pg_class
+      where oid='public.paper_manual_four_market_order_events'::regclass
+        and relrowsecurity and relforcerowsecurity
+    )
+    and exists (
+      select 1 from pg_catalog.pg_policies
+      where schemaname='public'
+        and tablename='paper_manual_four_market_order_events'
+        and policyname='paper_manual_order_events_owner_select_v1'
+        and cmd='SELECT' and 'authenticated'::name=any(roles)
+        and qual like '%auth.uid()%'
+        and qual like '%user_id%'
+    )
+    and exists (
+      select 1 from pg_catalog.pg_trigger
+      where tgrelid='public.paper_manual_four_market_order_events'::regclass
+        and tgname='paper_manual_order_event_no_change' and tgenabled='O'
+    )
+    and (select count(*) from pg_catalog.pg_constraint
+      where conrelid='public.paper_manual_four_market_order_events'::regclass
+        and conname in (
+          'paper_manual_order_event_pkey',
+          'paper_manual_order_event_unique_id',
+          'paper_manual_order_event_unique_request',
+          'paper_manual_order_event_wallet_fk',
+          'paper_manual_order_event_identity',
+          'paper_manual_order_event_server_only_claims'
+        )
+    )=6
+    and not exists (
+      select 1 from information_schema.role_table_grants
+      where table_schema='public'
+        and table_name='paper_manual_four_market_order_events'
+        and grantee in ('PUBLIC','anon','authenticated','service_role')
+        and privilege_type in ('UPDATE','DELETE','TRUNCATE')
+    )
+    and not exists (
+      select 1 from information_schema.role_table_grants
+      where table_schema='public'
+        and table_name='paper_manual_four_market_order_events'
+        and grantee in ('PUBLIC','anon','authenticated')
+        and privilege_type='INSERT'
+    )
+$manual_seq_ready$;
+revoke all on function public.manual_four_market_paper_sequential_guard_ready()
+  from public,anon,authenticated;
+grant execute on function public.manual_four_market_paper_sequential_guard_ready()
+  to authenticated,service_role;
+
+do $verify_manual_sequential$
+begin
+  if public.manual_four_market_paper_sequential_guard_ready() is not true then
+    raise exception 'MANUAL_PAPER_SEQUENTIAL_EVENT_GUARD_UNVERIFIED';
+  end if;
+end
+$verify_manual_sequential$;
+
 commit;

@@ -4,8 +4,22 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { createManualFourMarketWalletRouter } from './manual-four-market-paper-wallets';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
-import { sameManualPaperResearchReceipt, type ManualPaperFourMarketCycleInput,
-  type ManualPaperResearchReceiptRow, type ManualPaperOrderPathInput } from '../services/manual-four-market-paper-cycle.service';
+import {
+  sameManualPaperResearchReceipt,
+  manualPaperSequentialOrderId,
+  manualPaperSequentialEventId,
+  manualPaperSequentialRow,
+  sameManualPaperSequentialRow,
+  type ManualPaperFourMarketCycleInput,
+  type ManualPaperResearchReceiptRow,
+  type ManualPaperOrderPathInput,
+  type ManualPaperSequentialEvent,
+  type ManualPaperSequentialEventRow,
+  type ManualPaperSequentialSession,
+  type ManualPaperSequentialQuote,
+  type ManualPaperSequentialKind,
+  MANUAL_PAPER_SEQUENTIAL_LEDGER_VERSION,
+} from '../services/manual-four-market-paper-cycle.service';
 import { MANUAL_FOUR_MARKET_CONFIRMATION,
   buildManualFourMarketWalletSeeds } from '../services/manual-four-market-paper-wallets.service';
 const USER='11111111-1111-1111-1111-111111111111';
@@ -19,10 +33,19 @@ async function server(options:{
   orderPreviewEnabled?:boolean;
   orderPathEvidence?:ManualPaperOrderPathInput;
   receiptEnabled?:boolean; receiptRls?:boolean; receiptFail?:boolean;
+  seqEnabled?:boolean; seqRls?:boolean; seqAppendFail?:boolean;
+  seqMarketReady?:boolean;
+  seqIssuer?:(input:{
+    owner:{id:string;role:'admin'|'member'};
+    action:ManualPaperSequentialKind;orderId:string|null;
+    selection:Record<string,unknown>|null;requestKey:string;
+    existing:readonly ManualPaperSequentialEvent[];nowMs:number;
+  })=>ManualPaperSequentialEvent|null;
 }={}){
   const state={
     rows:options.existing??[] as StoredPaperJournalRecord[],writes:0,
     researchWrites:0,receipts:[] as ManualPaperResearchReceiptRow[],
+    seqWrites:0,seqRows:[] as ManualPaperSequentialEventRow[],
   };
   const app=express();app.use(express.json());
   app.use('/api',(req:any,_res,next)=>{
@@ -36,6 +59,33 @@ async function server(options:{
     bootstrapEnabled:()=>options.enabled===true,
     researchPreviewEnabled:()=>options.previewEnabled===true,
     readResearchCycleEvidence:async()=>options.previewEvidence??null,
+    sequentialWriteEnabled:()=>options.seqEnabled===true,
+    sequentialRlsReady:async()=>options.seqRls!==false,
+    sequentialMarketAdmissionReady:async()=>options.seqMarketReady===true,
+    issueSequentialEvent:async input=>options.seqIssuer?.(input)??null,
+    listSequentialRows:async(_req,owner,orderId)=>{
+      assert.equal(owner,USER);
+      return state.seqRows.filter(r=>r.user_id===owner
+        &&r.order_id===orderId).sort((a,b)=>a.sequence_number-b.sequence_number)
+        .map(r=>structuredClone(r));
+    },
+    appendSequentialRow:async(_req,row)=>{
+      if(options.seqAppendFail)throw new Error('secret DB appender failure');
+      assert.equal(row.user_id,USER);
+      assert.equal(row.event.executionAuthority,'NONE');
+      assert.equal(row.event.actualBrokerFill,false);
+      assert.equal(row.event.walletMutation,false);
+      const existing=state.seqRows.find(r=>r.order_id===row.order_id&&(
+        r.sequence_number===row.sequence_number
+        ||r.request_key===row.request_key||r.event_id===row.event_id));
+      if(existing){
+        if(!sameManualPaperSequentialRow(row,existing as unknown as Record<string,unknown>))
+          throw new Error('immutable compare-and-set simulated conflict');
+        return 'DUPLICATE' as const;
+      }
+      state.seqRows.push(structuredClone(row));state.seqWrites++;
+      return 'INSERTED' as const;
+    },
     orderPathPreviewEnabled:()=>options.orderPreviewEnabled===true,
     readOrderPathEvidence:async()=>options.orderPathEvidence??null,
     researchReceiptWriteEnabled:()=>options.receiptEnabled===true,
@@ -575,5 +625,228 @@ test('open simulated exposure returns no cash, reserve or profit credit',async()
     assert.equal(data.simulatedOrderPath.hypotheticalNewReserveKrw,null);
     assert.equal(data.simulatedOrderPath.actualPaperLedgerWritten,false);
     assert.equal(fixture.state.writes,0);
+  }finally{await fixture.close()}
+});
+
+
+// Trusted server source fixture: the HTTP caller cannot set quote, fill qty,
+// settlement costs, owner, margin, timestamp, provenance or true authority.
+const seqUrl='/api/paper-trading/manual-four-market/sequential-order';
+function verifiedSeqSource(input:{
+  owner:{id:string;role:'admin'|'member'};action:ManualPaperSequentialKind;
+  orderId:string|null;selection:Record<string,unknown>|null;
+  requestKey:string;existing:readonly ManualPaperSequentialEvent[];nowMs:number;
+}):ManualPaperSequentialEvent|null {
+  const current=NOW.getTime();
+  const selected=input.selection;
+  const oldSession=input.existing[0]?.session;
+  const s:ManualPaperSequentialSession=oldSession??{
+    ownerId:input.owner.id,role:input.owner.role,
+    market:selected?.market as ManualPaperSequentialSession['market']??'crypto_futures',
+    walletId:'manual-paper-member-v1:crypto_futures',
+    epochId:'manual-server-order-epoch-one',roundNumber:1,
+    symbol:String(selected?.symbol??'BTCUSDT'),
+    candidateId:String(selected?.candidateId??'validated-01'),
+    strategyId:String(selected?.strategyId??'user-strategy'),
+    strategyReceiptSha256:'a'.repeat(64),
+    strategyValidatedAtMs:current-90_000,signalObservedAtMs:current-5_000,
+    side:'LONG',leverage:7,requestedNotionalKrw:200_000,
+    operatingCapitalKrw:1_000_000,lockedReserveKrw:0,
+    highWaterMarkKrw:1_000_000,initialWalletReadbackVerified:true,
+    independentStrategyEvidenceVerified:true,
+  };
+  const sequence=input.existing.length+1;
+  const times={OPEN_ORDER:-4_500,ENTRY_MATCH:-3_000,
+    CANCEL_ENTRY:-2_700,REQUEST_EXIT:-2_000,
+    EXIT_MATCH:-1_000,CANCEL_EXIT:-500};
+  const kind=input.action, observedAtMs=current+times[kind];
+  const fx=1400,qty=s.requestedNotionalKrw/(100*fx);
+  const entryQuote:ManualPaperSequentialQuote={
+    provenance:'SERVER_PUBLIC_QUOTE_SIMULATION',
+    quoteSourceId:'server-public-entry-quote',observedAtMs:current-3_500,
+    currency:'USDT',bid:99,ask:100,fxKrwPerUnit:fx,
+    fxSourceId:'server-entry-fx',fxObservedAtMs:current-3_700,
+    feeKrw:10,taxKrw:0,slippageKrw:10,signedFundingKrw:0,
+    fundingCoverageVerified:true,
+  };
+  const exitQuote:ManualPaperSequentialQuote={
+    ...entryQuote,quoteSourceId:'server-public-exit-quote',
+    observedAtMs:current-1_200,bid:108,ask:109,
+    fxSourceId:'server-exit-fx',fxObservedAtMs:current-1_400,
+  };
+  const addition=kind==='OPEN_ORDER'?{session:s}
+    :kind==='ENTRY_MATCH'?{quantity:qty,quote:entryQuote}
+    :kind==='REQUEST_EXIT'?{quantity:qty}
+    :kind==='EXIT_MATCH'?{quantity:qty,quote:exitQuote}:{};
+  const withoutId={
+    schemaVersion:MANUAL_PAPER_SEQUENTIAL_LEDGER_VERSION,
+    orderId:manualPaperSequentialOrderId(s),
+    requestKey:input.requestKey,sequence,
+    ownerId:s.ownerId,walletId:s.walletId,role:s.role,market:s.market,
+    kind,observedAtMs,source:'SERVER_ISSUED_PAPER_EVENT' as const,
+    executionAuthority:'NONE' as const,actualBrokerFill:false as const,
+    walletMutation:false as const,actualPaperLedgerWritten:false as const,
+    ...addition,
+  };
+  return {...withoutId,eventId:manualPaperSequentialEventId(withoutId)};
+}
+const seqOpening={
+  action:'OPEN_ORDER',requestKey:'seq-open-1',selection:{...selection},
+};
+const seqNext=(action:ManualPaperSequentialKind,orderId:string,requestKey:string)=>({
+  action,orderId,requestKey,
+});
+test('server Paper events are OFF by default and require protected owner wallet and actual evidence provider',async()=>{
+  const cases=[
+    {seqEnabled:false,seqIssuer:verifiedSeqSource,existing:seededWallets()},
+    {seqEnabled:true,seqRls:false,seqIssuer:verifiedSeqSource,existing:seededWallets()},
+    {seqEnabled:true,seqIssuer:verifiedSeqSource,existing:[] as StoredPaperJournalRecord[]},
+    {seqEnabled:true,existing:seededWallets()},
+    {seqEnabled:true,seqIssuer:verifiedSeqSource,existing:seededWallets(),
+      seqMarketReady:false},
+  ];
+  for(const options of cases){
+    const fixture=await server(options);
+    try{
+      const response=await post(fixture.host+seqUrl+'/step',seqOpening);
+      assert.equal(response.status,409);
+      const body=await response.json();
+      assert.equal(body.orderSubmitted,false);
+      assert.equal(body.exchangeRequestSent,false);
+      assert.equal(body.executionAuthority,'NONE');
+      assert.equal(fixture.state.seqWrites,0);
+      assert.equal(fixture.state.writes,0);
+    }finally{await fixture.close()}
+  }
+});
+test('actual durable PAPER-simulation events append atomically in sequence; no real broker or financial wallet write',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqIssuer:verifiedSeqSource,existing:seededWallets(),
+    seqMarketReady:true,
+  });
+  try{
+    const opened=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(opened.status,201);
+    const start=await opened.json();
+    assert.equal(start.ok,true);
+    assert.equal(start.duplicate,false);
+    assert.equal(start.projection.status,'ENTRY_PENDING');
+    assert.equal(start.actualBrokerFill,false);
+    assert.equal(start.actualPaperLedgerWritten,false);
+    const orderId=start.orderId;
+    assert.match(orderId,/^manual-paper-seq-order-v1:[a-f0-9]{64}$/);
+    const repeatOpen=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(repeatOpen.status,200);
+    assert.equal((await repeatOpen.json()).duplicate,true);
+    assert.equal(fixture.state.seqWrites,1);
+    const entry=await post(fixture.host+seqUrl+'/step',
+      seqNext('ENTRY_MATCH',orderId,'seq-entry-1'));
+    assert.equal(entry.status,201);
+    assert.equal((await entry.json()).projection.status,'OPEN');
+    const reopenEntry=await post(fixture.host+seqUrl+'/step',
+      seqNext('ENTRY_MATCH',orderId,'seq-entry-1'));
+    assert.equal(reopenEntry.status,200);
+    assert.equal((await reopenEntry.json()).duplicate,true);
+    const requestExit=await post(fixture.host+seqUrl+'/step',
+      seqNext('REQUEST_EXIT',orderId,'seq-reduce-1'));
+    assert.equal(requestExit.status,201);
+    assert.equal((await requestExit.json()).projection.status,'EXIT_PENDING');
+    const close=await post(fixture.host+seqUrl+'/step',
+      seqNext('EXIT_MATCH',orderId,'seq-close-1'));
+    assert.equal(close.status,201);
+    const result=await close.json();
+    assert.equal(result.projection.status,'CLOSED_PROJECTION');
+    assert.ok(result.projection.hypotheticalNetPnlKrw>0);
+    assert.equal(result.projection.actualPaperLedgerWritten,false);
+    assert.equal(result.projection.actualBrokerFill,false);
+    assert.equal(result.financialMutationCount,0);
+    assert.equal(result.profitabilityProven,false);
+    assert.equal(result.exchangeRequestSent,false);
+    assert.equal(fixture.state.seqWrites,4);
+    assert.equal(fixture.state.rows.length,4);
+    assert.equal(fixture.state.writes,0);
+    assert.equal(fixture.state.researchWrites,0);
+    const read=await fetch(fixture.host+seqUrl+'/'+orderId);
+    assert.equal(read.status,200);
+    const history=await read.json();
+    assert.equal(history.readOnlyProbe,true);
+    assert.equal(history.projection.status,'CLOSED_PROJECTION');
+    assert.deepEqual(history.eventHistory.map((r:any)=>r.kind),
+      ['OPEN_ORDER','ENTRY_MATCH','REQUEST_EXIT','EXIT_MATCH']);
+    assert.equal(history.actualBrokerFill,false);
+    assert.equal(history.actualPaperLedgerWritten,false);
+    assert.equal(history.eventHistory.length,4);
+  }finally{await fixture.close()}
+});
+test('client quotes, funding, fill quantity, owner, LIVE rights and unrelated session fields are forbidden',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqIssuer:verifiedSeqSource,existing:seededWallets(),
+    seqMarketReady:true,
+  });
+  try{
+    for(const bad of [
+      {...seqOpening,userId:'other'},
+      {...seqOpening,selection:{...selection,quote:{bid:1,ask:1}}},
+      {...seqOpening,selection:{...selection,requestedNotionalKrw:NaN}},
+      {...seqOpening,quote:{bid:1,ask:1}},
+      {...seqOpening,fundingKrw:0},
+      {...seqOpening,executionAuthority:'LIVE'},
+      {...seqOpening,accountMode:'live'},
+      {...seqOpening,selection:{...selection,leverage:126}},
+    ]){
+      assert.equal((await post(fixture.host+seqUrl+'/step',bad)).status,400);
+    }
+    assert.equal((await post(fixture.host+seqUrl+'/step?userId=other',
+      seqOpening)).status,400);
+    assert.equal(fixture.state.seqWrites,0);
+    const missing=await fetch(fixture.host+seqUrl+'/'+'0'.repeat(64));
+    assert.equal(missing.status,400);
+  }finally{await fixture.close()}
+});
+test('sequential request reuse and wrong server owner reject without append or sensitive error leakage',async()=>{
+  const fixture=await server({
+    seqEnabled:true,existing:seededWallets(),
+    seqMarketReady:true,
+    seqIssuer:(input)=>{
+      const event=verifiedSeqSource(input);
+      return event?{...event,ownerId:'different-user'}:null;
+    },
+  });
+  try{
+    const response=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(response.status,409);
+    assert.equal(fixture.state.seqWrites,0);
+  }finally{await fixture.close()}
+  const failure=await server({
+    seqEnabled:true,seqIssuer:verifiedSeqSource,
+    existing:seededWallets(),seqAppendFail:true,seqMarketReady:true,
+  });
+  try{
+    const r=await post(failure.host+seqUrl+'/step',seqOpening);
+    assert.equal(r.status,409);
+    const body=await r.text();
+    assert.doesNotMatch(body,/secret DB|service_role|api[_-]?key/i);
+    assert.equal(failure.state.seqWrites,0);
+  }finally{await failure.close()}
+});
+test('sequential Paper cannot append any event after a fully simulated close',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqIssuer:verifiedSeqSource,existing:seededWallets(),
+    seqMarketReady:true,
+  });
+  try{
+    const first=await (await post(fixture.host+seqUrl+'/step',seqOpening)).json();
+    const id=first.orderId;
+    for(const [action,key] of [
+      ['ENTRY_MATCH','seq-entry-a'],
+      ['REQUEST_EXIT','seq-request-a'],
+      ['EXIT_MATCH','seq-exit-a'],
+    ] as const)assert.equal((await post(fixture.host+seqUrl+'/step',
+      seqNext(action,id,key))).status,201);
+    const replay=await post(fixture.host+seqUrl+'/step',
+      seqNext('ENTRY_MATCH',id,'reopen-exposure-forbidden'));
+    assert.equal(replay.status,409);
+    assert.equal((await replay.json()).code,'MANUAL_PAPER_SEQ_PROJECTION_BLOCKED');
+    assert.equal(fixture.state.seqWrites,4);
   }finally{await fixture.close()}
 });
