@@ -21,6 +21,7 @@ const entries = [
   'trade-order-recovery.test.ts',
   'trade-execution-pre-submission.test.ts',
   'automatic-live-budget.service.test.ts',
+  'public-live-plan-origin.service.test.ts',
   'trading-provider-response.service.test.ts',
   'bitget-native-protection-readonly.service.test.ts',
   'member-auto-trading-ai-review-evidence.service.test.ts',
