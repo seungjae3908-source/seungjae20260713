@@ -3,6 +3,7 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve, dirname } from 'node:path';
 
 import { buildResearchAiEvidence, RESEARCH_AI_WORKER_SAFETY } from './research-ai-review-worker.mjs';
+import { digestAiFormulaTrainValueV1 } from './ai-formula-train-producer-v1.mjs';
 import { prepareAiFormulaTrainProposalsV1 } from './ai-formula-train-producer-v1.mjs';
 
 export const AI_FORMULA_READBACK_CONTRACT_V1 = 'research-ai-formula-evidence-readback/v1';
@@ -207,6 +208,8 @@ export async function inspectAiFormulaResearchEvidenceV1({
       disposition: artifact.review.disposition,
       hypothesisCount: artifact.review.hypotheses.length,
       evidenceDigest: expected,
+      reviewContentDigest: digestAiFormulaTrainValueV1(artifact.review),
+      aiArtifactDigest: digestAiFormulaTrainValueV1(artifact),
       sourceCycleId: artifact.sourceCycleId,
     });
   }
