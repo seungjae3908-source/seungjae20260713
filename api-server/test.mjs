@@ -127,6 +127,7 @@ const groups = {
     path.join(root, 'src/services/trade-rule-pack-pilot-capital.service.test.ts'),
     path.join(root, 'src/services/automatic-live-budget.service.test.ts'),
     path.join(root, 'src/services/public-live-plan-origin.service.test.ts'),
+    path.join(root, 'src/services/automatic-live-preactivation-audit.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-paper-position-bridge.service.test.ts'),
     path.join(root, 'src/services/trade-market-intelligence-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),

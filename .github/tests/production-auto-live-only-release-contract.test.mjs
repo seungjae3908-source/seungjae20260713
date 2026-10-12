@@ -17,6 +17,7 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const evidenceVerifier = read('.github/scripts/verify-production-preactivation-evidence.cjs');
   const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
+  const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
@@ -39,7 +40,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
   assert.ok(production.includes('tail -n 1 "$state_root/logs/cron.log"'));
   assert.ok(production.includes('value?.naturalRuntimeSha !== process.env.TARGET_SHA'));
-  assert.ok(production.includes('handoffEvaluatedAfterScheduleActivation'));
+  assert.ok(production.includes("require('./.github/scripts/production-postdeploy-qa-evidence.cjs').assertAutoLiveSignalReceipt(value"));
+  assert.ok(production.includes('targetSha: process.env.TARGET_SHA, productionDeployRunId: Number(process.env.GITHUB_RUN_ID)'));
+  assert.ok(evidenceBuilder.includes('signal?.handoffEvaluatedAfterScheduleActivation !== true'));
+  assert.ok(signalAudit.includes('signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha)'));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_HANDOFF_SHA_MISMATCH'));
+  assert.ok(signalAudit.includes("from './production-auto-live-signal-identity.cjs'"));
+  assert.ok(!signalAudit.includes("from '../.github/"), 'runtime signal audit cannot import the excluded .github directory');
   assert.ok(production.includes('Prepare administrator four-market Automatic LIVE policy without execution authority'));
   assert.ok(production.includes('AUTO_LIVE_POLICY_PREPARATION_REQUIRED'));
   assert.ok(production.includes('AUTO_LIVE_POLICY_PREPARATION_SCOPE_INVALID'));

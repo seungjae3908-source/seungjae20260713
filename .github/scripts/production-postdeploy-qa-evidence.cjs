@@ -1,4 +1,5 @@
 const { assertMemberAccountSignalAudit } = require('./automatic-live-preactivation-audit.cjs');
+const { assertSignalEntryIdentityReceipt } = require('../../ops/production-auto-live-signal-identity.cjs');
 const REQUIRED_PROVIDERS = Object.freeze(['bitget', 'kiwoom', 'toss', 'upbit']);
 const REQUIRED_CREDENTIAL_REUSE_PATHS = Object.freeze(REQUIRED_PROVIDERS.map(
   (provider) => `/api/trade-automation/connections/${provider}/reuse-readonly`,
@@ -330,7 +331,7 @@ function assertAutoLiveReceipt(autoLive, { targetSha, productionDeployRunId }) {
 
 function assertAutoLiveSignalReceipt(signal, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
-  if (signal?.schemaVersion !== 'production-auto-live-signal-source-v1'
+  if (signal?.schemaVersion !== 'production-auto-live-signal-source-v2'
     || signal?.productionDeployRunId !== deployRunId
     || signal?.canonicalValidation !== true
     || signal?.handoffStatus !== 'READY'
@@ -355,6 +356,7 @@ function assertAutoLiveSignalReceipt(signal, { targetSha, productionDeployRunId 
     throw new Error('POSTDEPLOY_QA_AUTO_LIVE_SIGNAL_INVALID');
   }
   requireExactSha(signal.targetSha, sha, 'POSTDEPLOY_QA_AUTO_LIVE_SIGNAL_SHA_MISMATCH');
+  assertSignalEntryIdentityReceipt(signal, sha);
   requireZeroAuthority(signal, 'POSTDEPLOY_QA_AUTO_LIVE_SIGNAL');
   assertNoForbiddenEvidenceKeys(signal);
 }
@@ -516,7 +518,8 @@ function buildProductionPostdeployQaEvidence({
     comprehensiveQa: qaScope === 'full' ? 'PASS' : 'NOT_RUN',
     tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
     autoLiveQa: qaScope === 'auto_live' ? 'PASS' : 'NOT_RUN',
-    canonicalAutoLiveSignalSource: qaScope === 'auto_live' ? 'PASS' : 'NOT_EVALUATED',
+    autoLiveSignalTransport: qaScope === 'auto_live' ? 'PASS' : 'NOT_RUN',
+    canonicalAutoLiveSignalSource: qaScope === 'auto_live' ? 'NOT_PROVEN' : 'NOT_EVALUATED',
     automaticPositionIsolation: qaScope === 'auto_live' ? 'PASS' : 'NOT_EVALUATED',
     telegramActivationState: qaScope === 'trading_core'
       ? tradingCore.telegramActivationState
@@ -575,7 +578,8 @@ function buildProductionPostdeployQaEvidence({
     qaComplete: true,
     automaticLiveActivationReady: false,
     unprovenAutomaticLiveControls: qaScope === 'auto_live'
-      ? [...autoLive.memberAccountSignalAudit.additionalRequiredControls]
+      ? [...autoLive.memberAccountSignalAudit.additionalRequiredControls,
+        'SCANNER_PRODUCER_CONNECTED', 'AI_PRODUCER_CONNECTED', 'STRATEGY_EXECUTION_LINKAGE']
       : ['AUTOMATIC_LIVE_COMPLETE_CONTROL_AUDIT_REQUIRED'],
     activationReady: qaScope !== 'auto_live',
   };

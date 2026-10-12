@@ -6,6 +6,7 @@ const {
   isActiveProductionTradingGateRun,
   revalidateProductionTradingGateConflicts,
   assertAutomaticPositionIsolationReceipt,
+  assertAutoLiveSignalReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
@@ -19,6 +20,24 @@ const ZERO = {
   autoTradingAuthorityGranted: false,
 };
 const providers = ['bitget', 'kiwoom', 'toss', 'upbit'];
+test('signal transport receipts reject legacy unbound schema and never accept fabricated producer invocation', () => {
+  const receipt = { schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
+    productionDeployRunId: 42, canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true, maximumAgeMinutes: 30, entryCount: 0,
+    observedMarkets: [], entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true,
+    producerInvocationVerified: false, scheduleActive: true, scheduleEntryCount: 1,
+    disableSentinelPresent: false, publicDataOnly: true, privateRequestCount: 0,
+    financialMutationCount: 0, executionAuthority: 'NONE', realOrderSubmitted: false,
+    secretValuesRecorded: false, accountValuesRecorded: false, ...ZERO };
+  const context = { targetSha: SHA, productionDeployRunId: 42 };
+  assert.doesNotThrow(() => assertAutoLiveSignalReceipt(receipt, context));
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    schemaVersion: 'production-auto-live-signal-source-v1' }, context), /SIGNAL_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    producerInvocationVerified: true }, context), /SIGNAL_IDENTITY_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt, entryCount: 1, entryShaMatch: true,
+    entryResearchCodeShas: ['a'.repeat(40)], observedMarkets: ['KR_STOCK'] }, context), /SIGNAL_IDENTITY_INVALID/);
+});
 const { REQUIRED_CHECKS, ADDITIONAL_CONTROLS } = require('./automatic-live-preactivation-audit.cjs');
 // Synthetic unit evidence only; this fixture must never be emitted as a runtime receipt.
 function memberAccountSignalFixture() {
@@ -365,7 +384,7 @@ test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant o
     ...ZERO,
   };
   input.autoLiveSignal = {
-    schemaVersion: 'production-auto-live-signal-source-v1',
+    schemaVersion: 'production-auto-live-signal-source-v2',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:30.000Z',
@@ -376,6 +395,7 @@ test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant o
     maximumAgeMinutes: 30,
     entryCount: 0,
     observedMarkets: [],
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
     scheduleActive: true,
     scheduleEntryCount: 1,
     disableSentinelPresent: false,
@@ -392,14 +412,17 @@ test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant o
   assert.equal(evidence.qaComplete, true);
   assert.equal(evidence.activationReady, false);
   assert.equal(evidence.automaticLiveActivationReady, false);
-  assert.deepEqual(evidence.unprovenAutomaticLiveControls, input.autoLive.memberAccountSignalAudit.additionalRequiredControls);
+  assert.deepEqual(evidence.unprovenAutomaticLiveControls, [
+    ...input.autoLive.memberAccountSignalAudit.additionalRequiredControls,
+    'SCANNER_PRODUCER_CONNECTED', 'AI_PRODUCER_CONNECTED', 'STRATEGY_EXECUTION_LINKAGE']);
   assert.equal(evidence.qaScope, 'auto_live');
   assert.equal(evidence.autoLiveQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
   assert.equal(evidence.memberAutoPolicyReady, true);
   assert.equal(evidence.memberAutoLivePilotReady, true);
-  assert.equal(evidence.canonicalAutoLiveSignalSource, 'PASS');
+  assert.equal(evidence.autoLiveSignalTransport, 'PASS');
+  assert.equal(evidence.canonicalAutoLiveSignalSource, 'NOT_PROVEN');
   assert.equal(evidence.telegramActivationState, 'NOT_EVALUATED');
   const missing = structuredClone(input);
   delete missing.autoLive.memberAccountSignalAudit;
@@ -435,11 +458,12 @@ test('rejects Automatic LIVE evidence when the canonical signal schedule is not 
     accountValuesRecorded: false, ...ZERO,
   };
   input.autoLiveSignal = {
-    schemaVersion: 'production-auto-live-signal-source-v1', targetSha: SHA,
+    schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
     productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:30.000Z',
     canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
     handoffEvaluatedAfterScheduleActivation: true,
     maximumAgeMinutes: 30, entryCount: 0, observedMarkets: [], scheduleActive: false,
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
     scheduleEntryCount: 0, disableSentinelPresent: false, publicDataOnly: true,
     privateRequestCount: 0, financialMutationCount: 0, executionAuthority: 'NONE',
     secretValuesRecorded: false, accountValuesRecorded: false, realOrderSubmitted: false, ...ZERO,
