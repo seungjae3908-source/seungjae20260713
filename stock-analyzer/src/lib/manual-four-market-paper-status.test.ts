@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
   manualPaperBootstrapAuthorized,parseManualFourMarketResearchHistory,
-  parseManualSequentialOrderReadback,
+  parseManualSequentialOrderReadback,parseManualSequentialOrderList,
 } from './manual-four-market-paper-status';
 const fixture=()=>({
   ok:true,mode:'MANUAL_PAPER_FOUR_MARKET_SEED_ONLY',
@@ -234,4 +234,68 @@ test('manual sequential readback rejects false CLOSE without actual sequence-lev
       ...good,eventHistory:events,
     },orderId),/MANUAL_SEQ_ORDER_EVENT_TRANSITION_INVALID/);
   }
+});
+
+
+const manualSeqOrderListFixture=()=>({
+  ok:true,mode:'PAPER_SEQUENTIAL_SIMULATION_ORDER_LIST',ownerScope:'SELF',
+  readOnlyProbe:true,executionAuthority:'NONE',
+  realOrders:0,orderSubmitted:false,exchangeRequestSent:false,
+  privateProviderRequests:0,actualBrokerFill:false,
+  actualPaperLedgerWritten:false,actualWalletMutation:false,
+  financialMutationCount:0,profitabilityProven:false,
+  hasMoreThan25:false,orders:[{
+    orderId:'manual-paper-seq-order-v1:'+'b'.repeat(64),
+    market:'crypto_futures',symbol:'BTCUSDT',side:'LONG',leverage:7,
+    createdAtMs:1791800000000,
+    currentOrderStatus:'SELECT_ORDER_TO_VERIFY',
+    actualBrokerFill:false,actualPaperLedgerWritten:false,
+  }],
+});
+test('manual sequential order discovery returns only list identities, never a filled position or realized PnL',()=>{
+  const r=parseManualSequentialOrderList(manualSeqOrderListFixture());
+  assert.equal(r.ownerScope,'SELF');
+  assert.equal(r.orders.length,1);
+  assert.equal(r.orders[0].market,'crypto_futures');
+  assert.equal(r.orders[0].currentOrderStatus,'SELECT_ORDER_TO_VERIFY');
+  assert.equal(r.orders[0].actualBrokerFill,false);
+  assert.equal(r.orders[0].actualPaperLedgerWritten,false);
+  assert.equal(parseManualSequentialOrderList({
+    ...manualSeqOrderListFixture(),orders:[],
+  }).orders.length,0);
+});
+test('order list rejects unknown authority, injected financial amount and duplicate order IDs',()=>{
+  const base=manualSeqOrderListFixture();
+  for(const patch of [
+    {ownerScope:'OTHER'},{executionAuthority:'LIVE'},{realOrders:1},
+    {actualBrokerFill:true},{actualPaperLedgerWritten:true},
+    {profitabilityProven:true},{financialMutationCount:1},
+  ])assert.throws(()=>parseManualSequentialOrderList({...base,...patch}));
+  for(const corrupt of [
+    {orderId:'not-an-order'},
+    {market:'missing'},
+    {symbol:'../../secrets'},
+    {side:'SHORT',market:'us_stock',leverage:1},
+    {side:'BUY',market:'crypto_futures',leverage:1},
+    {leverage:12500},
+    {createdAtMs:Infinity},
+    {currentOrderStatus:'CLOSED_PROJECTION'},
+    {actualBrokerFill:true},
+    {actualPaperLedgerWritten:true},
+    {actualNetProfitKrw:12345},
+  ])assert.throws(()=>parseManualSequentialOrderList({
+    ...base,orders:[{...base.orders[0],...corrupt}],
+  }));
+  assert.throws(()=>parseManualSequentialOrderList({
+    ...base,orders:[base.orders[0],base.orders[0]],
+  }));
+  assert.throws(()=>parseManualSequentialOrderList({
+    ...base,orders:Array.from({length:26},()=>base.orders[0]),
+  }));
+});
+test('server-unavailable owner order list must not become false zero-history success',()=>{
+  for(const value of [null,{},{
+    ok:false,mode:'PAPER_SEQUENTIAL_SIMULATION_ORDER_LIST',
+    ownerScope:'SELF',orders:[],
+  }])assert.throws(()=>parseManualSequentialOrderList(value));
 });

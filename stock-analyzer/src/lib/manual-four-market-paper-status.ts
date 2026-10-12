@@ -272,3 +272,66 @@ export function parseManualSequentialOrderReadback(
   }
   return raw as unknown as ManualSequentialOrderReadback;
 }
+
+
+/** Owner-scoped list of opening event identities, not proof of current status.
+ * Selection must be replayed by the exact-ID sequential order readback.
+ */
+export type ManualSequentialOrderList=Readonly<{
+  ownerScope:'SELF';
+  readOnlyProbe:true;
+  hasMoreThan25:boolean;
+  orders:readonly Readonly<{
+    orderId:string;
+    market:ManualMarket;
+    symbol:string;
+    side:'BUY'|'LONG'|'SHORT';
+    leverage:number;
+    createdAtMs:number;
+    currentOrderStatus:'SELECT_ORDER_TO_VERIFY';
+    actualBrokerFill:false;
+    actualPaperLedgerWritten:false;
+  }>[];
+}>;
+export function parseManualSequentialOrderList(raw:unknown):ManualSequentialOrderList{
+  if(!record(raw)||raw.ok!==true
+    ||raw.mode!=='PAPER_SEQUENTIAL_SIMULATION_ORDER_LIST'
+    ||raw.ownerScope!=='SELF'||raw.readOnlyProbe!==true
+    ||raw.executionAuthority!=='NONE'
+    ||raw.orderSubmitted!==false||raw.exchangeRequestSent!==false
+    ||raw.privateProviderRequests!==0||raw.realOrders!==0
+    ||raw.actualBrokerFill!==false||raw.actualPaperLedgerWritten!==false
+    ||raw.actualWalletMutation!==false||raw.financialMutationCount!==0
+    ||raw.profitabilityProven!==false
+    ||typeof raw.hasMoreThan25!=='boolean'
+    ||!Array.isArray(raw.orders)||raw.orders.length>25) {
+    throw new Error('MANUAL_SEQ_ORDER_LIST_UNVERIFIED');
+  }
+  const ids=new Set<string>();
+  for(const entry of raw.orders){
+    if(!record(entry)
+      ||typeof entry.orderId!=='string'||!seqOrderPattern.test(entry.orderId)
+      ||ids.has(entry.orderId)
+      ||!MANUAL_FOUR_MARKETS.some(m=>m.key===entry.market)
+      ||typeof entry.symbol!=='string'
+      ||!/^[A-Z0-9._-]{2,35}$/u.test(entry.symbol)
+      ||!Number.isInteger(entry.leverage)
+      ||(entry.market==='crypto_futures'
+        ?(entry.side!=='LONG'&&entry.side!=='SHORT')
+          ||(entry.leverage as number)<1||(entry.leverage as number)>125
+        :entry.side!=='BUY'||entry.leverage!==1)
+      ||!Number.isSafeInteger(entry.createdAtMs)
+      ||(entry.createdAtMs as number)<=0
+      ||entry.currentOrderStatus!=='SELECT_ORDER_TO_VERIFY'
+      ||entry.actualBrokerFill!==false
+      ||entry.actualPaperLedgerWritten!==false
+      ||Object.keys(entry).some(key=>![
+        'orderId','market','symbol','side','leverage','createdAtMs',
+        'currentOrderStatus','actualBrokerFill','actualPaperLedgerWritten',
+      ].includes(key))){
+      throw new Error('MANUAL_SEQ_ORDER_LIST_IDENTITY_INVALID');
+    }
+    ids.add(entry.orderId as string);
+  }
+  return raw as unknown as ManualSequentialOrderList;
+}

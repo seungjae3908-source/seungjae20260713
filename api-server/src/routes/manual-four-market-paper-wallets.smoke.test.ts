@@ -78,6 +78,11 @@ async function server(options:{
         &&r.order_id===orderId).sort((a,b)=>a.sequence_number-b.sequence_number)
         .map(r=>structuredClone(r));
     },
+    listSequentialOrderOpenRows:async(_req,owner)=>{
+      assert.equal(owner,USER);
+      return state.seqRows.filter(r=>r.user_id===owner&&r.sequence_number===1)
+        .slice(-25).reverse().map(r=>structuredClone(r));
+    },
     appendSequentialRow:async(_req,row)=>{
       if(options.seqAppendFail)throw new Error('secret DB appender failure');
       assert.equal(row.user_id,USER);
@@ -909,5 +914,77 @@ test('global request reuse for a different symbol/action or order fails closed w
     assert.equal((await changedAction.json()).code,'MANUAL_PAPER_SEQ_GLOBAL_REQUEST_CONFLICT');
     assert.equal(fixture.state.seqWrites,1);
     assert.equal(fixture.state.seqRows.length,1);
+  }finally{await fixture.close()}
+});
+
+
+test('authenticated manual Paper order list reveals only owner-verified opening identities, never filled state',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqMarketReady:true,seqIssuer:verifiedSeqSource,
+    existing:seededWallets(),
+  });
+  try{
+    const opening=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(opening.status,201);
+    const recorded=await opening.json();
+    const list=await fetch(fixture.host+seqUrl+'s');
+    assert.equal(list.status,200);
+    assert.equal(list.headers.get('cache-control'),'no-store');
+    const body=await list.json();
+    assert.equal(body.ok,true);
+    assert.equal(body.ownerScope,'SELF');
+    assert.equal(body.readOnlyProbe,true);
+    assert.equal(body.executionAuthority,'NONE');
+    assert.equal(body.mode,'PAPER_SEQUENTIAL_SIMULATION_ORDER_LIST');
+    assert.equal(body.orders.length,1);
+    assert.equal(body.orders[0].orderId,recorded.orderId);
+    assert.equal(body.orders[0].market,'crypto_futures');
+    assert.equal(body.orders[0].currentOrderStatus,'SELECT_ORDER_TO_VERIFY');
+    assert.equal(body.orders[0].actualBrokerFill,false);
+    assert.equal(body.orders[0].actualPaperLedgerWritten,false);
+    assert.equal(body.realOrders,0);
+    assert.equal(body.financialMutationCount,0);
+    assert.equal(body.orders[0].symbol,'BTCUSDT');
+    assert.equal(fixture.state.seqWrites,1,'GET cannot append a second event');
+    assert.equal(fixture.state.writes,0,'GET cannot modify wallet funds');
+    assert.equal((await fetch(fixture.host+seqUrl+'s?userId=other')).status,400);
+  }finally{await fixture.close()}
+});
+
+test('manual Paper order list requires exact RLS guard and never labels missing DB as empty order history',async()=>{
+  const fixture=await server({seqRls:false,existing:seededWallets()});
+  try{
+    const response=await fetch(fixture.host+seqUrl+'s');
+    assert.equal(response.status,409);
+    const body=await response.json();
+    assert.equal(body.code,'MANUAL_PAPER_SEQ_DB_NOT_READY');
+    assert.equal(body.orderSubmitted,false);
+    assert.equal(fixture.state.seqWrites,0);
+  }finally{await fixture.close()}
+});
+
+test('manual Paper order list rejects malformed owner, duplicate order or tampered event sha',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqMarketReady:true,seqIssuer:verifiedSeqSource,
+    existing:seededWallets(),
+  });
+  try{
+    assert.equal((await post(fixture.host+seqUrl+'/step',seqOpening)).status,201);
+    const good=structuredClone(fixture.state.seqRows[0]);
+    const failList=async()=>{
+      const result=await fetch(fixture.host+seqUrl+'s');
+      assert.equal(result.status,503);
+      assert.equal((await result.json()).code,'MANUAL_PAPER_SEQ_ORDER_LIST_UNAVAILABLE');
+    };
+    fixture.state.seqRows[0]={...good,event:{
+      ...good.event,ownerId:'22222222-2222-2222-2222-222222222222',
+    }};
+    await failList();
+    fixture.state.seqRows[0]={...good,event_sha256:'0'.repeat(64)};
+    await failList();
+    fixture.state.seqRows[0]=good;
+    fixture.state.seqRows.push(structuredClone(good));
+    await failList();
+    assert.equal(fixture.state.writes,0);
   }finally{await fixture.close()}
 });
