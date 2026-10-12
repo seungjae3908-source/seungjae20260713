@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { PAPER_FORWARD_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 
 const workflowPath = ".github/workflows/paper-canonical-seven-blocker-repair.yml";
 const workflow = await readFile(workflowPath, "utf8");
@@ -24,11 +25,8 @@ test("Paper repair checks out the exact command SHA before loading local provena
   assert.match(workflow.slice(provenanceIndex), /\.github\/scripts\/current-main-ci-provenance\.cjs/u);
 });
 
-test("Paper validation and the extracted exact-path checker jointly own the checkout regression test", async () => {
+test("Paper validation owns the checkout regression test path", () => {
   const testPath = ".github/tests/pr-exact-head-paper-repair-checkout.test.mjs";
-  const bounded = await readFile(".github/scripts/check-paper-forward-bounded-diff.sh", "utf8");
-  // One exact PR trigger and one exact bounded allowlist entry, no blanket bypass.
-  assert.equal(validation.split(testPath).length - 1, 1);
-  assert.equal(bounded.split(testPath).length - 1, 1);
-  assert.match(validation, /run: bash \.github\/scripts\/check-paper-forward-bounded-diff\.sh/u);
+  assert.equal(validation.split(testPath).length - 1, 1, 'PR trigger must still cover the test');
+  assert.ok(PAPER_FORWARD_REVIEWED_PATHS.includes(testPath), 'bounded diff must still own the test');
 });

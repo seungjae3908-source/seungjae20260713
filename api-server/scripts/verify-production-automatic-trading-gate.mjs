@@ -49,6 +49,26 @@ const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
 
+// Account connectivity uses read-only vault keys; execution reuse has a distinct
+// Kiwoom key name. The shared worker/pre-submit/holdings reader must bridge it
+// only after decryption, without writing the vault or accepting conflicting keys.
+for (const token of [
+  'automaticExecutionReadonlyCredentials(provider, decryptTradingCredentials(envelope))',
+  "if (provider !== 'kiwoom') return raw",
+  "if (appSecret && secretKey && appSecret !== secretKey) throw new Error('CREDENTIALS_UNAVAILABLE')",
+  'appSecret: appSecret || secretKey',
+  "async save() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+  "async remove() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+]) requireText(positionIsolation, token, 'AUTO_GATE_EXECUTION_READONLY_CREDENTIAL_CONTRACT_MISSING');
+for (const token of [
+  'execution read-only credential adaptation preserves other providers and rejects ambiguous Kiwoom keys',
+  'Kiwoom execution-vault keys drive only authenticated read-only snapshots for isolation and holdings',
+  'encryptTradingCredentials(source)',
+  "'/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom'",
+  'assert.equal(calls, 0)',
+]) requireText(tradeAutomationSmoke, token, 'AUTO_GATE_ENCRYPTED_READONLY_CREDENTIAL_REGRESSION_MISSING');
+requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUTO_GATE_ENCRYPTED_CREDENTIAL_CHECK_WIRING_MISSING');
+
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');
