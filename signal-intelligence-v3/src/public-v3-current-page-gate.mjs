@@ -1,3 +1,5 @@
+import { verifiedV3CurrentPublicationRow, verifiedV3CurrentCandidateEvent } from './public-v3-publication-proof.mjs';
+
 /**
  * The twelve latest source page receipts and the persisted rolling research
  * history represent DIFFERENT trust levels. Old rows are useful for research
@@ -99,31 +101,56 @@ export function currentPagePublication(snapshot,coverage){
   const lanes=verifiedLanes(coverage);
   if(!lanes||!snapshot||!Array.isArray(snapshot.rows)
     ||!Array.isArray(snapshot.events)||!snapshot.lists)return empty;
-  const permitted=new Set();
+
+  // All visible candidates must come from a unique immutable normalized
+  // engine row. A deserialized list or event can never mint a different row.
+  const known=new Set(),permitted=new Map();
   for(const row of snapshot.rows){
-    const origin=row?.provenance;
+    if(!row||typeof row.id!=='string'||!row.id)continue;
+    if(known.has(row.id))return empty;
+    known.add(row.id);
+    const origin=row.provenance;
     const lane=lanes.get(origin?.laneId);
     if(!validSource(lane)||!verifiedCurrentLane(lane)
-      // Research-only cards from a globally BLOCKED_DATA source can never
-      // obtain publication authority, even if future code accidentally
-      // confuses their lane's page receipt with an eligible one.
-      ||origin?.blockedPageResearchOnly===true
-      ||origin?.publicationEligible===false
       ||origin?.sourceCycleId!==lane.sourceCycleId
-      ||origin.cursor!==lane.cursorBefore
-      ||!row?.id||row.state!=='CANDIDATE'||row.dataStatus!=='READY')
+      ||origin?.cursor!==lane.cursorBefore
+      ||!verifiedV3CurrentPublicationRow(row,lane))
       continue;
-    permitted.add(row.id);
+    permitted.set(row.id,row);
   }
-  const allowedIds=Object.freeze([...permitted].sort());
-  const lists={};
-  for(const key of Object.keys(empty.lists)){
-    const values=snapshot.lists[key];
+
+  const expected=Object.freeze({
+    krBuy:['KR_STOCK','BUY'],usBuy:['US_STOCK','BUY'],
+    spotBuy:['CRYPTO_SPOT','BUY'],futuresLong:['CRYPTO_FUTURES','LONG'],
+    futuresShort:['CRYPTO_FUTURES','SHORT'],
+  });
+  const lists={},listedIds=new Set();
+  for(const [name,[market,direction]] of Object.entries(expected)){
+    const values=snapshot.lists[name];
     if(!Array.isArray(values))return empty;
-    lists[key]=Object.freeze(values.filter(row=>permitted.has(row?.id)));
+    const clean=[],seen=new Set();
+    for(const value of values){
+      const row=permitted.get(value?.id);
+      if(!row||seen.has(row.id)
+        ||row.market!==market||row.direction!==direction
+        // Do not re-publish an altered list copy with the same trusted id.
+        ||JSON.stringify(value)!==JSON.stringify(row))continue;
+      clean.push(row);seen.add(row.id);listedIds.add(row.id);
+    }
+    lists[name]=Object.freeze(clean);
   }
-  const events=Object.freeze(snapshot.events.filter(event=>
-    event&&event.type==='NEW_CANDIDATE'&&permitted.has(event.id)));
-  return Object.freeze({allowedIds,lists:Object.freeze(lists),events,
-    fullCoverageProven:false,executionAuthority:'NONE'});
+
+  const unique=new Set(),events=[];
+  for(const event of snapshot.events){
+    if(event?.type!=='NEW_CANDIDATE'||!listedIds.has(event.id)
+      ||unique.has(event.id))continue;
+    const row=permitted.get(event.id);
+    if(!verifiedV3CurrentCandidateEvent(event,row))continue;
+    events.push(event);unique.add(event.id);
+  }
+  return Object.freeze({
+    allowedIds:Object.freeze([...permitted.keys()].sort()),
+    lists:Object.freeze(lists),events:Object.freeze(events),
+    fullCoverageProven:false,executionAuthority:'NONE',
+  });
 }

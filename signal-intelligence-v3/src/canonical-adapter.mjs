@@ -21,21 +21,27 @@ function immutableSha(value) {
 }
 
 function marketOf(card) {
-  const assetClass = String(card?.assetClass ?? '').toLowerCase();
-  const market = String(card?.market ?? '').toUpperCase();
-  if (assetClass === 'stock' && market === 'KR') return 'KR_STOCK';
-  if (assetClass === 'stock' && market === 'US') return 'US_STOCK';
-  if (assetClass === 'coin_spot') return 'CRYPTO_SPOT';
-  if (assetClass === 'coin_futures') return 'CRYPTO_FUTURES';
+  const assetClass=String(card?.assetClass??'').toLowerCase();
+  const market=String(card?.market??'').toUpperCase();
+  const exchange=String(card?.exchange??'').toUpperCase();
+  if(assetClass==='stock' && market==='KR')return 'KR_STOCK';
+  if(assetClass==='stock' && market==='US')return 'US_STOCK';
+  // Never interpret a futures-labelled price card as a Spot BUY or
+  // borrow Spot prices to form a futures LONG/SHORT recommendation.
+  if(assetClass==='coin_spot' && ['UPBIT_KRW','SPOT'].includes(market)
+    &&(!exchange||exchange==='UPBIT'))return 'CRYPTO_SPOT';
+  if(assetClass==='coin_futures'
+    &&['BITGET_USDT_FUTURES','FUTURES'].includes(market)
+    &&(!exchange||exchange==='BITGET'))return 'CRYPTO_FUTURES';
   return null;
 }
 
-function directionOf(card, market) {
-  const action = String(card?.action ?? '').toUpperCase();
-  const direction = String(card?.direction ?? '').toUpperCase();
-  if (market !== 'CRYPTO_FUTURES') return action === 'BUY' ? 'BUY' : null;
-  if (action === 'LONG' || action === 'SHORT') return action;
-  return direction === 'LONG' || direction === 'SHORT' ? direction : null;
+function directionOf(card,market){
+  const action=String(card?.action??'').toUpperCase();
+  const direction=String(card?.direction??'').toUpperCase();
+  if(market!=='CRYPTO_FUTURES')
+    return action==='BUY'&&['LONG','BUY'].includes(direction)?'BUY':null;
+  return ['LONG','SHORT'].includes(action)&&direction===action?action:null;
 }
 
 function entryMid(card) {
@@ -53,18 +59,21 @@ export function stopDistancePercent(card) {
 
 function dataReady(card, nowMs) {
   if (String(card?.dataState ?? '').toLowerCase() !== 'complete') return false;
-  if (card?.dataQuality?.state === 'DATA_UNTRUSTED') return false;
-  if (card?.dataQuality && card.dataQuality.strongSignalAllowed !== true) return false;
+  // No trusted quality receipt means the source is NOT independently ready.
+  if(card?.dataQuality?.state!=='TRUSTED'
+    ||card.dataQuality.strongSignalAllowed!==true
+    ||(Array.isArray(card.dataQuality.issues)
+      &&card.dataQuality.issues.some(x=>x?.severity==='blocking')))
+    return false;
   const observed = Date.parse(String(card?.observedAt ?? ''));
   const expires = Date.parse(String(card?.expiresAt ?? ''));
   return Number.isFinite(observed) && observed <= nowMs + 60_000 && Number.isFinite(expires) && expires > nowMs;
 }
 
 function quantReady(card) {
-  if (card?.strongSignalEligible !== true) return false;
-  if (card?.candidateRanking?.hardFilterPassed === false) return false;
-  const grade = String(card?.signalGrade ?? '').toUpperCase();
-  return !grade || grade === 'S' || grade === 'A';
+  if(card?.strongSignalEligible!==true
+    ||card?.candidateRanking?.hardFilterPassed===false)return false;
+  return ['S','A'].includes(String(card?.signalGrade??'').toUpperCase());
 }
 
 function riskReady(card, direction) {
