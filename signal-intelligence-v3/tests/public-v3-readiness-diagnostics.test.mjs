@@ -69,3 +69,24 @@ test('backtest lineage, OOS and full-cost blockers are diagnosed without any fal
  assert.equal(report.economicAuthority,'NONE');
  assert.equal(JSON.stringify(report).includes('SUPER_SECRET'),false);
 });
+
+test('aggregate counts both missing Paper lineage and backtest evidence with no economic promotion',()=>{
+  const report=summarizeV3EconomicReadiness([row({
+    provenance:{profitBlockers:[
+      'PAPER_IDENTITY_REQUIRED','CANONICAL_PROFIT_EVIDENCE_REQUIRED',
+      'EXPLICIT_COST_POLICY_REQUIRED','BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE',
+      'BACKTEST_QUALITY_VERIFICATION_REQUIRED',
+      'USER_ACCOUNT_INFORMATION_MUST_NOT_LEAK',
+    ]},
+  })]);
+  const x=report.byMarket.CRYPTO_SPOT;
+  assert.equal(x.identityMissing,1);
+  assert.equal(x.backtestIdentityMissing,1);
+  assert.equal(x.backtestEvidenceMissing,1);
+  assert.equal(x.canonicalProofAbsent,1);
+  assert.equal(x.costPolicyMissing,1);
+  assert.equal(x.candidate,0);
+  assert.equal(report.oosPassProven,false);
+  assert.equal(report.economicAuthority,'NONE');
+  assert.ok(!JSON.stringify(report).includes('USER_ACCOUNT_INFORMATION'));
+});
