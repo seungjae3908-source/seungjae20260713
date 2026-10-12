@@ -54,10 +54,12 @@ export function AiChartLivePanel({ snapshot }: { snapshot: ChartLiveSnapshot | n
 
 export function AiChartDrawingSummary({ snapshot }: { snapshot: ChartLiveSnapshot | null }) {
   const { format } = useChartCurrency();
+  const currentEvidenceUsable = snapshot != null && isChartLiveSnapshotUsable(snapshot);
   return <section data-testid="ai-chart-drawing-summary" className="rounded-2xl border border-card-border bg-card p-4">
     <h2 className="text-sm font-black">패턴·파동 후보</h2>
+    {snapshot && !currentEvidenceUsable ? <p role="status" data-testid="ai-chart-drawing-historical" className="mt-2 text-xs font-bold text-warning">시세 자료가 오래되었거나 연결이 끊겼습니다. 아래 표시가 남아 있더라도 과거 관측이며 현재 돌파·매매 신호가 아닙니다.</p> : null}
     {snapshot?.drawing.patterns.length ? snapshot.drawing.patterns.map(pattern => <div key={pattern.id} className="mt-3 rounded-xl bg-background p-3 text-xs">
-      <div className="flex justify-between gap-2"><strong>{pattern.name}</strong><span className={pattern.status === 'invalidated' ? 'text-destructive' : 'text-primary'}>{label[pattern.status]}</span></div>
+      <div className="flex justify-between gap-2"><strong>{pattern.name}</strong><span className={pattern.status === 'invalidated' ? 'text-destructive' : 'text-primary'}>{currentEvidenceUsable ? label[pattern.status] : `이전 ${label[pattern.status]}`}</span></div>
       <dl className="mt-2 grid grid-cols-2 gap-2"><dt className="text-muted-foreground">돌파 확인가</dt><dd className="text-right tabular-nums">{format(pattern.confirmation, snapshot.market)}</dd><dt className="text-muted-foreground">측정 목표 구간</dt><dd className="text-right tabular-nums">{format(pattern.target[0], snapshot.market)} ~ {format(pattern.target[1], snapshot.market)}</dd><dt className="text-muted-foreground">무효화 가격</dt><dd className="text-right tabular-nums text-destructive">{format(pattern.invalidation, snapshot.market)}</dd></dl>
       {pattern.direction === 'both' && <p className="mt-2 text-muted-foreground">상단 돌파 시나리오 · 방향 미확정</p>}
     </div>) : <p className="mt-3 text-xs text-muted-foreground">조건을 만족하는 패턴 없음</p>}

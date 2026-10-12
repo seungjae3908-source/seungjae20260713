@@ -6,7 +6,11 @@ test.skip(process.env.PHASE10_STAGING_E2E === 'true',
 const routeToDetail = (market: 'KR' | 'US', ticker: string) =>
   `/__phase11-stock-detail-ai-e2e?market=${market}&ticker=${ticker}&tab=analysis`;
 
-async function mockPublicAi(page: Page, handler: (body: any) => Record<string, unknown>) {
+async function mockPublicAi(
+  page: Page,
+  handler: (body: any) => Record<string, unknown> | Promise<Record<string, unknown>>,
+  responseStatus = 200,
+) {
   const requests: any[] = [];
   const financialWrites: string[] = [];
   page.on('request', (request) => {
@@ -22,7 +26,7 @@ async function mockPublicAi(page: Page, handler: (body: any) => Record<string, u
     const body = route.request().postDataJSON();
     requests.push(body);
     await route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify(handler(body)),
+      status: responseStatus, contentType: 'application/json', body: JSON.stringify(await handler(body)),
     }).catch(() => undefined);
   });
   return { requests, financialWrites };
@@ -82,6 +86,38 @@ test('future collection timestamp cannot be shown as a current grounded AI opini
   await page.getByTestId('stock-ai-request-analysis').click();
   await expect(page.getByRole('alert'))
     .toContainText('자료 출처·수집 시각·누락 근거');
+  await expect(page.getByTestId('stock-ai-evidence-result')).toHaveCount(0);
+  expect(requests).toHaveLength(1);
+  expect(financialWrites).toEqual([]);
+});
+
+// Provider failures must not be displayed as successful model answers.
+test('AI provider 429 is explained without fabricated analysis or financial writes', async ({ page }) => {
+  const { requests, financialWrites } = await mockPublicAi(page,
+    () => ({ ok: false, error: 'AI_CHAT_RATE_LIMITED' }), 429);
+  await page.goto(routeToDetail('US', 'AAPL'));
+  await expect(page.getByTestId('stock-ai-request-analysis')).toBeVisible();
+  expect(requests).toHaveLength(0);
+  await page.getByTestId('stock-ai-request-analysis').click();
+  await expect(page.getByRole('alert')).toContainText('AI 요청 한도에 도달했습니다');
+  await expect(page.getByTestId('stock-ai-evidence-result')).toHaveCount(0);
+  expect(requests).toHaveLength(1);
+  expect(financialWrites).toEqual([]);
+});
+
+test('cancelling an in-flight AI request prevents late provider results from repainting the stock page', async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { requests, financialWrites } = await mockPublicAi(page, async (body) => {
+    await gate;
+    return providerReply(body);
+  });
+  await page.goto(routeToDetail('US', 'AAPL'));
+  await page.getByTestId('stock-ai-request-analysis').click();
+  await expect(page.getByRole('button', { name: 'AI 분석 요청 취소' })).toBeVisible();
+  await page.getByRole('button', { name: 'AI 분석 요청 취소' }).click();
+  release();
+  await expect(page.getByRole('alert')).toContainText('요청을 취소했습니다');
   await expect(page.getByTestId('stock-ai-evidence-result')).toHaveCount(0);
   expect(requests).toHaveLength(1);
   expect(financialWrites).toEqual([]);
