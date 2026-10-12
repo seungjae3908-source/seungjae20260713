@@ -32,9 +32,11 @@ test('AI Chart prefers canonical Scanner signalScore and uses confidence only as
   );
 });
 
-test('AI Chart keeps signal score and evidence strength visibly distinct while formatting display precision only', () => {
+test('AI Chart distinguishes Scanner score from evidence strength and masks stale current scores', () => {
   expect(aiChartPageSource).toContain('>신호점수</p>');
-  expect(aiChartPageSource).toContain('{formatAiChartScore(selection.signalScore)}');
+  expect(aiChartPageSource).toContain('{formatAiChartScore(analysis ? selection.signalScore : null)}');
+  expect(aiChartPageSource).toContain('const currentAnalysis = currentEvidenceUsable ? analysis : null;');
+  expect(aiChartPageSource).not.toContain('{formatAiChartScore(selection.signalScore)}');
   expect(aiChartPageSource).toContain('>근거 강도</p>');
   expect(aiChartPageSource).toContain('{formatAiChartScore(confidence)}');
   expect(aiChartPageSource).not.toContain('{selection.signalScore ?? \'-\'}');
