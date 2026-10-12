@@ -270,6 +270,63 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/src/lib/excel-export.ts",
   ".github/scripts/paper-forward-reviewed-paths.mjs"
 ]);
+// Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
+// directory exemption or permission to deploy/activate. Keep the immutable
+// legacy Paper set separate and preserve every existing safety assertion.
+export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
+  ".github/config/automatic-live-preactivation-checklist.json",
+  ".github/scripts/automatic-live-preactivation-audit.cjs",
+  ".github/scripts/automatic-live-preactivation-audit.test.cjs",
+  ".github/scripts/production-auto-live-signal-identity.test.cjs",
+  ".github/scripts/production-manual-live-receipts.cjs",
+  ".github/scripts/production-manual-live-receipts.test.cjs",
+  ".github/tests/kiwoom-readonly-recovery-security-contract.test.mjs",
+  ".github/tests/production-auto-live-budget-contract.test.mjs",
+  ".github/workflows/application-fast-ci.yml",
+  "api-server/package.json",
+  "api-server/scripts/automatic-live-preflight-stages.mjs",
+  "api-server/scripts/automatic-live-preflight-stages.test.mjs",
+  "api-server/scripts/kiwoom-readonly-recovery-security-contract.mjs",
+  "api-server/scripts/run-automatic-live-preflight-tests.mjs",
+  "api-server/scripts/verify-automatic-live-budget-concurrency.sh",
+  "api-server/scripts/verify-phase8-security.mjs",
+  "api-server/src/services/automatic-live-budget.service.test.ts",
+  "api-server/src/services/automatic-live-budget.service.ts",
+  "api-server/src/services/automatic-live-owner-policy.service.test.ts",
+  "api-server/src/services/automatic-live-owner-policy.service.ts",
+  "api-server/src/services/automatic-live-position-isolation.service.test.ts",
+  "api-server/src/services/automatic-live-preactivation-audit.service.test.ts",
+  "api-server/src/services/automatic-live-preactivation-audit.service.ts",
+  "api-server/src/services/automatic-live-unrealized-risk.service.test.ts",
+  "api-server/src/services/automatic-live-unrealized-risk.service.ts",
+  "api-server/src/services/bitget-native-protection-readonly.service.test.ts",
+  "api-server/src/services/bitget-native-protection-readonly.service.ts",
+  "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
+  "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
+  "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
+  "api-server/src/services/public-live-plan-origin.service.test.ts",
+  "api-server/src/services/public-live-plan-origin.service.ts",
+  "api-server/src/services/trade-automation-repository-compatibility.test.ts",
+  "api-server/src/services/trade-execution-snapshot.service.ts",
+  "api-server/src/services/trade-history-completeness.service.test.ts",
+  "api-server/src/services/trade-history-completeness.service.ts",
+  "api-server/src/services/trade-kiwoom-readonly-contract.test.ts",
+  "api-server/src/services/trade-order-recovery.service.ts",
+  "api-server/src/services/trade-order-recovery.test.ts",
+  "api-server/src/services/trade-recovery-worker.service.ts",
+  "api-server/src/services/trade-recovery-worker.test.ts",
+  "api-server/src/services/trading-provider-response.service.test.ts",
+  "api-server/src/services/trading-provider-response.service.ts",
+  "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql",
+  "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql",
+  "api-server/supabase/test/automatic_live_atomic_budget_integration.sql",
+  "ops/apply-production-auto-live-budget.mjs",
+  "ops/production-auto-live-signal-identity.cjs",
+  "ops/production-auto-live-signal-source-audit.mjs",
+  "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
+]);
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('/paper-forward-reviewed-paths.mjs')) {
-  console.log(PAPER_FORWARD_REVIEWED_PATHS.join('\n'));
+  const paths = process.argv.includes('--list-auto-live-safety')
+    ? AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS : PAPER_FORWARD_REVIEWED_PATHS;
+  console.log(paths.join('\n'));
 }
