@@ -1,3 +1,5 @@
+import {V3_PUBLIC_YAHOO_SOURCE_REASONS} from './public-v3-stock-candle-integrity.mjs';
+
 // Diagnostics only. Reuse the exact real public Scanner cycle; do not
 // issue a second round of costly Upbit/Bitget/Yahoo requests just to
 // inspect provider errors after the first cycle has finished.
@@ -71,8 +73,14 @@ const YAHOO_CLASSES=Object.freeze([
  */
 export function createV3PublicYahooTerminalFailureCounter(){
   const counters=Object.fromEntries(YAHOO_CLASSES.map(key=>[key,0]));
-  let terminalFetches=0;
+  let terminalFetches=0,structuralRejections=0;
+  const reasonCounts=Object.fromEntries(V3_PUBLIC_YAHOO_SOURCE_REASONS.map(k=>[k,0]));
   return Object.freeze({
+    observeStructural(reason){
+      const key=V3_PUBLIC_YAHOO_SOURCE_REASONS.includes(reason)?reason:'NOT_ARRAY';
+      structuralRejections=Math.min(1_000_000,structuralRejections+1);
+      reasonCounts[key]=Math.min(1_000_000,reasonCounts[key]+1);
+    },
     observe(error){
       const raw=error instanceof Error?error.message:
         typeof error==='string'?error:'';
@@ -99,6 +107,11 @@ export function createV3PublicYahooTerminalFailureCounter(){
         schemaVersion:'public-v3-yahoo-terminal-failures-v1',
         terminalFailedFetches:terminalFetches,
         categories:Object.freeze({...counters}),
+        structuralCandleRejections:Object.freeze({
+          total:structuralRejections,
+          reasons:Object.freeze({...reasonCounts}),
+          sourceSymbolsIncluded:false,
+        }),
         source:'YAHOO_PUBLIC_V3_ONLY',instrumentCountProven:false,
         symbolsRedacted:true,rawErrorsIncluded:false,
         addedProviderRequests:0,economicAuthority:'NONE',
@@ -162,6 +175,18 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
               categories:Object.freeze(Object.fromEntries(YAHOO_CLASSES.map(key=>
                 [key,count(row.publicStockTerminalFailureSummary.categories?.[key])
                   ?row.publicStockTerminalFailureSummary.categories[key]:null]))),
+              structuralCandleRejections:Object.freeze({
+                total:count(row.publicStockTerminalFailureSummary
+                  .structuralCandleRejections?.total)
+                  ?row.publicStockTerminalFailureSummary.structuralCandleRejections.total:null,
+                reasons:Object.freeze(Object.fromEntries(
+                  V3_PUBLIC_YAHOO_SOURCE_REASONS.map(key=>[
+                    key,count(row.publicStockTerminalFailureSummary
+                      .structuralCandleRejections?.reasons?.[key])
+                      ?row.publicStockTerminalFailureSummary
+                        .structuralCandleRejections.reasons[key]:null,
+                  ]))),
+              }),
               symbolsRedacted:true,
             }) : null,
         cursorBefore:count(row.cursorBefore)?row.cursorBefore:null,
