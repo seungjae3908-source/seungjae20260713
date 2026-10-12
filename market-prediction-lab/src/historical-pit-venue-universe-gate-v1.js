@@ -16,7 +16,15 @@ const VENUES=Object.freeze({
 });
 const UTC_DAY=86_400_000;
 const SHA256=/^[a-f0-9]{64}$/;
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
+const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
+// Historical Bitget USDT contracts may legitimately start with Han glyphs.
+// The exact market-bound identifier is needed for archived listed/delisted
+// membership, not just current public source-page candles.
+const FUTURES_HAN=/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u;
+const acceptedSymbol=(symbol,market)=>
+  typeof symbol==="string"&&symbol===symbol.normalize("NFC")
+  &&(SYMBOL.test(symbol)||
+    (market==="CRYPTO_FUTURES"&&FUTURES_HAN.test(symbol)));
 const SOURCE_CLASSES=new Set(["EXCHANGE_DATED_ARCHIVE","LICENSED_PIT_HISTORICAL_VENDOR","TEST_FIXTURE"]);
 const ACCESS_RESTRICTIONS=Object.freeze({
   realOrders:false,privateApiRequests:false,productionPromotion:false,
@@ -48,14 +56,14 @@ function blocked(market,venue,reason,extra={}){
     ...ACCESS_RESTRICTIONS,...extra,
   });
 }
-function inspectMemberships(rows,start,end){
+function inspectMemberships(rows,start,end,market){
   if(!Array.isArray(rows)||!rows.length||rows.length>50000)
     return {error:"PIT_MEMBERSHIP_ROWS_INVALID"};
   const seen=new Map(),dayActive=new Set(),suspended=new Set(),
     endedBeforeDay=new Set(),endedHistorical=new Set(),allSymbols=new Set();
   for(const [index,row] of rows.entries()){
     const sym=norm(row?.symbol);
-    if(!SYMBOL.test(sym)||!validTime(row?.listedAtMs)
+    if(!acceptedSymbol(sym,market)||!validTime(row?.listedAtMs)
       ||row.removedAtMs!=null&&(!validTime(row.removedAtMs)||row.removedAtMs<=row.listedAtMs)
       ||!Array.isArray(row.halts)
       ||typeof row.sourceId!=="string"||!row.sourceId.trim()
@@ -109,7 +117,7 @@ export function auditHistoricalPITVenueUniverseV1({
   const selected=new Set(),observed=new Set();
   for(const row of selectedRows){
     const sym=norm(row?.symbol);
-    if(!SYMBOL.test(sym)||selected.has(sym)
+    if(!acceptedSymbol(sym,market)||selected.has(sym)
       ||!["OBSERVED_SELECTED_SYMBOL_DAY","BLOCKED_DATA"].includes(row?.status)
       ||(row.market!=null&&row.market!==market)
       ||(row.venue!=null&&row.venue!==venue)){
@@ -155,7 +163,7 @@ export function auditHistoricalPITVenueUniverseV1({
      ||(cls==="TEST_FIXTURE"&&manifest.testOnly!==true))
     return blocked(market,venue,"PIT_ARCHIVE_SOURCE_ATTESTATION_INVALID",
       {...known,sourceClass:cls});
-  const parsed=inspectMemberships(manifest.memberships,dayStartMs,dayEndMs);
+  const parsed=inspectMemberships(manifest.memberships,dayStartMs,dayEndMs,market);
   if(parsed.error)return blocked(market,venue,parsed.error,{
     ...known,sourceClass:cls,errorSymbol:parsed.symbol??null,
     errorIndex:parsed.index??null,
