@@ -549,3 +549,101 @@ test("PIT task CLI retry cannot execute without explicit previous SHA and public
    assert.equal(reviewed.allowPublicReadOnlyFetch,true);
  }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+
+
+test("private task CLI selects signed-by-digest partial REVIEW page, never the missing-source page",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const first=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(first.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  const freshPages=await makePageReceipts(t.root,t.market,t.manifest);
+  const reviewed=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages:freshPages,taskPageIndex:0});
+  assert.equal(reviewed.partialRetryReviewCount,1);
+  assert.equal(reviewed.partialRetryReviewTasks[0].expectedExistingSourceDigestSha256,
+   first.retainedSourceDigestSha256);
+  const manifestPath=join(t.root,"pit-reviewed.json");
+  const pagePath=join(t.root,"reviewed-0.json");
+  const pageIndex=join(t.root,"reviewed-index.json");
+  const out=join(t.root,"reviewed-retry.json");
+  writeFileSync(manifestPath,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pagePath,JSON.stringify(freshPages[0]),{mode:0o600});
+  writeFileSync(pageIndex,JSON.stringify({pageReceiptFiles:[pagePath]}),
+   {mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+   "--manifest",manifestPath,"--page-index",pageIndex,
+   "--root",t.root,"--task-page-index","0","--task-index","0",
+   "--expected-task-digest",reviewed.partialRetryReviewDigestSha256,
+   "--output",out,"--read-public","--retry-partial",
+   "--expected-existing-sha",first.retainedSourceDigestSha256];
+  const cliConfig=parse(args);
+  assert.equal(cliConfig.expectedExistingSourceDigestSha256,
+   first.retainedSourceDigestSha256);
+  const newSource=async(url,opt)=>{
+   calls.push({url,method:opt?.method??"GET"});
+   const selected=new URL(url).searchParams.get("market");
+   const row=ts=>({market:selected,
+    candle_date_time_utc:new Date(ts).toISOString().slice(0,19),
+    opening_price:100,high_price:104,low_price:99,
+    trade_price:102,candle_acc_trade_volume:5});
+   return {ok:true,status:200,json:async()=>[
+    row(START+3*MIN),row(START+2*MIN),row(START+MIN),
+    row(START),row(START-MIN),
+   ]};
+  };
+  const report=await cli(cliConfig,{nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:newSource});
+  assert.equal(report.status,"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW");
+  assert.equal(report.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(report.sourceMinuteCount,4);
+  assert.equal(report.priorSourceDigestSha256,first.retainedSourceDigestSha256);
+  assert.notEqual(report.proposedNewSourceDigestSha256,first.retainedSourceDigestSha256);
+  assert.equal(report.sourceRevisionAutoSelected,false);
+  assert.equal(report.providerGETCount,0);
+  assert.equal(report.profitabilityProven,false);
+  assert.equal(calls.length,2);
+  const file=JSON.parse(readFileSync(out,"utf8"));
+  assert.equal(file.selectedTaskKind,"PARTIAL_SOURCE_REVIEW");
+  assert.equal(file.archiveWriterLockUsed,true);
+  assert.equal(file.executionAuthority,"NONE");
+  assert.equal(file.profitabilityProven,false);
+  assert.equal(statSync(out).mode&0o077,0);
+  await assert.rejects(()=>cli(cliConfig,{nowImpl:()=>NOW,
+   statfsImpl:statfsHealthy,upbitFetchImpl:newSource}),
+   /PIT_MINUTE_TASK_CLI_OUTPUT_EXISTS/);
+  assert.equal(calls.length,2,"an occupied output forbids a second read");
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
+
+test("source task mode confusion cannot read a review ticket as missing-source GET",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const first=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+  }));
+  const pages=await makePageReceipts(t.root,t.market,t.manifest);
+  const reviewed=plan({market:t.market,day:"2026-09-18",
+   manifest:t.manifest,pages,taskPageIndex:0});
+  assert.equal(reviewed.candidateTasks.length,1);
+  assert.equal(reviewed.partialRetryReviewTasks.length,1);
+  const wrong=await execute(request(t,{
+   pages,expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+   retryPartialSource:false,allowPublicReadOnlyFetch:true,
+   upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(wrong.reason,"SELECTED_TASK_PAGE_SHA_CHANGED");
+  const changed=structuredClone(pages);
+  changed[0].partialSourcePlan[0].priorOriginalMinuteRows=0;
+  const invalid=await execute(request(t,{
+   pages:changed,
+   expectedTaskDigestSha256:reviewed.partialRetryReviewDigestSha256,
+   retryPartialSource:true,allowPublicReadOnlyFetch:true,
+   expectedExistingSourceDigestSha256:first.retainedSourceDigestSha256,
+   upbitFetchImpl:upbitFetch(calls),
+  }));
+  assert.equal(invalid.reason,"NO_VERIFIED_PUBLIC_SOURCE_TASK");
+  assert.equal(calls.length,1);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});
