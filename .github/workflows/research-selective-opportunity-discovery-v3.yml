@@ -1,0 +1,99 @@
+name: Research Selective Opportunity Independent Discovery V3
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/selective_opportunity_discovery_v3.py
+      - market-prediction-lab/tests/test_selective_opportunity_discovery_v3.py
+      - market-prediction-lab/docs/selective-opportunity-discovery-v3.md
+      - .github/workflows/research-selective-opportunity-discovery-v3.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: selective-discovery-v3-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact Draft head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+      - name: Assert exact identity and original V1 bytes
+        run: |
+          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+          test "$(git hash-object market-prediction-lab/scripts/run-selective-opportunity-6m-v1.js)" = d067756b29de71a4ddc0a9e51a1854eb0149cbc4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+      - name: Causality and accounting regressions
+        run: python -m unittest discover -s market-prediction-lab/tests -p 'test_selective_opportunity_discovery_v3.py' -v
+      - name: Read only the pinned previous artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/selective-v3-input
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10842828161/zip" > /tmp/selective-v3-input/source.zip
+          python - <<'PY'
+          import hashlib, zipfile
+          from pathlib import Path
+          root = Path('/tmp/selective-v3-input')
+          blob = (root/'source.zip').read_bytes()
+          assert hashlib.sha256(blob).hexdigest() == '3099e78aba40584612702b49ce868c9a6295ea8ca322272f545c1a52bdeeb64e', 'ARCHIVE_IDENTITY_MISMATCH'
+          with zipfile.ZipFile(root/'source.zip') as archive:
+              raw = archive.read('source-snapshot.json')
+          assert hashlib.sha256(raw).hexdigest() == 'fabcae6eabe257f0e02bfd1af1f9dabb0b5e1e79494768dd08cb589166a13702', 'SNAPSHOT_IDENTITY_MISMATCH'
+          (root/'source-snapshot.json').write_bytes(raw)
+          PY
+      - name: Offline independent discovery and all fixed comparisons
+        run: python market-prediction-lab/scripts/selective_opportunity_discovery_v3.py --snapshot /tmp/selective-v3-input/source-snapshot.json --output /tmp/selective-v3-result
+      - name: Replay the same snapshot without changing rules
+        run: python market-prediction-lab/scripts/selective_opportunity_discovery_v3.py --snapshot /tmp/selective-v3-input/source-snapshot.json --output /tmp/selective-v3-replay
+      - name: Exact replay and safety assertions
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          a, b = Path('/tmp/selective-v3-result'), Path('/tmp/selective-v3-replay')
+          for file in a.glob('*.json'):
+              assert file.read_bytes() == (b/file.name).read_bytes(), 'OFFLINE_REPLAY_MISMATCH:' + file.name
+          r = json.loads((a/'result.json').read_text())
+          assert hashlib.sha256((a/'result.json').read_bytes()).hexdigest() == '5adace4d2784485e20a89e6ded1a5eb3b6b06fd385c0a8383f3a24898e2012d0', 'LOCAL_CI_RESULT_MISMATCH'
+          assert len(r['summary']) == 20
+          assert r['combinedReturn'] is None
+          assert r['profitabilityProven'] is False
+          assert r['executionAuthority'] == 'NONE'
+          assert r['actualOrders'] == 0 and r['canonicalSampleDelta'] == 0
+          assert r['policy']['independentOos'] is False
+          for arm in r['summary']:
+              assert arm['normal']['minCash'] >= -1e-5
+              assert arm['normal']['maxGrossObserved'] <= 1.0000001
+              assert arm['fixedPositionStress']['netReturn'] <= arm['normal']['netReturn'] + 1e-9
+          files = {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path('market-prediction-lab/scripts/selective_opportunity_discovery_v3.py'), Path('market-prediction-lab/tests/test_selective_opportunity_discovery_v3.py')]}
+          provenance = {'researchCodeSha':os.environ['RESEARCH_CODE_SHA'], 'sourceSnapshotSha256':r['sourceSnapshotSha256'],
+                        'policySha256':r['policySha256'], 'resultSha256':hashlib.sha256((a/'result.json').read_bytes()).hexdigest(),
+                        'sourceFiles':files, 'offlineReplayExact':True, 'marketDataNetworkCalls':0,
+                        'actualOrders':0, 'telegramSent':0, 'canonicalSampleDelta':0, 'profitabilityProven':False}
+          (a/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
+          print('V3_EXACT_REPLAY_AND_RESEARCH_BOUNDARY_PASS')
+          PY
+      - name: Upload immutable research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-opportunity-discovery-v3-${{ github.run_id }}
+          path: /tmp/selective-v3-result
+          if-no-files-found: warn
+          retention-days: 90

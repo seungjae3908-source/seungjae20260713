@@ -1,0 +1,99 @@
+name: Research Selective Opportunity Entry Priority V6
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/selective_opportunity_entry_priority_v6.py
+      - market-prediction-lab/tests/test_selective_opportunity_entry_priority_v6.py
+      - market-prediction-lab/docs/selective-opportunity-entry-v6.md
+      - .github/workflows/research-selective-opportunity-entry-v6.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: selective-entry-v6-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-entry-priority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact Draft head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+      - name: Assert exact source identity
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+      - name: All original and new causal regressions
+        run: python -m unittest discover -s market-prediction-lab/tests -p 'test_selective_opportunity_*.py' -v
+      - name: Download pinned archived evidence only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/selective-entry-v6/input
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10842828161/zip" > /tmp/selective-entry-v6/input/v2.zip
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10844551652/zip" > /tmp/selective-entry-v6/input/v3.zip
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10844599643/zip" > /tmp/selective-entry-v6/input/v4.zip
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/10845603179/zip" > /tmp/selective-entry-v6/input/v5.zip
+          python - <<'PY'
+          import hashlib,zipfile
+          from pathlib import Path
+          root=Path('/tmp/selective-entry-v6/input')
+          assert hashlib.sha256((root/'v5.zip').read_bytes()).hexdigest()=='ebe716b60688f64bc072eb5a7d97b445fa647494cc4e495a99966e561bdb7a61'
+          with zipfile.ZipFile(root/'v5.zip') as z:
+              raw=z.read('portfolio-ledgers.json')
+          assert hashlib.sha256(raw).hexdigest()=='715f504d19648bd3d06b8d445e0021905ef145a49fe006ba00d7e6db8cca035b'
+          (root/'v5-ledger.json').write_bytes(raw)
+          PY
+      - name: Reproduce baseline and run all twelve comparisons twice
+        run: |
+          set -Eeuo pipefail
+          for name in result replay; do
+            python market-prediction-lab/scripts/selective_opportunity_entry_priority_v6.py \
+              --v2-zip /tmp/selective-entry-v6/input/v2.zip \
+              --v3-zip /tmp/selective-entry-v6/input/v3.zip \
+              --v4-zip /tmp/selective-entry-v6/input/v4.zip \
+              --v5-ledger /tmp/selective-entry-v6/input/v5-ledger.json \
+              --output /tmp/selective-entry-v6/$name
+          done
+      - name: Verify byte equality and research boundary
+        run: |
+          python - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          root=Path('/tmp/selective-entry-v6');a=root/'result';b=root/'replay'
+          for p in a.iterdir():assert p.read_bytes()==(b/p.name).read_bytes(),p.name
+          r=json.loads((a/'result.json').read_bytes())
+          assert len(r['summary'])==12 and r['baselineReproduced'] is True
+          assert r['profitabilityProven'] is False and r['independentOos'] is False
+          assert r['selectedChampion'] is None and r['combinedReturn'] is None
+          assert r['actualOrders']==0 and r['canonicalSampleDelta']==0 and r['providerCalls']==0
+          assert r['executionAuthority']=='NONE'
+          result_sha=hashlib.sha256((a/'result.json').read_bytes()).hexdigest()
+          assert result_sha=='64b4f2f8bbcb91533f23a55d526b60d3fbda3a40bc7baebfb469c00a88ad95d6'
+          proof={'researchCodeSha':os.environ['RESEARCH_CODE_SHA'],'resultSha256':result_sha,
+                 'exactReplay':True,'baselineReproduced':True,'all12ComparisonsRetained':True,
+                 'providerCalls':0,'actualOrders':0,'independentOos':False,'profitabilityProven':False}
+          (a/'ci-verification.json').write_text(json.dumps(proof,indent=2)+'\n')
+          print('V6_BASELINE_CAUSAL_REPLAY_AND_RESEARCH_BOUNDARY_PASS')
+          PY
+      - name: Upload immutable research outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-opportunity-entry-v6-${{ github.run_id }}
+          path: /tmp/selective-entry-v6/result
+          if-no-files-found: warn
+          retention-days: 90

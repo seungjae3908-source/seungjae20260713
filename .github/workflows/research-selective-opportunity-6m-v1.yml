@@ -1,0 +1,79 @@
+name: Research Selective Opportunity 6M V2 Audit
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-selective-opportunity-6m-v1.js
+      - market-prediction-lab/scripts/run-selective-opportunity-audit-v2.mjs
+      - market-prediction-lab/src/selective-opportunity-audit-v2.mjs
+      - market-prediction-lab/tests/selective-opportunity-audit-v2.test.mjs
+      - .github/workflows/research-selective-opportunity-6m-v1.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: research-selective-opportunity-6m-v1-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact research head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+      - name: Assert immutable identity
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Accounting and causality regression tests
+        working-directory: market-prediction-lab
+        run: node --test tests/selective-opportunity-audit-v2.test.mjs
+      - name: Freeze rules then collect one snapshot and compare all arms
+        working-directory: market-prediction-lab
+        run: node scripts/run-selective-opportunity-audit-v2.mjs docs/selective-opportunity-audit-v2
+      - name: Offline replay of identical archived candles
+        working-directory: market-prediction-lab
+        run: node scripts/run-selective-opportunity-audit-v2.mjs docs/selective-opportunity-audit-v2-replay --snapshot=docs/selective-opportunity-audit-v2/source-snapshot.json
+      - name: Assert replay equality and research boundary
+        working-directory: market-prediction-lab
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const read = p => JSON.parse(readFileSync(p,'utf8'));
+          const a = read('docs/selective-opportunity-audit-v2/result.json');
+          const b = read('docs/selective-opportunity-audit-v2-replay/result.json');
+          assert.equal(a.sourceSnapshotSha256,b.sourceSnapshotSha256);
+          assert.deepEqual(a.summary,b.summary);
+          assert.equal(a.profitabilityProven,false);
+          assert.equal(a.actualOrders,0);
+          assert.equal(a.executionAuthority,'NONE');
+          assert.equal(a.combinedReturn,null);
+          assert.equal(a.canonicalSampleDelta,0);
+          assert.equal(a.summary.length,12);
+          console.log('SAME_SNAPSHOT_REPLAY_AND_SAFETY_PASS');
+          NODE
+      - name: Print citable summary
+        if: always()
+        working-directory: market-prediction-lab
+        run: cat docs/selective-opportunity-audit-v2/result.md || true
+      - name: Upload source snapshot and immutable audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selective-opportunity-audit-v2-${{ github.run_id }}
+          path: market-prediction-lab/docs/selective-opportunity-audit-v2
+          if-no-files-found: warn
+          retention-days: 90
