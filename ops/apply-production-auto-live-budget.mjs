@@ -67,22 +67,41 @@ async function main() {
     '\\set ON_ERROR_STOP on', 'begin isolation level serializable;',
     "set local lock_timeout='5s';", "set local statement_timeout='60s';",
     "select pg_advisory_xact_lock(hashtextextended('production-auto-live-budget-install-v1',0));",
-    `select set_config('app.trading_fingerprint_before',(${fingerprint}),true);`,
-    String.raw`do $before$ begin
+    // Transaction-local snapshot: restricted PostgreSQL owners need not SET any
+    // custom GUC. ON COMMIT DROP prevents cross-run evidence reuse.
+    String.raw`create temporary table pg_temp.auto_live_budget_install_snapshot (
+      trading_fingerprint text not null,
+      reservation_fingerprint text not null
+    ) on commit drop;`,
+    `do $before$
+    declare
+      reservation_before text;
+    begin
       if to_regclass('public.trade_live_budget_reservations') is null then
-        perform set_config('app.budget_fingerprint_before',md5(''),true);
+        reservation_before := md5('');
       else
-        perform set_config('app.budget_fingerprint_before',(select md5(coalesce(string_agg(row_to_json(r)::text,',' order by user_id,order_id),''))
-          from public.trade_live_budget_reservations r),true);
+        select md5(coalesce(string_agg(row_to_json(r)::text,',' order by user_id,order_id),''))
+          into reservation_before from public.trade_live_budget_reservations r;
       end if;
+      insert into pg_temp.auto_live_budget_install_snapshot (trading_fingerprint,reservation_fingerprint)
+        values ((${fingerprint}), reservation_before);
     end $before$;`,
     body,
-    String.raw`do $after$ begin
+    `do $after$
+    declare
+      snapshot_count integer;
+      trading_before text;
+      reservation_before text;
+    begin
       if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true
         or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v3'
       then raise exception 'BUDGET_GUARD_NOT_READY'; end if;
-      if current_setting('app.trading_fingerprint_before')<>(${fingerprint}) then raise exception 'USER_TRADING_ROWS_MUTATED'; end if;
-      if current_setting('app.budget_fingerprint_before')<>(select md5(coalesce(string_agg(row_to_json(r)::text,',' order by user_id,order_id),''))
+      select count(*), max(trading_fingerprint), max(reservation_fingerprint)
+        into snapshot_count, trading_before, reservation_before
+        from pg_temp.auto_live_budget_install_snapshot;
+      if snapshot_count <> 1 then raise exception 'BUDGET_INSTALL_SNAPSHOT_INVALID'; end if;
+      if trading_before is distinct from (${fingerprint}) then raise exception 'USER_TRADING_ROWS_MUTATED'; end if;
+      if reservation_before is distinct from (select md5(coalesce(string_agg(row_to_json(r)::text,',' order by user_id,order_id),''))
         from public.trade_live_budget_reservations r) then raise exception 'BUDGET_RESERVATION_ROWS_MUTATED'; end if;
     end $after$;`,
     `select json_build_object('schemaVersion','production-auto-live-budget-install-v1','targetSha','${sha}',
