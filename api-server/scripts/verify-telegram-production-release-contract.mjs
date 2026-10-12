@@ -274,7 +274,9 @@ const runtimeTradingBlock = source.slice(runtimePreflightIndex,storageMigrationI
 if (!runtimeTradingBlock.includes('TELEGRAM_PREFLIGHT_TRADING_RUNTIME_ACTIVE')
   || !runtimeTradingBlock.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')
   || !runtimeTradingBlock.includes('LIVE_TRADING_ACTIVATION_APPROVED')
-  || !runtimeTradingBlock.includes('executionAuthority')) {
+  || !runtimeTradingBlock.includes('executionAuthority')
+  || !runtimeTradingBlock.includes('BITGET_LIVE_ORDER_ENABLED')
+  || !runtimeTradingBlock.includes('SPOT_LIVE_CAPABILITY_ALLOWLIST')) {
   throw new Error('TELEGRAM_PREFLIGHT_ACTIVE_TRADING_RUNTIME_NOT_BLOCKED');
 }
 const tradingActivationStart = source.indexOf('function activateApprovedTelegram(');
@@ -284,6 +286,9 @@ if (tradingActivationStart<0 || tradingActivationEnd<tradingActivationStart
   || !tradingActivationBlock.includes('TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE')
   || !tradingActivationBlock.includes("execFileSync('pm2',['jlist']")
   || !tradingActivationBlock.includes('activeTrading(fresh)')
+  || !tradingActivationBlock.includes('UPBIT_LIVE_ORDER_ENABLED')
+  || !tradingActivationBlock.includes('SPOT_LIVE_MARKET_ALLOWLIST')
+  || !tradingActivationBlock.includes("key === 'executionAuthority'")
   || tradingActivationBlock.includes("LIVE_TRADING: 'false'")
   || tradingActivationBlock.includes("AUTO_TRADING: 'false'")
   || tradingActivationBlock.includes("executionAuthority: 'NONE'")) {
