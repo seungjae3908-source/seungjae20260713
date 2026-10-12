@@ -4,6 +4,7 @@ import { collectUpbitSpotHistory } from "./upbit-spot-history.js";
 import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { BitgetPublicClient, BitgetPublicApiError } from "./bitget-public-client.js";
 import { isPublicHistorySourceDataErrorV1 } from "./public-history-source-errors-v1.js";
+import { isNativeBitgetUsdtSymbolV1 } from "./historical-native-symbol-v1.js";
 import {
   persistResearchMinuteSessionV1,
   deriveArchivedResearchTimeframesV1,
@@ -30,7 +31,6 @@ const MARKET = Object.freeze({
     sourceId: "BITGET_PUBLIC_V2_RETROSPECTIVE_1M",
   }),
 });
-const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const SHA = /^[0-9a-f]{64}$/u;
 const digest = rows => createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 const stop = (market, symbol, dayStartMs, reason, extra = {}) => Object.freeze({
@@ -48,9 +48,9 @@ const stop = (market, symbol, dayStartMs, reason, extra = {}) => Object.freeze({
 });
 function validate(input) {
   if (!input || !Object.hasOwn(MARKET, input.market)
-    || typeof input.symbol !== "string" || !SYMBOL.test(input.symbol)
+    || typeof input.symbol !== "string"
     || (input.market === "CRYPTO_SPOT" && !/^KRW-[A-Z0-9]{1,20}$/u.test(input.symbol))
-    || (input.market === "CRYPTO_FUTURES" && !/^[A-Z0-9]{2,30}USDT$/u.test(input.symbol))
+    || (input.market === "CRYPTO_FUTURES" && !isNativeBitgetUsdtSymbolV1(input.symbol))
     || !Number.isSafeInteger(input.dayStartMs) || input.dayStartMs <= 0
     || input.dayStartMs % DAY !== 0
     || !SHA.test(input.expectedRosterDigestSha256 ?? "")
@@ -92,7 +92,7 @@ export function normalizeRetrospectiveCryptoMinuteSourceV1({
   if (!Object.hasOwn(MARKET, market) || typeof symbol !== "string"
     || !(market === "CRYPTO_SPOT"
       ? /^KRW-[A-Z0-9]{1,20}$/u.test(symbol)
-      : /^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u.test(symbol)))
+      : isNativeBitgetUsdtSymbolV1(symbol)))
     return { error: "NATIVE_1M_SOURCE_IDENTITY_INVALID" };
   if (!Number.isSafeInteger(dayStartMs) || dayStartMs <= 0
     || dayStartMs % DAY !== 0 || dayStartMs + DAY > 8_640_000_000_000_000
