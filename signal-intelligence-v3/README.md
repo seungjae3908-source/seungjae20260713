@@ -523,3 +523,31 @@ clock errors. These include neither symbols nor candle values and never
 grant a scanner/Telegram/Paper/profitability PASS. Any genuine malformed
 completed daily bar remains a failed source-health check; detailed reasons
 are preserved in the existing no-deploy failed-run diagnostics.
+
+## Draft: exact candidate/publication lineage and cross-market safety
+
+The new V3-only current-page publication proof rejects candidate rows whose
+market, timeframe, strategy identity, source venue, original signal ID,
+immutable research SHA, cost-policy identity, quant/risk status, positive
+economic edge or verified-backtest *structure* does not match the exact
+current source lane. It compares each published list copy with the canonical
+snapshot row and every NEW_CANDIDATE event with that same canonical row.
+A forged or reused row ID cannot gain an economic result or create an alert.
+This is defence in depth **not independently authenticated OOS**.
+
+The canonical adapter also rejects asset-class/venue misrouting
+(Upbit Spot price as Bitget Futures or vice versa), action/side contradictions,
+missing trustworthy data-quality receipts and unknown/non-A/S signal grades.
+These restrictions apply only to the Signal V3 public Draft; shared member,
+Paper and LIVE code are unchanged.
+
+**Remaining real-data blockers** are separate: the KRX public-only Yahoo
+source excludes 2,496 alphanumeric instruments; 15m/60m Yahoo stock series
+contain unverified actual session gaps; sparse/no-trade Upbit 15m must
+not be fabricated; and validated independent OOS/WF/full-cost receipts
+do not yet exist for the retained research candidates.
+KRX data-service agreements and third-party redistribution conditions
+need separate authorized verification, not assuming a free private-use
+key grants rights to a commercial member-facing service.
+See https://openapi.krx.co.kr/contents/OPP/DATA/OPPDATA003.jsp and
+https://openapi.krx.co.kr/contents/OPP/INFO/OPPINFO005.jsp .

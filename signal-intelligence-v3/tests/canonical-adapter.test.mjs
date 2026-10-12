@@ -306,3 +306,52 @@ test('independent missing backtest proof is counted even before Paper identity e
   assert.ok(verifiedButUnlinked.provenance.profitBlockers.includes('BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED'));
   assert.ok(!verifiedButUnlinked.provenance.profitBlockers.includes('BACKTEST_QUALITY_VERIFICATION_REQUIRED'));
 });
+
+test('V3 cannot route a Spot venue as Futures or a Futures venue as Spot',()=>{
+  for(const override of [
+    {assetClass:'coin_spot',market:'BITGET_USDT_FUTURES',exchange:'BITGET',
+      action:'BUY',direction:'LONG'},
+    {assetClass:'coin_futures',market:'UPBIT_KRW',exchange:'UPBIT',
+      action:'SHORT',direction:'SHORT'},
+    {assetClass:'coin_spot',market:'UPBIT_KRW',exchange:'BITGET',
+      action:'BUY',direction:'LONG'},
+    {assetClass:'coin_futures',market:'BITGET_USDT_FUTURES',exchange:'UPBIT',
+      action:'SHORT',direction:'SHORT'},
+    {assetClass:'coin_spot',market:'FAKE_PROVIDER',
+      action:'BUY',direction:'LONG'},
+  ]){
+    assert.equal(adaptCanonicalScannerCard({card:card(override),timeframe:'15m'},
+      {nowMs:NOW}),null,JSON.stringify(override));
+  }
+});
+test('a conflicting action and side can never be silently normalized into a BUY, LONG or SHORT',()=>{
+  for(const override of [
+    {action:'BUY',direction:'SHORT'},
+    {action:'BUY',direction:'NEUTRAL'},
+    {action:'SELL',direction:'LONG'},
+    {assetClass:'coin_futures',market:'futures',action:'LONG',direction:'SHORT'},
+    {assetClass:'coin_futures',market:'futures',action:'SHORT',direction:'LONG'},
+    {assetClass:'coin_futures',market:'futures',action:'BUY',direction:'LONG'},
+  ]){
+    assert.equal(adaptCanonicalScannerCard({card:card(override),timeframe:'15m'},
+      {nowMs:NOW}),null,JSON.stringify(override));
+  }
+});
+test('missing/untrusted source quality and missing A/S qualification cannot become current candidates',()=>{
+  for(const change of [
+    {dataQuality:null},
+    {dataQuality:{state:'DEGRADED',strongSignalAllowed:true}},
+    {dataQuality:{state:'TRUSTED',strongSignalAllowed:false}},
+    {dataQuality:{state:'TRUSTED',strongSignalAllowed:true,
+      issues:[{code:'MISSING_CANDLE',severity:'blocking'}]}},
+  ]){
+    const row=adaptCanonicalScannerCard(canonicalInput(card(change)),{nowMs:NOW});
+    assert.equal(row.dataStatus,'BLOCKED',JSON.stringify(change));
+    assert.equal(runSignalIntelligenceV3([row]).lists.krBuy.length,0);
+  }
+  for(const grade of [null,'B','C','UNKNOWN']){
+    const row=adaptCanonicalScannerCard(canonicalInput(card({signalGrade:grade})),{nowMs:NOW});
+    assert.equal(row.quantEligible,false,String(grade));
+    assert.equal(runSignalIntelligenceV3([row]).lists.krBuy.length,0);
+  }
+});
