@@ -278,10 +278,8 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   const workflow = await readFile(workflowUrl, 'utf8');
   assert.match(workflow, /id: activate_ai/);
   assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
-  assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
-  assert.match(workflow, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=/);
-  assert.ok(workflow.includes("grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='"));
-  assert.ok(workflow.includes("grep -Eo 'AI_RESEARCH_[-A-Za-z0-9_.:=]+'"));
+  assert.match(workflow, /evaluateAiActivationResult/u);
+  assert.match(workflow, /research-ai-activation-result\.cjs/u);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /status: failed_closed/);
@@ -291,6 +289,10 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   assert.match(workflow, /id: confirm_policy/u);
   assert.ok(workflow.includes('steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason'));
   assert.ok(workflow.includes('ai-research-consent.txt'));
-  assert.ok(workflow.includes('remote_status=${PIPESTATUS[0]}'));
+  assert.ok(workflow.includes('activation_pipeline_status=("${PIPESTATUS[@]}")'));
+  assert.ok(workflow.includes('${activation_pipeline_status[0]}'));
+  assert.ok(workflow.includes('${activation_pipeline_status[1]}'));
+  assert.match(workflow, /runtime_recheck_required: ' \+ process\.env\.RUNTIME_RECHECK_REQUIRED/u);
+  assert.ok(workflow.includes("steps.activate_ai.outputs.runtime_recheck_required == 'true' || steps.activate_ai.outputs.completion_evidence_observed == 'true'"));
   assert.match(workflow, /RESEARCH_\(CONFIRMATION_\[A-Z_\]\+/u);
 });

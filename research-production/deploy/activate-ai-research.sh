@@ -154,7 +154,7 @@ process.stdout.write(JSON.stringify({
 NODE
 }
 
-provider_preflight() {
+provider_preflight() (
   if provider_env_ready >/dev/null; then
     provider_env_ready
     return 0
@@ -166,7 +166,9 @@ provider_preflight() {
   fi
   local evidence
   evidence="$(mktemp)"
-  trap 'rm -f "$evidence"' RETURN
+  # A RETURN trap survives this helper and later sees its expired local.
+  # The subshell keeps cleanup and its EXIT trap out of the caller's traps.
+  trap 'rm -f -- "$evidence"' EXIT
   "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" preflight \
     --app-root "$APP_ROOT" \
     --process-name stock-app > "$evidence"
@@ -188,7 +190,7 @@ if (value?.schemaVersion !== 'research-provider-bootstrap-v1'
   throw new Error('AI_RESEARCH_PROVIDER_PREFLIGHT_NOT_READY');
 }
 NODE
-}
+)
 
 normalize_existing_provider_env() {
   provider_credentials_present >/dev/null
@@ -396,10 +398,10 @@ refresh_current_sha_forward_evidence() {
   require_current_sha_ai_evidence_ready
 }
 
-verify_workspace_worker_health() {
+verify_workspace_worker_health() (
   local evidence
   evidence="$(mktemp)"
-  trap 'rm -f "$evidence"' RETURN
+  trap 'rm -f -- "$evidence"' EXIT
   local -a research_user_cmd
   if command -v runuser >/dev/null 2>&1; then
     research_user_cmd=("${SUDO[@]}" runuser -u investment-research --)
@@ -429,7 +431,7 @@ NODE
   done
   echo "AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE" >&2
   return 1
-}
+)
 
 verify_one_shot_evidence() {
   local started_ms="$1"
