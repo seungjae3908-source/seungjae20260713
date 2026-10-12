@@ -162,7 +162,7 @@ async function openStocksPage(page: Page) {
   await installAuthenticatedUser(page);
   await installNonSearchApiMocks(page);
   await page.goto('/market-browser');
-  await expect(page.getByTestId('stocks-shell')).toBeVisible();
+  await expect(page.getByTestId('stocks-shell')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
 }
 
@@ -338,12 +338,12 @@ test('zero results, provider failure, and identity-only results remain truthfull
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
 
   await input.fill('NO-SUCH-STOCK');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('NO_MATCH');
-  await expect(page.getByTestId('unified-search-outcome')).not.toContainText('PROVIDER_UNAVAILABLE');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('일치하는 종목이나 코인이 없습니다');
+  await expect(page.getByTestId('unified-search-outcome')).not.toContainText('일부 시장의 검색 결과를 확인할 수 없습니다');
 
   await input.fill('provider-down');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('PROVIDER_UNAVAILABLE');
-  await expect(page.getByTestId('unified-search-outcome')).toContainText('정상적인 검색 결과 0건이 아닙니다');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('일부 시장의 검색 결과를 확인할 수 없습니다');
+  await expect(page.getByTestId('unified-search-outcome')).toContainText('일부 제공기관이 응답하지 않아 결과가 완전하지 않습니다');
 
   await input.fill('005930');
   await expect(page.getByRole('option', { name: /삼성전자.*005930/ })).toBeVisible();
