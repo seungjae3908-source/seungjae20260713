@@ -43,6 +43,8 @@ export type MemberAutoTradingPaperHandoffEntry = Readonly<{
     learningSnapshot: Readonly<Record<string, unknown>> | null;
   }>;
   profitEvidence: Readonly<Record<string, unknown>> | null;
+  /** Already-issued upstream proof; absent evidence is not an AI approval. */
+  aiReviewEvidence?: Readonly<Record<string, unknown>>;
   riskEvidence: Readonly<{
     status: 'APPROVED';
     source: 'TRADING_RISK_ENGINE';
