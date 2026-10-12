@@ -449,9 +449,16 @@ calls, real/Paper orders and Telegram sends are not part of this Draft.
 caught a real starvation bug: 32 successful provider requests only advanced
 17 distinct symbols because a single global cursor repeatedly chose the same
 futures range. The experimental per-venue picker now orders eligible active
-ranges by their existing sealed `lastSuccessAt` receipt, ahead of optional
+ranges by their existing sealed `lastSuccessAtMs` receipt, ahead of optional
 BACKFILL ranges; it does not create/reset a parallel cursor or change the
 legacy single-lane order. A persisted restart regression must prove two
 successive 32-action fixture cycles progress **64 unique symbols**, never
 32 requests masquerading as complete-universe coverage. Provider rate-limit
 holds and original data availability semantics remain unchanged.
+
+
+The first attempted fairness implementation failed its dedicated Linux QA
+because it read a nonexistent `lastSuccessAt` key rather than the canonical
+SHA-sealed state key `lastSuccessAtMs`. The exact-key correction has an
+explicit adversarial global-nextIndex regression; never skip/falsify this
+test or credit a previous failed commit as passed.
