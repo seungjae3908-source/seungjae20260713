@@ -420,7 +420,7 @@ export class SignalIntelligenceTelegramDeliveryState {
   async markUnconfirmed(key: string, now: Date): Promise<void> {
     return this.persist(key, now, false);
   }
-  /** A sender explicitly performed ZERO Bot API attempts. */
+  /** Sender proves no accepted Bot API message (local skip/explicit rejection). */
   async releaseExplicitNoSend(key: string, now: Date): Promise<void> {
     return this.persist(key, now, null);
   }
@@ -608,10 +608,18 @@ export class SignalIntelligenceTelegramSubscriber {
           } else result.deduped += 1;
         } else if (sent.attempts === 0
           && ['NOT_CONFIGURED','COOLDOWN'].includes(sent.skipped)) {
-          // No Bot API attempt occurred. A definitive local no-send can
-          // safely release its pre-send reservation for a later retry.
+          // No Bot API attempt occurred, so a later retry is safe.
           await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
           result.skipped += 1;
+        } else if (sent.skipped === 'DELIVERY_FAILED'
+          && (sent.errorCode === 'TELEGRAM_API_REJECTED'
+            || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
+              .test(sent.errorCode ?? ''))) {
+          // Telegram explicitly refused this POST: no message was accepted.
+          // Preserve failure visibility while releasing only its no-send
+          // marker for a later bounded retry or repaired room permissions.
+          await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
+          result.failed += 1;
         } else if (sent.skipped === 'OUTCOME_UNCONFIRMED'
           || sent.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
           result.failed += 1;

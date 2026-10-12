@@ -63,3 +63,10 @@ a guarantee of true global exactly-once delivery across multiple unsynchronized
 workers, provider acknowledgments or external database failover. The protected
 Production recipient receipts and owner-approved operational tests remain
 unverified.
+
+Telegram's explicit HTTP 400/401/403/404/409/410/422/429 rejections
+and Bot API `ok:false` replies are known non-deliveries and may safely
+release the pre-send reservation while remaining classified as a failed send.
+HTTP 5xx, timeouts, malformed successful responses and any uncertain Bot API
+outcome remain blocked for manual reconciliation. This deliberately chooses
+at-most-once safety over guaranteed delivery after an ambiguous remote POST.
