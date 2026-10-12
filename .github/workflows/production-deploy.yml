@@ -467,6 +467,20 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+      - name: Verify independent AUTO LIVE source availability before any database or application mutation
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          test -s ops/production-auto-live-signal-identity.cjs
+          remote_env="$(printf 'AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_DEPLOYED_SHA=%q' "$TARGET_SHA" "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" \
+            < ops/production-auto-live-signal-identity.cjs
+          # No DB, PM2, cron, filesystem or provider mutation in this step.
       - name: Require canonical Production trade schema and journal privileges before application mutation
         id: database-gates
         env:
@@ -798,13 +812,15 @@ jobs:
             "$SSH_USER@$SSH_HOST" "$remote_command" > "$activation" <<'REMOTE'
           set -Eeuo pipefail
           test "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" = "$TARGET_SHA"
-          PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
-            bash ops/disable-paper-forward-schedule.sh >/dev/null
-          LIVE_DIR=/opt/stock-app \
-            PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
-            PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false \
-            AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED=true \
-            bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"
+          # Recheck independent ownership immediately before installing:
+          # the historic Paper Forward cron and ledger must remain untouched.
+          AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA" \
+            AUTO_LIVE_DEPLOYED_SHA="$TARGET_SHA" \
+            node ops/production-auto-live-signal-identity.cjs >/dev/null
+          AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true \
+            AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true \
+            AUTO_LIVE_TARGET_SHA="$TARGET_SHA" \
+            node ops/production-auto-live-signal-identity.cjs
           REMOTE
           node - "$activation" <<'NODE'
           const fs = require('node:fs');
@@ -819,6 +835,14 @@ jobs:
             || value?.financialMutationCount !== 0
             || value?.liveTrading !== false) {
             throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_SCHEDULE_INVALID');
+          }
+          if (value?.independentPaperRoot !== true
+            || value?.paperRootMutated !== false
+            || value?.paperCronReplaced !== false
+            || value?.producerInvocationVerified !== false
+            || value?.aiIssuerVerified !== false
+            || value?.autoTradingActivationReady !== false) {
+            throw new Error('PRODUCTION_AUTO_LIVE_INDEPENDENT_SOURCE_INVALID');
           }
           if (value?.canonicalCycleIntervalMs !== 900000) {
             throw new Error('PRODUCTION_AUTO_LIVE_SIGNAL_REFRESH_CADENCE_INVALID');
@@ -841,10 +865,10 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" 'bash -s' > "$refresh" <<'REMOTE'
           set -Eeuo pipefail
-          state_root=/opt/stock-app-data/paper-forward-v1
-          test ! -e "$state_root/DISABLED"
-          test ! -e "$state_root/runtime-state/DISABLED"
-          flock -w 120 "$state_root/cron.lock" "$state_root/bin/run-paper-forward-schedule"
+          state_root=/opt/stock-app-data/auto-live-signal-v1
+          test ! -e "$state_root/DISABLED" && test ! -L "$state_root/DISABLED"
+          test ! -e "$state_root/runtime-state/DISABLED" && test ! -L "$state_root/runtime-state/DISABLED"
+          flock -w 120 "$state_root/cron.lock" "$state_root/bin/run-auto-live-public-signal"
           tail -n 1 "$state_root/logs/cron.log"
           REMOTE
           node - "$refresh" <<'NODE'
@@ -863,7 +887,7 @@ jobs:
           }
           NODE
           remote_command="$(printf 'cd /opt/stock-app && node ops/production-auto-live-signal-source-audit.mjs %q %q %q' \
-            '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json' \
+            '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json' \
             "$TARGET_SHA" "$GITHUB_RUN_ID")"
           remote_command="$remote_command $(printf '%q' "$SIGNAL_SCHEDULE_ACTIVATED_AT_MS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
