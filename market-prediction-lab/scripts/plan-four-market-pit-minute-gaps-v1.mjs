@@ -116,6 +116,8 @@ export function runPITMinuteGapPlanCliV1(config) {
     taskPageIndex:result.taskPageIndex,
     nextTaskPageIndex:result.nextTaskPageIndex,
     proposedTasks:result.candidateTasks?.length??0,
+    partialRetryReviewCount:result.partialRetryReviewCount??null,
+    partialRetryCannotAutoExecute:true,
     totalMissingSourceSessions:result.totalMissingSourceSessions,
     autoExecuteAllowed:false,providerGETCount:0,
     trueMarketWideRecall:null,profitabilityProven:false,

@@ -235,3 +235,28 @@ node market-prediction-lab/scripts/audit-research-minute-revisions-v1.mjs \
 고정하지 않으며 1일~10년 이상의 지정 기간도 기존 최대 31일
 청크/이어받기 정책을 그대로 적용한다. 실제 데이터 수집,
 원본 파일 수정 또는 운영 배포는 이번 코드 QA에서 수행하지 않는다.
+
+### 2026-10-12 — 전 종목 PIT 일별 보고서로 원본 SHA 복구 티켓 전달
+
+한 종목/선택 기간의 `partialRetryReviewPlan`을 이미 구현된
+`auditHistoricalPITMinuteArchiveChunkV1`의 20종목 단위 PIT 원본
+보고서로 연결했다. 이어서 전체 일자 `summarizeHistoricalPITMinuteDayPagesV1`
+에서 모든 회원명부 종목/원본 세션의 누락 원본 SHA 티켓 개수와
+상위 100개 요약을 검증한다.
+
+부분 수집의 원본 SHA, 분봉 수, 남은 미검증 슬롯을 정확한
+종목·시장·세션 날짜와 묶는다. 누락 건과 부분 수집 건은 별개이므로
+이전에 존재하던 부분 원본을 새 `MISSING_ORIGINAL_ONE_MINUTE_SESSION`
+또는 자동 실행 가능한 GET 작업으로 잘못 전환하지 않는다.
+
+`planPITNativeMinuteSourceGapsV1`는 `candidateTasks` (진짜 원본
+세션 부재)와 `partialRetryReviewTasks` (이미 가진 분봉의
+**수동 해시 대조 검토**)를 따로 표시한다. 후자는 기존의
+`runPlannedPITMinuteSourceTaskV1` 자동 대상에 추가하지 않는다.
+재수집하려면 사용자의 별도 명시적 공개 데이터 조회 승인,
+원본 SHA 리뷰, 공급자별 비용·무료 제한·이용권 확인이 필요하다.
+
+국내/해외주식·코인현물은 매수만, 코인선물은 LONG/SHORT라는
+방향 정책은 그대로이고 이 코드에서 매매 신호 또는 주문은
+발생하지 않는다. `providerGETCount=0`, `executionAuthority=NONE`,
+`profitabilityProven=false`와 Draft 범위가 유지된다.
