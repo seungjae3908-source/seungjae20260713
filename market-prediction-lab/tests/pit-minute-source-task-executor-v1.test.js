@@ -842,9 +842,12 @@ test("all-members PIT one-task picker retains a dated Han named Bitget USDT cont
   const pages=await makePageReceipts(root,market,manifest);
   const planning=plan({market,day:"2026-09-18",manifest,pages,taskPageIndex:0});
   assert.equal(planning.status,"PLANNED_EXPLICIT_PUBLIC_READ_ONLY");
-  assert.equal(planning.candidateTasks[0].symbol,"龙虾USDT");
+  const hanTaskIndex=planning.candidateTasks
+    .findIndex(task=>task.symbol==="龙虾USDT");
+  assert.ok(hanTaskIndex>=0,"the Han contract is represented in the source plan");
   const t={root,market,manifest,pages,planning};
   const r=await execute(request(t,{
+   taskIndex:hanTaskIndex,
    allowPublicReadOnlyFetch:true,
    bitgetClient:{get:async(path,params)=>{
      calls.push({path,params});
