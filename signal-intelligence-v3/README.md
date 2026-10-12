@@ -551,3 +551,26 @@ need separate authorized verification, not assuming a free private-use
 key grants rights to a commercial member-facing service.
 See https://openapi.krx.co.kr/contents/OPP/DATA/OPPDATA003.jsp and
 https://openapi.krx.co.kr/contents/OPP/INFO/OPPINFO005.jsp .
+
+## Draft: repeat strict publication validation at the loopback HTTP read boundary
+
+The V3 producer already publishes only current, canonically validated source
+signals. The loopback read-only server must not assume any deserialized
+snapshot is trustworthy solely because it has a matching service SHA.
+It now recomputes the exact `currentPagePublication` projection on every
+new on-disk snapshot read, **before** returning `/v1/signals` or per-market
+lists. Only the canonically matching candidate rows and immutable events
+can appear in HTTP output. Old retained research rows remain available
+as research history, not active list or alert admission.
+
+The health endpoint reports independent source-page and publication readback
+integrity booleans. A stale, absent, partially proven or internally altered
+candidate list is NEVER reported as publication-ready. A mismatched published
+list or event is fail-closed for that market's active candidates without
+requiring any network data request or order. Test fixtures include an
+explicit, synthetic-only, twelve-lane positive readback and on-disk economic
+tampering / same-mtime inode replacement regression checks.
+
+This does **not** prove real independent OOS/walk-forward/full-cost profit;
+no Telegram Bot API send, real order, live enablement, main merge,
+Staging or Production change is authorized by this Draft.
