@@ -327,8 +327,9 @@ test('admin historical 1m coverage reads and aggregates the full selected period
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await expect(panel).toBeVisible();
   await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
@@ -364,8 +365,9 @@ test('historical 1m coverage UI fails closed after 403 or an unsafe response, wi
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
@@ -408,8 +410,9 @@ test('same-window admin recheck revokes previously displayed source totals after
     });
   });
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  // Enter the current general → research → validation navigation, not the retired 상세 entry.
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await page.getByRole('button', { name: '검증', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
   await panel.getByLabel('과거 데이터 시작일').fill('2026-09-18');
   await panel.getByLabel('과거 데이터 종료일').fill('2026-09-19');
