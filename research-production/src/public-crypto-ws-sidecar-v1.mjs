@@ -13,6 +13,7 @@ export const PUBLIC_WS_SIDECAR_CONTRACT=
   'research-public-crypto-ws-provisional-sidecar/v1';
 export const PUBLIC_WS_SIDECAR_LIMITS=Object.freeze({
   maxBatchObservations:2_048,maxDistinctMinutes:480,
+  maxRawUpdatesAccounted:200_000,
   maxUncompressedBytes:512*1024,maxGzipBytes:512*1024,
   minFreeBytes:5*1024**3,maxBatchMinutes:5,
 });
@@ -112,7 +113,7 @@ function row(raw,{market,startMs,endMs,nowMs}){
 const payloadDigest=x=>hex(JSON.stringify(x));
 export function preparePublicWsProvisionalBatchV1({
   enabled=false,market,socketDigest,producerSha,
-  startMs,endMs,observations=[],nowMs,
+  startMs,endMs,observations=[],actualUpdatesSeen=null,nowMs,
 }={}){
   if(!enabled)return Object.freeze({
     contract:PUBLIC_WS_SIDECAR_CONTRACT,status:'DISABLED',
@@ -123,6 +124,14 @@ export function preparePublicWsProvisionalBatchV1({
     ||observations.length>PUBLIC_WS_SIDECAR_LIMITS.maxBatchObservations
     ||!goodTime(nowMs)||nowMs<endMs+5_000)
     fail('WS_SIDECAR_BATCH_INPUT_INVALID');
+  // A per-socket spool may compact many websocket updates into the last
+  // cumulative observation of each minute. Count the actual seen updates
+  // without requiring thousands of duplicate raw frames on disk.
+  const rawUpdateCount=actualUpdatesSeen??observations.length;
+  if(!Number.isSafeInteger(rawUpdateCount)
+    ||rawUpdateCount<observations.length
+    ||rawUpdateCount>PUBLIC_WS_SIDECAR_LIMITS.maxRawUpdatesAccounted)
+    fail('WS_SIDECAR_ACTUAL_UPDATE_COUNT_INVALID');
   const index=new Map();
   for(const obs of observations){
     const record=row(obs,{market,startMs,endMs,nowMs});
@@ -151,7 +160,7 @@ export function preparePublicWsProvisionalBatchV1({
     contract:PUBLIC_WS_SIDECAR_CONTRACT,status:'PROVISIONAL_ONLY',
     market,socketDigest,producerSha,startMs,endMs,
     capturedAtMs:nowMs,observedRows:compact.length,
-    rawUpdatesSeen:observations.length,restClosedMinuteVerified:false,
+    rawUpdatesSeen:rawUpdateCount,restClosedMinuteVerified:false,
     genuineAsOfResearchCredit:false,executionAuthority:'NONE',
   };
   const digest=payloadDigest([header,compact]);
@@ -166,7 +175,7 @@ export function preparePublicWsProvisionalBatchV1({
     contract:PUBLIC_WS_SIDECAR_CONTRACT,status:'SEALED_PROVISIONAL_BATCH',
     payload,gzip,plainBytes:plain.length,gzipBytes:gzip.length,
     compressedDigest:hex(gzip),compactedMinutes:compact.length,
-    rawUpdatesSeen:observations.length,
+    rawUpdatesSeen:rawUpdateCount,
     archiveFilesWritten:0,...zero(),
   });
 }
@@ -207,7 +216,11 @@ function decodeCompressed(data){
     ||obj.header.status!=='PROVISIONAL_ONLY'
     ||obj.header.executionAuthority!=='NONE'
     ||obj.header.restClosedMinuteVerified!==false
-    ||obj.header.genuineAsOfResearchCredit!==false)
+    ||obj.header.genuineAsOfResearchCredit!==false
+    ||!Number.isSafeInteger(obj.header.rawUpdatesSeen)
+    ||obj.header.rawUpdatesSeen<obj.observations.length
+    ||obj.header.rawUpdatesSeen>
+      PUBLIC_WS_SIDECAR_LIMITS.maxRawUpdatesAccounted)
     fail('WS_SIDECAR_CONTENT_INVALID');
   return obj;
 }
