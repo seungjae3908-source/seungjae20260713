@@ -244,9 +244,12 @@ require_runtime_policy_env() {
     exit 72
   }
 
-  "${SUDO[@]}" node - "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV" <<'NODE'
-const fs = require('node:fs');
-const { parseEnv } = require('node:util');
+  "${SUDO[@]}" node --input-type=module - "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV" \
+    "$RESEARCH_ROOT/research-production/src/research-video-discovery-policy.mjs" <<'NODE'
+import fs from 'node:fs';
+import { parseEnv } from 'node:util';
+import { pathToFileURL } from 'node:url';
+const { resolveResearchVideoDiscoveryQueries } = await import(pathToFileURL(process.argv[4]).href);
 
 const aiPath = process.argv[2];
 const videoPath = process.argv[3];
@@ -293,6 +296,7 @@ const maxResults = Number(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? '3');
 if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 3) {
   throw new Error('VIDEO_RESEARCH_MAX_RESULTS_INVALID');
 }
+const queries = resolveResearchVideoDiscoveryQueries(video);
 const region = String(video.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim().toUpperCase();
 if (region && !/^[A-Z]{2}$/.test(region)) {
   throw new Error('VIDEO_RESEARCH_REGION_INVALID');
@@ -316,6 +320,7 @@ process.stdout.write(JSON.stringify({
   video: {
     approved: true,
     maxResults,
+    queryCount: queries.length,
     region: region || null,
     language: language || null,
     publishedAfterHours,
