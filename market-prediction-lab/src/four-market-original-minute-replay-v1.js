@@ -6,6 +6,7 @@ import {deriveArchivedResearchTimeframesV1} from "./research-minute-archive-v1.j
 import {validateResearchStockSessionsForDateV1} from "./research-minute-archive-window-v1.js";
 import {auditHistoricalPITVenueUniverseV1,digestPITMembershipRowsV1} from "./historical-pit-venue-universe-gate-v1.js";
 import {validatePublicNativeCryptoRosterCaptureV1} from "./public-native-crypto-roster-v1.js";
+import {isHistoricalNativeSymbolV1} from "./historical-native-symbol-v1.js";
 import {ORIGINAL_MINUTE_EXECUTION_MODEL_V2,originalMinuteExitFillV2,
   originalMinuteLiquidationV2,recordOriginalMinuteEquityV2} from "./original-minute-execution-model-v2.js";
 
@@ -32,7 +33,6 @@ const HORIZONS=Object.freeze([
 ]);
 const DATES=/^\d{4}-\d{2}-\d{2}$/;
 const SHA=/^[a-f0-9]{64}$/;
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
 const CURRENT_SCOPE="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
 const PIT_SCOPE="HISTORICAL_PIT_ROSTER";
 const CURRENT_SOURCE_IDS=Object.freeze({
@@ -124,7 +124,7 @@ function normalize(input){
     fxRateKRWPerQuote=null} = input;
   if(typeof root!=="string"||!isAbsolute(root)||resolve(root)!==root
     ||!Object.hasOwn(VENUES,market)||typeof symbol!=="string"
-    ||(!evidence.sourceOnlyMode&&!SYMBOL.test(symbol))||!FRAMES.has(timeframe)
+    ||(!evidence.sourceOnlyMode&&!isHistoricalNativeSymbolV1(market,symbol))||!FRAMES.has(timeframe)
     ||(timeframe==="1d"&&market.endsWith("STOCK"))
     ||!["LONG","SHORT"].includes(direction)
     ||(market!=="CRYPTO_FUTURES"&&direction!=="LONG")

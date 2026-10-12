@@ -5,6 +5,7 @@ import {evaluateUnifiedProfitabilityPromotion} from
   "./unified-profitability-promotion-gate-v1.js";
 import {isOriginalMinuteBacktestSymbolV1} from
   "../../packages/strategy-hypothesis/src/original-minute-backtest.js";
+import {isHistoricalNativeSymbolV1} from "./historical-native-symbol-v1.js";
 
 /**
  * PURE read-only connector from existing retrospective original-minute
@@ -20,7 +21,6 @@ const VERSION="four-market-original-minute-candidate-review-v1";
 const PERIOD="four-market-original-minute-period-v1";
 const SWEEP="four-market-original-minute-sweep-v1";
 const SHA=/^[0-9a-f]{64}$/u;
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const MARKETS=new Set(["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]);
 const REQUIRED=Object.freeze([
   "INDEPENDENT_WHOLE_VENUE_HISTORICAL_PIT_ROSTER_MISSING",
@@ -153,7 +153,7 @@ export function reviewOriginalMinuteForCanonicalPaperV1({
   const current=periodResult?.evidenceScope==="CURRENT_PROVIDER_ROSTER_SOURCE_ONLY";
   if(!MARKETS.has(market)||!(current
     ?validOriginalMinuteEvidenceScopeSummaryV1(periodResult)
-      &&isOriginalMinuteBacktestSymbolV1(market,symbol):SYMBOL.test(symbol??""))
+      &&isOriginalMinuteBacktestSymbolV1(market,symbol):isHistoricalNativeSymbolV1(market,symbol))
     ||!Number.isSafeInteger(nowMs)||nowMs<1)
     fail("ORIGINAL_MODEL_PAPER_REVIEW_SCOPE_INVALID");
   const blockers=[...REQUIRED];

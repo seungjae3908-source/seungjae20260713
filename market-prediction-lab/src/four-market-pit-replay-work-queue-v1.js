@@ -1,6 +1,7 @@
 import {createHash} from "node:crypto";
 import {resolveSelectedResearchWindowV1,UTC_DAY_MS_V1 as DAY} from "./research-selected-window-v1.js";
 import {auditHistoricalPITVenueUniverseV1,digestPITMembershipRowsV1} from "./historical-pit-venue-universe-gate-v1.js";
+import {isHistoricalNativeSymbolV1} from "./historical-native-symbol-v1.js";
 
 /**
  * Exhaustive historic-roster / selected-window work pagination, not an
@@ -17,7 +18,6 @@ const MARKETS=Object.freeze({
 const STOCK=new Set(["KR_STOCK","US_STOCK"]);
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 const SHA=/^[a-f0-9]{64}$/;
-const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
 const hash=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
 const utc=x=>new Date(x).toISOString().slice(0,10);
 const fail=x=>{throw new TypeError(x);};
@@ -65,7 +65,7 @@ function roster(market,manifest){
     ||digestPITMembershipRowsV1(manifest.memberships)!==manifest.rawMembershipDigestSha256)
     fail("PIT_REPLAY_HISTORIC_ROSTER_INVALID");
   const identities=manifest.memberships.map(row=>String(row?.symbol??"").trim().toUpperCase());
-  if(identities.some(sym=>!SYMBOL.test(sym)))
+  if(identities.some(sym=>!isHistoricalNativeSymbolV1(market,sym)))
     fail("PIT_REPLAY_ROSTER_IDENTITY_INVALID");
   // Retired then relisted ticker values need immutable security identities.
   // Do not count two instruments under the same ticker without a stable ID.

@@ -12,6 +12,8 @@ import { deriveArchivedResearchTimeframesV1 as derive, persistResearchMinuteSess
   from "../src/research-minute-archive-v1.js";
 import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
+import { auditResearchMinuteArchiveWindowV1 as auditWindow }
+  from "../src/research-minute-archive-window-v1.js";
 import { parsePITNativeMinuteBackfillArgsV1 as parse,
   runPITNativeMinuteBackfillCliV1 as cli }
   from "../scripts/pit-native-crypto-minute-backfill-v1.mjs";
@@ -258,10 +260,11 @@ test("Upbit PIT public 1m opt-in stores private source, no historical as-of fabr
   } finally {rmSync(root,{recursive:true,force:true});}
 });
 
-test("Bitget public FUTURES 1m uses only Bitget native history, never Binance",async()=>{
+test("Bitget public FUTURES 1m preserves ASCII, Han and one-character native pairs through archive",async()=>{
+  for(const symbol of ["BTCUSDT","龙虾USDT","FUSDT"]){
   const root=tmp(),calls=[];
   try{
-    const result=await collect(config(root,"CRYPTO_FUTURES","BTCUSDT",{
+    const result=await collect(config(root,"CRYPTO_FUTURES",symbol,{
       allowPublicReadOnlyFetch:true,bitgetClient:bitgetMock(calls)}));
     assert.equal(result.status,"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY");
     assert.equal(result.venue,"BITGET_USDT_FUTURES");
@@ -270,14 +273,21 @@ test("Bitget public FUTURES 1m uses only Bitget native history, never Binance",a
     assert.equal(calls[0].path,"/api/v2/mix/market/history-candles");
     assert.equal(calls[0].params.productType,"usdt-futures");
     assert.equal(calls[0].params.granularity,"1m");
-    assert.equal(calls[0].params.symbol,"BTCUSDT");
-    const r=await derive({root,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",
+    assert.equal(calls[0].params.symbol,symbol);
+    const r=await derive({root,market:"CRYPTO_FUTURES",symbol,
       sessionStartMs:START,asOfMs:NOW,timeframes:["1m","5m"]});
     assert.equal(r.sourceMinuteIntegrityVerified,true);
     assert.equal(r.sourceMinuteRows,3);
     assert.equal(r.intervalData["5m"].completeBarCount,0);
     assert.equal(r.historicalWholeMarketSourceCoverageVerified,false);
+    const inventory=await auditWindow({root,market:"CRYPTO_FUTURES",symbol,
+      researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"}});
+    assert.equal(inventory.symbol,symbol);
+    assert.equal(inventory.originalOneMinuteRows,3);
+    assert.equal(inventory.profitabilityProven,false);
+    assert.equal(inventory.wholeHistoricMarketPopulationVerified,false);
   } finally {rmSync(root,{recursive:true,force:true});}
+  }
 });
 
 test("missing PIT roster blocks all public GETs even with explicit opt-in",async()=>{
