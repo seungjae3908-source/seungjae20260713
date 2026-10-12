@@ -231,14 +231,30 @@ export async function prepareAiFormulaTrainProposalsV1({
     let itemDigest = null;
     let formulaCandidateId = binding?.formulaCandidate?.candidateId ?? null;
     if (canPropose && binding) {
-      const item = buildItem(binding, new Date(now).toISOString());
+      // Freeze the queue identity at the immutable AI observation instant.
+      // A new wall-clock time on a retry must never invent a second candidate.
+      const item = buildItem(binding, new Date(ai.observedAt).toISOString());
       const digestValue = digestAiFormulaTrainValueV1(binding.dataset);
+      const reviewIdentityDigest = digestAiFormulaTrainValueV1({
+        review: ai.review, observedAt: ai.observedAt,
+        evidenceDigest: ai.evidenceDigest, sourceCycleId: ai.sourceCycleId,
+        provider: ai.provider, model: ai.model, role: ai.role,
+      });
+      const reviewedAssociationDigest = digestAiFormulaTrainValueV1({
+        researchSha, reviewIdentityDigest, hypothesisId: hypothesis.hypothesisId,
+        formulaCandidateId: binding.formulaCandidate.candidateId,
+        canonicalHypothesisId: binding.formulaCandidate.hypothesisId,
+        formulaHash: binding.formulaCandidate.formulaHash,
+        datasetIdentity: binding.dataset.datasetIdentity,
+        datasetDigest: digestValue,
+      });
       const proof = typeof verifyOriginalSource === 'function'
         ? await verifyOriginalSource({
           researchSha, aiEvidenceDigest: ai.evidenceDigest, sourceCycleId: ai.sourceCycleId,
           hypothesisId: hypothesis.hypothesisId,
           formulaCandidate: binding.formulaCandidate, dataset: binding.dataset,
           datasetDigest: digestValue,
+          reviewIdentityDigest, reviewedAssociationDigest,
         }) : null;
       if (proof?.status === 'VERIFIED_TRAIN_SOURCE'
         && proof.researchSha === researchSha
@@ -247,10 +263,16 @@ export async function prepareAiFormulaTrainProposalsV1({
         && proof.datasetIdentity === binding.dataset.datasetIdentity
         && proof.datasetDigest === digestValue
         && proof.datasetRole === 'TRAIN'
+        && proof.reviewIdentityDigest === reviewIdentityDigest
+        && proof.reviewedAssociationDigest === reviewedAssociationDigest
+        && proof.formulaCandidateId === binding.formulaCandidate.candidateId
+        && proof.formulaHash === binding.formulaCandidate.formulaHash
+        && proof.formulaReviewedForAiHypothesis === true
         && proof.sourceRightsVerified === true
         && proof.sourceProvenanceVerified === true
         && positiveTimestamp(proof.observedAtMs, now)
-        && proof.observedAtMs >= binding.dataset.period.endTime) {
+        && proof.observedAtMs >= binding.dataset.period.endTime
+        && proof.observedAtMs <= ai.observedAt) {
         const record = buildFormulaProducedTrainInputV1({ item, researchCodeSha: researchSha });
         planned.push(record);
         itemDigest = record.itemDigest;
