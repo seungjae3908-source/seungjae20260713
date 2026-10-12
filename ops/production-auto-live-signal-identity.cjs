@@ -377,7 +377,127 @@ function runAutoLiveIndependentPublicSourcePreflight() {
   });
 }
 
+const INDEPENDENT_AUTO_PUBLIC_INSTALL_SCRIPT = "#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\nROOT='/opt/stock-app-data/auto-live-signal-v1'\nPARENT='/opt/stock-app-data'\nAPP='/opt/stock-app'\nTAG='# stock-app-auto-live-public-signal-v1'\nWRAPPER=\"$ROOT/bin/run-auto-live-public-signal\"\nSHA=\"$1\"\nSTAGE=''\nPUBLISHED=0\nCRON_MUTATED=0\nOLD_CRON=''\nNEW_CRON=''\nabort() { printf '[auto-live-independent-install] %s\\n' \"$1\" >&2; exit 1; }\nrollback() {\n  code=$?\n  trap - EXIT\n  if (( code != 0 )) && (( PUBLISHED == 1 )); then\n    : > \"$ROOT/DISABLED\" || true\n    chmod 600 \"$ROOT/DISABLED\" || true\n  fi\n  if (( code != 0 )) && (( CRON_MUTATED == 1 )); then\n    now_cron=\"$(crontab -l 2>/dev/null || true)\"\n    expected=\"$NEW_CRON\"\n    if [[ -n \"$OLD_CRON\" ]]; then expected=\"$OLD_CRON\"
+  readBoundedAutoLiveSourceArtifact,
+  readProductionAutoLiveScheduleActivation,
+  readProductionAutoLiveScheduleWrapper,
+  readProductionAutoLiveSignalHandoff,
+  inspectIndependentAutoLivePublicSourcePlan,
+  assertAutoLiveSignalNotDisabled,
+  inspectAutoLiveSharedPaperForwardOwnership,
+  inspectManagedPaperForwardSchedule,
+  inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+  verifyProductionAutoLivePrearmHandoff,
+};
+
+// This file can be streamed over a protected SSH stdin (node -), so the
+// predeploy check uses the exact PR source before the current app is deployed.
+// Importing the helper in offline tests has no side effects.
+if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+  try {
+    process.stdout.write(JSON.stringify(runAutoLiveSharedPaperForwardPreflight()) + '\n');
+  } catch (error) {
+    const safe = error instanceof Error && /^AUTO_LIVE_SHARED_[A-Z0-9_]{1,100}$/u.test(error.message)
+      ? error.message : 'AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE';
+    process.stderr.write('[auto-live-shared-paper-preflight] ' + safe + '\n');
+    process.exitCode = 1;
+  }
+}
+
+if (process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true') {
+  if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+    process.stderr.write('[auto-live-source-preflight] CONFLICTING_PREFLIGHT_MODES\n');
+    process.exitCode = 1;
+  } else {
+    try {
+      process.stdout.write(JSON.stringify(runAutoLiveIndependentPublicSourcePreflight()) + '\n');
+    } catch (error) {
+      const safe = error instanceof Error
+        && /^AUTO_LIVE_INDEPENDENT_[A-Z0-9_]{1,100}$/u.test(error.message)
+        ? error.message : 'AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE';
+      process.stderr.write('[auto-live-source-preflight] ' + safe + '\n');
+      process.exitCode = 1;
+    }
+  }
+}
+\\n'\"$NEW_CRON\"; fi\n    # Never overwrite a third-party crontab change made during the installer.\n    if [[ \"$now_cron\" == \"$expected\" ]]; then\n      if [[ -n \"$OLD_CRON\" ]]; then printf '%s\\n' \"$OLD_CRON\" | crontab - || true\n      else crontab -r 2>/dev/null || true; fi\n    fi\n  fi\n  if [[ -n \"$STAGE\" && -d \"$STAGE\" ]]; then rm -rf -- \"$STAGE\"; fi\n  exit \"$code\"\n}\ntrap rollback EXIT\n\n[[ \"$SHA\" =~ ^[0-9a-f]{40}$ ]] || abort 'exact source SHA required'\n[[ \"$(printenv AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED || true)\" == 'true' ]] \\\n  || abort 'protected owner approval required'\n[[ -d \"$PARENT\" && ! -L \"$PARENT\" ]] || abort 'isolated root parent unavailable'\n[[ -r \"$APP/.deploy/current-sha\" ]] || abort 'deployed SHA marker missing'\n[[ \"$(tr -d '[:space:]' < \"$APP/.deploy/current-sha\")\" == \"$SHA\" ]] \\\n  || abort 'target does not equal exact deployed SHA'\n[[ ! -e \"$ROOT\" && ! -L \"$ROOT\" ]] || abort 'independent root already owned'\nfor command in bash node rsync flock crontab chmod mkdir mktemp sed find sort xargs sha256sum mv; do\n  command -v \"$command\" >/dev/null 2>&1 || abort 'installer dependency unavailable'\ndone\n[[ -x /usr/bin/flock ]] || abort 'canonical flock unavailable'\nfor rel in market-prediction-lab packages/strategy-hypothesis packages/external-research; do\n  [[ -d \"$APP/$rel\" && ! -L \"$APP/$rel\" ]] || abort 'canonical source package missing'\ndone\n[[ -r \"$APP/market-prediction-lab/scripts/run-paper-forward-schedule.js\" ]] \\\n  || abort 'public observation engine missing'\n[[ -r \"$APP/packages/strategy-hypothesis/src/index.js\" ]] \\\n  || abort 'strategy hypothesis dependency missing'\n[[ -r \"$APP/packages/external-research/src/index.js\" ]] \\\n  || abort 'external research dependency missing'\n\nexec 9>\"$PARENT/.auto-live-signal-v1-install.lock\"\nflock -n 9 || abort 'independent install already running'\nset +e\nOLD_CRON=\"$(crontab -l 2>/dev/null)\"\ncron_rc=$?\nset -e\n[[ \"$cron_rc\" == 0 || \"$cron_rc\" == 1 ]] || abort 'crontab unavailable'\n[[ \"$OLD_CRON\" != *\"$TAG\"* && \"$OLD_CRON\" != *\"$WRAPPER\"* ]] \\\n  || abort 'previous independent cron already owned'\n[[ ! -e \"$ROOT\" && ! -L \"$ROOT\" ]] || abort 'independent root appeared during preflight'\nFLOCK_BIN=\"$(command -v flock)\"\nNEW_CRON=\"*/15 * * * * $FLOCK_BIN -n $ROOT/cron.lock $WRAPPER $TAG\"\nSTAGE=\"$(mktemp -d \"$PARENT/.auto-live-signal-stage.XXXXXXXX\")\"\nchmod 700 \"$STAGE\"\nmkdir -p \"$STAGE/releases/$SHA/market-prediction-lab\" \\\n  \"$STAGE/releases/$SHA/packages/strategy-hypothesis\" \\\n  \"$STAGE/releases/$SHA/packages/external-research\" \\\n  \"$STAGE/runtime-state\" \"$STAGE/bin\" \"$STAGE/logs\"\n# Immutable code only; NEVER copy Paper ledgers, keys, env or original cron.\nfor rel in market-prediction-lab packages/strategy-hypothesis packages/external-research; do\n  rsync -a --delete --exclude='node_modules/' --exclude='*/node_modules/' \\\n    --exclude='.env*' --exclude='*.pem' --exclude='*.key' --exclude='*.p12' \\\n    \"$APP/$rel/\" \"$STAGE/releases/$SHA/$rel/\"\ndone\nif find \"$STAGE/releases/$SHA\" -type l | grep -q .; then\n  abort 'unexpected symlink in isolated code snapshot'\nfi\nfind \"$STAGE/releases/$SHA\" -type f -exec chmod 600 {} +\nfind \"$STAGE/releases/$SHA\" -type d -exec chmod 700 {} +\nACTIVATION_MS=\"$(node -e 'process.stdout.write(String(Date.now()))')\"\ncat > \"$STAGE/bin/run-auto-live-public-signal\" <<'WRAPPER'\n#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\nROOT='/opt/stock-app-data/auto-live-signal-v1'\n[[ ! -e \"$ROOT/DISABLED\" && ! -L \"$ROOT/DISABLED\" ]] || exit 0\n[[ ! -e \"$ROOT/runtime-state/DISABLED\" && ! -L \"$ROOT/runtime-state/DISABLED\" ]] || exit 0\nLOG=\"$ROOT/logs/cron.log\"\nif [[ -f \"$LOG\" && \"$(wc -c < \"$LOG\")\" -gt 5242880 ]]; then\n  mv -f \"$LOG\" \"$ROOT/logs/cron.previous.log\"\nfi\nexec >> \"$LOG\" 2>&1\nexec /usr/bin/env -i \\\n  HOME='/tmp' PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \\\n  NODE_ENV='production' \\\n  PAPER_FORWARD_SCHEDULE_ACTIVE='true' \\\n  PAPER_FORWARD_TRIGGER_SOURCE='cron' \\\n  PAPER_FORWARD_ROOT='/opt/stock-app-data/auto-live-signal-v1/runtime-state' \\\n  PAPER_FORWARD_RESEARCH_SHA='__SOURCE_SHA__' \\\n  PAPER_FORWARD_ACTIVATION_AT_MS='__ACTIVATION_MS__' \\\n  AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true' \\\n  PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false' \\\n  RESEARCH_PRODUCTION='false' \\\n  LIVE_TRADING='false' LIVE_TRADING_ENABLED='false' \\\n  REAL_ORDER_ENABLED='false' PRIVATE_TRADING_API_ALLOWED='false' \\\n  PRIVATE_API_ENABLED='false' PRIVATE_ACCOUNT_ACCESS='false' \\\n  node '/opt/stock-app-data/auto-live-signal-v1/releases/__SOURCE_SHA__/market-prediction-lab/scripts/run-paper-forward-schedule.js'\nWRAPPER\nsed -i -e \"s/__SOURCE_SHA__/$SHA/g\" -e \"s/__ACTIVATION_MS__/$ACTIVATION_MS/g\" \\\n  \"$STAGE/bin/run-auto-live-public-signal\"\nchmod 700 \"$STAGE/bin/run-auto-live-public-signal\"\nRUNTIME_DIGEST=\"$(cd \"$STAGE/releases/$SHA\" && find . -type f -print0 | sort -z | \\\n  xargs -0 -r sha256sum | sha256sum | awk '{print $1}')\"\nCRON_HASH=\"$(printf '%s' \"$NEW_CRON\" | sha256sum | awk '{print $1}')\"\nnode - \"$STAGE/activation.json\" \"$SHA\" \"$ACTIVATION_MS\" \"$RUNTIME_DIGEST\" \"$CRON_HASH\" <<'NODE'\nconst fs = require('node:fs');\nconst [path,sha,at,digest,cronHash] = process.argv.slice(2);\nconst value = {\n  schemaVersion:'paper-forward-schedule-activation-v2',\n  status:'ACTIVE_WAITING_FOR_NATURAL_CYCLE',\n  targetSha:sha, deployedSha:sha,\n  activationAtMs:Number(at), installedAt:new Date(Number(at)).toISOString(),\n  pollCadence:'EVERY_15_MINUTES',\n  canonicalCycleIntervalMs:900000, autoLivePublicSignalRefreshEnabled:true,\n  independentPaperRoot:true, paperRootMutated:false, paperCronReplaced:false,\n  producerInvocationVerified:false, aiIssuerVerified:false,\n  autoTradingActivationReady:false,\n  runtimeDigest:digest, cronHash, scheduleActive:true, publicDataOnly:true,\n  paperTradeOutcomeAccumulationEnabled:false, simulatedFinancialAdaptersEnabled:false,\n  externalFinancialMutationAllowed:false, liveTrading:false,\n  privateAccountAccess:false, orderAuthority:false,\n  privateRequestCount:0, financialMutationCount:0,\n};\nfs.writeFileSync(path,JSON.stringify(value)+'\\n',{flag:'wx',mode:0o600});\nNODE\n# A dormant published root is safe even if Cron is mutated before readback.\n: > \"$STAGE/DISABLED\"\nchmod 600 \"$STAGE/DISABLED\" \"$STAGE/activation.json\"\n[[ ! -e \"$ROOT\" && ! -L \"$ROOT\" ]] || abort 'independent root became owned'\nmv -T \"$STAGE\" \"$ROOT\"\nSTAGE=''\nPUBLISHED=1\n# A read-only final crontab check reduces the chance of overwriting another\n# writer. Append exactly one entry; never remove the historic Paper tag.\nCURRENT_CRON=\"$(crontab -l 2>/dev/null || true)\"\n[[ \"$CURRENT_CRON\" == \"$OLD_CRON\" ]] || abort 'unrelated cron changed during preparation'\nif [[ -n \"$OLD_CRON\" ]]; then\n  printf '%s\\n%s\\n' \"$OLD_CRON\" \"$NEW_CRON\" | crontab -\nelse\n  printf '%s\\n' \"$NEW_CRON\" | crontab -\nfi\nCRON_MUTATED=1\nREADBACK=\"$(crontab -l)\"\nEXPECTED=\"$NEW_CRON\"\nif [[ -n \"$OLD_CRON\" ]]; then EXPECTED=\"$OLD_CRON\"
+  readBoundedAutoLiveSourceArtifact,
+  readProductionAutoLiveScheduleActivation,
+  readProductionAutoLiveScheduleWrapper,
+  readProductionAutoLiveSignalHandoff,
+  inspectIndependentAutoLivePublicSourcePlan,
+  assertAutoLiveSignalNotDisabled,
+  inspectAutoLiveSharedPaperForwardOwnership,
+  inspectManagedPaperForwardSchedule,
+  inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+  verifyProductionAutoLivePrearmHandoff,
+};
+
+// This file can be streamed over a protected SSH stdin (node -), so the
+// predeploy check uses the exact PR source before the current app is deployed.
+// Importing the helper in offline tests has no side effects.
+if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+  try {
+    process.stdout.write(JSON.stringify(runAutoLiveSharedPaperForwardPreflight()) + '\n');
+  } catch (error) {
+    const safe = error instanceof Error && /^AUTO_LIVE_SHARED_[A-Z0-9_]{1,100}$/u.test(error.message)
+      ? error.message : 'AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE';
+    process.stderr.write('[auto-live-shared-paper-preflight] ' + safe + '\n');
+    process.exitCode = 1;
+  }
+}
+
+if (process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true') {
+  if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true') {
+    process.stderr.write('[auto-live-source-preflight] CONFLICTING_PREFLIGHT_MODES\n');
+    process.exitCode = 1;
+  } else {
+    try {
+      process.stdout.write(JSON.stringify(runAutoLiveIndependentPublicSourcePreflight()) + '\n');
+    } catch (error) {
+      const safe = error instanceof Error
+        && /^AUTO_LIVE_INDEPENDENT_[A-Z0-9_]{1,100}$/u.test(error.message)
+        ? error.message : 'AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE';
+      process.stderr.write('[auto-live-source-preflight] ' + safe + '\n');
+      process.exitCode = 1;
+    }
+  }
+}
+\\n'\"$NEW_CRON\"; fi\n[[ \"$READBACK\" == \"$EXPECTED\" ]] || abort 'independent cron readback mismatch'\nrm -f \"$ROOT/DISABLED\"\nPUBLISHED=0\nCRON_MUTATED=0\ntrap - EXIT\nprintf '{\"status\":\"ACTIVE_WAITING_FOR_NATURAL_CYCLE\",\"targetSha\":\"%s\",\"activationAtMs\":%s,\"scheduleActive\":true,\"canonicalCycleIntervalMs\":900000,\"paperTradeOutcomeAccumulationEnabled\":false,\"simulatedFinancialAdaptersEnabled\":false,\"externalFinancialMutationAllowed\":false,\"independentPaperRoot\":true,\"paperRootMutated\":false,\"paperCronReplaced\":false,\"producerInvocationVerified\":false,\"aiIssuerVerified\":false,\"autoTradingActivationReady\":false,\"privateRequestCount\":0,\"financialMutationCount\":0,\"liveTrading\":false}\\n' \\\n  \"$SHA\" \"$ACTIVATION_MS\"\n";
+function buildIndependentAutoLivePublicInstallScript() {
+  return INDEPENDENT_AUTO_PUBLIC_INSTALL_SCRIPT;
+}
+function installIndependentAutoLivePublicSource(targetSha) {
+  if (!/^[a-f0-9]{40}$/u.test(targetSha ?? '')
+    || process.env.AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED !== 'true') {
+    throw new Error('AUTO_LIVE_INDEPENDENT_INSTALL_NOT_APPROVED');
+  }
+  const { spawnSync } = require('node:child_process');
+  const out = spawnSync('bash', ['-s', '--', targetSha], {
+    input: INDEPENDENT_AUTO_PUBLIC_INSTALL_SCRIPT,
+    encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, LIVE_TRADING: 'false', AUTO_TRADING: 'false',
+      REAL_ORDER_ENABLED: 'false', PRIVATE_TRADING_API_ALLOWED: 'false' },
+  });
+  if (out.error || out.status !== 0 || out.signal) {
+    throw new Error('AUTO_LIVE_INDEPENDENT_INSTALL_FAILED_CLOSED');
+  }
+  let receipt;
+  try { receipt = JSON.parse(String(out.stdout ?? '').trim()); }
+  catch { throw new Error('AUTO_LIVE_INDEPENDENT_INSTALL_RECEIPT_INVALID'); }
+  if (receipt?.targetSha !== targetSha || receipt?.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+    || receipt?.independentPaperRoot !== true || receipt?.paperRootMutated !== false
+    || receipt?.paperCronReplaced !== false || receipt?.autoTradingActivated === true
+    || receipt?.liveTrading !== false
+    || receipt?.financialMutationCount !== 0
+    || receipt?.producerInvocationVerified !== false) {
+    throw new Error('AUTO_LIVE_INDEPENDENT_INSTALL_RECEIPT_INVALID');
+  }
+  return receipt;
+}
 module.exports = {
+  buildIndependentAutoLivePublicInstallScript,
+  installIndependentAutoLivePublicSource,
   runAutoLiveIndependentPublicSourcePreflight,
   readBoundedAutoLiveSourceArtifact,
   readProductionAutoLiveScheduleActivation,
@@ -417,6 +537,24 @@ if (process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true') {
         && /^AUTO_LIVE_INDEPENDENT_[A-Z0-9_]{1,100}$/u.test(error.message)
         ? error.message : 'AUTO_LIVE_INDEPENDENT_SOURCE_INSPECTION_UNAVAILABLE';
       process.stderr.write('[auto-live-source-preflight] ' + safe + '\n');
+      process.exitCode = 1;
+    }
+  }
+}
+
+if (process.env.AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL === 'true') {
+  if (process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true'
+    || process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true') {
+    process.stderr.write('[auto-live-source-install] CONFLICTING_OPERATION_MODES\n');
+    process.exitCode = 1;
+  } else {
+    try {
+      const receipt = installIndependentAutoLivePublicSource(process.env.AUTO_LIVE_TARGET_SHA);
+      process.stdout.write(JSON.stringify(receipt) + '\n');
+    } catch (error) {
+      const safe = error instanceof Error && /^AUTO_LIVE_INDEPENDENT_[A-Z0-9_]+$/u.test(error.message)
+        ? error.message : 'AUTO_LIVE_INDEPENDENT_INSTALL_FAILED_CLOSED';
+      process.stderr.write('[auto-live-source-install] ' + safe + '\n');
       process.exitCode = 1;
     }
   }

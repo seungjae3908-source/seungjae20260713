@@ -817,12 +817,10 @@ jobs:
           AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA" \
             AUTO_LIVE_DEPLOYED_SHA="$TARGET_SHA" \
             node ops/production-auto-live-signal-identity.cjs >/dev/null
-          LIVE_DIR=/opt/stock-app \
-            PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/auto-live-signal-v1 \
-            PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false \
-            AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED=true \
+          AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true \
             AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true \
-            bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"
+            AUTO_LIVE_TARGET_SHA="$TARGET_SHA" \
+            node ops/production-auto-live-signal-identity.cjs
           REMOTE
           node - "$activation" <<'NODE'
           const fs = require('node:fs');

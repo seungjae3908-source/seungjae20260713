@@ -42,7 +42,10 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(isolatedPlan.includes('inspectIndependentAutoLivePublicSourcePlan('));
   assert.ok(isolatedPlan.includes('runAutoLiveIndependentPublicSourcePreflight()'));
   assert.ok(isolatedPlan.includes('ownerInstallApprovalRequired: true'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
   assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
+  assert.ok(signalIdentity.includes('buildIndependentAutoLivePublicInstallScript()'));
+  assert.ok(signalIdentity.includes('installIndependentAutoLivePublicSource('));
   assert.ok(!production.includes('bash ops/disable-paper-forward-schedule.sh'));
 
   // Bound pre-DB and last-moment checks to the dedicated root. Historical
@@ -53,17 +56,18 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const databaseMutation = production.indexOf(
     '- name: Require canonical Production trade schema and journal privileges before application mutation');
   const lastOwner = production.indexOf('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA"');
-  const installCall = production.indexOf('bash ops/install-paper-forward-schedule.sh "$TARGET_SHA"');
+  const installCall = production.indexOf('node ops/production-auto-live-signal-identity.cjs');
   assert.ok(earlyOwner > 0 && earlyOwner < databaseMutation);
   assert.ok(lastOwner > databaseMutation && lastOwner < installCall);
   assert.ok(production.includes('< ops/production-auto-live-signal-identity.cjs'));
   assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q'));
-  assert.ok(production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/auto-live-signal-v1'));
+  assert.ok(production.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
   assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_ALREADY_OWNED'));
   assert.ok(preflight.includes('AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED'));
   assert.ok(preflight.includes("lstatSync('/opt/stock-app-data/auto-live-signal-v1')"));
   assert.ok(preflight.includes('autoTradingActivationReady: false'));
   assert.ok(!production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1'));
+  assert.ok(!production.includes('bash ops/install-paper-forward-schedule.sh'));
 
   assert.ok(production.includes('PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false'));
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
