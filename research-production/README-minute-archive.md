@@ -118,3 +118,44 @@ RESEARCH_MINUTE_ARCHIVE_ENABLED=true.
     node --test research-production/test/four-market-minute-backfill-runtime-contract.test.mjs
 
 **아직 남은 운영 P0:** 실제 Vultr의 디스크/CPU/RAM, 데이터 보관·상업 재제공 약관, KR/US 인증된 분봉 제공사 및 거래일/기업행위, 전시장 PIT roster, 유효한 종료·무거래 증거, 수집 source-gap 복구, 24시간 연속 표본, 원본에서 연구센터/백테스터로의 합법적 연결, OOS·경제적 PASS. 이 PR의 green CI는 이 운영 증거를 대신하지 않습니다.
+
+
+## 후속 Draft v3: 전체 종목 처리량 차단·신규 현행 로스터 정합성
+
+### 실제 확인된 수집 용량 부족
+
+2026-10-11에 관측했던 코인현물 294개 + 코인선물 466개를 **현재 숫자라고 확정하지 않는 과거 작업 표본**으로 가정하면:
+- 상한 120분/페이지 -> 24시간 x 60분 / 120분 = 종목당 매일 최소 12페이지.
+- 필요한 원본 조회 = (294+466) x 12 = 매일 최소 9,120회(모든 종목에서 봉이 지속 생성되는 상한 시나리오).
+- 현재 timer 5분마다 16회 = 매일 최대 4,608회.
+- **단순 요청 용량 약 50.5%**, 부족분 4,512회/일. 우발적 재시도·기존 Watch HTTP 공유·휴장/무거래/종목 수 변화·호스트 부하를 아직 포함하지 않았음.
+- 여유 20% 모델에서는 5분당 최소 38회 처리해야 하지만, 실제 Vultr 2 vCPU/4GiB와 거래소 IP별 API 호출 한도·HTTP 응답 시간·디스크 용량을 확인하기 전에는 요청 상한을 16에서 강제로 올리지 않음.
+- 신규 assessMinuteManifestCapacity는 crypto의 CONTINUOUS 범위만 24시간 모형으로 계산. KR/US 주식에는 거래소·거래시간·공급 데이터 권한이 빠져 있어 "STOCK_SESSION_NOT_MODELLED"이며 PASS 불가.
+- 상한보다 큰 scope의 작업자는 **HOLD_CAPACITY**로 요청·저장소 변경 전 차단. 상한 아래인 작은 연구 시범도 "CAPACITY_MODEL_POSSIBLE"이라는 **산술 모형**만 표시하며 데이터 완전성/서버 SLA/수익성 PASS가 아님.
+
+CLI(공급원 HTTP, 저장, timer 조작 없이 0600 스코프 파일 분석):
+    
+    RESEARCH_MINUTE_QUEUE_MANIFEST=/path/to/private-manifest.json \
+    node research-production/bin/four-market-minute-backfill.mjs --capacity
+
+### 전체 코인 공개 종목 현재 목록 검증
+
+신규 four-market-minute-roster-capacity-v1.mjs:
+- Upbit 공식 /v1/market/all?is_details=true 의 2024년 이후 **market_event.warning + market_event.caution** 필드를 검증. 제거된 market_warning을 정상 근거로 사용하지 않음. 유의/주의 종목은 **연구 데이터용 로스터에 기록하되 restricted로 표시**, 종목 누락/삭제/비정상 응답·경고값을 무음 처리하지 않음. 기존 120초 Watch의 실제 후보 검색은 경고 종목을 검색에서 제외하도록 안전하게 보완.
+- Bitget 공식 /api/v2/mix/market/contracts?productType=USDT-FUTURES의 유효 선물/USDT/현재 symbol 상태/RWA 분류를 검증. 상장 종료·RWA 계약은 현재 대상에서 제외하고, 제한/분류 불명은 연구용 목록에는 남기되 restricted로 표시. 현재 로스터는 **상장폐지 포함 과거 PIT 로스터 증명이 아님**.
+- 수집 목록은 원본 시각/데이터 digest/경고 표시로 봉인하고, 자료 생성 후 15분 넘으면 신규 일괄 실행용 목록으로 자동 사용하지 않음.
+- Upbit/Bitget 공개 REST 조회는 **명시적으로 opt-in 한 1회 진단**만 지원. 2개 공급원 모두 정상이어야 일괄 로스터를 출력하며, 한쪽 429/오류는 전체 차단. 최대 2MB 응답, 8초 timeout, URL 고정, redirect 거부, 비공개 주문/계좌 API 없음. 서비스 timer에 이 진단은 추가하지 않음.
+- 전체 종목용 연속 수집 manifest는 아직 **승인용 제안** 단계이며, 자동 서버 queue admission·스케줄 활성화는 없음. 기존 Research Stage-1 Watch와 중복된 새 상시 로스터 감시기를 추가하지 않음.
+
+아래 명령은 기본 OFF이며, 명시적인 자격 확인/프로덕션 승인 없이 실행하지 않습니다.
+    
+    node research-production/bin/four-market-minute-roster-capacity.mjs --dry-run
+    # 별도 승인 후에만 RESEARCH_MINUTE_PUBLIC_ROSTER_PROBE_ENABLED=true
+    # node research-production/bin/four-market-minute-roster-capacity.mjs --public-probe
+
+공식 참고:
+- https://docs.upbit.com/kr/reference/list-trading-pairs
+- https://docs.upbit.com/kr/reference/rate-limits
+- https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market
+
+**남은 운영 P0:** 실제 4시장 저비용 사용권/1분봉 보관/재제공 조건, KR·US 주식 히스토리 및 세션 통합, 역사적 delisting 포함 PIT 로스터, 실 서버 자원 계측, 지속 가능한 요청/WSS 처리량, 누락 자동복구 증거, 이전 원본 용량/포맷 관리, 연구센터 PIT·백테스트 연결, 24시간 실제 가동 및 독립 OOS/비용/수익성 PASS. Draft green CI는 실제 원본 확보나 server activation의 증거가 아닙니다.
