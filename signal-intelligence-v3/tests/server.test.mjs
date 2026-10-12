@@ -91,6 +91,9 @@ test('server fails signal reads closed when snapshot is missing', async () => {
     assert.equal(health.snapshotClockReady,false);
     assert.equal(health.snapshotPublicationReady,false);
     assert.equal(health.snapshotBlockedReason,'SNAPSHOT_NOT_READY');
+    const unknown = await fetch(`http://127.0.0.1:${port}/favicon.ico`);
+    assert.equal(unknown.status,404);
+    assert.equal((await unknown.json()).error,'NOT_FOUND');
     const response = await fetch(`http://127.0.0.1:${port}/v1/signals/kr`);
     assert.equal(response.status, 503);
     const body = await response.json();
