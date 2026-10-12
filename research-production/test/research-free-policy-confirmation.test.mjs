@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import { buildConfirmedResearchPolicies, validResearchFreeConfirmation } from '../src/research-free-policy-confirmation.mjs';
+import { resolveResearchVideoDiscoveryPolicy } from '../src/research-video-discovery-worker.mjs';
 const input = () => ({ aiText: 'RESEARCH_AI_FREE_TIER_CONFIRMED=false\nAI_CHAT_PROVIDER=gemini\nRESEARCH_AI_MAX_CALLS_PER_SCAN=2\n', videoText: 'RESEARCH_VIDEO_DISCOVERY_APPROVED=false\nRESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["주식 연구"]\nRESEARCH_VIDEO_DISCOVERY_MAX_RESULTS=2\n', targetSha: 'a'.repeat(40), ownerCommentId: '1234', observedAt: Date.now() });
 test('explicit owner confirmation preserves bounded settings without granting trading or evidence authority', () => {
   const plan = buildConfirmedResearchPolicies(input());
@@ -33,4 +36,35 @@ test('paired consent supports the unchanged app without relabeling the isolated 
   for (const change of [{ appSha: 'c'.repeat(40) }, { researchSha: 'main' }]) {
     assert.equal(validResearchFreeConfirmation({ ...plan.confirmation, ...change }, 'b'.repeat(40)), false);
   }
+});
+
+test('legacy optional video rotation uses exactly the existing worker defaults, never empty-array repair', () => {
+  const defaults = resolveResearchVideoDiscoveryPolicy({}).queries;
+  const example = parseEnv(readFileSync(new URL('../deploy/research-video.env.example', import.meta.url), 'utf8'));
+  assert.equal(defaults.length, 8);
+  assert.deepEqual(JSON.parse(example.RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON), defaults);
+  for (const videoText of ['RESEARCH_VIDEO_DISCOVERY_APPROVED=true\n',
+    'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=\n', 'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=   \n']) {
+    const plan = buildConfirmedResearchPolicies({ ...input(), videoText });
+    assert.deepEqual(JSON.parse(parseEnv(plan.videoText).RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON), defaults);
+    assert.deepEqual(resolveResearchVideoDiscoveryPolicy(parseEnv(plan.videoText)).queries, defaults);
+    assert.equal(plan.confirmation.orderAllowed, false);
+  }
+  for (const value of ['[]', 'null', '{}', 'not-json', '["same","same"]', '["same"," same "]',
+    '["Ａ","A"]', '[" "]', '[1]', '["secret=TEST_ONLY_NOT_A_KEY"]',
+    JSON.stringify(['bad\u0000query']), JSON.stringify(['x'.repeat(121)]), JSON.stringify(Array(9).fill('query'))]) {
+    const videoText = 'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=' + value.replaceAll('#', '\\u0023') + '\n';
+    assert.throws(() => buildConfirmedResearchPolicies({ ...input(), videoText }), /VIDEO_QUERIES_INVALID/);
+    assert.throws(() => resolveResearchVideoDiscoveryPolicy(parseEnv(videoText)), /QUERIES_INVALID/);
+  }
+});
+
+test('confirmed query normalization and env roundtrip preserve valid custom topics', () => {
+  const queries = ["  momentum #tag  ", "research's strategy", 'ＶＷＡＰ 연구'];
+  const videoText = 'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=' + JSON.stringify(queries).replaceAll('#', '\\u0023') + '\n';
+  const expected = resolveResearchVideoDiscoveryPolicy(parseEnv(videoText)).queries;
+  const plan = buildConfirmedResearchPolicies({ ...input(), videoText });
+  assert.deepEqual(resolveResearchVideoDiscoveryPolicy(parseEnv(plan.videoText)).queries, expected);
+  const repeated = buildConfirmedResearchPolicies({ ...input(), videoText: plan.videoText });
+  assert.equal(repeated.videoText, plan.videoText);
 });
