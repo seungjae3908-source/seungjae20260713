@@ -1116,6 +1116,43 @@ jobs:
           printf 'PUBLIC_BUNDLE_SHA256=%s\n' "$(sha256sum "$archive" | awk '{print $1}')" >> "$GITHUB_ENV"
           printf 'PUBLIC_MANIFEST_SHA256=%s\n' "$(sha256sum "$bundle_dir/SHA256SUMS" | awk '{print $1}')" >> "$GITHUB_ENV"
           printf 'PUBLIC_HELPER_SHA256=%s\n' "$(sha256sum "$bundle_dir/ops/production-auto-live-signal-identity.cjs" | awk '{print $1}')" >> "$GITHUB_ENV"
+          # Check real server dependencies with READ-ONLY commands before any
+          # scratch write or Cron installation. Do not install host packages.
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "bash -s" <<'BASH'
+          set -Eeuo pipefail
+          [[ -d /opt/stock-app-data && ! -L /opt/stock-app-data && -w /opt/stock-app-data ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_PARENT_NOT_WRITABLE' >&2
+            exit 1
+          }
+          for command in bash node rsync flock crontab chmod mkdir mktemp \
+              sed find sort xargs sha256sum mv grep awk wc tr rm pgrep cp tar; do
+            command -v "$command" >/dev/null 2>&1 || {
+              echo 'AUTO_LIVE_PUBLIC_INSTALL_HOST_DEPENDENCY_MISSING' >&2
+              exit 1
+            }
+          done
+          [[ -x /usr/bin/flock ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_FLOCK_MISSING' >&2
+            exit 1
+          }
+          node -e "process.exit(Number(process.versions.node.split('.')[0])>=20?0:1)" || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_NODE_UNSUPPORTED' >&2
+            exit 1
+          }
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl is-active --quiet cron || pgrep -x cron >/dev/null || {
+              echo 'AUTO_LIVE_PUBLIC_INSTALL_CRON_DAEMON_MISSING' >&2
+              exit 1
+            }
+          else
+            pgrep -x cron >/dev/null || {
+              echo 'AUTO_LIVE_PUBLIC_INSTALL_CRON_DAEMON_MISSING' >&2
+              exit 1
+            }
+          fi
+          BASH
           # Read-only preflight runs the exact checked-out implementation over
           # protected SSH stdin; no remote app deployment identity is claimed.
           remote_env="$(printf 'AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_DEPLOYED_SHA=%q' "$TARGET_SHA" "$TARGET_SHA")"
