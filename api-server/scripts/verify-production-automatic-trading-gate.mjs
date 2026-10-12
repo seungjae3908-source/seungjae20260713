@@ -40,6 +40,7 @@ const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-p
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
+const budgetMigration = read('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -47,6 +48,14 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// A migration proof must install under hosted non-superuser privileges without
+// replacing definition-drift verification with a caller-controlled parameter.
+requireText(budgetMigration, 'automatic_live_budget_expected_schema_fingerprint()', 'AUTO_GATE_OWNER_BOUND_BUDGET_PROOF_MISSING');
+requireText(budgetMigration, "substring(p.prosrc from '^select ''([0-9a-f]{32})''::text;$')", 'AUTO_GATE_SEALED_BUDGET_LITERAL_CHECK_MISSING');
+requireText(budgetMigration, "not pg_has_role('service_role',p.proowner,'MEMBER')", 'AUTO_GATE_RUNTIME_BUDGET_PROOF_OWNERSHIP_FORBIDDEN');
+forbid(budgetMigration, /automatic_live_guard\.expected_schema_fingerprint/u, 'AUTO_GATE_CUSTOM_PARAMETER_AUTHORITY_FORBIDDEN');
+requireText(workflow, 'node --test .github/tests/production-auto-live-budget-contract.test.mjs', 'AUTO_GATE_BUDGET_PROOF_REGRESSION_WIRING_MISSING');
 
 // Account connectivity uses read-only vault keys; execution reuse has a distinct
 // Kiwoom key name. The shared worker/pre-submit/holdings reader must bridge it
