@@ -67,12 +67,27 @@ function quantReady(card) {
   return !grade || grade === 'S' || grade === 'A';
 }
 
-function riskReady(card) {
+function riskReady(card, direction) {
   if (!['LOW', 'MEDIUM'].includes(String(card?.riskLevel ?? '').toUpperCase())) return false;
+  if (!['BUY', 'LONG', 'SHORT'].includes(direction)) return false;
   const entry = entryMid(card);
   const stop = positive(card?.pricePlan?.stopLoss);
-  const targets = Array.isArray(card?.pricePlan?.targets) ? card.pricePlan.targets.map(positive).filter(Boolean) : [];
-  return entry != null && stop != null && stop !== entry && targets.length > 0;
+  const zone = card?.pricePlan?.entryZone;
+  const from = positive(zone?.from), to = positive(zone?.to);
+  if (entry == null || stop == null
+    || (zone && (from == null || to == null || from > to))) return false;
+  const low = zone ? from : entry;
+  const high = zone ? to : entry;
+  const rawTargets = card?.pricePlan?.targets;
+  if (!Array.isArray(rawTargets) || rawTargets.length === 0) return false;
+  const targets = rawTargets.map(positive);
+  if (targets.some(target => target == null)) return false;
+  // A long/BUY stop must be below the WHOLE entry zone, with profit targets
+  // above it. Futures SHORT requires the exact inverse geometry. Merely
+  // having a different stop price can mistakenly bless an inverted order.
+  return direction === 'SHORT'
+    ? stop > high && targets.every(target => target < low)
+    : stop < low && targets.every(target => target > high);
 }
 
 function addBlocker(blockers, blocker) {
@@ -274,7 +289,7 @@ export function adaptCanonicalScannerCard(input, options = {}) {
     dataStatus: dataReady(card, nowMs) ? 'READY' : 'BLOCKED',
     quantEligible: quantReady(card),
     profitEligible: Boolean(evidence),
-    riskReady: riskReady(card),
+    riskReady: riskReady(card, direction),
     evidence: evidence ?? {},
     ai: aiEvidence(card, input?.ai),
     leverageEvidence: market === 'CRYPTO_FUTURES' ? input?.leverageEvidence : undefined,
