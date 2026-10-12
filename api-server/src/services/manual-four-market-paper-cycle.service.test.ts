@@ -523,10 +523,9 @@ test('source, side, time, provenance and out-of-order matches fail closed',()=>{
     {eventId:'entry-a',quantity:-1},
   ];
   for(const patch of modifications){
-    const first={...input.events[0],...patch};
+    const first={...input.events[0],...patch} as ManualPaperSimulatedMatch;
     const outcome=evaluateManualFourMarketPaperOrderPath({
-      ...input,events:[first,input.events[1],input.events[2],input.events[3]]
-        as ManualPaperSimulatedMatch[],
+      ...input,events:[first,input.events[1],input.events[2],input.events[3]],
     });
     assert.equal(outcome.status,'BLOCKED',JSON.stringify(patch));
     assert.equal(outcome.journal,null);
