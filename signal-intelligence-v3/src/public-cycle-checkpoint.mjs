@@ -87,6 +87,13 @@ async function safeUnlink(file,record){
   if(!stat.isFile()||stat.ino!==record.ino||stat.dev!==record.dev)
     throw bad('FILE_CHANGED');
   await unlink(file);
+  // Durable journal deletion prevents replay of an already-finalized old
+  // checkpoint after a power loss. Never infer success if this sync fails.
+  let dir;
+  try{
+    dir=await open(dirname(file),constants.O_RDONLY);
+    await dir.sync();
+  }finally{await dir?.close();}
 }
 export async function recoverPublicV3CycleCheckpoint({
   journalFile,cycleStateFile,snapshotFile,serviceSha,atomicWrite,validateSnapshot,

@@ -150,3 +150,34 @@ test('malformed public Yahoo candle source is not accepted before trying one aut
   assert.deepEqual(await withPublicStockProviderFallback(['AAPL'],async()=>({price:99})),
     {price:99},'quote objects must remain acceptable');
 });
+
+test('deterministic paired Yahoo 404 skips repeated same-alias calls but allows the approved alternate',async()=>{
+  const requested=[];
+  const value=await withPublicStockProviderFallback(['001234.KS','001234.KQ'],async candidate=>{
+    requested.push(candidate);
+    if(candidate.endsWith('.KS'))
+      throw Error('YAHOO_HEDGED_PAIR_FAILED:YAHOO_CHART_HTTP_404|YAHOO_CHART_HTTP_404');
+    return [{time:'2026-10-10T00:00:00Z',open:3,high:4,low:2,close:3,volume:1}];
+  },{pause:async()=>{throw Error('404_MUST_NOT_RETRY');}});
+  assert.equal(value.length,1);
+  assert.deepEqual(requested,['001234.KS','001234.KQ']);
+});
+test('Yahoo rate-limit response stops the entire retry burst, including alternate symbols',async()=>{
+  const requested=[];
+  await assert.rejects(withPublicStockProviderFallback(['AAPL','AAPL.X'],async symbol=>{
+    requested.push(symbol);
+    throw Error('YAHOO_HEDGED_PAIR_FAILED:YAHOO_CHART_HTTP_429|YAHOO_CHART_HTTP_429');
+  },{pause:async()=>{throw Error('SHOULD_NOT_RETRY');}}),/PUBLIC_STOCK_RATE_LIMITED/);
+  assert.deepEqual(requested,['AAPL']);
+});
+test('mixed 404 and network timeout is not misclassified as certain permanent rejection',async()=>{
+  let attempts=0;
+  const value=await withPublicStockProviderFallback(['AAPL'],async()=>{
+    attempts+=1;
+    if(attempts===1)
+      throw Error('YAHOO_HEDGED_PAIR_FAILED:YAHOO_CHART_HTTP_404|YAHOO_CHART_BUDGET_EXCEEDED');
+    return {price:100};
+  },{pause:async()=>{}});
+  assert.equal(attempts,2);
+  assert.equal(value.price,100);
+});
