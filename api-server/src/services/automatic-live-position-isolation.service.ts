@@ -3,6 +3,7 @@ import { createVaultBackedAccountReaders } from '../features/account-readonly/ac
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingHistoryComplete } from './trade-history-completeness.service';
 
 export const AUTOMATIC_LIVE_POSITION_ISOLATION_POLICY = 'manual-protected-auto-ledger-v1';
 const TOLERANCE = 1e-8;
@@ -22,9 +23,34 @@ export type AutomaticLiveOwnedPosition = Readonly<{ plan: TradingPlan; remaining
 /** Only actual canonical fills confer ownership. Plans and manual holdings never do. */
 export function canonicalAutomaticLivePositions(plans: readonly TradingPlan[], orders: readonly TradingOrder[]): AutomaticLiveOwnedPosition[] {
   // Repository page bounds cannot prove that older AUTO fills never existed.
-  if (plans.length >= 200 || orders.length >= 500) throw new Error('BACKGROUND_LIVE_OWNERSHIP_HISTORY_INCOMPLETE');
+  if (!tradingHistoryComplete(plans, 200) || !tradingHistoryComplete(orders, 500)) {
+    throw new Error('BACKGROUND_LIVE_OWNERSHIP_HISTORY_INCOMPLETE');
+  }
+  // Full history may contain up to 100,000 rows. Repeated find/filter scans
+  // made ownership validation quadratic and could starve the worker's stop
+  // supervision as a real account accumulated history. Index the complete
+  // snapshot once; retain every fill and every exact exit-parent validation.
+  const plansById = new Map<string, TradingPlan>();
+  const exitsByEntryId = new Map<string, TradingPlan[]>();
+  for (const plan of plans) {
+    if (plansById.has(plan.id)) throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
+    plansById.set(plan.id, plan);
+    if (plan.accountMode !== 'live' || !plan.reduceOnly || !automatic(plan)) continue;
+    for (const parentId of new Set(plan.signalReasons.filter((reason) => reason.startsWith(EXIT_PARENT))
+      .map((reason) => reason.slice(EXIT_PARENT.length)))) {
+      const exits = exitsByEntryId.get(parentId) ?? [];
+      exits.push(plan);
+      exitsByEntryId.set(parentId, exits);
+    }
+  }
+  const filled = (order: TradingOrder) => ['PARTIALLY_FILLED', 'FILLED'].includes(order.state)
+    && finite(order.filledQuantity) && order.filledQuantity > TOLERANCE;
+  const fillsByPlanId = new Map<string, TradingOrder[]>();
+  const orderIds = new Set<string>();
   for (const order of orders) {
-    const plan = plans.find((row) => row.id === order.planId);
+    if (orderIds.has(order.id)) throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
+    orderIds.add(order.id);
+    const plan = plansById.get(order.planId);
     if (!plan && order.filledQuantity > TOLERANCE) throw new Error('BACKGROUND_LIVE_CANONICAL_PLAN_MISSING');
     if (plan?.accountMode === 'live' && automatic(plan)) {
       if (['PARTIALLY_FILLED', 'FILLED'].includes(order.state)
@@ -33,24 +59,35 @@ export function canonicalAutomaticLivePositions(plans: readonly TradingPlan[], o
         throw new Error('BACKGROUND_LIVE_CANONICAL_FILL_RECONCILIATION_REQUIRED');
       }
     }
+    if (filled(order)) {
+      const fills = fillsByPlanId.get(order.planId) ?? [];
+      fills.push(order);
+      fillsByPlanId.set(order.planId, fills);
+    }
   }
-  const filled = (order: TradingOrder) => ['PARTIALLY_FILLED', 'FILLED'].includes(order.state)
-    && finite(order.filledQuantity) && order.filledQuantity > TOLERANCE;
   return plans.flatMap((plan) => {
     if (plan.accountMode !== 'live' || plan.reduceOnly || !automatic(plan)) return [];
-    const entries = orders.filter((order) => order.planId === plan.id && filled(order));
+    const entries = fillsByPlanId.get(plan.id) ?? [];
     if (entries.length === 0) return [];
     if (entries.length !== 1 || entries[0]!.userId !== plan.userId || entries[0]!.exchange !== plan.exchange) {
       throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
     }
     let exited = 0;
-    for (const exit of plans.filter((row) => row.accountMode === 'live' && row.reduceOnly && automatic(row)
-      && row.signalReasons.includes(`${EXIT_PARENT}${plan.id}`))) {
+    for (const exit of exitsByEntryId.get(plan.id) ?? []) {
       if (exit.userId !== plan.userId || exit.exchange !== plan.exchange
         || symbolKey(exit.symbol) !== symbolKey(plan.symbol) || exit.market !== plan.market) {
         throw new Error('BACKGROUND_LIVE_CANONICAL_EXIT_PARENT_MISMATCH');
       }
-      const exitOrders = orders.filter((order) => order.planId === exit.id && filled(order));
+      const closingSide = plan.exchange === 'bitget'
+        ? plan.side === 'long' ? 'short' : plan.side === 'short' ? 'long' : null
+        : plan.side === 'buy' ? 'sell' : null;
+      if (closingSide === null || exit.side !== closingSide
+        || exit.signalReasons.filter((reason) => reason.startsWith(EXIT_PARENT)).length !== 1) {
+        // A same-direction fill cannot reduce AUTO ownership, including partial
+        // closes. Checking only fully closed budget reservations is too late.
+        throw new Error('BACKGROUND_LIVE_CANONICAL_EXIT_DIRECTION_INVALID');
+      }
+      const exitOrders = fillsByPlanId.get(exit.id) ?? [];
       if (exitOrders.length > 1 || exitOrders.some((order) => order.userId !== plan.userId || order.exchange !== plan.exchange)) {
         throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
       }

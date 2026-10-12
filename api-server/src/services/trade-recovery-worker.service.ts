@@ -35,6 +35,7 @@ export type TradeRecoveryWorkerResult = {
   ordersSubmitted: 0;
   ordersCancelled: 0;
   privateMutationRequests: 0;
+  overlapSkipped: boolean;
 };
 
 export interface TradeRecoveryWorkerSource {
@@ -303,8 +304,9 @@ export class TradeRecoveryWorker {
       ordersSubmitted: 0,
       ordersCancelled: 0,
       privateMutationRequests: 0,
+      overlapSkipped: false,
     };
-    if (this.running) return result;
+    if (this.running) return { ...result, overlapSkipped: true };
     this.running = true;
     try {
       const claimed = await this.source.claimRecoveryOrders(
@@ -370,14 +372,29 @@ export type TradeRecoveryWorkerControl = {
   stop: () => void;
 };
 
+type RecoveryRuntimeHealth = Readonly<{ enabled: boolean; privateLookupEnabled: boolean;
+  lastTickAt: string | null; tickOk: boolean | null; errorCode: string | null;
+  financialMutationCount: 0 }>;
+let recoveryRuntimeHealth: RecoveryRuntimeHealth = Object.freeze({ enabled: false,
+  privateLookupEnabled: false, lastTickAt: null, tickOk: null, errorCode: null, financialMutationCount: 0 });
+let recoveryRuntimeGeneration = 0;
+let activeRecoveryRuntime: TradeRecoveryWorkerControl | null = null;
+export const readTradeRecoveryRuntimeHealth = () => recoveryRuntimeHealth;
+
 export function startTradeRecoveryWorker(): TradeRecoveryWorkerControl | null {
+  const generation = ++recoveryRuntimeGeneration;
+  activeRecoveryRuntime?.stop();
+  activeRecoveryRuntime = null;
   const enabled = process.env.TRADE_RECOVERY_WORKER_ENABLED === 'true';
   const privateLookupEnabled = process.env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED === 'true';
+  recoveryRuntimeHealth = Object.freeze({ enabled: false, privateLookupEnabled,
+    lastTickAt: null, tickOk: null, errorCode: null, financialMutationCount: 0 });
   if (!enabled || !privateLookupEnabled) {
     console.log('[trade-recovery-worker] disabled; explicit worker and private-lookup flags are required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    recoveryRuntimeHealth = Object.freeze({ ...recoveryRuntimeHealth, errorCode: 'TRADE_RECOVERY_SERVICE_ROLE_REQUIRED' });
     console.error('[trade-recovery-worker] blocked: service-role Supabase configuration is required');
     return null;
   }
@@ -389,9 +406,48 @@ export function startTradeRecoveryWorker(): TradeRecoveryWorkerControl | null {
   };
   const intervalMs = boundedInteger(process.env.TRADE_RECOVERY_INTERVAL_MS, 30_000, 10_000, 300_000);
   const worker = new TradeRecoveryWorker(new SupabaseTradeRecoveryWorkerSource(), options);
+  recoveryRuntimeHealth = Object.freeze({ ...recoveryRuntimeHealth, enabled: true });
+  activeRecoveryRuntime = createTradeRecoveryRuntime(worker, intervalMs, (health) => {
+    // A prior process-local worker can finish after a replacement starts.
+    // Neither its completion nor its stop may overwrite the replacement.
+    if (generation === recoveryRuntimeGeneration) recoveryRuntimeHealth = health;
+  });
+  return activeRecoveryRuntime;
+}
+
+/** Read-only lifecycle separated from credential/bootstrap loading so
+ * restart/overlap/late completion is testable with a fake claim source. */
+export function createTradeRecoveryRuntime(
+  worker: TradeRecoveryWorker, intervalMs: number,
+  publishHealth: (health: RecoveryRuntimeHealth) => void, clock = Date.now,
+): TradeRecoveryWorkerControl {
+  if (!Number.isInteger(intervalMs) || intervalMs < 10_000 || intervalMs > 300_000) {
+    throw new Error('TRADE_RECOVERY_INTERVAL_INVALID');
+  }
+  let health: RecoveryRuntimeHealth = Object.freeze({ enabled: true, privateLookupEnabled: true,
+    lastTickAt: null, tickOk: null, errorCode: null, financialMutationCount: 0 });
+  const publish = (value: RecoveryRuntimeHealth) => {
+    health = Object.freeze(value);
+    publishHealth(health);
+  };
+  publish(health);
+  let stopped = false;
   const tick = async () => {
     try {
       const result = await worker.runOnce();
+      // A skipped overlap is not a completed reconciliation cycle. A late
+      // completion after stop must not resurrect positive runtime health.
+      if (stopped || result.overlapSkipped) return;
+      const healthy = result.failed === 0 && result.manualReviewRequired === 0
+        && result.pending === 0 && result.leaseLost === 0;
+      const failureCode = result.failed > 0 || result.manualReviewRequired > 0
+        ? 'TRADE_RECOVERY_RECONCILIATION_REQUIRED'
+        : result.leaseLost > 0 ? 'TRADE_RECOVERY_LEASE_LOST'
+          : result.pending > 0 ? 'TRADE_RECOVERY_PENDING_RECONCILIATION' : null;
+      publish({ enabled: true, privateLookupEnabled: true,
+        lastTickAt: new Date(clock()).toISOString(), tickOk: healthy,
+        errorCode: failureCode,
+        financialMutationCount: 0 });
       if (result.claimed > 0) {
         console.log('[trade-recovery-worker] cycle', {
           claimed: result.claimed,
@@ -408,11 +464,19 @@ export function startTradeRecoveryWorker(): TradeRecoveryWorkerControl | null {
         });
       }
     } catch (error) {
+      if (stopped) return;
+      publish({ ...health, lastTickAt: new Date(clock()).toISOString(),
+        tickOk: false, errorCode: errorCode(error, 'TRADE_RECOVERY_CYCLE_FAILED') });
       console.error('[trade-recovery-worker] cycle failed', { errorCode: errorCode(error, 'TRADE_RECOVERY_CYCLE_FAILED') });
     }
   };
   void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs);
   timer.unref();
-  return { worker, stop: () => clearInterval(timer) };
+  return { worker, stop: () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    publish({ ...health, enabled: false, tickOk: null });
+  } };
 }
