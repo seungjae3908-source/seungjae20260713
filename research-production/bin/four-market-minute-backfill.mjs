@@ -10,7 +10,8 @@ import { QUEUE_LIMITS, runDurableMinuteBackfillCycle,
 import { assessMinuteManifestCapacity,
   forecastPublicMinuteArchiveFootprintV1 } from
   '../src/four-market-minute-roster-capacity-v1.mjs';
-import { assessMinuteCollectorPacingPreflightV1 } from
+import { assessMinuteCollectorPacingPreflightV1,
+  assessMinuteDualVenuePacingPreflightV1 } from
   '../src/four-market-minute-pacing-preflight-v1.mjs';
 const script=fileURLToPath(import.meta.url);
 const emit=v=>process.stdout.write(JSON.stringify(v)+'\n');
@@ -55,6 +56,7 @@ async function main() {
     return emit({
       status:'CAPACITY_AUDIT_ONLY',capacity,
       pacingPreflight:assessMinuteCollectorPacingPreflightV1({manifest}),
+      dualVenuePacingProposal:assessMinuteDualVenuePacingPreflightV1({manifest}),
       storageEstimate:forecastPublicMinuteArchiveFootprintV1({
         cryptoSpotSymbols:capacity.cryptoSpotSymbols,
         cryptoFuturesSymbols:capacity.cryptoFuturesSymbols,

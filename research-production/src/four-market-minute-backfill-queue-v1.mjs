@@ -6,8 +6,11 @@ import { lstat, open, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { MINUTE_MS, MINUTE_ARCHIVE_LIMITS, validateMinuteTask,
   runMinuteArchiveIntakeV1 } from './four-market-minute-archive-intake-v1.mjs';
-import { assessMinuteManifestCapacity } from './four-market-minute-roster-capacity-v1.mjs';
+import { assessMinuteManifestCapacity, assessMinuteArchiveCapacity } from './four-market-minute-roster-capacity-v1.mjs';
 
+// Two independent venue lanes are programmatic/offline only, never selected
+// by the installed CLI. Only one GET per venue is outstanding at a time.
+const PUBLIC_VENUES = Object.freeze(['CRYPTO_SPOT','CRYPTO_FUTURES']);
 export const QUEUE_CONTRACT = 'research-minute-backfill-cursor/v1';
 export const SCOPE_CONTRACT = 'research-minute-backfill-scope/v1';
 export const QUEUE_LIMITS = Object.freeze({
@@ -156,12 +159,15 @@ function provider429HoldMarkets(state, atMs) {
       || (r.status === 'BACKOFF' && r.retryAtMs > atMs))
   ).map(r => r.market));
 }
-export function pickBackfillWindow(state, atMs) {
+export function pickBackfillWindow(state, atMs, marketFilter=null) {
   if (!positive(atMs)) fail('MINUTE_QUEUE_TIME_INVALID');
+  if (marketFilter!==null && !PUBLIC_VENUES.includes(marketFilter))
+    fail('MINUTE_QUEUE_MARKET_FILTER_INVALID');
   const rateLimitedMarkets = provider429HoldMarkets(state, atMs);
   for (let offset=0; offset<state.ranges.length; offset++) {
     const index=(state.nextIndex + offset) % state.ranges.length;
     const r=state.ranges[index];
+    if (marketFilter!==null && r.market!==marketFilter) continue;
     if (rateLimitedMarkets.has(r.market) || r.status === 'COMPLETE'
       || r.status === 'NEEDS_REVIEW'
       || r.status === 'BACKOFF' && r.retryAtMs > atMs) continue;
@@ -313,23 +319,54 @@ export async function runDurableMinuteBackfillCycle({
   enabled=false, queueRoot, archiveRoot, manifest, researchSha,
   now=()=>Date.now(), fetchImpl=globalThis.fetch, sleep=ms=>new Promise(r=>setTimeout(r,ms)),
   freeBytes=null, maxActions=QUEUE_LIMITS.maxActionsPerCycle,
+  dualVenueMode=false, dualVenueOwnerApproved=false, dualVenueHostAttested=false,
 }={}) {
   if (!enabled) return Object.freeze({status:'DISABLED',providerCalls:0,
     filesWritten:0,executionAuthority:'NONE'});
   if (!SHA40.test(researchSha ?? '') || !isAbsolute(queueRoot ?? '')
     || !isAbsolute(archiveRoot ?? '') || resolve(queueRoot)===resolve(archiveRoot)
-    || !nonnegative(maxActions) || maxActions > QUEUE_LIMITS.maxActionsPerCycle)
+    || !nonnegative(maxActions) || maxActions > QUEUE_LIMITS.maxActionsPerCycle
+    || typeof dualVenueMode!=='boolean'
+    || typeof dualVenueOwnerApproved!=='boolean'
+    || typeof dualVenueHostAttested!=='boolean')
     fail('MINUTE_QUEUE_CONFIG_INVALID');
+  if (dualVenueMode
+    && (!dualVenueOwnerApproved || !dualVenueHostAttested))
+    return Object.freeze({
+      contract:QUEUE_CONTRACT,status:'HOLD_DUAL_VENUE_OPERATOR_ATTESTATION',
+      attempts:0,providerCalls:0,filesWritten:0,
+      hostCapacityVerified:false,sharedIpBudgetVerified:false,
+      executionAuthority:'NONE',
+    });
   const scope=validateBackfillScope(manifest);
-  const capacity=assessMinuteManifestCapacity(manifest,{actionsPerCycle:maxActions,
-    windowMinutes:scope.pageWindowMinutes});
+  // Max 16 per provider lane, not an unconstrained 32-request pool.
+  // Aggregate 32 is meaningful only if EACH venue independently meets
+  // its 16-action budget. Stock sessions are never promoted here.
+  const venueCapacities=dualVenueMode?PUBLIC_VENUES.map(market=>{
+    const count=scope.ranges.filter(r=>r.mode==='CONTINUOUS'
+      &&r.market===market).length;
+    return Object.freeze({
+      market,
+      ...assessMinuteArchiveCapacity({
+        cryptoSpotSymbols:market==='CRYPTO_SPOT'?count:0,
+        cryptoFuturesSymbols:market==='CRYPTO_FUTURES'?count:0,
+        actionsPerCycle:maxActions,windowMinutes:scope.pageWindowMinutes,
+      }),
+    });
+  }):[];
+  const capacity=assessMinuteManifestCapacity(manifest,{
+    actionsPerCycle:dualVenueMode?maxActions*2:maxActions,
+    windowMinutes:scope.pageWindowMinutes,
+  });
   if(capacity.status==='CAPACITY_MODEL_INSUFFICIENT'
-    ||capacity.status==='STOCK_SESSION_NOT_MODELLED') {
+    ||capacity.status==='STOCK_SESSION_NOT_MODELLED'
+    ||venueCapacities.some(v=>v.status==='CAPACITY_MODEL_INSUFFICIENT')) {
     // A short research pilot is not silently called sustainable all-symbol
     // capture. Do not create a queue or access providers until capacity
     // constraints have been separately reviewed and the job budget changed.
     return Object.freeze({
       contract:QUEUE_CONTRACT,status:'HOLD_CAPACITY',capacity,
+      ...(dualVenueMode?{venueCapacities}:{}),
       attempts:0,providerCalls:0,filesWritten:0,
       fullUniverseProven:false,independentOosProven:false,
       profitabilityProven:false,executionAuthority:'NONE',
@@ -342,25 +379,46 @@ export async function runDurableMinuteBackfillCycle({
     state=await writeBackfillQueue(root,scope,state,null);
   }
   let attempts=0, providerCalls=0, filesWritten=0;
-  let heldDisk=false;
+  let heldDisk=false, heldDeadline=false;
   const outcomes=[];
+  const beganAt=performance.now();
   for(let step=0; step<maxActions; step++) {
-    const choice=pickBackfillWindow(state,now());
-    if(!choice) break;
-    const response=await runMinuteArchiveIntakeV1({
-      enabled:true,root:archiveRoot,tasks:[choice.task],researchSha,
-      now,fetchImpl,sleep,freeBytes,
-    });
-    if(response.status==='HOLD_DISK') {heldDisk=true;break;}
-    const result=response.results?.[0];
-    if(!result) fail('MINUTE_QUEUE_INTAKE_RESULT_MISSING');
-    const next=applyBackfillOutcome(state,choice,result,now(),researchSha);
-    state=await writeBackfillQueue(root,scope,next,state.stateDigest);
-    attempts++;
-    providerCalls+=response.providerCalls;
-    filesWritten+=response.filesWritten;
-    outcomes.push({market:result.market,symbol:result.symbol,status:result.status,
-      error:result.error ?? null});
+    // The installed child has a 210s hard limit. Do not start a new
+    // provider GET when an 8s timeout + a 15s shutdown reserve would
+    // exceed it. Immutable pages already stored remain safe on a crash.
+    if(dualVenueMode && performance.now()-beganAt
+      + MINUTE_ARCHIVE_LIMITS.networkTimeoutMs+15_000>=210_000){
+      heldDeadline=true;
+      break;
+    }
+    const choices=(dualVenueMode?PUBLIC_VENUES:[null])
+      .map(market=>pickBackfillWindow(state,now(),market)).filter(Boolean);
+    if(!choices.length) break;
+    // Parallelize independent public providers ONLY. No two requests
+    // in-flight from the same provider. State writes remain SERIAL and
+    // globally lease-protected by the single outer flock process.
+    const settled=await Promise.allSettled(choices.map(choice=>
+      runMinuteArchiveIntakeV1({
+        enabled:true,root:archiveRoot,tasks:[choice.task],researchSha,
+        now,fetchImpl,sleep,freeBytes,
+      })));
+    let fatal=false;
+    for(let i=0;i<choices.length;i++){
+      if(settled[i].status!=='fulfilled'){fatal=true;continue;}
+      const response=settled[i].value;
+      if(response.status==='HOLD_DISK'){heldDisk=true;continue;}
+      const result=response.results?.[0];
+      if(!result)fail('MINUTE_QUEUE_INTAKE_RESULT_MISSING');
+      const next=applyBackfillOutcome(state,choices[i],result,now(),researchSha);
+      state=await writeBackfillQueue(root,scope,next,state.stateDigest);
+      attempts++;
+      providerCalls+=response.providerCalls;
+      filesWritten+=response.filesWritten;
+      outcomes.push({market:result.market,symbol:result.symbol,status:result.status,
+        error:result.error ?? null});
+    }
+    if(fatal)fail('MINUTE_QUEUE_DUAL_VENUE_INTAKE_FAILED');
+    if(heldDisk)break;
     if(providerCalls && step<maxActions-1)
       await sleep(MINUTE_ARCHIVE_LIMITS.minRequestIntervalMs);
   }
@@ -378,6 +436,7 @@ export async function runDurableMinuteBackfillCycle({
   const providerRateLimitedMarkets=Object.freeze([...provider429HoldMarkets(state,now())].sort());
   return Object.freeze({
     contract:QUEUE_CONTRACT,status:heldDisk?'HOLD_DISK'
+      :heldDeadline?'HOLD_WORKER_DEADLINE'
       :providerRateLimitedMarkets.length?'HOLD_PROVIDER_RATE_LIMIT'
       :reviewCount?'NEEDS_REVIEW'
       :completeCount===state.ranges.length?(gapsUnresolved
@@ -386,6 +445,9 @@ export async function runDurableMinuteBackfillCycle({
     scopeDigest:scope.scopeDigest,rangeCount:state.ranges.length,
     completeCount,rollingCount,reviewCount,backoffCount,
     attempts,providerCalls,filesWritten,outcomes,capacity,
+    ...(dualVenueMode?{venueCapacities,dualVenueMode:true,
+      providerLaneMaxActionsPerCycle:maxActions,
+      sourceOnlyConcurrentProviderLimit:2}:{}),
     providerRateLimitedMarkets,
     gapAffectedPageCount,unverifiedMissingMinuteSlots,
     legacyGapAuditUnverified,
