@@ -57,6 +57,9 @@ function validate(input) {
     || typeof input.root !== "string"
     || ![true,false].includes(input.allowPublicReadOnlyFetch)
     || ![true,false].includes(input.retryPartialSource)
+    || (input.retryPartialSource
+      ? !SHA.test(input.expectedExistingSourceDigestSha256??"")
+      : input.expectedExistingSourceDigestSha256 != null)
     || typeof input.nowImpl !== "function") {
     throw new TypeError("PIT_NATIVE_MINUTE_BACKFILL_ARGUMENTS_INVALID");
   }
@@ -173,11 +176,13 @@ export async function collectPITNativeCryptoMinuteSourceV1({
   root,market,symbol,dayStartMs,manifest=null,
   expectedRosterDigestSha256=null,
   allowPublicReadOnlyFetch=false,retryPartialSource=false,
+  expectedExistingSourceDigestSha256=null,
   nowImpl=()=>Date.now(),
   upbitFetchImpl=null,bitgetClient=null,
 } = {}) {
   validate({root,market,symbol,dayStartMs,
-    expectedRosterDigestSha256,allowPublicReadOnlyFetch,retryPartialSource,nowImpl});
+    expectedRosterDigestSha256,allowPublicReadOnlyFetch,retryPartialSource,
+    expectedExistingSourceDigestSha256,nowImpl});
   const end=dayStartMs+DAY;
   const now=nowImpl();
   if (!Number.isSafeInteger(now) || now < end
@@ -200,6 +205,8 @@ export async function collectPITNativeCryptoMinuteSourceV1({
     root,market,symbol,sessionStartMs:dayStartMs,asOfMs:now,
     timeframes:["1m"],
   });
+  if(retryPartialSource&&existing.reason==="ARCHIVED_SESSION_NOT_FOUND")
+    return stop(market,symbol,dayStartMs,"RETRY_EXISTING_PARTIAL_ARCHIVE_REQUIRED");
   if (existing.status==="BLOCKED_DATA"
     && existing.reason!=="ARCHIVED_SESSION_NOT_FOUND") {
     return stop(market,symbol,dayStartMs,
@@ -208,6 +215,15 @@ export async function collectPITNativeCryptoMinuteSourceV1({
       });
   }
   if (existing.sourceMinuteIntegrityVerified===true) {
+    // Never retry a different source revision, a stale request, or an
+    // ambiguous archive containing multiple immutable histories.
+    if (retryPartialSource
+      && (existing.archiveRevisionCount!==1
+        || existing.archiveSourceDigestSha256!==expectedExistingSourceDigestSha256)) {
+      return stop(market,symbol,dayStartMs,"RETRY_SOURCE_REVISION_DIGEST_MISMATCH",{
+        currentSourceDigestSha256:existing.archiveSourceDigestSha256??null,
+      });
+    }
     const complete=existing.intervalData?.["1m"]?.sourceSessionCoverageComplete;
     if (complete===true) {
       return stop(market,symbol,dayStartMs,"ALREADY_RETAINED_COMPLETE_1M_SOURCE",{
@@ -260,13 +276,49 @@ export async function collectPITNativeCryptoMinuteSourceV1({
   });
   if (!parsed.source)
     return stop(market,symbol,dayStartMs,parsed.error);
+  if (retryPartialSource) {
+    // A later retrospective GET may have additional observed minutes, but it
+    // must NOT delete or silently revise any previously stored OHLCV.
+    // The as-of timestamp naturally becomes *later* at a re-download;
+    // compare original OHLCV only and do not rewrite its earlier as-of.
+    const oldBars=existing.intervalData?.["1m"]?.bars;
+    if (!Array.isArray(oldBars)
+      || oldBars.length!==existing.sourceMinuteRows
+      || existing.archiveRevisionCount!==1) {
+      return stop(market,symbol,dayStartMs,"RETRY_PREVIOUS_SOURCE_UNVERIFIABLE");
+    }
+    const freshByMinute=new Map(parsed.source.minuteBars
+      .map(row=>[row.timestampMs,row]));
+    for(const old of oldBars){
+      const fresh=freshByMinute.get(old.startMs);
+      if(!fresh)
+        return stop(market,symbol,dayStartMs,"RETRY_PRIOR_MINUTE_DISAPPEARED");
+      if(['open','high','low','close','volume']
+        .some(key=>fresh[key]!==old[key]))
+        return stop(market,symbol,dayStartMs,"RETRY_HISTORICAL_PRICE_CONFLICT");
+    }
+    if(parsed.source.minuteBars.length<=oldBars.length){
+      return stop(market,symbol,dayStartMs,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES",{
+        retainedOriginalMinuteCount:existing.sourceMinuteRows,
+        currentSourceDigestSha256:existing.archiveSourceDigestSha256,
+      });
+    }
+  }
   const stored=await persistResearchMinuteSessionV1({
     root,source:parsed.source,
   });
   return Object.freeze({
     schemaVersion:"pit-native-crypto-minute-backfill-v1",
-    status:"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY",
-    reason:"HISTORICAL_SCANNER_PUBLICATION_NOT_ESTABLISHED",
+    status:retryPartialSource
+      ?"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW"
+      :"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY",
+    reason:retryPartialSource
+      ?"EXPLICIT_ARCHIVE_REVISION_SELECTION_REQUIRED"
+      :"HISTORICAL_SCANNER_PUBLICATION_NOT_ESTABLISHED",
+    competingArchiveRevisionExists:retryPartialSource,
+    priorSourceDigestSha256:retryPartialSource
+      ?existing.archiveSourceDigestSha256:null,
+    sourceRevisionAutoSelected:false,
     market,venue:MARKET[market].venue,symbol,dayStartMs,
     archiveStatus:stored.status,
     sourceMinuteCount:stored.storedOneMinuteRows,
