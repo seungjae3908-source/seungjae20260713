@@ -147,6 +147,42 @@ export function collectResearchActivationPreflight({ researchSha, appSha, io = f
   });
   check('VIDEO_POLICY', 'postactivation', () => optionalEnv(ENV_ROOT + '/research-video.env')
     ?.RESEARCH_VIDEO_DISCOVERY_APPROVED === 'true' ? 'PASS' : 'PENDING');
+  // Read-only configuration admission is separate from owner consent. Missing
+  // optional fields use the same fixed defaults as consent planning; explicit
+  // invalid values remain blockers. No raw settings or queries are recorded.
+  check('AI_POLICY_CONFIGURATION', 'prerequisite', () => {
+    const ai = optionalEnv(ENV_ROOT + '/research-ai.env') ?? {};
+    const keys = ['RESEARCH_AI_FREE_TIER_CONFIRMED', 'AI_CHAT_PROVIDER', 'RESEARCH_AI_MAX_CALLS_PER_SCAN', 'GROQ_MODEL', 'GEMINI_MODEL'];
+    const count = Number(ai.RESEARCH_AI_MAX_CALLS_PER_SCAN ?? 3);
+    return Object.keys(ai).every(key => keys.includes(key))
+      && ['gemini', 'groq'].includes(String(ai.AI_CHAT_PROVIDER ?? 'groq').trim().toLowerCase())
+      && Number.isSafeInteger(count) && count >= 1 && count <= 3
+      && (!ai.GROQ_MODEL || ai.GROQ_MODEL === 'openai/gpt-oss-20b')
+      && (!ai.GEMINI_MODEL || ai.GEMINI_MODEL === 'gemini-3.1-flash-lite') ? 'PASS' : 'BLOCKED';
+  });
+  check('VIDEO_POLICY_CONFIGURATION', 'prerequisite', () => {
+    const video = optionalEnv(ENV_ROOT + '/research-video.env') ?? {};
+    const keys = ['RESEARCH_VIDEO_DISCOVERY_APPROVED', 'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS',
+      'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON', 'RESEARCH_VIDEO_DISCOVERY_REGION_CODE',
+      'RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE', 'RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS'];
+    if (!Object.keys(video).every(key => keys.includes(key))) return 'BLOCKED';
+    const results = Number(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? 3);
+    const hours = Number(video.RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS ?? 720);
+    const region = String(video.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim();
+    const language = String(video.RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE ?? '').trim();
+    if (!Number.isSafeInteger(results) || results < 1 || results > 3
+      || !Number.isSafeInteger(hours) || hours < 1 || hours > 2160
+      || region && !/^[A-Z]{2}$/u.test(region)
+      || language && !/^[A-Za-z]{2,3}(?:-[A-Za-z]{2})?$/u.test(language)) return 'BLOCKED';
+    const raw = String(video.RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON ?? '').trim();
+    if (!raw) return 'PASS'; // existing fixed eight-topic rotation, not consent
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 8) return 'BLOCKED';
+    const queries = parsed.map(value => typeof value === 'string' ? value.normalize('NFKC').trim() : null);
+    const secret = /(?:bearer\s+\S+|sk-[A-Za-z0-9_-]{12,}|(?:api[_ -]?key|access[_ -]?token|password|secret)\s*[:=]\s*\S+)/iu;
+    return queries.some(query => !query || query.length > 120 || /[\u0000-\u001f\u007f]/u.test(query) || secret.test(query))
+      || new Set(queries).size !== queries.length ? 'BLOCKED' : 'PASS';
+  });
   check('SHARED_APP_AI_CONSENT_IDENTITY', 'functionality', () => {
     const value = json(ENV_ROOT + '/research-free-confirmation.json');
     return value.schemaVersion === 'research-free-owner-confirmation-v1' && value.targetSha === appSha
