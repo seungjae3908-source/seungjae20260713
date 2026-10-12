@@ -507,3 +507,19 @@ files for offline review. **The CI job still FAILS and signals remain NO-GO.**
 The deploy artifact uploader and exact-pass gates are NOT bypassed. This change
 does not repair real Yahoo availability, full KRX instrument coverage, sparse
 US/Upbit candles or absent independent OOS/full-cost evidence.
+
+## Draft: closed Yahoo bar selection and exact malformed reason categories
+
+The V3-only Yahoo stock public scanner now excludes only observed trailing
+**forming** daily (before KR 15:30 KST or US 16:00 America/New_York)
+and intraday bars (before the source interval has elapsed). It does not
+manufacture candles or ignore malformed completed source bars. The remaining
+closed candles must all pass the existing strict OHLCV and source quality gate.
+
+The same actual first/alternate public source responses now emit bounded
+structural source reason counts: timestamp format/duplicate/order/future,
+invalid OHLC price/range or volume, empty/oversized/non-array source, and
+clock errors. These include neither symbols nor candle values and never
+grant a scanner/Telegram/Paper/profitability PASS. Any genuine malformed
+completed daily bar remains a failed source-health check; detailed reasons
+are preserved in the existing no-deploy failed-run diagnostics.
