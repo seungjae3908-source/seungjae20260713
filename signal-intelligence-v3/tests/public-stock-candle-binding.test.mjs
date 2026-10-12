@@ -133,3 +133,20 @@ test('all-empty or failed public stock providers never silently become valid bar
   await assert.rejects(withPublicStockProviderFallback(['AAPL'],async()=>{
     throw Error('PUBLIC_QUOTE_REJECTED');},{retryCount:1}),/PUBLIC_QUOTE_REJECTED/);
 });
+
+test('malformed public Yahoo candle source is not accepted before trying one authorized alternative',async()=>{
+  const complete=[{time:'2026-10-12T00:00:00Z',open:1,high:2,low:1,close:2,volume:4}];
+  for(const bad of [null,undefined,{rows:[]}]) {
+    const observed=[];
+    const rows=await withPublicStockProviderFallback(['AAPL','AAPL.X'],async ticker=>{
+      observed.push(ticker);return ticker==='AAPL'?bad:complete;
+    },{validValue:Array.isArray,pause:async()=>{throw Error('NO_USELESS_RETRY');}});
+    assert.deepEqual(rows,complete);
+    assert.deepEqual(observed,['AAPL','AAPL.X']);
+  }
+  await assert.rejects(withPublicStockProviderFallback(['AAPL'],async()=>({rows:[]}),{
+    retryCount:1,validValue:Array.isArray,
+  }),/PUBLIC_STOCK_INVALID_PROVIDER_RESPONSE/);
+  assert.deepEqual(await withPublicStockProviderFallback(['AAPL'],async()=>({price:99})),
+    {price:99},'quote objects must remain acceptable');
+});
