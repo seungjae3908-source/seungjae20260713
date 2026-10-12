@@ -1372,7 +1372,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ -n "$PUBLIC_SOURCE_STAGE" ]]; then
+          if [[ -n "${PUBLIC_SOURCE_STAGE:-}" ]]; then
             [[ "$PUBLIC_SOURCE_STAGE" =~ ^/opt/stock-app-data/\.auto-live-public-seal\.[A-Za-z0-9]{8}$ ]] || {
               echo 'AUTO_LIVE_PUBLIC_INSTALL_CLEANUP_SCOPE_INVALID' >&2
               exit 1
