@@ -491,3 +491,19 @@ gaps and missing verified Paper/OOS/full-cost inputs. Per-timeframe KRX
 roster exclusions are deduplicated at market level. This adds no public
 requests, instrument identifiers, raw candle samples, signal admission,
 fake performance evidence, Telegram sends or execution authority.
+
+## Draft: Preserve truthful Yahoo public-source failure evidence on blocked CI
+
+The exact-head public provider runner now records bounded Yahoo-specific
+terminal fetch categories (429, other 4xx, 5xx, timeout, empty source, malformed
+response, unsupported timeframe or other) from already-attempted V3 stock
+candles/quotes. No extra HTTP requests, raw exceptions, URLs, tickers, member
+data or symbols are added to diagnostic artifacts. This can explain provider
+failures that Stock Scanner previously counted without retaining reasons.
+
+If the genuine public cycle fails its strict zero-provider-error KR gate,
+the diagnostic artifact uploader still runs and captures available run/snapshot
+files for offline review. **The CI job still FAILS and signals remain NO-GO.**
+The deploy artifact uploader and exact-pass gates are NOT bypassed. This change
+does not repair real Yahoo availability, full KRX instrument coverage, sparse
+US/Upbit candles or absent independent OOS/full-cost evidence.

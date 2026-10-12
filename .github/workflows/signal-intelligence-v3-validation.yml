@@ -171,6 +171,9 @@ jobs:
           printf '%s\n' "$TARGET_SHA" > "$RUNNER_TEMP/deploy/SERVICE_SHA"
           sha256sum "$RUNNER_TEMP/deploy/public-cycle.mjs" > "$RUNNER_TEMP/deploy/public-cycle.sha256"
       - name: Upload fresh-public runtime evidence
+        # Preserve real-source provider diagnostics even if zero-error gating
+        # correctly marks this exact SHA a NO-GO; no deploy artifact on failure.
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: signal-intelligence-v3-public-cycle-${{ github.event.pull_request.head.sha || github.sha }}
@@ -180,7 +183,7 @@ jobs:
             ${{ runner.temp }}/signal-intelligence-live-cycle.log
             ${{ runner.temp }}/signal-intelligence-provider-diagnostic.json
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn
       - name: Upload self-contained deploy artifact
         uses: actions/upload-artifact@v4
         with:
