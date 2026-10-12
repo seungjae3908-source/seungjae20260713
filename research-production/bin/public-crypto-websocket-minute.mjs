@@ -5,6 +5,10 @@ import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { planPublicCryptoMinuteWebsocketV1 } from
   '../src/public-crypto-websocket-minute-v1.mjs';
+import { createPublicCryptoWsSupervisorV1,
+  pollPublicCryptoWsSupervisorV1,
+  publicCryptoWsSupervisorStatusV1 } from
+  '../src/public-crypto-ws-supervisor-v1.mjs';
 
 const emit=x=>process.stdout.write(JSON.stringify(x)+'\n');
 const fail=code=>{throw new Error(code);};
@@ -34,14 +38,34 @@ async function main(){
       publicProviderGETCount:0,socketConnectionsOpened:0,
       archiveFilesWritten:0,executionAuthority:'NONE'});
   }
-  if(args.length!==1||args[0]!=='--plan'
+  if(args.length!==1||!['--plan','--simulate'].includes(args[0])
     ||process.env.RESEARCH_PUBLIC_WS_PLAN_ENABLED!=='true')
     fail('WS_MINUTE_EXPLICIT_PLAN_APPROVAL_REQUIRED');
   const input=await readPrivateRoster(
     process.env.RESEARCH_PUBLIC_WS_ROSTER_MANIFEST);
+  const atMs=Date.now();
   const report=planPublicCryptoMinuteWebsocketV1({
-    enabled:true,...input,nowMs:Date.now(),
+    enabled:true,...input,nowMs:atMs,
   });
+  if(args[0]==='--simulate'){
+    // Pure deterministic state machine. It cannot create a socket even
+    // when requested by an operator. Intents are never executed here.
+    const state=createPublicCryptoWsSupervisorV1({
+      enabled:true,plan:report,nowMs:atMs,
+    });
+    const step=pollPublicCryptoWsSupervisorV1({state,nowMs:atMs});
+    const summary=publicCryptoWsSupervisorStatusV1(step.state);
+    return emit({
+      contract:summary.contract,status:summary.status,
+      plannedConnections:summary.plannedConnections,
+      simulatedIntentCount:step.intent.action==='NONE'?0:1,
+      proposedFirstAction:step.intent.action,
+      pendingRestAudits:summary.pendingRestAudits,
+      actualPublicWebsocketsOpened:0,providerCalls:0,
+      archiveFilesWritten:0,operatorActivation:false,
+      paperAdmissionAllowed:false,executionAuthority:'NONE',
+    });
+  }
   return emit({
     contract:report.contract,status:report.status,
     plannedConnections:report.plannedConnections,

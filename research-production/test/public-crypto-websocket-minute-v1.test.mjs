@@ -6,6 +6,7 @@ import {
 import {
   PUBLIC_WS_MINUTE_LIMITS,planPublicCryptoMinuteWebsocketV1 as plan,
   normalizePublicCryptoWsMinuteV1 as normalize,
+  normalizePublicCryptoWsMinutePacketV1 as packets,
   advancePublicCryptoWsMinuteV1 as advance,
   reconcilePublicCryptoWsRestMinuteV1 as reconcile,
 } from '../src/public-crypto-websocket-minute-v1.mjs';
@@ -129,6 +130,42 @@ test('Bitget public futures update normalizes correctly; snapshot is not credite
   assert.equal(snapshot.status,'IGNORED_SNAPSHOT');
   assert.equal(snapshot.archiveFilesWritten,0);
 });
+
+test('Bitget batched provisional rows preserve all minutes in sorted order',()=>{
+  const at=START+91_000;
+  const v=bitgetPacket({
+    ts:START+90_000,
+    data:[
+      [String(START+60_000),'100','106','98','104','3','301','301'],
+      [String(START),'100','105','98','103','2','203','203'],
+    ],
+  });
+  const got=packets({market:'CRYPTO_FUTURES',
+    allowedSymbols:['BTCUSDT'],
+    receivedAtMs:at,raw:Buffer.from(JSON.stringify(v))});
+  assert.equal(got.length,2);
+  assert.deepEqual(got.map(x=>x.row.timestamp),[START,START+60_000]);
+  assert.ok(got.every(x=>x.needsRestFinalityCheck));
+  assert.ok(got.every(x=>x.executionAuthority==='NONE'));
+  assert.equal(got[0].archiveFilesWritten,0);
+});
+test('bitget duplicate, oversized array and oversize raw object are rejected',()=>{
+  const at=START+90_000;
+  const frame=bitgetPacket({ts:at-1000});
+  assert.throws(()=>packets({market:'CRYPTO_FUTURES',
+    allowedSymbols:['BTCUSDT'],receivedAtMs:at,
+    raw:{...frame,data:[frame.data[0],frame.data[0]]}}),
+  /WS_MINUTE_BITGET_BATCH_DUPLICATE/);
+  assert.throws(()=>packets({market:'CRYPTO_FUTURES',
+    allowedSymbols:['BTCUSDT'],receivedAtMs:at,
+    raw:{...frame,data:Array.from({length:33},()=>frame.data[0])}}),
+  /WS_MINUTE_BITGET_BATCH_INVALID/);
+  assert.throws(()=>packets({market:'CRYPTO_SPOT',
+    allowedSymbols:['BTC'],receivedAtMs:at,
+    raw:{...upbitPacket(),filler:'x'.repeat(256*1024)}}),
+  /WS_MINUTE_PACKET_OVERSIZE/);
+});
+
 test('unknown symbols, malformed OHLC, future events and fake channels fail closed',()=>{
   assert.throws(()=>spotObservation(upbitPacket({code:'KRW-FAKE'})),
     /WS_MINUTE_SOURCE_TIME_OR_SYMBOL_INVALID/);

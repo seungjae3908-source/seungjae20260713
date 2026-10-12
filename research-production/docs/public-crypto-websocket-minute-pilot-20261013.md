@@ -71,3 +71,85 @@ Hub #1102 · Workroom #1775 · Release Control #1555.
 Hard stop: Replit/Replit Agent prohibited. Draft only, no Ready/Merge,
 Staging/Production, VPS/systemd/PM2/DB/Secrets changes, provider GET/WS traffic,
 Paper or LIVE order, Telegram send, or profitability promotion.
+
+## Draft v2 — transport supervisor and isolated compressed source-only sidecar
+
+**Implementation:** `src/public-crypto-ws-supervisor-v1.mjs`,
+`src/public-crypto-ws-sidecar-v1.mjs`; both are OFFLINE source-contract
+components, with no real WebSocket constructor, network request, runtime
+timer, worker installation or database access. The existing CLI now supports
+an opt-in `--simulate` command using the same pre-existing private 0600
+sealed roster manifest as `--plan`. Both print *counts only*; no raw bars,
+source subscription payloads, secrets, portfolio data or private endpoints.
+
+### Connection lifecycle, fail-closed
+
+- A deterministic supervisor validates the actual current-roster plan
+  (only `wss://api.upbit.com/websocket/v1` and
+  `wss://ws.bitget.com/v2/ws/public`), rejects duplicate symbols,
+  private endpoints, tampered symbols and invalid subscriptions.
+- It proposes at most **one new connection per second globally**
+  and times out handshake after 30 seconds, with 5-second
+  exponential reconnect delays capped at 5 minutes and a manual
+  review hold after repeated unsuccessful attempts. All actions are
+  **intents** and include `neverExecuted:true`. No network is opened.
+- `OPEN` requires an explicit subscription transmission receipt.
+  Upbit has no guaranteed per-symbol ACK. Bitget remains in
+  `AWAIT_ACK` until every expected channel subscription is
+  acknowledged. Unsolicited/stale ACKs are refused.
+- Upbit sends a WebSocket protocol Ping **frame** every 30 seconds
+  in the dry simulation; Bitget uses the literal text message
+  `ping` and requires a literal `pong`. Missing response for
+  over 15 seconds requests a close/retry intent. **No candle activity
+  does not indicate a dead connection**: a symbol may have no trades,
+  and only independent transport heartbeat establishes liveness.
+  No silent period becomes a fictitious zero-volume candle.
+- Bitget candle updates may contain multiple one-minute rows. The
+  bounded packet normalizer sorts and validates up to 32 rows,
+  rejects duplicate minute indices and oversized packets (including
+  in-memory object frames and binary websocket payloads), and feeds
+  every row to the same provisional source/gap validator.
+- A genuine rollover or connection loss adds a **bounded REST
+  audit proposal** with market/symbol/window and
+  `sourceVerified=false`. It is NEVER automatically treated as
+  verified no-trade, a genuine OOS event or authority to submit a
+  real/Paper order. Pending audits are bounded to 2,048 and cause a
+  fail-closed state if that capacity is exceeded.
+
+### Private provisional batches — NOT final market history
+
+- Up to 2,048 WebSocket *updates* may be compacted into no more than
+  480 distinct minute/symbol observations in a 5-minute shard batch.
+  Same-minute older events, cumulative high/low regression, volume
+  regressions, OHLC inconsistency, source-id swaps and unapproved
+  accounts are rejected before persistence.
+- A private, operator-approved **existing** 0700 root is required.
+  Sidecar files are gzip-compressed, SHA256-sealed, written via
+  create-exclusive temporary file, fsync, hard-link publication,
+  and exact private readback. An already existing identical batch is
+  reused; a revision conflict is blocked rather than overwritten.
+  A 5 GiB free-space requirement is modeled, not attested on Vultr.
+  Symlinks, world-readable files, unsafe folders and decompression
+  bombs fail closed.
+- Files are **research-only provisional sidecars**, not the
+  existing 120m/180m immutable REST original source archive. They
+  cannot generate OOS/Full Cost/Paper profitability credit.
+  REST close/finality check, provider rights, signal-time evidence,
+  host resource validation and approved native backtester admission
+  are separate missing requirements. Tests use disposable local
+  0700 fixture roots only; no production host writes.
+
+### Official heartbeat references
+
+- Upbit public WebSocket connections can idle-timeout after about
+  120 seconds; official guide supports PING/PONG frames.
+  https://docs.upbit.com/kr/reference/websocket-guide
+- Bitget Classic WebSocket public guide recommends sending text
+  `ping` every 30 seconds and checking literal `pong`, and
+  suggests fewer than 50 channels per connection.
+  https://www.bitget.com/docs/classic/websocket/intro
+
+**Hard stop remains:** NO Replit, Ready/Merge, Staging/Production, PM2,
+systemd, cron, live WebSocket/REST provider traffic, DB/Secret/permissions,
+private broker calls, member re-publication, Paper/LIVE orders, withdrawals
+or Telegram sends. All tests synthetic/offline. `executionAuthority=NONE`.
