@@ -6,11 +6,13 @@ on:
     paths:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
+      - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
       - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
   pull_request:
     paths:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
+      - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
       - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
 
 permissions:
@@ -24,7 +26,7 @@ jobs:
   offline-model-evidence:
     name: Offline original-minute fill, cost, and drawdown regression
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     env:
       LIVE_TRADING: 'false'
       AUTO_TRADING: 'false'
@@ -72,6 +74,19 @@ jobs:
           node --check market-prediction-lab/src/original-minute-execution-model-v2.js
           node --check market-prediction-lab/tests/original-minute-execution-model-v2.test.js
           node --test market-prediction-lab/tests/original-minute-execution-model-v2.test.js
+      - name: Verify original-minute dependency closure and replay (offline fixtures only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js
+          node --test \
+            market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js \
+            market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js \
+            market-prediction-lab/tests/four-market-original-minute-batch-v1.test.js \
+            market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js \
+            market-prediction-lab/tests/four-market-original-minute-candidate-review-v1.test.js \
+            market-prediction-lab/tests/research-original-minute-diagnostic-readonly-v1.test.js \
+            market-prediction-lab/tests/research-minute-archive-v1.test.js
       - name: No deployment or economic-source claims
         run: |
           echo 'originalMinuteModelOfflineUnit=COMPLETE'
