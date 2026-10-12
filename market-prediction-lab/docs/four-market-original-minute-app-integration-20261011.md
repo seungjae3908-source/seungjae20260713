@@ -345,3 +345,10 @@ collector 단위 API \`get\` 호출 수로 기록한다. 이는 HTTP 재시도
 실제 과거 데이터의 무료 이용 가능 범위 및 회원 대상 재배포
 권한은 별도로 확인해야 한다. 이 Draft에서는 운영 서버의
 과거 1분봉을 새로 받거나 API를 호출하지 않았다.
+
+
+Historical Bitget V2 `BITGET_HISTORY_PAGE_BUDGET_EXCEEDED` is now
+classified as an expected blocked original-source coverage failure by the
+Research Center's public-source error registry, **not** a software-internal
+exception or zero market opportunities. Unknown implementation errors still
+surface distinctly for developer repair.
