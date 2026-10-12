@@ -62,25 +62,29 @@ function validSource(lane){
   const key=String(lane?.laneId??'').split('_')[0];
   return VALID_SOURCE[key]?.has(lane?.universeSource)===true;
 }
+/** One canonical *page* check for source-readiness summaries and alerts.
+ * A nominal status without an exact completed source page is not evidence.
+ */
+export function verifiedCurrentPublicV3Page(lane){
+  if(!validSource(lane)||lane.lastGoodPreserved!==false
+    ||lane.cursorRotatedBlockedOnly===true
+    ||lane.responseDataState!=='complete'
+    ||lane.universePartial!==false||lane.universeStale!==false
+    ||lane.status!=='VALID_NO_TRADE'&&lane.status!=='CANDIDATES_AVAILABLE'
+    ||!isCount(lane.scannedCards)||!isCount(lane.retainedFromBatch)
+    ||lane.retainedFromBatch>lane.scannedCards)return false;
+  const page={...lane,status:'CANDIDATES_AVAILABLE'};
+  return verifiedCurrentLane(page) &&
+    (lane.status!=='VALID_NO_TRADE'||
+      (lane.scannedCards===0&&lane.retainedFromBatch===0)) &&
+    (lane.status!=='CANDIDATES_AVAILABLE'||
+      (lane.scannedCards>0&&lane.retainedFromBatch>0));
+}
 /** All source-backed *current pages* are healthy; does not prove every
  * symbol in each full roster has ever been scanned. */
 export function currentPublicV3CycleReady(coverage){
   const lanes=verifiedLanes(coverage);
-  return Boolean(lanes && [...lanes.values()].every(lane=>{
-    if(!validSource(lane)||lane.lastGoodPreserved!==false
-      ||lane.cursorRotatedBlockedOnly===true
-      ||lane.responseDataState!=='complete'
-      ||lane.universePartial!==false||lane.universeStale!==false
-      ||lane.status!=='VALID_NO_TRADE'&&lane.status!=='CANDIDATES_AVAILABLE'
-      ||!isCount(lane.scannedCards)||!isCount(lane.retainedFromBatch)
-      ||lane.retainedFromBatch>lane.scannedCards)return false;
-    const page={...lane,status:'CANDIDATES_AVAILABLE'};
-    return verifiedCurrentLane(page) &&
-      (lane.status!=='VALID_NO_TRADE'||
-        (lane.scannedCards===0&&lane.retainedFromBatch===0)) &&
-      (lane.status!=='CANDIDATES_AVAILABLE'||
-        (lane.scannedCards>0&&lane.retainedFromBatch>0));
-  }));
+  return Boolean(lanes && [...lanes.values()].every(verifiedCurrentPublicV3Page));
 }
 
 /** Conservative fresh publication view. Prior research rows are kept only in

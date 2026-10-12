@@ -2,13 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {summarizeV3BlockerTriage} from '../src/public-v3-blocker-triage.mjs';
 const markets={KR:'KR_STOCK',US:'US_STOCK',SPOT:'CRYPTO_SPOT',FUTURES:'CRYPTO_FUTURES'};
+const EPOCH='11111111-1111-4111-8111-111111111111';
 const cover=()=>Object.entries(markets).flatMap(([prefix,market])=>
   [['SCALPING_15M','SCALPING','15m'],['SWING_60M','SWING','60m'],['MID_LONG_1D','MID_LONG','1D']]
     .map(([id,strategy,timeframe])=>({
-      laneId:prefix+'_'+id,market,strategy,timeframe,
+      laneId:prefix+'_'+id,market,strategy,timeframe,sourceCycleId:EPOCH,
+      universeSource:market==='KR_STOCK'?'krx-symbol-master'
+        :market==='US_STOCK'?'nasdaq-trader-public-directory'
+          :market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',
       status:'VALID_NO_TRADE',lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
       universePartial:false,universeStale:false,responseDataState:'complete',
       universeProviderErrors:0,providerErrors:0,timeouts:0,
+      scannedCards:0,retainedFromBatch:0,
+      cursorBefore:0,cursorAfter:20,totalUniverse:100,
+      publicExecutionDiagnostic:{
+        state:'PAGE_EXECUTION_COMPLETE',requested:20,started:20,completed:20,
+        partial:false,timedOut:false,providerErrors:0,timeouts:0,
+        failuresObserved:0,
+      },
     })));
 const evidence=()=>({
   schemaVersion:'public-v3-economic-readiness-v1',totalRows:1,
@@ -16,6 +27,8 @@ const evidence=()=>({
     examined:m==='KR_STOCK'?1:0,canonicalProofAbsent:m==='KR_STOCK'?1:0,
     backtestIdentityMissing:m==='KR_STOCK'?1:0,
     backtestEvidenceMissing:m==='KR_STOCK'?1:0,
+    backtestOosOrWalkForwardMissing:0,
+    backtestFullCostIncomplete:0,
   }])),
 });
 test('valid twelve-lane market source diagnosis does not claim OOS or all-symbol coverage',()=>{
@@ -71,4 +84,32 @@ test('source instrumentation never exports redacted ticker or candle contents',(
   assert.ok(!report.includes('PRIVATE_UNDISTRIBUTABLE_TICKER'));
   assert.ok(!report.includes('SECRET_CANDLE'));
   assert.ok(!report.includes('SECRET_SENSITIVE_OHLC'));
+});
+
+test('triage uses the exact canonical page proof, never just green status metadata',()=>{
+  const base=cover();
+  assert.equal(summarizeV3BlockerTriage(base,evidence()).sourceReadyLanes,12);
+  const absent=cover();
+  delete absent[0].publicExecutionDiagnostic;
+  assert.equal(summarizeV3BlockerTriage(absent,evidence()).sourceReadyLanes,11);
+  const incomplete=cover();
+  incomplete[1].publicExecutionDiagnostic.completed=19;
+  assert.equal(summarizeV3BlockerTriage(incomplete,evidence()).sourceReadyLanes,11);
+  const wrongProvider=cover();
+  wrongProvider[3].universeSource='bitget-public';
+  assert.equal(summarizeV3BlockerTriage(wrongProvider,evidence()).sourceReadyLanes,11);
+  const greenButNoCards=cover();
+  greenButNoCards[1].status='CANDIDATES_AVAILABLE';
+  assert.equal(summarizeV3BlockerTriage(greenButNoCards,evidence()).sourceReadyLanes,11);
+});
+test('cross-cycle stale source rows and cross-market input counts cannot claim 12 healthy current pages',()=>{
+  const old=cover();
+  old[0].sourceCycleId='22222222-2222-4222-8222-222222222222';
+  assert.throws(()=>summarizeV3BlockerTriage(old,evidence()),/LANE_INVALID/);
+  const missing=cover();
+  delete missing[0].sourceCycleId;
+  assert.throws(()=>summarizeV3BlockerTriage(missing,evidence()),/SOURCE_CYCLE_INVALID/);
+  const total=evidence();
+  total.totalRows=2;
+  assert.throws(()=>summarizeV3BlockerTriage(cover(),total),/ECONOMIC_INVALID/);
 });
