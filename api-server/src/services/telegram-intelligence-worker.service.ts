@@ -31,6 +31,7 @@ export interface TelegramIntelligenceStateStore {
   hasUnconfirmed(key: string): Promise<boolean>;
   markDelivered(key: string, deliveredAt: Date): Promise<void>;
   markUnconfirmed(key: string, attemptedAt: Date): Promise<void>;
+  releaseExplicitNoSend(key: string, attemptedAt: Date): Promise<void>;
 }
 
 type PersistedState = {
@@ -147,7 +148,12 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
   async markUnconfirmed(key: string, attemptedAt: Date): Promise<void> {
     return this.persist(key, attemptedAt, false);
   }
-  private async persist(key: string, at: Date, confirmed: boolean): Promise<void> {
+  /** Only a documented local skip or explicit Bot API rejection may release a
+   * pre-send reservation; an uncertain POST must stay permanently blocked. */
+  async releaseExplicitNoSend(key: string, attemptedAt: Date): Promise<void> {
+    return this.persist(key, attemptedAt, null);
+  }
+  private async persist(key: string, at: Date, confirmed: boolean | null): Promise<void> {
     await this.ensureLoaded();
     try {
       if (!key.startsWith('telegram-intelligence:') || key.length > 1024
@@ -155,16 +161,20 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
       const nextDelivered = new Map(this.delivered);
       const nextUnconfirmed = new Map(this.unconfirmed);
       const cutoff = at.getTime() - MAX_STATE_AGE_MS;
-      for (const ledger of [nextDelivered, nextUnconfirmed]) {
-        for (const [candidate, timestamp] of ledger)
-          if (Date.parse(timestamp) < cutoff) ledger.delete(candidate);
-      }
-      if (confirmed) {
+      // Confirmed receipts have a bounded dedupe lifetime, but an ambiguous
+      // remote POST is never made retry-safe solely by the passage of time.
+      for (const [candidate, timestamp] of nextDelivered)
+        if (Date.parse(timestamp) < cutoff) nextDelivered.delete(candidate);
+      if (confirmed === true) {
         nextUnconfirmed.delete(key);
         nextDelivered.set(key, at.toISOString());
-      } else {
+      } else if (confirmed === false) {
         if (nextDelivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
         nextUnconfirmed.set(key, at.toISOString());
+      } else {
+        if (nextDelivered.has(key) || !nextUnconfirmed.has(key))
+          throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        nextUnconfirmed.delete(key);
       }
       if (nextDelivered.size + nextUnconfirmed.size > 10000)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
@@ -184,6 +194,9 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
         await fd.sync();
       } finally { await fd.close(); }
       await rename(temporary, this.statePath);
+      // The rename itself must survive a host crash before the POST starts.
+      const directory = await open(path.dirname(this.statePath), fileConstants.O_RDONLY);
+      try { await directory.sync(); } finally { await directory.close(); }
       this.delivered = nextDelivered;
       this.unconfirmed = nextUnconfirmed;
     } catch {
@@ -209,6 +222,11 @@ export class MemoryTelegramIntelligenceStateStore implements TelegramIntelligenc
   async markUnconfirmed(key: string): Promise<void> {
     if (this.delivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     this.unconfirmed.add(key);
+  }
+  async releaseExplicitNoSend(key: string): Promise<void> {
+    if (this.delivered.has(key) || !this.unconfirmed.has(key))
+      throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
+    this.unconfirmed.delete(key);
   }
 }
 
@@ -325,7 +343,6 @@ export class TelegramIntelligenceWorker {
             result.failed += 1;
             continue;
           }
-          result.attempted += 1;
           const alert = briefSnapshot
             ? buildTelegramMarketBriefInput({
                 kind: plan.kind,
@@ -346,20 +363,34 @@ export class TelegramIntelligenceWorker {
                 duplicateWindowMs: 24 * 60 * 60 * 1000,
                 cooldownMs: 0,
               };
+          // Checkpoint an UNKNOWN outcome *before* the non-idempotent Bot API
+          // POST, not after it. A crash following remote acceptance must not
+          // cause the next process to retransmit this report.
+          await this.store.markUnconfirmed(deliveryKey, now);
+          result.attempted += 1;
           const delivered = await this.deliver(alert);
           if (delivered.ok) {
             await this.store.markDelivered(deliveryKey, now);
             result.delivered += 1;
-          } else if (delivered.skipped === 'DUPLICATE') {
-            await this.store.markDelivered(deliveryKey, now);
-            result.deduped += 1;
-          } else if (delivered.skipped === 'NOT_CONFIGURED') {
+          } else if (delivered.attempts === 0
+            && delivered.skipped === 'NOT_CONFIGURED') {
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.notConfigured += 1;
-          } else if (delivered.skipped === 'OUTCOME_UNCONFIRMED'
-            || delivered.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
-            await this.store.markUnconfirmed(deliveryKey, now);
+          } else if (delivered.attempts === 0
+            && delivered.skipped === 'COOLDOWN') {
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
+            result.deduped += 1;
+          } else if (delivered.skipped === 'DELIVERY_FAILED'
+            && (delivered.errorCode === 'TELEGRAM_API_REJECTED'
+              || /^TELEGRAM_HTTP_(?:400|401|403|404|409|410|422|429)$/u
+                .test(delivered.errorCode ?? ''))) {
+            // A specific rejection proves that Telegram did not accept this
+            // POST. Other transport errors must retain the reservation.
+            await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.failed += 1;
           } else {
+            // DUPLICATE is not a remote receipt (the other call may still be
+            // in-flight). Unknown/failed results require reconciliation.
             result.failed += 1;
           }
         }
