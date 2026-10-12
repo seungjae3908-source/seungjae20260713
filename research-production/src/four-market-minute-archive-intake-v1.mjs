@@ -2,8 +2,8 @@
 // Historical source availability is the actual fetch time, NEVER candle time.
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readFile, link, unlink } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { lstat, mkdir, open, link, unlink } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const MINUTE_MS = 60_000;
 export const MINUTE_ARCHIVE_CONTRACT = 'four-market-original-minute-public-intake/v1';
@@ -172,17 +172,35 @@ export async function fetchCryptoMinutePage(task, {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
-    const response = await fetchImpl(url.toString(), {
-      method: 'GET', redirect: 'error', signal: controller.signal,
-      headers: { accept: 'application/json' },
-    });
-    if (!response || response.ok !== true)
-      fail('MINUTE_SOURCE_HTTP_' + (Number.isSafeInteger(response?.status) ? response.status : 'ERROR'));
-    const parsed = await boundedJson(response);
-    return normalizePublicMinuteResponse(task, parsed);
+    try {
+      const response = await fetchImpl(url.toString(), {
+        method: 'GET', redirect: 'error', signal: controller.signal,
+        headers: { accept: 'application/json' },
+      });
+      if (!response || response.ok !== true)
+        fail('MINUTE_SOURCE_HTTP_' + (Number.isSafeInteger(response?.status) ? response.status : 'ERROR'));
+      const parsed = await boundedJson(response);
+      return normalizePublicMinuteResponse(task, parsed);
+    } catch (e) {
+      if (controller.signal.aborted) fail('MINUTE_SOURCE_TIMEOUT');
+      if (/^MINUTE_[A-Z0-9_]{1,80}$/u.test(e?.message ?? '')) throw e;
+      fail('MINUTE_SOURCE_NETWORK_UNAVAILABLE');
+    }
   } finally { clearTimeout(timer); }
 }
 
+// Reject aliased ancestors, not just the final storage directory. This
+// must run before any write and each independent archive read.
+async function unlinkedAncestors(path) {
+  let part = path;
+  while (true) {
+    const info = await lstat(part);
+    if (info.isSymbolicLink()) fail('MINUTE_ARCHIVE_ANCESTOR_SYMLINK');
+    const parent = dirname(part);
+    if (parent === part) break;
+    part = parent;
+  }
+}
 async function privateDirectory(path, create = false) {
   if (create) {
     try { await mkdir(path, { mode: 0o700 }); }
@@ -198,20 +216,27 @@ function archiveFile(root, task) {
     String(task.windowStartMs) + '-' + String(task.windowEndMs) + '.json');
 }
 async function privateArchiveFile(path) {
+  let handle;
   try {
-    const info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = await handle.stat();
+    if (!info.isFile() || info.nlink !== 1
       || (info.mode & POSIX_PRIVATE) || info.size < 1
       || info.size > MINUTE_ARCHIVE_LIMITS.maxArchiveBytes)
       fail('MINUTE_ARCHIVE_FILE_UNSAFE');
-    return await readFile(path, 'utf8');
+    return await handle.readFile('utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') return null;
+    if (error?.code === 'ENOENT') return null;
+    if (error?.code === 'ELOOP') fail('MINUTE_ARCHIVE_FILE_UNSAFE');
     throw error;
+  } finally {
+    await handle?.close();
   }
 }
 function candleDigest(record) {
-  return sha256([record.contract, record.researchSha, record.market, record.symbol,
+  // Same observed candles remain reusable across code releases; the original
+  // producer SHA is separately sealed by contentDigest and never rewritten.
+  return sha256([record.contract, record.market, record.symbol,
     record.source, record.windowStartMs, record.windowEndMs, record.candles]);
 }
 function contentDigest(record) {
@@ -230,6 +255,7 @@ export async function readOriginalMinutePage(root, task, researchSha) {
   const base = resolve(root);
   if (/^\/(?:opt\/stock-app-data|srv\/stock-app|var\/lib\/stock-app)(?:\/|$)/u.test(base))
     fail('MINUTE_ARCHIVE_APP_ROOT_FORBIDDEN');
+  await unlinkedAncestors(base);
   await privateDirectory(base);
   for (const part of [join(base, scope.market),
     join(base, scope.market, scope.symbol),
@@ -243,7 +269,7 @@ export async function readOriginalMinutePage(root, task, researchSha) {
   if (data === null) return null;
   let row;
   try { row = JSON.parse(data); } catch { fail('MINUTE_ARCHIVE_CORRUPT'); }
-  if (row?.contract !== MINUTE_ARCHIVE_CONTRACT || row.researchSha !== researchSha
+  if (row?.contract !== MINUTE_ARCHIVE_CONTRACT || !SHA40.test(row.researchSha ?? '')
     || row.market !== task.market || row.symbol !== task.symbol
     || row.source !== SOURCE[task.market] || row.windowStartMs !== task.windowStartMs
     || row.windowEndMs !== task.windowEndMs || !HASH64.test(row.contentDigest ?? '')
@@ -275,6 +301,7 @@ export async function persistOriginalMinutePage({
   const base = resolve(root);
   if (/^\/(?:opt\/stock-app-data|srv\/stock-app|var\/lib\/stock-app)(?:\/|$)/u.test(base))
     fail('MINUTE_ARCHIVE_APP_ROOT_FORBIDDEN');
+  await unlinkedAncestors(base);
   await privateDirectory(base);
   const candles = validateMinuteCandles(scope, rows, retrievedAtMs);
   if (!candles.length) return Object.freeze({ status: 'BLOCKED_EMPTY_RESPONSE', archived: false });
@@ -345,6 +372,7 @@ export async function runMinuteArchiveIntakeV1({
   const scopes = tasks.map(validateMinuteTask);
   if (new Set(scopes.map(s => JSON.stringify(s))).size !== scopes.length)
     fail('MINUTE_INTAKE_DUPLICATE_TASK');
+  await unlinkedAncestors(resolve(root));
   await privateDirectory(resolve(root));
   if (freeBytes != null && (!Number.isSafeInteger(freeBytes)
     || freeBytes < MINUTE_ARCHIVE_LIMITS.minFreeBytes))
@@ -361,7 +389,8 @@ export async function runMinuteArchiveIntakeV1({
     try {
       const existing = await readOriginalMinutePage(resolve(root), task, researchSha);
       if (existing) {
-        results.push({ market: task.market, symbol: task.symbol, status: 'REUSED_IDENTICAL' });
+        results.push({ market: task.market, symbol: task.symbol,
+          status: 'REUSED_IDENTICAL', candleCount: existing.candleCount });
         continue;
       }
       const observedAt = now();
