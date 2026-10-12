@@ -14,7 +14,7 @@ const MS = 60_000;
 const PINNED = 'a'.repeat(40);
 const hash = x => createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const midnight = Date.parse('2025-01-01T00:00:00Z');
-function fakeSealedPrewire(market = 'CRYPTO_SPOT') {
+function fakeSealedPrewire(market = 'CRYPTO_SPOT', sourcePageCount = 12) {
   const spot = market === 'CRYPTO_SPOT';
   const venue = spot ? 'UPBIT_KRW' : 'BITGET_USDT_FUTURES';
   const sourceId = spot ? 'UPBIT_PUBLIC_1M' : 'BITGET_PUBLIC_FUTURES_1M';
@@ -46,11 +46,11 @@ function fakeSealedPrewire(market = 'CRYPTO_SPOT') {
     sourceMinuteDigest: digest, sourceMinuteRows: 1440,
     oldestActualReceiptMs: midnight + DAY + MS,
     newestActualReceiptMs: baseLastReceipt,
-    sourceArchiveDigests: Array.from({ length: 12 }, (_, i) =>
+    sourceArchiveDigests: Array.from({ length: sourcePageCount }, (_, i) =>
       hash(['test-fixture-only', i])),
     sourceArchiveProducerShas: [PINNED],
     metadata: {
-      sourceMinutePages: 12, missingOneMinuteSlots: 0,
+      sourceMinutePages: sourcePageCount, missingOneMinuteSlots: 0,
       allSourceSlotsObserved: true, sourceDigestMatchesCanonicalModel: true,
       independentMarketLicenseOrPITProven: false,
       retrospectiveTimeCannotBeUsedAsScannerTime: true,
@@ -85,6 +85,24 @@ test('private source validation accepts exact 1440-row retrospective crypto day 
     // No raw candles returned by a status-only exported inspector.
     assert.ok(!Object.hasOwn(verified, 'modelInput'));
     assert.ok(!JSON.stringify(verified).includes('"minuteBars"'));
+  }
+});
+
+
+test('eight verified 180m source receipts allow source-only compatibility but not economic credit', () => {
+  for(const market of ['CRYPTO_SPOT','CRYPTO_FUTURES']){
+    const v=fakeSealedPrewire(market,8);
+    const good=verify(v,{expectedResearchSha:PINNED});
+    assert.equal(good.status,'RETROSPECTIVE_ORIGINAL_SOURCE_COMPATIBLE');
+    assert.equal(good.actualSourceReceipts,8);
+    assert.equal(good.profitabilityProven,false);
+    assert.equal(good.paperAdmissionAllowed,false);
+    assert.equal(good.executionAuthority,'NONE');
+    const short=verify(fakeSealedPrewire(market,7),{expectedResearchSha:PINNED});
+    assert.equal(short.status,'BLOCKED_DATA');
+    const mismatched=verify({...v,metadata:{...v.metadata,sourceMinutePages:12}},
+      {expectedResearchSha:PINNED});
+    assert.equal(mismatched.status,'BLOCKED_DATA');
   }
 });
 
