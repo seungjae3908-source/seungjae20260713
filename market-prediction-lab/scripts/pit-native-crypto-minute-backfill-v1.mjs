@@ -12,6 +12,8 @@
  * Only if allowed to read public native 1m data for private research:
  *   add --read-public. To retry a retained partial source, additionally add
  *   --retry-partial --expected-existing-sha <SHA256-of-reviewed-revision>.
+ *   Omit --read-public for a ZERO-network private preflight; an authorized
+ *   historical GET still requires --read-public explicitly.
  *   A retry never overwrites the prior original, requires the exact reviewed
  *   prior digest and only stores an unchanged-price superseding 1m inventory.
  *   Multiple revisions require explicit read selection; no auto promotion.
@@ -72,7 +74,6 @@ export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
     fields[key]=value;
   }
   if(!REQUIRED.every(key=>Object.hasOwn(fields,key))
-    ||(retryPartialSource&&!allowPublicReadOnlyFetch)
     ||(retryPartialSource
       ?!/^[0-9a-f]{64}$/u.test(fields["--expected-existing-sha"]??"")
       :Object.hasOwn(fields,"--expected-existing-sha"))
