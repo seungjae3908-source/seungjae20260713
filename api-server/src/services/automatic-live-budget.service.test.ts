@@ -225,3 +225,34 @@ test('foreign notional uses genuine fill-time FX once, regardless of preserved f
     assert.equal(projection.baseCharges[0]!.riskKrw, 2_940);
   }
 });
+
+test('large retained histories and durable holds are projected with bounded linear identity reads', async () => {
+  const count = 4_000;
+  let identityReads = 0;
+  const tracked = <T extends TradingPlan | TradingOrder>(row: T): T => new Proxy(row, {
+    get(target, property, receiver) {
+      if (property === 'id' || property === 'planId') identityReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const parents: TradingPlan[] = [];
+  const children: TradingOrder[] = [];
+  const holds = [];
+  for (let i = 0; i < count; i += 1) {
+    const parent = tracked(plan(`history-${i}`));
+    const child = tracked(order(parent, { state: 'REJECTED', submissionStartedAt: null }));
+    parents.push(parent); children.push(child);
+    holds.push({ orderId: child.id, market: 'crypto_spot', instrument: `upbit:KRW:${parent.symbol.toUpperCase()}`,
+      strategy: parent.strategyId, amountKrw: 70_000, riskKrw: 700 });
+  }
+  const next = tracked(plan('next'));
+  const nextOrder = tracked(order(next));
+  const nextId = nextOrder.id;
+  identityReads = 0;
+  const projection = await projectAutomaticLiveBudget({ policy: policy(), emergencyStopped: false,
+    plans: [...parents, next], orders: [...children, nextOrder], holds }, userId, nextId, (value) => value!);
+  assert.equal(projection.releases.length, count);
+  assert.equal(projection.baseCharges.length, 0);
+  assert.equal(projection.amountKrw, 70_000);
+  assert.ok(identityReads < count * 40, `identity reads must be linear, observed ${identityReads}`);
+});

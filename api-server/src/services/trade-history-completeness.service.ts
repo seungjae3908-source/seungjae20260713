@@ -27,9 +27,12 @@ export async function readCompleteTradingHistory<T>(input: {
     let cursor: string | null = null;
     for (;;) {
       const page = await input.page(cursor, 500);
+      if (!Array.isArray(page) || page.length > 500) throw new Error('TRADE_HISTORY_CURSOR_INVALID');
       for (const row of page) {
         if (!row || typeof row.id !== 'string' || !row.id || seen.has(row.id)
-          || !row.updated_at || row.payload == null) throw new Error('TRADE_HISTORY_CURSOR_INVALID');
+          || cursor !== null && row.id <= cursor
+          || typeof row.updated_at !== 'string' || !Number.isFinite(Date.parse(row.updated_at))
+          || row.payload == null) throw new Error('TRADE_HISTORY_CURSOR_INVALID');
         seen.add(row.id);
         cursor = row.id;
         rows.push(row);
