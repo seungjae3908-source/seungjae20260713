@@ -295,3 +295,112 @@ test("Bitget preserves native Han contract symbols and rejects unsafe symbol cha
     }), /symbol must contain/);
   }
 });
+
+
+test("Bitget short 1m history pages continue backward until the actual requested start", async()=>{
+ const MIN=60_000, all=Array.from({length:260},(_,i)=>
+  [String(START+i*MIN),"100","101","99","100","5","500"]);
+ const seen=[];
+ const client={get:async(path,params)=>{
+  seen.push({path,params});
+  const rows=all.filter(x=>Number(x[0])<Number(params.endTime)).slice(-71);
+  assert.ok(rows.length<=71&&rows.length<=Number(params.limit));
+  return {code:"00000",data:rows};
+ }};
+ const result=await collectBitgetCandles({
+  client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+  startTime:START,endTime:START+260*MIN,minCandles:2,maxPages:12,
+ });
+ assert.equal(result.candles.length,260);
+ assert.equal(result.candles[0].timestamp,START);
+ assert.equal(result.candles.at(-1).timestamp,START+259*MIN);
+ assert.equal(result.rawPageWindowTraversed,true);
+ assert.equal(result.reachedRequestedStart,true);
+ assert.equal(result.requestedProviderPages,4);
+ assert.equal(seen.length,4);
+ assert.ok(seen.every(e=>e.path.endsWith("/mix/market/history-candles")));
+ assert.equal(result.missingMinuteNoTradeProof,false);
+ assert.equal(result.historicalSignalAvailabilityProven,false);
+});
+
+test("short history page followed by empty page is incomplete, not a no-trade or profitability proof", async()=>{
+ const MIN=60_000;
+ const last=Array.from({length:70},(_,i)=>
+  [String(START+(200+i)*MIN),"100","101","99","100","3"]);
+ let calls=0;
+ const client={get:async()=>({
+  code:"00000",data:++calls===1?last:[],
+ })};
+ await assert.rejects(()=>collectBitgetCandles({
+  client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+  startTime:START,endTime:START+270*MIN,minCandles:2,maxPages:5,
+ }),{code:"BITGET_HISTORY_RANGE_INCOMPLETE"});
+ assert.equal(calls,2);
+ calls=0;
+ const partial=await collectBitgetCandles({
+  client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+  startTime:START,endTime:START+270*MIN,minCandles:2,maxPages:5,
+  requireFullWindow:false,allowPartialSource:true,
+ });
+ assert.equal(partial.rawPageWindowTraversed,false);
+ assert.equal(partial.reachedRequestedStart,false);
+ assert.equal(partial.requestedProviderPages,2);
+ assert.equal(partial.candles.length,70);
+ assert.equal(partial.missingMinuteNoTradeProof,false);
+ assert.equal(partial.actualFillProven,false);
+});
+
+test("an underfilled 1m provider never exceeds maxPages or fabricates a completed window", async()=>{
+ const MIN=60_000;
+ const all=Array.from({length:270},(_,i)=>
+  [String(START+i*MIN),"100","101","99","100","5"]);
+ let calls=0;
+ const client={get:async(_path,params)=>{
+  calls++;
+  return {code:"00000",
+   data:all.filter(x=>Number(x[0])<Number(params.endTime)).slice(-60)};
+ }};
+ await assert.rejects(()=>collectBitgetCandles({
+  client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+  startTime:START,endTime:START+270*MIN,minCandles:2,maxPages:3,
+ }),{code:"BITGET_HISTORY_PAGE_BUDGET_EXCEEDED"});
+ assert.equal(calls,3);
+ for(const pages of [0,-1,2.5,2049,Number.NaN]){
+  calls=0;
+  await assert.rejects(()=>collectBitgetCandles({
+   client,market:"CRYPTO_FUTURES",symbol:"BTCUSDT",timeframe:"1m",
+   startTime:START,endTime:START+270*MIN,maxPages:pages,
+  }),/maxPages must be 1..2048/);
+  assert.equal(calls,0,"malformed budget must fail BEFORE network I/O");
+ }
+});
+
+test("Bitget mark/index reference collectors traverse underfilled history pages and bound requests",async()=>{
+ const all=rows(450);
+ for(const priceType of ["mark","index"]){
+  let calls=0;
+  const client={get:async(_path,params)=>{
+   calls++;
+   return {code:"00000",data:all.filter(x=>Number(x[0])<Number(params.endTime)).slice(-83)};
+  }};
+  const result=await collectBitgetFuturesReferenceCandles({
+   client,priceType,symbol:"BTCUSDT",timeframe:"15m",
+   startTime:START,endTime:START+450*INTERVAL,maxPages:12,
+  });
+  assert.equal(result.candles.length,450);
+  assert.equal(result.candles[0].timestamp,START);
+  assert.equal(result.requestedProviderPages,6);
+  assert.equal(calls,6);
+  assert.equal(result.candles.at(-1).timestamp,START+449*INTERVAL);
+ }
+ let calls=0;
+ const client={get:async(_path,params)=>{
+  calls++;
+  return {code:"00000",data:all.filter(x=>Number(x[0])<Number(params.endTime)).slice(-71)};
+ }};
+ await assert.rejects(()=>collectBitgetFuturesReferenceCandles({
+  client,priceType:"mark",symbol:"BTCUSDT",timeframe:"15m",
+  startTime:START,endTime:START+450*INTERVAL,maxPages:2,
+ }),{code:"BITGET_HISTORY_PAGE_BUDGET_EXCEEDED"});
+ assert.equal(calls,2);
+});
