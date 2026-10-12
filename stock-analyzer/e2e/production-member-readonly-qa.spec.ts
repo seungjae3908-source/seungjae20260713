@@ -6,6 +6,8 @@ import {
   isIgnorableProductionRequestFailure,
 } from './support/production-readonly-policy';
 
+// Release-candidate refresh: merge only after canonical Application CI itself is completed/success,
+ // not merely after its six required commit statuses turn green.
 const enabled = process.env.PRODUCTION_MEMBER_READONLY_QA === 'true';
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').trim().replace(/\/$/, '');
 const expectedSha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
