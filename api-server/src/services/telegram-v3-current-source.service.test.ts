@@ -48,9 +48,22 @@ function fixture(){
    rows:[{id:ID,market:'US_STOCK',symbol:'AAPL',
      strategy:'SWING',timeframe:'60m',direction:'BUY',
      state:'CANDIDATE',dataStatus:'READY',
+     quantEligible:true,profitEligible:true,riskReady:true,
+     evidence:{source:'CANONICAL_PROFIT_EVIDENCE_READY',expectedNetEdgeR:1.2},
      validationTier:'RESEARCH_CANDIDATE',
      utilityR:1.2,utilityMode:'FULL_EXPECTED_UTILITY',leverage:null,
-     provenance:{laneId:'US_SWING_60M',cursor:0,sourceCycleId:EPOCH}}],
+     provenance:{
+       laneId:'US_SWING_60M',cursor:0,sourceCycleId:EPOCH,
+       scannerSignalId:'signal-aapl-1',
+       edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
+       profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
+       costPolicyId:'runtime-cost-v1',profitBlockers:[],
+       paperIdentity:{signalId:'signal-aapl-1',strategyId:'scanner-swing-v1',
+         strategyVersion:'scanner-swing-v1',parameterHash:'params-sha256:one',
+         market:'US_STOCK',symbol:'AAPL',timeframe:'60m',direction:'BUY',
+         costPolicyVersion:'runtime-cost-v1',researchCodeSha:SHA,
+         executionAuthority:'NONE'},
+     }}],
    events:[{id:ID,type:'NEW_CANDIDATE',market:'US_STOCK',
      symbol:'AAPL',strategy:'SWING',timeframe:'60m',
      direction:'BUY',state:'CANDIDATE',validationTier:'RESEARCH_CANDIDATE',
@@ -193,6 +206,21 @@ test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 pro
  assert.equal(mutate(x=>{x.events[0].utilityMode='FAKE_PASS';}),false);
  assert.equal(mutate(x=>{(x.events[0] as {leverage:unknown}).leverage={status:'INDICATIVE_ONLY',hardMaximum:125};}),false);
  assert.equal(mutate(x=>{x.rows[0].dataStatus='BLOCKED';}),false);
+ assert.equal(mutate(x=>{x.rows[0].quantEligible=false;}),false);
+ assert.equal(mutate(x=>{x.rows[0].profitEligible=false;}),false);
+ assert.equal(mutate(x=>{x.rows[0].riskReady=false;}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.profitEvidenceStatus='TRAIN_ONLY';}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.backtestQualityStatus='unverified';}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.edgeSource='INVENTED';}),false);
+ assert.equal(mutate(x=>{x.rows[0].evidence.source='INVENTED';}),false);
+ assert.equal(mutate(x=>{x.rows[0].evidence.expectedNetEdgeR=0;}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.profitBlockers.push('OOS_MISSING');}),false);
+ assert.equal(mutate(x=>{Object.assign(x.rows[0].provenance,{blockedPageResearchOnly:true});}),false);
+ assert.equal(mutate(x=>{Object.assign(x.rows[0].provenance,{publicationEligible:false});}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.paperIdentity.researchCodeSha='old';}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.paperIdentity.signalId='forged';}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.paperIdentity.direction='SHORT';}),false);
+ assert.equal(mutate(x=>{x.rows[0].provenance.paperIdentity.costPolicyVersion='other-cost';}),false);
  assert.equal(mutate(x=>{x.coverage[4].publicExecutionDiagnostic.completed=19;}),false);
  assert.equal(mutate(x=>{x.events.push({...x.events[0]});}),false);
  assert.equal(mutate(x=>{x.safety.executionAuthority='LIVE';}),false);

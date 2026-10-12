@@ -375,7 +375,10 @@ export class SignalIntelligenceTelegramDeliveryState {
       this.blocked = true;
       throw new Error(LEDGER_ERROR);
     }
-    return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
+    // An unknown Bot API POST result must never become safe for replay just
+    // because the 14-day confirmed-send dedupe window elapsed. Manual
+    // reconciliation is required: this prioritizes at-most-once safety.
+    return true;
   }
 
   async mark(key: string, now: Date): Promise<void> {
@@ -391,9 +394,10 @@ export class SignalIntelligenceTelegramDeliveryState {
     const next = new Map(this.delivered);
     const uncertain = new Map(this.unconfirmed);
     const cutoff = now.getTime() - MAX_DELIVERED_AGE_MS;
-    for (const ledger of [next, uncertain])
-      for (const [id, timestamp] of ledger)
-        if (Date.parse(timestamp) < cutoff) ledger.delete(id);
+    // Only confirmed deliveries expire after 14 days. Unknown outcomes are
+    // permanent tombstones pending explicit reconciliation, not normal TTLs.
+    for (const [id, timestamp] of next)
+      if (Date.parse(timestamp) < cutoff) next.delete(id);
     if (delivered) {
       uncertain.delete(key);
       next.set(key, now.toISOString());
