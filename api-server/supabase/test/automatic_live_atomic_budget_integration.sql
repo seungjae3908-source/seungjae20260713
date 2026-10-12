@@ -4,7 +4,8 @@ begin isolation level serializable;
 select set_config('request.jwt.claim.sub','',true);
 
 do $acl$ begin
-  if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true then
+  if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true
+    or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v2' then
     raise exception 'atomic budget schema/ACL/isolation guard not ready';
   end if;
   if has_function_privilege('authenticated','public.reserve_automatic_live_entry_budget(uuid,uuid,uuid,jsonb,jsonb,boolean)','EXECUTE')
@@ -47,7 +48,7 @@ declare
   first_id uuid:='57000000-0000-0000-0000-000000000001';
   second_id uuid:='57000000-0000-0000-0000-000000000002';
   claim_id uuid:='67000000-0000-0000-0000-000000000001';
-  snap jsonb; projection jsonb; response jsonb; invalid_key text;
+  snap jsonb; projection jsonb; response jsonb; invalid_key text; repriced jsonb; baseline_projection jsonb;
 begin
   snap:=public.read_automatic_live_budget_snapshot(owner);
   projection:=jsonb_build_object('userId',owner::text,'orderId',first_id::text,
@@ -86,6 +87,54 @@ begin
   if (select execution_claim_id from public.trade_orders where user_id=owner and id=second_id) is not null then
     raise exception 'blocked second signal still acquired execution claim';
   end if;
+  baseline_projection:=projection;
+  repriced:=jsonb_build_object('orderId',first_id::text,'market','crypto_spot',
+    'instrument','upbit:KRW:BUDGET1','strategy','budget-test','amountKrw',72100,'riskKrw',3100);
+  projection:=projection||jsonb_build_object('baseCharges',jsonb_build_array(repriced));
+  foreach invalid_key in array array['orderId','market','instrument','strategy','amountKrw','riskKrw'] loop
+    begin
+      perform public.reserve_automatic_live_entry_budget(owner,second_id,claim_id,
+        public.read_automatic_live_budget_snapshot(owner),
+        jsonb_set(projection,'{baseCharges}',jsonb_build_array(jsonb_set(repriced,array[invalid_key],'null'::jsonb))),false);
+      raise exception 'null actual-fill repricing was accepted: %',invalid_key;
+    exception when raise_exception then
+      if sqlerrm<>'AUTOMATIC_LIVE_BUDGET_PROJECTION_SCOPE_INVALID' then raise; end if;
+    end;
+  end loop;
+  begin
+    perform public.reserve_automatic_live_entry_budget(owner,second_id,claim_id,
+      public.read_automatic_live_budget_snapshot(owner),jsonb_set(projection,'{baseCharges,0,instrument}',
+        '"upbit:KRW:OTHER"'::jsonb),false);
+    raise exception 'repricing changed held instrument lineage';
+  exception when raise_exception then
+    if sqlerrm<>'AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT' then raise; end if;
+  end;
+  -- This subtransaction is deliberately rolled back after a successful claim,
+  -- preserving the original synthetic fixtures for the independent tests below.
+  begin
+    projection:=jsonb_set(jsonb_set(projection,'{limits,market}','200000'::jsonb),'{limits,positions}','2'::jsonb);
+    response:=public.reserve_automatic_live_entry_budget(owner,second_id,claim_id,
+      public.read_automatic_live_budget_snapshot(owner),projection,false);
+    if response->>'status'<>'RESERVED' then raise exception 'held fill was double-counted: %',response; end if;
+    raise exception 'ROLLBACK_REPRICING_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_REPRICING_PROBE' then raise; end if;
+  end;
+  -- Planned 70000 + next 29000 would fit; actual 72100 + 29000 must not.
+  -- The server RPC binds the requested amount to the immutable plan payload.
+  -- Change this synthetic next-plan amount too; never weaken that binding.
+  update public.trade_order_plans set payload=jsonb_set(payload,'{estimatedKrw}','29000'::jsonb)
+    where user_id=owner and id='47000000-0000-0000-0000-000000000002';
+  projection:=baseline_projection||jsonb_build_object('amountKrw',29000,'riskKrw',290,
+    'baseCharges',jsonb_build_array(repriced));
+  response:=public.reserve_automatic_live_entry_budget(owner,second_id,claim_id,
+    public.read_automatic_live_budget_snapshot(owner),projection,false);
+  if response->>'blockCode'<>'AUTOMATIC_LIVE_BUDGET_MARKET_EXCEEDED' then
+    raise exception 'actual fill slippage/fee was ignored: %',response;
+  end if;
+  update public.trade_order_plans set payload=jsonb_set(payload,'{estimatedKrw}','70000'::jsonb)
+    where user_id=owner and id='47000000-0000-0000-0000-000000000002';
+  projection:=baseline_projection;
   begin
     perform public.claim_trade_order_execution(owner,second_id,0,claim_id,30);
     raise exception 'legacy claim bypassed AUTO aggregate guard';
