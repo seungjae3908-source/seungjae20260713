@@ -8,6 +8,9 @@ import {
   assessMinuteArchiveCapacity,
 } from '../src/four-market-minute-roster-capacity-v1.mjs';
 import {
+  assessMinuteCollectorPacingPreflightV1,
+} from '../src/four-market-minute-pacing-preflight-v1.mjs';
+import {
   AI_FORMULA_TRAIN_PRODUCER_CONTRACT_V1,
   prepareAiFormulaTrainProposalsV1,
 } from '../src/ai-formula-train-producer-v1.mjs';
@@ -52,3 +55,28 @@ test('frozen AI research intake remains a separate bounded non-trading path', ()
   assert.equal(typeof previewAiFormulaNextIterationV1, 'function');
 });
 
+test('collector + AI integration cannot turn a 38-action proposal into authorized collection', () => {
+  const startMs = Date.parse('2026-10-12T10:00:00.000Z');
+  const manifest = { schemaVersion: 'research-minute-backfill-scope/v1',
+    ranges: [
+      ...Array.from({length:294},(_,i)=>({
+        market:'CRYPTO_SPOT',symbol:'S'+i,mode:'CONTINUOUS',startMs,
+      })),
+      ...Array.from({length:466},(_,i)=>({
+        market:'CRYPTO_FUTURES',symbol:'F'+i+'USDT',mode:'CONTINUOUS',startMs,
+      })),
+    ],
+  };
+  const pacing=assessMinuteCollectorPacingPreflightV1({
+    manifest, proposedActionsPerCycle:38,
+  });
+  assert.equal(pacing.capacity.status, 'CAPACITY_MODEL_POSSIBLE');
+  assert.equal(pacing.minimumActionsPerCycleWithHeadroom, 38);
+  assert.ok(pacing.proposedSequentialWorstCaseMs > pacing.usableSequentialWorkerMs);
+  assert.equal(pacing.actualRuntimeMaximumActionsPerCycle, 16);
+  assert.ok(pacing.reasons.includes('EXISTING_WORKER_HARD_CAP_NOT_CHANGED'));
+  assert.equal(pacing.currentTimerActivated, false);
+  assert.equal(pacing.providerRateBudgetVerified, false);
+  assert.equal(pacing.hostCapacityVerified, false);
+  assert.equal(pacing.executionAuthority, 'NONE');
+});

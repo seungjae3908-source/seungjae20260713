@@ -5,7 +5,7 @@
 ## Frozen source provenance
 
 - Base main: `032efa64ccd09d3c1049167c0009121a826596a9`
-- Original 1-minute intake/gap/backfill/capacity: source Draft #1859 `895a9f0d4e031307bdded65e29a9096655832975` (29 exact blob paths).
+- Original 1-minute intake/gap/backfill/capacity: source Draft #1859 `b44ad6ca63f0fb870000828a275a1819b066383e` (31 exact source blob paths: previous 29 plus the isolated read-only pacing preflight and tests). The originally integrated 29 paths were preserved; five verified latest source blobs have been updated in this integration.
 - AI research review → bounded canonical formula TRAIN: source Draft #1860 `d6049a6291365adc9a15d6434bce199928c50f06` (9 exact blob paths).
 - Natural Production three-task/stale-release observer owner Draft #1756 `f7300c8f84b192885d98ae065c796b5dd7a4fa8a` is **explicitly excluded**. Its Paper Forward Schedule protected scope rejects mixing read-only observer changes with original-data/AI changes. Do not weaken this gate; owner #1756 requires separate source-scoped integration/QA and separate permission.
 - Changes from these source owners are retained on their own Drafts. This QA integration is not authority to merge any source owner or activate its worker.
@@ -18,6 +18,7 @@
 | Original KR/US 1m feed | Licensed/authorized vendor, accurate exchange sessions/DST, corporate actions, proven historical PIT including delistings | **NO_GO** (not supplied) |
 | Crypto 1m collection | Real Upbit/Bitget current roster, provider IP rate budget, full 24h sample/429/backoff, actual immutable archive and gaps | **NO_GO** (not installed/proven) |
 | Intake capacity | 16 requests every 5m = 4,608/day vs 760 illustrative crypto symbols at dense 1m = 9,120/day minimum (20% reserve requires >=38 requests/5m) | **NO_GO** (capacity model insufficient) |
+| Sequential worker deadline | At 38/5m with 8s timeout each, worst-case 315,100ms > worker 210,000ms, 15s reserve; alternate 2m timer also misses worst-case budget | **NO_GO** without operator-reviewed scheduling/worker model |
 | Storage and recovery | Vultr actual disk/inodes/CPU/RAM, backup/restore, append-only source SHA, gap recheck and cursor restart verified | **NO_GO** (estimate only) |
 | AI source chain | Current-role/provenance historical PROPOSER + forward CRITIC, approved FormulaCandidate and independently source-verified TRAIN input | **NO_GO** (no operating original TRAIN data) |
 | Natural three-task observer | formula-backtest-queue/shadow-forward/paper-forward all present, fresh same-SHA cycle, no `blocked_data`; stale release must fail | **NO_GO** in latest observed run |
