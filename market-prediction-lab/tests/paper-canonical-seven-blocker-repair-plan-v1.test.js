@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPaperCanonicalSevenBlockerRepairPlan,
+  PAPER_CANONICAL_FULL_COST_COMPONENT_BLOCKERS,
   PAPER_CANONICAL_SEVEN_BLOCKERS,
 } from "../src/paper-canonical-seven-blocker-repair-plan-v1.js";
 
@@ -64,6 +65,47 @@ test("genuine-evidence blockers can never be promoted by the repair planner", ()
   assert.equal(plan.readyForActivationReview, false);
   assert.ok(plan.actions.every((row) => row.requiresGenuineEvidence === true));
   assert.equal(plan.safety.naturalSampleCreditGrantedByRepair, 0);
+});
+
+test("Full Cost component blockers stay attached to genuine evidence instead of becoming unrelated", () => {
+  const fundingBlocker = "PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY";
+  assert.ok(PAPER_CANONICAL_FULL_COST_COMPONENT_BLOCKERS.includes(fundingBlocker));
+
+  const plan = buildPaperCanonicalSevenBlockerRepairPlan({
+    readyForActivationReview: false,
+    blockers: [
+      "PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY",
+      fundingBlocker,
+    ],
+    evidenceCounts: {
+      naturalPositions: 1,
+      naturalSettlements: 0,
+      fullCostReadyPositions: 0,
+      durableSettlementPackets: 0,
+      canonicalRebinds: 0,
+    },
+    fullCostComponentEvidenceCounts: {
+      commission: 1,
+      tax: 1,
+      spread: 1,
+      slippage: 1,
+      funding: 0,
+      latency: 1,
+      liquidityImpact: 1,
+      partialFillImpact: 1,
+    },
+  });
+
+  assert.equal(plan.status, "WAITING_GENUINE_EVIDENCE");
+  assert.deepEqual(plan.unrelatedBlockers, []);
+  assert.deepEqual(plan.fullCostComponentBlockers, [fundingBlocker]);
+  assert.equal(plan.genuineEvidencePending, true);
+  assert.equal(plan.technicalRepairPending, false);
+  assert.equal(plan.fullCostComponentEvidenceCounts.funding, 0);
+  assert.equal(plan.fullCostComponentEvidenceCounts.commission, 1);
+  assert.deepEqual(plan.actions.map((row) => row.id), [
+    "WAIT_FOR_GENUINE_FULL_COST_POSITION",
+  ]);
 });
 
 test("unknown blockers fail closed and produce no action", () => {
