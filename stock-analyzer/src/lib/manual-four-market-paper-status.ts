@@ -72,3 +72,61 @@ export function parseManualFourMarketStatus(raw:unknown):ManualFourMarketStatus{
   }
   return raw as unknown as ManualFourMarketStatus;
 }
+
+
+/** Research-only immutable receipt view, never an executed Paper fill or
+ * settled wallet. Missing/error response must not become a zero-PnL claim.
+ */
+export type ManualResearchHistoryReadback=Readonly<{
+  ownerScope:'SELF';
+  readOnlyProbe:true;
+  hasMoreThan100:boolean;
+  receipts:readonly Readonly<{
+    cycleId:string;
+    market:ManualMarket;
+    receiptSha256:string;
+    recordedAt:string;
+    status:'RESEARCH_SIMULATED_CLOSED';
+    hypotheticalNetPnlKrw:number;
+    actualPaperLedgerWritten:false;
+    profitabilityProven:false;
+  }>[];
+}>;
+export function parseManualFourMarketResearchHistory(raw:unknown):ManualResearchHistoryReadback{
+  if(!record(raw)||raw.ok!==true
+    ||raw.mode!=='MANUAL_PAPER_RESEARCH_RECEIPT_READ_ONLY'
+    ||raw.ownerScope!=='SELF'||raw.readOnlyProbe!==true
+    ||raw.actualPaperLedgerWritten!==false
+    ||raw.profitabilityProven!==false
+    ||raw.financialMutationCount!==0
+    ||raw.privateProviderRequests!==0
+    ||raw.realOrders!==0
+    ||raw.orderSubmitted!==false
+    ||raw.exchangeRequestSent!==false
+    ||raw.executionAuthority!=='NONE'
+    ||typeof raw.hasMoreThan100!=='boolean'
+    ||!Array.isArray(raw.receipts)||raw.receipts.length>100) {
+    throw new Error('MANUAL_PAPER_RESEARCH_HISTORY_CONTRACT_INVALID');
+  }
+  const seen=new Set<string>();
+  for(const entry of raw.receipts){
+    if(!record(entry)
+      ||typeof entry.cycleId!=='string'
+      ||!/^paper-manual-cycle-v1:[a-f0-9]{64}$/u.test(entry.cycleId)
+      ||seen.has(entry.cycleId)
+      ||!MANUAL_FOUR_MARKETS.some(m=>m.key===entry.market)
+      ||typeof entry.receiptSha256!=='string'
+      ||!/^[a-f0-9]{64}$/u.test(entry.receiptSha256)
+      ||typeof entry.recordedAt!=='string'
+      ||!Number.isFinite(Date.parse(entry.recordedAt))
+      ||entry.status!=='RESEARCH_SIMULATED_CLOSED'
+      ||typeof entry.hypotheticalNetPnlKrw!=='number'
+      ||!Number.isFinite(entry.hypotheticalNetPnlKrw)
+      ||entry.actualPaperLedgerWritten!==false
+      ||entry.profitabilityProven!==false) {
+      throw new Error('MANUAL_PAPER_RESEARCH_HISTORY_ENTRY_INVALID');
+    }
+    seen.add(entry.cycleId);
+  }
+  return raw as unknown as ManualResearchHistoryReadback;
+}

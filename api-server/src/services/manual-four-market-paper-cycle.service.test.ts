@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evaluateManualFourMarketPaperClosedCycle,
+  buildManualPaperResearchReceipt,
+  sameManualPaperResearchReceipt,
+  MANUAL_PAPER_RESEARCH_RECEIPT_VERSION,
   type ManualPaperFourMarketCycleInput,
 } from './manual-four-market-paper-cycle.service';
 import type {AdminPaperMarket} from './admin-four-market-paper-capital.service';
@@ -314,4 +317,55 @@ test('50/50 high-water advances only on wins and never credits reserve on later 
   assert.equal(loss.newCompoundedProfitKrw,0);
   assert.equal(loss.updatedHighWaterMarkKrw,first.updatedHighWaterMarkKrw);
   assert.equal(loss.updatedLockedReserveKrw,first.updatedLockedReserveKrw);
+});
+
+
+test('four-market manual closed research receipts pin owner, strategy, epoch and source evidence',()=>{
+  for(const market of ['domestic_stock','us_stock','crypto_spot','crypto_futures'] as const){
+    const input=fixture(market);
+    const calculation=evaluateManualFourMarketPaperClosedCycle(input);
+    assert.equal(calculation.status,'RESEARCH_SIMULATED_CLOSED');
+    const receipt=buildManualPaperResearchReceipt(input,calculation);
+    assert.equal(receipt.receipt.schemaVersion,MANUAL_PAPER_RESEARCH_RECEIPT_VERSION);
+    assert.equal(receipt.receipt.executionAuthority,'NONE');
+    assert.equal(receipt.receipt.actualPaperLedgerWritten,false);
+    assert.equal(receipt.receipt.realOrderSubmitted,false);
+    assert.equal(receipt.receipt.profitabilityProven,false);
+    assert.equal(receipt.receipt.financialMutationCount,0);
+    assert.equal(receipt.receipt.walletId,manualPaperWalletId('member',market));
+    assert.equal(receipt.receipt.market,market);
+    assert.equal(receipt.receipt.hypotheticalNetPnlKrw,calculation.netPnlKrw);
+    assert.match(receipt.cycle_id,/^paper-manual-cycle-v1:[a-f0-9]{64}$/);
+    assert.match(receipt.receipt_sha256,/^[a-f0-9]{64}$/);
+    const stored=structuredClone(receipt) as unknown as Record<string,unknown>;
+    assert.ok(sameManualPaperResearchReceipt(receipt,stored));
+    assert.equal(calculation.actualPaperLedgerWritten,false);
+  }
+});
+test('manual research receipt collision on revised quote or FX cannot produce another profit credit',()=>{
+  const first=fixture('crypto_futures');
+  const base=buildManualPaperResearchReceipt(first,evaluateManualFourMarketPaperClosedCycle(first));
+  const revised=change(first,'exitQuote',{bid:109,ask:110,sourceId:'server-revision'});
+  const different=buildManualPaperResearchReceipt(
+    revised,evaluateManualFourMarketPaperClosedCycle(revised));
+  assert.equal(base.cycle_id,different.cycle_id,'decision identity stays fixed');
+  assert.notEqual(base.receipt_sha256,different.receipt_sha256,
+    'economic evidence revisions must never be silently idempotent');
+  assert.equal(sameManualPaperResearchReceipt(base,
+    structuredClone(different) as unknown as Record<string,unknown>),false);
+  const altered={...base,receipt_sha256:'0'.repeat(64)};
+  assert.equal(sameManualPaperResearchReceipt(base,altered),false);
+});
+test('manual research receipt refuses blocker and foreign-owner calculations',()=>{
+  const good=fixture();
+  const blocked=evaluateManualFourMarketPaperClosedCycle(
+    change(good,'verifiedOwner',{ownerRlsReady:false}));
+  assert.equal(blocked.status,'BLOCKED');
+  assert.throws(()=>buildManualPaperResearchReceipt(good,blocked),
+    /MANUAL_PAPER_RESEARCH_RECEIPT_INVALID_EVIDENCE/);
+  const other=change(good,'selected',{ownerId:'22222222-2222-2222-2222-222222222222'});
+  const mismatched=evaluateManualFourMarketPaperClosedCycle(other);
+  assert.equal(mismatched.status,'BLOCKED');
+  assert.throws(()=>buildManualPaperResearchReceipt(other,mismatched),
+    /MANUAL_PAPER_RESEARCH_RECEIPT_INVALID_EVIDENCE/);
 });
