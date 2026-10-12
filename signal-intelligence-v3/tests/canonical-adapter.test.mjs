@@ -255,3 +255,37 @@ test('matching source lineage is necessary but never upgrades a missing canonica
   assert.ok(adapted.provenance.profitBlockers.includes('CANONICAL_PROFIT_EVIDENCE_REQUIRED'));
   assert.equal(runSignalIntelligenceV3([adapted]).lists.krBuy.length,0);
 });
+
+test('BUY risk blocks inverted stop, inside-zone targets, reversed zone and invalid targets',()=>{
+  const valid=adaptCanonicalScannerCard(canonicalInput(),{nowMs:NOW});
+  assert.equal(valid.riskReady,true);
+  for(const pricePlan of [
+    {entryZone:{from:99,to:101},stopLoss:105,targets:[110]},
+    {entryZone:{from:99,to:101},stopLoss:95,targets:[98]},
+    {entryZone:{from:101,to:99},stopLoss:95,targets:[110]},
+    {entryZone:{from:99,to:101},stopLoss:95,targets:[110,0]},
+    {entryZone:{from:99,to:101},stopLoss:99.5,targets:[110]},
+  ]){
+    const adapted=adaptCanonicalScannerCard(canonicalInput(card({pricePlan})),{nowMs:NOW});
+    assert.equal(adapted.riskReady,false,JSON.stringify(pricePlan));
+    assert.equal(runSignalIntelligenceV3([adapted]).lists.krBuy.length,0);
+  }
+});
+
+test('futures SHORT risk requires a stop above the entry zone and every target below',()=>{
+  const input=pricePlan=>({card:card({
+    assetClass:'coin_futures',market:'futures',symbol:'BTCUSDT',
+    action:'SHORT',direction:'SHORT',pricePlan,
+  }),timeframe:'15m'});
+  const good={entryZone:{from:99,to:101},stopLoss:106,targets:[90,85]};
+  assert.equal(adaptCanonicalScannerCard(input(good),{nowMs:NOW}).riskReady,true);
+  for(const pricePlan of [
+    {...good,stopLoss:95},
+    {...good,targets:[105]},
+    {...good,targets:[90,105]},
+    {...good,entryZone:{from:101,to:99}},
+  ]){
+    assert.equal(adaptCanonicalScannerCard(input(pricePlan),{nowMs:NOW}).riskReady,false,
+      JSON.stringify(pricePlan));
+  }
+});
