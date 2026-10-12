@@ -29,6 +29,9 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(sourceOnly.includes("startsWith(github.event.comment.body, '/install-auto-live-public-signal ')"));
   assert.ok(sourceOnly.includes('environment: production'));
   assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH'));
+  assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID'));
+  assert.ok(sourceOnly.includes("status:'CONFIGURATION_VERIFIED_ONLY'"));
   assert.ok(sourceOnly.includes('AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT'));
   assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true'));
   assert.ok(sourceOnly.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
