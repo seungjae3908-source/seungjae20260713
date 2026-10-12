@@ -60,11 +60,21 @@ test('legacy optional video rotation uses exactly the existing worker defaults, 
 });
 
 test('confirmed query normalization and env roundtrip preserve valid custom topics', () => {
-  const queries = ["  momentum #tag  ", "research's strategy", 'ＶＷＡＰ 연구'];
-  const videoText = 'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=' + JSON.stringify(queries).replaceAll('#', '\\u0023') + '\n';
+  const queries = ["  momentum #tag  ", "research's strategy", 'ＶＷＡＰ 연구', '"quoted" path\\research $topic `metadata`'];
+  const videoText = "RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON='" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'\n";
   const expected = resolveResearchVideoDiscoveryPolicy(parseEnv(videoText)).queries;
   const plan = buildConfirmedResearchPolicies({ ...input(), videoText });
   assert.deepEqual(resolveResearchVideoDiscoveryPolicy(parseEnv(plan.videoText)).queries, expected);
+  // Independent literal-single-quote contract from systemd.exec(5), not a
+  // claim that a service or external provider was invoked in this test.
+  const line = plan.videoText.split('\n').find(value => value.startsWith('RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON='));
+  const assignment = line.slice(line.indexOf('=') + 1);
+  assert.equal(assignment[0], "'");
+  assert.equal(assignment.at(-1), "'");
+  const systemdLiteral = assignment.slice(1, -1);
+  assert.equal(systemdLiteral.includes("'"), false);
+  assert.equal(parseEnv(plan.videoText).RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON, systemdLiteral);
+  assert.deepEqual(JSON.parse(systemdLiteral), expected);
   const repeated = buildConfirmedResearchPolicies({ ...input(), videoText: plan.videoText });
   assert.equal(repeated.videoText, plan.videoText);
 });
