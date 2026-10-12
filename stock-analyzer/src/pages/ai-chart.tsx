@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -396,6 +396,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const handleLiveSnapshotChange = useCallback((snapshot: ChartLiveSnapshot) => setLiveSnapshot(snapshot), []);
   const visibleLiveSnapshot = liveSnapshot?.identity === `${selection.market}:${selection.ticker}:${selection.timeframe}` ? liveSnapshot : null;
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
+  const evidenceReadyRef = useRef(!DIRECT_AI_CHART_COLD_ROUTE);
+  const evidenceIdleRef = useRef<number | null>(null);
+  const evidenceFrameRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (evidenceIdleRef.current != null) window.cancelIdleCallback?.(evidenceIdleRef.current);
+    if (evidenceFrameRef.current != null) window.cancelAnimationFrame(evidenceFrameRef.current);
+  }, []);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('chart');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
@@ -440,7 +447,24 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const handleAnalysisChange = useCallback((nextAnalysis: ChartAnalysis | null) => {
     setAnalysis(nextAnalysis);
-    setCriticalRendererMounted(true);
+  }, []);
+  const handleRendererFirstPaint = useCallback(() => {
+    if (evidenceReadyRef.current || evidenceIdleRef.current != null || evidenceFrameRef.current != null) return;
+    const releaseEvidence = () => {
+      evidenceIdleRef.current = null;
+      evidenceFrameRef.current = null;
+      evidenceReadyRef.current = true;
+      startTransition(() => {
+        setCriticalRendererMounted(true);
+      });
+    };
+    // Current judgment and live records remain immediate. Only optional
+    // intelligence/public-context chunks yield to the freshly usable chart.
+    if (typeof window.requestIdleCallback === 'function') {
+      evidenceIdleRef.current = window.requestIdleCallback(releaseEvidence, { timeout: 1_000 });
+    } else {
+      evidenceFrameRef.current = window.requestAnimationFrame(releaseEvidence);
+    }
   }, []);
 
   const updateStrategyMode = useCallback((nextMode: AiChartStrategyMode) => {
@@ -712,6 +736,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         onSelectionChange={updateSelection}
         onAnalysisChange={handleAnalysisChange}
         onLiveSnapshotChange={handleLiveSnapshotChange}
+        onFirstPaint={handleRendererFirstPaint}
       />
     </Suspense>
   ) : emptyState;
