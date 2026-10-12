@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildConfirmedResearchPolicies } from '../src/research-free-policy-confirmation.mjs';
 import test from 'node:test';
 
 const scriptUrl = new URL('../deploy/activate-ai-research.sh', import.meta.url);
@@ -16,6 +22,22 @@ test('AI Research activation is fail-closed and exact-SHA bound', async () => {
   assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
   assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
   assert.match(script, /systemctl disable --now/);
+});
+
+test('AI cutover stops active one-shots, not just their timers', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const freeze = script.slice(script.indexOf('disable_timers()'), script.indexOf('research_sha()'));
+  assert.match(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
+  assert.match(freeze, /AI_RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.ok(activation.indexOf('disable_timers') < activation.indexOf('install-ai-research-units.sh'));
+});
+
+test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
+  const source = await readFile(new URL('../bin/confirm-research-free-policy.mjs', import.meta.url), 'utf8');
+  assert.match(source, /appSha: readBoundedPrivateFile\('\/opt\/stock-app\/\.deploy\/current-sha'\)\.trim\(\)/u);
+  assert.doesNotMatch(source, /pm2|systemctl|API_KEY|\.env\.production/u);
+  assert.match(source, /atomicWrite\('research-free-confirmation\.json'/u);
 });
 
 test('provider readiness is proven before timer activation and secrets are not printed', async () => {
@@ -54,6 +76,59 @@ test('runtime policy files require explicit YouTube approval and free AI provide
   assert.match(script, /AI_RESEARCH_FREE_TIER_CONFIRMATION_REQUIRED/);
   assert.match(script, /VIDEO_RESEARCH_DISCOVERY_APPROVAL_REQUIRED/);
   assert.doesNotMatch(script, /source\s+"\$AI_POLICY_ENV"|source\s+"\$VIDEO_POLICY_ENV"/);
+});
+
+test('actual activation Node preflight admits legacy defaults and blocks invalid video policy before calls', async () => {
+  const source = (await readFile(scriptUrl, 'utf8')).replaceAll('\r\n', '\n');
+  const helper = source.slice(source.indexOf('require_runtime_policy_env() {'), source.indexOf('print_ai_diagnostic() {'));
+  const code = /<<'NODE'\n([\s\S]*?)\nNODE/u.exec(helper)?.[1];
+  assert.ok(code);
+  assert.match(helper, /node --input-type=module/u);
+  assert.match(code, /resolveResearchVideoDiscoveryQueries/u);
+  const root = mkdtempSync(join(tmpdir(), 'TEST-ONLY-ai-policy-'));
+  try {
+    const ai = join(root, 'research-ai.env'), video = join(root, 'research-video.env');
+    writeFileSync(ai, 'RESEARCH_AI_FREE_TIER_CONFIRMED=true\nAI_CHAT_PROVIDER=groq\nRESEARCH_AI_MAX_CALLS_PER_SCAN=3\n');
+    const invoke = videoText => {
+      writeFileSync(video, videoText);
+      return spawnSync(process.execPath, ['--input-type=module', '-', ai, video,
+        fileURLToPath(new URL('../src/research-video-discovery-policy.mjs', import.meta.url))],
+      { input: code, encoding: 'utf8', timeout: 10000 });
+    };
+    const legacy = invoke('RESEARCH_VIDEO_DISCOVERY_APPROVED=true\n');
+    assert.equal(legacy.status, 0, legacy.stderr || String(legacy.error ?? ''));
+    assert.equal(JSON.parse(legacy.stdout).video.queryCount, 8);
+    assert.equal(JSON.parse(legacy.stdout).executionAuthority, 'NONE');
+    const queries = ['#topic', "research's \"quoted\" path\\topic", 'VWAP 연구'];
+    const plan = buildConfirmedResearchPolicies({ aiText: '',
+      videoText: "RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON='" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'\n",
+      targetSha: 'a'.repeat(40), ownerCommentId: '1234', observedAt: Date.now() });
+    const confirmed = invoke(plan.videoText);
+    assert.equal(confirmed.status, 0, confirmed.stderr || String(confirmed.error ?? ''));
+    assert.equal(JSON.parse(confirmed.stdout).video.queryCount, queries.length);
+    for (const extra of ['RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=[]',
+      'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["same"," same "]',
+      'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["secret=TEST_ONLY_NO_KEY"]',
+      'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS=4', 'RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS=2161']) {
+      const result = invoke('RESEARCH_VIDEO_DISCOVERY_APPROVED=true\n' + extra + '\n');
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.includes('TEST_ONLY_NO_KEY'), false);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('free consent writes are isolated from read-only preflight and require an exact owner command', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.match(script, /confirm-free-only\) confirm_free_only/);
+  assert.match(script, /RESEARCH_FREE_ONLY_OWNER_COMMENT_ID/);
+  const preflight = script.slice(script.indexOf('\npreflight() {'), script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(preflight, /confirm-research-free-policy|confirm_free_only|chown|chmod/);
+  assert.match(workflow, / --confirm-free-only/);
+  assert.match(workflow, /comment\.user\.login == github\.repository_owner/);
+  assert.match(workflow, /author_association == 'OWNER'/);
+  assert.match(workflow, /core\.setOutput\('free_only_owner_comment_id', match\[2\] \? String\(context\.payload\.comment\.id\)/);
 });
 
 test('provider materialization fallback is non-recursive and preserves existing isolated env first', async () => {
@@ -203,14 +278,21 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   const workflow = await readFile(workflowUrl, 'utf8');
   assert.match(workflow, /id: activate_ai/);
   assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
-  assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
-  assert.match(workflow, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=/);
-  assert.ok(workflow.includes("grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='"));
-  assert.ok(workflow.includes("grep -Eo 'AI_RESEARCH_[-A-Za-z0-9_.:=]+'"));
+  assert.match(workflow, /evaluateAiActivationResult/u);
+  assert.match(workflow, /research-ai-activation-result\.cjs/u);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /status: failed_closed/);
   assert.match(workflow, /failure_reason: ' \+ process\.env\.FAILURE_REASON/);
   assert.match(workflow, /provider_secret_values_exposed: false/);
   assert.match(workflow, /executionAuthority: NONE/);
+  assert.match(workflow, /id: confirm_policy/u);
+  assert.ok(workflow.includes('steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason'));
+  assert.ok(workflow.includes('ai-research-consent.txt'));
+  assert.ok(workflow.includes('activation_pipeline_status=("${PIPESTATUS[@]}")'));
+  assert.ok(workflow.includes('${activation_pipeline_status[0]}'));
+  assert.ok(workflow.includes('${activation_pipeline_status[1]}'));
+  assert.match(workflow, /runtime_recheck_required: ' \+ process\.env\.RUNTIME_RECHECK_REQUIRED/u);
+  assert.ok(workflow.includes("steps.activate_ai.outputs.runtime_recheck_required == 'true' || steps.activate_ai.outputs.completion_evidence_observed == 'true'"));
+  assert.match(workflow, /RESEARCH_\(CONFIRMATION_\[A-Z_\]\+/u);
 });

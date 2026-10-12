@@ -340,6 +340,7 @@ export class TossReadonlyProvider {
       return {
         market: normalizeTossMarket(row),
         symbol,
+        displayName: typeof row.name === 'string' ? row.name.trim().slice(0, 120) : null,
         quantity: requiredNumber(row.quantity, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
         availableQuantity: null,
         averageEntryPrice: requiredNumber(row.averagePurchasePrice, 'TOSS_HOLDINGS_RESPONSE_INVALID'),

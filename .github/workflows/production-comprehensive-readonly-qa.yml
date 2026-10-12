@@ -116,7 +116,7 @@ jobs:
             throw new Error('Comprehensive QA must isolate Telegram readiness behind the explicit opt-in');
           }
           if (!researchSpec.includes("getByTestId('capability-denied')")
-            || !researchSpec.includes('ADMIN_RESEARCH_CENTER_NOT_EVALUATED')) {
+            || !researchSpec.includes('RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canAccessBasicInfo')) {
             throw new Error('Research Center QA must distinguish membership-policy denial from product failure');
           }
           if (!config.includes("trace: 'off'")) {
@@ -124,6 +124,9 @@ jobs:
           }
           if (!config.includes("screenshot: 'off'")) {
             throw new Error('Authenticated Production QA must not retain raw screenshots');
+          }
+          if (/\bpage\.screenshot\s*\(/u.test(comprehensiveSpec + researchSpec)) {
+            throw new Error('Explicit authenticated screenshots bypass the structured-only evidence policy');
           }
           if (!uploadStep.includes('stock-analyzer/production-comprehensive-artifacts')) {
             throw new Error('Structured Production QA evidence must remain uploaded');

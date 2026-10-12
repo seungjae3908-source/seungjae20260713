@@ -7,6 +7,8 @@ on:
       - .github/workflows/production-automatic-trading-gate.yml
       - .github/scripts/production-trading-gate-conflicts.cjs
       - .github/scripts/production-trading-gate-conflicts.test.cjs
+      - .github/scripts/production-manual-live-receipts.cjs
+      - .github/scripts/production-manual-live-receipts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-preactivation-evidence-paths.cjs
@@ -87,9 +89,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Validate Production gate and zero-LIVE automatic Paper wallet contracts
+      - name: Validate Production gate, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
       - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
+      - run: node --test .github/scripts/production-manual-live-receipts.test.cjs
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
@@ -165,47 +168,14 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
-            const postDeploy = comments.filter((comment) =>
-              Date.parse(comment.created_at || '') >= productionCompletedAt);
-
-            const spotReceipt = [...postDeploy].reverse().find((comment) => {
-              const body = String(comment.body || '');
-              return body.includes('[PRODUCTION_LIVE_TRADING_GATE]')
-                && body.includes('status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL')
-                && body.includes('target_sha: ' + target)
-                && body.includes('providers: kiwoom,toss,upbit')
-                && body.includes('AUTO_TRADING=false')
-                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
-                && body.includes('executionAuthority=SPOT_LIVE_LIMITED')
-                && body.includes('REAL_ORDER_SUBMITTED=false');
+            const { inspectManualLiveReceipts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-manual-live-receipts.cjs`
+            );
+            const { spot: spotReceipt, futures: futuresReceipt } = await inspectManualLiveReceipts({
+              github, context, comments, targetSha: target,
+              deploymentCompletedAt: release.productionDeployCompletedAt,
             });
-            if (!spotReceipt) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED:' + target);
-              return;
-            }
-
-            const futuresReceipt = [...postDeploy].reverse().find((comment) => {
-              const body = String(comment.body || '');
-              return body.includes('[PRODUCTION_FUTURES_LIVE_TRADING_GATE]')
-                && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
-                && body.includes('target_sha: ' + target)
-                && body.includes('provider: bitget')
-                && /max_leverage:\s*([2-7])/u.test(body)
-                && body.includes('margin_mode: isolated')
-                && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
-                && body.includes('AUTO_TRADING=false')
-                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
-                && body.includes('REAL_ORDER_SUBMITTED=false');
-            });
-            if (!futuresReceipt) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
-              return;
-            }
-            const leverage = /max_leverage:\s*([2-7])/u.exec(String(futuresReceipt.body || ''))?.[1];
-            if (!leverage) {
-              core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
-              return;
-            }
+            const leverage = futuresReceipt.leverage;
 
             core.setOutput('ci_run_id', String(ciRunId));
             core.setOutput('production_run_id', String(production.id));
@@ -213,8 +183,8 @@ jobs:
             core.setOutput('account_run_id', String(account.id));
             core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
             core.setOutput('qa_scope', release.qaScope);
-            core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
-            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
+            core.setOutput('spot_receipt_comment_id', String(spotReceipt.commentId));
+            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.commentId));
             core.setOutput('futures_max_leverage', leverage);
 
       - name: Download exact Production post-deploy evidence
@@ -237,7 +207,8 @@ jobs:
           root="${{ runner.temp }}/production-preactivation-evidence"
           test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root" \
+            --require-automatic-position-isolation
 
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
@@ -389,12 +360,20 @@ jobs:
                   'http://127.0.0.1:' + port + '/api/health',
                 ], { encoding: 'utf8' }));
                 const health = last?.autoTradingBackground;
+                const recovery = last?.tradeRecoveryWorker;
                 const nowMs = Date.now();
                 const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
                 const autoHealthFresh = Number.isFinite(autoLastTickMs)
                   && autoLastTickMs <= nowMs
                   && nowMs - autoLastTickMs <= 360_000;
                 if (health?.enabled === true
+                  && recovery?.enabled === true
+                  && recovery?.privateLookupEnabled === true
+                  && recovery?.tickOk === true
+                  && recovery?.financialMutationCount === 0
+                  && Number.isFinite(Date.parse(String(recovery?.lastTickAt ?? '')))
+                  && nowMs - Date.parse(recovery.lastTickAt) >= 0
+                  && nowMs - Date.parse(recovery.lastTickAt) <= 360_000
                   && health?.liveModeRequested === true
                   && autoHealthFresh
                   && health?.tickOk === true
@@ -412,7 +391,7 @@ jobs:
                   && health?.liveCyclePolicyReady === true
                   && health?.liveCycleAllFourPolicyReady === true
                   && health?.globalEmergencyStopActive === false
-                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true && health?.liveEntriesArmed === true)) {
                   return health;
                 }
               } catch {}
@@ -420,6 +399,7 @@ jobs:
             }
             throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify({
               autoTradingBackground: last?.autoTradingBackground ?? null,
+              tradeRecoveryWorker: last?.tradeRecoveryWorker ?? null,
             }));
           };
           const manualState = (env) => ({
@@ -510,6 +490,8 @@ jobs:
             LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
             TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
             PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+            TRADE_RECOVERY_WORKER_ENABLED: String(env.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+            TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: String(env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
           });
           const restartAutomatic = (enabled, baselineEnv) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
@@ -521,6 +503,8 @@ jobs:
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                TRADE_RECOVERY_WORKER_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+                TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
                 MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
                 CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
                 CRYPTO_AUTO_TRADE_ENABLED: 'false',
@@ -557,9 +541,11 @@ jobs:
           const preserved = manualState(before);
           let mutated = false;
           try {
+            // Restart may mutate PM2 successfully before `pm2 save` fails.
+            // Record rollback intent BEFORE either operation, not afterwards.
+            mutated = true;
             disarmLiveEntries();
             restartAutomatic(true, before);
-            mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
             const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
@@ -572,6 +558,9 @@ jobs:
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
+            // Observe the actual post-delay worker transition. The mock
+            // zero-mutation rehearsal alone is not Production activation.
+            const armedHealth = requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
               status: 'ACTIVATED_ALL4',
               targetSha: target,
@@ -593,6 +582,7 @@ jobs:
               LIVE_ENTRY_ARM_ACTIVATE_NOT_BEFORE: activateNotBeforeAt,
               LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs,
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
+              POST_ARM_RUNTIME_HEALTH_PROVEN: armedHealth.liveEntriesArmed === true,
               LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
               LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
               LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
@@ -670,6 +660,7 @@ jobs:
                 'live_entry_arm_readback_proven=true',
                 'live_entry_arm_activation_delay_ms=120000',
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
+                'post_arm_runtime_health_proven=true',
                 'live_readiness_cycle_complete=true',
                 'live_cycle_order_eligible=true',
                 'live_cycle_policy_ready=true',

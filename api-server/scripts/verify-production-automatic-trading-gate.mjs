@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const manualReceipts = read('.github/scripts/production-manual-live-receipts.cjs');
 const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
 const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
 const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
@@ -21,6 +22,7 @@ const telegramWorker = read('api-server/src/features/user-broker-telegram/user-b
 const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
 const liveConnectionVerification = read('api-server/src/services/live-connection-verification.service.ts');
 const liveExecution = read('api-server/src/services/trade-execution.service.ts');
+const positionIsolation = read('api-server/src/services/automatic-live-position-isolation.service.ts');
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
@@ -45,6 +47,26 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// Account connectivity uses read-only vault keys; execution reuse has a distinct
+// Kiwoom key name. The shared worker/pre-submit/holdings reader must bridge it
+// only after decryption, without writing the vault or accepting conflicting keys.
+for (const token of [
+  'automaticExecutionReadonlyCredentials(provider, decryptTradingCredentials(envelope))',
+  "if (provider !== 'kiwoom') return raw",
+  "if (appSecret && secretKey && appSecret !== secretKey) throw new Error('CREDENTIALS_UNAVAILABLE')",
+  'appSecret: appSecret || secretKey',
+  "async save() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+  "async remove() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+]) requireText(positionIsolation, token, 'AUTO_GATE_EXECUTION_READONLY_CREDENTIAL_CONTRACT_MISSING');
+for (const token of [
+  'execution read-only credential adaptation preserves other providers and rejects ambiguous Kiwoom keys',
+  'Kiwoom execution-vault keys drive only authenticated read-only snapshots for isolation and holdings',
+  'encryptTradingCredentials(source)',
+  "'/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom'",
+  'assert.equal(calls, 0)',
+]) requireText(tradeAutomationSmoke, token, 'AUTO_GATE_ENCRYPTED_READONLY_CREDENTIAL_REGRESSION_MISSING');
+requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUTO_GATE_ENCRYPTED_CREDENTIAL_CHECK_WIRING_MISSING');
 
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
@@ -134,11 +156,16 @@ for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) 
   requireText(workflow, market, 'AUTO_GATE_MARKET_MISSING');
 }
 
-requireText(workflow, 'providers: kiwoom,toss,upbit', 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
-requireText(workflow, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
-requireText(workflow, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_SPOT_MANUAL_GATE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_FUTURES_MANUAL_GATE_MISSING');
+requireText(workflow, 'await inspectManualLiveReceipts({', 'AUTO_GATE_MANUAL_RECEIPT_VERIFIER_WIRING_MISSING');
+requireText(manualReceipts, "field(body, 'providers') !== 'kiwoom,toss,upbit'", 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
+requireText(manualReceipts, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
+requireText(manualReceipts, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
+requireText(manualReceipts, 'AUTOMATIC_TRADING_EXACT_${kind.toUpperCase()}_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_BOTH_MANUAL_RECEIPTS_REQUIRED');
+for (const proof of ["comment?.user?.login !== 'github-actions[bot]'", 'at < deploymentAt',
+  "field(body, 'target_sha') !== targetSha", '/^[2-7]$/u', 'run.head_sha === targetSha',
+  "run.status === 'completed' && run.conclusion === 'success'", 'run.path === expectedPath']) {
+  requireText(manualReceipts, proof, 'AUTO_GATE_MANUAL_RECEIPT_PROVENANCE_MISSING');
+}
 requireText(workflow, 'const ciRunId = release.requiredCiRunId;', 'AUTO_GATE_REQUIRED_CI_HELPER_WIRING_MISSING');
 requireText(workflow, 'Date.parse(release.productionDeployCompletedAt)', 'AUTO_GATE_DEPLOYMENT_BOUNDARY_HELPER_WIRING_MISSING');
 requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_6_OF_6', 'AUTO_GATE_REQUIRED_CI_6_OF_6_HELPER_MISSING');
@@ -306,10 +333,7 @@ for (const token of [
   "const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];",
   'liveAllFourConnectionVerificationReady(policy, connections, nowMs)',
   'liveProviderSnapshotReadyForAutomaticWarmup',
-  "snapshot.openOrders.length > 0",
-  "snapshot.positionMode !== 'one_way_mode'",
-  "String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated'",
-  "leverage < 2 || leverage > 7",
+  'assertAutomaticLiveSnapshotIsolation(snapshot, owned, maximumLeverage)',
   "this.readLiveAccountSnapshot(userId, provider)",
   '&& liveSnapshotsReady',
   'paperReadEnabled = true',
@@ -368,7 +392,17 @@ requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_
 requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
 requireText(paperWorker, 'if (!await liveEntryArmPresent())', 'AUTO_GATE_WORKER_REARM_MISSING');
 requireText(paperWorker, "liveExitsSuppressedByPolicy", 'AUTO_GATE_STOPPED_LIVE_POSITION_VISIBILITY_MISSING');
-requireText(paperWorker, "'BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED'", 'AUTO_GATE_PROVIDER_UNTRACKED_POSITION_BLOCK_MISSING');
+requireText(paperWorker, 'canonicalAutomaticLivePositions(runtime.plans, runtime.orders)', 'AUTO_GATE_CANONICAL_POSITION_OWNERSHIP_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_MANUAL_ASSET_PROTECTED'", 'AUTO_GATE_MANUAL_ASSET_PROTECTION_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT'", 'AUTO_GATE_MIXED_POSITION_BLOCK_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_CANONICAL_EXIT_OWNERSHIP_REQUIRED'", 'AUTO_GATE_CANONICAL_EXIT_PROOF_MISSING');
+for (const token of ["snapshot.openOrders.length !== 0", "snapshot.positionMode !== 'one_way_mode'",
+  "position.marginMode !== 'isolated'", 'position.leverage! < 2 || position.leverage! > maximumLeverage']) {
+  requireText(positionIsolation, token, 'AUTO_GATE_ISOLATION_PROVIDER_SAFETY_MISSING');
+}
+requireText(liveExecution, 'await this.assertAutomaticLivePositionIsolation(userId, plan);', 'AUTO_GATE_SUBMISSION_POSITION_RECHECK_MISSING');
+requireText(workflow, '--require-automatic-position-isolation', 'AUTO_GATE_POSITION_ISOLATION_RECEIPT_MISSING');
+requireText(preactivationEvidence, 'assertAutomaticPositionIsolationReceipt(account)', 'AUTO_GATE_POSITION_ISOLATION_VERIFIER_MISSING');
 requireText(liveExecution, "throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY')", 'AUTO_GATE_PROVIDER_ARM_MISSING');
 requireText(liveExecution, 'await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);', 'AUTO_GATE_BITGET_MUTATION_ARM_GUARD_MISSING');
 requireText(liveExecution, "'AUTOMATIC_ENTRY_POLICY_REVOKED'", 'AUTO_GATE_AUTO_ORIGIN_POLICY_REVOCATION_GUARD_MISSING');
@@ -560,6 +594,7 @@ console.log(JSON.stringify({
   liveEntryTwoPhaseArm: true,
   startupWarmupProofRequired: true,
   sameTickRiskRefreshRequired: true,
+  manualAssetIsolationRequired: true,
   executionProjectionFailClosed: true,
   zeroMutationActivationRehearsal: true,
   postArmExactShaReadbackRequired: true,

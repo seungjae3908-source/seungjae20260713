@@ -54,7 +54,6 @@ export function ResearchLightweightMarketWatchPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-muted-foreground">LIGHTWEIGHT MARKET WATCH</p>
           <h3 className="mt-1 text-sm font-black">4시장 자동 감시</h3>
         </div>
         <strong
@@ -76,7 +75,7 @@ export function ResearchLightweightMarketWatchPanel({
         <div><span className="text-muted-foreground">당일 발견 후보</span><p className="font-bold">{number(summary?.candidatesToday ?? null)}건</p></div>
         <div><span className="text-muted-foreground">최근 시세 관찰</span><p className="font-bold">{displayTime(summary?.observedAt ?? null)}</p></div>
       </div>
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
         {(markets.length ? markets : Object.keys(MARKET_NAMES).map((market) => ({
           market, status: 'BLOCKED_DATA', observedCount: 0, listedCount: 0, newCandidates: 0, source: 'NONE',
         }))).map((row) => (
@@ -91,22 +90,19 @@ export function ResearchLightweightMarketWatchPanel({
           </div>
         ))}
       </div>
-      <div className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
+      <details className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
         data-testid="research-market-watch-prospective">
-        <strong>20분 후속 공개시세 관찰 (UTC 당일 기준)</strong>
+        <summary className="min-h-11 cursor-pointer py-3 font-bold">후속 시세 관찰</summary>
         <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <p>추적 중 {number(prospective?.pendingCount ?? null)}건</p>
           <p>시세 관찰 완료 {number(prospective?.observedCoarseToday ?? null)}건</p>
           <p>자료 부족·차단 {number(prospective?.blockedToday ?? null)}건</p>
           <p>이번 주기 미추적 {number(prospective?.untrackedThisCycle ?? null)}건</p>
         </div>
-        <p className="mt-1 text-muted-foreground">
-          완료는 20분 공개시세 표본 조건 충족만 의미하며 체결·실현수익·수익성 증거가 아닙니다.
-          거래비용·OOS·Paper 검증 표본은 0건으로 별도 관리합니다.
-        </p>
-      </div>
-      <div className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
+      </details>
+      <details className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
         data-testid="research-market-watch-cadence">
+        <summary className="min-h-11 cursor-pointer py-3 font-bold">24시간 수집 기록</summary>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <strong>최근 24시간 공개시세 수집주기 · 자체 기록</strong>
           <span className="text-muted-foreground" data-testid="research-market-watch-cadence-status">
@@ -123,15 +119,9 @@ export function ResearchLightweightMarketWatchPanel({
           <p>4시장 전체 시세 수집 주기 {number(cadence?.allFourMarketReadyCycles ?? null)}회</p>
         </div>
         <p className="mt-1 text-muted-foreground" data-testid="research-market-watch-cadence-warning">
-          내부 파일의 연속 수집 기록만 진단합니다. 서버·서비스의 실제 24시간 가동과 4시장 전체 데이터는 독립 검증되지 않았습니다.
-          신호 PASS·실거래·Paper 체결·수익성 증거로 인정하지 않습니다.
+          자체 기록 · 실제 24시간 가동은 독립 검증되지 않았습니다.
         </p>
-      </div>
-      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground" data-testid="research-market-watch-boundary">
-        시세 감시 후보는 매수·매도 신호가 아닙니다. 24시간 연속 가동,
-        AI·수식 PASS, OOS·거래비용 수익성 검증과 Paper 체결은 별도 증거가 필요합니다.
-        실주문 권한은 없습니다.
-      </p>
+      </details>
     </section>
   );
 }

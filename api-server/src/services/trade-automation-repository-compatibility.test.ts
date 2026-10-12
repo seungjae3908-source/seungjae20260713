@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './trade-history-completeness.service.test';
 import assert from 'node:assert/strict';
 import {
   InMemoryTradingRepository,
