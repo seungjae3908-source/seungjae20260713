@@ -165,23 +165,23 @@ test('search fault matrix fails closed and latest response wins without leaking 
     expected: RegExp;
     handler: (route: Route) => Promise<unknown>;
   }> = [
-    { name: 'null', expected: /DATA_UNAVAILABLE/u, handler: (route) => json(route, null) },
-    { name: 'abort', expected: /DATA_UNAVAILABLE/u, handler: (route) => route.abort('failed') },
+    { name: 'null', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => json(route, null) },
+    { name: 'abort', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => route.abort('failed') },
     {
       name: 'timeout',
-      expected: /DATA_UNAVAILABLE/u,
+      expected: /검색 결과를 불러오지 못했습니다/u,
       handler: async (route) => {
         await new Promise((resolve) => setTimeout(resolve, 5_200));
         return route.abort('timedout').catch(() => undefined);
       },
     },
-    { name: '401', expected: /DATA_UNAVAILABLE/u, handler: (route) => json(route, { error: 'UNAUTHORIZED' }, 401) },
-    { name: '403', expected: /DATA_UNAVAILABLE/u, handler: (route) => json(route, { error: 'FORBIDDEN' }, 403) },
-    { name: '429', expected: /DATA_UNAVAILABLE/u, handler: (route) => json(route, { error: 'RATE_LIMITED' }, 429) },
-    { name: '500', expected: /DATA_UNAVAILABLE/u, handler: (route) => json(route, { error: 'UPSTREAM_ERROR' }, 500) },
+    { name: '401', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => json(route, { error: 'UNAUTHORIZED' }, 401) },
+    { name: '403', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => json(route, { error: 'FORBIDDEN' }, 403) },
+    { name: '429', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => json(route, { error: 'RATE_LIMITED' }, 429) },
+    { name: '500', expected: /검색 결과를 불러오지 못했습니다/u, handler: (route) => json(route, { error: 'UPSTREAM_ERROR' }, 500) },
     {
       name: 'provider-unavailable',
-      expected: /PROVIDER_UNAVAILABLE/u,
+      expected: /일부 시장의 검색 결과를 확인할 수 없습니다/u,
       handler: async (route) => {
         const query = new URL(route.request().url()).searchParams.get('q') ?? '';
         const unavailable = searchEnvelope(query, []);
