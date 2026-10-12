@@ -99,6 +99,60 @@ test('rate-limit pauses with backoff and never marks failed input complete',()=>
   }
   assert.equal(pickBackfillWindow(state,NOW+24*60*60_000),null);
 });
+
+test('shared-provider 429 holds sibling symbols across cycles while other venue can progress',async()=>{
+  await workspace(async({queue,archive})=>{
+    const m=manifest([SPOT,{...SPOT,symbol:'ETH'},FUTURE]);
+    let upbitCalls=0,bitgetCalls=0;
+    const fetchImpl=async requestUrl=>{
+      const url=new URL(requestUrl);
+      if(url.hostname==='api.upbit.com'){
+        upbitCalls++;
+        return {ok:false,status:429,headers:{get:()=>null}};
+      }
+      if(url.hostname==='api.bitget.com'){
+        bitgetCalls++;
+        const t=Number(url.searchParams.get('startTime'))+MINUTE_MS;
+        return apiResponse({code:'00000',
+          data:[[String(t),'100','110','90','105','2','1000']]});
+      }
+      throw Error('Unexpected provider host');
+    };
+    const opts={enabled:true,queueRoot:queue,archiveRoot:archive,
+      manifest:m,researchSha:SHA1,now:()=>NOW,
+      maxActions:6,fetchImpl,sleep:async()=>{},freeBytes:6*1024**3};
+    const first=await runDurableMinuteBackfillCycle(opts);
+    assert.equal(first.status,'HOLD_PROVIDER_RATE_LIMIT');
+    assert.deepEqual(first.providerRateLimitedMarkets,['CRYPTO_SPOT']);
+    assert.equal(upbitCalls,1);
+    assert.equal(bitgetCalls,2);
+    const next=await runDurableMinuteBackfillCycle({
+      ...opts,now:()=>NOW+5*MINUTE_MS,
+    });
+    assert.equal(next.status,'HOLD_PROVIDER_RATE_LIMIT');
+    assert.equal(next.providerCalls,0);
+    assert.equal(upbitCalls,1);
+    const state=await readBackfillQueue(queue,validateBackfillScope(m));
+    const resumed=pickBackfillWindow(state,NOW+QUEUE_LIMITS.retryRateLimitMs);
+    assert.equal(resumed.task.market,'CRYPTO_SPOT');
+  });
+});
+test('fifth provider 429 blocks other symbols of that venue until manual review',()=>{
+  const scope=validateBackfillScope(manifest([SPOT,{...SPOT,symbol:'ETH'},FUTURE]));
+  let state=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
+  const index=state.ranges.findIndex(r=>r.market==='CRYPTO_SPOT'&&r.symbol==='BTC');
+  const choice={index,task:{market:'CRYPTO_SPOT',symbol:'BTC',
+    windowStartMs:START,windowEndMs:START+120*MINUTE_MS}};
+  for(let i=0;i<QUEUE_LIMITS.maxAttemptsPerWindow;i++){
+    state=applyBackfillOutcome(state,choice,{market:'CRYPTO_SPOT',
+      symbol:'BTC',status:'BLOCKED',error:'MINUTE_SOURCE_HTTP_429'},
+    NOW+i*2*60*60_000,SHA1);
+  }
+  assert.equal(state.ranges[index].status,'NEEDS_REVIEW');
+  assert.equal(pickBackfillWindow(state,NOW+48*60*60_000).task.market,
+    'CRYPTO_FUTURES');
+});
+
 test('private atomic state survives restart and does not silently reset on manifest change',async()=>{
   await workspace(async({queue})=>{
     const scope=validateBackfillScope(manifest());

@@ -137,12 +137,23 @@ export function verifyBackfillQueue(state, scope) {
   }
   return state;
 }
+// A public 429 is a provider-shared rate limit, not a single-symbol defect.
+// Existing durable range backoff also holds sibling requests in this market.
+function provider429HoldMarkets(state, atMs) {
+  return new Set(state.ranges.filter(r =>
+    r.lastFailure === 'MINUTE_SOURCE_HTTP_429'
+    && (r.status === 'NEEDS_REVIEW'
+      || (r.status === 'BACKOFF' && r.retryAtMs > atMs))
+  ).map(r => r.market));
+}
 export function pickBackfillWindow(state, atMs) {
   if (!positive(atMs)) fail('MINUTE_QUEUE_TIME_INVALID');
+  const rateLimitedMarkets = provider429HoldMarkets(state, atMs);
   for (let offset=0; offset<state.ranges.length; offset++) {
     const index=(state.nextIndex + offset) % state.ranges.length;
     const r=state.ranges[index];
-    if (r.status === 'COMPLETE' || r.status === 'NEEDS_REVIEW'
+    if (rateLimitedMarkets.has(r.market) || r.status === 'COMPLETE'
+      || r.status === 'NEEDS_REVIEW'
       || r.status === 'BACKOFF' && r.retryAtMs > atMs) continue;
     const closedEnd=Math.floor((atMs-5_000)/MINUTE_MS)*MINUTE_MS;
     const horizon=r.mode==='CONTINUOUS'?closedEnd:Math.min(r.endMs,closedEnd);
@@ -353,14 +364,18 @@ export async function runDurableMinuteBackfillCycle({
   const legacyGapAuditUnverified=state.ranges.some(r=>
     r.sourceGapAuditVersion==null||r.historicalMissingBeforeAudit===true);
   const gapsUnresolved=unverifiedMissingMinuteSlots>0||legacyGapAuditUnverified;
+  const providerRateLimitedMarkets=Object.freeze([...provider429HoldMarkets(state,now())].sort());
   return Object.freeze({
-    contract:QUEUE_CONTRACT,status:heldDisk?'HOLD_DISK':reviewCount?'NEEDS_REVIEW'
+    contract:QUEUE_CONTRACT,status:heldDisk?'HOLD_DISK'
+      :providerRateLimitedMarkets.length?'HOLD_PROVIDER_RATE_LIMIT'
+      :reviewCount?'NEEDS_REVIEW'
       :completeCount===state.ranges.length?(gapsUnresolved
         ?'PLANNED_WINDOWS_ARCHIVED_SOURCE_LIMITED':'PLANNED_WINDOWS_ARCHIVED')
         :attempts?'PROGRESS_RECORDED':'WAIT_OR_NO_ELIGIBLE_WINDOW',
     scopeDigest:scope.scopeDigest,rangeCount:state.ranges.length,
     completeCount,rollingCount,reviewCount,backoffCount,
     attempts,providerCalls,filesWritten,outcomes,capacity,
+    providerRateLimitedMarkets,
     gapAffectedPageCount,unverifiedMissingMinuteSlots,
     legacyGapAuditUnverified,
     sourceSlotEvidenceStatus:legacyGapAuditUnverified
