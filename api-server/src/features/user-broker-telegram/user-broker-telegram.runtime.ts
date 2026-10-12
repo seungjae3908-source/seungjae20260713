@@ -15,13 +15,38 @@ function brokerName(exchange: TradingExchange | null): UnifiedTradeOrder['broker
   if (exchange === 'upbit') return 'UPBIT';
   if (exchange === 'bitget') return 'BITGET';
   if (exchange === 'kiwoom') return 'KIWOOM';
+  if (exchange === 'toss') return 'TOSS';
   return 'APP';
 }
 
-function marketFor(exchange: TradingExchange | null): { market: UnifiedTradeOrder['market']; currency: UnifiedTradeOrder['currency'] } {
-  if (exchange === 'upbit') return { market: 'CRYPTO_SPOT', currency: 'KRW' };
-  if (exchange === 'bitget') return { market: 'CRYPTO_FUTURES', currency: 'USDT' };
-  return { market: 'KR_STOCK', currency: 'KRW' };
+function marketFor(event: UserExecutionEvent): {
+  market: UnifiedTradeOrder['market']; currency: UnifiedTradeOrder['currency'];
+} {
+  const scope = event.market.trim().toUpperCase();
+  if (event.brokerConnectionRef === 'upbit') {
+    // A non-KRW Upbit quote cannot be silently converted into a KRW journal.
+    if (scope !== 'KRW' && !scope.startsWith('KRW-')) {
+      throw new Error('PORTFOLIO_PAPER_SPOT_QUOTE_CURRENCY_UNVERIFIED');
+    }
+    return { market: 'CRYPTO_SPOT', currency: 'KRW' };
+  }
+  if (event.brokerConnectionRef === 'bitget') {
+    if (scope !== 'USDT-FUTURES' && scope !== 'USDT') {
+      throw new Error('PORTFOLIO_PAPER_FUTURES_QUOTE_CURRENCY_UNVERIFIED');
+    }
+    return { market: 'CRYPTO_FUTURES', currency: 'USDT' };
+  }
+  if (event.brokerConnectionRef !== 'toss' && event.brokerConnectionRef !== 'kiwoom') {
+    throw new Error('PORTFOLIO_PAPER_BROKER_IDENTITY_REQUIRED');
+  }
+  if (['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(scope)) {
+    return { market: 'US_STOCK', currency: 'USD' };
+  }
+  if (['KR', 'KRW', 'KR_STOCK', 'KOSPI', 'KOSDAQ'].includes(scope)) {
+    return { market: 'KR_STOCK', currency: 'KRW' };
+  }
+  // Account-provider identity alone cannot prove KR vs US for stock orders.
+  throw new Error('PORTFOLIO_PAPER_STOCK_MARKET_UNVERIFIED');
 }
 
 function maskedAccount(event: UserExecutionEvent) {
@@ -42,9 +67,30 @@ function tradePayload(event: UserExecutionEvent): UnifiedTradeOrder | null {
   if (filledQuantity == null || filledQuantity <= 0 || averageFillPrice == null || averageFillPrice <= 0) return null;
   const remainingQuantity = Math.max(0, finite(event.remainingQuantity) ?? 0);
   const quantity = filledQuantity + remainingQuantity;
-  const { market, currency } = marketFor(event.brokerConnectionRef);
+  const { market, currency } = marketFor(event);
   const broker = brokerName(event.brokerConnectionRef);
-  const isExit = event.side === 'sell' || event.side === 'short' || event.type === 'TAKE_PROFIT_FILLED' || event.type === 'STOP_FILLED';
+  if (!['buy', 'sell', 'long', 'short'].includes(String(event.side))) {
+    throw new Error('PORTFOLIO_PAPER_EXECUTION_SIDE_REQUIRED');
+  }
+  const side = event.side === 'buy' || event.side === 'long' ? 'BUY' as const : 'SELL' as const;
+  const futures = market === 'CRYPTO_FUTURES';
+  if (!futures && event.side === 'short') {
+    throw new Error('PORTFOLIO_PAPER_CASH_SHORT_FORBIDDEN');
+  }
+  const isExit = futures
+    ? event.metadata.reduceOnly === true
+    : side === 'SELL' || event.type === 'TAKE_PROFIT_FILLED' || event.type === 'STOP_FILLED';
+  if (futures && (event.type === 'TAKE_PROFIT_FILLED' || event.type === 'STOP_FILLED') && !isExit) {
+    throw new Error('PORTFOLIO_PAPER_FUTURES_EXIT_REDUCE_ONLY_REQUIRED');
+  }
+  if (!futures && isExit && side !== 'SELL') {
+    throw new Error('PORTFOLIO_PAPER_CASH_EXIT_SIDE_INVALID');
+  }
+  const positionSide = futures
+    ? isExit
+      ? side === 'SELL' ? 'LONG' as const : 'SHORT' as const
+      : side === 'SELL' ? 'SHORT' as const : 'LONG' as const
+    : 'LONG' as const;
   const status: UnifiedTradeOrder['status'] = event.type === 'ORDER_PARTIALLY_FILLED' ? 'PARTIALLY_FILLED' : 'FILLED';
   const fees = finite(event.metadata.feeAmount);
   const tax = finite(event.metadata.taxAmount);
@@ -56,8 +102,8 @@ function tradePayload(event: UserExecutionEvent): UnifiedTradeOrder | null {
     accountIdMasked: maskedAccount(event),
     market,
     symbol: event.symbol,
-    side: isExit ? 'SELL' : 'BUY',
-    positionSide: event.side === 'short' ? 'SHORT' : 'LONG',
+    side,
+    positionSide,
     positionEffect: isExit ? 'CLOSE' : 'OPEN',
     clientOrderId: event.executionId,
     brokerOrderId: event.executionId ?? event.sourceEventId,

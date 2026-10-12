@@ -141,6 +141,25 @@ test('owner holdings room is resolved only for the configured owner member', () 
   } as NodeJS.ProcessEnv), null);
 });
 
+test('owner holdings mirror rejects a dedicated room collision with AUTO or a market', () => {
+  const base = {
+    TELEGRAM_OWNER_MEMBER_ID: 'owner-user',
+    TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID: '-1009001',
+    TELEGRAM_AUTO_TRADING_CHAT_ID: '-1009002',
+    TELEGRAM_KR_STOCK_CHAT_ID: '-1009003',
+  } as NodeJS.ProcessEnv;
+  assert.equal(ownerHoldingsChatIdForUser('owner-user', base), '-1009001');
+  assert.equal(ownerHoldingsChatIdForUser('owner-user', {
+    ...base,
+    TELEGRAM_AUTO_TRADING_CHAT_ID: ' -1009001 ',
+  }), null);
+  assert.equal(ownerHoldingsChatIdForUser('owner-user', {
+    ...base,
+    TELEGRAM_KR_STOCK_CHAT_ID: '-1009001',
+  }), null);
+  assert.equal(ownerHoldingsChatIdForUser('other-user', base), null);
+});
+
 test('member holdings messages separate stock and crypto without exposing user identity', () => {
   const stock = buildMemberHoldingTelegramDispatch({
     userId: 'user-a-secret-id',

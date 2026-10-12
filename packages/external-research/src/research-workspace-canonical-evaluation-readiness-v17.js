@@ -14,6 +14,9 @@ const sha=x=>createHash('sha256').update(JSON.stringify(canonical(x))).digest('h
 const freeze=x=>{if(x&&typeof x==='object'&&!Object.isFrozen(x)){Object.values(x).forEach(freeze);Object.freeze(x);}return x;};
 const MARKETS=new Set(['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES']);
 const SIDES=new Set(['LONG','SHORT']);
+const MARKET_SIDE_POLICY=Object.freeze({
+  KR_STOCK:new Set(['LONG']),US_STOCK:new Set(['LONG']),CRYPTO_SPOT:new Set(['LONG']),CRYPTO_FUTURES:new Set(['LONG','SHORT']),
+});
 const BINDINGS=Object.freeze({
   stageCheckpointExecutor:{ownerRefs:['#551'],capability:'TOURNAMENT_STAGE_CHECKPOINT_RESUME_V1'},
   canonicalBundleSource:{ownerRefs:['#821','#833'],capability:'AUTHENTIC_CANONICAL_BUNDLE_SOURCE_V1'},
@@ -57,6 +60,7 @@ export function validateCanonicalEvaluationConfigV17(config,{currentSha,review,d
     ||!digest(config.tournamentPolicyDigest)||!object(config.crossValidation)||!object(config.datasets)||!object(config.runtimeBindings)
     ||!object(config.authority)||!digest(config.configDigest))reasons.push('EVALUATION_CONFIG_SHAPE_INVALID');
   if(reasons.length===0){
+    if(!MARKET_SIDE_POLICY[config.market]?.has(config.side))reasons.push('MARKET_DIRECTION_POLICY_VIOLATION');
     const cross=config.crossValidation;
     if(!exact(cross,['supportingPaperBundleDigest','contradictoryPaperBundleDigest','officialSourceBundleDigest','supportingPaperCount','contradictoryPaperCount','allSourcesReviewed'])
       ||!digest(cross.supportingPaperBundleDigest)||!(cross.contradictoryPaperBundleDigest===null||digest(cross.contradictoryPaperBundleDigest))

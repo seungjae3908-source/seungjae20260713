@@ -91,3 +91,23 @@ test('any authority mutation blocks evaluation',()=>{
   const out=assessCanonicalEvaluationReadinessV17({config:c,currentSha:sourceSha,review:r,decision:d,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.ok(out.reasonCodes.includes('EVALUATION_CONFIG_AUTHORITY_INVALID'));
 });
+
+test('cash-market SHORT is rejected before canonical evaluation',()=>{
+  const r=review(),d=decision(r),c=config();
+  c.side='SHORT';
+  const core=Object.fromEntries(Object.entries(c).filter(([k])=>k!=='configDigest'));
+  c.configDigest=sha(core);
+  const out=assessCanonicalEvaluationReadinessV17({config:c,currentSha:sourceSha,review:r,decision:d,checkedAt:now});
+  assert.equal(out.status,'BLOCKED');
+  assert.ok(out.reasonCodes.includes('MARKET_DIRECTION_POLICY_VIOLATION'));
+  assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
+});
+
+test('crypto futures SHORT remains allowed for research evaluation',()=>{
+  const r=review(),d=decision(r),c=config();
+  c.market='CRYPTO_FUTURES';c.side='SHORT';c.symbolScope=['BTCUSDT'];
+  const core=Object.fromEntries(Object.entries(c).filter(([k])=>k!=='configDigest'));
+  c.configDigest=sha(core);
+  const out=assessCanonicalEvaluationReadinessV17({config:c,currentSha:sourceSha,review:r,decision:d,checkedAt:now});
+  assert.equal(out.status,'READY_FOR_CANONICAL_EVALUATION_ONE_SHOT');
+});

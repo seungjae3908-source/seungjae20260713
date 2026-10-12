@@ -55,9 +55,10 @@ for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
 
-    await expect(page.getByRole('heading', { name: '매매', level: 1 })).toBeVisible();
-    await expect(page.getByTestId('trading-mode-auto')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('trading-mode-paper')).toContainText('모의매매');
+    await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
+    await expect(page.getByTestId('trading-mode-auto')).toHaveCount(0);
+    await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
+    await expect(page.getByTestId('trading-market-select')).toBeVisible();
 
     const safetySummary = page.getByTestId('auto-trading-safety-summary');
     await expect(safetySummary).toContainText('주문별 승인');
@@ -69,26 +70,34 @@ for (const width of [360, 390, 430]) {
 
     await page.getByTestId('trading-section-settings').click();
 
+    await expect(page.getByTestId('auto-trading-telegram-settings')).not.toHaveAttribute('open', '');
+    await page.getByTestId('auto-trading-telegram-settings').locator('summary').click();
+    await expect(page.getByTestId('user-broker-telegram-panel')).toBeVisible();
     await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveValue('kiwoom');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-us_stock').click();
+    await page.getByTestId('trading-market-select').selectOption('us_stock');
     await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
+    await expect(page.getByTestId('stock-broker-us_stock')).toBeDisabled();
+    await expect(page.getByTestId('stock-broker-us_stock').locator('option')).toHaveCount(1);
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_spot').click();
+    await page.getByTestId('trading-market-select').selectOption('crypto_spot');
     await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-upbit')).toBeVisible();
     await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
     await expect(page.getByLabel('Bitget 레버리지')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_futures').click();
+    await page.getByTestId('trading-market-select').selectOption('crypto_futures');
     await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-bitget')).toBeVisible();
     await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
+    await expect(page.getByLabel('Bitget 레버리지').locator('option')).toHaveText([
+      '2배 (기본)', '3배', '4배', '5배', '6배', '7배 (최대)',
+    ]);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
@@ -165,10 +174,10 @@ test('automatic trading surface never exposes per-order approval actions', async
 
 test('paper mode exposes the same four-market navigation without enabling live authority', async ({ page }) => {
   const failures = captureBrowserFailures(page);
-  await page.goto('/__phase12-trade-automation-e2e');
+  await page.goto('/__phase12-trade-automation-e2e?mode=paper');
 
-  await page.getByTestId('trading-mode-paper').click();
-  await expect(page.getByTestId('trading-mode-paper')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('heading', { name: '모의매매', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible();
   await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실제 주문 0');
 
@@ -177,6 +186,250 @@ test('paper mode exposes the same four-market navigation without enabling live a
     await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
   }
 
-  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
+  await expect(page.getByTestId('trading-paper-modes')).toContainText('자동모의매매');
+  await expect(page.getByTestId('trading-paper-modes')).toContainText('수동모의매매');
+  await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveCount(0);
   expectNoBrowserFailures(failures);
+});
+
+for (const width of [360, 390, 768, 1024, 1440]) {
+  test('holdings popup uses saved entry evidence and protects manual assets at ' + width + 'px', async ({ page }) => {
+    const failures = captureBrowserFailures(page);
+    const mutations: string[] = [];
+    page.on('request', request => {
+      if (new URL(request.url()).pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) mutations.push(request.url());
+    });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/__phase12-trade-automation-e2e?holdings=true');
+    const holdings = page.getByTestId('trading-holdings');
+    const samsung = holdings.getByRole('button', { name: /삼성전자/ }).filter({ visible: true });
+    await samsung.click();
+    const popup = page.getByTestId('holding-detail-dialog');
+    await expect(popup).toBeVisible();
+    expect(await popup.evaluate(element => getComputedStyle(element).backgroundColor)).not.toMatch(/rgba\(|transparent/);
+    await expect(popup).toContainText('기존 보유 — AUTO 진입 기록 없음');
+    await expect(popup).toContainText('미설정');
+    await expect(popup.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(popup).not.toBeVisible();
+    await expect(samsung).toBeFocused();
+    await holdings.getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+    await expect(popup).toContainText('거래량 증가 + 돌파 조건 충족');
+    await expect(popup).toContainText('200,000 KRW');
+    await expect(popup).toContainText('목표가 · 저장된 계획');
+    await popup.getByText('근거 더 보기', { exact: true }).click();
+    await expect(popup).toContainText('진입 당시 저장된 추세 정렬 근거');
+    await expect(popup).toContainText('test-signal');
+    const box = await popup.boundingBox();
+    expect(box!.width).toBeLessThanOrEqual(width);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await popup.getByRole('button', { name: '종목상세', exact: true }).click();
+    await expect(page).toHaveURL(/\/stock-info\?.*ticker=000660/);
+    await page.goto('/__phase12-trade-automation-e2e?holdings=true');
+    await page.getByTestId('trading-holdings').getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+    await page.getByTestId('holding-detail-dialog').getByRole('button', { name: 'AI차트', exact: true }).click();
+    await expect(page).toHaveURL(/\/ai-chart\?.*market=KR.*ticker=000660/);
+    expect(mutations).toEqual([]);
+    expect(failures.pageErrors).toEqual([]);
+  });
+}
+
+
+test('holding popup never substitutes the broker average for missing canonical fill-price evidence', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e?holdings=true&missingFillPrice=true');
+  await page.getByTestId('trading-holdings').getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+  const popup = page.getByTestId('holding-detail-dialog');
+  await expect(popup).toBeVisible();
+  await expect(popup.getByText('진입가 · 실제 체결').locator('..')).toContainText('미설정 / 미확인');
+  await expect(popup).not.toContainText('200,000 KRW');
+  await expect(popup).toContainText('거래량 증가 + 돌파 조건 충족');
+  await expect(popup.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+});
+
+test('auto-trading rehearsal tab proves the safe four-market chain and displays zero real orders', async ({ page }) => {
+  await page.unroute(/\/api\/user-integrations(?:\?.*)?$/);
+  const forbiddenTradingMutations: string[] = [];
+  let rehearsalRequest: Record<string, unknown> | null = null;
+
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      request.method() !== 'GET'
+      && path.startsWith('/api/trade-automation/')
+      && path !== '/api/trade-automation/rehearsal/run'
+    ) {
+      forbiddenTradingMutations.push(`${request.method()} ${path}`);
+    }
+  });
+
+  await page.route(/\/api\/paper-journal\/snapshot(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        mode: 'journal-sync-only',
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+        records: [],
+      }),
+    });
+  });
+
+  await page.route(/\/api\/user-integrations(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-10-07T00:00:00.000Z' },
+        telegramRuntime: { deliveryReady: true },
+        brokerConnections: [],
+        preferences: {},
+      }),
+    });
+  });
+
+  await page.route(/\/api\/user-integrations\/telegram\/test$/, async (route) => {
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      }),
+    });
+  });
+
+  await page.route(/\/api\/trade-automation\/rehearsal\/run$/, async (route) => {
+    expect(route.request().method()).toBe('POST');
+    rehearsalRequest = route.request().postDataJSON() as Record<string, unknown>;
+    const providers = Object.fromEntries(
+      ['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => [provider, {
+        configured: true,
+        accountMode: 'live',
+        liveConnectionVerified: true,
+        reusableReadonlyCredential: true,
+        readOnlyVerified: true,
+        ready: true,
+        lastErrorCode: null,
+        credentialsExposed: false,
+      }]),
+    );
+    const market = (
+      name: string,
+      direction: string,
+      strategyId: string,
+      providerList: string[],
+    ) => ({
+      market: name,
+      direction,
+      strategyId,
+      providers: providerList,
+      aiDecision: 'PASS',
+      status: 'ACTIVE_REHEARSAL',
+      wouldActivateLiveAuto: true,
+      blockers: [],
+      exceptionPolicyApplied: true,
+      oosRequiredForRehearsal: false,
+      profitabilityPromotionRequiredForRehearsal: false,
+      executionAuthority: 'NONE',
+      realOrderSubmitted: false,
+      productionMutationAllowed: false,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        schemaVersion: 'formula-ai-auto-rehearsal-runtime-v1',
+        mode: 'DRIFT_REHEARSAL',
+        exceptionPolicy: 'FORMULA_AI_LIVE_EXCEPTION_V1',
+        signal: { source: 'SYNTHETIC_REHEARSAL_SIGNAL', deterministicRuleReady: true, productionSignalCreated: false },
+        ai: {
+          positiveDecision: 'PASS',
+          vetoDecision: 'VETO',
+          vetoBlocked: true,
+          vetoBlockers: ['FORMULA_AI_AI_PASS_REQUIRED'],
+          liveAiProviderInvokedByThisEndpoint: false,
+        },
+        providers,
+        credentialReuse: Object.fromEntries(
+          ['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => [provider, {
+            configured: true,
+            reusable: true,
+            readOnlyVerified: true,
+            errorCode: null,
+            credentialsExposed: false,
+          }]),
+        ),
+        paper: {
+          paperAutoReady: true,
+          paperFillReady: true,
+          journalReady: true,
+          riskReady: true,
+          orderState: 'filled',
+          fillCount: 1,
+          journalEntryCount: 1,
+          executionAuthority: 'NONE',
+          realOrderSubmitted: false,
+          exchangeRequestSent: false,
+          providerMutationRequests: 0,
+          productionMutationAllowed: false,
+        },
+        journal: {
+          paperJournalProjectionReady: true,
+          journalEndpointReadReady: true,
+          ready: true,
+          persistentMutationPerformedByThisEndpoint: false,
+        },
+        telegram: { ready: true, testMessageRequestedByThisEndpoint: false },
+        futures: { marginMode: 'isolated', maxLeverage: 7, isolatedReady: true, leverageReady: true },
+        markets: [
+          market('KR_STOCK', 'BUY', 'KR_PRESSURE_BREAKOUT_V1', ['toss', 'kiwoom']),
+          market('US_STOCK', 'BUY', 'US_STOCKS_IN_PLAY_ORB_RETEST_V1', ['kiwoom']),
+          market('CRYPTO_SPOT', 'BUY', 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', ['upbit']),
+          market('CRYPTO_FUTURES', 'LONG', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1', ['bitget']),
+          market('CRYPTO_FUTURES', 'SHORT', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1', ['bitget']),
+        ],
+        allProvidersReady: true,
+        allCredentialReuseReady: true,
+        wouldActivateLiveAuto: true,
+        executionAuthority: 'NONE',
+        realOrderSubmitted: false,
+        actualOrderSubmitted: false,
+        exchangeRequestSent: false,
+        providerMutationRequests: 0,
+        productionMutationAllowed: false,
+        liveTradingActivated: false,
+        automaticLiveExecutionActivated: false,
+      }),
+    });
+  });
+
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('auto-trading-rehearsal-settings').locator('summary').click();
+  await expect(page.getByTestId('formula-ai-auto-rehearsal-panel')).toBeVisible();
+  await expect(page.getByTestId('run-auto-rehearsal')).toContainText('자동매매 활성화 리허설 실행');
+
+  await page.getByTestId('run-auto-rehearsal').click();
+
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('자동매매 활성화 가능');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('실주문 권한:');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('OFF');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('실주문:');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('0건');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('toss');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('bitget');
+  expect(rehearsalRequest).toEqual({
+    confirmed: true,
+    journalReadReady: true,
+    telegramReady: true,
+  });
+  expect(forbiddenTradingMutations).toEqual([]);
 });

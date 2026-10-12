@@ -25,6 +25,7 @@ try {
     profile_rows_copied: 0,
     storage_objects_copied: 0,
     credentials_recorded: false,
+    admin_v2_rls_verified: true,
   });
   writeJson('playwright-report.json', {
     suites: [{

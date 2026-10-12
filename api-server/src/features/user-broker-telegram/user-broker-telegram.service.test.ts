@@ -21,23 +21,30 @@ import type {
   UserExecutionEvent,
 } from './user-broker-telegram.types';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
+import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from './user-broker-telegram.worker';
+import { HttpUserTelegramTransport } from './user-broker-telegram.transport';
 
 class FakeTelegramTransport implements TelegramTransport {
   readonly sent: Array<{ chatId: string; text: string }> = [];
   fail = false;
+  errorCode = 'FAKE_OUTAGE';
   async send(chatId: string, text: string) {
     this.sent.push({ chatId, text });
-    return this.fail ? { ok: false, errorCode: 'FAKE_OUTAGE' } : { ok: true };
+    return this.fail ? { ok: false, errorCode: this.errorCode } : { ok: true };
   }
 }
 
 class FakePortfolioSink implements PortfolioSyncSink {
   readonly events: UserExecutionEvent[] = [];
-  async accept(event: UserExecutionEvent) { this.events.push(structuredClone(event)); }
+  async accept(event: UserExecutionEvent) {
+    if (this.events.some((row) => row.sourceEventId === event.sourceEventId && row.userId === event.userId)) return;
+    this.events.push(structuredClone(event));
+  }
 }
 
 const APPROVED_ASSOCIATE = Object.freeze({
   status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',
 });
 
 function fixture() {
@@ -92,6 +99,25 @@ test('member revoked after token issuance cannot bind Telegram', async () => {
     /TELEGRAM_MEMBER_INELIGIBLE/,
   );
   assert.equal(await repository.getTelegramConnection('user-a'), null);
+});
+
+test('expired and schema-incomplete members cannot bind a Telegram link', async () => {
+  for (const profile of [
+    { ...APPROVED_ASSOCIATE, membership_expires_at: '2025-01-01T00:00:00.000Z' },
+    { ...APPROVED_ASSOCIATE, permissions_updated_at: null },
+    { ...APPROVED_ASSOCIATE, membership_level: null, role: 'associate' },
+  ]) {
+    const { service, repository } = fixture();
+    const now = new Date('2026-08-12T00:00:00.000Z');
+    const created = await service.createTelegramLink('user-a', now);
+    const token = new URL(created.deepLink!).searchParams.get('start')!;
+    repository.setMemberProfile('user-a', profile);
+    await assert.rejects(
+      service.bindTelegramStart({ token, telegramChatId: 'chat-a', telegramUserId: 'tg-a', now }),
+      /TELEGRAM_MEMBER_INELIGIBLE/,
+    );
+    assert.equal(await repository.getTelegramConnection('user-a'), null);
+  }
 });
 
 test('expired Telegram link cannot be consumed', async () => {
@@ -232,6 +258,43 @@ test('owner AUTO_POLICY events mirror only to the dedicated auto-trading room', 
   assert.match(transport.sent[1].text, /🤖 자동매매 · 매수 신호/);
 });
 
+test('owner AUTO mirror skips a colliding holdings room while personal receipt succeeds', async () => {
+  const originalHoldings = process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID;
+  try {
+    process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID = 'owner-auto-room';
+    const repository = new InMemoryUserBrokerTelegramRepository();
+    repository.setMemberProfile('user-a', APPROVED_ASSOCIATE);
+    const transport = new FakeTelegramTransport();
+    const service = new UserBrokerTelegramService(
+      repository, transport, new FakePortfolioSink(), 'ci_test_bot',
+      undefined, 'user-a', 'owner-auto-room',
+    );
+    await link(service, 'user-a', 'chat-a');
+    const event: UserExecutionEvent = {
+      ...manualPortfolioEvent({
+        id: 'owner-auto-collision',
+        userId: 'user-a',
+        symbol: '005930',
+        market: 'KR',
+        side: 'buy',
+        quantity: 1,
+        price: 72000,
+      }),
+      type: 'ORDER_FILLED',
+      source: 'PAPER_EXECUTION',
+      executionMethod: 'AUTO_POLICY',
+    };
+    const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+    assert.ok(queued.deliveryId);
+    const sent = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+    assert.equal(sent.state, 'SENT');
+    assert.deepEqual(transport.sent.map(item => item.chatId), ['chat-a']);
+  } finally {
+    if (originalHoldings == null) delete process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID;
+    else process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID = originalHoldings;
+  }
+});
+
 test('member revoked after queueing is dead-lettered before Telegram transport', async () => {
   const { service, repository, transport } = fixture();
   await link(service, 'user-a', 'chat-a');
@@ -241,6 +304,23 @@ test('member revoked after queueing is dead-lettered before Telegram transport',
   const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
   repository.setMemberProfile('user-a', {
     status: 'suspended', membership_level: 'associate', is_active: false, role: 'associate',
+  });
+  const result = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+  assert.equal(result.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 0);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.lastErrorCode, 'TELEGRAM_MEMBER_INELIGIBLE');
+});
+
+test('membership expiration after queueing prevents Telegram send and dead-letters the delivery', async () => {
+  const { service, repository, transport } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'expired-after-queue', userId: 'user-a', symbol: '005930', market: 'KR', quantity: 1, price: 72000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  repository.setMemberProfile('user-a', {
+    ...APPROVED_ASSOCIATE, membership_expires_at: '2025-01-01T00:00:00.000Z',
   });
   const result = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
   assert.equal(result.state, 'DEAD_LETTER');
@@ -275,6 +355,164 @@ test('Telegram delivery retries are bounded and end in dead letter without chang
   const delivery = await repository.getDelivery('user-a', deliveryId);
   assert.equal(delivery?.attempts, 3);
   assert.equal(transport.sent.length, 3);
+});
+
+test('real member Telegram HTTP transport requires an acknowledged message id and never retries ambiguous POST', async()=>{
+ const original=globalThis.fetch;
+ const transport=new HttpUserTelegramTransport('mock-token-do-not-send');
+ let calls=0;
+ try{
+   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({
+     ok:true,result:{message_id:451},
+   }),{status:200});};
+   assert.deepEqual(await transport.send('mock-chat','safe message'),{ok:true});
+   assert.equal(calls,1);
+
+   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({
+     ok:true,
+   }),{status:200});};
+   assert.deepEqual(await transport.send('mock-chat','missing receipt'),{
+     ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+   });
+   assert.equal(calls,2);
+
+   globalThis.fetch=async()=>{calls++;return new Response('unavailable',{status:502});};
+   assert.deepEqual(await transport.send('mock-chat','http 502'),{
+     ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+   });
+   assert.equal(calls,3);
+
+   globalThis.fetch=async()=>{calls++;throw new Error('SENSITIVE_HTTP_ERROR_MUST_NOT_LEAK');};
+   const failed=await transport.send('mock-chat','network loss');
+   assert.deepEqual(failed,{ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED'});
+   assert.equal(calls,4);
+   assert.equal(JSON.stringify(failed).includes('SENSITIVE_HTTP_ERROR'),false);
+ }finally{globalThis.fetch=original;}
+});
+
+test('uncertain Telegram POST stops persistent personal outbox retry without revoking a valid connection', async () => {
+  const { service, repository, transport } = fixture();
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'ambiguous-response', userId: 'user-a', symbol: 'BTC',
+    market: 'spot', quantity: 0.01, price: 100000000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  const first = await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:01:01.000Z'));
+  assert.equal(first.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 1);
+  const stored = await repository.getDelivery('user-a', queued.deliveryId!);
+  assert.equal(stored?.lastErrorCode, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED');
+  assert.equal(stored?.nextRetryAt, null);
+  assert.equal(stored?.attempts, 1);
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'ACTIVE');
+  assert.equal((await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:05:00.000Z'))).processed, false);
+  assert.equal(transport.sent.length, 1);
+});
+
+test('Telegram 403 is permanent, dead-letters once, and revokes the stale personal connection', async () => {
+  const { service, repository, transport } = fixture();
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_HTTP_403';
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'forbidden-source', userId: 'user-a', symbol: 'BTC', market: 'spot', quantity: 0.01, price: 100000000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  const result = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:02:00.000Z'));
+
+  assert.equal(result.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 1);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.attempts, 1);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.lastErrorCode, 'TELEGRAM_HTTP_403');
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'REVOKED');
+});
+
+test('historical Telegram 403 after the latest link is exposed and blocks new delivery fan-out', async () => {
+  const { service, repository } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  await repository.enqueueDelivery({
+    id: 'historical-forbidden', userId: 'user-a', eventId: null, dedupeKey: 'historical-forbidden',
+    state: 'DEAD_LETTER', attempts: 3, nextRetryAt: null, lastErrorCode: 'TELEGRAM_HTTP_403',
+    createdAt: '2026-08-12T00:01:00.000Z', updatedAt: '2026-08-12T00:02:00.000Z',
+    kind: 'EXECUTION_EVENT', payload: null,
+  });
+
+  const state = await service.getState('user-a');
+  assert.deepEqual(state.telegram, {
+    connected: false,
+    status: 'RECOVERY_REQUIRED',
+    connectedAt: '2026-08-12T00:00:00.000Z',
+    recoveryRequired: true,
+    recoveryErrorCode: 'TELEGRAM_HTTP_403',
+    recoveryFailedAt: '2026-08-12T00:02:00.000Z',
+  });
+
+  const event = manualPortfolioEvent({
+    id: 'blocked-after-forbidden', userId: 'user-a', symbol: 'BTC', market: 'spot', quantity: 0.01, price: 100000000,
+  });
+  const recorded = await service.recordEvent(event, new Date('2026-08-12T00:03:00.000Z'), 'associate');
+  assert.equal(recorded.deliveryQueued, false);
+  assert.equal(recorded.skipped, 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED');
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
+});
+
+test('relink after historical 403 only delivers a fresh event once', async () => {
+  const { service, repository, transport } = fixture();
+  const beforeReconnect = new Date('2026-08-11T23:00:00.000Z');
+  await link(service, 'user-a', 'chat-a', 'tg-user-a', beforeReconnect);
+
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_HTTP_403';
+  const historical = manualPortfolioEvent({
+    id: 'relink-old-403', userId: 'user-a', symbol: 'BTC', market: 'spot',
+    quantity: 0.01, price: 100000000, occurredAt: '2026-08-11T23:01:00.000Z',
+  });
+  const oldQueue = await service.recordEvent(historical, new Date('2026-08-11T23:02:00.000Z'), 'associate');
+  assert.equal(oldQueue.deliveryQueued, true);
+  const oldResult = await service.processDelivery('user-a', oldQueue.deliveryId!, new Date('2026-08-11T23:03:00.000Z'));
+  assert.equal(oldResult.state, 'DEAD_LETTER');
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'REVOKED');
+  assert.equal(transport.sent.length, 1);
+
+  // A user explicitly reconnects after the old forbidden response. Never
+  // replay historical dead letters or backfill a pre-link execution.
+  transport.fail = false;
+  await link(service, 'user-a', 'chat-a', 'tg-user-a', new Date('2026-08-12T00:00:00.000Z'));
+  const state = await service.getState('user-a');
+  assert.equal(state.telegram.connected, true);
+  assert.equal(state.telegram.recoveryRequired, false);
+
+  const preLink = manualPortfolioEvent({
+    id: 'pre-relink-execution', userId: 'user-a', symbol: 'BTC', market: 'spot',
+    quantity: 0.01, price: 100000000, occurredAt: '2026-08-11T23:50:00.000Z',
+  });
+  const oldAttempt = await service.recordEvent(preLink, new Date('2026-08-12T00:00:30.000Z'), 'associate');
+  assert.equal(oldAttempt.deliveryQueued, false);
+  assert.equal(transport.sent.length, 1);
+
+  const fresh = manualPortfolioEvent({
+    id: 'fresh-post-relink-execution', userId: 'user-a', symbol: '005930', market: 'KR',
+    quantity: 1, price: 72000, occurredAt: '2026-08-12T00:01:00.000Z',
+  });
+  const queued = await service.recordEvent(fresh, new Date('2026-08-12T00:01:05.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  const sent = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:01:10.000Z'));
+  assert.equal(sent.state, 'SENT');
+
+  const duplicate = await service.recordEvent(fresh, new Date('2026-08-12T00:01:15.000Z'), 'associate');
+  assert.equal(duplicate.deliveryQueued, false);
+  const stored = await repository.listDeliveries('user-a');
+  assert.equal(stored.length, 2);
+  assert.equal(stored.find(item => item.id === oldQueue.deliveryId)?.state, 'DEAD_LETTER');
+  assert.equal(stored.find(item => item.id === oldQueue.deliveryId)?.lastErrorCode, 'TELEGRAM_HTTP_403');
+  assert.equal(stored.find(item => item.id === queued.deliveryId)?.state, 'SENT');
+  assert.equal(transport.sent.length, 2); // 1 historical forbidden + 1 new accepted mock
+  assert.equal(transport.sent[1].chatId, 'chat-a');
 });
 
 test('revoked Telegram connection cannot receive a queued event', async () => {
@@ -373,4 +611,226 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(message.includes('ORDER_FILLED'), false);
   assert.equal(maskBrokerAccount('12'), '****12');
   assert.throws(() => executionEventFromTradingOrder({ ...transition, userId: 'user-b' }, order, plan), /EXECUTION_OWNER_MISMATCH/);
+});
+
+
+test('Telegram runtime health rejects failed, stale and future worker ticks', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const ready = { enabled: true, lastTickAt: new Date(now - 30_000).toISOString(), tickOk: true, deliveryConfirmed: true, lastConfirmedDeliveryAt: new Date(now - 45_000).toISOString(), errorCode: null };
+  assert.equal(userTelegramDeliveryWorkerHealthy(ready, now), true);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now - 400_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now + 10_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, tickOk: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, enabled: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, errorCode: 'TELEGRAM_UNAVAILABLE' }, now), false);
+});
+
+test('Telegram delivery failure stays unhealthy through idle ticks until confirmed success', () => {
+  const failed = { sent: 0, retryScheduled: 1, deadLetter: 0 };
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  const sent = { sent: 1, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(true, failed), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, sent), true);
+  assert.equal(telegramDeliveryTickConfirmed(true, { sent: 1, retryScheduled: 0, deadLetter: 1 }), false);
+});
+
+test('overlapping Telegram delivery tick cannot overwrite the in-flight health', async () => {
+  let complete!: (result: { processed: boolean; state: 'SENT' }) => void;
+  const pending = new Promise<{ processed: boolean; state: 'SENT' }>((resolve) => { complete = resolve; });
+  const worker = new TelegramDeliveryWorker(
+    { async listDue() { return [{ userId: 'user-a', id: 'delivery-a' }]; } },
+    { async processDelivery() { return pending; } } as unknown as UserBrokerTelegramService,
+    1,
+  );
+  const first = worker.runOnce();
+  const overlap = await worker.runOnce();
+  assert.equal(overlap.overlapSkipped, true);
+  complete({ processed: true, state: 'SENT' });
+  const done = await first;
+  assert.equal(done.overlapSkipped, false);
+  assert.equal(done.sent, 1);
+});
+
+
+test('idle initial Telegram tick is not actual member delivery proof', () => {
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  assert.equal(userTelegramDeliveryWorkerHealthy({
+    enabled: true, tickOk: true, lastTickAt: new Date(now).toISOString(),
+    deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
+  }, now), false);
+});
+
+
+test('recent durable SENT receipt restores Telegram health only when no newer failed delivery exists', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const row = { state: 'SENT', updated_at: new Date(now - 40_000).toISOString() };
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(row, now), row.updated_at);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'RETRY_SCHEDULED' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'DEAD_LETTER' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now - 25 * 60 * 60_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now + 10_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(null, now), null);
+});
+
+
+test('interrupted canonical event fan-out recovers journal and Telegram using the original persisted event ID', async () => {
+  const { service, repository, portfolio } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const original = {
+    ...manualPortfolioEvent({
+      id: 'crash-after-event-insert', userId: 'user-a',
+      symbol: 'BTC', market: 'CRYPTO_SPOT', quantity: 0.01, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  let failOnce = true;
+  const failingPortfolio: PortfolioSyncSink = {
+    async accept(event) {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error('TEST_PORTFOLIO_PROJECTION_CRASH');
+      }
+      await portfolio.accept(event);
+    },
+  };
+  const recoveryService = new UserBrokerTelegramService(repository, new FakeTelegramTransport(),
+    failingPortfolio, 'ci_test_bot');
+  await assert.rejects(
+    () => recoveryService.recordEvent(original, new Date(), 'associate'),
+    /TEST_PORTFOLIO_PROJECTION_CRASH/,
+  );
+  const persisted = await repository.getExecutionEventBySource('user-a', original.sourceEventId);
+  assert.equal(persisted?.id, original.id);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  const recovered = await recoveryService.recordEvent({
+    ...original, id: 'fresh-uuid-on-retry',
+  }, new Date(), 'associate');
+  assert.equal(recovered.inserted, false);
+  assert.equal(recovered.deliveryQueued, true);
+  assert.equal(portfolio.events.length, 1);
+  const deliveries = await repository.listDeliveries('user-a');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.eventId, original.id);
+  const repeated = await recoveryService.recordEvent({
+    ...original, id: 'second-retry-id',
+  }, new Date(), 'associate');
+  assert.equal(repeated.inserted, false);
+  assert.equal(repeated.deliveryQueued, false);
+  assert.equal(portfolio.events.length, 1);
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
+});
+
+test('late Telegram connection cannot retroactively enqueue an originally disconnected source event', async () => {
+  const { service, repository } = fixture();
+  const original = manualPortfolioEvent({
+    id: 'late-telegram-bind', userId: 'user-a', symbol: 'AAPL',
+    market: 'US', quantity: 1, price: 100,
+    occurredAt: '2026-08-11T23:59:00.000Z',
+  });
+  assert.deepEqual(await service.recordEvent(original, new Date(), 'associate'),
+    { inserted: true, deliveryQueued: false });
+  await link(service, 'user-a', 'chat-a');
+  const retry = await service.recordEvent({ ...original, id: 'different-event-uuid' }, new Date(), 'associate');
+  assert.equal(retry.inserted, false);
+  assert.equal(retry.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  assert.equal((await repository.getExecutionEventBySource('user-a', original.sourceEventId))
+    ?.metadata.telegramDeliveryIntendedAtInsert, false);
+});
+
+
+test('later preference enable never retroactively makes old canonical events deliverable', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const preferences = await repository.getPreferences('user-a');
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: false }, new Date().toISOString());
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'opted-out-event', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  assert.equal((await service.recordEvent(event, new Date(), 'associate')).deliveryQueued, false);
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: true }, new Date().toISOString());
+  const retried = await service.recordEvent({ ...event, id: 'retry-opted-out' }, new Date(), 'associate');
+  assert.equal(retried.inserted, false);
+  assert.equal(retried.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+});
+
+test('source event replay detects historical incorrect AUTO_POLICY attribution instead of silently sending', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'historical-manual-method', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+    executionMethod: 'USER_APPROVED' as const,
+  };
+  const first = await service.recordEvent(event, new Date(), 'associate');
+  assert.equal(first.inserted, true);
+  await assert.rejects(
+    () => service.recordEvent({
+      ...event, id: 'auto-origin-correction-needs-approval',
+      executionMethod: 'AUTO_POLICY',
+    }, new Date(), 'associate'),
+    /EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT/,
+  );
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
+});
+
+
+test('relink after historical 403 does not replay DEAD_LETTER but permits a new personal delivery', async () => {
+  const { service, repository, transport } = fixture();
+  const first = new Date('2026-08-12T00:00:00.000Z');
+  await link(service, 'user-a', 'chat-old', 'tg-user-a', first);
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_HTTP_403';
+
+  const prior = manualPortfolioEvent({
+    id: 'forbidden-before-relink', userId: 'user-a',
+    symbol: 'AAPL', market: 'US', quantity: 1, price: 220,
+  });
+  const queued = await service.recordEvent(prior, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  assert.equal(
+    (await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:02:00.000Z'))).state,
+    'DEAD_LETTER',
+  );
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'REVOKED');
+
+  const relinkedAt = new Date('2026-08-13T00:00:00.000Z');
+  await link(service, 'user-a', 'chat-new', 'tg-user-a', relinkedAt);
+  const recovered = await service.getState('user-a');
+  assert.equal(recovered.telegram.connected, true);
+  assert.equal(recovered.telegram.status, 'ACTIVE');
+  assert.equal(recovered.telegram.recoveryRequired, false);
+  assert.equal(recovered.telegram.recoveryErrorCode, null);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.state, 'DEAD_LETTER');
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.attempts, 1);
+
+  transport.fail = false;
+  const next = manualPortfolioEvent({
+    id: 'new-after-relink', userId: 'user-a',
+    symbol: 'MSFT', market: 'US', quantity: 1, price: 450,
+  });
+  const pending = await service.recordEvent(next, new Date('2026-08-13T00:01:00.000Z'), 'associate');
+  assert.equal(pending.deliveryQueued, true);
+  assert.equal(
+    (await service.processDelivery('user-a', pending.deliveryId!, new Date('2026-08-13T00:02:00.000Z'))).state,
+    'SENT',
+  );
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.state, 'DEAD_LETTER');
+  assert.equal((await repository.listDeliveries('user-a')).length, 2);
+  assert.equal(transport.sent.length, 2);
+  assert.equal(transport.sent[1]?.chatId, 'chat-new');
 });

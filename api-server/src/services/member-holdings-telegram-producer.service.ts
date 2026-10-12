@@ -1,4 +1,4 @@
-import { hasCapability } from '../../../packages/member-access/src/index.js';
+import { hasCanonicalMemberAccessState, hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
 import { collectStockNewsDisclosureIntelligence } from './news-disclosure-market-intelligence.service';
@@ -89,6 +89,8 @@ type ProfileRow = {
   membership_level?: string | null;
   is_active?: boolean | null;
   role?: string | null;
+  membership_expires_at?: string | null;
+  permissions_updated_at?: string | null;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
@@ -120,7 +122,7 @@ function canonicalStockMarket(value: unknown): CanonicalStockMarket | null {
  * must not re-implement or widen membership truth here.
  */
 export function memberHoldingProfileEligibleForPersonalTelegram(profile: ProfileRow): boolean {
-  return hasCapability(profile, 'canConnectPersonalTelegram');
+  return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');
 }
 
 export function memberHoldingsTelegramProducerEnabled(
@@ -165,7 +167,7 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
       const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
       const { data: profiles, error: profileError } = await client
         .from('profiles')
-        .select('id,status,membership_level,is_active,role')
+        .select('id,status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')
         .in('id', batch)
         .eq('status', 'approved');
       if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');

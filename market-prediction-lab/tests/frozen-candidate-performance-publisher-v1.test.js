@@ -238,6 +238,43 @@ test("publisher writes the exact Dashboard canonical path and preserves owner-bo
   assert.equal(artifact.executionAuthority, "NONE");
 });
 
+test("publisher preserves candidate-bound monotonic evidence counts across durable rewrites", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "candidate-performance-watermark-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = createFrozenCandidatePerformanceSourceV1({
+    existingOwnerRuntimeResult: ownerResult(),
+    candidateMatchEvidence: matchEvidence(),
+    effectiveIndependentMarketN: 92,
+  });
+  await publishFrozenCandidatePerformanceV1({
+    rootDirectory: root,
+    source,
+    reconciledStageEvidence: stageEvidence(),
+    recurringState: recurringState(),
+  });
+  const zeroMeasured = Object.freeze({
+    status: "MEASURED", count: 0, blocker: null, candidateBound: true, observationIds: Object.freeze([]),
+  });
+  const regressedStage = Object.freeze({
+    ...stageEvidence(),
+    runtimeStageMeasurements: Object.freeze({
+      Entry: zeroMeasured, Position: zeroMeasured, Settlement: zeroMeasured,
+    }),
+  });
+  await assert.rejects(
+    publishFrozenCandidatePerformanceV1({
+      rootDirectory: root,
+      source,
+      reconciledStageEvidence: regressedStage,
+      recurringState: Object.freeze({ samples: Object.freeze([]), positions: Object.freeze([]), settlements: Object.freeze([]) }),
+    }),
+    /CANDIDATE_PERFORMANCE_(?:Entry_N|Settlement_N)_REGRESSION/u,
+  );
+  const preserved = JSON.parse(await readFile(join(root, "status", "candidate-performance.json"), "utf8"));
+  assert.equal(preserved.Entry_N, 1);
+  assert.equal(preserved.Settlement_N, 1);
+});
+
 test("missing or non-production owner source still publishes a zero-credit BLOCKED artifact", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "candidate-performance-blocked-"));
   t.after(() => rm(root, { recursive: true, force: true }));

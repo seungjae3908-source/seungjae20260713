@@ -11,6 +11,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessBasicInfo',
   'canAccessSpot',
   'canAccessFutures',
+  'canAccessAiChart',
   'canAccessRiskPreview',
   'canAccessBacktests',
   'canAccessPaperTrading',
@@ -28,9 +29,12 @@ const ASSOCIATE = Object.freeze({
   ...NONE,
   canAccessBasicInfo: true,
   canAccessSpot: true,
+  canAccessAiChart: true,
   canAccessPaperTrading: true,
   canAccessAutoTrading: true,
   canConnectPersonalTelegram: true,
+  canAccessTradingAnalytics: true,
+  canAccessAiTradingReview: true,
 });
 const REGULAR = Object.freeze({
   ...ASSOCIATE,
@@ -55,6 +59,32 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+
+export function hasCanonicalMemberAccessState(profile) {
+  const value = asRecord(profile);
+  const status = typeof value.status === 'string' ? value.status : null;
+  if (status !== 'approved' && status !== 'suspended') return true;
+  const explicit = typeof value.membership_level === 'string'
+    ? value.membership_level
+    : typeof value.membershipLevel === 'string'
+      ? value.membershipLevel
+      : null;
+  const activePresent = typeof value.is_active === 'boolean'
+    || typeof value.isActive === 'boolean';
+  const permissionsUpdatedAt = typeof value.permissions_updated_at === 'string'
+    ? value.permissions_updated_at
+    : typeof value.permissionsUpdatedAt === 'string'
+      ? value.permissionsUpdatedAt
+      : null;
+  return Boolean(
+    explicit
+    && MEMBER_TIERS.includes(explicit)
+    && activePresent
+    && permissionsUpdatedAt
+    && Number.isFinite(Date.parse(permissionsUpdatedAt)),
+  );
+}
+
 export function deriveMemberTier(profile) {
   const value = asRecord(profile);
   const explicit = typeof value.membership_level === 'string'
@@ -62,18 +92,25 @@ export function deriveMemberTier(profile) {
     : typeof value.membershipLevel === 'string'
       ? value.membershipLevel
       : null;
-  const active = value.is_active !== false && value.isActive !== false;
+  const active = value.is_active === true || value.isActive === true;
   const status = typeof value.status === 'string' ? value.status : null;
+  const expiry = typeof value.membership_expires_at === 'string'
+    ? value.membership_expires_at
+    : typeof value.membershipExpiresAt === 'string'
+      ? value.membershipExpiresAt
+      : null;
+  const expiryMs = expiry && expiry.trim() ? Date.parse(expiry) : null;
+  const expired = expiryMs != null && (!Number.isFinite(expiryMs) || expiryMs <= Date.now());
 
   // Profile-object authorization is fail closed: only an explicitly approved,
-  // active database profile may receive member capabilities. Direct tier strings
-  // remain supported for the static permission-matrix API below.
-  if (!active || status !== 'approved') return 'pending';
+  // active, unexpired database profile may receive member capabilities. Direct
+  // tier strings remain supported for the static permission-matrix API below.
+  if (!active || status !== 'approved' || expired) return 'pending';
   if (explicit && MEMBER_TIERS.includes(explicit)) return explicit;
   if (value.role === 'admin' || value.role === 'master') return 'admin';
   if (value.role === 'associate') return 'associate';
-  if (value.role === 'regular' || value.role === 'full') return 'regular';
-  return 'regular';
+  if (value.role === 'user' || value.role === 'regular' || value.role === 'full') return 'regular';
+  return 'pending';
 }
 
 export function permissionsFor(profileOrTier) {

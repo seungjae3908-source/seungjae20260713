@@ -60,8 +60,13 @@ test('missing member scope fails closed instead of defaulting Telegram delivery 
 
 test('link binding and every durable send recheck canonical current member eligibility', () => {
   expect(repository).toContain("from('profiles')");
-  expect(repository).toContain(".select('status,membership_level,is_active,role')");
-  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  // Canonical member reads must include expiration and permission timestamps;
+  // silently restoring the legacy four-column select would re-open expired links.
+  expect(repository).toContain(".select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')");
+  expect(repository).not.toContain(".select('status,membership_level,is_active,role')");
+  expect(repository).toContain('membership_expires_at: typeof row.membership_expires_at');
+  expect(repository).toContain('permissions_updated_at: typeof row.permissions_updated_at');
+  expect(service).toContain("hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram')");
   expect(service).toContain("throw new Error('TELEGRAM_MEMBER_INELIGIBLE')");
   expect(service).toContain("'TELEGRAM_MEMBER_INELIGIBLE'");
   expect(service).toContain("'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE'");
@@ -79,13 +84,18 @@ test('the existing worker processes personal alerts with the same bounded retry 
   expect(service).toContain('cooldownMs: 0');
 });
 
-test('worker restart recovers stale SENDING leases through the same queue before normal claims', () => {
+test('worker restart quarantines stale SENDING leases instead of duplicating an ambiguous Telegram POST', () => {
   expect(worker).toContain('STALE_SENDING_LEASE_MS = 2 * 60 * 1000');
   expect(worker).toContain(".eq('state', 'SENDING')");
-  expect(worker).toContain("state: 'RETRY_SCHEDULED'");
-  expect(worker).toContain("last_error_code: 'STALE_SENDING_RECOVERED'");
+  expect(worker).toContain("state: 'DEAD_LETTER'");
+  expect(worker).toContain("next_retry_at: null");
+  expect(worker).toContain("last_error_code: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED'");
   expect(worker).toContain(".lte('updated_at', staleBefore)");
   expect(worker).toContain(".in('state', ['PENDING', 'RETRY_SCHEDULED', 'FAILED'])");
+  // No unknown outcome is reported as SENT or scheduled for automatic replay.
+  expect(service).toContain("telegramDeliveryOutcomeUnknown(transportResult.errorCode)");
+  expect(service).toContain("telegramDeliveryOutcomeUnknown(alertResult.errorCode)");
+  expect(service).toContain("'TELEGRAM_SEND_OUTCOME_UNCONFIRMED', timestamp");
 });
 
 test('protected Production storage apply knows and verifies the complete Telegram V3 storage bundle before deployment evidence validation', () => {

@@ -22,9 +22,12 @@ assert(
   'schedule and pull-request validation concurrency must be isolated',
 );
 assert(
-  workflow.includes("workflow_id: 'fast-profitability-v1-preactivation-watch.yml'")
-    && workflow.includes("event: 'schedule'"),
-  'prior watch state must come from bounded natural schedule workflow runs',
+  workflow.includes('listArtifactsForRepo')
+    && workflow.includes('name,')
+    && workflow.includes("run.event !== 'schedule'")
+    && workflow.includes("String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-preactivation-watch.yml'")
+    && workflow.includes("String(run.head_sha ?? '').toLowerCase() !== targetSha"),
+  'prior watch state must come from exact-name artifacts whose source run is the successful exact-SHA natural schedule workflow',
 );
 assert(workflow.includes('getBranch') && workflow.includes('mainSha'), 'current-main resolution required');
 for (const status of [
