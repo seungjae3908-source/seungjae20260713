@@ -21,7 +21,10 @@ export function chartDisplayValue(value: number | null | undefined, market: Anal
   const currency = nativeChartCurrency(market);
   if (currency === 'KRW' || display === 'USD') return value;
   const quote = usableChartFx(quotes.find(row => row.currency === currency), now);
-  return quote ? value * quote.krwRate : null;
+  if (!quote) return null;
+  const converted = value * quote.krwRate;
+  // An overflow is not a financial quote; never display Infinity or NaN.
+  return Number.isFinite(converted) ? converted : null;
 }
 
 export function formatChartMoney(value: number | null | undefined, market: AnalysisMarket, display: ChartDisplayCurrency = 'USD', quotes: readonly ChartFxQuote[] = [], now = Date.now()): string {

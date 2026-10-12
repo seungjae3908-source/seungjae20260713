@@ -28,3 +28,9 @@ test('USD prices retain cents while small native prices and USDT remain truthful
   expect(formatChartMoney(0.00000123, 'UPBIT')).toBe('0.00000123원');
   expect(formatChartMoney(null, 'US')).toBe('미제공');
 });
+
+test('overflowing currency multiplication is never presented as Infinity', () => {
+  expect(chartDisplayValue(Number.MAX_VALUE, 'US', 'KRW', quotes, now)).toBeNull();
+  expect(formatChartMoney(Number.MAX_VALUE, 'US', 'KRW', quotes, now)).toBe('환율 미제공');
+  expect(chartDisplayValue(100, 'US', 'KRW', quotes, now)).toBe(140000);
+});

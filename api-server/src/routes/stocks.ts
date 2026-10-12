@@ -1437,7 +1437,7 @@ router.get("/:ticker/history-candles", async (req, res) => {
       const timestamp = typeof raw === "number" ? (raw < 10_000_000_000 ? raw * 1_000 : raw) : Date.parse(String(raw));
       return Number.isFinite(timestamp) && timestamp < before;
     }).slice(-200);
-    return res.json({ ok: true, provider: "yahoo-history", timeframe, candles, count: candles.length });
+    return res.json({ ok: true, provider: "yahoo-history", ticker, timeframe, candles, count: candles.length });
   } catch (error) {
     console.warn("stock historical candles unavailable", { ticker, timeframe, code: error instanceof Error ? error.name : "UNKNOWN" });
     return res.status(502).json({ ok: false, error: "STOCK_HISTORY_PROVIDER_UNAVAILABLE", candles: [] });

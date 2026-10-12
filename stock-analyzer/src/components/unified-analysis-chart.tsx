@@ -458,6 +458,13 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [live, setLive] = useState(true);
+  const [freshnessClockMs, setFreshnessClockMs] = useState(() => Date.now());
+  useEffect(() => {
+    // Paused auto-refresh must not freeze source age/AI state indefinitely.
+    // Local clock only: no network calls or trading side effects.
+    const timer = window.setInterval(() => setFreshnessClockMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [overlays, setOverlays] = useState<Record<OverlayKey, boolean>>(loadOverlays);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [inputError, setInputError] = useState('');
@@ -783,11 +790,11 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         && realtimeHealth.dataStatus === 'LIVE',
       previous: previousAnalysisRef.current,
     });
-  }, [analysisCandles.length, analysisIndicators, analysisLevels, chartQuery.isError, effectiveChartData, historyKey, liveCandle, realtimeHealth.connectionState, realtimeHealth.dataStatus, selection, timeframe]);
+  }, [analysisCandles.length, analysisIndicators, analysisLevels, chartQuery.isError, effectiveChartData, historyKey, liveCandle, realtimeHealth.connectionState, realtimeHealth.dataStatus, selection, timeframe, freshnessClockMs]);
 
   useEffect(() => {
     const latest = analysisCandles.at(-1);
-    const dataState = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError);
+    const dataState = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError, freshnessClockMs);
     const verifiedStream = liveCandle != null && liveCandleIdentityRef.current === historyKey
       && realtimeHealth.connectionState === 'LIVE_STREAM' && realtimeHealth.dataStatus === 'LIVE';
     onLiveSnapshotChange?.({ identity: historyKey, market, analysis, drawing, price: latest?.close ?? null,
@@ -796,7 +803,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       source: verifiedStream ? `${realtimeHealth.provider}:PUBLIC_WS_VERIFIED` : chartQuery.data?.provider ?? '연결 대기',
       status: dataStatusLabel(dataState), dataState, transport: verifiedStream ? '공개 WS 검증' : 'REST 주기 조회',
       asOf: verifiedStream ? realtimeHealth.lastValidEventAt : latestCandleSourceTimeMs(effectiveChartData) });
-  }, [analysis, analysisCandles, analysisIndicators, chartQuery.data, chartQuery.isError, drawing, effectiveChartData, historyKey, liveCandle, market, onLiveSnapshotChange, realtimeHealth.connectionState, realtimeHealth.dataStatus, realtimeHealth.lastValidEventAt, realtimeHealth.provider]);
+  }, [analysis, analysisCandles, analysisIndicators, chartQuery.data, chartQuery.isError, drawing, effectiveChartData, historyKey, liveCandle, market, onLiveSnapshotChange, realtimeHealth.connectionState, realtimeHealth.dataStatus, realtimeHealth.lastValidEventAt, realtimeHealth.provider, freshnessClockMs]);
 
   useEffect(() => {
     if (selectedCandleTime != null && !candles.some((candle) => candle.time === selectedCandleTime)) {

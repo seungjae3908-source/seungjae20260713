@@ -4,6 +4,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import type { Currency } from '@/lib/api';
 import {
   parseStockAnalysisReply,
+  isStockAnalysisCollectionRecent,
   type StockAnalysisReply,
   type StockAnalysisTarget,
 } from '@/lib/stock-ai-analysis-reply';
@@ -47,6 +48,7 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
   const market: StockAnalysisTarget['market'] = currency === 'KRW' ? 'KR' : 'US';
   const symbol = ticker.trim().toUpperCase();
   const [result, setResult] = useState<StockAnalysisReply | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const controllerRef = useRef<AbortController | null>(null);
@@ -64,6 +66,16 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
       controllerRef.current?.abort();
     };
   }, [symbol, market, active]);
+
+  useEffect(() => {
+    if (!result || result.data.status === 'unavailable') return;
+    // Expire an on-screen opinion on a local 30s clock, no background model call.
+    const interval = window.setInterval(() => setClockNow(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
+  }, [result]);
+
+  const expired = result !== null && result.data.status !== 'unavailable'
+    && !isStockAnalysisCollectionRecent(result.data.asOf, clockNow);
 
   async function requestAnalysis() {
     if (!active || !symbol || busy || controllerRef.current) return;
@@ -94,6 +106,7 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
       const parsed = parseStockAnalysisReply(body, context);
       if (controller.signal.aborted || generation.current !== owner) return;
       setResult(parsed);
+      setClockNow(Date.now());
     } catch (cause) {
       if (controller.signal.aborted || generation.current !== owner) return;
       setError(analysisFailureText(cause));
@@ -145,7 +158,11 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
             {result.data.sources.length ? <p>출처: {result.data.sources.join(' · ')}</p> : null}
             {result.data.missing.length ? <p className="text-amber-700">누락 자료: {result.data.missing.join(' · ')}</p> : null}
           </div>
-          {result.data.status === 'unavailable' ? (
+          {expired ? (
+            <div role="status" data-testid="stock-ai-expired-evidence" className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+              기존 AI분석의 자료 수집 시각이 만료됐습니다. 예전 판단을 현재 의견으로 사용하지 말고 새 자료로 다시 분석해 주세요.
+            </div>
+          ) : result.data.status === 'unavailable' ? (
             <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
               선택 종목의 검증된 최신 공개자료가 없어 AI 의견을 표시하지 않습니다.
             </div>

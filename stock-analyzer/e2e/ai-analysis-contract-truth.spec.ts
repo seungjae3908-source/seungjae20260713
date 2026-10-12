@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseStockAnalysisReply, type StockAnalysisTarget } from '../src/lib/stock-ai-analysis-reply';
+import { isStockAnalysisCollectionRecent, parseStockAnalysisReply, STOCK_AI_COLLECTION_MAX_AGE_MS, type StockAnalysisTarget } from '../src/lib/stock-ai-analysis-reply';
 
 const target: StockAnalysisTarget = { market: 'US', ticker: 'AAPL', timeframe: '1D' };
 const good = () => ({
@@ -13,7 +13,7 @@ const good = () => ({
   model: 'sample-research-model',
   fallbackUsed: false,
   data: {
-    status: 'partial', asOf: '2026-10-10T00:00:00.000Z', basis: 'server_collection_time',
+    status: 'partial', asOf: new Date().toISOString(), basis: 'server_collection_time',
     sources: ['공개 시세'], missing: ['선택 시간봉 1D OHLCV·기술지표'],
   },
 });
@@ -93,4 +93,16 @@ test('stock AI tab never requests the nonexistent legacy /analysis or /overview 
   expect(source).not.toContain('/trade-automation');
   expect(source).not.toContain('targetPrice:');
   expect(source).not.toContain('stopLossPrice:');
+});
+
+test('AI analysis source collection expires after 30 minutes even when provider reports partial success', () => {
+  const now = Date.now();
+  const old = new Date(now - STOCK_AI_COLLECTION_MAX_AGE_MS - 60_000).toISOString();
+  expect(isStockAnalysisCollectionRecent(old, now)).toBe(false);
+  expect(isStockAnalysisCollectionRecent(new Date(now - 60_000).toISOString(), now)).toBe(true);
+  expect(() => parseStockAnalysisReply({ ...good(), data: { ...good().data, asOf: old } }, target))
+    .toThrow('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/tabs/ai-tab.tsx'), 'utf8');
+  expect(source).toContain('data-testid="stock-ai-expired-evidence"');
+  expect(source).toContain('isStockAnalysisCollectionRecent(result.data.asOf, clockNow)');
 });

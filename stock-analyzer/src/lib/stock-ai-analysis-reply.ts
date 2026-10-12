@@ -36,10 +36,13 @@ function validList(value: unknown): value is string[] {
 // Reject absent or impossibly future collection evidence for displayed opinions;
 // tolerate small user-device clock differences without claiming quote freshness.
 const COLLECTION_CLOCK_SKEW_MS = 5 * 60_000;
-function validCollectionTime(value: unknown, now = Date.now()): boolean {
-  if (!validText(value)) return false;
+export const STOCK_AI_COLLECTION_MAX_AGE_MS = 30 * 60_000;
+export function isStockAnalysisCollectionRecent(value: unknown, now = Date.now()): boolean {
+  if (!validText(value) || !Number.isFinite(now)) return false;
   const time = Date.parse(value);
-  return Number.isFinite(time) && time > 0 && time <= now + COLLECTION_CLOCK_SKEW_MS;
+  return Number.isFinite(time) && time > 0
+    && time >= now - STOCK_AI_COLLECTION_MAX_AGE_MS
+    && time <= now + COLLECTION_CLOCK_SKEW_MS;
 }
 export function parseStockAnalysisReply(payload: unknown, target: StockAnalysisTarget): StockAnalysisReply {
   if (!isRecord(payload) || payload.ok !== true || payload.kind !== 'answer' || !validText(payload.answer)) {
@@ -55,8 +58,8 @@ export function parseStockAnalysisReply(payload: unknown, target: StockAnalysisT
   if (!isRecord(data) || !['complete', 'partial', 'unavailable'].includes(String(data.status))
     || data.basis !== 'server_collection_time'
     || !validList(data.sources) || !validList(data.missing)
-    || (data.asOf !== null && !validCollectionTime(data.asOf))
-    || (data.status !== 'unavailable' && !validCollectionTime(data.asOf))) {
+    || (data.asOf !== null && !isStockAnalysisCollectionRecent(data.asOf))
+    || (data.status !== 'unavailable' && !isStockAnalysisCollectionRecent(data.asOf))) {
     throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
   }
   if (data.status === 'complete' && data.missing.length > 0) throw new Error('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
