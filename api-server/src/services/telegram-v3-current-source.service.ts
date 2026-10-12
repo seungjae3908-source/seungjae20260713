@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Telegram-only runtime intake proof. Safe GET envelopes alone are not
  * evidence of a fresh market event. No Bot API, DB, broker or file actions.
@@ -18,6 +20,32 @@ const SOURCE:Record<string,string[]>={
 const PREFIX:Record<string,string>={KR_STOCK:'KR',US_STOCK:'US',
  CRYPTO_SPOT:'SPOT',CRYPTO_FUTURES:'FUTURES'};
 const STATUSES=new Set(['CANDIDATES_AVAILABLE','VALID_NO_TRADE','BLOCKED_DATA','SEARCH_FAILURE']);
+
+/** Stable immutable delivery episode: same source-day candidate across polls,
+ * retries and service deployments; a later observed UTC source day may recur.
+ * A cycle UUID or build SHA is NOT a new market opportunity.
+ */
+export function verifiedTelegramV3EpisodeKey(value:unknown,nowMs=Date.now()):string|null{
+ const row=OBJ(value),proof=OBJ(row?.provenance),identity=OBJ(proof?.paperIdentity);
+ if(!row||!proof||!identity||!Number.isSafeInteger(nowMs)||nowMs<=0
+   ||!STR(row.id,400)||!STR(proof.scannerSignalId,256)
+   ||!STR(identity.strategyVersion,200)||!STR(identity.parameterHash,256)
+   ||!SHA.test(identity.researchCodeSha??'')
+   ||!STR(identity.costPolicyVersion,200))return null;
+ const stamp=row.sourceAsOf;
+ if(typeof stamp!=='string')return null;
+ const at=Date.parse(stamp),end=Date.parse(proof.sourceExpiresAt??'');
+ if(!Number.isFinite(at)||at<=0||at>nowMs+5000
+   ||new Date(at).toISOString()!==stamp
+   ||!Number.isFinite(end)||end<=nowMs||at>=end)return null;
+ const payload=JSON.stringify([
+   'SIGNAL_V3_PUBLIC_EPISODE_V2',row.id,proof.scannerSignalId,
+   identity.strategyVersion,identity.parameterHash,
+   identity.researchCodeSha,identity.costPolicyVersion,stamp.slice(0,10),
+ ]);
+ return 'signal-intelligence-v3:episode-v2:'+createHash('sha256')
+   .update(payload,'utf8').digest('hex');
+}
 
 /** Independent Telegram safety barrier for the canonical V3 profit chain.
  * Structural provenance checks are NOT authenticated OOS evidence by themselves.
@@ -154,6 +182,7 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
     ||proof.providerErrors!==0||proof.timeouts!==0||proof.failuresObserved!==0
     ||!NUM(proof.requested)||proof.requested===0
     ||lane.scannedCards>proof.requested
+    ||verifiedTelegramV3EpisodeKey(row,nowMs)===null
     ||typeof origin.sourceExpiresAt!=='string'
     ||!Number.isFinite(Date.parse(origin.sourceExpiresAt))
     ||Date.parse(origin.sourceExpiresAt)<=nowMs

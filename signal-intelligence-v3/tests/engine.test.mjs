@@ -294,3 +294,26 @@ test('previous publication history is market and direction scoped, not arbitrary
  assert.equal(next.events.filter(e=>e.type==='NEW_CANDIDATE').length,1,
    'a forged cross-market list must not suppress a real current candidate');
 });
+
+test('a genuinely new dated source opportunity survives prior published identity; same-day replay does not',()=>{
+ const opportunity={
+   sourceAsOf:'2026-10-12T12:00:00.000Z',
+   provenance:{
+     scannerSignalId:'scanner-stable-1',
+     paperIdentity:{strategyVersion:'v1',parameterHash:'p1',
+       researchCodeSha:'a'.repeat(40),costPolicyVersion:'cost1'},
+   },
+ };
+ const first=runSignalIntelligenceV3([baseCandidate(opportunity)]);
+ const sameDay=runSignalIntelligenceV3([baseCandidate({
+   ...opportunity,sourceAsOf:'2026-10-12T13:30:00.000Z',
+ })],{previousSnapshot:first});
+ assert.equal(sameDay.events.filter(e=>e.type==='NEW_CANDIDATE').length,0);
+ const nextDay=runSignalIntelligenceV3([baseCandidate({
+   ...opportunity,sourceAsOf:'2026-10-13T12:00:00.000Z',
+ })],{previousSnapshot:first});
+ assert.equal(nextDay.events.filter(e=>e.type==='NEW_CANDIDATE').length,1);
+ const retest=runSignalIntelligenceV3([baseCandidate(opportunity)],
+   {previousSnapshot:{...first,lists:{...first.lists,krBuy:[]}}});
+ assert.equal(retest.events.filter(e=>e.type==='NEW_CANDIDATE').length,1);
+});

@@ -333,8 +333,23 @@ function candidateStateMap(rows) {
 // separately verified current-page projection alone grants publication.
 // Treating a prior unpublishable research CANDIDATE as already announced
 // silently loses the first real NEW_CANDIDATE when its source recovers.
+function signalEpisodeIdentity(row) {
+  const stamp = row?.sourceAsOf;
+  const observed = typeof stamp === 'string' ? Date.parse(stamp) : NaN;
+  if (!Number.isFinite(observed) || new Date(observed).toISOString() !== stamp) return null;
+  const proof = row?.provenance, identity = proof?.paperIdentity;
+  if (typeof proof?.scannerSignalId !== 'string' || !identity
+    || typeof identity.strategyVersion !== 'string'
+    || typeof identity.parameterHash !== 'string'
+    || typeof identity.researchCodeSha !== 'string'
+    || typeof identity.costPolicyVersion !== 'string') return null;
+  // Closed-market opportunities may recur on a later UTC trading date.
+  // No raw source cycle UUID: retried scans/worker restarts are not new alerts.
+  return [stamp.slice(0, 10), proof.scannerSignalId, identity.strategyVersion,
+    identity.parameterHash, identity.researchCodeSha, identity.costPolicyVersion].join('|');
+}
 function previouslyPublishedCandidateIds(snapshot) {
-  const published = new Set();
+  const published = new Map();
   const slots = [
     ['krBuy', 'KR_STOCK', 'BUY'],
     ['usBuy', 'US_STOCK', 'BUY'],
@@ -348,7 +363,7 @@ function previouslyPublishedCandidateIds(snapshot) {
     for (const row of rows) {
       if (row?.market === market && row?.direction === direction
         && row?.state === 'CANDIDATE' && row?.id === identity(row)) {
-        published.add(row.id);
+        published.set(row.id, signalEpisodeIdentity(row));
       }
     }
   }
@@ -374,7 +389,10 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         validationTier: row.validationTier,
       }));
     }
-    if (row.state === 'CANDIDATE' && !previouslyPublished.has(row.id)) {
+    const episode = signalEpisodeIdentity(row);
+    if (row.state === 'CANDIDATE' &&
+      (!previouslyPublished.has(row.id)
+        || (episode !== null && episode !== previouslyPublished.get(row.id)))) {
       events.push(Object.freeze({
         type: 'NEW_CANDIDATE',
         id: row.id,

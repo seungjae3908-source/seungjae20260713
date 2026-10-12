@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {validTelegramV3CurrentSource,boundedTelegramV3Json,verifiedTelegramV3PageCount}
+import {validTelegramV3CurrentSource,boundedTelegramV3Json,verifiedTelegramV3PageCount,verifiedTelegramV3EpisodeKey}
  from './telegram-v3-current-source.service';
 import {
  SignalIntelligenceTelegramSubscriber,SignalIntelligenceTelegramDeliveryState,
@@ -49,6 +49,7 @@ function fixture(){
    rows:[{id:ID,market:'US_STOCK',symbol:'AAPL',
      strategy:'SWING',timeframe:'60m',direction:'BUY',
      state:'CANDIDATE',dataStatus:'READY',
+     sourceAsOf:new Date(NOW-5_000).toISOString(),
      quantEligible:true,profitEligible:true,riskReady:true,
      evidence:{source:'CANONICAL_PROFIT_EVIDENCE_READY',expectedNetEdgeR:1.2},
      validationTier:'RESEARCH_CANDIDATE',
@@ -368,5 +369,96 @@ test('Telegram V3 separately rejects expired candidates and fabricated page/card
  ]){
    const forged:any=fixture();change(forged);
    assert.equal(validTelegramV3CurrentSource(forged,NOW),false);
+ }
+});
+
+test('stable source-day episode identity is independent of release SHA and duplicate polls',()=>{
+ const s:any=fixture();
+ const key=verifiedTelegramV3EpisodeKey(s.rows[0],NOW);
+ assert.match(key??'',/^signal-intelligence-v3:episode-v2:[0-9a-f]{64}$/u);
+ assert.equal(verifiedTelegramV3EpisodeKey(s.rows[0],NOW+1000),key);
+ s.serviceSha='b'.repeat(40);
+ assert.equal(verifiedTelegramV3EpisodeKey(s.rows[0],NOW),key);
+ s.rows[0].sourceAsOf=new Date(NOW+24*60*60_000).toISOString();
+ s.rows[0].provenance.sourceExpiresAt=new Date(NOW+24*60*60_000+60_000).toISOString();
+ const newKey=verifiedTelegramV3EpisodeKey(s.rows[0],NOW+24*60*60_000);
+ assert.notEqual(newKey,key,'a genuinely later source day is not suppressed for 14 days');
+ s.rows[0].sourceAsOf='2026-02-30T00:00:00.000Z';
+ assert.equal(verifiedTelegramV3EpisodeKey(s.rows[0],NOW+24*60*60_000),null);
+ const missing:any=fixture();
+ delete missing.rows[0].sourceAsOf;
+ assert.equal(validTelegramV3CurrentSource(missing,NOW),false);
+});
+
+test('Telegram new daily opportunity is delivered once per source day, even after SHA rotation',async()=>{
+ const folder=await mkdtemp(path.join(tmpdir(),'v3-episode-'));
+ const originalUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const originalRoom=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const day=24*60*60_000;
+ let active:any=fixture();
+ let sends=0,personals:string[]=[];
+ try {
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(path.join(folder,'ledger.json')),
+     async()=>{sends++;return {ok:true as const,attempts:1};},
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:active.serviceSha,
+       executionAuthority:'NONE',snapshot:active}),{status:200}),
+     async(event)=>{personals.push(event.occurrenceKey??'');return {
+       eligible:true,matched:1,attempted:1,delivered:0,queued:1,
+       deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const,
+     };},
+   );
+   let first=await subscriber.runOnce(new Date(NOW));
+   assert.equal(first.sourceStatus,'READY');assert.equal(first.publicDelivered,1);
+   let replay=await subscriber.runOnce(new Date(NOW+1000));
+   assert.equal(replay.publicDelivered,0);assert.equal(replay.deduped,1);
+   assert.equal(sends,1);
+   active=fixture();active.serviceSha='b'.repeat(40);
+   active.generatedAt=new Date(NOW+day-2000).toISOString();
+   active.rows[0].sourceAsOf=new Date(NOW+day-5000).toISOString();
+   active.rows[0].provenance.sourceExpiresAt=new Date(NOW+day+60_000).toISOString();
+   let second=await subscriber.runOnce(new Date(NOW+day));
+   assert.equal(second.sourceStatus,'READY');assert.equal(second.publicDelivered,1);
+   assert.equal(sends,2);
+   await subscriber.runOnce(new Date(NOW+day+1000));
+   assert.equal(sends,2);
+   assert.equal(personals[0],personals[1],'a retry has the same personal event identity');
+   assert.notEqual(personals[1],personals[2],'a later source-day alert gets a new personal identity');
+ } finally {
+   if(originalUrl===undefined) delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=originalUrl;
+   if(originalRoom===undefined) delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=originalRoom;
+   await rm(folder,{recursive:true,force:true});
+ }
+});
+
+test('legacy sent V3 candidate is not replayed across code-release dedupe migration',async()=>{
+ const folder=await mkdtemp(path.join(tmpdir(),'v3-legacy-rollout-'));
+ const oldUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ let publicSends=0,personalSends=0;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   const state=new SignalIntelligenceTelegramDeliveryState(path.join(folder,'ledger.json'));
+   const oldKey='signal-intelligence-v3:'+'a'.repeat(40)
+      +':NEW_CANDIDATE:'+ID+'::CANDIDATE';
+   await state.mark(oldKey,new Date(NOW-1_000));
+   const s:any=fixture();s.serviceSha='b'.repeat(40);
+   const subscriber=new SignalIntelligenceTelegramSubscriber(state,
+     async()=>{publicSends++;return {ok:true as const,attempts:1};},
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:s.serviceSha,
+       executionAuthority:'NONE',snapshot:s}),{status:200}),
+     async()=>{personalSends++;return {eligible:true,matched:1,attempted:1,
+       delivered:0,queued:1,deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const};});
+   const r=await subscriber.runOnce(new Date(NOW));
+   assert.equal(r.sourceStatus,'READY');
+   assert.equal(r.deduped,1);
+   assert.equal(publicSends,0);assert.equal(personalSends,0);
+ } finally {
+   if(oldUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=oldUrl;
+   await rm(folder,{recursive:true,force:true});
  }
 });
