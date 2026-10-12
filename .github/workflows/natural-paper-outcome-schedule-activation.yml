@@ -1,6 +1,14 @@
 name: Natural Paper Outcome Schedule Activation
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/natural-paper-outcome-schedule-activation.yml
+      - ops/install-natural-paper-outcome-schedule.sh
+      - ops/verify-natural-paper-outcome-cycle.sh
+      - ops/disable-paper-forward-schedule.sh
+      - market-prediction-lab/tests/natural-paper-outcome-activation-contract-v1.test.js
   issue_comment:
     types: [created]
 
@@ -15,11 +23,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate current Release Control and Natural Paper safety
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/natural-paper-outcome-schedule-activation.yml
+          grep -Fq 'github.event.issue.number == 1555' "$workflow"
+          grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          grep -Fq "startsWith(github.event.comment.body, '/activate-natural-paper-outcome-schedule ')" "$workflow"
+          ! grep -Eq 'github\\.event\\.issue\\.number == 23\\b|issue_number:[[:space:]]*23\\b' "$workflow"
+          bash -n ops/install-natural-paper-outcome-schedule.sh
+          bash -n ops/verify-natural-paper-outcome-cycle.sh
+          bash -n ops/disable-paper-forward-schedule.sh
+          (cd market-prediction-lab && node --test tests/natural-paper-outcome-activation-contract-v1.test.js)
+          ! grep -Eiq "LIVE_TRADING:[[:space:]]+['\\\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\\\"]?true" "$workflow"
+
   gate:
     name: Validate exact owner approval and immutable release evidence
     if: >-
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       startsWith(github.event.comment.body, '/activate-natural-paper-outcome-schedule ')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -382,11 +419,9 @@ jobs:
               '- Live Trading: `false`',
               '- Schedule active: `true`',
             ].join('\n');
-            for (const issue_number of [23, 62]) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number,
-                body,
-              });
-            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
