@@ -1,6 +1,8 @@
 import test from 'node:test';
 // Run canonical exit identity regressions in the already registered phase12 lane.
 import './member-auto-trading-exit-plan.service.test';
+import './automatic-live-preactivation-audit.service.test';
+import './automatic-live-unrealized-risk.service.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -2068,6 +2070,21 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
   assert.equal(result.createdPlans, 0);
   assert.equal(result.liveOrders, 0);
   assert.equal(result.failures, 1);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_PAPER_HANDOFF_STALE');
+});
+
+test('handoff failure reports a sanitized cause without leaking filesystem or secret details', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const result = await new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { throw new Error('HANDOFF_ENTRY_STALE:private-file:secret-value'); },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffErrorCode, 'HANDOFF_ENTRY_STALE');
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 
@@ -2314,6 +2331,55 @@ async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, n
     createdAt: timestamp, updatedAt: timestamp,
   } as any);
 }
+
+test('restart with a current arm and missing entry handoff still evaluates only owned guarded Live exits', async () => {
+  const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH'] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const root = await mkdtemp(join(tmpdir(), 'auto-owned-exit-restart-'));
+  const armPath = join(root, 'arm.json');
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { return null; },
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      // Stop before order creation: no actual or simulated financial POST.
+      throw new Error('BACKGROUND_EXIT_READONLY_TEST_BOUNDARY');
+    },
+  });
+  try {
+    for (const key of flags.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({ schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha: 'c'.repeat(40), armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString() }), { mode: 0o600 });
+    for (const timestamp of [nowMs, nowMs + 15_000]) {
+      const result = await withFetchMock(() => worker.runOnce(new Date(timestamp)));
+      assert.equal(result.handoffReady, false);
+      assert.equal(result.liveEntriesArmed, false);
+      assert.equal(result.newEntriesFailClosed, true);
+      assert.equal(result.liveTrackedPositions, 1);
+      assert.equal(result.liveExitsSuppressedByWarmupOrArm, 0);
+      assert.equal(result.liveOrders + result.liveExitOrders, 0);
+      assert.equal(result.createdPlans, 0);
+    }
+    assert.equal(providerReads, 2, 'each guarded exit reaches a read-only provider boundary despite missing entry handoff');
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of flags) {
+      const value = previous[key];
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test('expired automatic member retains read-only Live fill visibility and has zero order authority', async () => {
   const flags = [

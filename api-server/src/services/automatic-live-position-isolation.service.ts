@@ -3,6 +3,7 @@ import { createVaultBackedAccountReaders } from '../features/account-readonly/ac
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { tradingHistoryComplete } from './trade-history-completeness.service';
 
 export const AUTOMATIC_LIVE_POSITION_ISOLATION_POLICY = 'manual-protected-auto-ledger-v1';
 const TOLERANCE = 1e-8;
@@ -22,7 +23,9 @@ export type AutomaticLiveOwnedPosition = Readonly<{ plan: TradingPlan; remaining
 /** Only actual canonical fills confer ownership. Plans and manual holdings never do. */
 export function canonicalAutomaticLivePositions(plans: readonly TradingPlan[], orders: readonly TradingOrder[]): AutomaticLiveOwnedPosition[] {
   // Repository page bounds cannot prove that older AUTO fills never existed.
-  if (plans.length >= 200 || orders.length >= 500) throw new Error('BACKGROUND_LIVE_OWNERSHIP_HISTORY_INCOMPLETE');
+  if (!tradingHistoryComplete(plans, 200) || !tradingHistoryComplete(orders, 500)) {
+    throw new Error('BACKGROUND_LIVE_OWNERSHIP_HISTORY_INCOMPLETE');
+  }
   for (const order of orders) {
     const plan = plans.find((row) => row.id === order.planId);
     if (!plan && order.filledQuantity > TOLERANCE) throw new Error('BACKGROUND_LIVE_CANONICAL_PLAN_MISSING');

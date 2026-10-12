@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loginProductionReadOnly, productionReadOnlyAccessToken } from './support/production-readonly-login';
+import { approvedAdministratorAutomaticLivePolicy, administratorAutomaticLivePolicyBlockers } from '../../api-server/src/services/automatic-live-owner-policy.service';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/u, '');
 const login = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -45,7 +46,7 @@ async function appApi(page: Page, pathname: string, method = 'GET', body?: unkno
 }
 
 function policyBlockers(policy: any) {
-  const blockers: string[] = [];
+  const blockers: string[] = administratorAutomaticLivePolicyBlockers(policy);
   if (policy?.mode !== 'automatic' || policy?.automaticEnabled !== true) blockers.push('AUTOMATIC_POLICY_OFF');
   if (policy?.emergencyStopped !== false || policy?.newEntriesStopped !== false) blockers.push('MEMBER_STOP_ACTIVE');
   for (const market of MARKETS) if (policy?.marketEnabled?.[market] !== true) blockers.push(`MARKET_OFF:${market}`);
@@ -84,25 +85,18 @@ test('prepare the administrator four-market Automatic LIVE policy without execut
   let memberStopResumed = false;
   let policyConfigurationMutationCount = 0;
 
-  if (policy?.emergencyStopped === true || policy?.newEntriesStopped === true) {
-    const resumed = await appApi(page, '/api/trade-automation/resume', 'POST', {
-      confirmation: 'RESUME_MEMBER_TRADING',
-    });
-    expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
-    expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
-    expect(resumed.body?.effectiveGlobalEmergencyStopped).toBe(false);
-    expect(resumed.body?.orderSubmitted ?? false).toBe(false);
-    memberStopResumed = true;
-    policyConfigurationMutationCount += 1;
-    policy = resumed.body?.policy;
-  }
+  // A deployment approval is not an owner instruction to remove a sticky
+  // trading stop. Preparation must fail closed and preserve that setting.
+  expect(policy?.emergencyStopped, 'PREACTIVATION_MEMBER_STOP_REQUIRES_OWNER_RESUME').toBe(false);
+  expect(policy?.newEntriesStopped, 'PREACTIVATION_MEMBER_STOP_REQUIRES_OWNER_RESUME').toBe(false);
+  for (const provider of PROVIDERS) expect(status.body?.liveAutomaticExecutionServerEnabled?.[provider]).toBe(false);
 
   const leverage = Number.isInteger(policy?.bitgetLeverage)
     && policy.bitgetLeverage >= 2 && policy.bitgetLeverage <= 7 ? policy.bitgetLeverage : 2;
   const strategies = Array.isArray(policy?.enabledStrategies) && policy.enabledStrategies.length > 0
     ? policy.enabledStrategies : [...DEFAULT_STRATEGIES];
   const preparedPolicy = {
-    ...policy,
+    ...approvedAdministratorAutomaticLivePolicy(policy),
     mode: 'automatic',
     automaticEnabled: true,
     emergencyStopped: false,
@@ -116,8 +110,7 @@ test('prepare the administrator four-market Automatic LIVE policy without execut
     },
     bitgetLeverage: leverage,
     riskOptimizationEnabled: true,
-    pilotStage: ['limited-50', 'validated', 'formula-ai-exception'].includes(policy?.pilotStage)
-      ? policy.pilotStage : 'limited-50',
+    pilotStage: 'formula-ai-exception',
     enabledStrategies: strategies,
     confirmation: { acknowledged: true },
   };
