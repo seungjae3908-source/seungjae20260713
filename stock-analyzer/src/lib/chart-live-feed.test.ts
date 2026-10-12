@@ -127,10 +127,10 @@ test('recovery does not report disconnected candles or threshold changes as newl
 });
 
 test('provider / transport switch resets the live bar baseline without removing the new source status', () => {
-  const original = snapshot({ closedTime: barTime, volumeRatio: 1.2 });
+  const original = snapshot({ closedTime: barTime - 300, volumeRatio: 1.2 });
   const newProvider = snapshot({
     source: 'UPSTREAM_PUBLIC_WS:PUBLIC_WS_VERIFIED', transport: '공개 WS 검증',
-    closedTime: barTime + 300, volumeRatio: 2.3,
+    closedTime: barTime, volumeRatio: 2.3,
   });
   const changed = buildChartLiveEvents(original, newProvider, now);
   assert.deepEqual(changed.map((event) => event.kind), ['data']);
@@ -140,15 +140,15 @@ test('provider / transport switch resets the live bar baseline without removing 
   // closed-bar and volume-transition events are allowed again.
   const continuous = buildChartLiveEvents(newProvider, snapshot({
     source: newProvider.source, transport: newProvider.transport,
-    closedTime: barTime + 600, volumeRatio: 1.0,
+    closedTime: barTime + 300, volumeRatio: 1.0,
   }), now);
   assert.deepEqual(continuous.map((event) => event.kind), ['bar']);
   const rising = buildChartLiveEvents(snapshot({
     source: newProvider.source, transport: newProvider.transport,
-    closedTime: barTime + 600, volumeRatio: 1.0,
+    closedTime: barTime + 300, volumeRatio: 1.0,
   }), snapshot({
     source: newProvider.source, transport: newProvider.transport,
-    closedTime: barTime + 900, volumeRatio: 2.0,
+    closedTime: barTime + 600, volumeRatio: 2.0,
   }), now);
   assert.deepEqual(rising.map((event) => event.kind), ['bar', 'bar']);
 });
