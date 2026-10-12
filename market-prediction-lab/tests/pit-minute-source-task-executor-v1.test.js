@@ -741,3 +741,92 @@ test("private PIT task CLI permits reviewed partial dry-run without public read 
   assert.equal(statSync(receipt).mode&0o077,0);
  }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+
+
+test("source-limited one-candle PIT crypto capture is a stored UNKNOWN history, never false full coverage",async()=>{
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const t=await setup(market,2),seen=[],at=START+720*MIN;
+  try{
+   const source=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:async(url,opt)=>{
+      seen.push(new URL(url).searchParams.get("to"));
+      return {ok:true,status:200,json:async()=>
+        Date.parse(new URL(url).searchParams.get("to"))>at
+         ?[{market:new URL(url).searchParams.get("market"),
+            candle_date_time_utc:new Date(at).toISOString().slice(0,19),
+            opening_price:100,high_price:104,low_price:99,
+            trade_price:102,candle_acc_trade_volume:5}]:[]};
+     }}
+    :{bitgetClient:{get:async(path,params)=>{
+      seen.push(Number(params.endTime));
+      return {code:"00000",data:Number(params.endTime)>at
+        ?[[String(at),"100","104","99","102","5"]]:[]};
+     }}};
+   const denied=await execute(request(t,{
+    ...source,allowSourceLimitedArchive:true,
+   }));
+   assert.equal(denied.status,"BLOCKED_DATA");
+   assert.equal(denied.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+   assert.equal(seen.length,0);
+   const done=await execute(request(t,{
+    ...source,allowPublicReadOnlyFetch:true,
+    allowSourceLimitedArchive:true,
+   }));
+   assert.equal(done.status,"RETROSPECTIVE_SOURCE_LIMITED_STORED_WITHIN_LOCAL_BUDGET");
+   assert.equal(done.selectedTaskKind,"MISSING_SOURCE");
+   assert.equal(done.retainedMinuteRows,1);
+   assert.equal(done.requestedProviderPages,2);
+   assert.equal(done.providerRequestWindowVerified,false);
+   assert.equal(done.missingUnverifiedMinuteSlots,1439);
+   assert.equal(done.sourceLimitedOnly,true);
+   assert.equal(done.sourceArchiveCompletenessProven,false);
+   assert.equal(done.independentlyAuthenticatedPITAndPriceData,false);
+   assert.equal(done.profitabilityProven,false);
+   assert.equal(done.actualFillCount,null);
+   assert.equal(done.executionAuthority,"NONE");
+   assert.equal(seen.length,2);
+   const symbol=t.planning.candidateTasks[0].symbol;
+   const fromDisk=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(fromDisk.sourceMinuteRows,1);
+   assert.equal(fromDisk.nativeMinuteSlotInventoryComplete,false);
+   const asOf=await derive({root:t.root,market,symbol,
+    sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
+   assert.equal(asOf.intervalData["1m"].bars.length,0);
+   const blocked=await execute(request(t,{
+    ...source,allowPublicReadOnlyFetch:true,allowSourceLimitedArchive:true,
+   }));
+   assert.equal(blocked.reason,"EXISTING_PARTIAL_SOURCE_NEEDS_EXPLICIT_RETRY");
+   assert.equal(seen.length,2);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+ }
+});
+
+test("source-limited flag in bounded private task CLI is separate from consent",async()=>{
+ const t=await setup("CRYPTO_SPOT",2),calls=[];
+ try{
+  const manifestFile=join(t.root,"limit-manifest.json");
+  const pageFile=join(t.root,"limit-page.json");
+  const indexFile=join(t.root,"limit-index.json");
+  const out=join(t.root,"limit-preview.json");
+  writeFileSync(manifestFile,JSON.stringify(t.manifest),{mode:0o600});
+  writeFileSync(pageFile,JSON.stringify(t.pages[0]),{mode:0o600});
+  writeFileSync(indexFile,JSON.stringify({pageReceiptFiles:[pageFile]}),{mode:0o600});
+  const args=["--market",t.market,"--day","2026-09-18",
+    "--manifest",manifestFile,"--page-index",indexFile,
+    "--root",t.root,"--task-page-index","0","--task-index","0",
+    "--expected-task-digest",t.planning.candidateTaskDigestSha256,
+    "--output",out,"--retain-source-limited"];
+  const config=parse(args);
+  assert.equal(config.allowSourceLimitedArchive,true);
+  assert.equal(config.allowPublicReadOnlyFetch,false);
+  assert.throws(()=>parse([...args,"--retain-source-limited"]),
+    /PIT_MINUTE_TASK_CLI_DUPLICATE_SOURCE_LIMITED_FLAG/);
+  const status=await cli(config,{
+   nowImpl:()=>NOW,statfsImpl:statfsHealthy,
+   upbitFetchImpl:async()=>{calls.push(1);throw Error("NO_UNAPPROVED_GET");}});
+  assert.equal(status.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(status.executionAuthority,"NONE");
+  assert.equal(calls.length,0);
+ }finally{rmSync(t.root,{recursive:true,force:true});}
+});

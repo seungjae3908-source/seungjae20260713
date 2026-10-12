@@ -312,3 +312,26 @@ test("Upbit applies a bounded request signal and preserves caller cancellation",
   await assert.rejects(() => collectUpbitSpotHistory({ ...config, timeoutMs: 0 }), /timeoutMs/);
   await assert.rejects(() => collectUpbitSpotHistory({ ...config, minIntervalMs: Number.NaN }), /minIntervalMs/);
 });
+
+
+test("Upbit provider request count includes the empty terminal page distinct from nonempty pageCount",async()=>{
+ const start=Date.UTC(2026,8,18),minute=60_000;
+ const original={
+  market:"KRW-BTC",candle_date_time_utc:new Date(start+720*minute).toISOString().slice(0,19),
+  opening_price:100,high_price:101,low_price:99,trade_price:100,
+  candle_acc_trade_volume:1,candle_acc_trade_price:100,
+ };
+ let calls=0;
+ const r=await collectUpbitSpotHistory({
+  symbol:"KRW-BTC",timeframe:"1m",startTime:start,endTime:start+86_400_000,
+  minCandles:1,requireFullWindow:false,allowPartialSource:true,minIntervalMs:0,
+  fetchImpl:async()=>response(++calls===1?[original]:[]),
+ });
+ assert.equal(r.candles.length,1);
+ assert.equal(r.pageCount,1,"legacy pageCount measures nonempty source pages");
+ assert.equal(r.requestedProviderPages,2,
+  "new logical public GET count includes empty terminal source page");
+ assert.equal(calls,2);
+ assert.equal(r.rawPageWindowTraversed,false);
+ assert.equal(r.missingMinuteNoTradeProof,false);
+});

@@ -608,3 +608,94 @@ test("direct native 1m private CLI previews reviewed partial source without a GE
   assert.equal(statSync(output).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("opt-in source-limited capture retains one genuine listing-edge 1m, never claims a complete PIT day",async()=>{
+ const seen=[];
+ for(const [market,symbol] of [["CRYPTO_SPOT","KRW-BTC"],["CRYPTO_FUTURES","BTCUSDT"]]){
+  const root=tmp(),at=START+720*MIN,requests=[];
+  try{
+   const row=market==="CRYPTO_SPOT"
+    ?{upbitFetchImpl:async(url,opt)=>{
+      requests.push({url});
+      const endTime=Date.parse(new URL(url).searchParams.get("to"));
+      return {ok:true,status:200,json:async()=>
+        endTime>at?[nativeMinute(at)]:[]};
+     }}
+    :{bitgetClient:{get:async(path,params)=>{
+      requests.push({path,params});
+      return {code:"00000",data:Number(params.endTime)>at
+        ?[[String(at),"100","104","99","102","2.5"]]:[]};
+     }}};
+   const strict=await collect(config(root,market,symbol,{
+     allowPublicReadOnlyFetch:true,...row,
+   }));
+   assert.equal(strict.status,"BLOCKED_DATA");
+   assert.equal(strict.reason,"NATIVE_1M_PROVIDER_DATA_UNAVAILABLE");
+   assert.equal(requests.length,2);
+   const retained=await collect({...config(root,market,symbol,{
+     allowPublicReadOnlyFetch:true,...row,
+   }),allowSourceLimitedArchive:true});
+   assert.equal(retained.status,"RETROSPECTIVE_SOURCE_LIMITED_RETAINED_REVIEW_ONLY");
+   assert.equal(retained.reason,"SOURCE_LIMITED_ORIGINAL_1M_REQUIRES_MANUAL_REVIEW");
+   assert.equal(retained.providerRequestWindowVerified,false);
+   assert.equal(retained.providerRawPageWindowTraversed,false);
+   assert.equal(retained.sourceLimitedOnly,true);
+   assert.equal(retained.sourceMinuteCount,1);
+   assert.equal(retained.missingUnverifiedMinuteSlots,1439);
+   assert.equal(retained.requestedProviderPages,2);
+   assert.equal(retained.allowSourceLimitedArchiveUsed,true);
+   assert.equal(retained.historicalFullMarketPITUniverseVerified,false);
+   assert.equal(retained.nativeMinutesNoTradeGapVerified,false);
+   assert.equal(retained.sourceHistoricalPublicationTimeProven,false);
+   assert.equal(retained.profitabilityProven,false);
+   assert.equal(retained.actualFillCount,null);
+   assert.equal(retained.executionAuthority,"NONE");
+   assert.equal(requests.length,4);
+   const retainedRows=await derive({root,market,symbol,sessionStartMs:START,
+     asOfMs:NOW,timeframes:["1m","5m"]});
+   assert.equal(retainedRows.sourceMinuteRows,1);
+   assert.equal(retainedRows.archiveRevisionCount,1);
+   assert.equal(retainedRows.nativeMinuteSlotInventoryComplete,false);
+   assert.equal(retainedRows.intervalData["1m"].bars[0].startMs,at);
+   assert.equal(retainedRows.profitabilityProven,false);
+   const replay=await derive({root,market,symbol,sessionStartMs:START,
+     asOfMs:START+DAY,timeframes:["1m"]});
+   assert.equal(replay.intervalData["1m"].bars.length,0,
+     "retrospective retrieval MUST NOT create historical scanner-time observations");
+   seen.push({market,digest:retained.archiveSourceDigestSha256});
+  }finally{rmSync(root,{recursive:true,force:true});}
+ }
+ assert.equal(seen.length,2);
+});
+
+test("limited native archive mode is explicitly opt-in and does not authorize public reads alone",async()=>{
+ const root=tmp(),market="CRYPTO_SPOT",symbol="KRW-BTC",calls=[];
+ try{
+  const opts={...config(root,market,symbol,{
+    upbitFetchImpl:async()=>{calls.push(1);throw Error("NO_PUBLIC_FETCH_PERMITTED");},
+  }),allowSourceLimitedArchive:true};
+  const preview=await collect(opts);
+  assert.equal(preview.status,"BLOCKED_DATA");
+  assert.equal(preview.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(calls.length,0);
+  const manifestData=manifest(market,symbol);
+  const path=join(root,"limited-manifest.json"),out=join(root,"limited-preview.json");
+  writeFileSync(path,JSON.stringify(manifestData),{mode:0o600});
+  const args=["--market",market,"--symbol",symbol,"--day","2026-09-18",
+   "--manifest",path,"--expected-roster-sha",manifestData.rawMembershipDigestSha256,
+   "--root",root,"--output",out,"--retain-source-limited"];
+  const parsed=parse(args);
+  assert.equal(parsed.allowSourceLimitedArchive,true);
+  assert.equal(parsed.allowPublicReadOnlyFetch,false);
+  assert.throws(()=>parse([...args,"--retain-source-limited"]),
+    /PIT_NATIVE_MINUTE_CLI_DUPLICATE_FLAG/);
+  const r=await cli(parsed,{nowImpl,
+   upbitFetchImpl:async()=>{calls.push(1);throw Error("NO_PUBLIC_FETCH_PERMITTED");}});
+  assert.equal(r.status,"BLOCKED_DATA");
+  assert.equal(r.reason,"EXPLICIT_PUBLIC_READ_ONLY_OPT_IN_REQUIRED");
+  assert.equal(r.executionAuthority,"NONE");
+  assert.equal(calls.length,0);
+  assert.equal(statSync(out).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
