@@ -34,6 +34,11 @@ export function validateBackfillScope(manifest) {
     || !Array.isArray(manifest.ranges) || !manifest.ranges.length
     || manifest.ranges.length > QUEUE_LIMITS.maxRanges)
     fail('MINUTE_QUEUE_MANIFEST_INVALID');
+  // 120 is the existing immutable cursor contract. 180 is a distinct
+  // optional scope, so changing page size never silently reuses a v1 cursor.
+  const pageWindowMinutes = manifest.pageWindowMinutes ?? 120;
+  if (![120,180].includes(pageWindowMinutes))
+    fail('MINUTE_QUEUE_PAGE_WINDOW_INVALID');
   const ranges = manifest.ranges.map(value => {
     const mode=object(value) ? (value.mode ?? 'BACKFILL') : null;
     const isRolling=mode==='CONTINUOUS';
@@ -54,8 +59,9 @@ export function validateBackfillScope(manifest) {
     fail('MINUTE_QUEUE_DUPLICATE_SYMBOL');
   return Object.freeze({
     contract:SCOPE_CONTRACT,
-    ranges:Object.freeze(ranges),
-    scopeDigest:digest(ranges),
+    ranges:Object.freeze(ranges),pageWindowMinutes,
+    scopeDigest:pageWindowMinutes===120
+      ?digest(ranges):digest(['PAGE_WINDOW_MINUTES',pageWindowMinutes,ranges]),
     fullUniverseProven:false, pitMembershipProven:false,
   });
 }
@@ -72,6 +78,7 @@ export function createBackfillQueue({ scope, researchSha, atMs }) {
     || !positive(atMs)) fail('MINUTE_QUEUE_INITIALIZATION_INVALID');
   return seal({
     schemaVersion:QUEUE_CONTRACT, scopeDigest:scope.scopeDigest,
+    ...(scope.pageWindowMinutes===180?{pageWindowMinutes:180}:{}),
     createdBySha:researchSha, lastUpdatedBySha:researchSha,
     createdAtMs:atMs, updatedAtMs:atMs, nextIndex:0,
     ranges:scope.ranges.map(r => ({
@@ -90,6 +97,9 @@ export function verifyBackfillQueue(state, scope) {
   if (!object(state) || state.schemaVersion !== QUEUE_CONTRACT
     || !scope || scope.contract !== SCOPE_CONTRACT
     || state.scopeDigest !== scope.scopeDigest
+    || ![120,180].includes(scope.pageWindowMinutes)
+    || (state.pageWindowMinutes ?? 120) !== scope.pageWindowMinutes
+    || (state.pageWindowMinutes !== undefined && state.pageWindowMinutes !== 180)
     || !HASH64.test(state.stateDigest ?? '')
     || state.stateDigest !== stateDigest(state)
     || !SHA40.test(state.createdBySha ?? '')
@@ -158,7 +168,7 @@ export function pickBackfillWindow(state, atMs) {
     const closedEnd=Math.floor((atMs-5_000)/MINUTE_MS)*MINUTE_MS;
     const horizon=r.mode==='CONTINUOUS'?closedEnd:Math.min(r.endMs,closedEnd);
     const end = Math.min(horizon, r.cursorMs
-      + MINUTE_ARCHIVE_LIMITS.maxWindowMinutes * MINUTE_MS);
+      + (state.pageWindowMinutes ?? 120) * MINUTE_MS);
     if (end <= r.cursorMs || end > closedEnd) continue;
     return Object.freeze({
       index, task:Object.freeze({ market:r.market, symbol:r.symbol,
@@ -180,7 +190,7 @@ export function applyBackfillOutcome(state, selection, result, atMs, researchSha
     || t.windowStartMs!==r.cursorMs || !positive(t.windowEndMs)
     || t.windowEndMs % MINUTE_MS || t.windowEndMs<=r.cursorMs
     || t.windowEndMs>Math.min(expectedHorizon,
-      r.cursorMs+MINUTE_ARCHIVE_LIMITS.maxWindowMinutes*MINUTE_MS))
+      r.cursorMs+(state.pageWindowMinutes ?? 120)*MINUTE_MS))
     fail('MINUTE_QUEUE_RESULT_TASK_MISMATCH');
   if (result.market !== r.market || result.symbol !== r.symbol)
     fail('MINUTE_QUEUE_RESULT_SCOPE_MISMATCH');
@@ -188,7 +198,7 @@ export function applyBackfillOutcome(state, selection, result, atMs, researchSha
   if (result.status === 'ARCHIVED' || result.status === 'REUSED_IDENTICAL') {
     const expectedSlots=(selection.task.windowEndMs-selection.task.windowStartMs)/MINUTE_MS;
     if (!nonnegative(result.candleCount) || result.candleCount > expectedSlots
-      || expectedSlots>120)
+      || expectedSlots>(state.pageWindowMinutes ?? 120))
       fail('MINUTE_QUEUE_RESULT_CANDLES_INVALID');
     const missingSlots=expectedSlots-result.candleCount;
     const slotAudit=result.minuteSlotAudit;
@@ -311,7 +321,8 @@ export async function runDurableMinuteBackfillCycle({
     || !nonnegative(maxActions) || maxActions > QUEUE_LIMITS.maxActionsPerCycle)
     fail('MINUTE_QUEUE_CONFIG_INVALID');
   const scope=validateBackfillScope(manifest);
-  const capacity=assessMinuteManifestCapacity(manifest,{actionsPerCycle:maxActions});
+  const capacity=assessMinuteManifestCapacity(manifest,{actionsPerCycle:maxActions,
+    windowMinutes:scope.pageWindowMinutes});
   if(capacity.status==='CAPACITY_MODEL_INSUFFICIENT'
     ||capacity.status==='STOCK_SESSION_NOT_MODELLED') {
     // A short research pilot is not silently called sustainable all-symbol

@@ -37,7 +37,7 @@ async function workspace(fn) {
   finally { await rm(root, { recursive: true, force: true }); }
 }
 
-test('strict four-market identity and 120-minute UTC closed window guard', () => {
+test('strict four-market identity and opt-in maximum 180-minute UTC closed-window guard', () => {
   assert.equal(validateMinuteTask(spot).symbol, 'BTC');
   assert.equal(validateMinuteTask({ ...spot, market: 'KR_STOCK', symbol: '005930' }).market, 'KR_STOCK');
   assert.equal(validateMinuteTask({ ...spot, market: 'US_STOCK', symbol: 'AAPL' }).market, 'US_STOCK');
@@ -45,12 +45,47 @@ test('strict four-market identity and 120-minute UTC closed window guard', () =>
     { ...spot, symbol: '../../secret' },
     { ...spot, symbol: 'btc' },
     { ...spot, windowStartMs: BEGIN + 1 },
-    { ...spot, windowEndMs: BEGIN + 121 * MINUTE_MS },
+    { ...spot, windowEndMs: BEGIN + 181 * MINUTE_MS },
     { ...spot, windowEndMs: BEGIN - MINUTE_MS },
     { ...spot, market: 'FAKE' },
   ]) assert.throws(() => validateMinuteTask(bad), /MINUTE_/);
   assert.throws(() => validateMinuteCandles(spot, [candle()], END + 3_000),
     /MINUTE_WINDOW_NOT_CLOSED/);
+});
+
+
+test('180m original minute page has immutable readback and 181m is rejected', async () => {
+  const task={...spot,windowEndMs:BEGIN+180*MINUTE_MS};
+  assert.equal(validateMinuteTask(task).windowEndMs,task.windowEndMs);
+  assert.throws(()=>validateMinuteTask({...task,windowEndMs:BEGIN+181*MINUTE_MS}),
+    /MINUTE_WINDOW_INVALID/);
+  await workspace(async root=>{
+    const rows=Array.from({length:180},(_,i)=>candle(BEGIN+i*MINUTE_MS));
+    const retrievedAtMs=task.windowEndMs+10*MINUTE_MS;
+    const result=await persistOriginalMinutePage({root,task,researchSha:SHA,
+      rows,retrievedAtMs});
+    assert.equal(result.status,'ARCHIVED');
+    assert.equal(result.candleCount,180);
+    const readback=await readOriginalMinutePage(root,task,SHA);
+    assert.equal(readback.candles.length,180);
+    assert.equal(readback.minuteSlotAudit.unverifiedMissingMinuteSlots,0);
+    assert.equal(readback.fullMarketCoverageProven,false);
+    assert.equal(readback.profitabilityProven,false);
+  });
+});
+
+test('180m Bitget page tolerates one extra boundary candle but never imports it',async()=>{
+  const task={...future,windowEndMs:BEGIN+180*MINUTE_MS};
+  const response=[bitget(BEGIN-MINUTE_MS),
+    ...Array.from({length:180},(_,i)=>bitget(BEGIN+i*MINUTE_MS))];
+  assert.equal(response.length,181);
+  const rows=await fetchCryptoMinutePage(task,{
+    fetchImpl:async()=>fakeResponse({code:'00000',data:response}),
+  });
+  const normalized=validateMinuteCandles(task,rows,task.windowEndMs+10*MINUTE_MS);
+  assert.equal(normalized.length,180);
+  assert.equal(normalized[0].timestamp,BEGIN);
+  assert.equal(normalized.at(-1).timestamp,BEGIN+179*MINUTE_MS);
 });
 
 test('Upbit uses candle UTC start not last-tick timestamp, and never makes no-trade bars', () => {
