@@ -522,6 +522,42 @@ jobs:
             execFileSync('pm2', ['save'], { stdio: 'inherit' });
           };
 
+          // A missing/stale publisher is a known deterministic failure. Refuse
+          // to change any PM2 flags or arm files until a fresh public handoff
+          // exists; the worker still performs the full digest/evidence check.
+          const requireFreshPublishedHandoff = (env) => {
+            const handoffPath = String(env.MEMBER_AUTO_TRADING_HANDOFF_PATH || '').trim()
+              || '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+            let h;
+            try {
+              const file = lstatSync(handoffPath);
+              if (!file.isFile() || file.isSymbolicLink() || file.size <= 0 || file.size > 32 * 1024 * 1024) {
+                throw new Error('INVALID_HANDOFF_FILE');
+              }
+              h = JSON.parse(readFileSync(handoffPath, 'utf8'));
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID');
+            }
+            const nowMs = Date.now();
+            if (h?.schemaVersion !== 'member-auto-trading-paper-handoff-v1'
+              || h?.status !== 'READY' || !Array.isArray(h?.entries)
+              || h?.entryCount !== h.entries.length
+              || !Array.isArray(h?.blockers) || h.blockers.length !== 0
+              || h?.safety?.executionAuthority !== 'NONE'
+              || h?.safety?.publicDataOnly !== true || h?.safety?.orderSubmitted !== false
+              || !/^[a-f0-9]{64}$/u.test(String(h?.handoffDigest ?? ''))
+              || !Number.isFinite(h?.evaluatedAtMs) || h.evaluatedAtMs <= 0
+              || h.evaluatedAtMs > nowMs || nowMs - h.evaluatedAtMs > 30 * 60_000) {
+              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE');
+            }
+            if (h.entries.some((entry) => entry?.identity?.researchCodeSha !== target)) {
+              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH');
+            }
+            // This is intentionally only a cheap *pre-mutation* sanity check:
+            // it cannot certify the AI issuer, risk evidence, provider data or
+            // activation. Those independent guards must still pass later.
+          };
+
           const before = snapshot();
           let alreadyDesired = false;
           try {
@@ -545,6 +581,7 @@ jobs:
             process.exit(0);
           }
           assertAllFourManual(before, false);
+          requireFreshPublishedHandoff(before);
           const preserved = manualState(before);
           let mutated = false;
           try {
