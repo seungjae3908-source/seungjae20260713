@@ -481,3 +481,13 @@ real Yahoo bars consumed by the current strategy, rather than rejecting
 current evidence due to an unrelated historic out-of-window anomaly in a
 10-year 1D series. Historical OOS requires separate independently validated
 full-history datasets and is not inferred from these bounded current bars.
+
+## Draft: cause-focused current-page and research evidence diagnostics
+
+V3 reports an aggregate `blockerTriage` derived from the same 12 public
+market/strategy lanes and canonical economic blockers, differentiating
+provider failures, unsupported KRX roster codes, observed candle quality
+gaps and missing verified Paper/OOS/full-cost inputs. Per-timeframe KRX
+roster exclusions are deduplicated at market level. This adds no public
+requests, instrument identifiers, raw candle samples, signal admission,
+fake performance evidence, Telegram sends or execution authority.

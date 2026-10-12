@@ -162,7 +162,9 @@ function validateCostPolicy(policy, { market, costPolicyId }, blockers) {
  * evaluator's independence or an OOS PASS by itself.
  */
 function validateBacktestLineage(card, identity, profit, blockers) {
-  if (!identity) return;
+  // Missing Paper identity must not hide a SECOND independent missing
+  // prerequisite. Audit actual backtest fields without promoting a card.
+  if (!identity) addBlocker(blockers, 'BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE');
   const quality = card?.backtestQuality;
   if (!quality || quality.status !== 'verified') {
     addBlocker(blockers, 'BACKTEST_QUALITY_VERIFICATION_REQUIRED');
@@ -174,7 +176,7 @@ function validateBacktestLineage(card, identity, profit, blockers) {
     addBlocker(blockers, 'BACKTEST_ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED');
   if (quality.lookaheadGuarded !== true || quality.survivorshipGuarded !== true)
     addBlocker(blockers, 'BACKTEST_PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED');
-  const lineage = {
+  const lineage = identity ? {
     signalId: identity.signalId,
     strategyId: identity.strategyId,
     strategyVersion: identity.strategyVersion,
@@ -185,8 +187,8 @@ function validateBacktestLineage(card, identity, profit, blockers) {
     symbol: identity.symbol,
     timeframe: identity.timeframe,
     direction: identity.direction,
-  };
-  if (!quality.canonicalLineage || typeof quality.canonicalLineage !== 'object'
+  } : null;
+  if (!lineage || !quality.canonicalLineage || typeof quality.canonicalLineage !== 'object'
     || Object.entries(lineage).some(([key, value]) =>
       quality.canonicalLineage[key] !== value))
     addBlocker(blockers, 'BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED');

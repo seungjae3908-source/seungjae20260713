@@ -289,3 +289,20 @@ test('futures SHORT risk requires a stop above the entry zone and every target b
       JSON.stringify(pricePlan));
   }
 });
+
+test('independent missing backtest proof is counted even before Paper identity exists',()=>{
+  const noBacktest=adaptCanonicalScannerCard({
+    card:card({backtestQuality:null}),timeframe:'1D',
+  },{nowMs:NOW});
+  assert.equal(noBacktest.profitEligible,false);
+  assert.ok(noBacktest.provenance.profitBlockers.includes('PAPER_IDENTITY_REQUIRED'));
+  assert.ok(noBacktest.provenance.profitBlockers.includes('CANONICAL_PROFIT_EVIDENCE_REQUIRED'));
+  assert.ok(noBacktest.provenance.profitBlockers.includes('BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE'));
+  assert.ok(noBacktest.provenance.profitBlockers.includes('BACKTEST_QUALITY_VERIFICATION_REQUIRED'));
+  assert.equal(runSignalIntelligenceV3([noBacktest]).lists.krBuy.length,0);
+  const verifiedButUnlinked=adaptCanonicalScannerCard({card:card(),timeframe:'1D'},{nowMs:NOW});
+  assert.equal(verifiedButUnlinked.profitEligible,false);
+  assert.ok(verifiedButUnlinked.provenance.profitBlockers.includes('BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE'));
+  assert.ok(verifiedButUnlinked.provenance.profitBlockers.includes('BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED'));
+  assert.ok(!verifiedButUnlinked.provenance.profitBlockers.includes('BACKTEST_QUALITY_VERIFICATION_REQUIRED'));
+});

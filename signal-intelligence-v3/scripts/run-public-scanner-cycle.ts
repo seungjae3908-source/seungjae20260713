@@ -16,6 +16,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
+import { summarizeV3BlockerTriage } from '../src/public-v3-blocker-triage.mjs';
 import { summarizeV3RawCryptoQuality } from '../src/public-v3-crypto-quality-diagnostic.mjs';
 import { selectV3TrustedSpotResearchOnly } from '../src/public-v3-spot-blocked-page-research.mjs';
 import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
@@ -730,6 +731,9 @@ async function main() {
   const inputs = Object.values(state.retained).map((row) => row.input);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
   const economicReadiness = summarizeV3EconomicReadiness(baseSnapshot.rows);
+  // Aggregate current source/economic dependency diagnosis; no admission
+  // change, no extra provider requests or profitability credit.
+  const blockerTriage = summarizeV3BlockerTriage(coverage,economicReadiness);
   // Retained earlier research rows remain inspectable in rows/stateById,
   // but only the exact verified current source page can publish fresh lists
   // or Telegram candidate events. An invalid receipt returns empty outputs.
@@ -744,6 +748,7 @@ async function main() {
     publicCycleRosterProgress: Object.values(state.rosterProgress),
     publicDataOnly: true,
     economicReadiness,
+    blockerTriage,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     publicStageTwoOffPageResearch:offPageResearch,
@@ -766,6 +771,7 @@ async function main() {
     profile: snapshot.profile,
     releaseStateReset: releaseChanged,
     economicReadiness,
+    blockerTriage,
     publicStageOneWatch:stageOneWatch.report,
     publicStageTwoPriority:v3WithinPagePriorityDiagnostic(),
     publicStageTwoOffPageResearch:offPageResearch,
