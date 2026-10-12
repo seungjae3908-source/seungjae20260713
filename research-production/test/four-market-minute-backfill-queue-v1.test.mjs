@@ -436,6 +436,12 @@ test('dual selection prioritizes continuous across restart and round-robins same
   const progressed=applyBackfillOutcome(q,first,{
     market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',candleCount:1,
   },NOW,SHA1);
+  assert.equal(progressed.ranges[first.index].lastSuccessAtMs,NOW);
+  assert.equal(Object.hasOwn(progressed.ranges[first.index],'lastSuccessAt'),false);
+  // The full durable state may restart with a global index pointing back
+  // to BTC; the provider-specific selection must still choose unvisited ETH.
+  assert.equal(pickBackfillWindow({...progressed,nextIndex:first.index},NOW,
+    'CRYPTO_SPOT').task.symbol,'ETH');
   const second=pickBackfillWindow(progressed,NOW,'CRYPTO_SPOT');
   assert.equal(second.task.symbol,'ETH');
   const afterSecond=applyBackfillOutcome(progressed,second,{
