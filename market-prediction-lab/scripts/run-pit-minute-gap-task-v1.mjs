@@ -20,6 +20,9 @@
  * absent-source list. Both are recalculated against the full PIT day pages.
  * A safe superset is stored as a NEW revision requiring explicit selection;
  * no automatic deployment, promotion, scheduling, Paper or LIVE/orders.
+ * --retain-source-limited is a separate explicit source-only option for a
+ * 1m listing-edge single candle or untraversed day. It never proves missing
+ * no-trade minutes, scanner availability, OOS/Paper or original-data rights.
  */
 import { lstatSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve, dirname } from "node:path";
@@ -58,7 +61,8 @@ function readPrivateJson(path,maxBytes) {
 export function parsePITMinuteTaskArgsV1(args=[]) {
   if(!Array.isArray(args)||args.length<18||args.length>26)
     throw new TypeError("PIT_MINUTE_TASK_CLI_ARGUMENTS_INVALID");
-  const o={};let readPublic=false,retryPartial=false;
+  const o={};let readPublic=false,retryPartial=false,
+    retainSourceLimited=false;
   for(let i=0;i<args.length;i++){
     if(args[i]==="--read-public"){
       if(readPublic)throw new TypeError("PIT_MINUTE_TASK_CLI_DUPLICATE_READ_FLAG");
@@ -67,6 +71,11 @@ export function parsePITMinuteTaskArgsV1(args=[]) {
     if(args[i]==="--retry-partial"){
       if(retryPartial)throw new TypeError("PIT_MINUTE_TASK_CLI_DUPLICATE_RETRY_FLAG");
       retryPartial=true;continue;
+    }
+    if(args[i]==="--retain-source-limited"){
+      if(retainSourceLimited)
+        throw new TypeError("PIT_MINUTE_TASK_CLI_DUPLICATE_SOURCE_LIMITED_FLAG");
+      retainSourceLimited=true;continue;
     }
     const key=args[i], val=args[++i];
     if(!OPTIONS.has(key)||Object.hasOwn(o,key)
@@ -100,6 +109,7 @@ export function parsePITMinuteTaskArgsV1(args=[]) {
     minFreeBytes:Number(o["--min-free-mib"]??2048)*1024*1024,
     allowPublicReadOnlyFetch:readPublic,
     retryPartialSource:retryPartial,
+    allowSourceLimitedArchive:retainSourceLimited,
     expectedExistingSourceDigestSha256:o["--expected-existing-sha"]??null,
   });
 }
@@ -135,6 +145,7 @@ export async function runPITMinuteTaskCliV1(config,dependencies={}) {
     expectedTaskDigestSha256:config.expectedTaskDigestSha256,
     allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
     retryPartialSource:config.retryPartialSource??false,
+    allowSourceLimitedArchive:config.allowSourceLimitedArchive??false,
     expectedExistingSourceDigestSha256:
       config.expectedExistingSourceDigestSha256??null,
     maxLocalBytes:config.maxLocalBytes,minFreeBytes:config.minFreeBytes,
@@ -153,6 +164,10 @@ export async function runPITMinuteTaskCliV1(config,dependencies={}) {
     taskPageIndex:config.taskPageIndex,taskIndex:config.taskIndex,
     sourceMinuteCount:result.retainedMinuteRows??null,
     selectedTaskKind:result.selectedTaskKind??null,
+    sourceLimitedOnly:result.sourceLimitedOnly??null,
+    providerRequestWindowVerified:result.providerRequestWindowVerified??null,
+    missingUnverifiedMinuteSlots:result.missingUnverifiedMinuteSlots??null,
+    requestedProviderPages:result.requestedProviderPages??null,
     proposedNewSourceDigestSha256:result.retainedSourceDigestSha256??null,
     priorSourceDigestSha256:result.priorSourceDigestSha256??null,
     sourceRevisionAutoSelected:false,
