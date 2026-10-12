@@ -248,65 +248,101 @@ function inspectIndependentAutoLivePublicSourcePlan({
 const CANONICAL_AUTO_SIGNAL_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_AUTO_SIGNAL_HANDOFF_BYTES = 8 * 1024 * 1024;
+const CANONICAL_AUTO_SIGNAL_ACTIVATION_PATH = '/opt/stock-app-data/paper-forward-v1/activation.json';
+const CANONICAL_AUTO_SIGNAL_WRAPPER_PATH =
+  '/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule';
+const CANONICAL_AUTO_SIGNAL_FILES = Object.freeze({
+  HANDOFF: Object.freeze({ path: CANONICAL_AUTO_SIGNAL_HANDOFF_PATH,
+    maxBytes: MAX_AUTO_SIGNAL_HANDOFF_BYTES, minBytes: 2, executable: false }),
+  ACTIVATION: Object.freeze({ path: CANONICAL_AUTO_SIGNAL_ACTIVATION_PATH,
+    maxBytes: 32 * 1024, minBytes: 2, executable: false }),
+  WRAPPER: Object.freeze({ path: CANONICAL_AUTO_SIGNAL_WRAPPER_PATH,
+    maxBytes: 64 * 1024, minBytes: 16, executable: true }),
+});
+
 /**
- * Read a real, pinned public-only handoff without following the final symlink.
- * This verifies the local transport, not live scanner/AI provenance.
- * Always sanitize errors: malformed JSON may contain credentials or paths.
+ * Bounded, read-only, NOFOLLOW source artifact reader. A growing file can
+ * never be consumed past its original size+1 before rejection. Transport
+ * verification does not attest any genuine scanner or AI invocation.
  */
-function readProductionAutoLiveSignalHandoff(handoffPath, io = require('node:fs')) {
-  if (handoffPath !== CANONICAL_AUTO_SIGNAL_HANDOFF_PATH) {
-    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PATH_INVALID');
-  }
-  const parents = [
-    '/opt/stock-app-data',
-    '/opt/stock-app-data/paper-forward-v1',
-    '/opt/stock-app-data/paper-forward-v1/runtime-state',
-    '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff',
-  ];
-  for (const dirname of parents) {
+function readBoundedAutoLiveSourceArtifact(kind, candidatePath, io = require('node:fs')) {
+  const rule = CANONICAL_AUTO_SIGNAL_FILES[kind];
+  const prefix = 'AUTO_LIVE_SIGNAL_' + kind;
+  if (!rule || candidatePath !== rule.path) throw new Error(prefix + '_PATH_INVALID');
+  // Verify all ancestor paths; final component also uses O_NOFOLLOW.
+  for (let slash = rule.path.indexOf('/', 1); slash !== -1;
+    slash = rule.path.indexOf('/', slash + 1)) {
+    const parent = rule.path.slice(0, slash);
     let stat;
-    try { stat = io.lstatSync(dirname); }
-    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID'); }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID');
+    try { stat = io.lstatSync(parent); }
+    catch { throw new Error(prefix + '_PARENT_INVALID'); }
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(prefix + '_PARENT_INVALID');
     }
   }
-  if (!Number.isInteger(io.constants?.O_NOFOLLOW)
-    || !Number.isInteger(io.constants?.O_NONBLOCK)
-    || !Number.isInteger(io.constants?.O_RDONLY)) {
-    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FLAGS_UNAVAILABLE');
-  }
+  if (![io.constants?.O_RDONLY, io.constants?.O_NOFOLLOW, io.constants?.O_NONBLOCK]
+    .every(Number.isInteger)) throw new Error(prefix + '_OPEN_FLAGS_UNAVAILABLE');
   let fd;
   try {
-    fd = io.openSync(handoffPath,
+    fd = io.openSync(rule.path,
       io.constants.O_RDONLY | io.constants.O_NOFOLLOW | io.constants.O_NONBLOCK);
-  } catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FAILED'); }
+  } catch { throw new Error(prefix + '_OPEN_FAILED'); }
   try {
-    const stat = io.fstatSync(fd);
-    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 2
-      || stat.size > MAX_AUTO_SIGNAL_HANDOFF_BYTES
-      || (stat.mode & 0o077) !== 0) {
-      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE');
+    const before = io.fstatSync(fd);
+    if (!before?.isFile() || !Number.isSafeInteger(before.size)
+      || before.size < rule.minBytes || before.size > rule.maxBytes
+      || !Number.isInteger(before.mode) || (before.mode & 0o077) !== 0
+      || (rule.executable && (before.mode & 0o111) === 0)) {
+      throw new Error(prefix + '_FILE_UNSAFE');
     }
-    const raw = io.readFileSync(fd, 'utf8');
-    if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_AUTO_SIGNAL_HANDOFF_BYTES) {
-      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE');
+    const bytes = Buffer.allocUnsafe(before.size + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const count = io.readSync(fd, bytes, read, bytes.length - read, read);
+      if (!Number.isSafeInteger(count) || count < 0 || count > bytes.length - read) {
+        throw new Error(prefix + '_FILE_UNSAFE');
+      }
+      if (count === 0) break;
+      read += count;
     }
-    try { return JSON.parse(raw); }
-    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID'); }
+    const after = io.fstatSync(fd);
+    if (read !== before.size || !after?.isFile()
+      || after.size !== before.size
+      || (after.mode & 0o777) !== (before.mode & 0o777)
+      || after.ino !== before.ino || after.dev !== before.dev
+      || after.mtimeMs !== before.mtimeMs) {
+      throw new Error(prefix + '_FILE_CHANGED');
+    }
+    return bytes.subarray(0, read).toString('utf8');
   } catch (error) {
-    // No arbitrary filesystem messages or JSON snippets in public job logs.
-    if (error instanceof Error && /^AUTO_LIVE_SIGNAL_HANDOFF_(?:FILE_UNSAFE|JSON_INVALID)$/u.test(error.message)) {
+    if (error instanceof Error
+      && [prefix + '_FILE_UNSAFE', prefix + '_FILE_CHANGED'].includes(error.message)) {
       throw error;
     }
-    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_READ_FAILED');
+    throw new Error(prefix + '_READ_FAILED');
   } finally {
     try { io.closeSync(fd); }
-    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_CLOSE_FAILED'); }
+    catch { throw new Error(prefix + '_CLOSE_FAILED'); }
   }
+}
+function readProductionAutoLiveSignalHandoff(handoffPath, io = require('node:fs')) {
+  const raw = readBoundedAutoLiveSourceArtifact('HANDOFF', handoffPath, io);
+  try { return JSON.parse(raw); }
+  catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID'); }
+}
+function readProductionAutoLiveScheduleActivation(path, io = require('node:fs')) {
+  const raw = readBoundedAutoLiveSourceArtifact('ACTIVATION', path, io);
+  try { return JSON.parse(raw); }
+  catch { throw new Error('AUTO_LIVE_SIGNAL_ACTIVATION_JSON_INVALID'); }
+}
+function readProductionAutoLiveScheduleWrapper(path, io = require('node:fs')) {
+  return readBoundedAutoLiveSourceArtifact('WRAPPER', path, io);
 }
 
 module.exports = {
+  readBoundedAutoLiveSourceArtifact,
+  readProductionAutoLiveScheduleActivation,
+  readProductionAutoLiveScheduleWrapper,
   readProductionAutoLiveSignalHandoff,
   inspectIndependentAutoLivePublicSourcePlan,
   assertAutoLiveSignalNotDisabled,
