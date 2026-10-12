@@ -46,6 +46,7 @@ async function server(options:{
     rows:options.existing??[] as StoredPaperJournalRecord[],writes:0,
     researchWrites:0,receipts:[] as ManualPaperResearchReceiptRow[],
     seqWrites:0,seqRows:[] as ManualPaperSequentialEventRow[],
+    seqIssuerCalls:0,
   };
   const app=express();app.use(express.json());
   app.use('/api',(req:any,_res,next)=>{
@@ -62,7 +63,15 @@ async function server(options:{
     sequentialWriteEnabled:()=>options.seqEnabled===true,
     sequentialRlsReady:async()=>options.seqRls!==false,
     sequentialMarketAdmissionReady:async()=>options.seqMarketReady===true,
-    issueSequentialEvent:async input=>options.seqIssuer?.(input)??null,
+    issueSequentialEvent:async input=>{
+      state.seqIssuerCalls++;
+      return options.seqIssuer?.(input)??null;
+    },
+    readSequentialByRequestKey:async(_req,owner,key)=>{
+      assert.equal(owner,USER);
+      const found=state.seqRows.find(r=>r.user_id===owner&&r.request_key===key);
+      return found?structuredClone(found):null;
+    },
     listSequentialRows:async(_req,owner,orderId)=>{
       assert.equal(owner,USER);
       return state.seqRows.filter(r=>r.user_id===owner
@@ -848,5 +857,57 @@ test('sequential Paper cannot append any event after a fully simulated close',as
     assert.equal(replay.status,409);
     assert.equal((await replay.json()).code,'MANUAL_PAPER_SEQ_PROJECTION_BLOCKED');
     assert.equal(fixture.state.seqWrites,4);
+  }finally{await fixture.close()}
+});
+
+
+test('same OPEN request key across candidate/order revisions replays the original immutable order',async()=>{
+  const options={
+    seqEnabled:true,seqIssuer:verifiedSeqSource,
+    seqMarketReady:true,existing:seededWallets(),
+  };
+  const fixture=await server(options);
+  try{
+    const opened=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(opened.status,201);
+    const recorded=await opened.json();
+    const beforeCalls=fixture.state.seqIssuerCalls;
+    assert.equal(fixture.state.seqWrites,1);
+    // Simulate a newer server strategy/quote at retry time. The same
+    // owner-wide requestKey must not call the issuer a second time.
+    options.seqIssuer=()=>{throw new Error('duplicate request must not regenerate order');};
+    const replay=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(replay.status,200);
+    const body=await replay.json();
+    assert.equal(body.duplicate,true);
+    assert.equal(body.orderId,recorded.orderId);
+    assert.equal(body.recordedEventId,recorded.recordedEventId);
+    assert.equal(body.eventInsertionsByThisRequest,0);
+    assert.equal(body.actualBrokerFill,false);
+    assert.equal(fixture.state.seqWrites,1);
+    assert.equal(fixture.state.seqIssuerCalls,beforeCalls);
+  }finally{await fixture.close()}
+});
+
+test('global request reuse for a different symbol/action or order fails closed without a second event',async()=>{
+  const fixture=await server({
+    seqEnabled:true,seqIssuer:verifiedSeqSource,
+    seqMarketReady:true,existing:seededWallets(),
+  });
+  try{
+    const first=await post(fixture.host+seqUrl+'/step',seqOpening);
+    assert.equal(first.status,201);
+    const stored=await first.json();
+    const changed={...seqOpening,selection:{...selection,symbol:'ETHUSDT'}};
+    const conflict=await post(fixture.host+seqUrl+'/step',changed);
+    assert.equal(conflict.status,409);
+    assert.equal((await conflict.json()).code,'MANUAL_PAPER_SEQ_GLOBAL_REQUEST_CONFLICT');
+    const changedAction=await post(fixture.host+seqUrl+'/step',{
+      action:'REQUEST_EXIT',orderId:stored.orderId,requestKey:'seq-open-1',
+    });
+    assert.equal(changedAction.status,409);
+    assert.equal((await changedAction.json()).code,'MANUAL_PAPER_SEQ_GLOBAL_REQUEST_CONFLICT');
+    assert.equal(fixture.state.seqWrites,1);
+    assert.equal(fixture.state.seqRows.length,1);
   }finally{await fixture.close()}
 });

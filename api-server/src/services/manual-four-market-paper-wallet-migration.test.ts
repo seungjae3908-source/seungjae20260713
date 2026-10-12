@@ -100,6 +100,9 @@ test('sequential manual PAPER event table has per-owner RLS, atomic sequence/req
   assert.match(migration,/primary key \(user_id,order_id,sequence_number\)/u);
   assert.match(migration,/unique \(user_id,order_id,event_id\)/u);
   assert.match(migration,/unique \(user_id,order_id,request_key\)/u);
+  assert.match(migration,/paper_manual_order_event_global_request_unique[\s\S]*unique \(user_id,request_key\)/u);
+  // The protected DB guard must verify the new global idempotency invariant.
+  assert.match(migration,/conname in \([\s\S]*'paper_manual_order_event_global_request_unique'[\s\S]*\)\s*\)=7/u);
   assert.match(migration,/foreign key \(user_id,wallet_id\) references public\.paper_accounts\(user_id,id\)/u);
   assert.match(migration,/paper_manual_four_market_order_events\s+enable row level security;[\s\S]*force row level security;/u);
   assert.match(migration,/for select to authenticated\s+using \(\(select auth\.uid\(\)\)=user_id\)/u);
@@ -110,4 +113,27 @@ test('sequential manual PAPER event table has per-owner RLS, atomic sequence/req
   assert.doesNotMatch(migration,/grant insert on public\.paper_manual_four_market_order_events\s+to authenticated/u);
   assert.doesNotMatch(migration,/security definer/u);
   assert.doesNotMatch(migration,/update public\.paper_accounts\s+set/u);
+});
+
+
+test('every required JSONB claim fails closed for SQL UNKNOWN, never accepts a sparse receipt',()=>{
+  // PostgreSQL CHECK accepts NULL (UNKNOWN) as well as TRUE. Without
+  // COALESCE, a receipt/event JSONB object containing no mandatory
+  // attributes would evade the equality assertions as NULL.
+  assert.match(migration,
+    /constraint paper_manual_research_receipt_claims check \(coalesce\(\([\s\S]*?receipt->>'financialMutationCount' = '0'\s*\),false\)\)/iu);
+  assert.match(migration,
+    /constraint paper_manual_order_event_server_only_claims check \(coalesce\(\([\s\S]*?event->>'actualPaperLedgerWritten'='false'[\s\S]*?\),false\)\)/iu);
+  for(const required of [
+    "receipt->>'schemaVersion'",
+    "receipt->>'cycleId'",
+    "receipt->>'ownerId'",
+    "receipt->>'executionAuthority'",
+    "event->>'schemaVersion'",
+    "event->>'orderId'",
+    "event->>'ownerId'",
+    "event->>'source'",
+    "event->>'executionAuthority'",
+    "event->>'actualBrokerFill'",
+  ])assert.ok(migration.includes(required),required);
 });
