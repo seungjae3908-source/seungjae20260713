@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { linkedLegacyTelegramWatchlistOwner } from './member-watchlist.service';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {validTelegramV3CurrentSource,boundedTelegramV3Json,verifiedTelegramV3PageCount,verifiedTelegramV3EpisodeKey}
@@ -460,5 +460,128 @@ test('legacy sent V3 candidate is not replayed across code-release dedupe migrat
    if(oldUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
    else process.env.SIGNAL_INTELLIGENCE_URL=oldUrl;
    await rm(folder,{recursive:true,force:true});
+ }
+});
+
+test('Telegram subscriber writes crash-safe reservation before a mocked public send',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-before-post-'));
+ const ledger=path.join(dir,'ledger.json');
+ const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const beforeRoom=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const source:any=fixture();
+ let sends=0,configured=false;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async alert=>{
+       if(!configured)return {ok:false as const,attempts:0,skipped:'NOT_CONFIGURED' as const};
+       const onDisk=JSON.parse(await readFile(ledger,'utf8'));
+       assert.ok(onDisk.unconfirmed[alert.dedupeKey],
+         'unknown outcome must be DURABLE before any Bot API POST');
+       sends+=1;
+       return {ok:true as const,attempts:1};
+     },
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:source.serviceSha,
+       executionAuthority:'NONE',snapshot:source}),{status:200}),
+     async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+       deduped:0,skipped:0,failed:0,reason:'DISABLED' as const}),
+   );
+   const noSend=await subscriber.runOnce(new Date(NOW));
+   assert.equal(noSend.skipped,1);
+   assert.equal(sends,0);
+   const unreserved=JSON.parse(await readFile(ledger,'utf8'));
+   assert.equal(Object.keys(unreserved.unconfirmed).length,0,
+     'a definitive locally skipped request is safe to retry');
+   configured=true;
+   const first=await subscriber.runOnce(new Date(NOW));
+   assert.equal(first.publicDelivered,1);assert.equal(sends,1);
+   const confirmed=JSON.parse(await readFile(ledger,'utf8'));
+   assert.equal(Object.keys(confirmed.delivered).length,1);
+   assert.equal(Object.keys(confirmed.unconfirmed).length,0);
+   const repeat=await subscriber.runOnce(new Date(NOW+1000));
+   assert.equal(repeat.deduped,1);assert.equal(sends,1);
+ }finally{
+   if(beforeUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=beforeUrl;
+   if(beforeRoom===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=beforeRoom;
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+
+test('unexpected Telegram POST interruption leaves a restart-proof no-replay tombstone',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-post-interrupt-'));
+ const ledger=path.join(dir,'ledger.json');
+ const oldUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const oldRoom=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const source:any=fixture();
+ let sends=0;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const feed=async()=>new Response(JSON.stringify({ok:true,serviceSha:source.serviceSha,
+     executionAuthority:'NONE',snapshot:source}),{status:200});
+   const noMember=async()=>({eligible:false,matched:0,attempted:0,delivered:0,
+     queued:0,deduped:0,skipped:0,failed:0,reason:'DISABLED' as const});
+   const first=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async()=>{sends++;throw Error('simulated interruption after POST');},
+     feed,noMember);
+   const failure=await first.runOnce(new Date(NOW));
+   assert.equal(failure.sourceStatus,'PROCESSING_FAILED');
+   assert.equal(sends,1);
+   assert.equal(Object.keys(JSON.parse(await readFile(ledger,'utf8')).unconfirmed).length,1);
+   const restarted=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async()=>{sends++;return {ok:true as const,attempts:1};},
+     feed,noMember);
+   const replay=await restarted.runOnce(new Date(NOW+1000));
+   assert.equal(replay.sourceStatus,'READY');
+   assert.equal(replay.failed,1);
+   assert.equal(sends,1,'restart cannot send again after interrupted POST');
+ }finally{
+   if(oldUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=oldUrl;
+   if(oldRoom===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=oldRoom;
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+
+test('new independent day after confirmed legacy v1 send is not silenced by SHA migration',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-legacy-next-day-'));
+ const oldUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const oldRoom=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const source:any=fixture(),day=24*60*60_000;
+ let sends=0;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const state=new SignalIntelligenceTelegramDeliveryState(path.join(dir,'ledger.json'));
+   const legacy='signal-intelligence-v3:'+'a'.repeat(40)
+      +':NEW_CANDIDATE:'+ID+'::CANDIDATE';
+   await state.mark(legacy,new Date(NOW-1000));
+   source.serviceSha='b'.repeat(40);
+   source.generatedAt=new Date(NOW+day-2000).toISOString();
+   source.rows[0].sourceAsOf=new Date(NOW+day-5000).toISOString();
+   source.rows[0].provenance.sourceExpiresAt=new Date(NOW+day+60_000).toISOString();
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     state,
+     async()=>{sends++;return {ok:true as const,attempts:1};},
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:source.serviceSha,
+       executionAuthority:'NONE',snapshot:source}),{status:200}),
+     async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+       deduped:0,skipped:0,failed:0,reason:'DISABLED' as const}));
+   const result=await subscriber.runOnce(new Date(NOW+day));
+   assert.equal(result.publicDelivered,1);
+   assert.equal(sends,1);
+ }finally{
+   if(oldUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=oldUrl;
+   if(oldRoom===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=oldRoom;
+   await rm(dir,{recursive:true,force:true});
  }
 });

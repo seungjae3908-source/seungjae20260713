@@ -390,6 +390,7 @@ export class SignalIntelligenceTelegramDeliveryState {
     await this.load();
     const observed = Date.parse(sourceAsOf ?? '');
     if (typeof id !== 'string' || id.length === 0 || id.length > 400
+      || typeof sourceAsOf !== 'string'
       || !Number.isFinite(now.getTime()) || !Number.isFinite(observed)
       || observed > now.getTime() + 5_000
       || new Date(observed).toISOString() !== sourceAsOf)

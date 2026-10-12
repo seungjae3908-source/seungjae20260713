@@ -42,3 +42,24 @@ fixtures exercise plumbing only; they do not certify real profitability.
 No service activation, data collection, paper admission, market/member
 Telegram sends or trading orders in this work. Draft/Drift only,
 no Replit, Ready/Merge/Deploy/PM2/systemd/DB/secret changes.
+
+## Additional proof/notification integrity
+
+The verified signed-record reader returns immutable cloned receipts through a
+read-only lookup and rejects fabricated `SIGNED_EVIDENCE_AVAILABLE` caller
+objects. Four-market diagnostic pages must share one exact source cycle UUID;
+otherwise no mixed-epoch source readiness can be claimed.
+
+The Telegram public-room worker durably records an unconfirmed send reservation
+**before** making a Bot API request, and syncs the ledger's parent directory
+after rename. A restart or network-ambiguous outcome leaves a no-replay marker
+for operator reconciliation. Explicit zero-attempt `NOT_CONFIGURED` and
+`COOLDOWN` outcomes alone may release it for safe retry. Confirmed legacy
+delivery suppresses only its original source UTC day; an independently observed
+later day can be alerted again. Unknown legacy outcomes remain conservative.
+
+This guards process-crash replay with a single active subscriber. It is **not**
+a guarantee of true global exactly-once delivery across multiple unsynchronized
+workers, provider acknowledgments or external database failover. The protected
+Production recipient receipts and owner-approved operational tests remain
+unverified.
