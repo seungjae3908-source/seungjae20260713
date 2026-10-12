@@ -1,7 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
+import { link, lstat, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
+
+import { RESEARCH_AI_WORKER_SAFETY } from './research-ai-review-worker.mjs';
 
 import { assertFormulaCandidateV1 } from '../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js';
 import {
@@ -63,16 +65,36 @@ function validateAiArtifact(review, researchSha, now) {
     || review.safety?.orderAllowed !== false) {
     fail('AI_FORMULA_REVIEW_PROOF_INVALID');
   }
+  if (!equalKeys(review.safety, Object.keys(RESEARCH_AI_WORKER_SAFETY))
+    || Object.entries(RESEARCH_AI_WORKER_SAFETY).some(([key, value]) => review.safety[key] !== value)) {
+    fail('AI_FORMULA_REVIEW_SAFETY_ENVELOPE_INVALID');
+  }
+  const artifactJson = JSON.stringify(review);
+  if (typeof artifactJson !== 'string' || Buffer.byteLength(artifactJson, 'utf8') > 32 * 1024) {
+    fail('AI_FORMULA_REVIEW_BYTES_INVALID');
+  }
   const result = review.review;
-  if (!result || !['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA'].includes(result.disposition)
+  if (!equalKeys(result, ['summary', 'findings', 'hypotheses', 'risks', 'disposition'])
+    || !['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA'].includes(result.disposition)
     || !Array.isArray(result.hypotheses) || result.hypotheses.length > MAX_PROPOSALS) {
     fail('AI_FORMULA_REVIEW_DISPOSITION_INVALID');
   }
+  const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+  if (!text(result.summary, 800) || !Array.isArray(result.findings) || result.findings.length > 8
+    || !result.findings.every((value) => text(value, 500))
+    || !Array.isArray(result.risks) || result.risks.length > 8
+    || !result.risks.every((value) => text(value, 500))) fail('AI_FORMULA_REVIEW_TEXT_INVALID');
   const seen = new Set();
   for (const h of result.hypotheses) {
-    if (!HYPOTHESIS_ID.test(String(h?.hypothesisId ?? '')) || seen.has(h.hypothesisId)
-      || typeof h.thesis !== 'string' || typeof h.falsification !== 'string'
-      || !Array.isArray(h.requiredEvidence)) fail('AI_FORMULA_HYPOTHESIS_INVALID');
+    if (!equalKeys(h, ['hypothesisId', 'thesis', 'requiredEvidence', 'falsification',
+        'intendedRegime', 'independenceRationale'])
+      || !HYPOTHESIS_ID.test(String(h?.hypothesisId ?? '')) || seen.has(h.hypothesisId)
+      || !text(h.thesis, 700) || !text(h.falsification, 500)
+      || !text(h.intendedRegime, 240) || !text(h.independenceRationale, 500)
+      || !Array.isArray(h.requiredEvidence) || h.requiredEvidence.length > 8
+      || !h.requiredEvidence.every((value) => text(value, 300))) {
+      fail('AI_FORMULA_HYPOTHESIS_INVALID');
+    }
     seen.add(h.hypothesisId);
   }
 }
@@ -117,7 +139,10 @@ function rootPath(value) {
 }
 
 async function checkDir(path, { allowSharedRoot = false, create = false } = {}) {
-  if (create) await mkdir(path, { mode: 0o700 });
+  if (create) {
+    try { await mkdir(path, { mode: 0o700 }); }
+    catch (error) { if (error?.code !== 'EEXIST') throw error; }
+  }
   const st = await lstat(path);
   if (!st.isDirectory() || st.isSymbolicLink()
     || (st.mode & (allowSharedRoot ? 0o027 : 0o077)) !== 0
@@ -166,35 +191,63 @@ async function readExisting(path, maximumBytes) {
   }
 }
 
-async function stageOnce(outbox, record) {
-  const name = record.itemDigest + '.json';
-  if (!SHA64.test(record.itemDigest)) fail('AI_FORMULA_INTAKE_DIGEST_INVALID');
-  const bytes = Buffer.from(JSON.stringify(record, null, 2) + '\n', 'utf8');
-  if (bytes.length > MAX_ITEM_BYTES) fail('AI_FORMULA_INTAKE_BYTES_EXCEEDED');
-  const path = join(outbox, name);
-  let file;
-  try {
-    file = await open(path, 'wx', 0o600);
-  } catch (error) {
-    if (error?.code !== 'EEXIST') throw error;
-    const existing = JSON.parse(await readExisting(path, MAX_ITEM_BYTES));
+async function assertSamePublishedRecord(path, record) {
+  // An exclusive link can briefly have nlink=2 until its private temp is
+  // unlinked. Retry only that bounded transition; never relax file integrity.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let contents;
+    try { contents = await readExisting(path, MAX_ITEM_BYTES); }
+    catch (error) {
+      if (String(error?.message) !== 'AI_FORMULA_EXISTING_FILE_UNSAFE' || attempt === 11) throw error;
+      await new Promise((done) => setTimeout(done, 5));
+      continue;
+    }
+    let existing;
+    try { existing = JSON.parse(contents); }
+    catch { fail('AI_FORMULA_IMMUTABLE_INTAKE_CONFLICT'); }
     if (!equalKeys(existing, ['schemaVersion', 'contract', 'researchCodeSha', 'itemDigest', 'item'])
       || existing.itemDigest !== record.itemDigest
       || digestAiFormulaTrainValueV1(existing.item) !== record.itemDigest
       || JSON.stringify(canonical(existing)) !== JSON.stringify(canonical(record))) {
       fail('AI_FORMULA_IMMUTABLE_INTAKE_CONFLICT');
     }
-    return 'ALREADY_STAGED';
+    return;
   }
+  fail('AI_FORMULA_IMMUTABLE_INTAKE_CONFLICT');
+}
+
+async function stageOnce(outbox, record) {
+  const name = record.itemDigest + '.json';
+  if (!SHA64.test(record.itemDigest)) fail('AI_FORMULA_INTAKE_DIGEST_INVALID');
+  const bytes = Buffer.from(JSON.stringify(record, null, 2) + '\n', 'utf8');
+  if (bytes.length > MAX_ITEM_BYTES) fail('AI_FORMULA_INTAKE_BYTES_EXCEEDED');
+  const destination = join(outbox, name);
+  const temporary = join(outbox, '.' + record.itemDigest + '.' + process.pid + '.' + randomUUID() + '.partial');
+  let handle = null;
+  let created = false;
+  let status = 'STAGED';
   try {
-    await file.writeFile(bytes);
-    await file.sync();
+    // Complete private file + fsync before any final digest path is visible.
+    handle = await open(temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    created = true;
+    await handle.writeFile(bytes);
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    try { await link(temporary, destination); }
+    catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      status = 'ALREADY_STAGED';
+    }
   } finally {
-    await file.close();
+    if (handle) await handle.close();
+    if (created) await unlink(temporary);
   }
   const directory = await open(outbox, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try { await directory.sync(); } finally { await directory.close(); }
-  return 'STAGED';
+  await assertSamePublishedRecord(destination, record);
+  return status;
 }
 
 export async function prepareAiFormulaTrainProposalsV1({
@@ -318,8 +371,14 @@ export async function prepareAiFormulaTrainProposalsV1({
   });
 }
 
-export function buildAiFormulaTrainFeedbackV1({ researchSha, queueSummary } = {}) {
+export function buildAiFormulaTrainFeedbackV1({ researchSha, queueSummary, reviewedItemDigests } = {}) {
+  // Rotating queue summaries include other research. Never map an unrelated
+  // formula's failure back to the AI hypothesis under improvement review.
   if (!SHA40.test(String(researchSha ?? ''))
+    || !Array.isArray(reviewedItemDigests) || reviewedItemDigests.length < 1
+    || reviewedItemDigests.length > MAX_PROPOSALS
+    || reviewedItemDigests.some((id) => !SHA64.test(String(id)))
+    || new Set(reviewedItemDigests).size !== reviewedItemDigests.length
     || queueSummary?.contract !== 'research-formula-auto-backtest-summary/v1'
     || queueSummary.executionAuthority !== 'NONE'
     || queueSummary.liveTrading !== false
@@ -330,8 +389,15 @@ export function buildAiFormulaTrainFeedbackV1({ researchSha, queueSummary } = {}
     || queueSummary.oosAndSettlementVerified !== false
     || !Array.isArray(queueSummary.rows)
     || queueSummary.paperRegisteredCount !== 0
-    || queueSummary.counts?.PASS !== 0) fail('AI_FORMULA_FEEDBACK_UNTRUSTED');
-  const rows = queueSummary.rows.slice(0, 4).map((r) => {
+    || queueSummary.counts?.PASS !== 0
+    || queueSummary.rows.some((row) => row?.state === 'PASS')) fail('AI_FORMULA_FEEDBACK_UNTRUSTED');
+  const expected = new Set(reviewedItemDigests);
+  const selected = queueSummary.rows.filter((row) => expected.has(row?.itemDigest));
+  if (selected.length > MAX_PROPOSALS
+    || new Set(selected.map((row) => row.itemDigest)).size !== selected.length) {
+    fail('AI_FORMULA_FEEDBACK_DUPLICATE_OR_UNBOUNDED');
+  }
+  const rows = selected.map((r) => {
     if (!['HOLD', 'RESERVE', 'EXCLUDE'].includes(r?.state)
       || !SHA64.test(String(r?.itemDigest ?? ''))
       || !Array.isArray(r.blockers)) fail('AI_FORMULA_FEEDBACK_ROW_INVALID');
@@ -345,9 +411,16 @@ export function buildAiFormulaTrainFeedbackV1({ researchSha, queueSummary } = {}
           : 'WAIT_FOR_INDEPENDENT_EVIDENCE',
     });
   });
+  const inputIdentity = [...expected].sort();
+  const observed = new Set(rows.map((row) => row.itemDigest));
+  const missingItemDigests = inputIdentity.filter((id) => !observed.has(id));
   return Object.freeze({
     schemaVersion: 1, contract: AI_FORMULA_TRAIN_FEEDBACK_CONTRACT_V1,
-    researchSha, feedbackDigest: digestAiFormulaTrainValueV1(rows),
+    researchSha,
+    feedbackDigest: digestAiFormulaTrainValueV1({ researchSha, reviewedItemDigests: inputIdentity, rows }),
+    reviewedItemDigestsDigest: digestAiFormulaTrainValueV1(inputIdentity),
+    status: missingItemDigests.length === 0 ? 'BOUND_TRAIN_FEEDBACK_ONLY' : 'WAITING_BOUND_TRAIN_RESULTS',
+    missingItemDigests: Object.freeze(missingItemDigests),
     rows: Object.freeze(rows),
     adviceOnly: true, orderAuthority: false,
     automaticFormulaMutation: false, automaticPromotion: false,

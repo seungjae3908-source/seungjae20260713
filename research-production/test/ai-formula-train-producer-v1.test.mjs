@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, lstat, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, lstat, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -173,7 +173,7 @@ test('approved 1-candidate bounded TRAIN producer feeds existing canonical queue
   assert.equal(summary.executionAuthority, 'NONE');
   assert.equal(summary.genuineResearchProducerVerified, false);
   assert.equal(summary.automationReadiness, 'BLOCKED_DATA_OOS_NOT_ATTESTED');
-  const feedback = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: summary });
+  const feedback = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: summary, reviewedItemDigests: [first.proposals[0].itemDigest] });
   assert.equal(feedback.contract, AI_FORMULA_TRAIN_FEEDBACK_CONTRACT_V1);
   assert.equal(feedback.rows[0].state, 'HOLD');
   assert.equal(feedback.automaticPromotion, false);
@@ -281,14 +281,91 @@ test('TRAIN-only feedback cannot be transformed into automatic promotions or for
     oosAndSettlementVerified: false, paperRegisteredCount: 0, counts: { PASS: 0 },
     rows: [{ itemDigest, state: 'RESERVE', blockers: ['MISSING_CANONICAL_CALLBACK'] }],
   };
-  const fb = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: summary });
+  const fb = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: summary, reviewedItemDigests: [itemDigest] });
+  assert.equal(fb.status, 'BOUND_TRAIN_FEEDBACK_ONLY');
   assert.equal(fb.rows[0].nextStep, 'REVIEW_RESEARCH_HYPOTHESIS');
   assert.equal(fb.adviceOnly, true);
   assert.equal(fb.orderAuthority, false);
   assert.throws(() => buildAiFormulaTrainFeedbackV1({
-    researchSha: SHA, queueSummary: { ...summary, paperOrderAuthorityGranted: true },
+    researchSha: SHA, reviewedItemDigests: [itemDigest], queueSummary: { ...summary, paperOrderAuthorityGranted: true },
   }), /AI_FORMULA_FEEDBACK_UNTRUSTED/u);
   assert.throws(() => buildAiFormulaTrainFeedbackV1({
-    researchSha: SHA, queueSummary: { ...summary, rows: [{ itemDigest, state: 'HOLD', blockers: ['secret=x'] }] },
+    researchSha: SHA, reviewedItemDigests: [itemDigest], queueSummary: { ...summary, rows: [{ itemDigest, state: 'HOLD', blockers: ['secret=x'] }] },
   }), /AI_FORMULA_FEEDBACK_BLOCKER_INVALID/u);
+});
+
+
+test('parallel AI retries publish one complete immutable TRAIN page and leave no partial files', async () => inTemp(async root => {
+  const args = options({ stage: true, stateRoot: root, env: { RESEARCH_AI_FORMULA_TRAIN_STAGE_ENABLED: 'true' } });
+  const results = await Promise.all(Array.from({ length: 8 }, () => prepareAiFormulaTrainProposalsV1(args)));
+  assert.equal(results.filter((r) => r.proposals[0].state === 'STAGED_TRAIN_ONLY').length, 1);
+  assert.equal(results.filter((r) => r.proposals[0].state === 'ALREADY_STAGED_TRAIN_ONLY').length, 7);
+  const outbox = join(root, 'formula-backtest', 'producer-outbox');
+  const names = await readdir(outbox);
+  assert.equal(names.length, 1);
+  assert.equal(names[0], results[0].proposals[0].itemDigest + '.json');
+  assert.equal((await lstat(join(outbox, names[0]))).nlink, 1);
+  const record = JSON.parse(await readFile(join(outbox, names[0]), 'utf8'));
+  assert.equal(record.itemDigest, results[0].proposals[0].itemDigest);
+  assert.equal(digestAiFormulaTrainValueV1(record.item), record.itemDigest);
+}));
+
+test('truncated preexisting final record is rejected without an overwrite', async () => inTemp(async root => {
+  const args = options({ stage: true, stateRoot: root, env: { RESEARCH_AI_FORMULA_TRAIN_STAGE_ENABLED: 'true' } });
+  const result = await prepareAiFormulaTrainProposalsV1(args);
+  const path = join(root, 'formula-backtest', 'producer-outbox', result.proposals[0].itemDigest + '.json');
+  await writeFile(path, '{ "partial":', { mode: 0o600 });
+  await assert.rejects(prepareAiFormulaTrainProposalsV1(args), /AI_FORMULA_IMMUTABLE_INTAKE_CONFLICT/u);
+  assert.equal(await readFile(path, 'utf8'), '{ "partial":');
+}));
+
+test('AI artifact cannot bring additional safety powers, output fields, or oversized content', async () => {
+  for (const alter of [
+    (v) => { v.safety = { ...v.safety, paidFallback: true }; },
+    (v) => { v.safety = { ...v.safety, numericPerformanceAuthority: true }; },
+    (v) => { v.safety = { ...v.safety, injectedAuthority: true }; },
+  ]) {
+    const forged = ai(); alter(forged);
+    await assert.rejects(prepareAiFormulaTrainProposalsV1(options({ aiReviewArtifact: forged })), /AI_FORMULA_REVIEW_SAFETY_ENVELOPE_INVALID/u);
+  }
+  const extra = ai(); extra.review = { ...extra.review, orderSignal: 'BUY NOW' };
+  await assert.rejects(prepareAiFormulaTrainProposalsV1(options({ aiReviewArtifact: extra })), /AI_FORMULA_REVIEW_DISPOSITION_INVALID/u);
+  const hypothesis = ai();
+  hypothesis.review = { ...hypothesis.review, hypotheses: [{ ...hypothesis.review.hypotheses[0], hiddenCommand: 'LIVE' }] };
+  await assert.rejects(prepareAiFormulaTrainProposalsV1(options({ aiReviewArtifact: hypothesis })), /AI_FORMULA_HYPOTHESIS_INVALID/u);
+  const enormous = ai(); enormous.review = { ...enormous.review, summary: 'x'.repeat(40 * 1024) };
+  await assert.rejects(prepareAiFormulaTrainProposalsV1(options({ aiReviewArtifact: enormous })), /AI_FORMULA_REVIEW_BYTES_INVALID/u);
+});
+
+test('feedback is bound to reviewed item digests, not unrelated rotating research rows', () => {
+  const id = digestAiFormulaTrainValueV1({ reviewed: true });
+  const other = digestAiFormulaTrainValueV1({ unrelated: true });
+  const record = {
+    contract: 'research-formula-auto-backtest-summary/v1', executionAuthority: 'NONE',
+    liveTrading: false, autoTrading: false, realOrder: false,
+    paperOrderAuthorityGranted: false, canonicalFutureSignalVerified: false, oosAndSettlementVerified: false,
+    paperRegisteredCount: 0, counts: { PASS: 0 },
+    rows: [
+      { itemDigest: other, state: 'EXCLUDE', blockers: ['FORMULA_INVALID'] },
+      { itemDigest: id, state: 'HOLD', blockers: ['MISSING_CANONICAL_CALLBACK'] },
+    ],
+  };
+  const result = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: record, reviewedItemDigests: [id] });
+  assert.equal(result.status, 'BOUND_TRAIN_FEEDBACK_ONLY');
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].itemDigest, id);
+  assert.equal(result.rows[0].state, 'HOLD');
+  const missing = digestAiFormulaTrainValueV1({ notProcessed: true });
+  const waiting = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: record, reviewedItemDigests: [missing] });
+  assert.equal(waiting.rows.length, 0);
+  assert.equal(waiting.status, 'WAITING_BOUND_TRAIN_RESULTS');
+  assert.deepEqual(waiting.missingItemDigests, [missing]);
+  const otherRelease = buildAiFormulaTrainFeedbackV1({ researchSha: 'c'.repeat(40), queueSummary: record, reviewedItemDigests: [id] });
+  assert.notEqual(otherRelease.feedbackDigest, result.feedbackDigest);
+  assert.throws(() => buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: record }), /AI_FORMULA_FEEDBACK_UNTRUSTED/u);
+  assert.throws(() => buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: record, reviewedItemDigests: [id, id] }), /AI_FORMULA_FEEDBACK_UNTRUSTED/u);
+  assert.throws(() => buildAiFormulaTrainFeedbackV1({
+    researchSha: SHA, reviewedItemDigests: [id],
+    queueSummary: { ...record, rows: [record.rows[1], record.rows[1]] },
+  }), /AI_FORMULA_FEEDBACK_DUPLICATE_OR_UNBOUNDED/u);
 });
