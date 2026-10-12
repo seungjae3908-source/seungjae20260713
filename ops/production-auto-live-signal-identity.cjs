@@ -244,7 +244,70 @@ function inspectIndependentAutoLivePublicSourcePlan({
   });
 }
 
+
+const CANONICAL_AUTO_SIGNAL_HANDOFF_PATH =
+  '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+const MAX_AUTO_SIGNAL_HANDOFF_BYTES = 8 * 1024 * 1024;
+/**
+ * Read a real, pinned public-only handoff without following the final symlink.
+ * This verifies the local transport, not live scanner/AI provenance.
+ * Always sanitize errors: malformed JSON may contain credentials or paths.
+ */
+function readProductionAutoLiveSignalHandoff(handoffPath, io = require('node:fs')) {
+  if (handoffPath !== CANONICAL_AUTO_SIGNAL_HANDOFF_PATH) {
+    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PATH_INVALID');
+  }
+  const parents = [
+    '/opt/stock-app-data',
+    '/opt/stock-app-data/paper-forward-v1',
+    '/opt/stock-app-data/paper-forward-v1/runtime-state',
+    '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff',
+  ];
+  for (const dirname of parents) {
+    let stat;
+    try { stat = io.lstatSync(dirname); }
+    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID'); }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID');
+    }
+  }
+  if (!Number.isInteger(io.constants?.O_NOFOLLOW)
+    || !Number.isInteger(io.constants?.O_NONBLOCK)
+    || !Number.isInteger(io.constants?.O_RDONLY)) {
+    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FLAGS_UNAVAILABLE');
+  }
+  let fd;
+  try {
+    fd = io.openSync(handoffPath,
+      io.constants.O_RDONLY | io.constants.O_NOFOLLOW | io.constants.O_NONBLOCK);
+  } catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FAILED'); }
+  try {
+    const stat = io.fstatSync(fd);
+    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 2
+      || stat.size > MAX_AUTO_SIGNAL_HANDOFF_BYTES
+      || (stat.mode & 0o077) !== 0) {
+      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE');
+    }
+    const raw = io.readFileSync(fd, 'utf8');
+    if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_AUTO_SIGNAL_HANDOFF_BYTES) {
+      throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE');
+    }
+    try { return JSON.parse(raw); }
+    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID'); }
+  } catch (error) {
+    // No arbitrary filesystem messages or JSON snippets in public job logs.
+    if (error instanceof Error && /^AUTO_LIVE_SIGNAL_HANDOFF_(?:FILE_UNSAFE|JSON_INVALID)$/u.test(error.message)) {
+      throw error;
+    }
+    throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_READ_FAILED');
+  } finally {
+    try { io.closeSync(fd); }
+    catch { throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_CLOSE_FAILED'); }
+  }
+}
+
 module.exports = {
+  readProductionAutoLiveSignalHandoff,
   inspectIndependentAutoLivePublicSourcePlan,
   assertAutoLiveSignalNotDisabled,
   inspectAutoLiveSharedPaperForwardOwnership,
