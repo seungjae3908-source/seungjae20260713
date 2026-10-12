@@ -2,7 +2,7 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
@@ -142,8 +142,14 @@ test('cron configuration cannot re-use stale, mismatched or Paper-outcome activa
 
 test('audit rejects both disable sentinels and a different source-wrapper identity', () => {
   const source = readFileSync('ops/production-auto-live-signal-source-audit.mjs', 'utf8');
-  assert.ok(source.includes("scheduleRoot + '/DISABLED'"));
-  assert.ok(source.includes("scheduleRoot + '/runtime-state/DISABLED'"));
+  assert.ok(source.includes('signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot)'));
+  const identitySource = readFileSync('ops/production-auto-live-signal-identity.cjs', 'utf8');
+  assert.ok(identitySource.includes("root + '/DISABLED'"));
+  assert.ok(identitySource.includes("root + '/runtime-state/DISABLED'"));
+  assert.ok(identitySource.includes("stat(path)"));
+  assert.ok(source.includes('timeout: 5000'));
+  assert.ok(source.includes('maxBuffer: 1024 * 1024'));
+  assert.doesNotMatch(source, /existsSync\(scheduleRoot\s*\+/u);
   assert.ok(source.includes('inspectManagedPaperForwardSchedule('));
   assert.ok(source.includes('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID'));
   assert.ok(source.includes("PAPER_FORWARD_RESEARCH_SHA='"));
@@ -190,4 +196,51 @@ test('auto-LIVE shared-scheduler preflight passes only an empty prior Paper owne
   assert.ok(preflight.includes('AUTO_LIVE_SHARED_SCHEDULE_INSPECTION_UNAVAILABLE'));
   assert.ok(preflight.includes("process.env.AUTO_LIVE_SHARED_PAPER_PREFLIGHT === 'true'"));
   assert.doesNotMatch(preflight, /\b(?:execFileSync|spawnSync)\(\s*['"](?:pm2|psql|bash|sh)['"]/iu);
+});
+
+
+test('disabled schedule sentinels fail closed even when dangling symlinks', () => {
+  const root = '/opt/stock-app-data/paper-forward-v1';
+  const directory = { isDirectory: () => true, isSymbolicLink: () => false };
+  const symlink = { isDirectory: () => false, isSymbolicLink: () => true };
+  const marker = { isDirectory: () => false, isSymbolicLink: () => false };
+  const absent = Object.assign(new Error('missing'), { code: 'ENOENT' });
+  const unreadable = Object.assign(new Error('denied'), { code: 'EACCES' });
+  const statFixture = (custom = {}) => (path) => {
+    if (Object.hasOwn(custom, path)) {
+      if (custom[path] instanceof Error) throw custom[path];
+      return custom[path];
+    }
+    if (path === root || path === root + '/runtime-state') return directory;
+    throw absent;
+  };
+  assert.deepEqual(assertAutoLiveSignalNotDisabled(root, statFixture()), {
+    disableSentinelPresent: false,
+  });
+  assert.deepEqual(assertAutoLiveSignalNotDisabled(root, statFixture({
+    [root + '/runtime-state']: absent,
+  })), { disableSentinelPresent: false });
+  for (const markerPath of [root + '/DISABLED', root + '/runtime-state/DISABLED']) {
+    for (const value of [marker, symlink]) {
+      assert.throws(() => assertAutoLiveSignalNotDisabled(
+        root, statFixture({ [markerPath]: value }),
+      ), /AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED/u);
+    }
+    assert.throws(() => assertAutoLiveSignalNotDisabled(
+      root, statFixture({ [markerPath]: unreadable }),
+    ), /AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE/u);
+  }
+  for (const badParent of [root, root + '/runtime-state']) {
+    for (const value of [symlink, unreadable]) {
+      assert.throws(() => assertAutoLiveSignalNotDisabled(
+        root, statFixture({ [badParent]: value }),
+      ), /AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE/u);
+    }
+  }
+  assert.throws(() => assertAutoLiveSignalNotDisabled(
+    root, statFixture({ [root]: absent }),
+  ), /AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE/u);
+  assert.throws(() => assertAutoLiveSignalNotDisabled(
+    '/tmp/not-a-production-root', statFixture(),
+  ), /AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE/u);
 });

@@ -143,6 +143,37 @@ function inspectAutoLiveSharedPaperForwardOwnership({ targetSha, crontabText, sh
   });
 }
 
+// A disabled marker must remain visible even when it is a dangling symlink.
+// Also reject a redirected runtime-state parent: ENOENT on a child below a
+// broken parent is not proof that activation is enabled.
+function assertAutoLiveSignalNotDisabled(root, stat = require('node:fs').lstatSync) {
+  if (root !== '/opt/stock-app-data/paper-forward-v1' || typeof stat !== 'function') {
+    throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE');
+  }
+  const rootAndParent = [root, root + '/runtime-state'];
+  for (const path of rootAndParent) {
+    try {
+      const info = stat(path);
+      if (!info.isDirectory() || info.isSymbolicLink()) {
+        throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE');
+      }
+    } catch (error) {
+      if (path !== root && error?.code === 'ENOENT') continue;
+      throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE');
+    }
+  }
+  for (const path of [root + '/DISABLED', root + '/runtime-state/DISABLED']) {
+    try {
+      stat(path);
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue;
+      throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_UNAVAILABLE');
+    }
+    throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED');
+  }
+  return Object.freeze({ disableSentinelPresent: false });
+}
+
 function runAutoLiveSharedPaperForwardPreflight() {
   const { lstatSync } = require('node:fs');
   const { spawnSync } = require('node:child_process');
@@ -173,6 +204,7 @@ function runAutoLiveSharedPaperForwardPreflight() {
 }
 
 module.exports = {
+  assertAutoLiveSignalNotDisabled,
   inspectAutoLiveSharedPaperForwardOwnership,
   inspectManagedPaperForwardSchedule,
   inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
