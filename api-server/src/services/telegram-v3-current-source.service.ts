@@ -77,7 +77,7 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
     candidates.set(row.id,row);
   }
  }
- const sent=new Set<string>();
+ const sent=new Set<string>(),candidateCountByLane=new Map<string,number>();
  for(const raw of events){
   const event=OBJ(raw);
   if(!event||!['NEW_CANDIDATE','STATE_CHANGED','RESCAN_REQUESTED'].includes(event.type)
@@ -146,16 +146,26 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
     ||lane.universePartial!==false||lane.universeStale!==false
     ||lane.responseDataState!=='complete'
     ||lane.providerErrors!==0||lane.timeouts!==0||lane.universeProviderErrors!==0
+    ||!NUM(lane.scannedCards)||lane.scannedCards===0
+    ||!NUM(lane.retainedFromBatch)||lane.retainedFromBatch===0
+    ||lane.retainedFromBatch>lane.scannedCards
     ||proof.state!=='PAGE_EXECUTION_COMPLETE'
     ||proof.partial!==false||proof.timedOut!==false
     ||proof.providerErrors!==0||proof.timeouts!==0||proof.failuresObserved!==0
     ||!NUM(proof.requested)||proof.requested===0
+    ||lane.scannedCards>proof.requested
+    ||typeof origin.sourceExpiresAt!=='string'
+    ||!Number.isFinite(Date.parse(origin.sourceExpiresAt))
+    ||Date.parse(origin.sourceExpiresAt)<=nowMs
     ||proof.started!==proof.requested||proof.completed!==proof.requested
     ||!NUM(lane.cursorBefore)||!NUM(lane.cursorAfter)
     ||!NUM(lane.totalUniverse)||lane.totalUniverse===0)return false;
   const end=lane.cursorBefore+proof.requested;
   if(end>lane.totalUniverse||lane.cursorAfter!==(end===lane.totalUniverse?0:end))
     return false;
+  const count=(candidateCountByLane.get(lane.laneId)??0)+1;
+  if(count>lane.retainedFromBatch)return false;
+  candidateCountByLane.set(lane.laneId,count);
  }
  return true;
 }

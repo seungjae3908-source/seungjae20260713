@@ -307,6 +307,9 @@ export function adaptCanonicalScannerCard(input, options = {}) {
     sourceAsOf: card.observedAt ?? null,
     provenance: {
       scannerSignalId: card.signalId ?? null,
+      // Persist provider card expiry: the twelve sequential V3 scans may
+      // finish after an initially valid card has already expired.
+      sourceExpiresAt: card.expiresAt ?? null,
       scannerSources: Array.isArray(card.dataSources) ? card.dataSources : [],
       edgeSource: evidence?.source ?? null,
       profitEvidenceStatus: input?.profitEvidence?.status ?? null,

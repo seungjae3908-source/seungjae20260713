@@ -132,6 +132,7 @@ test('canonical READY ProfitEvidence plus exact Paper Identity and explicit runt
   assert.equal(adapted.provenance.costPolicyId, 'runtime-cost-v1');
   assert.deepEqual(adapted.provenance.paperIdentity, paperIdentity());
   assert.deepEqual(adapted.provenance.profitBlockers, []);
+  assert.equal(adapted.provenance.sourceExpiresAt,card().expiresAt);
   const snapshot = runSignalIntelligenceV3([adapted]);
   assert.equal(snapshot.lists.krBuy.length, 1);
   assert.equal(snapshot.lists.krBuy[0].utilityMode, 'NET_EDGE_ONLY_RISK_SEPARATE');

@@ -31,6 +31,7 @@ function fixture(){
      responseDataState:active?'complete':'untrusted',
      universePartial:!active,universeStale:false,
      cursorBefore:0,cursorAfter:20,totalUniverse:100,
+     scannedCards:active?1:0,retainedFromBatch:active?1:0,
      providerErrors:0,timeouts:0,universeProviderErrors:0,
      publicExecutionDiagnostic:{
        state:'PAGE_EXECUTION_COMPLETE',requested:20,started:20,
@@ -55,6 +56,7 @@ function fixture(){
      provenance:{
        laneId:'US_SWING_60M',cursor:0,sourceCycleId:EPOCH,
        scannerSignalId:'signal-aapl-1',
+       sourceExpiresAt:new Date(NOW+60_000).toISOString(),
        edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
        profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
        costPolicyId:'runtime-cost-v1',profitBlockers:[] as string[],
@@ -345,5 +347,26 @@ test('public room and member watchlist receive only current verified V3 candidat
    if(beforeUs===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
    else process.env.TELEGRAM_US_STOCK_CHAT_ID=beforeUs;
    await rm(dir,{recursive:true,force:true});
+ }
+});
+
+test('Telegram V3 separately rejects expired candidates and fabricated page/card counts',()=>{
+ const stale:any=fixture();
+ stale.rows[0].provenance.sourceExpiresAt=new Date(NOW-1).toISOString();
+ assert.equal(validTelegramV3CurrentSource(stale,NOW),false);
+ const missing:any=fixture();
+ delete missing.rows[0].provenance.sourceExpiresAt;
+ assert.equal(validTelegramV3CurrentSource(missing,NOW),false);
+ const clean:any=fixture();
+ assert.equal(validTelegramV3CurrentSource(clean,NOW),true);
+ assert.equal(validTelegramV3CurrentSource(clean,NOW+60_000),false);
+ for(const change of [
+   (s:any)=>{s.coverage[4].scannedCards=0;},
+   (s:any)=>{s.coverage[4].retainedFromBatch=0;},
+   (s:any)=>{s.coverage[4].retainedFromBatch=2;},
+   (s:any)=>{s.coverage[4].scannedCards=21;},
+ ]){
+   const forged:any=fixture();change(forged);
+   assert.equal(validTelegramV3CurrentSource(forged,NOW),false);
  }
 });

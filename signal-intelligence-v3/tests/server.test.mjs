@@ -53,6 +53,7 @@ function testOnlyCanonicalCandidate(symbol='005930'){
    provenance:{
      sourceCycleId:EPOCH,laneId:'KR_MID_LONG_1D',cursor:0,
      scannerSignalId:'fixture-signal-'+symbol,
+     sourceExpiresAt:'2099-01-01T00:00:00.000Z',
      scannerSources:['yahoo-public'],profitBlockers:[],
      edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
      profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
