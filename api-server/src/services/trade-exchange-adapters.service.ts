@@ -303,6 +303,11 @@ export function prepareBitgetTicker(symbol: string): PreparedExchangeRequest {
   };
 }
 
+function isBitgetAutomaticEntry(plan: TradingPlanInput): boolean {
+  return !plan.reduceOnly && (('executionMode' in plan && plan.executionMode === 'automatic')
+    || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF'));
+}
+
 export function validateBitgetContractRules(
   plan: TradingPlanInput, contract: Record<string, unknown>, referencePrice?: number,
 ) {
@@ -318,7 +323,7 @@ export function validateBitgetContractRules(
   if (maximumQuantity > 0 && quantity > maximumQuantity) throw new Error('BITGET_MAXIMUM_QUANTITY');
   const contractStatus = String(contract.symbolStatus ?? '').toLowerCase();
   if (contractStatus && contractStatus !== 'normal') throw new Error('BITGET_CONTRACT_NOT_TRADABLE');
-  if (!plan.reduceOnly && plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF')) {
+  if (isBitgetAutomaticEntry(plan)) {
     const priceStep = Number(contract.priceEndStep ?? 1) * 10 ** -Number(contract.pricePlace ?? 0);
     for (const value of [plan.stopPrice, ...plan.targetPrices]) {
       if (!Number.isFinite(value) || value <= 0
@@ -369,9 +374,7 @@ export function prepareBitgetOrder(
     clientOid: clientOrderId,
     reduceOnly: plan.reduceOnly ? 'YES' : 'NO',
   };
-  const automaticEntry = !plan.reduceOnly && ('executionMode' in plan && plan.executionMode === 'automatic'
-    || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF'));
-  if (automaticEntry) {
+  if (isBitgetAutomaticEntry(plan)) {
     const stop = Number(plan.stopPrice);
     // Final target protects the residual position without converting the
     // worker's earlier partial take-profit targets into a full close.
