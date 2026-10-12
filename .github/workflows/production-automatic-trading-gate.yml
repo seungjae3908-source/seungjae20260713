@@ -1058,7 +1058,7 @@ jobs:
             for (const contextName of requiredContexts) {
               const current = statuses.data.find((entry) => entry.context === contextName);
               if (!current || current.state !== 'success' ||
-                !String(current.target_url || '').includes(exactRunUrl)) {
+                !String(current.target_url || '').replace(/\/$/, '').endsWith(exactRunUrl)) {
                 core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_REQUIRED_STATUS_PROVENANCE_INVALID');
                 return;
               }
