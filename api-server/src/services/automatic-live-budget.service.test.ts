@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { projectAutomaticLiveBudget, automaticLiveBudgetRequired } from './automatic-live-budget.service';
+import { projectAutomaticLiveBudget, automaticLiveBudgetRequired, assertAutomaticLiveBudgetProjection } from './automatic-live-budget.service';
 import { DEFAULT_TRADING_POLICY, type TradingOrder, type TradingPlan, type TradingPolicy } from './trade-automation.types';
 
 const userId = '11111111-1111-1111-1111-111111111111';
@@ -255,4 +255,13 @@ test('large retained histories and durable holds are projected with bounded line
   assert.equal(projection.baseCharges.length, 0);
   assert.equal(projection.amountKrw, 70_000);
   assert.ok(identityReads < count * 40, `identity reads must be linear, observed ${identityReads}`);
+  let releaseReads = 0;
+  const releases = new Proxy(projection.releases, {
+    get(target, property, receiver) {
+      if (/^\d+$/u.test(String(property))) releaseReads += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  assertAutomaticLiveBudgetProjection({ ...projection, releases }, holds);
+  assert.ok(releaseReads <= count * 2, `release membership reads must be linear, observed ${releaseReads}`);
 });

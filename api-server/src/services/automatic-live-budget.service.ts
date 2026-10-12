@@ -238,8 +238,9 @@ export async function projectAutomaticLiveBudget(
 export function assertAutomaticLiveBudgetProjection(
   projection: AutomaticLiveBudgetProjection, holds: readonly AutomaticLiveBudgetCharge[],
 ) {
+  const releasedOrderIds = new Set(projection.releases);
   const candidates = [...projection.baseCharges,
-    ...holds.filter((row) => row.orderId !== projection.orderId && !projection.releases.includes(row.orderId)), projection];
+    ...holds.filter((row) => row.orderId !== projection.orderId && !releasedOrderIds.has(row.orderId)), projection];
   const byOrder = new Map<string, AutomaticLiveBudgetCharge>();
   for (const row of candidates) {
     const prior = byOrder.get(row.orderId);

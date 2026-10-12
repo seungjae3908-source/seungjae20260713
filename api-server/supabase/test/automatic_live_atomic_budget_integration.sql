@@ -5,7 +5,7 @@ select set_config('request.jwt.claim.sub','',true);
 
 do $acl$ begin
   if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true
-    or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v2' then
+    or public.read_automatic_live_budget_guard()->>'version' is distinct from 'automatic-live-atomic-budget-v3' then
     raise exception 'atomic budget schema/ACL/isolation guard not ready';
   end if;
   if has_function_privilege('authenticated','public.reserve_automatic_live_entry_budget(uuid,uuid,uuid,jsonb,jsonb,boolean)','EXECUTE')
@@ -14,6 +14,59 @@ do $acl$ begin
     raise exception 'member/anonymous can bypass server-owned budget derivation';
   end if;
 end $acl$;
+
+-- Each DDL tamper is confined to a rolled-back subtransaction. Counts and
+-- roles stay unchanged: only the genuine installed policy/function proof must
+-- distinguish them. No real account or provider exists in this database.
+do $definition_drift$ begin
+  begin
+    alter policy auto_live_server_update_guard on public.trade_orders using (true) with check (true);
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'changed policy body retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_POLICY_PROOF_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_POLICY_PROOF_PROBE' then raise; end if;
+  end;
+  begin
+    execute 'create or replace function public.is_automatic_live_ledger_payload(p_payload jsonb) returns boolean language sql immutable security invoker as ''select false''';
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'changed classification function retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_ROUTINE_PROOF_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_ROUTINE_PROOF_PROBE' then raise; end if;
+  end;
+  begin
+    alter table public.trade_orders disable row level security;
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'disabled ledger RLS retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_RLS_PROOF_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_RLS_PROOF_PROBE' then raise; end if;
+  end;
+  begin
+    grant execute on function public.automatic_live_budget_schema_fingerprint() to authenticated;
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'public proof-function grant retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_PROOF_ACL_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_PROOF_ACL_PROBE' then raise; end if;
+  end;
+  if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true then
+    raise exception 'rolling back probes did not restore the original proof';
+  end if;
+end $definition_drift$;
+
+set local role service_role;
+do $server_guard$ begin
+  if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true then
+    raise exception 'scoped server role cannot verify the definition-bound guard';
+  end if;
+end $server_guard$;
+reset role;
 
 insert into public.trade_automation_profiles(user_id,payload)
 values('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','{"mode":"automatic","automaticEnabled":true}')
@@ -190,6 +243,10 @@ do $deny$ begin
   begin
     perform public.read_automatic_live_budget_snapshot('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
     raise exception 'authenticated obtained server-only history';
+  exception when insufficient_privilege then null; end;
+  begin
+    perform public.automatic_live_budget_schema_fingerprint();
+    raise exception 'authenticated obtained server-only schema proof';
   exception when insufficient_privilege then null; end;
 end $deny$;
 reset role;
