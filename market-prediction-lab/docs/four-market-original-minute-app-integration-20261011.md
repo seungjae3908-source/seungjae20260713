@@ -383,3 +383,23 @@ surface distinctly for developer repair.
 기록한다. 네트워크 라이브러리 내부의 HTTP 재시도 횟수까지
 증명하는 값은 아니다. 이 Draft에서는 운영 공급원 GET을 실행하지
 않고 모의 응답과 개인 임시 저장소로 검증한다.
+
+### 2026-10-12 — Bitget Han contract identifiers in archival PIT gaps
+
+Bitget public current rosters and price collectors support USDT futures symbols
+containing Han glyphs, such as 龙虾USDT, but the historical PIT membership
+gate, single-day native collector and selected-date archive audit had
+ASCII-only symbol filters. This caused false missing source coverage for those
+contracts even when original 1m data was available.
+
+Historical CRYPTO_FUTURES now shares the restricted NFC Han USDT symbol
+contract with the Bitget native provider collector and original-minute archive.
+The dated roster, per-member PIT day planner, one-task original collector,
+and owner-only multi-date inventory preserve the exact symbol identity.
+KR/US stock IDs and Upbit KRW spot symbols retain ASCII-only validation.
+Whitespace, slash, emoji and unsafe separators remain blocked.
+
+Mock source tests show code correctness only. A retrospectively supplied PIT
+roster is not an independently verified historical exchange universe. No
+real provider GET, production archive write, Paper/OOS profit promotion,
+or real order authority is conferred.
