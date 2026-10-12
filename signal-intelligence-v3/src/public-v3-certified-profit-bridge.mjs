@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from 'node:crypto';
+import { createPublicKey, verify } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -11,6 +11,8 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 export const V3_ECONOMIC_BRIDGE_SCHEMA='signal-v3-economic-proof-bundle-v1';
 const SHA40=/^[0-9a-f]{40}$/u, SHA256=/^[0-9a-f]{64}$/u;
 const MAX_BYTES=1_048_576;
+const validPublicKey=x=>typeof x==='string'&&x.length>0&&x.length<8000
+  &&x.includes('-----BEGIN PUBLIC KEY-----');
 const MARKETS=new Set(['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES']);
 const COSTS=['commissionPercent','taxPercent','spreadPercent','slippagePercent',
   'fundingPercent','latencyPercent','liquidityImpactPercent','partialFillImpactPercent'];
@@ -136,7 +138,7 @@ function validatedBundle(bundle,publicKeyPem,expectedResearchSha,nowMs){
 export function inspectV3SignedResearchBundle(bundle,{publicKeyPem,expectedResearchSha,
   nowMs=Date.now(),enabled=false}={}){
  if(enabled!==true)return blocked('DISABLED');
- if(!SHA40.test(expectedResearchSha??'')||!text(publicKeyPem,8000)
+ if(!SHA40.test(expectedResearchSha??'')||!validPublicKey(publicKeyPem)
    ||!Number.isSafeInteger(nowMs)||nowMs<=0)return blocked('NOT_CONFIGURED');
  return validatedBundle(bundle,publicKeyPem,expectedResearchSha,nowMs);
 }
@@ -145,11 +147,13 @@ export async function loadV3SignedResearchBundle({enabled=false,root,fileName,
  if(enabled!==true)return blocked('DISABLED');
  if(!isAbsolute(root??'')||!text(fileName,128)
    ||basename(fileName)!==fileName||fileName==='.'||fileName==='..'
-   ||!SHA40.test(expectedResearchSha??'')||!text(publicKeyPem,8000)
+   ||!SHA40.test(expectedResearchSha??'')||!validPublicKey(publicKeyPem)
    ||!Number.isSafeInteger(nowMs)||nowMs<=0)
    return blocked('NOT_CONFIGURED');
  try{
   const resolved=resolve(root),file=join(resolved,fileName);
+  if(file!==resolve(resolved,fileName)||file===resolved)
+    return blocked('UNSAFE_PRIVATE_SOURCE');
   const stat=await lstat(resolved);
   if(!stat.isDirectory()||stat.isSymbolicLink()
     ||(stat.mode&0o077)!==0||await realpath(resolved)!==resolved
