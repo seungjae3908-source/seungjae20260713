@@ -75,6 +75,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(signalIdentity.includes('MAX_AUTO_SIGNAL_HANDOFF_BYTES'));
   assert.ok(signalIdentity.includes('O_NOFOLLOW'));
   assert.ok(signalIdentity.includes('O_NONBLOCK'));
+  assert.ok(signalIdentity.includes('readBoundedAutoLiveSourceArtifact('));
+  assert.ok(signalIdentity.includes('io.readSync(fd, bytes,'));
+  assert.ok(!signalIdentity.includes("io.readFileSync(fd, 'utf8')"));
+  assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleActivation(activationPath)'));
+  assert.ok(signalAudit.includes('signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath)'));
+  assert.ok(!signalAudit.includes("readFileSync(activationPath, 'utf8')"));
+  assert.ok(!signalAudit.includes("readFileSync(wrapperPath, 'utf8')"));
   assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_HANDOFF_SHA_MISMATCH'));
   assert.ok(signalAudit.includes("from './production-auto-live-signal-identity.cjs'"));
   assert.ok(!signalAudit.includes("from '../.github/"), 'runtime signal audit cannot import the excluded .github directory');

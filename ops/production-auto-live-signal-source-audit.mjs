@@ -1,4 +1,3 @@
-import { lstatSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import signalIdentity from './production-auto-live-signal-identity.cjs';
 import {
@@ -53,12 +52,7 @@ const activationPath = scheduleRoot + '/activation.json';
 const wrapperPath = scheduleRoot + '/bin/run-paper-forward-schedule';
 let activation;
 try {
-  const activationStat = lstatSync(activationPath);
-  if (!activationStat.isFile() || activationStat.isSymbolicLink()
-    || activationStat.size <= 0 || activationStat.size > 32 * 1024) {
-    throw new Error('INVALID_ACTIVATION_FILE');
-  }
-  activation = JSON.parse(readFileSync(activationPath, 'utf8'));
+  activation = signalIdentity.readProductionAutoLiveScheduleActivation(activationPath);
 } catch {
   throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_MISSING_OR_INVALID');
 }
@@ -67,13 +61,7 @@ signalIdentity.inspectManagedPaperForwardSchedule(
 );
 signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot);
 try {
-  const wrapperStat = lstatSync(wrapperPath);
-  if (!wrapperStat.isFile() || wrapperStat.isSymbolicLink()
-    || (wrapperStat.mode & 0o111) === 0
-    || (wrapperStat.mode & 0o077) !== 0 || wrapperStat.size > 64 * 1024) {
-    throw new Error('INVALID_WRAPPER_MODE');
-  }
-  const wrapper = readFileSync(wrapperPath, 'utf8');
+  const wrapper = signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath);
   if (!wrapper.includes("PAPER_FORWARD_RESEARCH_SHA='" + targetSha + "'")
     || !wrapper.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'")
     || !wrapper.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'")

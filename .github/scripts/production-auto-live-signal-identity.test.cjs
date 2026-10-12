@@ -2,7 +2,9 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { readProductionAutoLiveSignalHandoff, inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
+const { readBoundedAutoLiveSourceArtifact, readProductionAutoLiveScheduleActivation,
+  readProductionAutoLiveScheduleWrapper, readProductionAutoLiveSignalHandoff,
+  inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
 const SHA = 'a'.repeat(40);
 const SCHEDULE_AT = Date.parse('2026-10-13T00:20:00.000Z');
@@ -275,60 +277,89 @@ test('a dedicated Auto LIVE public source plan never replaces existing Paper or 
     /AUTO_LIVE_INDEPENDENT_SOURCE_STATE_ALREADY_OWNED/u);
 });
 
-test('source handoff path is pinned and opened nofollow, bounded, private and closed on every outcome', () => {
-  const handoffPath =
-    '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
-  const parent = { isDirectory: () => true, isSymbolicLink: () => false };
-  const regular = { isFile: () => true, size: 32, mode: 0o100600 };
-  const reads = [];
-  const base = {
-    constants: { O_RDONLY: 0, O_NOFOLLOW: 131072, O_NONBLOCK: 2048 },
-    lstatSync(path) { reads.push(['parent', path]); return parent; },
-    openSync(path, flags) { reads.push(['open', path, flags]); return 71; },
-    fstatSync(fd) { assert.equal(fd, 71); return regular; },
-    readFileSync(fd, encoding) {
-      assert.equal(fd, 71);
-      assert.equal(encoding, 'utf8');
-      return '{"status":"READY"}';
-    },
-    closeSync(fd) { reads.push(['close', fd]); },
-  };
-  assert.deepEqual(readProductionAutoLiveSignalHandoff(handoffPath, base), { status: 'READY' });
-  assert.equal(reads.filter(row => row[0] === 'parent').length, 4);
-  const open = reads.find(row => row[0] === 'open');
-  assert.equal(open[1], handoffPath);
-  assert.ok((open[2] & base.constants.O_NOFOLLOW) !== 0);
-  assert.ok((open[2] & base.constants.O_NONBLOCK) !== 0);
-  assert.equal(reads.at(-1)[0], 'close');
-  for (const bad of [handoffPath + '/extra', '/tmp/secrets.json',
-    '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json']) {
-    assert.throws(() => readProductionAutoLiveSignalHandoff(bad, base),
-      /AUTO_LIVE_SIGNAL_HANDOFF_PATH_INVALID/u);
-  }
-  const unsafeStats = [
-    { ...regular, mode: 0o100644 },
-    { ...regular, size: 0 },
-    { ...regular, size: 9 * 1024 * 1024 },
-    { ...regular, size: Number.NaN },
-    { ...regular, isFile: () => false },
+test('handoff, activation and wrapper artifacts are all anchored and read through bounded NOFOLLOW fd', () => {
+  const fixtures=[
+    ['HANDOFF','/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json',
+      '{"status":"READY"}',0o100600],
+    ['ACTIVATION','/opt/stock-app-data/paper-forward-v1/activation.json',
+      '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE"}',0o100600],
+    ['WRAPPER','/opt/stock-app-data/paper-forward-v1/bin/run-paper-forward-schedule',
+      '#!/usr/bin/env bash\nset -Eeuo pipefail\n',0o100700],
   ];
-  for (const stat of unsafeStats) {
-    let closed = false;
-    assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
-      ...base, fstatSync: () => stat, closeSync: () => { closed = true; },
-    }), /AUTO_LIVE_SIGNAL_HANDOFF_FILE_UNSAFE/u);
-    assert.equal(closed, true);
+  for(const [kind,file,payload,mode] of fixtures){
+    const data=Buffer.from(payload,'utf8');
+    const stat={isFile:()=>true,size:data.length,mode,dev:4,ino:17,mtimeMs:100};
+    let closes=0;
+    const opens=[];
+    const io={
+      constants:{O_RDONLY:0,O_NOFOLLOW:131072,O_NONBLOCK:2048},
+      lstatSync:()=>({isDirectory:()=>true,isSymbolicLink:()=>false}),
+      openSync(p,f){opens.push({p,f});return 71;},
+      fstatSync(fd){assert.equal(fd,71);return stat;},
+      readSync(fd,b,o,n,p){
+        assert.equal(fd,71);
+        const count=Math.min(n,Math.max(0,data.length-p));
+        if(count>0)data.copy(b,o,p,p+count);
+        return count;
+      },
+      closeSync(fd){assert.equal(fd,71);closes++;}
+    };
+    assert.equal(readBoundedAutoLiveSourceArtifact(kind,file,io),payload);
+    assert.equal(closes,1);
+    assert.equal(opens[0].p,file);
+    assert.ok((opens[0].f & io.constants.O_NOFOLLOW)!==0);
+    assert.ok((opens[0].f & io.constants.O_NONBLOCK)!==0);
+    for(const badPath of ['/tmp/secret-key',file+'/../secret-key']){
+      assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,badPath,io),
+        new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_PATH_INVALID'));
+    }
+    assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+      ...io,lstatSync:()=>({isDirectory:()=>false,isSymbolicLink:()=>true}),
+    }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_PARENT_INVALID'));
+    for(const bad of [
+      {...stat,size:0},{...stat,size:9*1024*1024},
+      {...stat,mode:mode|0o044},{...stat,isFile:()=>false},
+    ]){
+      assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+        ...io,fstatSync:()=>bad,
+      }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_FILE_UNSAFE'));
+    }
+    let count=0;
+    assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+      ...io,fstatSync:()=>++count===1?stat:{...stat,mtimeMs:101},
+    }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_FILE_CHANGED'));
+    assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+      ...io,readSync:()=>0,
+    }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_FILE_CHANGED'));
+    assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+      ...io,readSync:(fd,b,o,n,p)=>n,
+    }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_FILE_CHANGED'));
+    assert.throws(()=>readBoundedAutoLiveSourceArtifact(kind,file,{
+      ...io,openSync:()=>{throw new Error('PRIVATE_DO_NOT_REPORT');},
+    }),new RegExp('AUTO_LIVE_SIGNAL_'+kind+'_OPEN_FAILED'));
+    if(kind==='HANDOFF')assert.deepEqual(readProductionAutoLiveSignalHandoff(file,io),{status:'READY'});
+    if(kind==='ACTIVATION')assert.deepEqual(readProductionAutoLiveScheduleActivation(file,io),
+      {status:'ACTIVE_WAITING_FOR_NATURAL_CYCLE'});
+    if(kind==='WRAPPER')assert.equal(readProductionAutoLiveScheduleWrapper(file,io),payload);
   }
-  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
-    ...base, lstatSync: () => ({ isDirectory: () => false, isSymbolicLink: () => true }),
-  }), /AUTO_LIVE_SIGNAL_HANDOFF_PARENT_INVALID/u);
-  let closed = false;
-  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
-    ...base, readFileSync: () => '{"private_key":"TOP_SECRET" invalid',
-    closeSync: () => { closed = true; },
-  }), /AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID/u);
-  assert.equal(closed, true);
-  assert.throws(() => readProductionAutoLiveSignalHandoff(handoffPath, {
-    ...base, openSync: () => { throw new Error('SENSITIVE_KEY_MUST_NOT_ESCAPE'); },
-  }), /^Error: AUTO_LIVE_SIGNAL_HANDOFF_OPEN_FAILED$/u);
+});
+test('malformed pinned JSON errors stay sanitized and descriptors are closed', () => {
+  const file='/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+  const data=Buffer.from('{"private_key":"SECRET"', 'utf8');
+  let closes=0;
+  const io={
+    constants:{O_RDONLY:0,O_NOFOLLOW:131072,O_NONBLOCK:2048},
+    lstatSync:()=>({isDirectory:()=>true,isSymbolicLink:()=>false}),
+    openSync:()=>44,
+    fstatSync:()=>({isFile:()=>true,size:data.length,mode:0o100600,dev:1,ino:2,mtimeMs:4}),
+    readSync(fd,b,o,n,p){
+      const count=Math.min(n,Math.max(0,data.length-p));
+      if(count)data.copy(b,o,p,p+count);
+      return count;
+    },
+    closeSync(){closes++;}
+  };
+  assert.throws(()=>readProductionAutoLiveSignalHandoff(file,io),
+    /^Error: AUTO_LIVE_SIGNAL_HANDOFF_JSON_INVALID$/u);
+  assert.equal(closes,1);
 });
