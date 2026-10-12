@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import signalIdentity from './production-auto-live-signal-identity.cjs';
 import {
@@ -16,11 +16,9 @@ if (!handoffPath || !/^[0-9a-f]{40}$/u.test(targetSha)
   || !Number.isSafeInteger(scheduleActivatedAtMs) || scheduleActivatedAtMs <= 0) {
   throw new Error('AUTO_LIVE_SIGNAL_AUDIT_ARGUMENT_INVALID');
 }
-if (!existsSync(handoffPath)) throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_MISSING');
-
 const nowMs = Date.now();
 const handoff = validateMemberAutoTradingPaperHandoff(
-  JSON.parse(readFileSync(handoffPath, 'utf8')),
+  signalIdentity.readProductionAutoLiveSignalHandoff(handoffPath),
   nowMs,
 );
 if (handoff.status !== 'READY' || handoff.blockers.length !== 0) {
