@@ -171,6 +171,7 @@ export function assessMinuteManifestCapacity(manifest,opts={}) {
     cryptoSpotSymbols:rows.filter(v=>v.market===markets[0]).length,
     cryptoFuturesSymbols:rows.filter(v=>v.market===markets[1]).length,
     stockSymbols:rows.filter(v=>v.market==='KR_STOCK'||v.market==='US_STOCK').length,
+    windowMinutes:manifest.pageWindowMinutes ?? 120,
     ...opts,
   });
 }
@@ -299,7 +300,7 @@ export async function probePublicCurrentCryptoRosters({
 
 /**
  * Mechanical storage and inode forecast, NOT observed Vultr disk usage.
- * Every 120m immutable JSON source page is a separate inode. Long unbounded
+ * Every immutable 120m (legacy) / opt-in 180m source page is a separate inode. Long unbounded
  * retention on 2vCPU/4GiB may exhaust disk/inodes even when HTTP rate is fine.
  * KR/US stock sessions require independent local calendar/source estimates.
  */
@@ -315,7 +316,7 @@ export function forecastPublicMinuteArchiveFootprintV1({
     ['BYTES_PER_MINUTE',bytesPerObservedMinuteRow,4096],
     ['PAGE_METADATA',pageMetadataBytes,65536],
     ['MINUTES_PER_DAY',minutesPerDay,1440],
-    ['PAGE_WINDOW_MINUTES',pageWindowMinutes,120],
+    ['PAGE_WINDOW_MINUTES',pageWindowMinutes,180],
   ]){
     if(!Number.isSafeInteger(value)||value<0||value>max)
       fail('MINUTE_FOOTPRINT_'+name+'_INVALID');

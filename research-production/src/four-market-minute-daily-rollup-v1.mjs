@@ -103,7 +103,7 @@ async function listSelectedPages(root,market,symbol,dayStart){
   const marketPath=join(root,market),symbolPath=join(marketPath,symbol);
   if(!await privateDirectory(marketPath,true)
     ||!await privateDirectory(symbolPath,true))return result;
-  // Each original request spans <=120m, so only previous and current
+  // Each original request spans <=180m, so only previous and current
   // UTC-date directories can intersect the requested UTC day.
   for(const dayMs of [dayStart-DAY,dayStart]){
     const dir=join(symbolPath,new Date(dayMs).toISOString().slice(0,10));

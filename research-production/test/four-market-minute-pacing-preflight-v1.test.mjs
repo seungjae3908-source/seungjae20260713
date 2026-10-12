@@ -118,6 +118,36 @@ test('manifest duplicate / forged backfill fails closed before capacity numbers'
       startMs:NOW,endMs:NOW-60_000}] }}),/MINUTE_QUEUE_RANGE_INVALID/);
 });
 
+
+test('opt-in 180m source budget is distinct from untouched 120m queue', () => {
+  const m={...manifest(294,466),pageWindowMinutes:180};
+  const x=plan({manifest:m});
+  assert.equal(x.activeManifestPageMinutes,180);
+  assert.equal(x.capacity.windowMinutes,180);
+  assert.equal(x.capacity.dailyRequired,6080);
+  assert.equal(x.capacity.dailyAvailable,4608);
+  assert.equal(x.capacity.requiredWithHeadroom,7296);
+  assert.equal(x.capacity.minActionsPerCycleWithHeadroom,26);
+  assert.equal(x.alternatePage200Scenario.activeArchivePageMinutes,180);
+  assert.equal(x.alternatePage200Scenario.maxOptionalArchivePageMinutes,180);
+  assert.equal(x.alternatePage200Scenario.enabled,false);
+  assert.ok(x.reasons.includes('CONTINUOUS_DAY_CAPTURE_RATE_INSUFFICIENT'));
+  assert.equal(x.actionable,false);
+  assert.equal(x.providerCalls,0);
+  assert.equal(x.executionAuthority,'NONE');
+});
+test('opt-in 180m backfill origin estimate never becomes real cursor progress',()=>{
+  const m={...manifest(1,0),pageWindowMinutes:180};
+  m.ranges.push({market:'CRYPTO_SPOT',symbol:'T0000',mode:'BACKFILL',
+    startMs:NOW-360*60_000,endMs:NOW});
+  const x=plan({manifest:m});
+  assert.equal(x.declaredBackfillRanges,1);
+  assert.equal(x.declaredBackfillPagesFromOrigin,2);
+  assert.equal(x.alternatePage200Scenario.declaredBackfillPagesFromOrigin,2);
+  assert.equal(x.backfillQueueCursorAndCurrentOutstandingPagesNotInspected,true);
+  assert.equal(x.currentTimerActivated,false);
+});
+
 test('stock sources never inherit crypto 24h timing assumptions', () => {
   const x = plan({ manifest: manifest(2, 2, 1) });
   assert.equal(x.capacity.status, 'STOCK_SESSION_NOT_MODELLED');
