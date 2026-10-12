@@ -78,7 +78,7 @@ test('Bitget duplicates/invalid status and contradictory quote currencies are bl
 });
 test('current roster identities cannot be modified or upgraded to trading permission',()=>{
   const r=normalizeUpbitKrwMinuteRoster(upbit,NOW);
-  assert.throws(()=>verifyPublicMinuteRoster({...r,symbols:['BTC','XRP']}),/DIGEST_MISMATCH/);
+  assert.throws(()=>verifyPublicMinuteRoster({...r,symbols:['BTC','XRP']}),/ATTESTATION_INVALID/);
   assert.throws(()=>verifyPublicMinuteRoster({...r,canTrade:true}),/ATTESTATION_INVALID/);
   assert.throws(()=>verifyPublicMinuteRoster({...r,historicalPITProven:true}),/ATTESTATION_INVALID/);
 });
