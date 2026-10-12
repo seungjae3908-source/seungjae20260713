@@ -1,8 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { Info } from 'lucide-react';
+import { BarChart3, Bot, ChevronRight, ClipboardCheck, Info, Radar } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
-import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
@@ -39,6 +38,38 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
   backtest: '백테스트',
   trade: '기술매매',
 };
+
+const WORKSPACE_CARDS = [
+  {
+    value: 'signal',
+    title: 'AI 검색기',
+    description: 'AI가 포착한 시장 신호와 근거를 한눈에 확인합니다.',
+    icon: Radar,
+  },
+  {
+    value: 'chart',
+    title: 'AI 차트',
+    description: '보조지표와 AI 분석을 실제 차트 위에서 함께 봅니다.',
+    icon: BarChart3,
+  },
+  {
+    value: 'trade',
+    title: '기술매매',
+    description: '모의·실전 주문 상태와 안전장치를 분리해 관리합니다.',
+    icon: Bot,
+  },
+  {
+    value: 'backtest',
+    title: '백테스트',
+    description: '과거 데이터로 전략 성과와 위험을 검증합니다.',
+    icon: ClipboardCheck,
+  },
+] as const satisfies ReadonlyArray<{
+  value: Workspace;
+  title: string;
+  description: string;
+  icon: typeof Radar;
+}>;
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
@@ -257,14 +288,54 @@ export default function TechnicalWorkspacePage() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
       <h1 className="sr-only sm:hidden" data-testid="technical-mobile-accessible-title">{WORKSPACE_TITLES[workspace]}</h1>
-      <div className="hidden sm:block" data-testid="technical-desktop-header">
-        <CenteredPageHeader
-          title={WORKSPACE_TITLES[workspace]}
-          infoTitle="기술 기능 안내"
-          infoItems={[...TECHNICAL_INFO_ITEMS]}
-        />
+      <div className="hidden shrink-0 border-b border-card-border bg-background px-5 pb-4 pt-5 sm:block lg:px-7" data-testid="technical-desktop-header">
+        <div className="mx-auto w-full max-w-[96rem]">
+          <div className="mb-4 flex items-end justify-between gap-6">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">AI investment workspace</p>
+              <h1 aria-label={WORKSPACE_TITLES[workspace]} className="mt-1 text-2xl font-extrabold tracking-tight text-foreground lg:text-3xl">기술 분석</h1>
+              <p className="mt-1 text-sm font-medium text-muted-foreground">AI와 시장 데이터로 검증한 분석·매매 도구를 한곳에서 사용하세요.</p>
+            </div>
+            <div className="hidden rounded-full border border-card-border bg-card px-3 py-1.5 text-xs font-semibold text-muted-foreground lg:block">
+              현재 화면 <span className="ml-1 text-foreground">{WORKSPACE_TITLES[workspace]}</span>
+            </div>
+          </div>
+          <div role="group" aria-label="기술 기능 선택" data-testid="technical-desktop-cards" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {WORKSPACE_CARDS.map((card) => {
+              const selected = card.value === workspace;
+              const disabled = !workspaceAllowed(card.value);
+              const Icon = card.icon;
+              return (
+                <button
+                  key={card.value}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-disabled={disabled || undefined}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (!disabled) setWorkspace(card.value);
+                  }}
+                  className={`group flex min-h-[104px] min-w-0 items-center gap-3 rounded-2xl border p-3.5 text-left shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    selected
+                      ? 'border-primary bg-primary/[0.07] shadow-[0_12px_32px_rgba(37,99,235,0.12)]'
+                      : 'border-card-border bg-card hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md'
+                  } ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
+                >
+                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${selected ? 'border-primary/30 bg-primary text-primary-foreground' : 'border-primary/15 bg-primary/[0.06] text-primary'}`}>
+                    <Icon className="h-6 w-6" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-base font-extrabold text-foreground">{card.title}{disabled ? ' · 잠김' : ''}</span>
+                    <span className="mt-1 line-clamp-2 block text-xs font-medium leading-5 text-muted-foreground">{card.description}</span>
+                  </span>
+                  <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${selected ? 'translate-x-0.5 text-primary' : 'text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary'}`} aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
+      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <div className="min-w-0 flex-1">
             <ResponsiveTabs
@@ -274,7 +345,7 @@ export default function TechnicalWorkspacePage() {
                 if (workspaceAllowed(nextWorkspace)) setWorkspace(nextWorkspace);
               }}
               ariaLabel="기술 기능 탭"
-              testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
+              testId="technical-mobile-tabs"
               compact
             />
           </div>
