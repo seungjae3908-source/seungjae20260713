@@ -8,6 +8,8 @@ import { persistOriginalMinutePage, MINUTE_MS } from
   '../src/four-market-minute-archive-intake-v1.mjs';
 import { inspectImmutableMinuteDayRollupV1 } from
   '../src/four-market-minute-daily-rollup-v1.mjs';
+import { prepareSealedMinuteBacktesterInputV1 } from
+  '../src/four-market-minute-backtester-prewire-v1.mjs';
 
 const DAY_MS=86_400_000;
 const DAY=Date.parse('2026-10-10T00:00:00Z');
@@ -45,6 +47,34 @@ async function store(root,market,symbol,start,end,mutate=null,sha=SHA1){
     retrievedAtMs:RETRIEVED,
   });
 }
+
+
+test('eight sealed 180m pages yield exact 1440-minute source-only native prewire',async()=>{
+  await room(async root=>{
+    for(let i=0;i<8;i++){
+      const from=DAY+i*180*MINUTE_MS;
+      const saved=await store(root,'CRYPTO_SPOT','BTC',
+        from,from+180*MINUTE_MS);
+      assert.equal(saved.status,'ARCHIVED');
+      assert.equal(saved.candleCount,180);
+    }
+    const report=await inspectImmutableMinuteDayRollupV1(opts(root));
+    assert.equal(report.status,'SOURCE_ONLY_COMPLETE_DAY_MINUTES');
+    assert.equal(report.sourceMinutePages,8);
+    assert.equal(report.sourceMinuteRows,1440);
+    assert.equal(report.missingOneMinuteSlots,0);
+    assert.equal(report.derivedReport.intervalData['5m'].completeBarCount,288);
+    const ready=await prepareSealedMinuteBacktesterInputV1({
+      ...opts(root),enabled:true,
+    });
+    assert.equal(ready.status,'RETROSPECTIVE_RESEARCH_MODEL_INPUT_ONLY');
+    assert.equal(ready.sourceArchiveDigests.length,8);
+    assert.equal(ready.sourceMinuteRows,1440);
+    assert.equal(ready.paperAdmissionAllowed,false);
+    assert.equal(ready.profitabilityProven,false);
+    assert.equal(ready.executionAuthority,'NONE');
+  });
+});
 
 test('no installed archive is BLOCKED, not zero opportunities or a trading signal',async()=>{
   await room(async root=>{

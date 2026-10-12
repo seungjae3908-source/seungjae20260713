@@ -96,7 +96,7 @@ function validateReceipt(task,base,receipt,filename,nowMs) {
     ||retrievedAt<task.windowEndMs+5_000
     ||retrievedAt<Date.parse(base.retrievedAt)
     ||!Array.isArray(receipt.candles)||!receipt.candles.length
-    ||receipt.candles.length>120
+    ||receipt.candles.length>MINUTE_ARCHIVE_LIMITS.maxWindowMinutes
     ||receipt.addedRowsDigest!==digestAdded(base,receipt.candles)
     ||receipt.receiptDigest!==digestReceipt(receipt)
     ||filename!==receiptFilename(task,receipt.addedRowsDigest))
