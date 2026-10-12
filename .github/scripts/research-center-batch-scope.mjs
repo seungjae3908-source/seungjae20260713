@@ -35,6 +35,7 @@ export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
   ".github/workflows/research-center-predeploy-validation.yml",
   ".github/workflows/research-market-watch-activation.yml",
   ".github/workflows/research-production-activation.yml",
+  ".github/workflows/research-production-validation.yml",
   ".github/workflows/research-workspace-integration-v1.yml",
   "api-server/scripts/verify-research-center-predeploy-contract.mjs",
   "api-server/src/routes/index.ts",
