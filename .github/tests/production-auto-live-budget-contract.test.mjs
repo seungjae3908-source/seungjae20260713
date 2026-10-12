@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { productionBudgetConnection, productionBudgetMigrationBody, assertProductionBudgetReceipt } from '../../ops/apply-production-auto-live-budget.mjs';
+import { productionBudgetConnection, productionBudgetMigrationBody, productionBudgetInstallationSql, assertProductionBudgetReceipt } from '../../ops/apply-production-auto-live-budget.mjs';
 
 const sha = 'a'.repeat(40);
 const migration = 'api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql';
@@ -16,6 +16,26 @@ test('budget installer rejects wrong database identity and strips only one trans
   assert.ok(productionBudgetMigrationBody(source).includes('pg_advisory_xact_lock'));
   assert.throws(() => productionBudgetMigrationBody('begin;\nbegin;\ncommit;'));
 });
+
+test('actual Production installer SQL runs in Phase8 under a restricted owner, not only isolated DDL', () => {
+  const migrationSql = readFileSync(migration, 'utf8');
+  const sql = productionBudgetInstallationSql(migrationSql, sha);
+  const harness = readFileSync('api-server/scripts/verify-phase8-db.sh', 'utf8');
+  assert.ok(sql.includes('begin isolation level serializable;'));
+  assert.ok(sql.includes('create temporary table pg_temp.auto_live_budget_install_snapshot'));
+  assert.ok(sql.includes('on commit drop;'));
+  assert.ok(sql.includes('BUDGET_GUARD_NOT_READY'));
+  assert.ok(sql.includes('USER_TRADING_ROWS_MUTATED'));
+  assert.ok(sql.includes('BUDGET_RESERVATION_ROWS_MUTATED'));
+  assert.ok(sql.includes('commit;'));
+  assert.doesNotMatch(sql, /(?:set_config|current_setting)\(\s*'app\./iu);
+  assert.throws(() => productionBudgetInstallationSql(migrationSql, 'not-a-sha'), /APPROVED_TARGET_SHA_REQUIRED/u);
+  assert.ok(harness.includes('GENERATED_BUDGET_INSTALL_SQL='));
+  assert.ok(harness.includes('productionBudgetInstallationSql(source,'));
+  assert.ok(harness.includes('verify exact Production installer transaction under non-superuser role'));
+  assert.ok(harness.includes('run_budget_owner_sql "verify exact Production installer transaction under non-superuser role"'));
+});
+
 test('budget install receipt cannot grant authority, mutate trading rows or reuse another SHA', () => {
   const receipt = { schemaVersion: 'production-auto-live-budget-install-v1', targetSha: sha, status: 'PASS',
     migrationSha256: 'b'.repeat(64), transactional: true, guardReady: true, userTradingRowsPreserved: true,

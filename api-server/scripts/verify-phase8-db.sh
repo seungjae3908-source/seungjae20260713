@@ -57,6 +57,11 @@ run_budget_owner_sql() {
     echo '[phase8-db] budget owner test requires disposable loopback CI' >&2; exit 1;
   }
   local label="$1" path="$2"
+  # Absolute paths are reserved for generated disposable CI SQL; repository
+  # migrations continue to resolve relative to the immutable checkout.
+  local source_file="$path"
+  if [[ "$path" != /* ]]; then source_file="${ROOT_DIR}/${path}"; fi
+  [[ -f "$source_file" ]] || { echo '[phase8-db] budget SQL source missing' >&2; exit 1; }
   echo "[phase8-db] ${label}"
   {
     printf 'set role phase8_budget_owner;\n'
@@ -65,7 +70,7 @@ run_budget_owner_sql() {
         or has_parameter_privilege(current_user,'automatic_live_guard.expected_schema_fingerprint','SET')
       then raise exception 'BUDGET_INSTALL_ROLE_MUST_HAVE_NO_SUPERUSER_OR_PARAMETER_AUTHORITY'; end if;
     end \$owner\$;"
-    cat "${ROOT_DIR}/${path}"
+    cat "$source_file"
     printf '\nreset role;\n'
   } | "${PSQL[@]}"
 }
@@ -297,6 +302,20 @@ grant usage on schema auth to phase8_budget_owner;
 SQL
 run_budget_owner_sql "apply AUTO LIVE atomic budget guard as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
 run_budget_owner_sql "reapply AUTO LIVE atomic budget guard idempotently as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+# Exercise the *same complete SQL transaction as the human-gated Production
+# installer* in a disposable Phase8 database. The previous isolated migration
+# tests could miss privileges used only by the install wrapper.
+GENERATED_BUDGET_INSTALL_SQL="$BOOTSTRAP_ARTIFACT_DIR/production-budget-install-transaction.sql"
+(
+  cd "$ROOT_DIR"
+  node --input-type=module <<'NODE'
+import { readFileSync } from 'node:fs';
+import { productionBudgetInstallationSql } from './ops/apply-production-auto-live-budget.mjs';
+const source = readFileSync('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql','utf8');
+process.stdout.write(productionBudgetInstallationSql(source, 'a'.repeat(40)));
+NODE
+) > "$GENERATED_BUDGET_INSTALL_SQL"
+run_budget_owner_sql "verify exact Production installer transaction under non-superuser role" "$GENERATED_BUDGET_INSTALL_SQL"
 run_sql "verify AUTO LIVE budget, claim atomicity and ACL" "api-server/supabase/test/automatic_live_atomic_budget_integration.sql"
 bash "${ROOT_DIR}/api-server/scripts/verify-automatic-live-budget-concurrency.sh"
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
