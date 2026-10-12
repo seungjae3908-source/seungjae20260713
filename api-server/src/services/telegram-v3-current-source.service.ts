@@ -18,6 +18,36 @@ const SOURCE:Record<string,string[]>={
 const PREFIX:Record<string,string>={KR_STOCK:'KR',US_STOCK:'US',
  CRYPTO_SPOT:'SPOT',CRYPTO_FUTURES:'FUTURES'};
 const STATUSES=new Set(['CANDIDATES_AVAILABLE','VALID_NO_TRADE','BLOCKED_DATA','SEARCH_FAILURE']);
+
+/** Independent Telegram safety barrier for the canonical V3 profit chain.
+ * Structural provenance checks are NOT authenticated OOS evidence by themselves.
+ */
+function verifiedTelegramV3ProfitLineage(row:Record<string,any>,origin:Record<string,any>,
+  market:string,event:Record<string,any>):boolean{
+ const identity=OBJ(origin.paperIdentity),edge=OBJ(row.evidence);
+ return row.quantEligible===true&&row.profitEligible===true
+   &&row.riskReady===true
+   &&edge?.source==='CANONICAL_PROFIT_EVIDENCE_READY'
+   &&typeof edge.expectedNetEdgeR==='number'
+   &&Number.isFinite(edge.expectedNetEdgeR)&&edge.expectedNetEdgeR>0
+   &&origin.edgeSource==='CANONICAL_PROFIT_EVIDENCE_READY'
+   &&origin.profitEvidenceStatus==='READY'
+   &&origin.backtestQualityStatus==='verified'
+   &&origin.blockedPageResearchOnly!==true
+   &&origin.publicationEligible!==false
+   &&Array.isArray(origin.profitBlockers)&&origin.profitBlockers.length===0
+   &&identity!==null
+   &&identity.executionAuthority==='NONE'
+   &&STR(identity.signalId,256)&&identity.signalId===origin.scannerSignalId
+   &&STR(identity.strategyId,200)&&STR(identity.strategyVersion,200)
+   &&STR(identity.parameterHash,256)
+   &&SHA.test(identity.researchCodeSha??'')
+   &&identity.market===market&&identity.symbol===event.symbol
+   &&identity.timeframe===event.timeframe
+   &&identity.direction===event.direction
+   &&STR(identity.costPolicyVersion,200)
+   &&identity.costPolicyVersion===origin.costPolicyId;
+}
 export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boolean{
  const s=OBJ(value),security=OBJ(s?.safety);
  if(!s||!Number.isSafeInteger(nowMs)||nowMs<=0||!SHA.test(s.serviceSha??'')
@@ -96,6 +126,7 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
     ||lane.laneId!==origin.laneId
     ||lane.strategy!==slot.split('_').slice(0,-1).join('_')
     ||row.state!=='CANDIDATE'||row.dataStatus!=='READY'
+    ||!verifiedTelegramV3ProfitLineage(row,origin,market,event)
     ||row.market!==market||row.symbol!==event.symbol
     ||row.strategy!==event.strategy||row.timeframe!==event.timeframe
     ||row.direction!==dir

@@ -150,3 +150,26 @@ test('V3 Telegram ledger never writes through a preexisting temporary symlink', 
     await rm(directory,{recursive:true,force:true});
   }
 });
+
+test('an unknown V3 Bot API outcome stays blocked beyond 14 days and unrelated ledger updates',async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'signal-tg-unknown-ttl-'));
+  try{
+    const file=path.join(directory,'delivered.json');
+    const first='signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:unknown::';
+    const unrelated='signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:other::';
+    const start=new Date('2026-09-01T00:00:00.000Z');
+    const future=new Date('2026-10-12T00:00:00.000Z');
+    const ledger=new SignalIntelligenceTelegramDeliveryState(file);
+    await ledger.markUnconfirmed(first,start);
+    assert.equal(await ledger.hasUnconfirmed(first,future),true,
+      'a 14-day dedupe expiry must not unlock an unconfirmed Bot API POST');
+    await ledger.mark(unrelated,future);
+    const stored=JSON.parse(await readFile(file,'utf8'));
+    assert.equal(Object.keys(stored.unconfirmed).length,1);
+    assert.equal(Object.keys(stored.delivered).length,1);
+    const restarted=new SignalIntelligenceTelegramDeliveryState(file);
+    assert.equal(await restarted.hasUnconfirmed(first,future),true,
+      'restarting the worker retains the unknown-outcome tombstone');
+    assert.equal(await restarted.has(unrelated,future),true);
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
