@@ -315,3 +315,33 @@ providerGETCount=0, publicGETAttempted=false and the reviewed source SHA.
 A real native market GET still requires the explicit read-public flag. The
 same immutable-only semantics and no-Paper/no-Live/no-economic-proof gate
 remain. Stock markets still require licensed original-minute sources.
+
+
+### 2026-10-12 — Bitget V2 역사적 1분봉 짧은 페이지 순회 수정
+
+기존 \`collectBitgetCandles\`와 Mark/Index 보조 시세 수집기에는
+\`payload.data.length < 200\`이면 수집을 종료하는 조건이 있었다.
+Bitget V2 과거 캔들 API는 최대 200건을 반환할 수 있지만 짧은
+페이지는 더 오래된 원본 자료가 없다는 증거가 아니다. 특히 1분봉의
+유동성 부족·상품 기간·공급원 응답 제한 상황에서 데이터가 더
+이전 날짜에 존재하는데도 중간에서 멈출 수 있었다.
+
+이번 수정은 명시적 \`startTime\`까지 **실제로 도달했는지**로
+페이지 완료 여부를 판단한다. 짧은 페이지가 오면 이전 페이지에서
+받은 가장 오래된 원본 timestamp를 배타적 \`endTime\`으로
+다시 조회하여 한 봉도 건너뛰지 않는다. 공급원 빈 페이지 또는
+명시된 요청 예산을 소진했는데도 시작 시점에 도달하지 못하면
+\`BITGET_HISTORY_RANGE_INCOMPLETE\`/
+\`BITGET_HISTORY_PAGE_BUDGET_EXCEEDED\`로 구분하여 차단한다.
+
+모든 콜렉터에는 엄격한 요청 예산 \`maxPages\` 기본 512,
+범위 1~2048이 적용되며 \`requestedProviderPages\`를 실제
+collector 단위 API \`get\` 호출 수로 기록한다. 이는 HTTP 재시도
+횟수까지 포함한 총 요청 수가 아니며, 기존 실제 공급원 데이터를
+다운로드했다는 의미도 아니다. 짧은 페이지·빈 페이지·중복·
+최대 요청 예산·mark/index를 mock으로 검사하고, 과거 PIT/
+실제 체결/OOS 수익성 증명과 구분한다.
+
+실제 과거 데이터의 무료 이용 가능 범위 및 회원 대상 재배포
+권한은 별도로 확인해야 한다. 이 Draft에서는 운영 서버의
+과거 1분봉을 새로 받거나 API를 호출하지 않았다.
