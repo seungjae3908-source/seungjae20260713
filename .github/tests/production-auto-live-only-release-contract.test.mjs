@@ -59,6 +59,15 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(autoGate.includes('AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID'));
   assert.ok(autoGate.includes("MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')"));
   assert.ok(!autoGate.includes('/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json'));
+  const tradeRoute = read('api-server/src/routes/trade-automation.ts');
+  const auditPath = tradeRoute.indexOf("router.get('/live-preactivation-readiness'");
+  const nextRoute = tradeRoute.indexOf("router.get('/status'", auditPath);
+  assert.ok(auditPath >= 0 && nextRoute > auditPath);
+  const readOnlyAudit = tradeRoute.slice(auditPath, nextRoute);
+  assert.ok(readOnlyAudit.includes("source: independentAutoLiveSource"));
+  assert.ok(readOnlyAudit.includes("new SupabaseMemberAutoTradingBackgroundSource("));
+  assert.ok(readOnlyAudit.includes("'/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json'"));
+  assert.ok(!readOnlyAudit.includes("new SupabaseMemberAutoTradingBackgroundSource()"));
 
   // Bound pre-DB and last-moment checks to the dedicated root. Historical
   // Paper owner state and cron remain unmodified, even when Paper is ACTIVE.
