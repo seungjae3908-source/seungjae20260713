@@ -49,6 +49,27 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
+run_budget_owner_sql() {
+  # Only the disposable budget install changes its effective role. No hosted
+  # database/parameter privilege is granted, and the migration gets no superuser.
+  [[ "${CI:-}" == "true" && "$PGDATABASE" == "phase8" && "$PGUSER" == "phase8"
+    && ( "$PGHOST" == "127.0.0.1" || "$PGHOST" == "localhost" ) ]] || {
+    echo '[phase8-db] budget owner test requires disposable loopback CI' >&2; exit 1;
+  }
+  local label="$1" path="$2"
+  echo "[phase8-db] ${label}"
+  {
+    printf 'set role phase8_budget_owner;\n'
+    printf "%s\n" "do \$owner\$ begin
+      if (select rolsuper or rolcreatedb or rolcreaterole or rolbypassrls from pg_roles where rolname=current_user)
+        or has_parameter_privilege(current_user,'automatic_live_guard.expected_schema_fingerprint','SET')
+      then raise exception 'BUDGET_INSTALL_ROLE_MUST_HAVE_NO_SUPERUSER_OR_PARAMETER_AUTHORITY'; end if;
+    end \$owner\$;"
+    cat "${ROOT_DIR}/${path}"
+    printf '\nreset role;\n'
+  } | "${PSQL[@]}"
+}
+
 run_production_paper_gate() {
   local label="$1"
   local expected_tables_before="$2"
@@ -244,8 +265,28 @@ run_sql "execute real membership-tier RLS integration queries" "api-server/supab
 run_sql "apply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS idempotently" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
-run_sql "apply AUTO LIVE atomic budget guard" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
-run_sql "reapply AUTO LIVE atomic budget guard idempotently" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+# Match the hosted migration's owner privileges without changing other suites.
+# These are empty/synthetic CI tables, never a Production ownership change.
+[[ "${CI:-}" == "true" && "$PGDATABASE" == "phase8" && "$PGUSER" == "phase8"
+  && ( "$PGHOST" == "127.0.0.1" || "$PGHOST" == "localhost" ) ]] || {
+  echo '[phase8-db] budget owner fixture requires disposable loopback CI' >&2; exit 1;
+}
+"${PSQL[@]}" <<'SQL'
+do $owner_fixture$ declare relation text; begin
+  if not exists(select 1 from pg_roles where rolname='phase8_budget_owner') then
+    create role phase8_budget_owner nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls;
+  end if;
+  foreach relation in array array['trade_automation_profiles','trade_system_controls','trade_order_plans',
+    'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders'] loop
+    execute format('alter table public.%I owner to phase8_budget_owner',relation);
+  end loop;
+end $owner_fixture$;
+grant usage, create on schema public to phase8_budget_owner;
+grant usage on schema auth to phase8_budget_owner;
+alter function public.claim_trade_order_execution(uuid,uuid,bigint,uuid,integer) owner to phase8_budget_owner;
+SQL
+run_budget_owner_sql "apply AUTO LIVE atomic budget guard as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+run_budget_owner_sql "reapply AUTO LIVE atomic budget guard idempotently as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
 run_sql "verify AUTO LIVE budget, claim atomicity and ACL" "api-server/supabase/test/automatic_live_atomic_budget_integration.sql"
 bash "${ROOT_DIR}/api-server/scripts/verify-automatic-live-budget-concurrency.sh"
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"

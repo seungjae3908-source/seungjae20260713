@@ -17,6 +17,11 @@ on:
       - .github/tests/production-paper-forward-readiness.test.mjs
       - .github/tests/production-telegram-runtime-readiness.test.mjs
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/scripts/verify-phase8-db.sh
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
+      - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
+      - .github/tests/production-auto-live-budget-contract.test.mjs
       - ops/verify-production-paper-forward-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
@@ -91,6 +96,8 @@ jobs:
           node-version: "22"
       - name: Validate Production gate, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - name: Validate non-superuser owner-bound budget proof contracts offline
+        run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
       - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
       - run: node --test .github/scripts/production-manual-live-receipts.test.cjs
 
