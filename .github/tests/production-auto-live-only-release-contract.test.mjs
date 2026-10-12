@@ -57,6 +57,11 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
     'AUTO_LIVE_INDEPENDENT_SOURCE_HELPER_HASH',
     'production-auto-live-signal-identity.cjs',
     'AUTO_LIVE_PUBLIC_INSTALL_CLEANUP_SCOPE_INVALID',
+    'AUTO_LIVE_PUBLIC_INSTALL_LATE_OPERATION_CONFLICT',
+    "steps.public_install.outcome == 'success'",
+    "steps.source_readback.outcome != 'success'",
+    'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_SCOPE_INVALID',
+    'AUTO_LIVE_PUBLIC_INSTALL_POSTAUDIT_FAILED_CLOSED_DISABLED',
   ]) assert.ok(sourceOnly.includes(proof), 'sealed standalone public source missing: '+proof);
   assert.equal(sourceOnly.includes('/opt/stock-app/.deploy/current-sha'),false);
   assert.equal(sourceOnly.includes('cd /opt/stock-app &&'),false);
