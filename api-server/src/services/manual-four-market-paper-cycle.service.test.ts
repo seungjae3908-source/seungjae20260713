@@ -713,7 +713,15 @@ test('sequential entry remainder cancellation and repeated reduce-only exit orde
     seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{quantity:qty*0.25,quote:exitQuote}),
     seqEvent(s,'CANCEL_EXIT',6,SEQ_AT+4_300),
     seqEvent(s,'REQUEST_EXIT',7,SEQ_AT+4_400,{quantity:qty*0.35}),
-    seqEvent(s,'EXIT_MATCH',8,SEQ_AT+4_600,{quantity:qty*0.35,quote:exitQuote}),
+    // A new exit request must use a new, as-of quote, not the prior
+    // request's favorable quote (retroactive profit would be hindsight).
+    seqEvent(s,'EXIT_MATCH',8,SEQ_AT+4_600,{
+      quantity:qty*0.35,
+      quote:seqQuote(s,'EXIT',{
+        quoteSourceId:'verified-second-exit-quote',
+        observedAtMs:SEQ_AT+4_500,fxObservedAtMs:SEQ_AT+4_480,
+      }),
+    }),
   ];
   const projected=seqProject(extra);
   assert.equal(projected.status,'CLOSED_PROJECTION',JSON.stringify(projected.blockers));
@@ -726,7 +734,9 @@ test('sequential entry remainder cancellation and repeated reduce-only exit orde
     seqEvent(s,'REQUEST_EXIT',3,SEQ_AT+3_000,{quantity:qty*0.6}),
     seqEvent(s,'EXIT_MATCH',4,SEQ_AT+4_600,{quantity:qty*0.6,quote:exitQuote}),
   ]);
-  assert.equal(withoutCancel.status,'PARTIALLY_CLOSED');
+  assert.equal(withoutCancel.status,'BLOCKED');
+  assert.ok(withoutCancel.blockers.includes(
+    'MANUAL_PAPER_SEQ_ENTRY_REMAINDER_CANCEL_REQUIRED_BEFORE_EXIT'));
   assert.equal(withoutCancel.hypotheticalNetPnlKrw,null);
 });
 test('sequential Paper LONG/SHORT PnL avoids USDT notional FX phantom gain',()=>{
@@ -821,4 +831,100 @@ test('sequential Paper event hash and JSONB-normalized duplicate readback agree 
   assert.equal(sameManualPaperSequentialRow(row,{
     ...fromJsonb,event:{...fromJsonb.event,quantity:99999},
   }),false);
+});
+
+
+test('partial entry requires remainder cancellation before reducing exit or it deadlocks',()=>{
+  const {s,events,qty,exit:exitQuote}=sequenceFor('crypto_spot');
+  const impossible=[
+    events[0],events[1],
+    seqEvent(s,'REQUEST_EXIT',3,SEQ_AT+3_000,{quantity:qty*0.6}),
+  ];
+  const rejected=seqProject(impossible);
+  assert.equal(rejected.status,'BLOCKED');
+  assert.ok(rejected.blockers.includes(
+    'MANUAL_PAPER_SEQ_ENTRY_REMAINDER_CANCEL_REQUIRED_BEFORE_EXIT'));
+  assert.equal(rejected.hypotheticalNetPnlKrw,null);
+  const viable=[
+    events[0],events[1],
+    seqEvent(s,'CANCEL_ENTRY',3,SEQ_AT+2_000),
+    seqEvent(s,'REQUEST_EXIT',4,SEQ_AT+3_000,{quantity:qty*0.6}),
+    seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+      quantity:qty*0.6,quote:exitQuote,
+    }),
+  ];
+  const valid=seqProject(viable);
+  assert.equal(valid.status,'CLOSED_PROJECTION',JSON.stringify(valid.blockers));
+  assert.ok(valid.hypotheticalNetPnlKrw!>0);
+  assert.equal(valid.actualPaperLedgerWritten,false);
+});
+
+test('sequential simulated fills reject quotes predating order, exit request or prior price observation',()=>{
+  const {s,events,qty}=sequenceFor();
+  const beforeOpen=seqEvent(s,'ENTRY_MATCH',2,SEQ_AT+1_200,{
+    quantity:qty*0.6,
+    quote:seqQuote(s,'ENTRY',{
+      observedAtMs:SEQ_AT-1,fxObservedAtMs:SEQ_AT-100,
+      quoteSourceId:'pre-open-price',
+    }),
+  });
+  const a=seqProject([events[0],beforeOpen]);
+  assert.equal(a.status,'BLOCKED');
+  assert.ok(a.blockers.includes('MANUAL_PAPER_SEQ_PUBLIC_COST_FX_OR_FILL_INVALID'));
+
+  const priorPrice=seqEvent(s,'ENTRY_MATCH',3,SEQ_AT+1_600,{
+    quantity:qty*0.4,
+    quote:seqQuote(s,'ENTRY',{
+      observedAtMs:SEQ_AT+900,fxObservedAtMs:SEQ_AT+800,
+      quoteSourceId:'earlier-entry-quote',
+    }),
+  });
+  const b=seqProject([events[0],events[1],priorPrice]);
+  assert.equal(b.status,'BLOCKED');
+
+  const retroExit=seqEvent(s,'EXIT_MATCH',5,SEQ_AT+4_200,{
+    quantity:qty*0.4,
+    quote:seqQuote(s,'EXIT',{
+      observedAtMs:SEQ_AT+2_800,fxObservedAtMs:SEQ_AT+2_700,
+      quoteSourceId:'favorable-before-exit-request',
+    }),
+  });
+  const c=seqProject([...events.slice(0,4),retroExit]);
+  assert.equal(c.status,'BLOCKED');
+  assert.ok(c.blockers.includes('MANUAL_PAPER_SEQ_PUBLIC_COST_FX_OR_FILL_INVALID'));
+  assert.equal(c.hypotheticalNetPnlKrw,null);
+
+});
+
+test('stale order signal and mismatched event kind payloads cannot mint a Paper settlement',()=>{
+  const {s,events,qty}=sequenceFor();
+  const staleS={...s,signalObservedAtMs:SEQ_AT-60_001};
+  const staleOpen=seqEvent(staleS,'OPEN_ORDER',1,SEQ_AT,{session:staleS});
+  const stale=seqProject([staleOpen]);
+  assert.equal(stale.status,'BLOCKED');
+  assert.equal(stale.hypotheticalNetPnlKrw,null);
+  for(const candidate of [
+    seqEvent(s,'OPEN_ORDER',1,SEQ_AT,{
+      session:s,quantity:qty,quote:seqQuote(s,'ENTRY'),
+    }),
+    seqEvent(s,'CANCEL_ENTRY',3,SEQ_AT+2_000,{
+      quantity:qty*0.5,
+    }),
+    seqEvent(s,'REQUEST_EXIT',4,SEQ_AT+3_000,{
+      quantity:qty,quote:seqQuote(s,'EXIT'),
+    }),
+    seqEvent(s,'CANCEL_EXIT',6,SEQ_AT+4_300,{
+      quote:seqQuote(s,'EXIT'),
+    }),
+  ]){
+    const history=candidate.kind==='OPEN_ORDER'?[candidate]
+      :candidate.kind==='CANCEL_ENTRY'
+        ?[events[0],events[1],candidate]
+        :candidate.kind==='REQUEST_EXIT'
+          ?[...events.slice(0,3),candidate]
+          :[...events.slice(0,5),candidate];
+    const projection=seqProject(history);
+    assert.equal(projection.status,'BLOCKED',candidate.kind);
+    assert.equal(projection.journalProjection,null);
+  }
 });
