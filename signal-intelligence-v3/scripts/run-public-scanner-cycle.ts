@@ -24,7 +24,7 @@ import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic,
   selectV3OutOfCursorResearch} from '../src/public-watch-v3-priority.mjs';
 import {runV3OutOfCursorResearch} from '../src/public-watch-v3-offpage-research.mjs';
 import {validV3PublicPriorityRequest} from '../src/public-v3-priority-public-route.mjs';
-import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
+import { summarizePublicProviderFailureReasons, createV3PublicYahooTerminalFailureCounter } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
 import { validV3PublicYahooCandlePage } from '../src/public-v3-stock-candle-integrity.mjs';
 import {commitPublicV3CycleCheckpoint,recoverPublicV3CycleCheckpoint} from '../src/public-cycle-checkpoint.mjs';
@@ -277,6 +277,7 @@ async function withStockPublicOnly(lane, operation) {
 
   const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
   const qualityCounter = createPublicStockQualityCounter();
+  const terminalYahoo = createV3PublicYahooTerminalFailureCounter();
   const sessionGapAudit = createPublicStockSessionGapAudit(lane.market, lane.timeframe);
   const qualityWindow = lane.strategyMode === 'scalping' ? 240
     : lane.strategyMode === 'swing' ? 320 : 400;
@@ -295,7 +296,8 @@ async function withStockPublicOnly(lane, operation) {
     const entry = entryByTicker.get(String(ticker).toUpperCase());
     const candidates = yahooProviderCandidates(lane, ticker, entry);
     let successfulSymbol = null;
-    const native = await withProviderFallback(candidates, async providerSymbol => {
+    let native;
+    try { native = await withProviderFallback(candidates, async providerSymbol => {
       const rows = await yahoo.getCandles(providerSymbol, timeframe);
       // Yahoo may return years of old/adjustment-affected candles. V3's
       // current-cycle indicator and quality proof uses this SAME bounded
@@ -305,6 +307,7 @@ async function withStockPublicOnly(lane, operation) {
       if (Array.isArray(relevant) && relevant.length>0) successfulSymbol = providerSymbol;
       return relevant;
     },{validValue:rows=>validV3PublicYahooCandlePage(rows,{nowMs:Date.now()})});
+    } catch (error) { terminalYahoo.observe(error); throw error; }
     let candles = native;
     // Only a BLOCKING missing-candle defect triggers one bounded public
     // shorter-interval Yahoo query. Verified complete lower bars may fill
@@ -359,7 +362,9 @@ async function withStockPublicOnly(lane, operation) {
     const originalTicker = String(ticker).toUpperCase();
     const entry = entryByTicker.get(originalTicker);
     const candidates = yahooProviderCandidates(lane, ticker, entry);
-    const quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol));
+    let quote;
+    try { quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol)); }
+    catch (error) { terminalYahoo.observe(error); throw error; }
     return {
       ...quote,
       ticker: originalTicker,
@@ -380,6 +385,7 @@ async function withStockPublicOnly(lane, operation) {
     return {
       ...withRosterEvidence,
       publicStockQualityDiagnostic: qualityCounter.snapshot(),
+      publicStockTerminalFailureSummary: terminalYahoo.snapshot(),
       publicStockSessionDiagnostic: sessionGapAudit.snapshot(),
       publicGapRecoveryDiagnostic: Object.freeze({
         ...gapRecovery, providerName:'yahoo-public',scope:'V3_US_REGULAR_COMPLETE_LOWER_ONLY',
@@ -662,6 +668,7 @@ async function main() {
         // Diagnostic-only, low-cardinality quality issues for the exact scan.
         // Its values do not grant a candidate, PASS, cursor or order authority.
         publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
+        publicStockTerminalFailureSummary: response.publicStockTerminalFailureSummary ?? null,
         publicCryptoQualityDiagnostic:response.publicCryptoQualityDiagnostic ?? null,
         // Diagnostic-only: distinguish regular hours vs other gap candidates.
         // This does NOT waive MISSING_CANDLE or create a verified signal.

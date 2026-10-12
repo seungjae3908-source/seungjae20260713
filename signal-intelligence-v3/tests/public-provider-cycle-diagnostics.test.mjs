@@ -4,6 +4,7 @@ import {
   PUBLIC_PROVIDER_CYCLE_DIAGNOSTIC_VERSION,
   inspectExactPublicProviderCycle,
   summarizePublicProviderFailureReasons,
+  createV3PublicYahooTerminalFailureCounter,
 } from '../src/public-provider-cycle-diagnostics.mjs';
 const NOW=Date.parse('2026-10-11T00:00:00.000Z');
 const SHA='a'.repeat(40);
@@ -112,4 +113,45 @@ test('provider failures missing or overflowing cannot be misreported as an empty
   assert.deepEqual(lane.publicProviderFailureSummary.bitgetNumericCodes, ['40034']);
   assert.equal(lane.publicProviderFailureSummary.failuresObserved, 2);
   assert.equal(result.rows.find(x=>x.market==='CRYPTO_FUTURES').providerErrorCount, 6);
+});
+
+test('V3 Yahoo terminal exceptions classify exact public fetch failure without symbol or raw API leakage',()=>{
+  const collector=createV3PublicYahooTerminalFailureCounter();
+  const samples=[
+    [new Error('YAHOO_HEDGED_PAIR_FAILED:YAHOO_CHART_HTTP_429|YAHOO_CHART_HTTP_429:private-symbol'),'HTTP_429'],
+    [new Error('YAHOO_HEDGED_PAIR_FAILED:YAHOO_CHART_HTTP_404|YAHOO_CHART_HTTP_404:SENSITIVE'),'HTTP_4XX'],
+    [new Error('YAHOO_CHART_HTTP_503 provider.example HIDDEN'),'HTTP_5XX'],
+    [new Error('YAHOO_CHART_BUDGET_EXCEEDED token=DO_NOT_EXPOSE'),'TIMEOUT'],
+    [new Error('PUBLIC_STOCK_EMPTY_CANDLES:BTC_SECRET'),'EMPTY_SOURCE'],
+    [new Error('PUBLIC_STOCK_INVALID_PROVIDER_RESPONSE:PRIVATE_BODY'),'INVALID_RESPONSE'],
+    [new Error('YAHOO_UNSUPPORTED_TIMEFRAME:PRIVATE_FRAME'),'UNSUPPORTED_TIMEFRAME'],
+    [new Error('unclassified failure with private user ID'),'PROVIDER_OTHER'],
+  ];
+  for(const [error] of samples)collector.observe(error);
+  const result=collector.snapshot();
+  assert.equal(result.terminalFailedFetches,8);
+  for(const [,key] of samples)assert.equal(result.categories[key],1,key);
+  assert.equal(result.symbolsRedacted,true);
+  assert.equal(result.addedProviderRequests,0);
+  assert.equal(result.economicAuthority,'NONE');
+  for(const forbidden of ['SENSITIVE','PRIVATE','DO_NOT_EXPOSE','provider.example',
+    'private-symbol','BTC_SECRET'])
+    assert.equal(JSON.stringify(result).includes(forbidden),false,forbidden);
+});
+test('the public-only provider diagnostic surfaces Yahoo category counts but never raw exception text',()=>{
+  const report=createV3PublicYahooTerminalFailureCounter();
+  report.observe(new Error('YAHOO_CHART_HTTP_503:_PRIVATE_USER_SYMBOL'));
+  const current=snapshot();
+  current.coverage[0].status='SEARCH_FAILURE';
+  current.coverage[0].providerErrors=1;
+  current.coverage[0].publicStockTerminalFailureSummary=report.snapshot();
+  const out=inspectExactPublicProviderCycle(current,SHA,NOW);
+  const bucket=out.rows.find(x=>x.market==='KR_STOCK').lanes[0].publicStockTerminalFailureSummary;
+  assert.equal(bucket.categories.HTTP_5XX,1);
+  assert.equal(bucket.terminalFailedFetches,1);
+  assert.equal(JSON.stringify(bucket).includes('PRIVATE_USER_SYMBOL'),false);
+  assert.equal(out.rows[0].status,'PROVIDER_BLOCKED');
+  const missing=snapshot();
+  assert.equal(inspectExactPublicProviderCycle(missing,SHA,NOW)
+    .rows[0].lanes[0].publicStockTerminalFailureSummary,null);
 });
