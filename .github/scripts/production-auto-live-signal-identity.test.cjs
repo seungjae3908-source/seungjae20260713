@@ -402,6 +402,12 @@ test('separate PUBLIC-only installer syntax and all protected Paper/financial bo
     'CRON_OUTPUT="$(LC_ALL=C crontab -l 2>&1)"',
     '[[ "$CRON_OUTPUT" == no\\ crontab\\ for\\ * ]]',
     'grep awk wc tr rm pgrep',
+    'NODE_BIN="$(command -v node)"',
+    "canonical Node executable invalid",
+    'FLOCK_BIN=\'/usr/bin/flock\'',
+    '"$NODE_BIN" --check "$STAGE/releases/$SHA/market-prediction-lab/scripts/run-paper-forward-schedule.js"',
+    "'__NODE_BIN__' '/opt/stock-app-data/auto-live-signal-v1/releases/__SOURCE_SHA__/market-prediction-lab/scripts/run-paper-forward-schedule.js'",
+    's@__NODE_BIN__@$NODE_BIN@g',
     '[[ "$READBACK" == "$EXPECTED" ]]',
     ': > "$STAGE/DISABLED"',
     'rm -f "$ROOT/DISABLED"',
@@ -412,6 +418,9 @@ test('separate PUBLIC-only installer syntax and all protected Paper/financial bo
   assert.doesNotMatch(script,/disable-paper-forward-schedule\.sh/u);
   assert.doesNotMatch(script,/install-paper-forward-schedule\.sh/u);
   assert.doesNotMatch(script,/PAPER_FORWARD_ROOT=['"]?\/opt\/stock-app-data\/paper-forward-v1/u);
+  // The validated custom Node binary must survive env -i, which strips nvm
+  // PATH entries. No unpinned "node" command is allowed in the cron wrapper.
+  assert.doesNotMatch(script, /^\s+node '\/opt\/stock-app-data\/auto-live-signal-v1\/releases\//mu);
   assert.doesNotMatch(script,/\b(?:pm2|psql|supabase)\b/iu);
   assert.throws(() => installIndependentAutoLivePublicSource(SHA),
     /AUTO_LIVE_INDEPENDENT_INSTALL_NOT_APPROVED/u);
