@@ -1,0 +1,82 @@
+name: Research Original Minute Gap and MTM Drift QA
+
+on:
+  push:
+    branches: [drift/research-minute-fill-repair-20261011]
+    paths:
+      - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
+      - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
+      - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
+  pull_request:
+    paths:
+      - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
+      - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
+      - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-original-minute-gap-mtm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline-model-evidence:
+    name: Offline original-minute fill, cost, and drawdown regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      PRIVATE_API_ENABLED: 'false'
+      ORDER_AUTHORITY: 'false'
+      EXECUTION_AUTHORITY: 'NONE'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assert source SHA and default no-order contract
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$LIVE_TRADING" = 'false'
+          test "$AUTO_TRADING" = 'false'
+          test "$PRIVATE_API_ENABLED" = 'false'
+          test "$ORDER_AUTHORITY" = 'false'
+          test "$EXECUTION_AUTHORITY" = 'NONE'
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const source = readFileSync('market-prediction-lab/src/original-minute-execution-model-v2.js','utf8');
+          if (/\b(?:fetch|axios|process\.env|child_process)\b/u.test(source)) {
+            throw new Error('ORIGINAL_MINUTE_MODEL_MUST_BE_PURE_OFFLINE');
+          }
+          for (const gate of [
+            'ORIGINAL_MINUTE_FILL_INPUT_INVALID',
+            'ORIGINAL_MINUTE_LIQUIDATION_INPUT_INVALID',
+            'ORIGINAL_MINUTE_EQUITY_STATE_INVALID',
+          ]) if (!source.includes(gate)) throw new Error('REQUIRED_FAIL_CLOSED_GATE_MISSING:'+gate);
+          NODE
+      - name: Check parser and unit regressions against actual source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-prediction-lab/src/original-minute-execution-model-v2.js
+          node --check market-prediction-lab/tests/original-minute-execution-model-v2.test.js
+          node --test market-prediction-lab/tests/original-minute-execution-model-v2.test.js
+      - name: No deployment or economic-source claims
+        run: |
+          echo 'originalMinuteModelOfflineUnit=COMPLETE'
+          echo 'realSourceProof=false'
+          echo 'independentOOSProven=false'
+          echo 'profitabilityProven=false'
+          echo 'paperAndLiveActivation=false'
+          echo 'orders=0'
