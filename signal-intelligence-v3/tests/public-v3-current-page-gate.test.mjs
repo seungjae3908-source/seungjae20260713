@@ -1,170 +1,217 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {currentPagePublication,currentPublicV3CycleReady} from '../src/public-v3-current-page-gate.mjs';
-
-const markets=['KR','US','SPOT','FUTURES'];
-const modes=['SCALPING_15M','SWING_60M','MID_LONG_1D'];
-const allLanes=markets.flatMap(m=>modes.map(mode=>m+'_'+mode));
-const CYCLE_ID='11111111-1111-4111-8111-111111111111';
-const PRIOR_CYCLE_ID='22222222-2222-4222-8222-222222222222';
-const readyLane=id=>({
-  laneId:id,sourceCycleId:CYCLE_ID,status:'CANDIDATES_AVAILABLE',
-  universeSource:id.startsWith('KR_')?'krx-symbol-master':
-    id.startsWith('US_')?'nasdaq-trader-public-directory':
-      id.startsWith('SPOT_')?'upbit-public':'bitget-public',
-  scannedCards:2,retainedFromBatch:2,
-  cursorBefore:10,cursorAfter:15,totalUniverse:200,
-  lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
-  responseDataState:'complete',universePartial:false,universeStale:false,
-  providerErrors:0,timeouts:0,universeProviderErrors:0,
-  publicExecutionDiagnostic:{
-    state:'PAGE_EXECUTION_COMPLETE',requested:5,started:5,completed:5,
-    partial:false,timedOut:false,providerErrors:0,timeouts:0,
-    failuresObserved:0,
-  },
-});
-const receipt=()=>allLanes.map(readyLane);
-const freshRow=(id,lane,at=10,overrides={})=>({
-  id,state:'CANDIDATE',dataStatus:'READY',
-  provenance:{laneId:lane,cursor:at,sourceCycleId:CYCLE_ID},...overrides,
-});
-const input=()=>{
-  const verified=freshRow('verified','US_SCALPING_15M');
-  const older=freshRow('historical','US_SCALPING_15M',0,{provenance:{laneId:'US_SCALPING_15M',cursor:0,sourceCycleId:PRIOR_CYCLE_ID}});
-  const blocked=freshRow('blocked','KR_SCALPING_15M');
-  const wrong=freshRow('unknown','WRONG_LANE');
-  const stale=freshRow('stale-row','US_SWING_60M',10,{dataStatus:'BLOCKED'});
-  const rows=[verified,older,blocked,wrong,stale];
-  return {
-    rows,lists:{
-      krBuy:[blocked],usBuy:[verified,older,stale],
-      spotBuy:[],futuresLong:[],futuresShort:[],
-    },
-    events:[
-      {id:'verified',type:'NEW_CANDIDATE'},
-      {id:'historical',type:'NEW_CANDIDATE'},
-      {id:'blocked',type:'NEW_CANDIDATE'},
-      {id:'unknown',type:'RESCAN_REQUESTED'},
-      {id:'verified',type:'STATE_CHANGED'},
-    ],
-  };
+import {
+  currentPagePublication,currentPublicV3CycleReady,
+} from '../src/public-v3-current-page-gate.mjs';
+const CYCLE='11111111-1111-4111-8111-111111111111';
+const PRIOR='22222222-2222-4222-8222-222222222222';
+const MARKETS={KR:'KR_STOCK',US:'US_STOCK',SPOT:'CRYPTO_SPOT',FUTURES:'CRYPTO_FUTURES'};
+const MODES=[['SCALPING_15M','SCALPING','15m'],['SWING_60M','SWING','60m'],
+ ['MID_LONG_1D','MID_LONG','1D']];
+const PREFIXES=Object.keys(MARKETS);
+const SOURCE={KR:'yahoo-public',US:'yahoo-public',SPOT:'upbit-public-candles',
+  FUTURES:'bitget-public-candles'};
+const ROSTER={KR:'krx-symbol-master',US:'nasdaq-trader-public-directory',
+  SPOT:'upbit-public',FUTURES:'bitget-public'};
+const SHA='a'.repeat(40);
+const laneSpec=(id)=>{
+ const parts=id.split('_'),prefix=parts[0];
+ const mode=MODES.find(x=>id===prefix+'_'+x[0]);
+ assert.ok(MARKETS[prefix]&&mode,id);
+ return {market:MARKETS[prefix],prefix,frame:mode[2],strategy:mode[1]};
 };
-test('new signals only from the exactly verified current batch, never retained',()=>{
-  const coverage=receipt(),snapshot=input();
-  coverage[0]={...coverage[0],status:'BLOCKED_DATA',
-    lastGoodPreserved:true,responseDataState:'untrusted'};
-  const output=currentPagePublication(snapshot,coverage);
-  assert.deepEqual(output.allowedIds,['verified']);
-  assert.deepEqual(output.lists.usBuy,[snapshot.rows[0]]);
-  assert.equal(output.lists.krBuy.length,0);
-  assert.deepEqual(output.events,[snapshot.events[0]]);
-  assert.equal(output.fullCoverageProven,false);
-  assert.equal(output.executionAuthority,'NONE');
-  assert.equal(snapshot.lists.usBuy.length,3,'history is still available to research');
-  assert.ok(Object.isFrozen(output.events));
+const readyLane=id=>{
+ const d=laneSpec(id);
+ return {
+   laneId:id,sourceCycleId:CYCLE,market:d.market,strategy:d.strategy,
+   timeframe:d.frame,universeSource:ROSTER[d.prefix],
+   status:'CANDIDATES_AVAILABLE',scannedCards:2,retainedFromBatch:2,
+   cursorBefore:10,cursorAfter:15,totalUniverse:200,
+   lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
+   responseDataState:'complete',universePartial:false,universeStale:false,
+   providerErrors:0,timeouts:0,universeProviderErrors:0,
+   publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:5,
+     started:5,completed:5,partial:false,timedOut:false,providerErrors:0,
+     timeouts:0,failuresObserved:0},
+ };
+};
+const receipt=()=>PREFIXES.flatMap(p=>MODES.map(m=>readyLane(p+'_'+m[0])));
+function freshRow(symbol,laneId,cursor=10){
+ const d=laneSpec(laneId);
+ const strategyId='scanner-swing-v1',strategy=strategyId.toUpperCase();
+ const direction=d.market==='CRYPTO_FUTURES'?'LONG':'BUY';
+ const market=d.market,id=[market,symbol,strategy,d.frame,direction].join('|');
+ return {
+   id,market,symbol,strategy,timeframe:d.frame,direction,
+   state:'CANDIDATE',dataStatus:'READY',quantEligible:true,
+   profitEligible:true,riskReady:true,utilityR:0.25,
+   utilityMode:'NET_EDGE_ONLY_RISK_SEPARATE',validationTier:'RESEARCH_CANDIDATE',
+   leverage:null,evidence:{
+     source:'CANONICAL_PROFIT_EVIDENCE_READY',expectedNetEdgeR:0.25,
+     expectedNetEdgePercent:1,expectedNetReturnPercent:1,
+     riskRewardRatio:2,sampleSize:80,costPolicyId:'cost-v1',
+   },
+   provenance:{
+     laneId,cursor,sourceCycleId:CYCLE,scannerSignalId:'scanner-'+symbol,
+     scannerSources:[SOURCE[d.prefix]],
+     edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
+     profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
+     costPolicyId:'cost-v1',profitBlockers:[],
+     paperIdentity:{
+       signalId:'scanner-'+symbol,strategyId,strategyVersion:'v1',
+       parameterHash:'parameters-'+symbol,researchCodeSha:SHA,
+       market,symbol,timeframe:d.frame,horizon:5,direction,
+       costPolicyVersion:'cost-v1',executionAuthority:'NONE',
+     },
+   },
+ };
+}
+function eventFor(row,patch={}){
+ return {
+   id:row.id,type:'NEW_CANDIDATE',market:row.market,symbol:row.symbol,
+   strategy:row.strategy,timeframe:row.timeframe,direction:row.direction,
+   state:row.state,validationTier:row.validationTier,
+   utilityR:row.utilityR,utilityMode:row.utilityMode,leverage:row.leverage,...patch,
+ };
+}
+function sample(){
+ const verified=freshRow('AAPL','US_SCALPING_15M');
+ const older=freshRow('HIST','US_SCALPING_15M',0);
+ older.provenance.sourceCycleId=PRIOR;
+ const blocked=freshRow('KRONE','KR_SCALPING_15M');
+ const wrong=freshRow('BAD','US_SCALPING_15M');
+ wrong.provenance.laneId='WRONG_LANE';
+ const stale=freshRow('STALE','US_SWING_60M');stale.dataStatus='BLOCKED';
+ return {
+   rows:[verified,older,blocked,wrong,stale],
+   lists:{krBuy:[blocked],usBuy:[verified,older,stale],
+     spotBuy:[],futuresLong:[],futuresShort:[]},
+   events:[eventFor(verified),eventFor(older),eventFor(blocked),
+     eventFor(wrong,{type:'RESCAN_REQUESTED'}),eventFor(verified,{type:'STATE_CHANGED'})],
+ };
+}
+test('only canonical profit-linked current source row survives, not retained or blocked',()=>{
+ const s=sample(),lanes=receipt();
+ lanes[0]={...lanes[0],status:'BLOCKED_DATA',lastGoodPreserved:true,
+   responseDataState:'untrusted'};
+ const z=currentPagePublication(s,lanes);
+ assert.deepEqual(z.allowedIds,[s.rows[0].id]);
+ assert.deepEqual(z.lists.usBuy,[s.rows[0]]);
+ assert.equal(z.lists.krBuy.length,0);
+ assert.deepEqual(z.events,[s.events[0]]);
+ assert.equal(z.fullCoverageProven,false);
+ assert.equal(z.executionAuthority,'NONE');
+ assert.ok(Object.isFrozen(z.events));
+ assert.equal(s.lists.usBuy.length,3,'rolling historical research is retained');
 });
-test('completeness, source replay and item failures fail closed',()=>{
-  const snapshot=input(),variants=[
-    a=>a.pop(),
-    a=>a.push(a[0]),
-    a=>{a[4]={...a[4],laneId:'UNKNOWN'};},
-    a=>{a[3]={...a[3],publicExecutionDiagnostic:{
-      ...a[3].publicExecutionDiagnostic,started:4}};},
-    a=>{a[3]={...a[3],publicExecutionDiagnostic:{
-      ...a[3].publicExecutionDiagnostic,failuresObserved:1}};},
-  ];
-  for(const change of variants){
-    const coverage=receipt();change(coverage);
-    const out=currentPagePublication(snapshot,coverage);
-    if(coverage.length!==12||new Set(coverage.map(x=>x.laneId)).size!==12
-      ||coverage.some(x=>!allLanes.includes(x.laneId))){
-      assert.deepEqual(out.allowedIds,[]);
-      assert.deepEqual(out.events,[]);
-    }
-  }
-  const bad=receipt();
-  bad[0]={...bad[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
-  bad[3]={...bad[3],publicExecutionDiagnostic:{
-    ...bad[3].publicExecutionDiagnostic,completed:4}};
-  const checked=currentPagePublication(snapshot,bad);
-  assert.equal(checked.lists.usBuy.length,0);
-  assert.equal(checked.events.length,0);
+test('source completeness, provider identity, epoch and cursor mismatches fail closed',()=>{
+ const s=sample();
+ for(const mutate of [
+   c=>c.pop(),
+   c=>c.push(c[0]),
+   c=>{c[3].universeSource='bitget-public';},
+   c=>{c[3].publicExecutionDiagnostic.completed=4;},
+   c=>{c[3].publicExecutionDiagnostic.failuresObserved=1;},
+   c=>{c[3].sourceCycleId=PRIOR;},
+   c=>{c[3].cursorBefore=0;c[3].cursorAfter=5;},
+ ]){
+   const lanes=receipt();mutate(lanes);
+   const z=currentPagePublication(s,lanes);
+   assert.equal(z.events.length,0);
+   assert.equal(z.lists.usBuy.length,0);
+ }
 });
-test('no stale portfolio or old candidate can be presented when source absent',()=>{
-  const source=input();
-  for(const item of [null,{},[],receipt().slice(0,11)]){
-    const out=currentPagePublication(source,item);
-    assert.deepEqual(out.events,[]);
-    assert.ok(Object.values(out.lists).every(rows=>rows.length===0));
-  }
-  const last=receipt();
-  last[0]={...last[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
-  last[3].cursorBefore=0;last[3].cursorAfter=5;
-  assert.deepEqual(currentPagePublication(source,last).events,[]);
+test('missing, partial, replayed or globally blocked source never produces current alerts',()=>{
+ const s=sample();
+ for(const coverage of [null,{},[],receipt().slice(0,11)]){
+   const z=currentPagePublication(s,coverage);
+   assert.equal(z.events.length,0);
+   assert.ok(Object.values(z.lists).every(rows=>rows.length===0));
+ }
+ const blocked=receipt();
+ blocked[0]={...blocked[0],status:'BLOCKED_DATA',lastGoodPreserved:true,
+   responseDataState:'untrusted'};
+ const old=s.rows[0];old.provenance.sourceCycleId=PRIOR;
+ assert.deepEqual(currentPagePublication(s,blocked).events,[]);
 });
-test('valid final wrap to zero remains a verifiable completed source page',()=>{
-  const snapshot=input(),lanes=receipt();
-  lanes[0]={...lanes[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
-  lanes[3].cursorBefore=195;
-  lanes[3].cursorAfter=0;
-  snapshot.rows[0].provenance.cursor=195;
-  const result=currentPagePublication(snapshot,lanes);
-  assert.deepEqual(result.allowedIds,['verified']);
+test('verified current wrap to zero is a completed source page, not new universe coverage',()=>{
+ const s=sample(),lanes=receipt();
+ lanes[0].status='BLOCKED_DATA';lanes[0].lastGoodPreserved=true;
+ lanes[0].responseDataState='untrusted';
+ lanes[3].cursorBefore=195;lanes[3].cursorAfter=0;
+ s.rows[0].provenance.cursor=195;
+ assert.deepEqual(currentPagePublication(s,lanes).allowedIds,[s.rows[0].id]);
 });
-
-test('source freshness requires exactly 12 complete pages and correct market roster',()=>{
-  const lanes=receipt();
-  assert.equal(currentPublicV3CycleReady(lanes),true);
-  const variant=receipt();
-  variant[3]={...variant[3],universeSource:'bitget-public'};
-  assert.equal(currentPublicV3CycleReady(variant),false);
-  assert.equal(currentPagePublication(input(),variant).events.some(e=>e.id==='verified'),false,
-    'a wrong US provider must not publish the US candidate; healthy other markets may remain');
-  const partial=receipt();partial[0].universePartial=true;
-  assert.equal(currentPublicV3CycleReady(partial),false);
-  const blocked=receipt();blocked[2].status='BLOCKED_DATA';
-  assert.equal(currentPublicV3CycleReady(blocked),false);
-  const noTrade=receipt();
-  noTrade[8]={...noTrade[8],status:'VALID_NO_TRADE',
-    scannedCards:0,retainedFromBatch:0};
-  assert.equal(currentPublicV3CycleReady(noTrade),true);
-  noTrade[8].retainedFromBatch=1;
-  assert.equal(currentPublicV3CycleReady(noTrade),false);
-  assert.equal(currentPublicV3CycleReady(receipt().slice(1)),false);
+test('ready page count only means 12 exact current source pages, not entire market history',()=>{
+ const lanes=receipt();
+ assert.equal(currentPublicV3CycleReady(lanes),true);
+ lanes[3].universeSource='bitget-public';
+ assert.equal(currentPublicV3CycleReady(lanes),false);
+ const s=sample();
+ assert.equal(currentPagePublication(s,lanes).lists.usBuy.length,0);
+ const noTrade=receipt();
+ noTrade[8]={...noTrade[8],status:'VALID_NO_TRADE',
+   scannedCards:0,retainedFromBatch:0};
+ assert.equal(currentPublicV3CycleReady(noTrade),true);
+ noTrade[8].retainedFromBatch=1;
+ assert.equal(currentPublicV3CycleReady(noTrade),false);
 });
-
-test('a reused cursor from an older cycle never publishes historical alerts',()=>{
-  const shot=input(),lanes=receipt();
-  lanes[0]={...lanes[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
-  shot.rows[0].provenance.sourceCycleId=PRIOR_CYCLE_ID;
-  assert.deepEqual(currentPagePublication(shot,lanes).events,[]);
-  const forged=receipt();
-  forged[3]={...forged[3],sourceCycleId:PRIOR_CYCLE_ID};
-  assert.equal(currentPublicV3CycleReady(forged),false);
-  assert.deepEqual(currentPagePublication(input(),forged).events,[]);
+test('a previously blocked Spot research-only row cannot publish on a forged healthy lane',()=>{
+ const row=freshRow('BTC','SPOT_SCALPING_15M');
+ row.provenance.blockedPageResearchOnly=true;
+ row.provenance.publicationEligible=false;
+ const s={rows:[row],lists:{krBuy:[],usBuy:[],spotBuy:[row],
+   futuresLong:[],futuresShort:[]},events:[eventFor(row)]};
+ const z=currentPagePublication(s,receipt());
+ assert.deepEqual(z.allowedIds,[]);
+ assert.deepEqual(z.lists.spotBuy,[]);
+ assert.deepEqual(z.events,[]);
+ const ordinary=freshRow('ETH','SPOT_SCALPING_15M');
+ const s2={rows:[ordinary],lists:{...s.lists,spotBuy:[ordinary]},
+   events:[eventFor(ordinary)]};
+ assert.deepEqual(currentPagePublication(s2,receipt()).allowedIds,[ordinary.id]);
 });
-
-
-test('Spot trusted research-only rows cannot publish even if a later lane receipt appears green',()=>{
-  const laneId='SPOT_SCALPING_15M',source=freshRow('SPOT_RESEARCH_ONLY',laneId,10,{
-    provenance:{laneId,cursor:10,sourceCycleId:CYCLE_ID,
-      blockedPageResearchOnly:true,publicationEligible:false,
-      economicAuthority:'NONE'},
-  });
-  const snapshot={rows:[source],lists:{
-    krBuy:[],usBuy:[],spotBuy:[source],futuresLong:[],futuresShort:[],
-  },events:[{id:source.id,type:'NEW_CANDIDATE'}]};
-  const lanes=receipt(); // intentionally forged healthy current lane
-  const view=currentPagePublication(snapshot,lanes);
-  assert.deepEqual(view.allowedIds,[]);
-  assert.deepEqual(view.lists.spotBuy,[]);
-  assert.deepEqual(view.events,[]);
-  // Without the research-only mark, canonical pages retain existing policy.
-  const ordinary=freshRow('ORDINARY',laneId);
-  const normal=currentPagePublication({
-    rows:[ordinary],lists:{...snapshot.lists,spotBuy:[ordinary]},
-    events:[{id:ordinary.id,type:'NEW_CANDIDATE'}],
-  },lanes);
-  assert.deepEqual(normal.allowedIds,['ORDINARY']);
-  assert.equal(normal.events.length,1);
+test('candidate state cannot spoof canonical economic/OOS/Paper lineage',()=>{
+ const source=freshRow('AAPL','US_SCALPING_15M');
+ const tryCase=change=>{
+   const row=structuredClone(source);
+   change(row);
+   const s={rows:[row],lists:{krBuy:[],usBuy:[row],
+     spotBuy:[],futuresLong:[],futuresShort:[]},
+     events:[eventFor(row)]};
+   const z=currentPagePublication(s,receipt());
+   assert.deepEqual(z.allowedIds,[]);
+   assert.deepEqual(z.events,[]);
+   assert.equal(z.lists.usBuy.length,0);
+ };
+ for(const change of [
+   x=>{x.quantEligible=false;},x=>{x.profitEligible=false;},
+   x=>{x.riskReady=false;},x=>{x.evidence.source='SIMULATED';},
+   x=>{x.evidence.expectedNetEdgeR=0;},
+   x=>{x.provenance.paperIdentity.costPolicyVersion='other';},
+   x=>{x.provenance.paperIdentity.signalId='forged';},
+   x=>{x.provenance.paperIdentity.researchCodeSha='bad';},
+   x=>{x.provenance.backtestQualityStatus='unverified';},
+   x=>{x.provenance.profitBlockers.push('OOS_MISSING');},
+   x=>{x.provenance.scannerSources=['upbit-public-candles'];},
+   x=>{x.id='US_STOCK|AAPL|UNKNOWN|15m|BUY';},
+ ])tryCase(change);
+});
+test('list copies and events must exactly match canonical row; no cross-market or direction aliasing',()=>{
+ const row=freshRow('AAPL','US_SCALPING_15M');
+ const e=eventFor(row);
+ const initial={rows:[row],lists:{krBuy:[],usBuy:[row],
+   spotBuy:[],futuresLong:[],futuresShort:[]},events:[e]};
+ const copies=structuredClone(initial);
+ copies.lists.usBuy[0].utilityR=99;
+ const z=currentPagePublication(copies,receipt());
+ assert.equal(z.lists.usBuy.length,0);
+ assert.equal(z.events.length,0);
+ const wrongEvent=structuredClone(initial);
+ wrongEvent.events[0].direction='SHORT';
+ assert.equal(currentPagePublication(wrongEvent,receipt()).events.length,0);
+ assert.equal(currentPagePublication(wrongEvent,receipt()).lists.usBuy.length,1);
+ const duplicated=structuredClone(initial);
+ duplicated.rows.push(structuredClone(row));
+ assert.equal(currentPagePublication(duplicated,receipt()).allowedIds.length,0);
 });
