@@ -303,6 +303,39 @@ requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOL
 requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
 
 forbid(paperWorker, /signalReasons\.filter\(\(reason\) => reason !== 'CANONICAL_PAPER_HANDOFF'\)/u, 'AUTO_GATE_PAPER_LINEAGE_REMOVAL_FORBIDDEN');
+
+const installJobStart = workflow.indexOf('  install-public-signal:');
+if (installJobStart < 0) throw new Error('AUTO_PUBLIC_COLLECTOR_SEPARATE_OWNER_INSTALL_JOB_MISSING');
+const sourceOnlyJob = workflow.slice(installJobStart);
+for (const part of [
+  "startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  "environment: production",
+  "ref: main",
+  "AUTO_LIVE_PUBLIC_INSTALL_REQUIRES_EXACT_CURRENT_MAIN",
+  "AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED",
+  "run.event === 'workflow_dispatch'",
+  "AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT",
+  "AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true",
+  "AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true",
+  "ops/production-auto-live-signal-identity.cjs",
+  "AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID",
+  "private_provider_calls: 0",
+  "live_auto_authority_granted: false",
+  "24_hour_uninterrupted_collection_verified: false",
+]) requireText(sourceOnlyJob, part, 'AUTO_PUBLIC_COLLECTOR_SOURCE_ONLY_CONTRACT_DRIFT');
+requireText(workflow, "|| startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  'AUTO_PUBLIC_COLLECTOR_CONCURRENCY_MISSING');
+forbid(sourceOnlyJob, /\bpm2\s+(?:start|restart|delete|save|set)\b/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_PM2');
+forbid(sourceOnlyJob, /ops\/(?:disable|install)-paper-forward-schedule\.sh/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_TOUCH_PAPER_SCHEDULE');
+forbid(sourceOnlyJob, /(?:psql|supabase)\s+(?:db|migration|run|sql|execute)/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_DB');
+forbid(sourceOnlyJob, /AUTO_TRADING[ \t]*[:=][ \t]*['"]?true|LIVE_TRADING[ \t]*[:=][ \t]*['"]?true/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_ARM_LIVE');
+
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /if:\s*\$\{\{\s*false\s*\}\}/u, 'AUTO_GATE_YAML_DEAD_VALIDATION_BLOCK_FORBIDDEN');
