@@ -120,6 +120,20 @@ function maximumSingleEntryKrwForProfile(profile: MemberAccessProfile) {
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
 }
+
+export function currentLiveMemberAccessMatchesBatch(
+  profile: MemberAccessProfile, expectedMaximumSingleEntryKrw: number | undefined,
+  plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>,
+) {
+  if (plan.accountMode !== 'live' || !hasCapability(profile, 'canAccessAutoTrading')
+    || !hasCapability(profile, 'canPlaceOrders')
+    || expectedMaximumSingleEntryKrw !== maximumSingleEntryKrwForProfile(profile)) return false;
+  if (plan.exchange !== 'bitget') return true;
+  const maximumLeverage = hasCapability(profile, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+  return hasCapability(profile, 'canAccessFutures') && Number.isInteger(plan.leverage)
+    && Number(plan.leverage) >= 2 && Number(plan.leverage) <= maximumLeverage;
+}
 // A READY handoff without entries otherwise has no per-entry freshness clock.
 // Keep a bounded publisher heartbeat even during quiet market periods.
 const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
@@ -364,6 +378,8 @@ export interface MemberAutoTradingBackgroundSource {
   adminPaperDatabaseGuardReady?(): Promise<boolean>;
   fourMarketPaperDatabaseGuardReady?(): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
+  /** Current owner capability/role read, never a cached batch permission. */
+  revalidateLiveMemberAccess?(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
   resolveFx(
@@ -1706,10 +1722,18 @@ async function executeAutomaticPlan(input: {
   emergencyStopped: boolean;
   verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
   isActive?: () => boolean;
+  memberAccessIsCurrent?: (userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) => Promise<boolean>;
 }) {
   const assertActive = () => {
     if (input.isActive && input.isActive() !== true) throw new Error('BACKGROUND_WORKER_STOPPED');
   };
+  assertActive();
+  if (input.planInput.accountMode === 'live') {
+    let current = false;
+    try { current = await input.memberAccessIsCurrent?.(input.userId, input.planInput) === true; }
+    catch { /* Do not expose DB/provider exception text or infer permission. */ }
+    if (!current) throw new Error('BACKGROUND_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
+  }
   assertActive();
   const automation = new TradeAutomationService(input.repository);
   // Only the Paper worker can supply an independently server-read quote.
@@ -1727,7 +1751,7 @@ async function executeAutomaticPlan(input: {
       costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
       fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope),
     }, input.isActive)
-    : new TradeExecutionService(input.repository, undefined, undefined, undefined, input.isActive);
+    : new TradeExecutionService(input.repository, undefined, undefined, undefined, input.isActive, input.memberAccessIsCurrent);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
   );
@@ -1820,6 +1844,8 @@ async function processAutomaticExit(input: {
     policy: input.member.policy,
     verifiedPaperFxQuote: input.live ? undefined : fx,
     isActive: input.isActive,
+    memberAccessIsCurrent: input.live ? (userId, plan) => input.source.revalidateLiveMemberAccess?.(userId, plan)
+      ?? Promise.resolve(false) : undefined,
     emergencyStopped: input.member.policy.emergencyStopped
       || persistentStop
       || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -2471,6 +2497,8 @@ export class MemberAutoTradingBackgroundWorker {
               }
               const liveRun = await executeAutomaticPlan({
                 isActive: () => !this.stopped,
+                memberAccessIsCurrent: (userId, plan) => this.source.revalidateLiveMemberAccess?.(userId, plan)
+                  ?? Promise.resolve(false),
                 repository,
                 userId: member.userId,
                 planInput: liveInput,
@@ -2770,6 +2798,15 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       && nativeProtectionReady
       && !persistentGlobalStop
       && process.env.TRADING_EMERGENCY_STOP !== 'true';
+  }
+
+  async revalidateLiveMemberAccess(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) {
+    const { data, error } = await this.client.from('profiles')
+      .select('id,role,status,membership_level,is_active,membership_expires_at')
+      .eq('id', userId).limit(2);
+    if (error || !Array.isArray(data) || data.length !== 1 || data[0]?.id !== userId) return false;
+    return currentLiveMemberAccessMatchesBatch(data[0] as MemberAccessProfile,
+      this.maximumSingleEntryKrwByUserId.get(userId), plan);
   }
 
   tradingRepositoryFor(userId: string) {

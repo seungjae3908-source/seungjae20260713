@@ -23,6 +23,7 @@ const entries = [
   'automatic-live-budget.service.test.ts',
   'trading-provider-response.service.test.ts',
   'bitget-native-protection-readonly.service.test.ts',
+  'member-auto-trading-ai-review-evidence.service.test.ts',
 ];
 const contracts = [
   'api-server/scripts/automatic-live-preflight-stages.test.mjs',
