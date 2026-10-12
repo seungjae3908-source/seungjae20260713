@@ -467,6 +467,20 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+      - name: Reject shared Paper Forward owner before AUTO LIVE database or application mutation
+        if: ${{ inputs.qa_scope == 'auto_live' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          test -s ops/production-auto-live-signal-identity.cjs
+          remote_env="$(printf 'AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" \
+            < ops/production-auto-live-signal-identity.cjs
+          # No DB, PM2, cron, filesystem or provider mutation in this step.
       - name: Require canonical Production trade schema and journal privileges before application mutation
         id: database-gates
         env:
@@ -798,6 +812,10 @@ jobs:
             "$SSH_USER@$SSH_HOST" "$remote_command" > "$activation" <<'REMOTE'
           set -Eeuo pipefail
           test "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" = "$TARGET_SHA"
+          # Recheck immediately before touching the shared Paper schedule;
+          # an owner may have started between the predeploy probe and this step.
+          AUTO_LIVE_SHARED_PAPER_PREFLIGHT=true AUTO_LIVE_TARGET_SHA="$TARGET_SHA" \
+            node ops/production-auto-live-signal-identity.cjs >/dev/null
           PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1 \
             bash ops/disable-paper-forward-schedule.sh >/dev/null
           LIVE_DIR=/opt/stock-app \
