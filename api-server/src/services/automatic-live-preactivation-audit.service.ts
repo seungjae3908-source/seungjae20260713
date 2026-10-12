@@ -182,7 +182,14 @@ export async function auditAutomaticLivePreactivation(input: {
   });
   await check('CURRENT_AI_EVIDENCE', () => {
     if (policy().pilotStage !== 'formula-ai-exception') return [];
-    return handoff()?.entries.some((entry) => !canonicalAiReviewEvidenceValid(entry.aiReviewEvidence, entry.identity, entry.evaluatedAtMs)
+    const current = handoff();
+    // Optional chaining on a missing handoff (or an empty READY transport)
+    // previously returned PASS without a single actual AI review. A live
+    // formula exception may never use absence of observations as approval.
+    if (!current || current.status !== 'READY' || current.entries.length === 0) {
+      return ['PREACTIVATION_SIGNAL_AI_REVIEW_MISSING'];
+    }
+    return current.entries.some((entry) => !canonicalAiReviewEvidenceValid(entry.aiReviewEvidence, entry.identity, entry.evaluatedAtMs)
       || Number(entry.aiReviewEvidence?.expiresAtMs) <= nowMs)
       ? ['PREACTIVATION_SIGNAL_AI_REVIEW_INVALID'] : [];
   });
