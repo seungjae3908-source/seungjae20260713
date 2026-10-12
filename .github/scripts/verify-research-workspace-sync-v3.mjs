@@ -665,10 +665,16 @@ const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
 );
 if(researchCenterChanged.length>0){
+ // This PIT-only readback has its own exact two-job protected GET/source QA
+ // workflow. Its general Research Center predeploy workflow MUST remain
+ // bit-identical to main, or Paper Forward's unrelated ownership gate fires.
+ // The PIT-specific block above already checks that invariant, including
+ // every source/UI/API path and the dedicated PIT workflow.
  const requiredIntegrationGuards=[
-  '.github/workflows/research-center-predeploy-validation.yml',
   'api-server/scripts/verify-research-center-predeploy-contract.mjs',
  ];
+ if (!pitReadOnlyChanged)
+  requiredIntegrationGuards.push('.github/workflows/research-center-predeploy-validation.yml');
  for(const p of requiredIntegrationGuards)if(!changed.includes(p))throw new Error('RESEARCH_CENTER_INTEGRATION_GUARD_MISSING:'+p);
 }
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
