@@ -21,7 +21,7 @@ const positive=x=>typeof x==='number'&&Number.isFinite(x)&&x>0;
 const natural=x=>Number.isSafeInteger(x)&&x>0;
 const record=x=>x&&typeof x==='object'&&!Array.isArray(x)?x:null;
 
-export function verifiedV3CurrentPublicationRow(row,lane){
+export function verifiedV3CurrentPublicationRow(row,lane,nowMs=Date.now()){
  const input=record(row),receipt=record(lane);
  if(!input||!receipt||input.state!=='CANDIDATE'
    ||input.dataStatus!=='READY'||input.quantEligible!==true
@@ -44,7 +44,13 @@ export function verifiedV3CurrentPublicationRow(row,lane){
    return false;
  const proof=record(input.provenance),identity=record(proof?.paperIdentity),
        edge=record(input.evidence);
- if(!proof||proof.blockedPageResearchOnly===true
+ // A card that was fresh when its page was scanned is not necessarily fresh
+ // when twelve lanes finish, when HTTP serves it, or when Telegram polls.
+ const sourceExpiresAt=typeof proof?.sourceExpiresAt==='string'
+   ?Date.parse(proof.sourceExpiresAt):NaN;
+ if(!Number.isSafeInteger(nowMs)||nowMs<=0
+   ||!Number.isFinite(sourceExpiresAt)||sourceExpiresAt<=nowMs
+   ||!proof||proof.blockedPageResearchOnly===true
    ||proof.publicationEligible===false
    ||!Array.isArray(proof.profitBlockers)||proof.profitBlockers.length!==0
    ||!Array.isArray(proof.scannerSources)

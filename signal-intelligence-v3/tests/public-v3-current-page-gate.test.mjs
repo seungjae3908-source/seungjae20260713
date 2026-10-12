@@ -54,6 +54,7 @@ function freshRow(symbol,laneId,cursor=10){
    },
    provenance:{
      laneId,cursor,sourceCycleId:CYCLE,scannerSignalId:'scanner-'+symbol,
+     sourceExpiresAt:'2099-01-01T00:00:00.000Z',
      scannerSources:[SOURCE[d.prefix]],
      edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
      profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
@@ -288,4 +289,35 @@ test('producer passes the full in-memory research pool before current-page top-t
  assert.match(source,/currentPagePublication\(baseSnapshot, coverage\)/u);
  assert.match(source,/lists: publication\.lists/u,
    'only post-source-proof lists may persist');
+});
+
+test('expired or missing source card expires before publication, even with fresh page receipts',()=>{
+ const current=freshRow('AAPL','US_SCALPING_15M');
+ const s={rows:[current],lists:{krBuy:[],usBuy:[current],spotBuy:[],
+   futuresLong:[],futuresShort:[]},events:[eventFor(current)]};
+ const lanes=receipt(),now=Date.parse('2026-10-12T04:00:00Z');
+ current.provenance.sourceExpiresAt=new Date(now-1).toISOString();
+ assert.deepEqual(currentPagePublication(s,lanes,now).lists.usBuy,[]);
+ current.provenance.sourceExpiresAt=null;
+ assert.deepEqual(currentPagePublication(s,lanes,now).events,[]);
+ current.provenance.sourceExpiresAt=new Date(now+60_000).toISOString();
+ assert.equal(currentPagePublication(s,lanes,now).lists.usBuy.length,1);
+ assert.deepEqual(currentPagePublication(s,lanes,now+60_000).events,[]);
+});
+test('a source page cannot publish more qualifying cards than its retained receipt',()=>{
+ const first=freshRow('AAPL','US_SCALPING_15M');
+ const second=freshRow('MSFT','US_SCALPING_15M');
+ const s={rows:[first,second],lists:{krBuy:[],usBuy:[first,second],
+   spotBuy:[],futuresLong:[],futuresShort:[]},
+   events:[eventFor(first),eventFor(second)]};
+ const lanes=receipt();
+ lanes[3].scannedCards=1;lanes[3].retainedFromBatch=1;
+ const out=currentPagePublication(s,lanes);
+ assert.deepEqual(out.lists.usBuy,[]);
+ assert.deepEqual(out.events,[]);
+ assert.deepEqual(out.allowedIds,[]);
+ lanes[3].scannedCards=2;lanes[3].retainedFromBatch=2;
+ assert.equal(currentPagePublication(s,lanes).lists.usBuy.length,2);
+ lanes[3].scannedCards=6; // Only five symbols in the proved source page.
+ assert.equal(currentPagePublication(s,lanes).lists.usBuy.length,0);
 });
