@@ -11,8 +11,11 @@
  *
  * Only if allowed to read public native 1m data for private research:
  *   add --read-public. To retry a retained partial source, additionally add
- *   --retry-partial (leaves immutable revisions; later explicit reconciliation
- *   is required). Replit/DB/Production/Paper/LIVE/order paths are absent.
+ *   --retry-partial --expected-existing-sha <SHA256-of-reviewed-revision>.
+ *   A retry never overwrites the prior original, requires the exact reviewed
+ *   prior digest and only stores an unchanged-price superseding 1m inventory.
+ *   Multiple revisions require explicit read selection; no auto promotion.
+ *   Replit/DB/Production/Paper/LIVE/order paths are absent.
  */
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -23,8 +26,8 @@ import {
 } from "../src/pit-native-crypto-minute-backfill-v1.js";
 
 const FLAGS=new Set(["--market","--symbol","--day","--manifest",
-  "--expected-roster-sha","--root","--output"]);
-const REQUIRED=[...FLAGS];
+  "--expected-roster-sha","--root","--output","--expected-existing-sha"]);
+const REQUIRED=[...FLAGS].filter(key=>key!=="--expected-existing-sha");
 function abs(value) {
   return typeof value==="string"&&isAbsolute(value)&&resolve(value)===value;
 }
@@ -49,7 +52,7 @@ function noSymlinkAncestors(path) {
   }
 }
 export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
-  if(!Array.isArray(args)||args.length<14||args.length>16)
+  if(!Array.isArray(args)||args.length<14||args.length>18)
     throw new TypeError("PIT_NATIVE_MINUTE_CLI_ARGUMENTS_INVALID");
   const fields={};
   let allowPublicReadOnlyFetch=false,retryPartialSource=false;
@@ -70,6 +73,9 @@ export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
   }
   if(!REQUIRED.every(key=>Object.hasOwn(fields,key))
     ||(retryPartialSource&&!allowPublicReadOnlyFetch)
+    ||(retryPartialSource
+      ?!/^[0-9a-f]{64}$/u.test(fields["--expected-existing-sha"]??"")
+      :Object.hasOwn(fields,"--expected-existing-sha"))
     ||!abs(fields["--root"])||!abs(fields["--manifest"])
     ||!abs(fields["--output"])
     ||new Set([fields["--root"],fields["--manifest"],fields["--output"]]).size!==3
@@ -85,6 +91,7 @@ export function parsePITNativeMinuteBackfillArgsV1(args=[]) {
     expectedRosterDigestSha256:fields["--expected-roster-sha"],
     outputPath:fields["--output"],
     allowPublicReadOnlyFetch,retryPartialSource,
+    expectedExistingSourceDigestSha256:fields["--expected-existing-sha"]??null,
   });
 }
 export async function runPITNativeMinuteBackfillCliV1(
@@ -105,6 +112,8 @@ export async function runPITNativeMinuteBackfillCliV1(
     expectedRosterDigestSha256:config.expectedRosterDigestSha256,
     manifest,allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
     retryPartialSource:config.retryPartialSource,
+    expectedExistingSourceDigestSha256:
+      config.expectedExistingSourceDigestSha256??null,
     ...(dependencies.nowImpl?{nowImpl:dependencies.nowImpl}:{}),
     ...(dependencies.upbitFetchImpl?{upbitFetchImpl:dependencies.upbitFetchImpl}:{}),
     ...(dependencies.bitgetClient?{bitgetClient:dependencies.bitgetClient}:{}),
@@ -118,6 +127,8 @@ export async function runPITNativeMinuteBackfillCliV1(
     market:config.market,symbol:config.symbol,
     sourceMinuteCount:result.sourceMinuteCount??null,
     archiveSourceDigestSha256:result.archiveSourceDigestSha256??null,
+    priorSourceDigestSha256:result.priorSourceDigestSha256??null,
+    sourceRevisionAutoSelected:false,
     historicalFullMarketPITUniverseVerified:false,
     actualMarketWideOpportunityCount:null,trueMarketWideRecall:null,
     profitabilityProven:false,executionAuthority:"NONE",
