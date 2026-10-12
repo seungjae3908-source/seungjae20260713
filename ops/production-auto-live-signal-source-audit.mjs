@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import signalIdentity from './production-auto-live-signal-identity.cjs';
 import {
   validateMemberAutoTradingPaperHandoff,
 } from '../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
@@ -50,9 +51,9 @@ if (existsSync('/opt/stock-app-data/paper-forward-v1/DISABLED')) {
   throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED');
 }
 
-const markets = [...new Set(handoff.entries.map((entry) => entry.identity.market))].sort();
+const identity = signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha);
 const receipt = {
-  schemaVersion: 'production-auto-live-signal-source-v1',
+  schemaVersion: 'production-auto-live-signal-source-v2',
   targetSha,
   productionDeployRunId,
   generatedAt: new Date(nowMs).toISOString(),
@@ -63,7 +64,7 @@ const receipt = {
   handoffFresh: true,
   maximumAgeMinutes: 30,
   entryCount: handoff.entryCount,
-  observedMarkets: markets,
+  ...identity,
   scheduleActive: true,
   scheduleEntryCount: 1,
   disableSentinelPresent: false,

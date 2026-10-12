@@ -17,6 +17,7 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const evidenceVerifier = read('.github/scripts/verify-production-preactivation-evidence.cjs');
   const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
+  const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
@@ -39,7 +40,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
   assert.ok(production.includes('tail -n 1 "$state_root/logs/cron.log"'));
   assert.ok(production.includes('value?.naturalRuntimeSha !== process.env.TARGET_SHA'));
-  assert.ok(production.includes('handoffEvaluatedAfterScheduleActivation'));
+  assert.ok(production.includes("require('./.github/scripts/production-postdeploy-qa-evidence.cjs').assertAutoLiveSignalReceipt(value"));
+  assert.ok(production.includes('targetSha: process.env.TARGET_SHA, productionDeployRunId: Number(process.env.GITHUB_RUN_ID)'));
+  assert.ok(evidenceBuilder.includes('signal?.handoffEvaluatedAfterScheduleActivation !== true'));
+  assert.ok(signalAudit.includes('signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha)'));
+  assert.ok(signalIdentity.includes('AUTO_LIVE_SIGNAL_HANDOFF_SHA_MISMATCH'));
+  assert.ok(signalAudit.includes("from './production-auto-live-signal-identity.cjs'"));
+  assert.ok(!signalAudit.includes("from '../.github/"), 'runtime signal audit cannot import the excluded .github directory');
   assert.ok(production.includes('Prepare administrator four-market Automatic LIVE policy without execution authority'));
   assert.ok(production.includes('AUTO_LIVE_POLICY_PREPARATION_REQUIRED'));
   assert.ok(production.includes('AUTO_LIVE_POLICY_PREPARATION_SCOPE_INVALID'));
@@ -64,7 +71,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(productionSpec.includes('withdrawalRequests: 0'));
   assert.ok(productionSpec.includes("paperTrading: 'OUT_OF_SCOPE'"));
   assert.ok(productionSpec.includes("telegram: 'OUT_OF_SCOPE'"));
-  assert.ok(productionSpec.includes("schemaVersion: 'production-auto-live-readonly-qa-v2'"));
+  assert.ok(productionSpec.includes("schemaVersion: 'production-auto-live-readonly-qa-v3'"));
+  assert.ok(productionSpec.includes("'/api/trade-automation/live-preactivation-readiness'"));
+  assert.ok(productionSpec.includes('production-auto-live-preactivation-rehearsal.json'));
+  assert.ok(productionSpec.includes('assertMemberAccountSignalAudit(memberAccountSignalAudit'));
+  assert.ok(evidenceBuilder.includes('assertMemberAccountSignalAudit(autoLive.memberAccountSignalAudit'));
+  assert.ok(productionSpec.indexOf('production-auto-live-preactivation-rehearsal.json')
+    < productionSpec.indexOf('for (const viewport'), 'component blockers must be retained before a UI assertion can fail');
   assert.ok(productionSpec.includes('providerVerificationFresh'));
   assert.ok(productionSpec.includes('pendingOrderCount'));
   assert.ok(productionSpec.includes('workerPreactivationSafe'));
@@ -76,7 +89,10 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID'));
   assert.ok(signalAudit.includes('AUTO_LIVE_SIGNAL_HANDOFF_PREDATES_EXACT_SHA_SCHEDULE'));
   assert.ok(policySpec.includes("'/api/trade-automation/policy', 'PUT'"));
-  assert.ok(policySpec.includes("'/api/trade-automation/resume', 'POST'"));
+  assert.ok(!policySpec.includes("'/api/trade-automation/resume', 'POST'"), 'QA preparation cannot implicitly remove a sticky owner stop');
+  assert.ok(policySpec.includes('PREACTIVATION_MEMBER_STOP_REQUIRES_OWNER_RESUME'));
+  assert.ok(policySpec.includes('approvedAdministratorAutomaticLivePolicy(policy)'));
+  assert.ok(policySpec.includes('administratorAutomaticLivePolicyBlockers(policy)'));
   for (const counter of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) {
     assert.ok(policySpec.includes(`${counter}: 0`));
   }
