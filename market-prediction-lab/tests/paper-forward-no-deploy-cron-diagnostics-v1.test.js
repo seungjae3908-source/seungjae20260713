@@ -9,6 +9,8 @@ import {
   DIAGNOSTIC_SCHEMA_VERSION,
   buildPaperForwardNoDeployDiagnostics,
 } from '../../ops/collect-paper-forward-no-deploy-diagnostics.mjs';
+import { __paperForwardScheduleTestables } from '../src/paper-forward-schedule-runtime-base-v1.js';
+import { createRecurringPaperLoopState } from '../src/recurring-paper-loop-v1.js';
 
 const TARGET_SHA = 'a'.repeat(40);
 const FAILED_RUN_ID = 35038921110;
@@ -400,6 +402,42 @@ const bashPath = (path) => process.platform === 'win32'
   : path;
 const permissionFlag = process.allowedNodeEnvironmentFlags.has('--permission')
   ? '--permission' : '--experimental-permission';
+
+test('installer checks same-SHA mode identity read-only before mutation and never rewrites prior state', async () => {
+  const installer = (await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8'))
+    .replaceAll('\r\n', '\n');
+  const marker = '# Read-only mode identity preflight precedes every installer filesystem mutation.';
+  const start = installer.indexOf(marker);
+  const mutation = installer.indexOf('mkdir -p "$RELEASE_ROOT"');
+  assert.ok(start >= 0 && start < mutation);
+  const preflight = installer.slice(start, mutation).match(/<<'NODE'\n([\s\S]*?)\nNODE/u)?.[1];
+  assert.ok(preflight, 'execute the real installer preflight, not a duplicate checker');
+  const root = await mkdtemp(join(tmpdir(), 'paper-forward-install-mode-'));
+  const statePath = join(root, 'state.json');
+  const identity = __paperForwardScheduleTestables.buildIdentity(TARGET_SHA);
+  const state = createRecurringPaperLoopState({ identity,
+    ledger: __paperForwardScheduleTestables.initialLedger(), createdAtMs: ACTIVATION_AT_MS });
+  const before = JSON.stringify(state);
+  try {
+    await writeFile(statePath, before);
+    const launch = (outcome, autoRefresh, target = TARGET_SHA) => spawnSync(process.execPath,
+      ['--input-type=module', '-', sourceLab, statePath, target, outcome, autoRefresh],
+      { input: preflight, encoding: 'utf8' });
+    const unchanged = launch('false', 'false');
+    assert.equal(unchanged.status, 0, unchanged.stderr);
+    for (const [outcome, refresh] of [['false', 'true'], ['true', 'false'], ['true', 'true']]) {
+      const rejected = launch(outcome, refresh);
+      assert.equal(rejected.status, 11);
+      assert.equal(rejected.stdout, '');
+      assert.equal(rejected.stderr,
+        '[paper-forward-activate] PAPER_FORWARD_EXISTING_STATE_MODE_INCOMPATIBLE\n');
+      assert.equal(await readFile(statePath, 'utf8'), before);
+    }
+    const predecessor = launch('false', 'true', 'b'.repeat(40));
+    assert.equal(predecessor.status, 0, 'different SHA still uses the existing disabled-schedule archive contract');
+    assert.equal(await readFile(statePath, 'utf8'), before);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 // Only ordinary files and malformed input are used here. No policy values or
 // valid Risk Policy record are created, and no scheduled cycle is run.
