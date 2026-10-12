@@ -55,12 +55,22 @@ function cleanRow(raw){
   return Object.freeze(row);
 }
 function decode(raw){
+  if(Buffer.isBuffer(raw)||raw instanceof Uint8Array){
+    if(raw.byteLength>PUBLIC_WS_MINUTE_LIMITS.maxMessageBytes)
+      fail('WS_MINUTE_PACKET_OVERSIZE');
+    raw=Buffer.from(raw).toString('utf8');
+  }
   if(typeof raw==='string'){
     if(Buffer.byteLength(raw,'utf8')>PUBLIC_WS_MINUTE_LIMITS.maxMessageBytes)
       fail('WS_MINUTE_PACKET_OVERSIZE');
     try{return JSON.parse(raw);}catch{fail('WS_MINUTE_PACKET_JSON_INVALID');}
   }
   if(!object(raw))fail('WS_MINUTE_PACKET_INVALID');
+  let size;
+  try{size=Buffer.byteLength(JSON.stringify(raw),'utf8');}
+  catch{fail('WS_MINUTE_PACKET_INVALID');}
+  if(size>PUBLIC_WS_MINUTE_LIMITS.maxMessageBytes)
+    fail('WS_MINUTE_PACKET_OVERSIZE');
   return raw;
 }
 function cryptoDayString(ts){
@@ -191,6 +201,34 @@ export function normalizePublicCryptoWsMinuteV1({
   });
   return observation;
 }
+
+/**
+ * Bitget candle updates may include a list of rows. Normalize each row
+ * separately (still provisional); never silently discard a valid row.
+ * The per-symbol supervisor subsequently validates ordering and gaps.
+ */
+export function normalizePublicCryptoWsMinutePacketV1({
+  raw,market,allowedSymbols,receivedAtMs,
+}={}){
+  const packet=decode(raw);
+  if(market==='CRYPTO_FUTURES'&&packet.action==='update'
+    &&Array.isArray(packet.data)){
+    if(packet.data.length<1||packet.data.length>32
+      ||packet.data.some(r=>!Array.isArray(r)||r.length<7))
+      fail('WS_MINUTE_BITGET_BATCH_INVALID');
+    const sorted=[...packet.data].sort((a,b)=>Number(a[0])-Number(b[0]));
+    const startTimes=sorted.map(r=>r[0]);
+    if(new Set(startTimes).size!==startTimes.length)
+      fail('WS_MINUTE_BITGET_BATCH_DUPLICATE');
+    return Object.freeze(sorted.map(row=>normalizePublicCryptoWsMinuteV1({
+      raw:{...packet,data:[row]},market,allowedSymbols,receivedAtMs,
+    })));
+  }
+  return Object.freeze([normalizePublicCryptoWsMinuteV1({
+    raw:packet,market,allowedSymbols,receivedAtMs,
+  })]);
+}
+
 function equalRow(a,b){
   return ['timestamp','open','high','low','close','volume','quoteVolume']
     .every(k=>a[k]===b[k]);
