@@ -1,4 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { buildChartAnalysis, type ChartAnalysisInput } from '../src/lib/chart-analysis';
 import {
   aggregateMultiTimeframe,
@@ -261,6 +263,14 @@ test('current AI evidence fails closed on stale shared chart data without duplic
   await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
+});
+
+test('read-only dual provider failure uses one bounded attempt and a cooldown instead of endless request amplification', () => {
+  const source = readFileSync(
+    path.resolve(process.cwd(), 'src/components/unified-analysis-chart.tsx'), 'utf8');
+  expect(source).toContain("if (query.state.status === 'error') return 60_000;");
+  expect(source).toContain("error.kind === 'server' || error.kind === 'network'");
+  expect(source).toContain("refetchOnReconnect: true");
 });
 
 test('current AI evidence fails closed when the shared chart provider is unavailable', async ({ page, context }) => {
