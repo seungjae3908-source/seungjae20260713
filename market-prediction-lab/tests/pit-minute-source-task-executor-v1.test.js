@@ -789,7 +789,7 @@ test("source-limited one-candle PIT crypto capture is a stored UNKNOWN history, 
    const fromDisk=await derive({root:t.root,market,symbol,
     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
    assert.equal(fromDisk.sourceMinuteRows,1);
-   assert.equal(fromDisk.nativeMinuteSlotInventoryComplete,false);
+   assert.equal(fromDisk.intervalData["1m"].sourceSessionCoverageComplete,false);
    const asOf=await derive({root:t.root,market,symbol,
     sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
    assert.equal(asOf.intervalData["1m"].bars.length,0);

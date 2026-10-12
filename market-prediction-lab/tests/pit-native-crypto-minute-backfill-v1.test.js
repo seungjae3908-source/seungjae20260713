@@ -656,7 +656,7 @@ test("opt-in source-limited capture retains one genuine listing-edge 1m, never c
      asOfMs:NOW,timeframes:["1m","5m"]});
    assert.equal(retainedRows.sourceMinuteRows,1);
    assert.equal(retainedRows.archiveRevisionCount,1);
-   assert.equal(retainedRows.nativeMinuteSlotInventoryComplete,false);
+   assert.equal(retainedRows.intervalData["1m"].sourceSessionCoverageComplete,false);
    assert.equal(retainedRows.intervalData["1m"].bars[0].startMs,at);
    assert.equal(retainedRows.profitabilityProven,false);
    const replay=await derive({root,market,symbol,sessionStartMs:START,
