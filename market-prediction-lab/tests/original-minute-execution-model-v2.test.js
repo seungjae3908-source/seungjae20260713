@@ -55,3 +55,61 @@ test('MTM high water includes open gains before retracement', () => {
   mark(state, 1200); mark(state, 900);
   assert.equal(state.maxDrawdownPercent, 25);
 });
+
+test('malformed or reversed candle clock cannot claim an opening fill', () => {
+  for (const broken of [
+    { ...bar(90, 91, 89, 90), startMs: undefined },
+    { ...bar(90, 91, 89, 90), startMs: 121_000 },
+    { ...bar(90, 91, 89, 90), endMs: 60_000 },
+    { ...bar(90, 91, 89, 90), endMs: Number.POSITIVE_INFINITY },
+  ]) {
+    assert.throws(() => fill(broken, 'LONG', 100, strategy), /INPUT_INVALID/);
+  }
+  assert.throws(() => fill(bar(90, 91, 89, 90), 'LONG', 100,
+    { stopPercent: 100, targetPercent: 10 }), /INPUT_INVALID/);
+  assert.throws(() => fill(bar(100, 110, 90, 100), 'SHORT', 100,
+    { stopPercent: 5, targetPercent: 100 }), /INPUT_INVALID/);
+});
+
+test('standalone liquidation never converts an invalid side or negative costs into profit', () => {
+  const position = { side: 'LONG', entryPrice: 100, quantity: 1 };
+  for (const bad of [
+    { ...position, side: 'UNKNOWN' },
+    { ...position, quantity: 0 },
+    { ...position, quantity: -1 },
+    { ...position, entryPrice: Number.NaN },
+  ]) {
+    assert.throws(() => liquidation(bad, 110, costs, 'CRYPTO_FUTURES'),
+      /LIQUIDATION_INPUT_INVALID/);
+  }
+  for (const bad of [
+    { ...costs, exitFeeRate: -0.05 },
+    { ...costs, spreadRate: Number.NaN },
+    { ...costs, slippageRate: undefined },
+    { ...costs, fundingRatePerSession: -0.01 },
+    { ...costs, latencyRate: 0.2 },
+  ]) {
+    assert.throws(() => liquidation(position, 110, bad, 'CRYPTO_FUTURES'),
+      /LIQUIDATION_INPUT_INVALID/);
+  }
+  assert.throws(() => liquidation(position, 110, costs, 'UNKNOWN_MARKET'),
+    /LIQUIDATION_INPUT_INVALID/);
+  assert.throws(() => liquidation(position, 0, costs, 'CRYPTO_FUTURES'),
+    /LIQUIDATION_INPUT_INVALID/);
+  assert.throws(() => liquidation(position, 110,
+    { ...costs, fundingRatePerSession: 0.01 }, 'KR_STOCK'),
+  /LIQUIDATION_INPUT_INVALID/);
+});
+
+test('missing or corrupted equity high water cannot hide drawdown', () => {
+  for (const invalid of [
+    null,
+    {},
+    { peak: 0, maxDrawdownPercent: 0 },
+    { peak: Number.NaN, maxDrawdownPercent: 0 },
+    { peak: 1000, maxDrawdownPercent: undefined },
+    { peak: 1000, maxDrawdownPercent: -1 },
+  ]) {
+    assert.throws(() => mark(invalid, 900), /EQUITY_STATE_INVALID/);
+  }
+});
