@@ -12,8 +12,9 @@ function boundedInteger(value, fallback, min, max) {
 }
 
 /** Owner confirmation changes consent only, never numeric investment policy or evidence. */
-export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, ownerCommentId, observedAt }) {
+export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, appSha = targetSha, ownerCommentId, observedAt }) {
   if (!/^[a-f0-9]{40}$/.test(targetSha) || !/^[1-9]\d{0,19}$/.test(String(ownerCommentId)) || !Number.isSafeInteger(observedAt) || observedAt <= 0) throw new Error('RESEARCH_OWNER_CONFIRMATION_REQUIRED');
+  if (!/^[a-f0-9]{40}$/.test(appSha)) throw new Error('RESEARCH_APP_CONFIRMATION_IDENTITY_REQUIRED');
   const ai = parseEnv(aiText), video = parseEnv(videoText);
   const provider = String(ai.AI_CHAT_PROVIDER ?? 'groq').trim().toLowerCase();
   if (!['gemini', 'groq'].includes(provider)) throw new Error('RESEARCH_CONFIRMATION_PROVIDER_INVALID');
@@ -41,7 +42,10 @@ export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, o
   return Object.freeze({
     aiText: encode(aiPolicy), videoText: encode(videoPolicy),
     confirmation: {
-      schemaVersion: 'research-free-owner-confirmation-v1', targetSha, ownerCommentId: String(ownerCommentId), observedAt,
+      // v1 targetSha is consumed by the unchanged deployed app. Preserve that
+      // exact binding; record the isolated Research release separately.
+      schemaVersion: 'research-free-owner-confirmation-v1', targetSha: appSha, appSha, researchSha: targetSha,
+      ownerCommentId: String(ownerCommentId), observedAt,
       providers: ['gemini', 'groq'], freeOnlyConfirmed: true, publicVideoDiscoveryApproved: true,
       paidFallback: false, executionAuthority: 'NONE', liveTrading: false, privateApi: false, orderAllowed: false,
     },
@@ -51,6 +55,7 @@ export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, o
 export function validResearchFreeConfirmation(value, targetSha) {
   return Boolean(value?.schemaVersion === 'research-free-owner-confirmation-v1'
     && /^[a-f0-9]{40}$/.test(targetSha) && value.targetSha === targetSha
+    && (value.appSha === undefined || (value.appSha === targetSha && /^[a-f0-9]{40}$/.test(value.researchSha ?? '')))
     && /^[1-9]\d{0,19}$/.test(String(value.ownerCommentId))
     && Number.isSafeInteger(value.observedAt) && value.observedAt > 0 && value.observedAt <= Date.now()
     && JSON.stringify(value.providers) === JSON.stringify(['gemini', 'groq'])

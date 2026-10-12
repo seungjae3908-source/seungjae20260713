@@ -609,15 +609,8 @@ async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promis
     visibleButtons: 0,
     visibleTabs: 0,
   } : await auditLayout(page);
-  const routePath = baseUrl ? new URL(route, baseUrl).pathname : route;
-  const screenshotTargets = ['/stocks','/scanner','/ai-chart','/paper-trading','/portfolio','/account','/stock-info/analysis'];
-  if (!page.isClosed() && screenshotTargets.includes(routePath)) {
-    await page.screenshot({
-      path: path.join(ARTIFACT_DIR, `${slug(testInfo.project.name)}-${slug(routePath)}.png`),
-      fullPage: false,
-      timeout: 4_000,
-    }).catch(() => undefined);
-  }
+  // Authenticated evidence is structured only; default screenshot: 'off' does
+  // not prevent explicit capture calls from retaining account information.
   return {
     route,
     finalUrl: page.isClosed() ? '[PAGE_CLOSED]' : page.url(),
