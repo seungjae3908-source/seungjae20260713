@@ -7,12 +7,22 @@ on:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
+      - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
+      - 'market-prediction-lab/src/four-market-original-minute-*.js'
+      - 'market-prediction-lab/src/research-minute-*.js'
+      - 'market-prediction-lab/src/historical-*.js'
+      - 'market-prediction-lab/src/timeframes.js'
       - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
   pull_request:
     paths:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
+      - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
+      - 'market-prediction-lab/src/four-market-original-minute-*.js'
+      - 'market-prediction-lab/src/research-minute-*.js'
+      - 'market-prediction-lab/src/historical-*.js'
+      - 'market-prediction-lab/src/timeframes.js'
       - '.github/workflows/research-minute-gap-mtm-drift-qa.yml'
 
 permissions:
@@ -78,6 +88,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node --check market-prediction-lab/src/four-market-original-minute-replay-v1.js
+          node --check market-prediction-lab/scripts/run-four-market-original-minute-replay-v1.mjs
           node --test market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js
           node --test \
             market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js \
