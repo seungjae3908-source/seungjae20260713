@@ -1,3 +1,4 @@
+const { assertMemberAccountSignalAudit } = require('./automatic-live-preactivation-audit.cjs');
 const REQUIRED_PROVIDERS = Object.freeze(['bitget', 'kiwoom', 'toss', 'upbit']);
 const REQUIRED_CREDENTIAL_REUSE_PATHS = Object.freeze(REQUIRED_PROVIDERS.map(
   (provider) => `/api/trade-automation/connections/${provider}/reuse-readonly`,
@@ -280,7 +281,7 @@ function assertAutoLiveReceipt(autoLive, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   const providerNames = Object.keys(autoLive?.providers ?? {}).sort();
   const marketNames = Object.keys(autoLive?.markets ?? {}).sort();
-  if (autoLive?.schemaVersion !== 'production-auto-live-readonly-qa-v2'
+  if (autoLive?.schemaVersion !== 'production-auto-live-readonly-qa-v3'
     || autoLive?.productionDeployRunId !== deployRunId
     || autoLive?.officialProductionOrigin !== true
     || autoLive?.authenticatedProductionSession !== true
@@ -297,7 +298,7 @@ function assertAutoLiveReceipt(autoLive, { targetSha, productionDeployRunId }) {
     || !Number.isInteger(autoLive?.memberAutoBitgetLeverage)
     || autoLive.memberAutoBitgetLeverage < 2
     || autoLive.memberAutoBitgetLeverage > 7
-    || !['limited-50', 'validated', 'formula-ai-exception'].includes(autoLive?.memberAutoPilotStage)
+    || !['validated', 'formula-ai-exception'].includes(autoLive?.memberAutoPilotStage)
     || autoLive?.memberAutoLivePilotReady !== true
     || autoLive?.providerVerificationFresh !== true
     || autoLive?.marketReadinessBlockersOnlyExpectedPreactivation !== true
@@ -320,6 +321,9 @@ function assertAutoLiveReceipt(autoLive, { targetSha, productionDeployRunId }) {
     throw new Error('POSTDEPLOY_QA_AUTO_LIVE_INVALID');
   }
   requireExactSha(autoLive.targetSha, sha, 'POSTDEPLOY_QA_AUTO_LIVE_SHA_MISMATCH');
+  assertMemberAccountSignalAudit(autoLive.memberAccountSignalAudit, {
+    targetSha: sha, generatedAt: autoLive.generatedAt,
+  });
   requireZeroAuthority(autoLive, 'POSTDEPLOY_QA_AUTO_LIVE');
   assertNoForbiddenEvidenceKeys(autoLive);
 }

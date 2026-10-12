@@ -113,6 +113,7 @@ const groups = {
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
     path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
+    path.join(root, 'src/services/trade-kiwoom-readonly-contract.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-readiness.service.test.ts'),
@@ -232,11 +233,14 @@ const outputFiles = [];
 try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
+    const buildStartedAt = performance.now();
+    console.log(`TEST_BUILD_START ${index + 1}/${entries.length} ${path.relative(repositoryRoot, entryPoint)}`);
     await build({
       entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
       format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
       define: { 'import.meta.env': '{}' },
     });
+    console.log(`TEST_BUILD_PASS ${index + 1}/${entries.length} ${Math.round(performance.now() - buildStartedAt)}ms`);
     outputFiles.push(outputFile);
   }
 
