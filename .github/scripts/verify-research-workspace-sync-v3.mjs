@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
+import { AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
 const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
@@ -318,6 +320,41 @@ const formulaAiDriftReviewed=[
  'api-server/test.mjs',
 ];
 const automaticTradingDriftReviewed=[
+ // Exact owner-approved AUTO safety paths still require both Trading guards
+ // below; protected Research prefixes, main ancestry and route bytes stay gated.
+ ...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+ // Read-only holdings UI and entry evidence, with no new database or financial scope.
+ 'stock-analyzer/src/components/bottom-nav.tsx',
+ 'stock-analyzer/e2e/app-navigation.spec.ts',
+ 'stock-analyzer/e2e/technical-workspace-professional.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/responsive-ai-chart-unification.spec.ts',
+ 'stock-analyzer/e2e/scanner-chart-broadcast.spec.ts',
+ 'stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts',
+ 'stock-analyzer/e2e/full-product-browser-flow.spec.ts',
+ '.github/tests/production-auto-live-only-release-contract.test.mjs',
+ 'stock-analyzer/e2e/platform-canonical-integration-contract.spec.ts',
+ 'stock-analyzer/e2e/stock-detail-ai-chart-ui-remediation.spec.ts',
+ 'stock-analyzer/e2e/detail-auto-ui-compact.spec.ts',
+ 'stock-analyzer/e2e/paper-bottom-nav-inset-contract.spec.ts',
+ 'stock-analyzer/e2e/scanner-member-access.spec.ts',
+ 'api-server/src/services/trading-holdings-readonly.service.ts',
+ 'api-server/src/features/account-readonly/account-readonly.contract.ts',
+ 'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
+ 'api-server/src/features/account-readonly/providers/toss-readonly.provider.ts',
+ 'stock-analyzer/src/components/trading-holdings-panel.tsx',
+ 'stock-analyzer/src/pages/paper-trading.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/e2e/staging-auto-live-only.spec.ts',
+ 'stock-analyzer/e2e/production-auto-live-only-qa.spec.ts',
+ // Manual holdings isolation is Trading-only; both activation guards below
+ // remain mandatory when either runtime or receipt validation changes.
+ '.github/scripts/verify-production-preactivation-evidence.cjs',
+ 'api-server/src/services/automatic-live-position-isolation.service.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts',
+ 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
  '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
  '.github/tests/production-telegram-active-readiness.test.mjs',
@@ -410,6 +447,7 @@ const researchPITReadOnlyReviewed=[
   '.github/workflows/research-pit-minute-readonly-drift.yml',
 ];
 const allowed=new Set([
+ ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
  ...added,
  ...supplemental,
@@ -427,8 +465,11 @@ const allowed=new Set([
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const pitReadOnlyChanged=changed.some((p)=>researchPITReadOnlyReviewed.includes(p));
 if(pitReadOnlyChanged){
+ // Keep the unrelated Paper-triggering predeploy workflow byte-identical to main.
+ const predeployPath='.github/workflows/research-center-predeploy-validation.yml';
+ if(git('rev-parse',`HEAD:${predeployPath}`)!==git('rev-parse',`${MAIN}:${predeployPath}`))
+  throw new Error('PIT_READONLY_UNRELATED_PAPER_GATE_MUTATED');
  const required=[...researchPITReadOnlyReviewed,
-  '.github/workflows/research-center-predeploy-validation.yml',
   'api-server/scripts/verify-research-center-predeploy-contract.mjs',
   '.github/scripts/verify-research-workspace-sync-v3.mjs',
   'api-server/src/routes/research-workspace.ts',
@@ -563,7 +604,15 @@ function isPersonalTelegramMembershipOnlyChange(p) {
  }
  return false;
 }
-const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)&&!isPersonalTelegramMembershipOnlyChange(p));
+const preservedPaperIntegration=changed.filter((p)=>isPreservedPaperIntegrationPath(p,
+ (ref,file)=>git('rev-parse',`${ref}:${file}`)));
+if(preservedPaperIntegration.length>0){
+  git('merge-base','--is-ancestor',PAPER_INTEGRATION_SHA,'HEAD');
+  for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA);
+}
+const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)
+ &&!isPersonalTelegramMembershipOnlyChange(p)&&!preservedPaperIntegration.includes(p)
+ &&!isResearchOnlyNavigationDiff(p,git('diff','--unified=0',MAIN,'HEAD','--',p)));
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
   '.github/workflows/production-automatic-trading-gate.yml',
@@ -632,6 +681,14 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
+// Normalize only the exact additive, authenticated, sanitized GET mount.
+// Do not normalize any admin guard, existing route, or mutation endpoint.
+if(!mainRoute.includes("import researchOverviewRouter from './research-overview';"))current=current
+ .replace("\nimport researchOverviewRouter from './research-overview';",'')
+ .replace(
+  "\n// Approved active members can read sanitized shared research. Administrative\n// research operations and AI generation retain their independent admin guard.\nrouter.use('/research', requireCapability('canAccessBasicInfo'), researchOverviewRouter);\n",
+  '',
+ );
 const memberAccessContractChanged=changed.some((p)=>(
  memberAccessReviewed.includes(p)
  && !formulaAiDriftReviewed.includes(p)
@@ -671,10 +728,10 @@ if(memberAccessRouteContractChanged){
  const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
  if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
  if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
- current=current
-  .replace(aiChartFuturesGate,canonicalFuturesGate)
-  .replace(journalSplitGate,canonicalJournalGate)
-  .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
+ if(!mainRoute.includes(aiChartFuturesGate))current=current.replace(aiChartFuturesGate,canonicalFuturesGate);
+ if(!mainRoute.includes(journalSplitGate))current=current.replace(journalSplitGate,canonicalJournalGate);
+ const expirationLine="    membership_expires_at: profile.membership_expires_at ?? null,\n";
+ if(!mainRoute.includes(expirationLine))current=current.replace(expirationLine,'');
 }
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
@@ -762,6 +819,10 @@ const protectedPathExceptions=new Map([
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);
  if(exceptions){
+  // Exact Research Center-owned paths only. Auth, lockfile and member-access
+  // restrictions remain unchanged; no directory-wide exception is introduced.
+  if(['market-prediction-lab','research-production','research-dashboard','stock-analyzer/src/pages/research-center.tsx'].includes(p))
+   for(const item of RESEARCH_CENTER_BATCH_PATHS)if(item===p||item.startsWith(p+'/'))exceptions.add(item);
   const unexpected=git('diff','--name-only',MAIN,'HEAD','--',p).split('\n').filter(Boolean).filter((item)=>!exceptions.has(item));
   if(unexpected.length>0)throw new Error('PROTECTED_PATH_CHANGED:'+p+':'+unexpected.join(','));
   continue;
@@ -769,6 +830,7 @@ for(const p of protectedPaths){
  if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 }
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
+  preservedPaperIntegrationSha:PAPER_INTEGRATION_SHA,preservedPaperIntegration,
   reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,
   protectedPathExceptions:Object.fromEntries([...protectedPathExceptions].map(([key,value])=>[key,[...value]])),
   ancestryPreserved:true,mainUpdated:false,

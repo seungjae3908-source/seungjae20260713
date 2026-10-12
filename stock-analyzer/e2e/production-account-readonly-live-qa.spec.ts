@@ -11,7 +11,7 @@ import {
   providerDiagnosticHealthy,
   type ReadonlyProbeObservation,
 } from './support/production-live-disable-provider-audit';
-import { parseBitgetReadonlyDiagnosticHeader, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
+import { READONLY_RUNTIME_ERROR_PATTERN, parseBitgetReadonlyDiagnosticHeader, summarizeAutomaticWarmupPositions, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -380,22 +380,53 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
-  const runtimeState = await page.evaluate(async ({ token }) => {
+  const runtimeState = await page.evaluate(async ({ token, requirePositionIsolation, errorPattern }) => {
     const read = async (url: string) => {
       const response = await fetch(url, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         credentials: 'same-origin',
         cache: 'no-store',
       });
-      if (!response.ok) throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}`);
+      if (!response.ok) {
+        let classification = 'UNKNOWN';
+        try {
+          const body = await response.json() as { error?: unknown };
+          if (typeof body.error === 'string'
+            && new RegExp(errorPattern).test(body.error)) {
+            classification = body.error;
+          }
+        } catch { /* Never log a raw provider body, credential, symbol or account. */ }
+        throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}:${url}:${classification}`);
+      }
       return response.json() as Promise<unknown>;
     };
-    const [orders, approvalQueue] = await Promise.all([
+    const [orders, approvalQueue, ...positionIsolation] = await Promise.all([
       read('/api/trade-automation/orders'),
       read('/api/trade-automation/approval-queue'),
+      ...(requirePositionIsolation ? ['bitget', 'kiwoom', 'toss', 'upbit']
+        .map((provider) => read(`/api/trade-automation/live-position-isolation/${provider}`)) : []),
     ]);
-    return { orders, approvalQueue };
-  }, { token: accessToken! }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot };
+    return { orders, approvalQueue, positionIsolation };
+  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit && testedProviders.length === 4,
+    errorPattern: READONLY_RUNTIME_ERROR_PATTERN }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
+    positionIsolation: Array<Record<string, unknown>> };
+
+  for (const proof of runtimeState.positionIsolation) {
+    expect(proof.ok).toBe(true);
+    expect(proof.policyVersion).toBe('manual-protected-auto-ledger-v1');
+    expect(proof.ready).toBe(true);
+    expect(proof.fresh).toBe(true);
+    expect(proof.ambiguousPositionCount).toBe(0);
+    expect(proof.manualEntryBlocked).toBe(true);
+    expect(proof.canonicalExitOnly).toBe(true);
+    expect(Number.isSafeInteger(proof.manualProtectedPositionCount)).toBe(true);
+    expect(Number(proof.manualProtectedPositionCount)).toBeGreaterThanOrEqual(0);
+    expect(Number.isSafeInteger(proof.automaticOwnedPositionCount)).toBe(true);
+    expect(Number(proof.automaticOwnedPositionCount)).toBeGreaterThanOrEqual(0);
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) expect(proof[key]).toBe(0);
+    expect(proof.liveTradingAuthorityGranted).toBe(false);
+    expect(proof.autoTradingAuthorityGranted).toBe(false);
+  }
 
   expect(runtimeState.orders.ok).toBe(true);
   expect(runtimeState.orders.orderSubmitted).toBe(false);
@@ -500,6 +531,8 @@ test('Production real-account read-only providers return fresh connected snapsho
       openOrderCount: Array.isArray(snapshot?.openOrders) ? snapshot.openOrders.length : -1,
       reconciliation: reconciliationPassed ? 'PASS' : 'FAIL',
       reconciliationPassed,
+      automaticWarmupPositions: summarizeAutomaticWarmupPositions(snapshot),
+      automaticPositionIsolation: runtimeState.positionIsolation.find((proof) => proof.provider === provider),
       diagnosticReadAccepted: snapshot !== undefined && providerReadErrorAccepted(
         provider,
         typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,
@@ -509,6 +542,15 @@ test('Production real-account read-only providers return fresh connected snapsho
         : {}),
     };
   });
+
+  console.log('AUTOMATIC_WARMUP_POSITION_DIAGNOSTIC', JSON.stringify({
+    localLiveOrderCount: localOrders.length,
+    providers: sanitizedProviders.map(({ provider, automaticWarmupPositions }) => ({
+      provider, ...automaticWarmupPositions,
+    })),
+    accountValuesRecorded: false,
+    secretValuesRecorded: false,
+  }));
 
   // Persist bounded, sanitized provider state before any connectivity assertion so a
   // Production failure identifies the exact provider status/error without retaining

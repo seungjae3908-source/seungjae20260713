@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { TradingRepository } from './trade-automation.repository';
 import {
   TradeRecoveryWorker,
+  createTradeRecoveryRuntime,
   type TradeRecoveryWorkerSource,
 } from './trade-recovery-worker.service';
 import type {
@@ -322,4 +323,63 @@ test('one item failure is recorded and does not stop the remaining recovery batc
     [result.ordersSubmitted, result.ordersCancelled, result.privateMutationRequests],
     [0, 0, 0],
   );
+});
+
+test('stopping a recovery runtime rejects both successful and failed late completions without resurrecting health', async () => {
+  for (const fail of [false, true]) {
+    const source = new FakeRecoverySource();
+    let release!: () => void;
+    source.claimRecoveryOrders = async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      if (fail) throw new Error('LATE_RECOVERY_FAILURE:private-details');
+      return [];
+    };
+    const worker = new TradeRecoveryWorker(source, { batchSize: 1, concurrency: 1, leaseSeconds: 60 });
+    const updates: Array<{ enabled: boolean; tickOk: boolean | null; errorCode: string | null }> = [];
+    const control = createTradeRecoveryRuntime(worker, 300_000, (health) => updates.push(health));
+    try {
+      assert.equal(updates.at(-1)?.enabled, true);
+      control.stop();
+      const stoppedCount = updates.length;
+      release();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(updates.length, stoppedCount);
+      assert.equal(updates.at(-1)?.enabled, false);
+      assert.equal(updates.at(-1)?.tickOk, null);
+      assert.equal(updates.at(-1)?.errorCode, null);
+    } finally { control.stop(); }
+  }
+});
+
+test('pending reconciliation and lost recovery lease are never advertised as healthy activation evidence', async () => {
+  for (const [field, errorCode] of [
+    ['pending', 'TRADE_RECOVERY_PENDING_RECONCILIATION'],
+    ['leaseLost', 'TRADE_RECOVERY_LEASE_LOST'],
+  ] as const) {
+    const worker = new TradeRecoveryWorker(new FakeRecoverySource(), { batchSize: 1, concurrency: 1, leaseSeconds: 60 });
+    const empty = await worker.runOnce();
+    worker.runOnce = async () => ({ ...empty, [field]: 1 });
+    let health: { tickOk: boolean | null; errorCode: string | null } | undefined;
+    const control = createTradeRecoveryRuntime(worker, 300_000, (value) => { health = value; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(health?.tickOk, false);
+      assert.equal(health?.errorCode, errorCode);
+    } finally { control.stop(); }
+  }
+});
+
+test('overlapping recovery is explicitly skipped, never a fabricated healthy completed cycle', async () => {
+  const source = new FakeRecoverySource();
+  source.seed(1);
+  source.transitionDelayMs = 20;
+  const worker = new TradeRecoveryWorker(source, { batchSize: 1, concurrency: 1, leaseSeconds: 60 });
+  const first = worker.runOnce();
+  const overlapping = await worker.runOnce();
+  assert.equal(overlapping.overlapSkipped, true);
+  assert.equal(overlapping.claimed, 0);
+  const completed = await first;
+  assert.equal(completed.overlapSkipped, false);
+  assert.equal(completed.claimed, 1);
+  assert.equal(completed.privateMutationRequests, 0);
 });

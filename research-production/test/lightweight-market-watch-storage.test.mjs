@@ -16,6 +16,7 @@ async function workspace(fn) {
   try {
     await mkdir(join(root,'watch','events'),{recursive:true,mode:0o700});
     await mkdir(join(root,'watch','outcomes'),{recursive:true,mode:0o700});
+    await mkdir(join(root,'watch','capped'),{recursive:true,mode:0o700});
     await mkdir(join(root,'latest'),{recursive:true,mode:0o700});
     return await fn(root);
   } finally {
@@ -42,6 +43,32 @@ test('bounded watcher JSONL append records UTF8 lines privately and retains prio
     assert.equal(await readFile(path,'utf8'),data);
     assert.equal(WATCH_STORAGE_LIMITS.dailyJsonlBytes,64*1024*1024);
     assert.equal(WATCH_STORAGE_LIMITS.jsonlLineBytes,16*1024);
+  });
+});
+
+test('bounded capped research candidate rows persist independently from emitted event logs',async()=>{
+  await workspace(async root=>{
+    const capped=join(root,'watch','capped','2026-10-09.jsonl');
+    const record={contract:'public-watch-capped-candidate-audit-v1',
+      market:'US_STOCK', kind:'CAPPED_RESEARCH_OBSERVATION_ONLY',
+      eventId:'a'.repeat(64), qualifyingCandidateCount:48,
+      emittedCandidateCount:12, cappedCandidateCount:36,
+      detailedCandidateCount:32, undetailedCandidateCount:4,
+      details:[{symbol:'US1',score:1}],
+      paperAdmitted:false, isTradingSignal:false, executionAuthority:'NONE'};
+    await appendBoundedWatchEvents(root,[record],AT,'capped');
+    await appendBoundedWatchEvents(root,[{...record,eventId:'b'.repeat(64)}],AT,'capped');
+    const saved=(await readFile(capped,'utf8')).trim().split('\n').map(JSON.parse);
+    assert.deepEqual(saved.map(v=>v.eventId),['a'.repeat(64),'b'.repeat(64)]);
+    assert.equal((await stat(capped)).mode & 0o077,0);
+    assert.equal(await readFile(join(root,'watch','events','2026-10-09.jsonl'),'utf8')
+      .catch(()=>null),null);
+    const secret=join(root,'private-secret.json');
+    await writeFile(secret,'must-not-append\n',{mode:0o600});
+    await rm(capped);
+    await symlink(secret,capped);
+    await assert.rejects(appendBoundedWatchEvents(root,[record],AT,'capped'));
+    assert.equal(await readFile(secret,'utf8'),'must-not-append\n');
   });
 });
 
@@ -125,6 +152,7 @@ test('atomic publisher refuses invalid byte cap and does not fake a successful s
 
 test('existing watcher uses synced bounded append before its atomic cursor and status',async()=>{
   const bin=await readFile(new URL('../bin/lightweight-market-watch.mjs',import.meta.url),'utf8');
+  assert.match(bin,/appendBoundedWatchEvents\(root, cappedCandidateAudits,[\s\S]*'capped'\)/u);
   assert.match(bin,/appendBoundedWatchEvents\(root, prospective\.outcomes,[\s\S]*'outcomes'\)/u);
   assert.match(bin,/appendBoundedWatchEvents\(root, allCandidates,[\s\S]*'events'\)/u);
   assert.match(bin,/atomicDurableWatchJson\(join\(root, 'watch', 'state-v1\.json'\), next\)/u);
