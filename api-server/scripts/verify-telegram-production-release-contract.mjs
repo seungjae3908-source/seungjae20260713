@@ -270,6 +270,25 @@ for (const forbidden of [
 ]) if (preDbReceipt.includes(forbidden) || preDbTls.includes(forbidden)) {
   throw new Error('TELEGRAM_PREDB_PROTECTED_READONLY_BOUNDARY_VIOLATION:'+forbidden);
 }
+const runtimeTradingBlock = source.slice(runtimePreflightIndex,storageMigrationIndex);
+if (!runtimeTradingBlock.includes('TELEGRAM_PREFLIGHT_TRADING_RUNTIME_ACTIVE')
+  || !runtimeTradingBlock.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')
+  || !runtimeTradingBlock.includes('LIVE_TRADING_ACTIVATION_APPROVED')
+  || !runtimeTradingBlock.includes('executionAuthority')) {
+  throw new Error('TELEGRAM_PREFLIGHT_ACTIVE_TRADING_RUNTIME_NOT_BLOCKED');
+}
+const tradingActivationStart = source.indexOf('function activateApprovedTelegram(');
+const tradingActivationEnd = source.indexOf('const requiredTelegramConfigKeys',tradingActivationStart);
+const tradingActivationBlock = source.slice(tradingActivationStart,tradingActivationEnd);
+if (tradingActivationStart<0 || tradingActivationEnd<tradingActivationStart
+  || !tradingActivationBlock.includes('TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE')
+  || !tradingActivationBlock.includes("execFileSync('pm2',['jlist']")
+  || !tradingActivationBlock.includes('activeTrading(fresh)')
+  || tradingActivationBlock.includes("LIVE_TRADING: 'false'")
+  || tradingActivationBlock.includes("AUTO_TRADING: 'false'")
+  || tradingActivationBlock.includes("executionAuthority: 'NONE'")) {
+  throw new Error('TELEGRAM_ACTIVATION_MUST_PRESERVE_NON_TELEGRAM_RUNTIME_AUTHORITY');
+}
 const remoteNodeOptionsValue = '--dns-result-order=ipv4first --no-network-family-autoselection';
 const remoteNodeOptionsDeclaration = `TELEGRAM_REMOTE_NODE_OPTIONS: ${remoteNodeOptionsValue}`;
 if (!source.includes(remoteNodeOptionsDeclaration)) {
