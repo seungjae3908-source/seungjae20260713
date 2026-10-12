@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -25,6 +25,7 @@ import {
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
   readTelegramIntelligenceWorkerHealth,
+  safeTelegramBriefFailureCode,
 } from './telegram-intelligence-worker.service';
 import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
@@ -37,6 +38,8 @@ import {
   type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
+import { deliverMemberWatchlistTelegramForSignal } from './member-watchlist-telegram-producer.service';
+import { TELEGRAM_POLICY_SAFETY } from './telegram-alert-policy.service';
 import './signal-intelligence-telegram-subscriber.service.test';
 
 const originalFetch = globalThis.fetch;
@@ -843,4 +846,161 @@ test('max-length escaping never truncates inside Telegram HTML tag/entity',()=>{
   assert.ok(output.length<=4096);
   assert.equal((output.match(/<b>/gu)||[]).length,(output.match(/<\/b>/gu)||[]).length);
   assert.doesNotMatch(output,/&(?:a|am|amp|l|lt|g|gt|quo|quot|#|#3|#39)$/u);
+});
+
+test('weekend exchange close/premarket Telegram plans never fire as regular session reports', () => {
+  const audience={membership:'admin' as const};
+  for(const now of [
+    '2026-10-11T07:00:00.000Z', // Sunday 16:00 Seoul (TODAY)
+    '2026-10-10T07:00:00.000Z', // Saturday 16:00 Seoul
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('KR_CLOSING'),now);
+  }
+  for(const now of [
+    '2026-10-11T12:00:00.000Z', // Sunday 08:00 New York EDT
+    '2026-10-10T12:00:00.000Z', // Saturday 08:00 New York EDT
+    '2026-01-11T13:00:00.000Z', // Sunday 08:00 New York EST
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('US_PREMARKET'),now);
+  }
+  // Daily market-condition briefing is still permitted on weekends,
+  // but it can only use data-available/N/A, not synthetic weekend trades.
+  const sundayMorning=dueTelegramIntelligenceReports(
+    new Date('2026-10-10T23:00:00.000Z'),audience);
+  assert.deepEqual(sundayMorning.map(x=>x.kind),['MORNING']);
+  assert.ok(sundayMorning.every(x=>x.orderSubmitted===false &&
+    x.liveTradingAuthority===false));
+});
+
+test('scheduled Telegram market-brief ledger refuses linked files and preserves the original', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-brief-linked-'));
+  try {
+    const original = path.join(dir, 'real.json');
+    const linked = path.join(dir, 'linked.json');
+    const content = JSON.stringify({ version: 1, delivered: {
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock':
+        '2026-10-11T00:00:00.000Z',
+    } });
+    await writeFile(original, content, 'utf8');
+    await symlink(original, linked);
+    const store = new FileTelegramIntelligenceStateStore(linked);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    await assert.rejects(store.has('telegram-intelligence:test'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(original, 'utf8'), content);
+    // Same fail-closed behavior on a genuine corrupt file is covered above.
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduled Telegram report never overwrites a separate file through a temporary symlink', async () => {
+  const dir=await mkdtemp(path.join(tmpdir(),'telegram-brief-trap-'));
+  try {
+    const ledger=path.join(dir,'market.json');
+    const unrelated=path.join(dir,'private-note.txt');
+    const trap=`${ledger}.${process.pid}.tmp`;
+    const original='DO_NOT_WRITE_PRIVATE_MATERIAL';
+    await writeFile(unrelated,original,'utf8');
+    await symlink(unrelated,trap);
+    const store=new FileTelegramIntelligenceStateStore(ledger);
+    await assert.rejects(store.markDelivered(
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock',
+      new Date('2026-10-11T00:00:00.000Z')),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),original);
+    await assert.rejects(store.has('telegram-intelligence:anything'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('scheduled market brief errors keep sensitive provider messages out of sanitized log classification', async () => {
+  const sensitive=Error('TELEGRAM_BOT_TOKEN=PRIVATE_SECRET https://private.example/key');
+  const code=safeTelegramBriefFailureCode(sensitive);
+  assert.equal(code,'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE');
+  assert.equal(JSON.stringify({code}).includes('PRIVATE_SECRET'),false);
+  const timedOut=Error('CONFIDENTIAL_DETAILS');
+  timedOut.name='AbortError';
+  assert.equal(safeTelegramBriefFailureCode(timedOut),'TELEGRAM_BRIEF_TIMEOUT');
+  const before=process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  let sent=0,fetches=0;
+  try{
+    process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED='true';
+    const worker=new TelegramIntelligenceWorker(
+      new MemoryTelegramIntelligenceStateStore(),
+      async()=>{sent+=1;return {ok:true as const,attempts:1};},
+      room=>room==='KR_STOCK_ROOM'?'mock-kr-room':null,
+      async()=>{fetches+=1;throw sensitive;},
+    );
+    const result=await worker.runOnce(new Date('2026-10-12T07:00:00.000Z'));
+    assert.equal(fetches,1);
+    assert.equal(result.delivered,1);
+    assert.equal(sent,1);
+    assert.equal(result.liveTradingAuthority,false);
+    assert.equal(result.orderSubmitted,false);
+  }finally{
+    if(before===undefined)delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=before;
+  }
+});
+
+test('member watchlist BATCHED personal digest is counted as durable queue, never delivered or skipped', async () => {
+  const event = {
+    type:'NEW_CANDIDATE' as const,
+    id:'US_STOCK|AAPL|SWING|60m|BUY',
+    serviceSha:'a'.repeat(40),
+    market:'US_STOCK' as const,
+    symbol:'AAPL',
+    strategy:'SWING',
+    timeframe:'60m',
+    direction:'BUY' as const,
+    validationTier:'RESEARCH_CANDIDATE' as const,
+    occurredAt:'2026-10-11T06:00:00.000Z',
+  };
+  const accepted=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:true,deliveryId:'mock-outbox-id',
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(accepted.eligible,true);
+  assert.equal(accepted.attempted,1);
+  assert.equal(accepted.queued,1,'a saved digest is a real queued alert');
+  assert.equal(accepted.delivered,0,'a saved digest is NOT Telegram Bot API acceptance');
+  assert.equal(accepted.skipped,0,'queued digest must not be reported as suppressed');
+  assert.equal(accepted.failed,0);
+  assert.equal(accepted.reason,'COMPLETE');
+
+  const refused=await deliverMemberWatchlistTelegramForSignal(event, {
+    findSubscribers:async()=>[{userId:'mock-user'}],
+    deliver:async()=>({
+      status:'POLICY' as const,reason:null,
+      policy:{
+        decision:{
+          action:'BATCHED' as const,reason:'DIGEST_BATCHED' as const,
+          userId:'mock-user',prioritySemantics:'DELIVERY_URGENCY_ONLY' as const,
+          digestKey:'mock-user:US:IMPORTANT',digestWindowMs:1800000,
+          safety:TELEGRAM_POLICY_SAFETY,
+        },
+        transport:null,safety:TELEGRAM_POLICY_SAFETY,
+      },
+      deliveryQueued:false,deliveryId:null,
+    }),
+  },{MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED:'true'});
+  assert.equal(refused.queued,0);
+  assert.equal(refused.delivered,0);
+  assert.equal(refused.skipped,1,'a rejected digest entry is not a queued success');
 });

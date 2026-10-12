@@ -175,6 +175,16 @@ export async function deliverMemberWatchlistTelegramForSignal(
         else result.skipped += 1;
         continue;
       }
+      if (dispatch.policy.decision.action === 'BATCHED') {
+        // Durable digest admission is successful queuing, NOT a direct
+        // Telegram Bot API send and NOT a suppressed signal. Preserve the
+        // recipient's configured digest preference and audit that queue.
+        const queued = durableQueueState(dispatch);
+        if (queued === true) result.queued += 1;
+        else if (queued === false) result.skipped += 1;
+        else result.failed += 1;
+        continue;
+      }
       if (dispatch.policy.decision.action !== 'IMMEDIATE') {
         result.skipped += 1;
         continue;
