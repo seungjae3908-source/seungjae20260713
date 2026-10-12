@@ -18,7 +18,7 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
   const signalAudit = read('ops/production-auto-live-signal-source-audit.mjs');
   const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
-  const dedicatedInstaller = read('ops/install-auto-live-public-signal-schedule.sh');
+  const isolatedPlan = read('ops/production-auto-live-signal-identity.cjs');
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
@@ -37,11 +37,11 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(production.includes('production-auto-live-qa.json'));
   assert.ok(production.includes('production-auto-live-signal-source.json'));
   assert.ok(production.includes('Install exact-SHA Automatic LIVE public-signal schedule without Paper DB or RLS'));
-  // Dedicated source is available for a separately approved future migration
-  // but the shared release path remains fail-closed until genuine validation.
-  assert.ok(production.includes('node --test .github/tests/auto-live-public-signal-schedule-contract.test.mjs'));
-  assert.ok(dedicatedInstaller.includes("ROOT='/opt/stock-app-data/auto-live-signal-v1'"));
-  assert.ok(dedicatedInstaller.includes('AUTO_LIVE_PUBLIC_SIGNAL_INSTALL_APPROVED'));
+  // Independently owned public observation is only a bounded Draft plan;
+  // the existing fail-closed Production financial authority remains intact.
+  assert.ok(isolatedPlan.includes('inspectIndependentAutoLivePublicSourcePlan('));
+  assert.ok(isolatedPlan.includes("status: 'DRAFT_PLAN_NOT_INSTALLED'"));
+  assert.ok(isolatedPlan.includes('ownerInstallApprovalRequired: true'));
 
   // AUTO LIVE must not disable or replace a separately owned Natural/Paper
   // schedule, even when the shared root contains only archived/disabled state.
