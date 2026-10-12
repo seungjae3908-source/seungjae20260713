@@ -75,6 +75,29 @@ export function FourMarketPaperStatusPanel(){
       </div> : <p className="pt-2 text-muted-foreground">
         사용자별 가상계좌 원장 증거를 확인하지 못했습니다. 원금을 현재 수익으로 표시하지 않습니다.
       </p>}
+      {status?.automaticPaperExecutionAudit ? <div className="mt-3 space-y-1 border-t border-card-border pt-2"
+        data-testid="paper-execution-history-audit">
+        <strong>기존 자동모의 주문·매매일지 무결성 (조회 전용)</strong>
+        <p>과거 Paper 주문 {status.automaticPaperExecutionAudit.totals.paperOrders}건 ·
+          체결 표시 {status.automaticPaperExecutionAudit.totals.filledOrders}건 ·
+          체결수량/가격 오류 {status.automaticPaperExecutionAudit.totals.invalidFilledOrders}건</p>
+        <p>일지 일치 {status.automaticPaperExecutionAudit.totals.confirmedJournalMirrors}건 ·
+          일지 누락 {status.automaticPaperExecutionAudit.totals.missingJournalMirrors}건 ·
+          원장 충돌 {status.automaticPaperExecutionAudit.totals.conflictingJournalMirrors}건</p>
+        <p>상세 체결 미확인 {status.automaticPaperExecutionAudit.totals.aggregateOnlyFilledOrders}건 ·
+          전체 비용·환율 등 증거 미확정 {status.automaticPaperExecutionAudit.totals.missingFullCostEvidence}건</p>
+        <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-4">
+          {PAPER_FOUR_MARKET_KEYS.map(({key,label})=>{
+            const lane=status.automaticPaperExecutionAudit!.markets[key];
+            return <div className="rounded-lg border border-card-border p-2" key={key}>
+              <strong>{label}</strong>
+              <p>기존 주문 {lane.paperOrders} · 체결 {lane.filledOrders}</p>
+              <p>오류 {lane.invalidFilledOrders+lane.conflictingJournalMirrors} · 비용 미확정 {lane.missingFullCostEvidence}</p>
+            </div>;
+          })}
+        </div>
+        <p className="text-muted-foreground">표시된 체결·일지는 순실현수익이나 수익성 PASS 증명이 아닙니다. 기존 원본을 수정하지 않으며 실거래 권한도 사용하지 않습니다.</p>
+      </div> : <p className="mt-2 text-muted-foreground">과거 자동모의 주문 원장 점검: 서버 증거 연결 확인 필요</p>}
       {status?.creationBlockers.length ?
         <p className="mt-2 text-amber-700">계좌 준비 차단: {status.creationBlockers.join(' · ')}</p> : null}
       <p className="mt-2 text-muted-foreground">

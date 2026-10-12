@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import type { StoredPaperJournalRecord } from './paper-journal.types';
+import { adminPaperMarketFromPlan, ADMIN_FOUR_PAPER_MARKETS, type AdminPaperMarket } from './admin-four-market-paper-capital.service';
+
 
 /**
  * Read-only owner-scoped reconciliation of a durable APP_PAPER execution
@@ -246,5 +250,161 @@ export function reconcileScopedExternalJournalHistory(
       financialMutationCount:0 as const,
       executionAuthority:'NONE' as const,
     }),
+  });
+}
+
+
+/**
+ * Owner-scoped, read-only audit of historical automatic Paper execution
+ * evidence. This is NOT a settlement service: neither a FILLED status, an
+ * aggregate fill nor an APP_PAPER journal mirror proves net KRW profitability.
+ * Never repair legacy records by rewriting quantities or assuming zero tax.
+ */
+export const PAPER_EXECUTION_HISTORY_AUDIT_V1 = 'automatic-paper-history-audit-v1' as const;
+type PaperMarketHistoryLane = {
+  paperOrders: number;
+  filledOrders: number;
+  partialOrders: number;
+  invalidFilledOrders: number;
+  aggregateOnlyFilledOrders: number;
+  confirmedJournalMirrors: number;
+  missingJournalMirrors: number;
+  conflictingJournalMirrors: number;
+  missingFullCostEvidence: number;
+};
+const zeroPaperLane = (): PaperMarketHistoryLane => ({
+  paperOrders:0, filledOrders:0, partialOrders:0,
+  invalidFilledOrders:0, aggregateOnlyFilledOrders:0,
+  confirmedJournalMirrors:0, missingJournalMirrors:0,
+  conflictingJournalMirrors:0, missingFullCostEvidence:0,
+});
+const centsMatch = (a: number, b: number) =>
+  Math.abs(a - b) <= Math.max(1e-8, Math.abs(b) * 1e-6);
+
+export function auditAutomaticPaperExecutionHistory(input: Readonly<{
+  ownerId: string;
+  plans: readonly TradingPlan[];
+  orders: readonly TradingOrder[];
+  storedRows: readonly StoredPaperJournalRecord[];
+}>) {
+  if (!input || typeof input.ownerId !== 'string' || !input.ownerId.trim()
+    || !Array.isArray(input.plans) || !Array.isArray(input.orders)
+    || !Array.isArray(input.storedRows)) {
+    throw new Error('PAPER_HISTORY_AUDIT_INPUT_INVALID');
+  }
+  const plansById = new Map<string, TradingPlan>();
+  for (const plan of input.plans) {
+    if (plan.accountMode !== 'paper' || plan.executionMode !== 'automatic') continue;
+    // A caller must pass only repository-enforced authenticated-owner data.
+    // A scope mixup must not return even an aggregate view of another owner.
+    if (plan.userId !== input.ownerId) throw new Error('PAPER_HISTORY_AUDIT_OWNER_MISMATCH');
+    if (plansById.has(plan.id)) throw new Error('PAPER_HISTORY_AUDIT_DUPLICATE_PLAN');
+    plansById.set(plan.id, plan);
+  }
+
+  const mirrorsByInternalOrderId = new Map<string, Record<string, unknown>[]>();
+  for (const row of input.storedRows) {
+    if (row.kind !== 'journal' || row.deletedAt !== null) continue;
+    const p = row.payload;
+    if (p?.source !== 'APP_PAPER' || p.recordType !== 'unified_trade_order') continue;
+    if (typeof p.brokerOrderId !== 'string' || p.brokerOrderId.length > 160) continue;
+    const existing = mirrorsByInternalOrderId.get(p.brokerOrderId) ?? [];
+    existing.push(p);
+    mirrorsByInternalOrderId.set(p.brokerOrderId, existing);
+  }
+  const markets = Object.fromEntries(
+    ADMIN_FOUR_PAPER_MARKETS.map(market => [market,zeroPaperLane()]),
+  ) as Record<AdminPaperMarket,PaperMarketHistoryLane>;
+  const seenOrders = new Set<string>();
+  for (const order of input.orders) {
+    const plan = plansById.get(order.planId);
+    if (!plan) continue;
+    if (order.userId !== input.ownerId || order.userId !== plan.userId) {
+      throw new Error('PAPER_HISTORY_AUDIT_ORDER_OWNER_MISMATCH');
+    }
+    if (seenOrders.has(order.id)) throw new Error('PAPER_HISTORY_AUDIT_DUPLICATE_ORDER');
+    seenOrders.add(order.id);
+    const market = adminPaperMarketFromPlan(plan);
+    const lane = markets[market];
+    const expectedJournalMarket = {
+      domestic_stock:'KR_STOCK', us_stock:'US_STOCK',
+      crypto_spot:'CRYPTO_SPOT', crypto_futures:'CRYPTO_FUTURES',
+    }[market];
+    lane.paperOrders += 1;
+    if (order.state === 'PARTIALLY_FILLED') lane.partialOrders += 1;
+    if (order.state !== 'FILLED') continue;
+    lane.filledOrders += 1;
+    const qty = order.filledQuantity;
+    const price = order.averageFillPrice;
+    if (!(typeof qty === 'number' && Number.isFinite(qty) && qty > 0)
+      || !(typeof price === 'number' && Number.isFinite(price) && price > 0)) {
+      // Legacy FILLED rows with zero quantity cannot be given profit credit.
+      lane.invalidFilledOrders += 1;
+      continue;
+    }
+    if (!Array.isArray(order.fills) || order.fills.length === 0) {
+      // An aggregate fill can be observable, but individual fill receipts are
+      // still UNKNOWN. Do not manufacture per-fill prices or time stamps.
+      lane.aggregateOnlyFilledOrders += 1;
+    }
+    const mirrored = mirrorsByInternalOrderId.get(order.id) ?? [];
+    if (mirrored.length === 0) lane.missingJournalMirrors += 1;
+    else if (mirrored.length !== 1
+      || mirrored[0]?.market !== expectedJournalMarket
+      || mirrored[0]?.status !== 'FILLED'
+      || typeof mirrored[0]?.filledQuantity !== 'number'
+      || typeof mirrored[0]?.averageFillPrice !== 'number'
+      || !centsMatch(mirrored[0].filledQuantity as number, qty)
+      || !centsMatch(mirrored[0].averageFillPrice as number, price)) {
+      lane.conflictingJournalMirrors += 1;
+    } else lane.confirmedJournalMirrors += 1;
+
+    const currency = plan.exchange === 'bitget' ? 'USDT'
+      : plan.exchange === 'upbit' ? 'KRW'
+        : adminPaperMarketFromPlan(plan) === 'us_stock' ? 'USD' : 'KRW';
+    const fx = order.settlementFxEvidence;
+    const fxObservedAt = Date.parse(fx?.observedAt ?? '');
+    const feeReady = typeof order.feeAmount === 'number'
+      && Number.isFinite(order.feeAmount) && order.feeAmount >= 0
+      && order.feeCurrency === currency;
+    const taxReady = typeof order.taxAmount === 'number'
+      && Number.isFinite(order.taxAmount) && order.taxAmount >= 0
+      && order.taxCurrency === currency;
+    const fxReady = fx && typeof fx.krwPerQuoteCurrency === 'number'
+      && Number.isFinite(fx.krwPerQuoteCurrency) && fx.krwPerQuoteCurrency > 0
+      && Number.isFinite(fxObservedAt)
+      && (currency !== 'KRW' || fx.krwPerQuoteCurrency === 1);
+    const fundingReady = plan.exchange !== 'bitget' || plan.reduceOnly !== true
+      || order.paperFundingSettlementEvidence?.complete === true;
+    if (!feeReady || !taxReady || !fxReady || !fundingReady) {
+      lane.missingFullCostEvidence += 1;
+    }
+  }
+  const total = zeroPaperLane();
+  for (const market of ADMIN_FOUR_PAPER_MARKETS) {
+    for (const key of Object.keys(total) as Array<keyof PaperMarketHistoryLane>) {
+      total[key] += markets[market][key];
+    }
+  }
+  const status = total.paperOrders === 0 ? 'NO_HISTORY'
+    : total.invalidFilledOrders || total.conflictingJournalMirrors
+      ? 'INCOMPLETE_EXECUTION_EVIDENCE'
+      : total.missingJournalMirrors ? 'INCOMPLETE_JOURNAL'
+        : total.missingFullCostEvidence || total.aggregateOnlyFilledOrders
+          ? 'UNSETTLED_PAPER_HISTORY' : 'HISTORY_OBSERVED_NOT_PROFITABILITY';
+  return Object.freeze({
+    version: PAPER_EXECUTION_HISTORY_AUDIT_V1,
+    readOnlyProbe: true as const,
+    ownerScope: 'SELF' as const,
+    status,
+    totals: Object.freeze(total),
+    markets: Object.freeze(Object.fromEntries(
+      ADMIN_FOUR_PAPER_MARKETS.map(market => [market,Object.freeze(markets[market])]),
+    ) as Record<AdminPaperMarket,Readonly<PaperMarketHistoryLane>>),
+    actualSettlementProven: false as const,
+    profitabilityProven: false as const,
+    financialMutationCount: 0 as const,
+    privateProviderRequests: 0 as const,
+    executionAuthority: 'NONE' as const,
   });
 }
