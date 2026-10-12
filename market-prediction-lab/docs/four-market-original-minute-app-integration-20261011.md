@@ -201,3 +201,37 @@ node market-prediction-lab/scripts/audit-research-minute-revisions-v1.mjs \
 이 도구는 네트워크 GET·파일 쓰기·금융 주문을 수행하지 않는다. 캔들 값은
 출력하지 않으며, 과거 source/PIT/이용권 인증이나 독립 OOS 증명으로
 승격하지 않는다. 기존 조회는 다중 수정본을 자동 선택하지 않는다.
+
+## 2026-10-12 — 선택 기간별 증분 원본 복구 계획 보강 (Draft only)
+
+기존 31일 범위 `auditResearchMinuteArchiveWindowV1`는 원본 세션이 아예
+없는 날짜만 `missingCollectionPlan`에 내보냈다. 반면 일부 저장된
+1분봉은 수량만 세었으므로 단일 원본 버전 기준 해시를 요구하는
+`--retry-partial --expected-existing-sha`와 연결되지 않았다.
+
+이번 수정은 **추가 공급원 요청 없이**, 원본 SHA-256을 검증한 청크 결과에서
+다음 네 분류를 수집한다.
+
+1. `missingCollectionPlan` — 원본 자체가 없는 일자/거래 세션,
+   증분 원본 수집 **검토** 대상.
+2. `partialRetryReviewPlan` — 원본 1분봉이 일부 있으며 고유한 단일
+   원본 SHA와 남은 불명확한 분 슬롯 수를 함께 돌려준다.
+   실제 재수집에는 사용자의 별도 공개 읽기 승인, 정확한 기존 원본
+   해시, 거래소 당시 상장 상태, 공급원 이용권이 필요하다.
+3. `revisionReviewPlan` — 여러 불변 원본 버전이 존재. SHA 자동 선택을
+   하지 않고 별도 revision auditor 검토만 허용한다.
+4. `unreadableSourceReviewPlan` — 파일 손상·불변 원본 출처와
+   거래 세션 불일치. 단순 미수집으로 간주하지 않고 차단한다.
+
+국내·미국주식의 거래일과 장전/정규/시간외 세션은 현지 거래일 기준이며,
+현재 허가된 역사적 원본 1분봉 공급자가 없는 상태이므로
+`proposedProvider=null`을 유지한다. 코인현물은 Upbit, 선물은 Bitget
+공개 과거 데이터 **후보**로만 표시하고 네 시장 공통으로
+`publicHistoryGETAuthorized=false`, `autoExecuteAllowed=false`,
+`providerGETCount=0`, `profitabilityProven=false`다.
+
+기존 CLI의 생성 전용 개인 보고서에도 이 네 구분과 원본 SHA를 보존하고
+표준 출력에는 복구 검토 건수만 표시한다. 대상 기간을 3년으로
+고정하지 않으며 1일~10년 이상의 지정 기간도 기존 최대 31일
+청크/이어받기 정책을 그대로 적용한다. 실제 데이터 수집,
+원본 파일 수정 또는 운영 배포는 이번 코드 QA에서 수행하지 않는다.
