@@ -4,6 +4,14 @@ on:
   pull_request:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
+      - api-server/package.json
+      - api-server/scripts/ai-preview-diagnostic-contract.mjs
+      - api-server/scripts/contract-source-text.mjs
+      - api-server/scripts/contract-source-text.test.mjs
+      - api-server/scripts/staging-detail-canonical-route-contract.mjs
+      - api-server/scripts/verify-ai-preview-diagnostic-contract.mjs
+      - api-server/scripts/verify-ai-preview-diagnostic-contract.test.mjs
+      - api-server/scripts/verify-staging-detail-canonical-route-contract.mjs
       - api-server/scripts/verify-production-us-chart-candle-priority-contract.mjs
       - api-server/src/kiwoom-chart-window.test.ts
       - api-server/src/providers/krx-source-pair.test.ts
