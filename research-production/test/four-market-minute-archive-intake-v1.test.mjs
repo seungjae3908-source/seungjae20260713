@@ -89,7 +89,7 @@ test('public GET requests are fixed and bounded; Bitget extra interval is exclud
   assert.equal(seen[0].init.redirect, 'error');
   assert.deepEqual(validateMinuteCandles(future, data, NOW).map(r => r.timestamp),
     [BEGIN + MINUTE_MS]);
-  assert.rejects(fetchCryptoMinutePage(spot, {
+  await assert.rejects(fetchCryptoMinutePage(spot, {
     fetchImpl: async () => fakeResponse({}, 429),
   }), /MINUTE_SOURCE_HTTP_429/);
   await assert.rejects(fetchCryptoMinutePage(future, {
@@ -200,4 +200,63 @@ test('unsafe root and insufficient disk stop before any provider requests', asyn
     }), /MINUTE_INTAKE_DUPLICATE_TASK/);
     assert.equal(calls,0);
   });
+});
+
+
+test('original source archive survives research code upgrades without losing producer identity',async()=>{
+  await workspace(async root=>{
+    const oldSha='a'.repeat(40);
+    const newSha='b'.repeat(40);
+    const first=await persistOriginalMinutePage({
+      root,task:spot,researchSha:oldSha,rows:[candle(BEGIN)],retrievedAtMs:NOW,
+    });
+    const old=await readOriginalMinutePage(root,spot,oldSha);
+    const next=await readOriginalMinutePage(root,spot,newSha);
+    assert.equal(first.status,'ARCHIVED');
+    assert.equal(old.researchSha,oldSha);
+    assert.equal(next.researchSha,oldSha); // not rewritten to new release
+    assert.equal(next.candleDigest,old.candleDigest);
+    const reused=await persistOriginalMinutePage({
+      root,task:spot,researchSha:newSha,rows:[candle(BEGIN)],retrievedAtMs:NOW+60_000,
+    });
+    assert.equal(reused.status,'REUSED_IDENTICAL');
+    assert.equal((await readOriginalMinutePage(root,spot,newSha)).researchSha,oldSha);
+  });
+});
+
+test('symlink in archive ancestor or sealed page is fail-closed',async()=>{
+  await workspace(async base=>{
+    const root=join(base,'protected');
+    await mkdir(root,{mode:0o700});
+    const alias=join(base,'parent-link');
+    await symlink(root,alias);
+    await assert.rejects(runMinuteArchiveIntakeV1({
+      enabled:true,root:alias,tasks:[spot],researchSha:SHA,now:()=>NOW,
+    }),/MINUTE_ARCHIVE_(?:ANCESTOR_SYMLINK|DIRECTORY_UNSAFE)/);
+    await persistOriginalMinutePage({
+      root,task:spot,researchSha:SHA,rows:[candle()],retrievedAtMs:NOW,
+    });
+    const file=join(root,spot.market,spot.symbol,'2026-10-10',
+      BEGIN+'-'+END+'.json');
+    const duplicate=join(base,'archive-digest-duplicate');
+    await writeFile(duplicate,await readFile(file,'utf8'),{mode:0o600});
+    await rm(file);
+    await symlink(duplicate,file);
+    await assert.rejects(readOriginalMinutePage(root,spot,SHA),/MINUTE_ARCHIVE_FILE_UNSAFE/);
+  });
+});
+
+test('network failures never leak URLs/credentials, and return a retryable classification',async()=>{
+  await assert.rejects(fetchCryptoMinutePage(spot,{
+    fetchImpl:async()=>{throw Error('private-auth-token=https://unsafe.example');},
+  }),/MINUTE_SOURCE_NETWORK_UNAVAILABLE/);
+  const keepAlive=setInterval(()=>{},25);
+  try {
+    await assert.rejects(fetchCryptoMinutePage(future,{
+      timeoutMs:100,
+      fetchImpl:async(_url,{signal})=>new Promise((_,reject)=>{
+        signal.addEventListener('abort',()=>reject(Error('simulated timeout')),{once:true});
+      }),
+    }),/MINUTE_SOURCE_TIMEOUT/);
+  } finally { clearInterval(keepAlive); }
 });
