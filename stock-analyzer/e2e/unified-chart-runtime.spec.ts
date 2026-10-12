@@ -158,7 +158,8 @@ test('desktop chart changes market and timeframe, ignores a late request, persis
   for (const [market, expectedProvider] of [['US', 'fixture-stock'], ['UPBIT', 'upbit-fixture'], ['BITGET', 'bitget-fixture']] as const) {
     await page.getByTestId(`market-${market}`).click();
     await expect(page).toHaveURL(new RegExp(`market=${market}`));
-    await expect(page.getByText(expectedProvider, { exact: false })).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toContainText(expectedProvider);
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
   }
 

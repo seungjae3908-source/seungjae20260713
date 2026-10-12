@@ -23,6 +23,9 @@ function candleRows(revision: number) {
 async function installChartMock(context: BrowserContext) {
   let revision = 0;
   let calls = 0;
+  await context.route('**/api/**', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, items: [], results: [] }),
+  }));
   await context.route('**/api/stocks/*/candles**', async (route) => {
     calls += 1;
     const current = revision;
