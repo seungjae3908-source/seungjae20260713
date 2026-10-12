@@ -32,6 +32,36 @@ function readyProvider(nowMs) {
   });
 }
 
+test("AUTO-only public refresh recollects evidence every 15 minutes rather than retimestamping 4h replay", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "auto-live-public-refresh-"));
+  let nowMs = 1_800_000_000_000;
+  let providerCalls = 0;
+  const options = { rootDirectory: join(sandbox, "state"), researchCodeSha: RESEARCH_SHA,
+    triggerSource: "cron", activationAtMs: nowMs - 1000, autoLiveSignalRefresh: true,
+    clock: () => nowMs, publicEvidenceProvider: { async collectPublicEvidence(input) {
+      providerCalls += 1;
+      return readyProvider(nowMs).collectPublicEvidence(input);
+    } } };
+  try {
+    const first = await runPaperForwardScheduledInvocation(options);
+    assert.equal(first.status, "COMPLETED");
+    assert.equal(providerCalls, 4);
+    nowMs += 15 * 60_000;
+    const second = await runPaperForwardScheduledInvocation(options);
+    assert.equal(second.status, "COMPLETED");
+    assert.equal(providerCalls, 8, "fresh source reads must happen in the next cron cycle");
+    const persisted = JSON.parse(await readFile(join(sandbox, "state", "handoff", "member-auto-trading-latest.json"), "utf8"));
+    assert.equal(persisted.evaluatedAtMs, nowMs);
+    assert.equal(persisted.safety.orderSubmitted, false);
+    assert.equal(second.invocation.privateRequestCount, 0);
+    assert.equal(second.invocation.canonicalCycleIntervalMs, 900000);
+    assert.equal(first.persistedStatus.canonicalCycleIntervalMs, 900000);
+    assert.equal(second.persistedStatus.canonicalCycleIntervalMs, 900000);
+    await assert.rejects(runPaperForwardScheduledInvocation({ ...options, outcomeAccumulationEnabled: true }),
+      /REQUIRES_OBSERVATION_ONLY/);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
 test("natural cron invocation persists one canonical 4h cycle and active status", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-schedule-"));
   const root = join(sandbox, "persistent-state");
@@ -55,6 +85,7 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
     assert.equal(first.invocation.publicForwardEvidenceAccumulating, true);
     assert.equal(first.invocation.paperTradeOutcomeAccumulating, false);
     assert.equal(first.persistedStatus.scheduleActive, true);
+    assert.equal(first.persistedStatus.canonicalCycleIntervalMs, 4 * 60 * 60_000);
     assert.equal(first.persistedStatus.allProvidersReady, true);
     assert.equal(first.persistedStatus.privateRequestCount, 0);
     assert.equal(first.persistedStatus.orderCount, 0);
@@ -91,6 +122,30 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
   } finally {
     await rm(sandbox, { recursive: true, force: true });
   }
+});
+
+test("same-SHA cadence change fails before provider calls and preserves existing state and evidence", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-mode-identity-"));
+  const root = join(sandbox, "state");
+  let nowMs = 1_800_000_000_000;
+  let providerCalls = 0;
+  const options = { rootDirectory: root, researchCodeSha: RESEARCH_SHA,
+    clock: () => nowMs, publicEvidenceProvider: { collectPublicEvidence(input) {
+      providerCalls += 1;
+      return readyProvider(nowMs).collectPublicEvidence(input);
+    } } };
+  const paths = ["state/recurring-paper-loop.json", "status/runtime-status.json",
+    "status/invocations.jsonl", "handoff/member-auto-trading-latest.json"].map((path) => join(root, path));
+  try {
+    await runPaperForwardScheduledInvocation(options);
+    const before = await Promise.all(paths.map((path) => readFile(path, "utf8")));
+    assert.equal(providerCalls, 4);
+    nowMs += 15 * 60_000;
+    await assert.rejects(runPaperForwardScheduledInvocation({ ...options, autoLiveSignalRefresh: true }),
+      { message: "PAPER_LOOP_PREDECESSOR_IDENTITY_MISMATCH" });
+    assert.equal(providerCalls, 4, "incompatible state must block before any new source read");
+    assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, "utf8"))), before);
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
 });
 
 test("blocked new cycle overwrites the prior READY member automation handoff", async () => {

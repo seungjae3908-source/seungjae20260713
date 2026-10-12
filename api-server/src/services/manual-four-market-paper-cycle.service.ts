@@ -951,6 +951,8 @@ export function projectManualPaperSequentialEvents(
     ||!Number.isSafeInteger(s.signalObservedAtMs)
     ||s.strategyValidatedAtMs>s.signalObservedAtMs
     ||s.signalObservedAtMs<=0||s.signalObservedAtMs>start.observedAtMs
+    ||start.observedAtMs-s.signalObservedAtMs>60_000
+    ||start.quantity!==undefined||start.quote!==undefined
     ||!validPositive(s.requestedNotionalKrw)
     ||s.requestedNotionalKrw<1_000
     ||!validPositive(s.operatingCapitalKrw)
@@ -972,6 +974,10 @@ export function projectManualPaperSequentialEvents(
   let costsKrw=0,cancelEntry=false,exitStarted=false;
   let outstandingExit=0,exitRequestActive=false;
   let priorAt=0,finished=false,exitMatchCount=0;
+  // Quotes may not predate the order, move backward within a stream, or
+  // predate the *current* reduce-only exit request (no hindsight fill).
+  let lastMatchedQuoteAtMs=start.observedAtMs;
+  let activeExitRequestedAtMs=0;
   const knownEvents=new Set<string>();
   const knownRequests=new Set<string>();
   const matchIds:string[]=[];
@@ -1014,6 +1020,9 @@ export function projectManualPaperSequentialEvents(
         ||q.currency!==expectedCurrency
         ||!validPositive(q.bid)||!validPositive(q.ask)||q.ask<q.bid
         ||!Number.isSafeInteger(q.observedAtMs)
+        ||q.observedAtMs<start.observedAtMs
+        ||q.observedAtMs<lastMatchedQuoteAtMs
+        ||(kind==='EXIT_MATCH'&&q.observedAtMs<activeExitRequestedAtMs)
         ||q.observedAtMs>e.observedAtMs
         ||e.observedAtMs-q.observedAtMs>60_000
         ||!Number.isSafeInteger(q.fxObservedAtMs)
@@ -1080,12 +1089,20 @@ export function projectManualPaperSequentialEvents(
       costsKrw+=feeAndSlippage+q.signedFundingKrw;
       if(!Number.isFinite(costsKrw)||!Number.isFinite(exitGrossKrw))
         return blocked(['MANUAL_PAPER_SEQ_PROJECTION_OVERFLOW']);
+      lastMatchedQuoteAtMs=q.observedAtMs;
       matchIds.push(e.eventId);
     }else if(kind==='CANCEL_ENTRY'){
-      if(cancelEntry||exitStarted||entryKrw>=requestedNotional-toleranceKrw)
+      if(e.quantity!==undefined||e.quote!==undefined
+        ||cancelEntry||exitStarted||entryKrw>=requestedNotional-toleranceKrw)
         return blocked(['MANUAL_PAPER_SEQ_ENTRY_CANCEL_NOT_PENDING']);
       cancelEntry=true;
     }else if(kind==='REQUEST_EXIT'){
+      // Otherwise exitStarted permanently forbids CANCEL_ENTRY while the
+      // unfilled entry remainder can still fill after the exit: deadlocked
+      // unsettled exposure. First fill the entry or cancel its remainder.
+      if(e.quote!==undefined
+        ||(entryKrw<requestedNotional-toleranceKrw&&!cancelEntry))
+        return blocked(['MANUAL_PAPER_SEQ_ENTRY_REMAINDER_CANCEL_REQUIRED_BEFORE_EXIT']);
       if(!validPositive(e.quantity)
         ||entryQty<=exitQty+seqTolerance(entryQty)
         ||exitRequestActive
@@ -1093,12 +1110,15 @@ export function projectManualPaperSequentialEvents(
         return blocked(['MANUAL_PAPER_SEQ_EXIT_REQUEST_EXCEEDS_POSITION']);
       outstandingExit=e.quantity;
       exitRequestActive=true;
+      activeExitRequestedAtMs=e.observedAtMs;
       exitStarted=true;
     }else if(kind==='CANCEL_EXIT'){
-      if(!exitRequestActive||outstandingExit<=0)
+      if(e.quantity!==undefined||e.quote!==undefined
+        ||!exitRequestActive||outstandingExit<=0)
         return blocked(['MANUAL_PAPER_SEQ_EXIT_CANCEL_NOT_PENDING']);
       exitRequestActive=false;
       outstandingExit=0;
+      activeExitRequestedAtMs=0;
     }else{
       return blocked(['MANUAL_PAPER_SEQ_UNKNOWN_EVENT']);
     }
