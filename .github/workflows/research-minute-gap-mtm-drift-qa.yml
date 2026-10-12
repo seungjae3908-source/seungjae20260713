@@ -7,6 +7,8 @@ on:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
+      - 'market-prediction-lab/src/research-public-minute-prewire-bridge-v1.js'
+      - 'market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js'
       - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
       - 'market-prediction-lab/src/four-market-original-minute-*.js'
       - 'market-prediction-lab/src/research-minute-*.js'
@@ -18,6 +20,8 @@ on:
       - 'market-prediction-lab/src/original-minute-execution-model-v2.js'
       - 'market-prediction-lab/tests/original-minute-execution-model-v2.test.js'
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
+      - 'market-prediction-lab/src/research-public-minute-prewire-bridge-v1.js'
+      - 'market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js'
       - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
       - 'market-prediction-lab/src/four-market-original-minute-*.js'
       - 'market-prediction-lab/src/research-minute-*.js'
@@ -99,6 +103,13 @@ jobs:
             market-prediction-lab/tests/four-market-original-minute-candidate-review-v1.test.js \
             market-prediction-lab/tests/research-original-minute-diagnostic-readonly-v1.test.js \
             market-prediction-lab/tests/research-minute-archive-v1.test.js
+      - name: Validate 4-market collector prewire -> PRIVATE offline native-source bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-prediction-lab/src/research-public-minute-prewire-bridge-v1.js
+          node --check market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js
+          node --test market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js
       - name: No deployment or economic-source claims
         run: |
           echo 'originalMinuteModelOfflineUnit=COMPLETE'
