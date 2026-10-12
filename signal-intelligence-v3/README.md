@@ -475,3 +475,9 @@ than spending quota on an alias. Mixed errors can still retry conservatively.
 The scanner/public source is still not proven for the entire KR/US roster.
 V3 journal cleanup now fsyncs its parent directory to prevent stale replay
 of a completed checkpoint after a power loss.
+
+V3 stock source-page integrity is scoped to the same recent 240/320/400
+real Yahoo bars consumed by the current strategy, rather than rejecting
+current evidence due to an unrelated historic out-of-window anomaly in a
+10-year 1D series. Historical OOS requires separate independently validated
+full-history datasets and is not inferred from these bounded current bars.

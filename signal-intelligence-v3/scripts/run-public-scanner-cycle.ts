@@ -296,8 +296,13 @@ async function withStockPublicOnly(lane, operation) {
     let successfulSymbol = null;
     const native = await withProviderFallback(candidates, async providerSymbol => {
       const rows = await yahoo.getCandles(providerSymbol, timeframe);
-      if (Array.isArray(rows) && rows.length>0) successfulSymbol = providerSymbol;
-      return rows;
+      // Yahoo may return years of old/adjustment-affected candles. V3's
+      // current-cycle indicator and quality proof uses this SAME bounded
+      // recent window, so never reject the latest page for an out-of-scope
+      // historical row or feed those older rows into the scanner.
+      const relevant = Array.isArray(rows) ? rows.slice(-qualityWindow) : rows;
+      if (Array.isArray(relevant) && relevant.length>0) successfulSymbol = providerSymbol;
+      return relevant;
     },{validValue:rows=>validV3PublicYahooCandlePage(rows,{nowMs:Date.now()})});
     let candles = native;
     // Only a BLOCKING missing-candle defect triggers one bounded public
