@@ -13,6 +13,8 @@
  * To explicitly permit only public historical native 1m GET, add
  * --read-public. To retry a PARTIAL existing immutable archive, use
  * --retry-partial --expected-existing-sha <reviewed-archive-sha256>.
+ * Without --read-public, either mode performs only immutable local
+ * preflight with ZERO source GETs, returning a private blocked receipt.
  * For a retry, --expected-task-digest MUST be the exact reviewed
  * partialRetryReviewDigestSha256, NOT candidateTaskDigestSha256 from the
  * absent-source list. Both are recalculated against the full PIT day pages.
@@ -81,7 +83,7 @@ export function parsePITMinuteTaskArgsV1(args=[]) {
     ||!/^(?:[0-9]|1[0-9])$/u.test(o["--task-index"])
     ||!/^[0-9a-f]{64}$/u.test(o["--expected-task-digest"]??"")
     ||(retryPartial
-      ?!readPublic||!/^[0-9a-f]{64}$/u.test(o["--expected-existing-sha"]??"")
+      ?!/^[0-9a-f]{64}$/u.test(o["--expected-existing-sha"]??"")
       :Object.hasOwn(o,"--expected-existing-sha"))
     ||!/^(?:[3-9]|[1-9][0-9]{1,4})$/u.test(o["--max-local-mib"]??"2048")
     ||!/^(?:0|[1-9][0-9]{0,5})$/u.test(o["--min-free-mib"]??"2048")) {
