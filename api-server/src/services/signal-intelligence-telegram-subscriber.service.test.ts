@@ -173,3 +173,42 @@ test('an unknown V3 Bot API outcome stays blocked beyond 14 days and unrelated l
     assert.equal(await restarted.has(unrelated,future),true);
   }finally{await rm(directory,{recursive:true,force:true});}
 });
+
+test('V3 at-most-once ledger reservation survives a simulated send crash before receipt',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-pre-send-crash-'));
+ const key='signal-intelligence-v3:episode-v2:'+'b'.repeat(64);
+ const ledgerFile=path.join(dir,'ledger.json');
+ const at=new Date('2026-10-12T04:00:00.000Z');
+ try{
+   const state=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   await state.markUnconfirmed(key,at); // Represents durable pre-POST marker
+   const persisted=JSON.parse(await readFile(ledgerFile,'utf8'));
+   assert.ok(persisted.unconfirmed[key]);
+   const restarted=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   assert.equal(await restarted.hasUnconfirmed(key,new Date(at.getTime()+1000)),true);
+   assert.equal(await restarted.has(key,new Date(at.getTime()+1000)),false);
+   await state.mark(key,new Date(at.getTime()+2000));
+   const confirmed=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   assert.equal(await confirmed.has(key,new Date(at.getTime()+3000)),true);
+   assert.equal(await confirmed.hasUnconfirmed(key,new Date(at.getTime()+3000)),false);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('explicit zero-attempt no-send can release a pending marker, not a confirmed receipt',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-pre-send-release-'));
+ const file=path.join(dir,'ledger.json');
+ const key='signal-intelligence-v3:episode-v2:'+'c'.repeat(64);
+ const at=new Date('2026-10-12T04:00:00.000Z');
+ try{
+   const state=new SignalIntelligenceTelegramDeliveryState(file);
+   await state.markUnconfirmed(key,at);
+   await state.releaseExplicitNoSend(key,at);
+   assert.equal(await state.hasUnconfirmed(key,at),false);
+   await state.markUnconfirmed(key,at);
+   assert.equal(await new SignalIntelligenceTelegramDeliveryState(file)
+     .hasUnconfirmed(key,at),true);
+   await state.mark(key,new Date(at.getTime()+1000));
+   await assert.rejects(state.releaseExplicitNoSend(key,at),
+     /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
