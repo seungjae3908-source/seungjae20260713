@@ -542,7 +542,7 @@ test('slow response gets the bounded 60s default without changing provider or mo
   assert.equal(result.profileCoverage.allProfilesCurrentAndReviewed,false);
 }));
 
-for (const failure of ['FREE_AI_TIMEOUT', 'FREE_AI_NETWORK_UNAVAILABLE', 'FREE_AI_PROVIDER_UNAVAILABLE', 'FREE_AI_PROVIDER_ERROR']) {
+for (const failure of ['FREE_AI_TIMEOUT', 'FREE_AI_NETWORK_UNAVAILABLE', 'FREE_AI_PROVIDER_UNAVAILABLE']) {
 test(`a single transient retry for ${failure} retains the real failed attempt and requires a real valid response`, async () => recoveryFixture(async ({input,delays})=>{
   let calls=0;
   const result=await runResearchAiReviewScan({...input,invoke:async({policy})=>{
@@ -587,13 +587,34 @@ test('a one-call budget forbids even a transient retry', async()=>recoveryFixtur
   assert.equal(r.status,'PARTIAL_AI_UNAVAILABLE');assert.equal(r.providerFailures[0].retryScheduled,false);
 }));
 
-for(const reason of ['FREE_AI_RATE_LIMITED','FREE_AI_AUTH_REJECTED','FREE_AI_REQUEST_REJECTED','FREE_AI_PROVIDER_RESPONSE_INVALID']){
+for(const reason of ['FREE_AI_RATE_LIMITED','FREE_AI_AUTH_REJECTED','FREE_AI_REQUEST_REJECTED','FREE_AI_PROVIDER_RESPONSE_INVALID','FREE_AI_PROVIDER_ERROR']){
   test(`quota/auth/request/schema error ${reason} is not retried`,async()=>recoveryFixture(async({input,delays})=>{
     const r=await runResearchAiReviewScan({...input,invoke:async()=>{throw new Error(reason);}});
     assert.equal(r.providerNetworkCalls,1);assert.equal(delays.length,0);
     assert.equal(r.blockedProfiles[0].reason,reason);assert.equal(r.status,'PARTIAL_AI_UNAVAILABLE');
   }));
 }
+
+test('real HTTP status mapping retries temporary 5xx/timeout only, not permanent provider or request errors',async()=>{
+  for(const [status,reason,recoverable] of [[400,'FREE_AI_REQUEST_REJECTED',false],
+    [401,'FREE_AI_AUTH_REJECTED',false],[403,'FREE_AI_AUTH_REJECTED',false],
+    [404,'FREE_AI_PROVIDER_ERROR',false],[422,'FREE_AI_REQUEST_REJECTED',false],
+    [429,'FREE_AI_RATE_LIMITED',false],[408,'FREE_AI_TIMEOUT',true],
+    [500,'FREE_AI_PROVIDER_UNAVAILABLE',true],[503,'FREE_AI_PROVIDER_UNAVAILABLE',true],
+    [504,'FREE_AI_TIMEOUT',true]]){
+    await recoveryFixture(async({input,delays})=>{
+      let calls=0;
+      const r=await runResearchAiReviewScan({...input,invoke:invokeResearchFreeAi,fetchImpl:async()=>{
+        if(++calls===1)return new Response('{}',{status});
+        return new Response(JSON.stringify({candidates:[{content:{parts:[{text:safeAnswer}]}}]}),{status:200});
+      }});
+      assert.equal(calls,recoverable?2:1,String(status));
+      assert.equal(delays.length,recoverable?1:0,String(status));
+      assert.equal(r.status,recoverable?'PARTIAL_COVERAGE_COMPLETE':'PARTIAL_AI_UNAVAILABLE',String(status));
+      assert.equal(r.providerFailures[0].reason,reason,String(status));
+    });
+  }
+});
 
 test('real HTTP response-body timeout aborts; a bounded longer deadline parses the response',async()=>{
   const server=createServer((_req,res)=>{

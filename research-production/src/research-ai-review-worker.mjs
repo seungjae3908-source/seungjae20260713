@@ -11,7 +11,7 @@ const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 // Three bounded requests plus two short delays remain below the 5m systemd limit.
 const REQUEST_TIMEOUT_MS = 60_000;
 const RECOVERABLE_PROVIDER_ERRORS = new Set(['FREE_AI_TIMEOUT', 'FREE_AI_NETWORK_UNAVAILABLE',
-  'FREE_AI_PROVIDER_UNAVAILABLE', 'FREE_AI_PROVIDER_ERROR']);
+  'FREE_AI_PROVIDER_UNAVAILABLE']);
 const TRANSIENT_RETRY_AFTER_MS = 15 * 60 * 1_000;
 const SEMANTIC_RETRY_AFTER_MS = 6 * 60 * 60 * 1_000;
 const ALLOWED_DISPOSITIONS = new Set(['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA']);
