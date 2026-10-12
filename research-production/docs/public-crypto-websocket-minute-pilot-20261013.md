@@ -202,3 +202,48 @@ Offline negative/regression fixtures cover 240 consecutive rollovers,
 >180-minute disconnected tails, 760 scoped symbols, forbidden/forged
 REST settlement, idempotent source readback, missing original pages,
 and uncertain no-trade slots. Replit/Replit Agent forbidden; Draft only.
+
+
+## Draft v4 — bounded per-socket 1m spool fixes burst/sidecar mismatch
+
+Official Upbit/Bitget candle WebSocket feeds can push changed 1m candle
+updates about once per second on trading pairs. At an illustrative
+40 subscriptions/socket, a dense 5-minute interval can therefore
+generate **40 × 300 = 12,000 update messages/socket**, exceeding the
+original sidecar raw-input cap of 2,048. Across 760 symbols this is
+a hypothetical **228,000 updates/5min**, NOT a measured server rate.
+Writing every intermediate mutable update directly as a 5-minute
+sidecar would fail even with successful socket connections.
+
+- New pure in-memory `public-crypto-ws-minute-spool-v1.mjs` retains
+  only the **last validated cumulative 1m observation per (symbol,
+  UTC minute)**, not every second's mutable frame. It still counts all
+  source updates observed and rejects decreasing volumes/high-low,
+  changed candle openings, old event clocks, abnormal symbols and
+  cross-window frames. Partial updates do not become closed source.
+- One socket with 40 symbols × 5 minutes has at most **200 distinct
+  minute/symbol snapshots** (vs 12,000 mutable packets), which fits
+  the existing 480-row sealed sidecar cap. At the former example
+  20 sockets, the theoretical retained minute snapshots are
+  760×5=3,800, while actual message throughput, object lifetimes,
+  disk I/O and server 2vCPU/RAM remain UNKNOWN.
+- The old original sidecar format remains compatible; an optional
+  authenticated internal `actualUpdatesSeen` count preserves the
+  number of observed WebSocket updates before compaction, while only
+  the latest provisional snapshot is sealed. This is not trade tick
+  archival or historical as-of proof. `firstObservedAtMs` is
+  conservative (the retained last update receipt), never backdated.
+- Sidecar persistence remains separately operator-approved into a
+  protected 0700 root with 0600 immutable gzip/SHA256 receipts and a
+  readback. A failed write leaves the caller-owned in-memory spool
+  untouched for a separately coordinated retry. A real future
+  driver must atomically rotate after successful write or HOLD and
+  schedule REST gap inspection if a process crashes before flush.
+- The 5-minute spool is **not** a throughput or hosting attestation.
+  A future live worker needs bounded inbound socket buffers and
+  backpressure, collector WAL/checkpoint, one writer per shard,
+  RSS/CPU/disk measurements and 24h disconnection/restart test
+  before any activation. No production WebSocket opens here.
+
+All traffic/net calls in this Draft are zero; no commercial data rights
+attested, no PIT/OOS/FullCost/Paper/LIVE/Telegram authority.
