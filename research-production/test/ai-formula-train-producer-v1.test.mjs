@@ -273,7 +273,7 @@ test('TRAIN-only feedback cannot be transformed into automatic promotions or for
   assert.equal(fb.rows[0].nextStep, 'REVIEW_RESEARCH_HYPOTHESIS');
   assert.equal(fb.adviceOnly, true);
   assert.equal(fb.orderAuthority, false);
-  await assert.rejects(async () => buildAiFormulaTrainFeedbackV1({
+  assert.throws(() => buildAiFormulaTrainFeedbackV1({
     researchSha: SHA, queueSummary: { ...summary, paperOrderAuthorityGranted: true },
   }), /AI_FORMULA_FEEDBACK_UNTRUSTED/u);
   assert.throws(() => buildAiFormulaTrainFeedbackV1({
