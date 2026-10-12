@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 const chartUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m&strategyMode=SCALPING';
 
@@ -174,3 +176,10 @@ for (const width of [320, 390, 430, 768, 820, 1440]) {
     expect(orderWrites).toEqual([]);
   });
 }
+
+test('paused automatic refresh still recalculates stale source evidence with a local clock', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/components/unified-analysis-chart.tsx'), 'utf8');
+  expect(source).toContain('setInterval(() => setFreshnessClockMs(Date.now()), 30_000)');
+  expect(source).toContain('sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError, freshnessClockMs)');
+  expect(source).toContain('selection, timeframe, freshnessClockMs]');
+});

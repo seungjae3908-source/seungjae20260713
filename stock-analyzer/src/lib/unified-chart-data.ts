@@ -155,6 +155,38 @@ export function buildUnifiedChartHistoryUrl(input: {
   return `/api/stocks/${encodeURIComponent(symbol)}/history-candles?tf=${encodeURIComponent(input.timeframe)}&before=${beforeMs}`;
 }
 
+/** Explicit source identity must match the chart request before any candle,
+ * history or derived AI evidence is accepted. Optional legacy markers may be
+ * absent; supplied markers must never identify a different scope. */
+export function assertUnifiedChartResponseIdentity(
+  payload: Record<string, unknown>,
+  input: { market: AnalysisMarket; symbol: string; timeframe: UnifiedChartTimeframe },
+): void {
+  const symbol = normalizeUnifiedSymbol(input.market, input.symbol);
+  const matches = (value: unknown, expected: string): boolean =>
+    value === undefined || (typeof value === 'string' && value.trim().toUpperCase() === expected.toUpperCase());
+  const marketTag = typeof payload.market === 'string' ? payload.market.trim().toUpperCase() : '';
+  let valid = (payload.ok === undefined || payload.ok === true)
+    && matches(payload.ticker, symbol)
+    && matches(payload.symbol, symbol)
+    && matches(payload.timeframe, input.timeframe)
+    && matches(payload.granularity, input.timeframe);
+  if (['KR', 'US', 'UPBIT', 'BITGET'].includes(marketTag) && marketTag !== input.market) valid = false;
+  if (input.market === 'UPBIT') {
+    const unit = upbitUnit(input.timeframe);
+    const expectedUnit = unit === null ? '1D' : `${unit}m`;
+    valid = valid && matches(payload.market, `KRW-${symbol}`) && matches(payload.unit, expectedUnit);
+  } else if (input.market === 'BITGET') {
+    valid = valid && matches(payload.exchange, 'BITGET');
+  }
+  if (!valid) {
+    throw new UnifiedChartDataError(
+      '차트 공급원의 시장·종목·시간봉 정보가 요청과 일치하지 않아 데이터를 차단했습니다.',
+      'malformed-response', null, false,
+    );
+  }
+}
+
 export async function fetchUnifiedChartHistoryPage(input: {
   market: AnalysisMarket;
   symbol: string;
@@ -173,6 +205,7 @@ export async function fetchUnifiedChartHistoryPage(input: {
     if (payload.ok !== true || !Array.isArray(payload.candles)) {
       throw new UnifiedChartDataError('과거 캔들 응답 형식이 올바르지 않습니다.', 'malformed-response', response.status, false);
     }
+    assertUnifiedChartResponseIdentity(payload, input);
     const rawRows = candleRows(payload);
     const normalized = normalizeChartCandles(rawRows, input.timeframe as ChartCandleTimeframe);
     const older = normalized.candles.filter((candle) => candle.time < input.beforeTime);
@@ -321,7 +354,11 @@ function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: n
 }
 
 function canTryAlternateEndpoint(error: UnifiedChartDataError): boolean {
-  return error.kind === 'timeout' || error.status === 404 || error.status === 405;
+  // GET-only stock endpoint alternate: recover from 5xx/network failures,
+  // never multiply 429 pressure or bypass wrong-market payload protection.
+  return error.kind === 'timeout' || error.kind === 'network'
+    || error.status === 404 || error.status === 405
+    || (error.kind === 'server' && error.status !== null && error.status >= 500);
 }
 
 export async function fetchUnifiedChartData(input: {
@@ -395,6 +432,7 @@ export async function fetchUnifiedChartData(input: {
           throw error;
         }
 
+        assertUnifiedChartResponseIdentity(payload, { market: input.market, symbol, timeframe: input.timeframe });
         let normalization = normalizeChartCandles(
           candleRows(payload),
           input.timeframe as ChartCandleTimeframe,
@@ -404,6 +442,7 @@ export async function fetchUnifiedChartData(input: {
           const retryResponse = await fetcher(url, requestInit(attemptSignal));
           payload = await parsePayload(retryResponse);
           if (!retryResponse.ok) throw httpError(retryResponse.status, payload);
+          assertUnifiedChartResponseIdentity(payload, { market: input.market, symbol, timeframe: input.timeframe });
           normalization = normalizeChartCandles(
             candleRows(payload),
             input.timeframe as ChartCandleTimeframe,
