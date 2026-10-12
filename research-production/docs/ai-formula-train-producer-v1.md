@@ -44,3 +44,12 @@
 - 테스트는 병렬 8건 등록, 최종 파일 변조 후 재실행 차단, 추가 AI 권한, 대용량 AI 응답, 다른 후보 및 다른 Research 릴리스의 피드백 혼입을 검증합니다.
 
 이 보강은 기존 Draft에만 적용됩니다. 운영 서버가 AI 제안에서 수식을 자동 생성·개선하거나 24시간 실행하는 것은 아직 아니며 실제 원본·사용권·독립 OOS·전비용 증명 없이는 계속 HOLD입니다. Ready/Merge/Deploy 및 실주문은 하지 않습니다.
+
+## 현재 릴리스 AI 평가 → 원본 회차 정합성 읽기 (후속 Draft)
+
+- `ai-formula-evidence-readback-v1.mjs`는 기존 `ai-review/latest.json`의 PROPOSER/CRITIC 역할을 실제 동일 SHA 연구 회차 `latest/{profile}.json`와 교차 검증합니다. 단순 AI 보고만으로 새 수식·수익성·모의매매 승인으로 판단하지 않습니다.
+- 연구 회차의 **원래 작업 상태를 다시 투영**한 SHA-256 digest가 AI review에 기록된 digest와 정확히 일치해야 합니다. `cycleId`, provider/model, 시점, 공개된 프로필, AI 정책과 무주문 정책도 모두 검사합니다. AI 검토 파일은 안전한 bounded/no-follow/read-only 0600 파일로만 읽습니다.
+- 서버의 `forward/CRITIC`만 있는 상태는 정확히 `WAITING_HISTORICAL_PROPOSER_EVIDENCE`로 표시합니다. 진짜 `fast-historical`이나 `long-history`의 PROPOSER라도 승인된 canonical 수식/검증된 TRAIN 데이터가 없으면 `REVIEWED_PROPOSAL_AWAITING_APPROVED_FORMULA_AND_TRAIN_SOURCE`입니다.
+- 직접 확인 CLI: `node research-production/bin/research-ai-formula-readback.mjs --read-only --research-sha <정확한 SHA> --state-root <승인된 연구 상태 폴더>`. 기본 flag 없이는 실행 거부. 코드 내 provider HTTP 요청, 서버/DB/거래 변경, 자동 스케줄 설치가 없습니다. 민감한 원본 본문은 출력하지 않습니다.
+- 신규 회귀 테스트는 실제 연구 AI worker **모의 제공사** 출력으로 만든 원본 회차/AI 파일과 정합성을 검증합니다. 회차 변경, 다른 모델·프로필, 위조 정책, 잘못된 SHA, 파일 링크 탈취, 깨진 JSON, 아직 생성되지 않은 profile을 모두 안전 차단합니다.
+- 이 기능은 운영 AI 타이머를 바꾸지 않으며 연구용 검증된 실제 데이터 소유자와의 연동이 자동으로 끝났다는 의미가 아닙니다. 전체 시장 원본·독립 OOS/비용/포워드/수익성/모의 증빙은 별도입니다.
