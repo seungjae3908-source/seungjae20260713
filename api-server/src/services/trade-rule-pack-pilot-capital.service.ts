@@ -509,7 +509,7 @@ export function verifyRulePackPilotDynamicCapReceipt(
  * A missing/expired/forged token never falls back to manual order authority.
  */
 export async function resolveRulePackPilotDynamicCapPolicy(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   plan: TradingPlan,
   policy: TradingPolicy,
@@ -595,7 +595,7 @@ function planForBrokerOrder(
 }
 
 export async function readRulePackPilotCapitalState(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,

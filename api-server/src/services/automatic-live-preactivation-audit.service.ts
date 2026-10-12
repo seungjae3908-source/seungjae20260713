@@ -48,6 +48,11 @@ export async function auditAutomaticLivePreactivation(input: {
   const orders = () => value<Awaited<ReturnType<TradingRepository['listOrders']>>>(3);
   const handoff = () => value<Awaited<ReturnType<MemberAutoTradingBackgroundSource['readHandoff']>>>(5);
   await check('EXACT_DEPLOY_SHA', () => /^[a-f0-9]{40}$/u.test(input.targetSha) ? [] : ['PREACTIVATION_DEPLOY_SHA_INVALID']);
+  await check('ATOMIC_BUDGET_GUARD_INSTALLED', async () => {
+    if (!input.repository.readAutomaticLiveBudgetGuard) return ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY'];
+    const guard = await input.repository.readAutomaticLiveBudgetGuard();
+    return guard.ready && guard.version === 'automatic-live-atomic-budget-v1' ? [] : ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY'];
+  });
   await check('MEMBER_CAPABILITY', () => hasCapability(input.profile, 'canAccessAutoTrading')
     && hasCapability(input.profile, 'canPlaceOrders') && hasCapability(input.profile, 'canAccessFutures')
     ? [] : ['PREACTIVATION_MEMBER_EXECUTION_CAPABILITY_REQUIRED']);

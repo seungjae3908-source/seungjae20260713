@@ -107,6 +107,7 @@ async function buildAtomicSql(projectRef) {
     'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
     'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
     'api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql',
+    'api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql',
   ];
   const assertionPaths = [
     'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
