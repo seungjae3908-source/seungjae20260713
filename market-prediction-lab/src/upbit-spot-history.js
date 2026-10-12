@@ -84,7 +84,9 @@ export async function collectUpbitSpotHistory(raw = {}) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) throw new PredictionInputError("timeoutMs must be 100..60000");
   const closedAsOfTime = Math.min(endTime, collectedAt);
   const closedEndTime = Math.floor(closedAsOfTime / timeframeConfig.intervalMs) * timeframeConfig.intervalMs;
-  const byTimestamp = new Map(); const seen = new Map(); let cursor = closedEndTime; let pages = 0; let reachedRequestedStart = false;
+  const byTimestamp = new Map(); const seen = new Map();
+  let cursor = closedEndTime, pages = 0, requestedProviderPages = 0;
+  let reachedRequestedStart = false;
   while (cursor > startTime && pages < maxPages) {
     const to = new Date(cursor).toISOString();
     const venuePath = timeframe === "1d" ? "/v1/candles/days"
@@ -94,6 +96,7 @@ export async function collectUpbitSpotHistory(raw = {}) {
     const signal = raw.signal ? AbortSignal.any([raw.signal, timeoutSignal]) : timeoutSignal;
     let rows;
     try {
+      requestedProviderPages++;
       const response = await fetchImpl(url, { signal, headers: { accept: "application/json", "user-agent": "seungjae-prediction-lab/1.0" } });
       if (!response.ok) throw Object.assign(dataError(`UPBIT_HISTORY_HTTP_${response.status}`), { status: response.status });
       try {
@@ -134,7 +137,8 @@ export async function collectUpbitSpotHistory(raw = {}) {
   const rawPageWindowTraversed = reachedRequestedStart && endTime <= collectedAt;
   if (requireFullWindow && !rawPageWindowTraversed) throw dataError("UPBIT_HISTORY_RANGE_INCOMPLETE");
   if (candles.length < minCandles) throw dataError(`UPBIT_HISTORY_INSUFFICIENT_${candles.length}`);
-  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe, intervalMs: timeframeConfig.intervalMs, source: "upbit-public-candles", collectedAt, requestedStartTime: startTime, requestedEndTime: endTime, closedAsOfTime, pageCount: pages, reachedRequestedStart, rawPageWindowTraversed, historicalSignalAvailabilityProven: false, historicPointInTimeListingComplete: false, missingMinuteNoTradeProof: false, exactFirstTradeTimestampProven: false, actualFillProven: false, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), liveOrderAllowed: false, privateAccountRequestAllowed: false });
+  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe, intervalMs: timeframeConfig.intervalMs, source: "upbit-public-candles", collectedAt, requestedStartTime: startTime, requestedEndTime: endTime, closedAsOfTime, pageCount: pages, requestedProviderPages,
+    reachedRequestedStart, rawPageWindowTraversed, historicalSignalAvailabilityProven: false, historicPointInTimeListingComplete: false, missingMinuteNoTradeProof: false, exactFirstTradeTimestampProven: false, actualFillProven: false, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), liveOrderAllowed: false, privateAccountRequestAllowed: false });
 }
 
 export { marketCode as upbitKrwMarketCode };

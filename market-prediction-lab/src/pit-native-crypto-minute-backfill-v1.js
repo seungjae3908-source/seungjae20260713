@@ -57,6 +57,7 @@ function validate(input) {
     || typeof input.root !== "string"
     || ![true,false].includes(input.allowPublicReadOnlyFetch)
     || ![true,false].includes(input.retryPartialSource)
+    || ![true,false].includes(input.allowSourceLimitedArchive)
     || (input.retryPartialSource
       ? !SHA.test(input.expectedExistingSourceDigestSha256??"")
       : input.expectedExistingSourceDigestSha256 != null)
@@ -176,13 +177,14 @@ export async function collectPITNativeCryptoMinuteSourceV1({
   root,market,symbol,dayStartMs,manifest=null,
   expectedRosterDigestSha256=null,
   allowPublicReadOnlyFetch=false,retryPartialSource=false,
+  allowSourceLimitedArchive=false,
   expectedExistingSourceDigestSha256=null,
   nowImpl=()=>Date.now(),
   upbitFetchImpl=null,bitgetClient=null,
 } = {}) {
   validate({root,market,symbol,dayStartMs,
     expectedRosterDigestSha256,allowPublicReadOnlyFetch,retryPartialSource,
-    expectedExistingSourceDigestSha256,nowImpl});
+    allowSourceLimitedArchive,expectedExistingSourceDigestSha256,nowImpl});
   const end=dayStartMs+DAY;
   const now=nowImpl();
   if (!Number.isSafeInteger(now) || now < end
@@ -245,8 +247,11 @@ export async function collectPITNativeCryptoMinuteSourceV1({
     collected=market==="CRYPTO_SPOT"
       ?await collectUpbitSpotHistory({
         symbol,timeframe:"1m",startTime:dayStartMs,endTime:end,
-        minCandles:2,maxPages:10,minIntervalMs:220,
-        requireFullWindow:true,requireMarketIdentity:true,
+        minCandles:allowSourceLimitedArchive?1:2,
+        maxPages:10,minIntervalMs:220,
+        requireFullWindow:!allowSourceLimitedArchive,
+        allowPartialSource:allowSourceLimitedArchive,
+        requireMarketIdentity:true,
         ...(upbitFetchImpl?{fetchImpl:upbitFetchImpl}:{}),
       })
       :await collectBitgetCandles({
@@ -254,7 +259,9 @@ export async function collectPITNativeCryptoMinuteSourceV1({
           timeoutMs:12_000,maxRetries:1,minIntervalMs:220,
         }),
         market,symbol,timeframe:"1m",startTime:dayStartMs,endTime:end,
-        maxCandles:1600,minCandles:2,requireFullWindow:true,
+        maxCandles:1600,minCandles:allowSourceLimitedArchive?1:2,
+        maxPages:512,requireFullWindow:!allowSourceLimitedArchive,
+        allowPartialSource:allowSourceLimitedArchive,
         productType:"usdt-futures",
       });
   } catch (error) {
@@ -273,6 +280,7 @@ export async function collectPITNativeCryptoMinuteSourceV1({
   }
   const parsed=normalizeRetrospectiveCryptoMinuteSourceV1({
     market,symbol,dayStartMs,receivedAtMs:collectedAtMs,collected,
+    allowPartialSource:allowSourceLimitedArchive,
   });
   if (!parsed.source)
     return stop(market,symbol,dayStartMs,parsed.error);
@@ -307,14 +315,22 @@ export async function collectPITNativeCryptoMinuteSourceV1({
   const stored=await persistResearchMinuteSessionV1({
     root,source:parsed.source,
   });
+  // A source-limited native archive is historical observation material,
+  // NOT proof of no-trade intervals, PIT membership or prior scanner access.
+  const sourceLimited=parsed.providerRequestWindowVerified!==true
+    ||parsed.missingUnverifiedMinuteSlots>0;
   return Object.freeze({
     schemaVersion:"pit-native-crypto-minute-backfill-v1",
     status:retryPartialSource
       ?"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW"
-      :"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY",
+      :allowSourceLimitedArchive&&sourceLimited
+        ?"RETROSPECTIVE_SOURCE_LIMITED_RETAINED_REVIEW_ONLY"
+        :"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY",
     reason:retryPartialSource
       ?"EXPLICIT_ARCHIVE_REVISION_SELECTION_REQUIRED"
-      :"HISTORICAL_SCANNER_PUBLICATION_NOT_ESTABLISHED",
+      :allowSourceLimitedArchive&&sourceLimited
+        ?"SOURCE_LIMITED_ORIGINAL_1M_REQUIRES_MANUAL_REVIEW"
+        :"HISTORICAL_SCANNER_PUBLICATION_NOT_ESTABLISHED",
     competingArchiveRevisionExists:retryPartialSource,
     priorSourceDigestSha256:retryPartialSource
       ?existing.archiveSourceDigestSha256:null,
@@ -323,7 +339,15 @@ export async function collectPITNativeCryptoMinuteSourceV1({
     archiveStatus:stored.status,
     sourceMinuteCount:stored.storedOneMinuteRows,
     archiveSourceDigestSha256:stored.sourceDigestSha256,
-    providerRequestWindowVerified:true,
+    // Actual network *page* count, not necessarily HTTP retry attempts.
+    requestedProviderPages:collected.requestedProviderPages??null,
+    providerRequestWindowVerified:parsed.providerRequestWindowVerified,
+    providerRawPageWindowTraversed:parsed.providerRawPageWindowTraversed,
+    providerReachedRequestedStart:parsed.providerReachedRequestedStart,
+    sourcePartialReason:parsed.sourcePartialReason,
+    missingUnverifiedMinuteSlots:parsed.missingUnverifiedMinuteSlots,
+    sourceLimitedOnly:sourceLimited,
+    allowSourceLimitedArchiveUsed:allowSourceLimitedArchive,
     originalMinutePublicationTimeAssumed:false,
     availableAtMsConservativelyBoundToRetrieval:true,
     historicalFullMarketPITUniverseVerified:false,
