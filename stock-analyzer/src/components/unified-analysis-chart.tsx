@@ -534,13 +534,26 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     queryKey: ['unified-chart-data', market, selection.ticker, timeframe],
     queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: selection.ticker, timeframe, signal }),
     enabled: Boolean(selection.ticker),
-    refetchInterval: live && !streamOwnsTransport ? (timeframe === '1D' ? 30_000 : 8_000) : false,
+    refetchInterval: (query) => {
+      if (!live || streamOwnsTransport) return false;
+      // Bounded read-only primary+alternate requests already ran when both
+      // stock providers fail. An 8s error-polling loop would amplify outages.
+      // Keep explicit Refresh and focus/reconnect recovery available.
+      if (query.state.status === 'error') return 60_000;
+      return timeframe === '1D' ? 30_000 : 8_000;
+    },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: (failureCount, error) => {
       if (failureCount >= 1) return false;
-      if (error instanceof UnifiedChartDataError) return error.retryable && error.kind !== 'aborted';
+      if (error instanceof UnifiedChartDataError) {
+        // One stock invocation has already exhausted both public read-only
+        // endpoints on a 5xx/network failure. Do not rerun both immediately.
+        if ((market === 'KR' || market === 'US')
+          && (error.kind === 'server' || error.kind === 'network')) return false;
+        return error.retryable && error.kind !== 'aborted';
+      }
       return true;
     },
   });
