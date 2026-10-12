@@ -3,11 +3,19 @@ import { execFileSync } from 'node:child_process';
 // This is an immutable scope classification for the user's Draft scanner repair,
 // not trading approval. Every shared byte must match the verified source commit.
 // Further edits restore the full gate; no prefix, rename or wildcard exemption.
-export const SCANNER_REPAIR_SOURCE_SHA = '0d3f42a9b9639a902c0ce2ef713c8d75dc69b1be';
+export const SCANNER_REPAIR_SOURCE_SHA = 'dc15772f67822418c2eb4fa4cfc93b0b07542fa0';
 // Keep the pre-policy workflow baseline immutable even when a later source-only
 // regression fixture is pinned. A repin must not bless removal of safety steps.
 export const SCANNER_REPAIR_WORKFLOW_BASE_SHA = '6139042aaef5e7fec6bcc39648ccdddb949121e6';
 export const SCANNER_REPAIR_PINNED_PATHS = Object.freeze([
+  "api-server/package.json",
+  "api-server/scripts/ai-preview-diagnostic-contract.mjs",
+  "api-server/scripts/contract-source-text.mjs",
+  "api-server/scripts/contract-source-text.test.mjs",
+  "api-server/scripts/staging-detail-canonical-route-contract.mjs",
+  "api-server/scripts/verify-ai-preview-diagnostic-contract.mjs",
+  "api-server/scripts/verify-ai-preview-diagnostic-contract.test.mjs",
+  "api-server/scripts/verify-staging-detail-canonical-route-contract.mjs",
   "api-server/scripts/verify-production-us-chart-candle-priority-contract.mjs",
   "api-server/src/kiwoom-chart-window.test.ts",
   "api-server/src/providers/krx-source-pair.test.ts",
