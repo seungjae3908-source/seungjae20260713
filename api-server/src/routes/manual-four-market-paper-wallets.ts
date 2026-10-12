@@ -66,6 +66,8 @@ type ManualFourMarketDeps = {
     selected:ManualPaperPreviewSelection,nowMs:number)=>Promise<boolean>;
   listSequentialRows:(request:AuthenticatedRequest,ownerId:string,orderId:string)
     =>Promise<ManualPaperSequentialEventRow[]>;
+  listSequentialOrderOpenRows:(request:AuthenticatedRequest,ownerId:string)
+    =>Promise<ManualPaperSequentialEventRow[]>;
   readSequentialByRequestKey:(request:AuthenticatedRequest,ownerId:string,requestKey:string)
     =>Promise<ManualPaperSequentialEventRow|null>;
   appendSequentialRow:(request:AuthenticatedRequest,row:ManualPaperSequentialEventRow)
@@ -261,6 +263,20 @@ export function createManualFourMarketWalletRouter(
       .order('sequence_number',{ascending:true}).range(0,1000);
     if(error||!Array.isArray(data)||data.length>1000)
       throw new Error('MANUAL_PAPER_SEQ_READ_INCOMPLETE');
+    return data as ManualPaperSequentialEventRow[];
+  });
+  const listSequentialOrderOpenRows=deps.listSequentialOrderOpenRows??(async(
+    req,ownerId)=>{
+    if(!req.accessToken||req.member?.id!==ownerId)
+      throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_OWNER_REQUIRED');
+    const columns='user_id,wallet_id,order_id,event_id,request_key,sequence_number,market,owner_role,event_sha256,event';
+    const {data,error}=await getUserSupabase(req.accessToken)
+      .from(SEQUENTIAL_LEDGER_TABLE)
+      .select(columns)
+      .eq('user_id',ownerId).eq('sequence_number',1)
+      .order('created_at',{ascending:false}).limit(25);
+    if(error||!Array.isArray(data)||data.length>25)
+      throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_UNAVAILABLE');
     return data as ManualPaperSequentialEventRow[];
   });
   const readSequentialByRequestKey=deps.readSequentialByRequestKey??(async(
@@ -762,6 +778,76 @@ export function createManualFourMarketWalletRouter(
       }catch{
         return res.status(409).json(fail('MANUAL_PAPER_SEQ_NOT_RECORDED',
           '주문 이벤트 중복·원장 무결성 또는 서버 증거를 확인할 수 없습니다.'));
+      }
+    });
+
+  // Discover owner-only historical Paper-simulation order identities. This
+  // is NOT a market order, trade confirmation or settlement readback.
+  // A list view never infers whether a historic order is still open; the
+  // selected order must be replayed independently by the exact-ID GET.
+  router.get('/paper-trading/manual-four-market/sequential-orders',
+    async(req:AuthenticatedRequest,res)=>{
+      res.set('Cache-Control','no-store');
+      const owner=authenticatedOwner(req);
+      if(!owner)return res.status(403).json(fail('CAPABILITY_REQUIRED',
+        '본인의 수동모의 주문 이력을 조회할 권한이 없습니다.'));
+      if(Object.keys(req.query).length)
+        return res.status(400).json(fail('MANUAL_PAPER_SEQ_ORDER_LIST_QUERY_FORBIDDEN',
+          '다른 회원 또는 임의 필터로 주문을 조회할 수 없습니다.'));
+      try{
+        if(!await sequentialRlsReady(req))
+          return res.status(409).json(fail('MANUAL_PAPER_SEQ_DB_NOT_READY',
+            '모의주문 원장 DB 보호가 아직 준비되지 않았습니다.'));
+        const rows=await listSequentialOrderOpenRows(req,owner.id);
+        if(!Array.isArray(rows)||rows.length>25)
+          throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_LIMIT_BREACH');
+        const seen=new Set<string>();
+        const orders=rows.map(row=>{
+          const opening=row.event;
+          if(!opening||opening.kind!=='OPEN_ORDER'
+            ||opening.sequence!==1
+            ||row.user_id!==owner.id||opening.ownerId!==owner.id
+            ||opening.role!==owner.role||row.owner_role!==owner.role
+            ||row.sequence_number!==1||!opening.session
+            ||opening.session.ownerId!==owner.id
+            ||opening.session.role!==owner.role
+            ||opening.session.market!==row.market
+            ||opening.session.walletId!==row.wallet_id
+            ||opening.walletId!==row.wallet_id
+            ||seen.has(row.order_id))
+            throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_CROSS_OWNER_OR_DUPLICATE');
+          const canonical=manualPaperSequentialRow(opening);
+          if(!sameManualPaperSequentialRow(canonical,row))
+            throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_INVALID_HASH');
+          const projected=projectManualPaperSequentialEvents(
+            [opening],now().getTime());
+          if(projected.status!=='ENTRY_PENDING'
+            ||projected.orderId!==row.order_id
+            ||projected.market!==row.market)
+            throw new Error('MANUAL_PAPER_SEQ_ORDER_LIST_PROJECTION_INVALID');
+          seen.add(row.order_id);
+          return {
+            orderId:row.order_id,market:row.market,
+            symbol:opening.session.symbol,
+            side:opening.session.side,
+            leverage:opening.session.leverage,
+            createdAtMs:opening.observedAtMs,
+            currentOrderStatus:'SELECT_ORDER_TO_VERIFY' as const,
+            actualPaperLedgerWritten:false as const,
+            actualBrokerFill:false as const,
+          };
+        });
+        return res.json(harmless({
+          ok:true,ownerScope:'SELF',readOnlyProbe:true,
+          mode:'PAPER_SEQUENTIAL_SIMULATION_ORDER_LIST',
+          orders,hasMoreThan25:rows.length===25,
+          actualBrokerFill:false,actualPaperLedgerWritten:false,
+          actualWalletMutation:false,financialMutationCount:0,
+          profitabilityProven:false,
+        }));
+      }catch{
+        return res.status(503).json(fail('MANUAL_PAPER_SEQ_ORDER_LIST_UNAVAILABLE',
+          '본인 모의주문 목록의 원장·권한 증거를 확인하지 못했습니다.'));
       }
     });
 

@@ -31,4 +31,14 @@ test('legacy device watchlist ownership is closed and member sync invalidates ol
   expect(sync).toContain("request('/member-watchlist/sync'");
   expect(sync).not.toContain('deviceId: getDeviceId()');
   expect(sync).not.toContain('body: JSON.stringify({ userId');
+  expect(sync).toContain('reviewQuarantinedLegacyWatchlist');
+  expect(sync).toContain('importConfirmedLegacyWatchlist');
+  expect(sync).toContain('await authenticatedMemberId() !== memberId');
+  expect(sync).toContain('LEGACY_WATCHLIST_IMPORT_NOT_CONFIRMED');
+  expect(sync).toContain('LEGACY_WATCHLIST_IMPORT_MARKET_CONFLICT');
+  expect(sync).not.toContain('legacyDetailRaw: value.legacyDetailRaw');
+  const page = fs.readFileSync(path.join(root, 'stock-analyzer/src/pages/watchlist.tsx'), 'utf8');
+  expect(page).toContain('watchlist-legacy-consent-review');
+  expect(page).toContain('watchlist-explicit-legacy-import');
+  expect(page).toContain('disabled={!legacyConsent || legacyBusy}');
 });
