@@ -601,7 +601,11 @@ test("private task CLI selects signed-by-digest partial REVIEW page, never the m
   assert.equal(report.priorSourceDigestSha256,first.retainedSourceDigestSha256);
   assert.notEqual(report.proposedNewSourceDigestSha256,first.retainedSourceDigestSha256);
   assert.equal(report.sourceRevisionAutoSelected,false);
-  assert.equal(report.providerGETCount,0);
+  assert.equal(report.readPublicExplicitlyRequested,true);
+  // A real opt-in historical source action must NEVER be misreported as
+  // providerGETCount=0. The exact native provider page count is not tracked
+  // by this legacy summary; mock call accounting belongs to the QA fixture.
+  assert.equal(Object.hasOwn(report,"providerGETCount"),false);
   assert.equal(report.profitabilityProven,false);
   assert.equal(calls.length,2);
   const file=JSON.parse(readFileSync(out,"utf8"));
