@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import {
   persistResearchMinuteSessionV1 as store,
   deriveArchivedResearchTimeframesV1 as read,
+  auditResearchMinuteSessionRevisionsV1 as auditRevisions,
 } from "../src/research-minute-archive-v1.js";
 import {
   parseResearchMinuteArchiveArgsV1 as parseCli,
@@ -219,4 +220,78 @@ test("private CLI ingests and queries one session without network, duplicate out
       "--mode", "ingest", "--root", root, "--input", input,
     ])), /MINUTE_ARCHIVE_CLI_PRIVATE_SOURCE_REQUIRED/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("bounded read-only immutable revision audit identifies only a strict original-minute superset",async()=>{
+ const root=temp(),older=fixture("CRYPTO_SPOT",{missingMinute:2}),
+   full=fixture("CRYPTO_SPOT");
+ try{
+   const first=await store({root,source:older});
+   const second=await store({root,source:full});
+   const report=await auditRevisions({
+     root,market:older.market,symbol:older.symbol,
+     sessionStartMs:older.session.startMs,
+   });
+   assert.equal(report.status,"STRICT_NATIVE_MINUTE_SUPERSET_REQUIRES_REVIEW");
+   assert.equal(report.suggestedReviewDigestSha256,second.sourceDigestSha256);
+   assert.notEqual(report.suggestedReviewDigestSha256,first.sourceDigestSha256);
+   assert.equal(report.sourceRevisionAutoSelected,false);
+   assert.equal(report.explicitSourceRevisionReviewRequired,true);
+   assert.equal(report.archiveRevisionCount,2);
+   assert.deepEqual(report.revisionCandidates.map(x=>x.originalOneMinuteRows),[9,10]
+     .sort((a,b)=>a-b));
+   assert.equal(report.rawMinutePricesExposed,false);
+   assert.equal(report.providerGETCount,0);
+   assert.equal(report.profitabilityProven,false);
+   assert.equal(report.executionAuthority,"NONE");
+   const defaultRead=await read(request(root,older));
+   assert.equal(defaultRead.reason,
+     "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+   const explicit=await read(request(root,older,{
+     sourceDigestSha256:second.sourceDigestSha256,
+   }));
+   assert.equal(explicit.intervalData["1m"].completeBarCount,10);
+   assert.equal(explicit.profitabilityProven,false);
+   const tooMany=await auditRevisions({
+     root,market:older.market,symbol:older.symbol,
+     sessionStartMs:older.session.startMs,maxRevisions:1,
+   });
+   assert.equal(tooMany.reason,"ARCHIVE_REVISION_REVIEW_BUDGET_EXCEEDED");
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("revision audit never recommends conflicting or as-of-only duplicate originals",async()=>{
+ const root=temp(),a=fixture("CRYPTO_FUTURES");
+ try{
+   const first=await store({root,source:a});
+   const changed=structuredClone(a);
+   changed.minuteBars[0].high+=7;
+   changed.sourceMinuteRowsSha256=sha(JSON.stringify(changed.minuteBars));
+   await store({root,source:changed});
+   const conflict=await auditRevisions({
+     root,market:a.market,symbol:a.symbol,sessionStartMs:a.session.startMs,
+   });
+   assert.equal(conflict.reason,
+     "ARCHIVE_REVISIONS_CONFLICT_ON_ORIGINAL_OHLCV");
+   assert.equal(conflict.suggestedReviewDigestSha256,null);
+   assert.equal(conflict.sourceRevisionAutoSelected,false);
+   assert.equal(conflict.profitabilityProven,false);
+   assert.equal(conflict.providerGETCount,0);
+   const singleRoot=temp();
+   try{
+     const fresh=fixture("CRYPTO_SPOT");
+     await store({root:singleRoot,source:fresh});
+     const later=structuredClone(fresh);later.asOfMs+=MIN;
+     await store({root:singleRoot,source:later});
+     const equal=await auditRevisions({
+       root:singleRoot,market:fresh.market,symbol:fresh.symbol,
+       sessionStartMs:fresh.session.startMs,
+     });
+     assert.equal(equal.reason,"ARCHIVE_REVISIONS_DIFFER_ONLY_IN_CAPTURE_TIME");
+     assert.equal(equal.suggestedReviewDigestSha256,null);
+     assert.equal(equal.sourceRevisionAutoSelected,false);
+   }finally{rmSync(singleRoot,{recursive:true,force:true});}
+   const chosen=await read(request(root,a,{sourceDigestSha256:first.sourceDigestSha256}));
+   assert.equal(chosen.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
 });
