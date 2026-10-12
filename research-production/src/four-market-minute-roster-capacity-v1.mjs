@@ -7,7 +7,8 @@ export const MINUTE_ROSTER_PROPOSAL='research-minute-roster-manifest-review/v1';
 const DAY_MINUTES=1440;
 const MINUTE=60_000;
 const REGEXP=/^[A-Z0-9]{1,20}$/u;
-const FUTURES=/^[A-Z0-9]{3,30}$/u;
+// Require the literal USDT quote and allow documented venue Han/1-char bases.
+const FUTURES=/^[A-Z0-9\p{Script=Han}]{1,26}USDT$/u;
 const HASH=/^[a-f0-9]{64}$/u;
 const MAX_SYMBOLS=4_096;
 const STATUS=new Set(['normal','listed','maintain','limit_open','restrictedAPI','off']);
