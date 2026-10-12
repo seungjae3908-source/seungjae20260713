@@ -214,3 +214,52 @@ test('requested max is a ceiling and never force-fills missing candidates', () =
   const snapshot = runSignalIntelligenceV3([baseCandidate()], { maxCandidatesPerList: 10 });
   assert.equal(snapshot.lists.krBuy.length, 1);
 });
+
+test('historical futures LONG cannot veto a distinct current-source SHORT epoch',()=>{
+ const older='11111111-1111-4111-8111-111111111111';
+ const current='22222222-2222-4222-8222-222222222222';
+ const oldLong=futuresCandidate('LONG',{
+   provenance:{sourceCycleId:older},
+   evidence:{expectedNetEdgeR:2.5},
+ });
+ const newShort=futuresCandidate('SHORT',{
+   provenance:{sourceCycleId:current},
+   evidence:{expectedNetEdgeR:0.9},
+ });
+ const snapshot=runSignalIntelligenceV3([oldLong,newShort]);
+ assert.equal(snapshot.rows.find(row=>row.direction==='LONG').state,'CANDIDATE');
+ assert.equal(snapshot.rows.find(row=>row.direction==='SHORT').state,'CANDIDATE');
+ assert.equal(snapshot.lists.futuresShort.length,1,
+   'an old LONG is not same-time evidence against a new SHORT');
+ // The auction remains mandatory for contradictory same-epoch candidates.
+ const together=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:current}},
+   newShort,
+ ]);
+ assert.equal(together.lists.futuresShort.length,0);
+ assert.ok(together.rows.find(row=>row.direction==='SHORT')
+   .reasons.includes('DIRECTION_LOST_AUCTION'));
+ // Unverified epoch metadata must never bypass the conservative auction.
+ const invalid=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:'INVALID_EPOCH'}},
+   {...newShort,provenance:{sourceCycleId:'INVALID_EPOCH'}},
+ ]);
+ assert.equal(invalid.lists.futuresShort.length,0);
+});
+test('previous cycle near-tie cannot make an independently sourced SHORT abstain',()=>{
+ const oldLong=futuresCandidate('LONG',{
+   provenance:{sourceCycleId:'11111111-1111-4111-8111-111111111111'},
+   evidence:{expectedNetEdgeR:1.00},
+ });
+ const newShort=futuresCandidate('SHORT',{
+   provenance:{sourceCycleId:'22222222-2222-4222-8222-222222222222'},
+   evidence:{expectedNetEdgeR:0.91},
+ });
+ const snapshot=runSignalIntelligenceV3([oldLong,newShort]);
+ assert.equal(snapshot.rows.find(row=>row.direction==='SHORT').state,'CANDIDATE');
+ const sameTime=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:'22222222-2222-4222-8222-222222222222'}},
+   newShort,
+ ]);
+ assert.equal(sameTime.rows.filter(row=>row.state==='ABSTAIN').length,2);
+});

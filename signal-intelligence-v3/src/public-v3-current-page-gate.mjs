@@ -1,4 +1,5 @@
 import { verifiedV3CurrentPublicationRow, verifiedV3CurrentCandidateEvent } from './public-v3-publication-proof.mjs';
+import { SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
 
 /**
  * The twelve latest source page receipts and the persisted rolling research
@@ -15,11 +16,28 @@ const LANES = Object.freeze([
   'FUTURES_SCALPING_15M','FUTURES_SWING_60M','FUTURES_MID_LONG_1D',
 ]);
 const isCount=x=>Number.isSafeInteger(x)&&x>=0;
+const SCOPE=Object.freeze({
+  KR:'KR_STOCK',US:'US_STOCK',SPOT:'CRYPTO_SPOT',FUTURES:'CRYPTO_FUTURES',
+});
+const MODE=Object.freeze({
+  SCALPING_15M:['SCALPING','15m'],
+  SWING_60M:['SWING','60m'],
+  MID_LONG_1D:['MID_LONG','1D'],
+});
+function validLaneIdentity(lane){
+  const id=lane?.laneId,prefix=String(id??'').split('_')[0],
+    suffix=typeof id==='string'?id.slice(prefix.length+1):'';
+  const mode=MODE[suffix];
+  return Boolean(mode&&SCOPE[prefix]
+    &&lane.market===SCOPE[prefix]&&lane.strategy===mode[0]
+    &&lane.timeframe===mode[1]);
+}
 const CYCLE_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 
 function verifiedCurrentLane(lane){
   const page=lane?.publicExecutionDiagnostic;
-  if(!lane||!CYCLE_ID.test(lane.sourceCycleId??'')
+  if(!lane||!validLaneIdentity(lane)
+    ||!CYCLE_ID.test(lane.sourceCycleId??'')
     ||lane.status!=='CANDIDATES_AVAILABLE'
     ||lane.lastGoodPreserved!==false
     ||lane.cursorRotatedBlockedOnly===true
@@ -111,7 +129,8 @@ export function currentPagePublication(snapshot,coverage){
     known.add(row.id);
     const origin=row.provenance;
     const lane=lanes.get(origin?.laneId);
-    if(!validSource(lane)||!verifiedCurrentLane(lane)
+    if(!validSource(lane)||lane?.status!=='CANDIDATES_AVAILABLE'
+      ||!verifiedCurrentPublicV3Page(lane)
       ||origin?.sourceCycleId!==lane.sourceCycleId
       ||origin?.cursor!==lane.cursorBefore
       ||!verifiedV3CurrentPublicationRow(row,lane))
@@ -135,9 +154,13 @@ export function currentPagePublication(snapshot,coverage){
         ||row.market!==market||row.direction!==direction
         // Do not re-publish an altered list copy with the same trusted id.
         ||JSON.stringify(value)!==JSON.stringify(row))continue;
-      clean.push(row);seen.add(row.id);listedIds.add(row.id);
+      clean.push(row);seen.add(row.id);
     }
-    lists[name]=Object.freeze(clean);
+    // Engine's pre-projection candidate pool may include more than ten
+    // retained research rows, so cap only AFTER exact-current source proof.
+    const selected=clean.slice(0,SIGNAL_INTELLIGENCE_V3_POLICY.maxCandidatesPerList);
+    lists[name]=Object.freeze(selected);
+    for(const row of selected)listedIds.add(row.id);
   }
 
   const unique=new Set(),events=[];
