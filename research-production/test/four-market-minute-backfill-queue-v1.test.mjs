@@ -289,3 +289,41 @@ test('continuous one-minute receipts can be collected across timer invocations',
     assert.equal(state.ranges[0].status,'PENDING');
   });
 });
+
+
+test('unsustainable all-crypto 24h minute roster is held before any network or storage changes',async()=>{
+  const ranges=Array.from({length:400},(_,i)=>({
+    market:'CRYPTO_FUTURES',symbol:'S'+String(i).padStart(4,'0')+'USDT',
+    mode:'CONTINUOUS',startMs:START,
+  }));
+  let requested=0;
+  const result=await runDurableMinuteBackfillCycle({
+    enabled:true,
+    queueRoot:'/unlikely-unconfigured-minute-queue-for-capacity',
+    archiveRoot:'/unlikely-unconfigured-minute-archive-for-capacity',
+    manifest:manifest(ranges),researchSha:SHA1,now:()=>NOW,
+    maxActions:16,fetchImpl:async()=>{requested++; throw Error('forbidden');},
+  });
+  assert.equal(result.status,'HOLD_CAPACITY');
+  assert.equal(result.capacity.status,'CAPACITY_MODEL_INSUFFICIENT');
+  assert.equal(result.capacity.dailyRequired,4800);
+  assert.equal(result.capacity.dailyAvailable,4608);
+  assert.equal(result.providerCalls,0);
+  assert.equal(result.filesWritten,0);
+  assert.equal(requested,0);
+  assert.equal(result.profitabilityProven,false);
+  assert.equal(result.executionAuthority,'NONE');
+});
+test('stock continuous collection is not promoted without a stock calendar capacity owner',async()=>{
+  const r=await runDurableMinuteBackfillCycle({
+    enabled:true,
+    queueRoot:'/unlikely-unconfigured-minute-queue-for-stock',
+    archiveRoot:'/unlikely-unconfigured-minute-archive-for-stock',
+    manifest:manifest([{market:'US_STOCK',symbol:'AAPL',
+      mode:'CONTINUOUS',startMs:START}]),
+    researchSha:SHA1,now:()=>NOW,
+  });
+  assert.equal(r.status,'HOLD_CAPACITY');
+  assert.equal(r.capacity.status,'STOCK_SESSION_NOT_MODELLED');
+  assert.equal(r.providerCalls,0);
+});

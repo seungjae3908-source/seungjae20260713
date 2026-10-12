@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const url=relative=>new URL(relative,import.meta.url);
@@ -37,4 +39,37 @@ test('backfill CLI is safe by default and cannot enter worker without approval',
   });
   assert.equal(bare.status,2);
   assert.equal(JSON.parse(bare.stdout).reason,'MINUTE_OWNER_ACTIVATION_REQUIRED');
+});
+
+
+test('capacity-only CLI reads protected scope and performs zero provider calls/writes',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'minute-capacity-audit-'));
+  try {
+    const path=join(root,'manifest.json');
+    const startMs=Date.parse('2026-10-10T12:00:00.000Z');
+    const ranges=Array.from({length:400},(_,i)=>({
+      market:'CRYPTO_FUTURES',symbol:'S'+String(i).padStart(4,'0')+'USDT',
+      mode:'CONTINUOUS',startMs,
+    }));
+    await writeFile(path,JSON.stringify({
+      schemaVersion:'research-minute-backfill-scope/v1',ranges,
+    }),{mode:0o600});
+    const r=spawnSync(process.execPath,[
+      url('../bin/four-market-minute-backfill.mjs').pathname,'--capacity',
+    ],{
+      encoding:'utf8',timeout:8000,env:{
+        PATH:process.env.PATH,
+        RESEARCH_MINUTE_QUEUE_MANIFEST:path,
+      },
+    });
+    assert.equal(r.status,0,r.stderr);
+    const payload=JSON.parse(r.stdout);
+    assert.equal(payload.status,'CAPACITY_AUDIT_ONLY');
+    assert.equal(payload.capacity.status,'CAPACITY_MODEL_INSUFFICIENT');
+    assert.equal(payload.capacity.minActionsPerCycleNoHeadroom,17);
+    assert.equal(payload.providerCalls,0);
+    assert.equal(payload.filesWritten,0);
+    assert.equal(payload.executionAuthority,'NONE');
+    assert.equal((await readFile(path,'utf8')).length>0,true);
+  }finally{await rm(root,{recursive:true,force:true});}
 });

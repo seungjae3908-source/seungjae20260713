@@ -7,6 +7,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { QUEUE_LIMITS, runDurableMinuteBackfillCycle,
   validateBackfillScope } from '../src/four-market-minute-backfill-queue-v1.mjs';
+import { assessMinuteManifestCapacity } from
+  '../src/four-market-minute-roster-capacity-v1.mjs';
 const script=fileURLToPath(import.meta.url);
 const emit=v=>process.stdout.write(JSON.stringify(v)+'\n');
 const fail=code=>{throw new Error(code);};
@@ -38,6 +40,19 @@ async function main() {
   if (!arg.length || arg.length===1 && arg[0]==='--dry-run')
     return emit({status:'DISABLED',providerCalls:0,filesWritten:0,
       archiveTimerActivated:false,executionAuthority:'NONE'});
+  if (arg.length===1 && arg[0]==='--capacity') {
+    // Read a private operator scope only; absolutely no network, queue
+    // state, API credentials, disk writes or trading authority.
+    const manifest=await privateManifest(process.env.RESEARCH_MINUTE_QUEUE_MANIFEST);
+    return emit({
+      status:'CAPACITY_AUDIT_ONLY',
+      capacity:assessMinuteManifestCapacity(manifest,{
+        actionsPerCycle:QUEUE_LIMITS.maxActionsPerCycle,
+      }),
+      providerCalls:0,filesWritten:0,
+      archiveTimerActivated:false,executionAuthority:'NONE',
+    });
+  }
   if (arg.length!==1 || !['--execute','--locked'].includes(arg[0])
     || process.env.RESEARCH_MINUTE_ARCHIVE_ENABLED!=='true')
     fail('MINUTE_OWNER_ACTIVATION_REQUIRED');
@@ -82,7 +97,7 @@ async function main() {
     maxActions:QUEUE_LIMITS.maxActionsPerCycle,freeBytes,
   });
   emit(result);
-  if(result.status==='HOLD_DISK' || result.status==='NEEDS_REVIEW')
+  if(['HOLD_DISK','HOLD_CAPACITY','NEEDS_REVIEW'].includes(result.status))
     process.exitCode=2;
 }
 main().catch(e=>{
