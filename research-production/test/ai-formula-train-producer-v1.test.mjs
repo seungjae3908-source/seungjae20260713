@@ -132,6 +132,7 @@ test('valid independent PROPOSER evidence produces bounded, zero-authority TRAIN
     'fullCostVerified', 'profitabilityProven', 'paperDispatchAllowed', 'realOrderAllowed',
     'privateTradingApiAllowed']) assert.equal(result[key], false, key);
   assert.equal(result.executionAuthority, 'NONE');
+  assert.equal(result.requiresReviewedSourceCallback, true);
 });
 
 test('approved 1-candidate bounded TRAIN producer feeds existing canonical queue, then remains HOLD without OOS and cannot order', async () => inTemp(async root => {
@@ -265,7 +266,7 @@ test('TRAIN-only feedback cannot be transformed into automatic promotions or for
     contract: 'research-formula-auto-backtest-summary/v1',
     executionAuthority: 'NONE', liveTrading: false, autoTrading: false, realOrder: false,
     paperOrderAuthorityGranted: false, canonicalFutureSignalVerified: false,
-    oosAndSettlementVerified: false,
+    oosAndSettlementVerified: false, paperRegisteredCount: 0, counts: { PASS: 0 },
     rows: [{ itemDigest, state: 'RESERVE', blockers: ['MISSING_CANONICAL_CALLBACK'] }],
   };
   const fb = buildAiFormulaTrainFeedbackV1({ researchSha: SHA, queueSummary: summary });
