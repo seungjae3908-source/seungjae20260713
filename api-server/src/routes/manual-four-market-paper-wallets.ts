@@ -731,7 +731,7 @@ export function createManualFourMarketWalletRouter(
       if(!owner)return res.status(403).json(fail('CAPABILITY_REQUIRED',
         '본인 수동모의 주문 조회 권한이 없습니다.'));
       const orderId=req.params.orderId;
-      if(Object.keys(req.query).length||!orderId
+      if(Object.keys(req.query).length||typeof orderId!=='string'
         ||!/^manual-paper-seq-order-v1:[a-f0-9]{64}$/u.test(orderId))
         return res.status(400).json(fail('MANUAL_PAPER_SEQ_READ_REQUEST_INVALID',
           '올바른 모의주문 ID만 조회할 수 있습니다.'));
