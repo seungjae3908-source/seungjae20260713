@@ -565,3 +565,36 @@ test("single-day source inventory CLI emits SHA-based partial retry count but ne
   assert.equal(file.profitabilityProven,false);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("Han-named Bitget contract participates in selected multi-day native archive gaps without an extra GET",async()=>{
+ const root=tmp(),symbol="龙虾USDT",market="CRYPTO_FUTURES";
+ try{
+  const empty=await audit(inputs(root,market,
+    "2026-09-18","2026-09-19",{symbol}));
+  assert.equal(empty.missingSessionCount,2);
+  assert.deepEqual(empty.missingCollectionPlan.map(x=>x.symbol),
+    [symbol,symbol]);
+  assert.equal(empty.providerGETCount,0);
+  assert.equal(empty.profitabilityProven,false);
+  const source=sample(market,D0);
+  source.symbol=symbol;
+  source.minuteBars=source.minuteBars.map(row=>({...row,symbol}));
+  source.sourceMinuteRowsSha256=hash(source.minuteBars);
+  const stored=await store({root,source});
+  const checked=await audit(inputs(root,market,
+    "2026-09-18","2026-09-19",{symbol}));
+  assert.equal(checked.archivedSessionCount,1);
+  assert.equal(checked.missingSessionCount,1);
+  assert.equal(checked.partialRetryReviewPlan.length,1);
+  assert.equal(checked.partialRetryReviewPlan[0].symbol,symbol);
+  assert.equal(checked.partialRetryReviewPlan[0].expectedExistingSourceDigestSha256,
+   stored.sourceDigestSha256);
+  assert.equal(checked.partialRetryReviewPlan[0].autoExecuteAllowed,false);
+  assert.equal(checked.providerGETCount,0);
+  assert.equal(checked.profitabilityProven,false);
+  await assert.rejects(()=>audit(inputs(root,market,
+    "2026-09-18","2026-09-19",{symbol:"龙虾/USDT"})),
+    /MINUTE_WINDOW_SCOPE_INVALID/);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

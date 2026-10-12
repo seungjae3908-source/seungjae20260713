@@ -699,3 +699,42 @@ test("limited native archive mode is explicitly opt-in and does not authorize pu
   assert.equal(statSync(out).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("historically dated Han Bitget USDT perpetual is accepted in private native 1m without PIT/profit promotion",async()=>{
+ const root=tmp(),symbol="龙虾USDT",calls=[];
+ try{
+  const m=manifest("CRYPTO_FUTURES",symbol);
+  const first=await collect(config(root,"CRYPTO_FUTURES",symbol,{
+   allowPublicReadOnlyFetch:true,manifest:m,
+   bitgetClient:{get:async(path,params)=>{
+    calls.push({path,params});
+    assert.equal(params.symbol,symbol);
+    return {code:"00000",data:Number(params.endTime)>START
+      ?[[String(START+MIN),"100","104","99","102","2.5"],
+        [String(START),"100","104","99","102","2.5"]]:[]};
+   }},
+  }));
+  assert.equal(first.status,"RETROSPECTIVE_PRIVATE_SOURCE_RETAINED_ONLY");
+  assert.equal(first.market,"CRYPTO_FUTURES");
+  assert.equal(first.symbol,symbol);
+  assert.equal(first.sourceMinuteCount,2);
+  assert.equal(first.profitabilityProven,false);
+  assert.equal(first.historicalFullMarketPITUniverseVerified,false);
+  assert.equal(first.executionAuthority,"NONE");
+  const stored=await derive({root,market:"CRYPTO_FUTURES",symbol,
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  assert.equal(stored.sourceMinuteRows,2);
+  assert.equal(stored.sourceMinuteIntegrityVerified,true);
+  assert.equal(stored.profitabilityProven,false);
+  const historical=await derive({root,market:"CRYPTO_FUTURES",symbol,
+   sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
+  assert.equal(historical.intervalData["1m"].bars.length,0);
+  assert.equal(calls.length,1);
+  await assert.rejects(()=>collect(config(root,"CRYPTO_FUTURES","龙虾/USDT",{
+   allowPublicReadOnlyFetch:true,manifest:m,
+   bitgetClient:{get:async()=>{throw Error("unsafe symbol reached provider");}},
+  })),/PIT_NATIVE_MINUTE_BACKFILL_ARGUMENTS_INVALID/);
+  assert.equal(calls.length,1);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
