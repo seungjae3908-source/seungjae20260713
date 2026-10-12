@@ -39,12 +39,15 @@ test('budget DDL is server-only and durable; no provider execution or expiration
   assert.ok(source.includes('auto_live_server_delete_guard'));
   assert.ok(source.includes('CANONICAL_LIVE_AUTO_HANDOFF'));
   assert.ok(source.includes('AUTO_EXIT_ENTRY_PLAN:'));
-  assert.ok(source.includes('automatic-live-atomic-budget-v2'));
+  assert.ok(source.includes('automatic-live-atomic-budget-v3'));
+  assert.ok(source.includes('automatic_live_budget_schema_fingerprint'));
+  assert.ok(source.includes('pg_get_expr(p.polwithcheck,p.polrelid)'));
+  assert.ok(source.includes('automatic_live_guard.expected_schema_fingerprint'));
   assert.ok(source.includes('max(amount_krw) amount_krw,max(risk_krw) risk_krw'));
   assert.ok(source.includes('AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT'));
-  assert.ok(installer.includes("is distinct from 'automatic-live-atomic-budget-v2'"));
+  assert.ok(installer.includes("is distinct from 'automatic-live-atomic-budget-v3'"));
   const repository = readFileSync('api-server/src/services/trade-automation.repository.ts', 'utf8');
-  assert.ok(repository.includes("result.data?.version !== 'automatic-live-atomic-budget-v2'"));
+  assert.ok(repository.includes("result.data?.version !== 'automatic-live-atomic-budget-v3'"));
   assert.ok(!source.includes('security definer'));
   assert.ok(!source.includes('expires_at'));
   assert.ok(installer.includes('autoTradingBackground?.enabled !== false'));

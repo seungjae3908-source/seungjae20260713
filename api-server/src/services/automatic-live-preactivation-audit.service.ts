@@ -125,7 +125,7 @@ export async function auditAutomaticLivePreactivation(input: {
   await check('ATOMIC_BUDGET_GUARD_INSTALLED', async () => {
     if (!input.repository.readAutomaticLiveBudgetGuard) return ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY'];
     const guard = await input.repository.readAutomaticLiveBudgetGuard();
-    return guard.ready && guard.version === 'automatic-live-atomic-budget-v2' ? [] : ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY'];
+    return guard.ready && guard.version === 'automatic-live-atomic-budget-v3' ? [] : ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY'];
   });
   await check('MEMBER_CAPABILITY', () => hasCapability(input.profile, 'canAccessAutoTrading')
     && hasCapability(input.profile, 'canPlaceOrders') && hasCapability(input.profile, 'canAccessFutures')

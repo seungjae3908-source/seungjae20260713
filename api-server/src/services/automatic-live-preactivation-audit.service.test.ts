@@ -50,6 +50,23 @@ async function historyAudit(plans: TradingPlan[], orders: TradingOrder[]) {
     profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
     targetSha: 'a'.repeat(40), nowMs: Date.parse('2026-10-12T01:00:00Z') });
 }
+
+test('legacy ACL-only budget v2 cannot certify the definition-bound v3 guard', async () => {
+  for (const version of ['automatic-live-atomic-budget-v2', 'automatic-live-atomic-budget-v3']) {
+    const repository = Object.assign(new InMemoryTradingRepository(), {
+      readAutomaticLiveBudgetGuard: async () => ({ ready: true, version }),
+    });
+    const audit = await auditAutomaticLivePreactivation({ userId: 'audit-owner', repository,
+      source: { readHandoff: async () => null,
+        readLiveAccountSnapshot: async () => { throw new Error('CREDENTIALS_UNAVAILABLE'); } },
+      profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      targetSha: 'a'.repeat(40), nowMs: Date.parse('2026-10-12T01:00:00Z') });
+    const guard = audit.checks.find((row) => row.id === 'ATOMIC_BUDGET_GUARD_INSTALLED')!;
+    assert.equal(guard.status, version.endsWith('v3') ? 'PASS' : 'BLOCKED');
+    assert.equal(audit.activationReady, false);
+    assert.equal(audit.orderRequests + audit.cancelRequests + audit.amendRequests, 0);
+  }
+});
 const historyPlan = (id: string, accountMode: 'live' | 'paper', key = id): TradingPlan => ({
   id, userId: 'audit-owner', accountMode, exchange: 'upbit', executionMode: 'manual',
   signalReasons: [], reduceOnly: false, idempotencyKey: key,
