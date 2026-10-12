@@ -166,12 +166,12 @@ export function pickBackfillWindow(state, atMs, marketFilter=null) {
   const rateLimitedMarkets = provider429HoldMarkets(state, atMs);
   // A global nextIndex cannot provide independent venue fairness: after
   // each paired round it returns to the same futures symbol while the
-  // spot index advances. The durable per-range lastSuccessAt is already
+  // spot index advances. The durable per-range lastSuccessAtMs is already
   // sealed, so select the least recently successful eligible range
   // within EACH venue, including after process restart. For source
   // continuity prefer CONTINUOUS before discretionary BACKFILL.
   let laneChoice=null, laneRank=Number.POSITIVE_INFINITY,
-    laneLastSuccessAt=Number.POSITIVE_INFINITY;
+    laneLastSuccessAtMs=Number.POSITIVE_INFINITY;
   for (let offset=0; offset<state.ranges.length; offset++) {
     const index=(state.nextIndex + offset) % state.ranges.length;
     const r=state.ranges[index];
@@ -191,10 +191,10 @@ export function pickBackfillWindow(state, atMs, marketFilter=null) {
     if(marketFilter===null) return choice; // legacy single-lane untouched
     const rank=r.mode==='CONTINUOUS'?0:1;
     if(laneChoice===null || rank<laneRank
-      || (rank===laneRank && r.lastSuccessAt<laneLastSuccessAt)){
+      || (rank===laneRank && r.lastSuccessAtMs<laneLastSuccessAtMs)){
       laneChoice=choice;
       laneRank=rank;
-      laneLastSuccessAt=r.lastSuccessAt;
+      laneLastSuccessAtMs=r.lastSuccessAtMs;
     }
   }
   return laneChoice;
