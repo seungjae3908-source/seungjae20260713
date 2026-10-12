@@ -22,7 +22,9 @@ test('one read-only audit collects all policy, missing-source and four-provider 
   assert.equal(audit.ready, false);
   assert.equal(providerReads, 4, 'one provider rejection cannot hide failures in another provider');
   assert.equal(writes, 0);
-  assert.equal(audit.checks.length, 17);
+  assert.equal(audit.checks.length, 18);
+  assert.deepEqual(audit.checks.find((row) => row.id === 'NATIVE_FUTURES_PROTECTION_READBACK')!.codes,
+    ['BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED']);
   assert.deepEqual(audit.checks.find((row) => row.id === 'ATOMIC_BUDGET_GUARD_INSTALLED')!.codes,
     ['AUTOMATIC_LIVE_ATOMIC_BUDGET_GUARD_NOT_READY']);
   assert.deepEqual(audit.checks.find((row) => row.id === 'SIGNAL_FRESHNESS_AND_SHA')!.codes, ['HANDOFF_ENTRY_STALE']);

@@ -26,6 +26,7 @@ const contracts = [
   '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
   '.github/tests/production-auto-live-only-release-contract.test.mjs',
   '.github/tests/production-auto-live-budget-contract.test.mjs',
+  '.github/tests/kiwoom-readonly-recovery-security-contract.test.mjs',
 ];
 function run(args, cwd) {
   const result = spawnSync(process.execPath, args, { cwd, stdio: 'inherit' });

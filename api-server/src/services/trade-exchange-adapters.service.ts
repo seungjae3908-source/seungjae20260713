@@ -474,6 +474,17 @@ export function prepareBitgetPositions(credentials: BitgetCredentials, timestamp
   );
 }
 
+export function prepareBitgetSinglePosition(credentials: BitgetCredentials, symbol: string, timestamp?: string) {
+  if (!/^[A-Z0-9]{3,30}$/u.test(symbol)) throw new Error('BITGET_PROTECTION_SYMBOL_INVALID');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/position/single-position', null,
+    `?productType=USDT-FUTURES&symbol=${symbol}&marginCoin=USDT`, timestamp);
+}
+export function prepareBitgetPendingProtection(credentials: BitgetCredentials, symbol: string, orderId: string, timestamp?: string) {
+  if (!/^[A-Z0-9]{3,30}$/u.test(symbol) || !/^[1-9][0-9]{0,39}$/u.test(orderId)) throw new Error('BITGET_PROTECTION_IDENTITY_INVALID');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-plan-pending', null,
+    `?planType=profit_loss&productType=USDT-FUTURES&symbol=${symbol}&orderId=${orderId}`, timestamp);
+}
+
 export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbol?: string, timestamp?: string) {
   const normalizedSymbol = symbol?.trim().toUpperCase();
   const query = [
