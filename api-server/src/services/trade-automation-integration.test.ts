@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, bitgetAcknowledgedOrderId } from './trade-execution.service';
 import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -12,7 +12,11 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
-import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingPlanInput,
+} from './trade-automation.types';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -24,6 +28,86 @@ import {
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
+
+test('Bitget stores the actual broker ID, not clientOid, including one-way reducing acknowledgement without ID', () => {
+  const ack = { code: '00000', data: { clientOid: 'app-id', orderId: 'exchange-id' } };
+  assert.equal(bitgetAcknowledgedOrderId(ack, 'app-id'), 'exchange-id');
+  assert.equal(bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id', true), null);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: { clientOid: 'app-id' } }, 'app-id'), /ORDER_ID_MISSING/);
+  assert.throws(() => bitgetAcknowledgedOrderId(ack, 'other-app-id'), /INVALID_RESPONSE/);
+  assert.throws(() => bitgetAcknowledgedOrderId({ code: '00000', data: [ack.data] }, 'app-id'), /INVALID_RESPONSE/);
+});
+
+test('automatic Bitget entries preserve native stop and final target; reducing exits never attach new protection', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const automaticPlan = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105], marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+  assert.equal(body.presetStopLossPrice, '95');
+  assert.equal(body.presetStopSurplusPrice, '105');
+  const short = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, side: 'short',
+    stopPrice: 105, targetPrices: [96.5, 95] }, 'mock-short', '1000').body!);
+  assert.equal(short.presetStopLossPrice, '105');
+  assert.equal(short.presetStopSurplusPrice, '95');
+  const exit = JSON.parse(prepareBitgetOrder(credentials, { ...automaticPlan, reduceOnly: true }, 'mock-exit', '1000').body!);
+  assert.equal(exit.reduceOnly, 'YES');
+  assert.equal('presetStopLossPrice' in exit, false);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, stopPrice: 110 }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+  assert.throws(() => prepareBitgetOrder(credentials, { ...automaticPlan, targetPrices: [] }, 'bad', '1000'),
+    /NATIVE_PROTECTION_INVALID/);
+});
+test('Bitget native-protection validation covers mode-only and marker-only automatic entries', () => {
+  const credentials = { apiKey: 'test-key', secretKey: 'test-secret', passphrase: 'test-pass' };
+  const input = plan({ exchange: 'bitget', side: 'long', symbol: 'BTCUSDT', orderType: 'market',
+    quantity: 0.01, marginMode: 'isolated', leverage: 7, reduceOnly: false,
+    signalReasons: [], entryPrice: 100, stopPrice: 95, targetPrices: [103.5, 105],
+    marketSnapshot: { ...plan().marketSnapshot, currentPrice: 100 },
+  });
+  const contract = { pricePlace: '1', priceEndStep: '5', minTradeNum: '0.01', sizeMultiplier: '0.01' };
+  for (const automaticPlan of [
+    { ...input, executionMode: 'automatic' as const },
+    { ...input, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+    { ...input, executionMode: 'automatic' as const, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+  ]) {
+    assert.doesNotThrow(() => validateBitgetContractRules(automaticPlan, contract, 100));
+    for (const invalid of [
+      { ...automaticPlan, stopPrice: 95.1 },
+      { ...automaticPlan, targetPrices: [103.5, 105.1] },
+    ]) {
+      assert.throws(() => validateBitgetContractRules(invalid, contract, 100), /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    }
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, stopPrice: 105 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    assert.throws(() => validateBitgetContractRules({ ...automaticPlan, targetPrices: [] }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const body = JSON.parse(prepareBitgetOrder(credentials, automaticPlan, 'mock-only', '1000').body!);
+    assert.equal(body.presetStopLossPrice, '95');
+    assert.equal(body.presetStopSurplusPrice, '105');
+    const short = { ...automaticPlan, side: 'short' as const, stopPrice: 105, targetPrices: [96.5, 95] };
+    assert.doesNotThrow(() => validateBitgetContractRules(short, contract, 100));
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 105.1 }, contract, 100),
+      /AUTOMATIC_PROTECTION_PRICE_STEP/);
+    assert.throws(() => validateBitgetContractRules({ ...short, stopPrice: 95 }, contract, 100),
+      /AUTOMATIC_NATIVE_PROTECTION_INVALID/);
+    const shortBody = JSON.parse(prepareBitgetOrder(credentials, short, 'mock-short', '1000').body!);
+    assert.equal(shortBody.presetStopLossPrice, '105');
+    assert.equal(shortBody.presetStopSurplusPrice, '95');
+    const reducing = { ...automaticPlan, reduceOnly: true, stopPrice: 95.1, targetPrices: [105.1] };
+    assert.doesNotThrow(() => validateBitgetContractRules(reducing, contract, 100));
+    const exit = JSON.parse(prepareBitgetOrder(credentials, reducing, 'mock-exit', '1000').body!);
+    assert.equal('presetStopLossPrice' in exit, false);
+    assert.equal('presetStopSurplusPrice' in exit, false);
+  }
+  const manual = { ...input, stopPrice: 95.1, targetPrices: [105.1] };
+  assert.doesNotThrow(() => validateBitgetContractRules(manual, contract, 100));
+  const body = JSON.parse(prepareBitgetOrder(credentials, manual, 'mock-manual', '1000').body!);
+  assert.equal('presetStopLossPrice' in body, false);
+  assert.equal('presetStopSurplusPrice' in body, false);
+});
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const SPOT_LIVE_TEST_KEYS = [
   'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
@@ -91,6 +175,46 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
+  assert.equal(policy.totalCapitalKrw, 1_000_000);
+  assert.equal(policy.maxOrderKrw, 500_000);
+});
+
+test('member entry is capped at 500k while administrator entry accepts 1M and both fail closed above tier', () => {
+  const memberPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  });
+  assert.equal(memberPolicy.maxOrderKrw, 500_000);
+  assert.equal(evaluateTradingPlan(plan({
+    quoteAmount: 500_000,
+    estimatedKrw: 500_000,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+  assert.ok(evaluateTradingPlan(plan({
+    quoteAmount: 500_001,
+    estimatedKrw: 500_001,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'));
+
+  const administratorPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.equal(administratorPolicy.maxOrderKrw, 1_000_000);
+
+  const exact = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_000,
+    estimatedKrw: 1_000_000,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.equal(exact.blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+
+  const exceeded = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_001,
+    estimatedKrw: 1_000_001,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.ok(exceeded.blockCodes.includes('MAX_ORDER_AMOUNT'));
 });
 
 test('spot live create is capability allowlisted and exact-authority bound', () => {
@@ -302,10 +426,43 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
-test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite duplicate, and keeps reduce-only explicit', () => {
-  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+test('zero daily order quota stays opportunity-driven while an explicit positive quota remains fail-closed', () => {
+  const opportunityDriven = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 0,
+  });
+  const afterManyValidOpportunities = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 500 },
+  }), opportunityDriven, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(afterManyValidOpportunities.blockCodes.includes('DAILY_ORDER_LIMIT'), false);
+
+  const explicitlyBounded = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 10,
+  });
+  const bounded = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
+  }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
+test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
+  for (const leverage of [2, 3] as const) {
     assert.equal(
       normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      leverage,
+    );
+  }
+  for (const leverage of [4, 5, 6, 7] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      3,
+    );
+    assert.equal(
+      normalizeTradingPolicy(
+        { ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage },
+        PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).bitgetLeverage,
       leverage,
     );
   }
@@ -317,7 +474,10 @@ test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite
     () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
     /BITGET_LEVERAGE_POLICY_INVALID/,
   );
-  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 });
+  const policy = normalizeTradingPolicy(
+    { ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  );
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
@@ -968,7 +1128,7 @@ test('live connection verification authenticates the three spot providers with z
         });
       }
       if (url.includes('openapi.tossinvest.com/oauth2/token')) {
-        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+        return new Response(JSON.stringify({ access_token: 'toss-token', expires_in: 3600 }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }

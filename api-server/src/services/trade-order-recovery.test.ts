@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeExecutionService } from './trade-execution.service';
+import { assertReadonlyOrderRecoveryRequest } from './trade-order-recovery.service';
+import type { PreparedExchangeRequest } from './trade-exchange-adapters.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import type {
   TradingAccountMode,
@@ -200,7 +202,7 @@ test('Bitget uncertain execution performs clientOid detail lookup only and prese
     return new Response(JSON.stringify({
       code: '00000',
       data: {
-        symbol: 'BTCUSDT', orderId: 'bitget-order-1', clientOid: 'client-bitget', status: 'partially_filled',
+        symbol: 'BTCUSDT', orderId: '121212121212', clientOid: 'client-bitget', status: 'partially_filled',
         size: '1', baseVolume: '0.4', priceAvg: '50000', cTime: '1785891000000', uTime: '1785891001000',
       },
     }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -208,7 +210,7 @@ test('Bitget uncertain execution performs clientOid detail lookup only and prese
   try {
     const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
     assert.equal(recovered.state, 'PARTIALLY_FILLED');
-    assert.equal(recovered.exchangeOrderId, 'bitget-order-1');
+    assert.equal(recovered.exchangeOrderId, '121212121212');
     assert.equal(recovered.filledQuantity, 0.4);
     assert.equal(recovered.remainingQuantity, 0.6);
     assert.equal(requests.length, 1);
@@ -262,7 +264,7 @@ test('lookup failure schedules bounded retries and never replays the order POST'
   }
 });
 
-test('Kiwoom live recovery remains fail-closed until the official status contract is verified', async () => {
+test('Kiwoom recovery rejects an unverified broker order identity with zero requests', async () => {
   const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
     appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
   });
@@ -282,13 +284,96 @@ test('Kiwoom live recovery remains fail-closed until the official status contrac
     assert.equal(recovered.manualReviewRequired, true);
     assert.equal(
       recovered.lastErrorCode,
-      'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
+      'KIWOOM_RECOVERY_ORDER_ID_INVALID',
     );
     assert.equal(recovered.nextRetryAt, null);
     assert.equal(outbound, 0);
   } finally {
     globalThis.fetch = nativeFetch;
   }
+});
+
+test('verified Kiwoom KR/US recovery uses only token and complete readonly contracts', async () => {
+  for (const us of [false, true]) {
+    const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
+      appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
+    });
+    planValue.market = us ? 'US' : 'KR';
+    planValue.symbol = us ? 'AAPL' : '005930';
+    planValue.stockExchange = us ? 'NASDAQ' : 'KRX';
+    orderValue.exchangeOrderId = us ? '000000252' : '0000050';
+    await repository.savePlan(planValue);
+    await repository.saveOrder(orderValue);
+    const nativeFetch = globalThis.fetch;
+    const calls: string[] = [];
+    let openPages = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const api = headers.get('api-id') ?? 'token';
+      calls.push(api);
+      assert.equal(init?.method, 'POST');
+      assert.doesNotMatch(url, /\/ordr|cancel|amend|transfer|withdraw/u);
+      if (url.endsWith('/oauth2/token')) return new Response(JSON.stringify({ return_code: 0, token: 'fake-query-only' }));
+      assert.ok(['ka10075', 'kt00007', 'ust21050', 'ust21150'].includes(api));
+      if (['ka10075', 'ust21050'].includes(api)) {
+        openPages++;
+        if (us) assert.match(String(init?.body), /"ord_dt":"\d{8}"/u);
+        if (openPages === 1) return new Response(JSON.stringify({ return_code: 0,
+          [us ? 'result_list' : 'oso']: [{ ord_no: us ? '000000251' : '0000049' }] }),
+        { headers: { 'api-id': api, 'cont-yn': 'Y', 'next-key': 'next-2' } });
+        assert.equal(headers.get('cont-yn'), 'Y');
+        assert.equal(headers.get('next-key'), 'next-2');
+        return new Response(JSON.stringify({ return_code: 0, [us ? 'result_list' : 'oso']: [] }),
+          { headers: { 'api-id': api, 'cont-yn': 'N' } });
+      }
+      const row = { ord_no: orderValue.exchangeOrderId, stk_cd: us ? 'AAPL' : 'A005930',
+        ord_qty: '1', cntr_qty: '1', ord_remnq: '0', cntr_uv: us ? '201.3147' : '50000',
+        io_tp_nm: '현금매수', acpt_tp: '접수', mdfy_cncl: '', crnc_code: 'USD', slby_tp_nm: '매수',
+        cncl_qty: '0', mdfy_qty: '0', ord_stat_nm: '체결완료' };
+      return new Response(JSON.stringify({ return_code: 0,
+        [us ? 'result_list' : 'acnt_ord_cntr_prps_dtl']: [row] }), { headers: { 'api-id': api } });
+    }) as typeof fetch;
+    try {
+      const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+      assert.equal(recovered.state, 'FILLED', JSON.stringify({ market: planValue.market,
+        lastErrorCode: recovered.lastErrorCode, calls }));
+      assert.equal(recovered.filledQuantity, 1);
+      assert.equal(recovered.exchangeOrderId, us ? '000000252' : '0000050');
+      assert.equal(recovered.manualReviewRequired, false);
+      assert.equal(recovered.feeAmount, null);
+      assert.deepEqual(recovered.fills, []);
+      assert.deepEqual(calls, ['token', us ? 'ust21050' : 'ka10075', us ? 'ust21050' : 'ka10075',
+        us ? 'ust21150' : 'kt00007']);
+      const events = await repository.listEvents(USER_ID);
+      assert.equal(events.at(-1)?.metadata.orderResubmitted, false);
+    } finally { globalThis.fetch = nativeFetch; }
+  }
+});
+
+test('Kiwoom incomplete pages fail closed before history fallback or any financial request', async () => {
+  const { repository, planValue, orderValue } = await setup('kiwoom', 'live', {
+    appKey: 'kiwoom-app', secretKey: 'kiwoom-secret',
+  });
+  orderValue.exchangeOrderId = '0000050';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  let outbound = 0;
+  globalThis.fetch = (async (input) => {
+    outbound++;
+    assert.doesNotMatch(String(input), /\/ordr/u);
+    return String(input).endsWith('/oauth2/token')
+      ? new Response(JSON.stringify({ return_code: 0, token: 'fake-query-only' }))
+      : new Response(JSON.stringify({ return_code: 0, oso: [] }), { headers: { 'cont-yn': 'Y' } });
+  }) as typeof fetch;
+  try {
+    const recovered = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(recovered.state, 'RECOVERY_REQUIRED');
+    assert.equal(recovered.manualReviewRequired, true);
+    assert.equal(recovered.lastErrorCode, 'KIWOOM_RECOVERY_CONTINUATION_INVALID');
+    assert.equal(outbound, 2);
+    assert.equal(recovered.filledQuantity, 0);
+  } finally { globalThis.fetch = nativeFetch; }
 });
 
 test('Kiwoom mock recovery without an exchange order id remains manual-review only with zero outbound requests', async () => {
@@ -456,4 +541,125 @@ test('non-submitted orders cannot enter the exchange execution path', async () =
   } finally {
     globalThis.fetch = nativeFetch;
   }
+});
+
+test('recovery transport rejects financial routes, redirects to other hosts and non-query Kiwoom API IDs', () => {
+  const request = (method: PreparedExchangeRequest['method'], path: string, apiId = ''): PreparedExchangeRequest => ({
+    method, path, query: '', body: method === 'GET' ? null : '{}', headers: { 'api-id': apiId },
+  });
+  for (const [host, req] of [
+    ['https://api.bitget.com', request('POST', '/api/v2/mix/order/place-order')],
+    ['https://api.bitget.com', request('GET', '/api/v2/mix/order/cancel-order')],
+    ['https://api.upbit.com', request('DELETE', '/v1/order')],
+    ['https://api.upbit.com', request('POST', '/v1/orders/test')],
+    ['https://openapi.tossinvest.com', request('POST', '/api/v1/orders')],
+    ['https://api.kiwoom.com', request('POST', '/api/dostk/ordr', 'kt10000')],
+    ['https://api.kiwoom.com', request('POST', '/api/dostk/acnt', 'kt10000')],
+    ['https://untrusted.example', request('GET', '/v1/order')],
+  ] as const) assert.throws(() => assertReadonlyOrderRecoveryRequest(host, req), /ORDER_RECOVERY_READONLY_TRANSPORT_REQUIRED/);
+  assert.doesNotThrow(() => assertReadonlyOrderRecoveryRequest('https://api.kiwoom.com',
+    request('POST', '/api/us/acnt', 'ust21150')));
+});
+
+test('all non-Kiwoom recovery readers preserve unknown filled quantities instead of certifying zero', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const exchange of ['bitget', 'upbit', 'toss'] as const) {
+      for (const quantity of [undefined, null, '', true, [], -1, 'NaN']) {
+        const { repository, planValue, orderValue } = await setup(exchange, 'live', exchange === 'bitget'
+          ? { apiKey: 'fake-key', secretKey: 'fake-secret', passphrase: 'fake-pass' }
+          : exchange === 'upbit' ? { accessKey: 'fake-access', secretKey: 'fake-secret' }
+          : { clientId: 'fake-client', clientSecret: 'fake-secret', accountSeq: 'fake-account' });
+        if (exchange === 'toss') { orderValue.exchangeOrderId = 'toss-order-1'; await repository.saveOrder(orderValue); }
+        let financialRequests = 0;
+        globalThis.fetch = (async (input, init) => {
+          const url = String(input);
+          if (url.endsWith('/oauth2/token')) return new Response(JSON.stringify({ access_token: 'fake-query-token' }));
+          if (init?.method !== 'GET') financialRequests += 1;
+          assert.equal(init?.redirect, 'error');
+          const row = exchange === 'bitget' ? { code: '00000', data: {
+            symbol: 'BTCUSDT', orderId: '121212121212', clientOid: orderValue.clientOrderId,
+            state: 'canceled', size: '1', baseVolume: quantity } }
+            : exchange === 'upbit' ? { uuid: 'upbit-order-1', identifier: orderValue.clientOrderId,
+              market: 'KRW-BTC', state: 'cancel', volume: '0.001', executed_volume: quantity }
+            : { orderId: 'toss-order-1', symbol: 'BTC', status: 'canceled', quantity: '1', filledQuantity: quantity };
+          return new Response(JSON.stringify(row));
+        }) as typeof fetch;
+        const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+        assert.equal(result.state, 'RECOVERY_REQUIRED', `${exchange}:${String(quantity)}`);
+        assert.equal(result.lastErrorCode, `${exchange.toUpperCase()}_ORDER_FILLED_QUANTITY_UNKNOWN`);
+        assert.equal(result.manualReviewRequired, true);
+        assert.equal(result.filledQuantity, 0);
+        assert.equal(result.feeAmount, null);
+        assert.equal(financialRequests, 0);
+      }
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Upbit quote-currency spend is never certified as a unit fill price when actual trades are missing', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', {
+    accessKey: 'fake-access', secretKey: 'fake-secret',
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    uuid: 'upbit-order-1', identifier: orderValue.clientOrderId, market: 'KRW-BTC', state: 'done',
+    volume: '0.001', remaining_volume: '0', executed_volume: '0.001', price: '100000', trades: [],
+  }))) as typeof fetch;
+  try {
+    const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(result.filledQuantity, 0.001, 'the provider quantity remains visible, not fabricated');
+    assert.equal(result.averageFillPrice, null, 'unknown price cannot turn a currency spend into a unit price');
+    assert.equal(result.feeAmount, null);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Upbit quote-sized market buy reconciles actual base quantity, not the plan price estimate', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', {
+    accessKey: 'fake-access', secretKey: 'fake-secret',
+  });
+  const originalFetch = globalThis.fetch;
+  const response = { uuid: 'upbit-order-1', identifier: orderValue.clientOrderId, market: 'KRW-BTC',
+    side: 'bid', ord_type: 'price', state: 'done', price: '100000', volume: null,
+    remaining_volume: '0', executed_volume: '0.00105', paid_fee: '50',
+    trades: [{ uuid: 'fill-actual', price: '95238095.23809524', volume: '0.00105', created_at: '2026-10-12T00:00:00Z' }] };
+  let financialRequests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    if (init?.method !== 'GET') financialRequests += 1;
+    return new Response(JSON.stringify(response));
+  }) as typeof fetch;
+  try {
+    const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(result.state, 'FILLED');
+    assert.equal(result.requestedQuantity, null, 'a KRW spend has no fixed requested BTC quantity');
+    assert.equal(result.filledQuantity, 0.00105);
+    assert.equal(result.averageFillPrice, 95238095.23809524);
+    assert.equal(result.feeAmount, 50);
+    assert.equal(financialRequests, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('Toss ambiguous submission cannot adopt the first of two matching broker orders', async () => {
+  const { repository, planValue, orderValue } = await setup('toss', 'live', {
+    clientId: 'fake-client', clientSecret: 'fake-secret', accountSeq: 'fake-account',
+  });
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input); calls.push(url);
+    if (url.endsWith('/oauth2/token')) return new Response(JSON.stringify({ access_token: 'fake-token' }));
+    assert.equal(init?.method, 'GET');
+    return new Response(JSON.stringify({ result: [
+      { orderId: 'first', clientOrderId: orderValue.clientOrderId },
+      { orderId: 'second', clientOrderId: orderValue.clientOrderId },
+    ] }));
+  }) as typeof fetch;
+  try {
+    const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(result.state, 'RECOVERY_REQUIRED');
+    assert.equal(result.lastErrorCode, 'TOSS_RECOVERY_ORDER_ROW_AMBIGUOUS');
+    assert.equal(result.exchangeOrderId, null);
+    assert.equal(result.manualReviewRequired, true);
+    assert.equal(calls.length, 2, 'no order detail or mutation is requested after ambiguous ownership');
+  } finally { globalThis.fetch = originalFetch; }
 });

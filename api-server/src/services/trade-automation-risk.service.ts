@@ -2,6 +2,10 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingAssetClass,
   type TradingMarketSnapshot,
   type TradingPlanInput,
@@ -68,8 +72,17 @@ function plannedOpenRiskKrw(plan: TradingPlanInput) {
   return plan.estimatedKrw * Math.abs(reference - plan.stopPrice) / reference;
 }
 
-export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
+export function normalizeTradingPolicy(
+  value: Partial<TradingPolicy> | null | undefined,
+  requestedMaximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+): TradingPolicy {
   const input = value ?? {};
+  const maximumSingleEntryKrw = requestedMaximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const maximumBitgetLeverage = maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
   const leverage = input.bitgetLeverage == null
     ? DEFAULT_TRADING_POLICY.bitgetLeverage
     : Number(input.bitgetLeverage);
@@ -81,7 +94,12 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     || input.pilotStage === 'formula-ai-exception'
     ? input.pilotStage : 'approval-20';
   const totalCapitalKrw = clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw);
-  const maxOrderKrw = clampNumber(input.maxOrderKrw, 5_000, Math.min(1_000_000, totalCapitalKrw), Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw));
+  const maxOrderKrw = clampNumber(
+    input.maxOrderKrw,
+    5_000,
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+  );
   const maxInstrumentKrw = clampNumber(input.maxInstrumentKrw, 5_000, totalCapitalKrw, Math.min(maxOrderKrw, totalCapitalKrw));
   const classLimits = input.maxAssetClassKrw;
   const maxAssetClassKrw: Record<TradingAssetClass, number> = {
@@ -131,9 +149,14 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     weeklyLossLimitPercent: clampNumber(input.weeklyLossLimitPercent, 0.1, 25, DEFAULT_TRADING_POLICY.weeklyLossLimitPercent),
     maxAssetPercent: clampNumber(input.maxAssetPercent, 1, 30, DEFAULT_TRADING_POLICY.maxAssetPercent),
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
-    maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
+    maxDailyOrders: Number(input.maxDailyOrders) === 0
+      ? 0
+      : Math.round(clampNumber(input.maxDailyOrders, 1, 100, 0)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
-    bitgetLeverage: leverage as 2 | 3 | 4 | 5 | 6 | 7,
+    // Stored policies from before role-scoped leverage are read fail-closed.
+    // Administrator 4x-7x values remain exact; member values above 3x are
+    // reduced to the member ceiling before any Paper or Live worker sees them.
+    bitgetLeverage: Math.min(leverage, maximumBitgetLeverage) as 2 | 3 | 4 | 5 | 6 | 7,
     riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
     pilotStage,
     riskPerTradePercent: {
@@ -214,7 +237,8 @@ export function evaluateTradingPlan(
   if (!riskReducing && openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
 
   if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
-  if (!riskReducing && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
+  if (!riskReducing && policy.maxDailyOrders > 0
+    && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (!riskReducing && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
 

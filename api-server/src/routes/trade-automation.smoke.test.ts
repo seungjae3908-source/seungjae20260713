@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import router, {
   normalizeReadonlyCredentialsForLiveExecution,
   setTradeAutomationRepositoryFactoryForTests,
+  setTradeLivePolicyAuthorityOverrideForTests,
   setTradePaperRuntimeWalletReaderForTests,
   setTradePaperRuntimeRecordsReaderForTests,
   setTradePaperRuntimeAdminGuardReaderForTests,
@@ -22,6 +23,10 @@ import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { automaticPaperWalletBootstrapReadiness } from '../services/member-auto-trading-background-worker.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
+import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
+import { emptySnapshot } from '../features/account-readonly/account-readonly.contract';
+import { automaticExecutionReadonlyCredentials } from '../services/automatic-live-position-isolation.service';
+import { buildMemberFourMarketPaperBootstrap } from '../services/admin-four-market-paper-capital.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
@@ -348,6 +353,307 @@ test.beforeEach(async () => {
   setTradingPlanMarketIntelligenceRunnerForTests(unavailableMarketIntelligence);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
+});
+
+test('public HTTP cannot forge AUTO Live origin for any provider, before repository or external access', async () => {
+  let repositoryCalls = 0; let outbound = 0;
+  setTradeAutomationRepositoryFactoryForTests(() => { repositoryCalls += 1; throw new Error('REPOSITORY_MUST_NOT_BE_REACHED'); });
+  const { server, baseUrl } = await startServer(true, 'admin');
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith(baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
+    return nativeFetch(input, init);
+  };
+  try {
+    for (const exchange of ['kiwoom', 'toss', 'upbit', 'bitget']) {
+      for (const forged of [
+        { executionMode: 'automatic', signalReasons: [] },
+        { signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] },
+        { signalReasons: ['AUTO_EXIT_ENTRY_PLAN:foreign'] },
+        { signalReasons: ['PILOT_DYNAMIC_CAP_V1:forged'] },
+        { signalReasons: ['CANONICAL_PAPER_HANDOFF'] },
+        { signalReasons: ['STRATEGY_RULE_PACK:TREND_PULLBACK_REACCEL_V1'] },
+        { signalReasons: ['STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'] },
+        { signalReasons: ['AI_REVIEW_DECISION:PASS'] },
+        { signalReasons: ['AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'] },
+        { signalReasons: ['AI_REVIEW_EVIDENCE:' + 'a'.repeat(64)] },
+        { signalReasons: ['AI_REVIEW_EXPIRES:2099-01-01T00:00:00Z'] },
+      ]) {
+        const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ accountMode: 'live', exchange, ...forged }),
+        });
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN');
+        assert.equal(body.orderSubmitted, false);
+      }
+    }
+    for (const accountMode of [null, 'LIVE', ' live ', 'unknown', 0, {}]) {
+      const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountMode, exchange: 'upbit', signalReasons: [] }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+      assert.equal(response.status, 400); assert.equal(body.error, 'PUBLIC_TRADING_ACCOUNT_MODE_INVALID');
+      assert.equal(body.orderSubmitted, false);
+    }
+    assert.equal(repositoryCalls, 0); assert.equal(outbound, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('public approval cannot execute a stored background AUTO Live plan or mutate its canonical state', async () => {
+  const local = new InMemoryTradingRepository();
+  const plan = { id: 'http-auto-origin', userId: USER, state: 'APPROVAL_PENDING', version: 0,
+    executionMode: 'automatic', accountMode: 'live', exchange: 'upbit', signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as any;
+  await local.savePlan(plan);
+  setTradeAutomationRepositoryFactoryForTests(() => local);
+  const { server, baseUrl } = await startServer(true, 'admin');
+  const nativeFetch = globalThis.fetch; let outbound = 0;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith(baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
+    return nativeFetch(input, init);
+  };
+  try {
+    const response = await globalThis.fetch(baseUrl + '/api/trade-automation/plans/http-auto-origin/approve', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ approved: true }),
+    });
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(response.status, 400); assert.equal(body.error, 'AUTOMATIC_LIVE_BACKGROUND_EXECUTION_REQUIRED');
+    assert.equal(body.orderSubmitted, false); assert.equal(outbound, 0);
+    assert.equal((await local.getPlan(USER, plan.id))?.state, 'APPROVAL_PENDING');
+    assert.equal((await local.listOrders(USER)).length, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('manual/AUTO isolation endpoint is owner-scoped, zero-mutation and exposes counts only', async () => {
+  const local = new InMemoryTradingRepository();
+  await local.saveConnection({ userId: USER, exchange: 'upbit', accountMode: 'live', configured: true,
+    encryptedCredentials: encryptTradingCredentials({ accessKey: 'isolation-test-key', secretKey: 'isolation-test-secret' }),
+    lastVerifiedAt: new Date().toISOString(), lastErrorCode: null, updatedAt: new Date().toISOString() });
+  setTradeAutomationRepositoryFactoryForTests((owner) => {
+    assert.equal(owner, USER);
+    return local;
+  });
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.origin, 'https://api.upbit.com');
+    assert.equal(String(init?.method ?? 'GET'), 'GET');
+    providerCalls += 1;
+    return Response.json(url.pathname === '/v1/accounts' ? [
+      { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      { currency: 'BTC', balance: '0.2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+      { currency: 'ETH', balance: '2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+    ] : []);
+  }) as typeof fetch;
+  const { server, baseUrl } = await startServer(true, 'admin');
+  try {
+    const response = await originalFetch(baseUrl + '/api/trade-automation/live-position-isolation/upbit');
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control')!, /no-store/);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.ready, true);
+    assert.equal(body.manualProtectedPositionCount, 2);
+    assert.equal(body.automaticOwnedPositionCount, 0);
+    assert.equal(body.manualEntryBlocked, true);
+    assert.equal(body.canonicalExitOnly, true);
+    assert.equal(body.liveTradingAuthorityGranted, false);
+    assert.equal(body.autoTradingAuthorityGranted, false);
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) assert.equal(body[key], 0);
+    for (const key of ['positions', 'balances', 'orders', 'userId', 'accountRef', 'encryptedCredentials']) assert.equal(key in body, false);
+    assert.doesNotMatch(JSON.stringify(body), /isolation-test|BTC|ETH/);
+    assert.ok(providerCalls > 0);
+    setTradePaperRuntimeRecordsReaderForTests(async () => { throw new Error('PAPER_MUST_NOT_BLOCK_LIVE'); });
+    const holdingsResponse = await originalFetch(baseUrl + '/api/trade-automation/holdings?accountMode=live&provider=upbit&userId=other-member');
+    assert.equal(holdingsResponse.status, 200);
+    assert.match(holdingsResponse.headers.get('cache-control')!, /no-store/);
+    const holdings = await holdingsResponse.json() as any;
+    assert.equal(holdings.readOnly, true);
+    assert.equal(holdings.items.length, 2);
+    assert.ok(holdings.items.every((row: any) => row.ownership === 'MANUAL' && row.entryEvidence === null));
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) assert.equal(holdings[key], 0);
+    assert.equal(holdings.liveTradingAuthorityGranted, false);
+    assert.equal(holdings.autoTradingAuthorityGranted, false);
+    assert.doesNotMatch(JSON.stringify(holdings), /isolation-test|encryptedCredentials|accountRef|accessKey|secretKey/);
+    assert.equal((await local.listOrders(USER)).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setTradePaperRuntimeRecordsReaderForTests(null);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('execution read-only credential adaptation preserves other providers and rejects ambiguous Kiwoom keys', () => {
+  for (const [provider, raw] of [
+    ['toss', { clientId: 'id', clientSecret: 'secret', accountSeq: 'scope' }],
+    ['upbit', { accessKey: 'id', secretKey: 'secret' }],
+    ['bitget', { apiKey: 'id', secretKey: 'secret', passphrase: 'phrase' }],
+  ] as const) assert.deepEqual(automaticExecutionReadonlyCredentials(provider, raw), raw);
+  const raw = { appKey: 'id', secretKey: ' secret ' };
+  assert.equal(automaticExecutionReadonlyCredentials('kiwoom', raw).appSecret, 'secret');
+  assert.equal('appSecret' in raw, false, 'stored credential object is never mutated');
+  assert.throws(() => automaticExecutionReadonlyCredentials('kiwoom',
+    { appKey: 'id', secretKey: 'one', appSecret: 'different' }), /CREDENTIALS_UNAVAILABLE/);
+});
+
+test('Kiwoom execution-vault keys drive only authenticated read-only snapshots for isolation and holdings', async () => {
+  const originalFetch = globalThis.fetch;
+  const { server, baseUrl } = await startServer(true, 'admin');
+  try {
+    const sources: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' kiwoom-test-secret ', appSecret: 'kiwoom-test-secret ' },
+    ];
+    for (const source of sources) {
+      const local = new InMemoryTradingRepository();
+      await local.saveConnection({ userId: USER, exchange: 'kiwoom', accountMode: 'live', configured: true,
+        encryptedCredentials: encryptTradingCredentials(source), lastVerifiedAt: new Date().toISOString(),
+        lastErrorCode: null, updatedAt: new Date().toISOString() });
+      const savedConnection = await local.getConnection(USER, 'kiwoom');
+      setTradeAutomationRepositoryFactoryForTests(() => local);
+      const calls: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = new URL(String(input));
+        assert.equal(url.origin, 'https://api.kiwoom.com');
+        assert.equal(init?.method, 'POST'); // Kiwoom uses POST for authentication/account reads.
+        calls.push(url.pathname);
+        if (url.pathname === '/oauth2/token') {
+          const auth = JSON.parse(String(init?.body));
+          assert.equal(auth.appkey, 'kiwoom-test-key');
+          assert.equal(auth.secretkey, 'kiwoom-test-secret');
+          return Response.json({ token: 'kiwoom-test-token', expires_dt: '20991231235959', return_code: 0 });
+        }
+        assert.ok(['/api/dostk/acnt', '/api/us/acnt'].includes(url.pathname));
+        assert.ok(['kt00001', 'kt00018', 'ka10075', 'ust21110', 'ust21070', 'ust21050']
+          .includes(new Headers(init?.headers).get('api-id')!));
+        return Response.json({ return_code: 20, return_msg: 'NO_DATA' });
+      }) as typeof fetch;
+      for (const path of ['/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom']) {
+        const response = await originalFetch(baseUrl + '/api/trade-automation' + path);
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(response.status, 200, String(body.error ?? ''));
+        assert.equal(body.ok, true);
+        for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests'])
+          assert.equal(body[key], 0);
+        assert.equal(body.liveTradingAuthorityGranted, false);
+        assert.equal(body.autoTradingAuthorityGranted, false);
+        assert.doesNotMatch(JSON.stringify(body), /kiwoom-test|encryptedCredentials|appKey|secretKey|appSecret/);
+      }
+      assert.equal(calls.length, 14);
+      assert.equal((await local.listOrders(USER)).length, 0);
+      assert.deepEqual(await local.getConnection(USER, 'kiwoom'), savedConnection,
+        'successful account reads must not rewrite the execution vault or verification metadata');
+    }
+    const invalid: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key' },
+      { secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' ', appSecret: '' },
+      { appKey: 'kiwoom-test-key', secretKey: 'one', appSecret: 'different' },
+    ];
+    for (const source of invalid) {
+      const local = new InMemoryTradingRepository();
+      const encrypted = encryptTradingCredentials(source);
+      await local.saveConnection({ userId: USER, exchange: 'kiwoom', accountMode: 'live', configured: true,
+        encryptedCredentials: encrypted, lastVerifiedAt: new Date().toISOString(), lastErrorCode: null,
+        updatedAt: new Date().toISOString() });
+      setTradeAutomationRepositoryFactoryForTests(() => local);
+      let calls = 0;
+      globalThis.fetch = (async () => { calls += 1; throw new Error('PROVIDER_MUST_NOT_BE_CALLED'); }) as typeof fetch;
+      for (const path of ['/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom']) {
+        const response = await originalFetch(baseUrl + '/api/trade-automation' + path);
+        assert.equal(response.status, 400);
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(body.error, 'CREDENTIALS_UNAVAILABLE');
+        assert.doesNotMatch(JSON.stringify(body), /kiwoom-test|encryptedCredentials|appKey|secretKey|appSecret/);
+      }
+      assert.equal(calls, 0);
+      assert.equal((await local.getConnection(USER, 'kiwoom'))!.encryptedCredentials, encrypted);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('holdings connect only actual canonical AUTO fills to stored entry evidence and never invent manual reasons', () => {
+  const at = new Date().toISOString();
+  const plan = { id: 'entry', userId: USER, executionMode: 'automatic', accountMode: 'live', exchange: 'kiwoom',
+    market: 'KR', symbol: '000660', side: 'buy', reduceOnly: false, strategyId: 'breakout-v1', signalId: 'stored-signal',
+    stopPrice: 196000, targetPrices: [210000], signalReasons: ['거래량 증가', '돌파 조건 충족', 'CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: at }, createdAt: at, updatedAt: at } as any;
+  const order = { id: 'fill', planId: 'entry', userId: USER, exchange: 'kiwoom', state: 'FILLED',
+    filledQuantity: 1, averageFillPrice: 200000, updatedAt: at, protectionStatus: 'UNKNOWN' } as any;
+  const position = { market: 'KR', symbol: '000660', displayName: 'SK하이닉스', quantity: 1, availableQuantity: 1,
+    averageEntryPrice: 200000, currentPrice: 202000, marketValue: 202000, unrealizedPnl: 2000, unrealizedPnlPercent: 1,
+    leverage: null, liquidationPrice: null, marginMode: null, side: null };
+  const snapshot = { ...emptySnapshot('kiwoom', 'CONNECTED', at), connected: true, positions: [position,
+    { ...position, symbol: '005930', displayName: '삼성전자', quantity: 2, availableQuantity: 2 }], openOrders: [] };
+  const result = liveTradingHoldings(snapshot, [plan], [order]);
+  assert.equal(result.ownershipVerified, true);
+  assert.equal(result.items[0]!.ownership, 'AUTO');
+  assert.equal(result.items[0]!.displayName, 'SK하이닉스');
+  assert.equal(result.items[0]!.entryEvidence!.entryPrice, 200000);
+  assert.deepEqual(result.items[0]!.entryEvidence!.reasons, ['거래량 증가', '돌파 조건 충족']);
+  assert.equal(result.items[0]!.entryEvidence!.signalId, 'stored-signal');
+  assert.equal(result.items[0]!.entryEvidence!.protectionStatus, 'UNKNOWN');
+  assert.equal(liveTradingHoldings(snapshot, [plan], [{ ...order, averageFillPrice: null }])
+    .items[0]!.entryEvidence!.entryPrice, null, 'unknown canonical fill price is not the broker average');
+  assert.equal(result.items[1]!.ownership, 'MANUAL');
+  assert.equal(result.items[1]!.entryEvidence, null);
+  const mixed = liveTradingHoldings({ ...snapshot, positions: [{ ...position, quantity: 2 }] }, [plan], [order]);
+  assert.equal(mixed.ownershipVerified, false);
+  assert.equal(mixed.items[0]!.ownership, 'UNRESOLVED');
+  assert.equal(mixed.items[0]!.entryEvidence, null);
+  const stale = liveTradingHoldings({ ...snapshot, stale: true }, [plan], [order]);
+  assert.equal(stale.ownershipVerified, false);
+  assert.ok(stale.items.every(row => row.ownership === 'UNRESOLVED'));
+  assert.equal(stale.orderRequests, 0);
+  const paperAuto = { ...plan, accountMode: 'paper' };
+  const paperManual = { ...plan, id: 'manual-entry', symbol: '005930', accountMode: 'paper',
+    executionMode: 'manual', signalReasons: ['수동모의 입력'] };
+  const paperOrders = [order, { ...order, id: 'manual-fill', planId: 'manual-entry' }];
+  assert.deepEqual(paperTradingHoldings([paperAuto, paperManual, plan], paperOrders, 'automatic').items.map(row => row.symbol), ['000660']);
+  assert.deepEqual(paperTradingHoldings([paperAuto, paperManual], paperOrders, 'manual').items.map(row => row.symbol), ['005930']);
+  const nowMs = Date.now();
+  const records = buildMemberFourMarketPaperBootstrap(new Date(nowMs - 10_000)).map(row => ({
+    ...row, userId: USER, createdAt: new Date(nowMs - 10_000).toISOString(), serverUpdatedAt: new Date(nowMs - 10_000).toISOString(),
+  })) as any;
+  const oldPlan = { ...paperAuto, id: 'old-epoch', symbol: '123456', createdAt: new Date(nowMs - 20_000).toISOString() };
+  const oldOrder = { ...order, id: 'old-fill', planId: oldPlan.id, createdAt: oldPlan.createdAt };
+  const currentOrder = { ...order, createdAt: at };
+  assert.deepEqual(paperTradingHoldings([paperAuto, oldPlan], [currentOrder, oldOrder], 'automatic',
+    { records, role: 'member', nowMs }).items.map(row => row.symbol), ['000660']);
+  assert.throws(() => paperTradingHoldings([paperAuto], [currentOrder], 'automatic',
+    { records: [], role: 'member', nowMs }), /HOLDINGS_PAPER_WALLET_EPOCH_UNVERIFIED/);
+});
+
+test('holdings API rejects unauthorized users and invalid scopes before provider access', async () => {
+  const unauthenticated = await startServer(false);
+  const associate = await startServer(true, 'associate');
+  const admin = await startServer(true, 'admin');
+  try {
+    for (const server of [unauthenticated, associate]) {
+      const response = await fetch(server.baseUrl + '/api/trade-automation/holdings?provider=upbit');
+      assert.equal(response.status, 403);
+    }
+    assert.equal((await fetch(admin.baseUrl + '/api/trade-automation/holdings?accountMode=arbitrary')).status, 400);
+    assert.equal((await fetch(admin.baseUrl + '/api/trade-automation/holdings?provider=arbitrary')).status, 403);
+  } finally {
+    await Promise.all([unauthenticated, associate, admin].map(server => close(server.server)));
+  }
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
@@ -1561,6 +1867,8 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.doesNotMatch(text, /encryptedCredentials|accessKey|secretKey|passphrase/);
     const body = JSON.parse(text) as {
       policy: { mode: string; automaticEnabled: boolean };
+      initialMaxOrderKrw: number;
+      administratorOrderBaseline: boolean;
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticReadinessByMarket: Record<string, {
@@ -1571,6 +1879,8 @@ test('status is authenticated, automatic execution defaults off, and never retur
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.initialMaxOrderKrw, 500_000);
+    assert.equal(body.administratorOrderBaseline, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.equal(body.liveAutomaticReadinessByMarket.domestic_stock.readyForAutomaticOrderEvaluation, false);
@@ -1773,6 +2083,109 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
   } finally { await close(server); }
 });
 
+test('member order baseline stays 500k while an administrator may save the 1M baseline', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const requestBody = {
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    totalCapitalKrw: 1_000_000,
+    maxOrderKrw: 1_000_000,
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { maxOrderKrw: number } })
+      .policy.maxOrderKrw, 500_000);
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as {
+      initialMaxOrderKrw: number; administratorOrderBaseline: boolean;
+    };
+    assert.equal(statusBody.initialMaxOrderKrw, 500_000);
+    assert.equal(statusBody.administratorOrderBaseline, false);
+  } finally { await close(regular.server); }
+
+  const administrator = await startServer(true, 'admin');
+  try {
+    const saved = await fetch(`${administrator.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { maxOrderKrw: number } })
+      .policy.maxOrderKrw, 1_000_000);
+    const status = await fetch(`${administrator.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as {
+      initialMaxOrderKrw: number; administratorOrderBaseline: boolean;
+    };
+    assert.equal(statusBody.initialMaxOrderKrw, 1_000_000);
+    assert.equal(statusBody.administratorOrderBaseline, true);
+  } finally {
+    await close(administrator.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('member Bitget leverage stops at 3x while an administrator can save exact 7x', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const policyBody = {
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const rejected = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 4 }),
+    });
+    assert.equal(rejected.status, 409);
+    const rejectedBody = await rejected.json() as Record<string, any>;
+    assert.equal(rejectedBody.error, 'BITGET_LEVERAGE_ROLE_LIMIT');
+    assert.equal(rejectedBody.maximumBitgetLeverage, 3);
+    assert.equal(rejectedBody.orderSubmitted, false);
+    assert.equal(rejectedBody.providerMutationRequests, 0);
+
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 3 }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { bitgetLeverage: number } })
+      .policy.bitgetLeverage, 3);
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as Record<string, any>;
+    assert.equal(statusBody.maximumBitgetLeverage, 3);
+    assert.equal(statusBody.administratorLeveragePolicy, false);
+  } finally { await close(regular.server); }
+
+  const administrator = await startServer(true, 'admin');
+  try {
+    const saved = await fetch(`${administrator.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 7 }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { bitgetLeverage: number } })
+      .policy.bitgetLeverage, 7);
+    const status = await fetch(`${administrator.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as Record<string, any>;
+    assert.equal(statusBody.maximumBitgetLeverage, 7);
+    assert.equal(statusBody.administratorLeveragePolicy, true);
+  } finally {
+    await close(administrator.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
   const isolated = new InMemoryTradingRepository();
   await isolated.savePolicy(USER, normalizeTradingPolicy({
@@ -1922,6 +2335,98 @@ test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off wi
       if (value == null) delete process.env[key];
       else process.env[key] = value;
     }
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('admin may align the Production single-entry ceiling to 1M only while every live gate is off', async () => {
+  const isolated = new InMemoryTradingRepository();
+  const original = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    totalCapitalKrw: 500_000,
+    maxOrderKrw: 500_000,
+    maxInstrumentKrw: 400_000,
+    maxAssetClassKrw: {
+      domestic_stock: 300_000,
+      us_stock: 300_000,
+      crypto_spot: 250_000,
+      crypto_futures: 200_000,
+    },
+  });
+  await isolated.savePolicy(USER, original);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const endpoint = '/api/trade-automation/admin/order-limit-1m';
+  const requestBody = {
+    maxOrderKrw: 1_000_000,
+    confirmation: 'SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED',
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const denied = await fetch(`${regular.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(denied.status, 403);
+  } finally { await close(regular.server); }
+
+  setTradeLivePolicyAuthorityOverrideForTests(false);
+  const admin = await startServer(true, 'admin');
+  try {
+    const missing = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxOrderKrw: 1_000_000 }),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json() as { error: string }).error,
+      'PRODUCTION_ORDER_LIMIT_CONFIRMATION_REQUIRED');
+
+    setTradeLivePolicyAuthorityOverrideForTests(true);
+    const active = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(active.status, 409);
+    assert.equal((await active.json() as { error: string }).error,
+      'PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF');
+    assert.deepEqual(await isolated.getPolicy(USER), original);
+    setTradeLivePolicyAuthorityOverrideForTests(false);
+
+    const applied = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(applied.status, 200);
+    const body = await applied.json() as Record<string, any>;
+    assert.equal(body.ok, true);
+    assert.equal(body.policyUpdated, true);
+    assert.equal(body.idempotent, false);
+    assert.equal(body.policy.totalCapitalKrw, 1_000_000);
+    assert.equal(body.policy.maxOrderKrw, 1_000_000);
+    assert.equal(body.policy.maxInstrumentKrw, original.maxInstrumentKrw);
+    assert.deepEqual(body.policy.maxAssetClassKrw, original.maxAssetClassKrw);
+    assert.equal(body.policy.mode, original.mode);
+    assert.equal(body.policy.automaticEnabled, original.automaticEnabled);
+    assert.equal(body.liveTradingEnabledByThisRequest, false);
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.executionAuthority, 'NONE');
+    for (const key of ['orderSubmitted', 'cancelRequested', 'amendRequested', 'transferRequested', 'withdrawalRequested']) {
+      assert.equal(body[key], false);
+    }
+
+    const replay = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(replay.status, 200);
+    const replayBody = await replay.json() as Record<string, any>;
+    assert.equal(replayBody.policyUpdated, false);
+    assert.equal(replayBody.idempotent, true);
+  } finally {
+    setTradeLivePolicyAuthorityOverrideForTests(null);
     await close(admin.server);
     setTradeAutomationRepositoryFactoryForTests(() => repository);
   }
@@ -2631,7 +3136,7 @@ test('formula+AI rehearsal HTTP route proves four-market readiness and never cre
     });
   }
 
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let outboundRequests = 0;
   try {
@@ -2688,6 +3193,7 @@ test('formula+AI rehearsal HTTP route proves four-market readiness and never cre
     assert.equal(body.telegram.ready, true);
     assert.equal(body.futures.marginMode, 'isolated');
     assert.equal(body.futures.maxLeverage, 7);
+    assert.equal(body.futures.maximumLeverageForRequester, 7);
     assert.equal(body.ai.positiveDecision, 'PASS');
     assert.equal(body.ai.vetoDecision, 'VETO');
     assert.equal(body.ai.vetoBlocked, true);

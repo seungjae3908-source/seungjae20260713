@@ -122,7 +122,8 @@ test('professional command surface is shell-owned, desktop-idle split, capabilit
   expect(content).toContain('useState(initialOpen)');
   expect(content).toContain("auth.can('canAccessRiskPreview')");
   expect(content).toContain("auth.can('canAccessPaperTrading')");
-  expect(content).toContain("auth.can('canManageMembers')");
+  expect(content).toMatch(/id: 'research'[^\n]+href: APP_ROUTES\.researchCenter[^\n]+visible: auth\.can\('canAccessBasicInfo'\)/u);
+  expect(app).toContain("function ResearchCenterAccess() { return gated('canAccessBasicInfo', <ResearchCenterPage />); }");
   expect(content).toContain('aria-label="로그아웃"');
   expect(content).toContain('onClick={() => void auth.signOut()}');
   expect(content).toContain('const showGlobalLogout = currentPath !== APP_ROUTES.account;');
@@ -136,13 +137,14 @@ test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a re
   await page.setViewportSize({ width: 1440, height: 900 });
   await installRuntime(page);
   await page.goto('/home');
+  await expect(page.getByRole('heading', { name: '홈', exact: true })).toBeVisible();
+  await page.keyboard.press('Control+K');
 
   const bar = page.getByTestId('professional-command-bar');
   await expect(bar).toBeVisible({ timeout: 5_000 });
   await expect(bar).toContainText('홈');
   await expect(bar).toContainText('온라인');
 
-  await page.keyboard.press('Control+K');
   const palette = page.getByTestId('professional-command-palette');
   await expect(palette).toBeVisible();
   const input = page.getByLabel('빠른 실행 검색');
