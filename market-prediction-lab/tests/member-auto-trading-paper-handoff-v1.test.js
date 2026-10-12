@@ -154,6 +154,23 @@ test("builds a deterministic immutable public-only handoff", () => {
   assert.equal(Object.isFrozen(value.entries[0].execution.dataEvidence), true);
 });
 
+test("handoff preserves upstream AI evidence with digest binding but never invents an approval", () => {
+  const review = { schemaVersion: "canonical-signal-ai-review-v1", decision: "PASS",
+    evidenceDigest: "c".repeat(64), reviewedAtMs: NOW - 1000, expiresAtMs: NOW + 1000 };
+  const build = (row) => buildMemberAutoTradingPaperHandoff({ cycleId: "ai-carry",
+    evaluatedAtMs: NOW, lanes: [lane("CRYPTO_SPOT", [row])] });
+  const value = build(candidate({ overrides: { aiReviewEvidence: review } }));
+  assert.deepEqual(value.entries[0].aiReviewEvidence, review);
+  assert.equal(Object.isFrozen(value.entries[0].aiReviewEvidence), true);
+  assert.doesNotThrow(() => validateMemberAutoTradingPaperHandoff(value, NOW));
+  assert.equal("aiReviewEvidence" in build(candidate()).entries[0], false);
+  const tampered = structuredClone(value);
+  tampered.entries[0].aiReviewEvidence.expiresAtMs += 1;
+  assert.throws(() => validateMemberAutoTradingPaperHandoff(tampered, NOW), /DIGEST_MISMATCH/);
+  const unsafe = build(candidate({ overrides: { aiReviewEvidence: { apiKey: "never-copy" } } }));
+  assert.equal(unsafe.entryCount, 0);
+});
+
 test("supports the four canonical market entry directions", () => {
   const rows = [
     ["KR_STOCK", "BUY", "005930"],
