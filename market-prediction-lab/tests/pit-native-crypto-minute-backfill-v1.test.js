@@ -487,7 +487,7 @@ test("retry conflicts/erased minutes are blocked without creating a second archi
      allowPublicReadOnlyFetch:true,retryPartialSource:true,
      expectedExistingSourceDigestSha256:reviewed,
      upbitFetchImpl:newer([
-       {...nativeMinute(START+MIN),high_price:108},
+       nativeMinute(START+MIN),
        nativeMinute(START),nativeMinute(START-MIN),
      ]),
    }));
