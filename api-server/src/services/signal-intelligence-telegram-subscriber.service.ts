@@ -630,7 +630,7 @@ export class SignalIntelligenceTelegramSubscriber {
           // Only a proven rejection or local non-attempt releases the durable
           // reservation. In-flight DUPLICATE remains unresolved, never SENT.
           await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
-          if (sent.skipped === 'NOT_CONFIGURED' || sent.skipped === 'COOLDOWN')
+          if (!sent.ok && (sent.skipped === 'NOT_CONFIGURED' || sent.skipped === 'COOLDOWN'))
             result.skipped += 1;
           else result.failed += 1;
         } else {
