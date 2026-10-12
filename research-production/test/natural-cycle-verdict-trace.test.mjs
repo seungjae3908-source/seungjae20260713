@@ -7,6 +7,9 @@ import {
   CANONICAL_NATURAL_PAPER_STAGE_FIELDS,
   CANONICAL_NATURAL_PAPER_STAGE_ORDER,
   NATURAL_PAPER_STAGE_ORDER,
+  EXPECTED_FORWARD_TASK_IDS,
+  assessForwardCycleEvidence,
+  classifyNaturalCycleEvidence,
 } from '../src/natural-cycle-verdict-trace.mjs';
 
 const STRATEGY_SHA = '8b337eb22cf943a71e56158de4ae5fa5893aaa09';
@@ -470,3 +473,94 @@ test('runtime adapter exposes the canonical trace without changing the legacy ve
   assert.equal(trace.canonicalTrace.firstZeroStageName, 'ENTRY_ELIGIBLE');
   assert.equal(trace.runtimeAdapter.canonicalMeasurementsPresent, true);
 });
+
+// Isolated observer regression suite; never simulates actual Production authority.
+{
+const SHA = 'a'.repeat(40);
+const NOW_MS = Date.parse('2026-10-09T09:40:00Z');
+const timer = { last_trigger: 'Fri_2026-10-09_09:11:00_UTC' };
+const cycle = { present: 'true', research_sha: SHA, generated_at: '2026-10-09T09:22:00Z', failed_count: '0' };
+const tasks = EXPECTED_FORWARD_TASK_IDS.map((id) => ({
+  profile: 'forward', id, status: 'success',
+}));
+const observe = (patch = {}) => assessForwardCycleEvidence({
+  expectedSha: SHA, timer, cycle, tasks, nowMs: NOW_MS, ...patch,
+});
+const classify = (forward, patch = {}) => classifyNaturalCycleEvidence({
+  releaseMatch: true, timersHealthy: true, forward, paperSafe: true,
+  historicalComplete: true, historicalRunning: false, ...patch,
+});
+
+test('a natural forward cycle requires all THREE actual production tasks', () => {
+  assert.deepEqual(EXPECTED_FORWARD_TASK_IDS, [
+    'formula-backtest-queue', 'shadow-forward', 'paper-forward',
+  ]);
+  assert.deepEqual(observe(), {
+    observed: true, sourceExact: true, exactTasks: true,
+    clockFresh: true, hasBlockedData: false, allSucceeded: true,
+  });
+  assert.equal(observe({ tasks: tasks.slice(1) }).observed, false);
+  assert.equal(observe({ tasks: [...tasks, tasks[0]] }).observed, false);
+  assert.equal(observe({ tasks: [...tasks.slice(0, 2),
+    { ...tasks[2], id: 'unrecognized-task' }] }).observed, false);
+});
+
+test('wrong cycle SHA and untrusted last-trigger never count as observed', () => {
+  assert.equal(observe({ cycle: { ...cycle, research_sha: 'b'.repeat(40) } }).observed, false);
+  assert.equal(observe({ cycle: { ...cycle, failed_count: '1' } }).observed, false);
+  assert.equal(observe({ timer: { last_trigger: 'n/a' } }).observed, false);
+  assert.equal(observe({ timer: { last_trigger: 'unknown' } }).observed, false);
+  assert.equal(observe({ tasks: tasks.map(row => ({...row, status:'skipped'})) }).observed, false);
+});
+
+test('hourly forward cycle needs a fresh systemd trigger and matching cycle epoch', () => {
+  assert.equal(observe().clockFresh, true);
+  assert.equal(observe({ timer: { last_trigger: 'Fri_2026-10-09_18:11:00_KST' } }).clockFresh, true);
+  for (const stale of [
+    { timer: { last_trigger: '2026-10-09T06:00:00Z' } },
+    { timer: { last_trigger: 'Fri_2026-10-09_06:00:00_UTC' } },
+    { cycle: { ...cycle, generated_at: '2026-10-09T06:00:00Z' } },
+    { cycle: { ...cycle, generated_at: '2026-10-09T09:00:00Z' } },
+    { timer: { last_trigger: '2030-10-09T09:11:00Z' } },
+    { timer: { last_trigger: 'Fri_2026-10-09_09:11:00_UNKNOWN' } },
+    { cycle: { ...cycle, generated_at: undefined } },
+  ]) {
+    const result = observe(stale);
+    assert.equal(result.clockFresh, false);
+    assert.equal(result.observed, false);
+    assert.equal(classify(result), 'stale_cycle');
+  }
+  assert.equal(classify(observe(), { releaseMatch: false }), 'stale_release');
+});
+test('blocked_data tasks are observed but never promoted to operational PASS', () => {
+  const blocked = observe({ tasks: [
+    { ...tasks[0], status: 'blocked_data' },
+    { ...tasks[1], status: 'blocked_data' },
+    { ...tasks[2], status: 'blocked_data' },
+  ] });
+  assert.equal(blocked.observed, true);
+  assert.equal(blocked.hasBlockedData, true);
+  assert.equal(blocked.allSucceeded, false);
+  assert.equal(classify(blocked), 'blocked_data');
+});
+
+test('release SHA mismatch is a diagnosable stale release, not evidence unavailable or PASS', () => {
+  const valid = observe();
+  assert.equal(classify(valid, { releaseMatch: false }), 'stale_release');
+  assert.equal(classify(valid, { releaseMatch: null }), 'stale_release');
+  assert.equal(classify(valid, { paperSafe: false }), 'failed');
+  assert.equal(classify(valid, { timersHealthy: false }), 'failed');
+  assert.equal(classify(observe({ tasks: tasks.slice(1) })), 'failed');
+});
+
+test('only all-success forward tasks can report scheduled-cycle PASS', () => {
+  assert.equal(classify(observe()), 'passed');
+  assert.equal(classify(observe(), {
+    historicalComplete: false, historicalRunning: true,
+  }), 'forward_pass_historical_running');
+  assert.equal(classify(observe(), {
+    historicalComplete: false, historicalRunning: false,
+  }), 'forward_pass_historical_unproven');
+});
+
+}

@@ -15,7 +15,7 @@ import {
 import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_MARKETS, WATCH_SAFETY,
   blockedSource, evaluateMarketOpportunities, evaluateWatchBudget,
-  normalizeBitgetSnapshot, normalizeUpbitSnapshot,
+  normalizeBitgetSnapshot, normalizeUpbitSnapshot, isUnflaggedUpbitKrwMarket,
   parseBoundedPublicJson, watchCycleDigest,
 } from '../src/lightweight-market-watch.mjs';
 
@@ -50,13 +50,11 @@ async function publicJson(url) {
 }
 async function spotSnapshot(nowMs) {
   if (!spotMarkets || nowMs - spotMarketFetchedAt >= 60 * 60_000) {
-    spotMarkets = await publicJson(UPBIT + '/v1/market/all?isDetails=true');
+    spotMarkets = await publicJson(UPBIT + '/v1/market/all?is_details=true');
     if (!Array.isArray(spotMarkets)) throw new Error('UPBIT_MARKET_LIST_INVALID');
     spotMarketFetchedAt = nowMs;
   }
-  const marketCodes = spotMarkets.filter((row) =>
-    /^KRW-[A-Z0-9._-]{1,32}$/.test(String(row?.market ?? ''))
-    && String(row?.market_warning ?? 'NONE').toUpperCase() === 'NONE')
+  const marketCodes = spotMarkets.filter(isUnflaggedUpbitKrwMarket)
     .map((row) => row.market);
   if (!marketCodes.length) throw new Error('UPBIT_MARKET_LIST_EMPTY');
   const all = [];
