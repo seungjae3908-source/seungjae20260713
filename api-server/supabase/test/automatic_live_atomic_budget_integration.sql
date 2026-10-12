@@ -55,6 +55,55 @@ do $definition_drift$ begin
   exception when raise_exception then
     if sqlerrm<>'ROLLBACK_PROOF_ACL_PROBE' then raise; end if;
   end;
+  begin
+    execute 'create or replace function public.automatic_live_budget_expected_schema_fingerprint()
+      returns text language sql immutable security invoker set search_path=pg_catalog,public,pg_temp
+      as ''select ''''00000000000000000000000000000000''''::text;''';
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'changed baseline literal retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_BASELINE_LITERAL_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_BASELINE_LITERAL_PROBE' then raise; end if;
+  end;
+  begin
+    execute 'create or replace function public.automatic_live_budget_expected_schema_fingerprint()
+      returns text language sql immutable security invoker set search_path=pg_catalog,public,pg_temp
+      as ''select public.automatic_live_budget_schema_fingerprint()''';
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'dynamic self-recomputing baseline retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_DYNAMIC_BASELINE_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_DYNAMIC_BASELINE_PROBE' then raise; end if;
+  end;
+  begin
+    grant execute on function public.automatic_live_budget_expected_schema_fingerprint() to authenticated;
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'public baseline grant retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_BASELINE_ACL_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_BASELINE_ACL_PROBE' then raise; end if;
+  end;
+  begin
+    drop function public.automatic_live_budget_expected_schema_fingerprint();
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'missing baseline retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_MISSING_BASELINE_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_MISSING_BASELINE_PROBE' then raise; end if;
+  end;
+  begin
+    alter function public.automatic_live_budget_expected_schema_fingerprint() owner to service_role;
+    if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from false then
+      raise exception 'runtime-owned baseline retained a ready guard';
+    end if;
+    raise exception 'ROLLBACK_BASELINE_OWNER_PROBE';
+  exception when raise_exception then
+    if sqlerrm<>'ROLLBACK_BASELINE_OWNER_PROBE' then raise; end if;
+  end;
   if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true then
     raise exception 'rolling back probes did not restore the original proof';
   end if;
@@ -64,6 +113,18 @@ set local role service_role;
 do $server_guard$ begin
   if (public.read_automatic_live_budget_guard()->>'ready')::boolean is distinct from true then
     raise exception 'scoped server role cannot verify the definition-bound guard';
+  end if;
+  begin
+    execute 'create or replace function public.automatic_live_budget_expected_schema_fingerprint()
+      returns text language sql immutable security invoker as ''select null::text''';
+    raise exception 'server replaced owner-bound baseline';
+  exception when insufficient_privilege then null; end;
+  begin
+    alter function public.automatic_live_budget_expected_schema_fingerprint() owner to service_role;
+    raise exception 'server took ownership of sealed baseline';
+  exception when insufficient_privilege then null; end;
+  if public.automatic_live_budget_expected_schema_fingerprint() is distinct from public.automatic_live_budget_schema_fingerprint() then
+    raise exception 'server cannot read the exact sealed baseline';
   end if;
 end $server_guard$;
 reset role;
@@ -247,6 +308,10 @@ do $deny$ begin
   begin
     perform public.automatic_live_budget_schema_fingerprint();
     raise exception 'authenticated obtained server-only schema proof';
+  exception when insufficient_privilege then null; end;
+  begin
+    perform public.automatic_live_budget_expected_schema_fingerprint();
+    raise exception 'authenticated obtained owner-bound baseline';
   exception when insufficient_privilege then null; end;
 end $deny$;
 reset role;
