@@ -470,6 +470,8 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   errorCode: string | null;
 }>;
 
+let backgroundWorkerHandle: { stop(): void } | null = null;
+let backgroundWorkerGeneration = 0;
 let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.freeze({
   nativeProtectionErrorCode: null,
   enabled: false,
@@ -1703,7 +1705,12 @@ async function executeAutomaticPlan(input: {
   policy: TradingPolicy;
   emergencyStopped: boolean;
   verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
+  isActive?: () => boolean;
 }) {
+  const assertActive = () => {
+    if (input.isActive && input.isActive() !== true) throw new Error('BACKGROUND_WORKER_STOPPED');
+  };
+  assertActive();
   const automation = new TradeAutomationService(input.repository);
   // Only the Paper worker can supply an independently server-read quote.
   // Live execution remains on the original, independently protected path.
@@ -1719,15 +1726,17 @@ async function executeAutomaticPlan(input: {
       // a research-supplied cost guess can never certify settlement.
       costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
       fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope),
-    })
-    : new TradeExecutionService(input.repository);
+    }, input.isActive)
+    : new TradeExecutionService(input.repository, undefined, undefined, undefined, input.isActive);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
   );
   if (!created.plan) return { created, plan: null, order: null, orderDuplicate: false };
   let plan = created.plan;
+  assertActive();
   if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(input.userId, plan.id);
   if (plan.state !== 'SUBMITTED') return { created, plan, order: null, orderDuplicate: false };
+  assertActive();
   const createdOrder = await automation.createOrder(input.userId, plan);
   const order = createdOrder.duplicate
     ? createdOrder.order
@@ -1743,6 +1752,7 @@ async function processAutomaticExit(input: {
   fxCache: Map<string, MemberAutoTradingFxQuote>;
   now: Date;
   live: boolean;
+  isActive?: () => boolean;
 }) {
   if (input.position.activeExit) {
     return { status: 'IDEMPOTENT' as const, privateRequests: 0, orderCreated: false };
@@ -1809,6 +1819,7 @@ async function processAutomaticExit(input: {
     planInput: exitInput,
     policy: input.member.policy,
     verifiedPaperFxQuote: input.live ? undefined : fx,
+    isActive: input.isActive,
     emergencyStopped: input.member.policy.emergencyStopped
       || persistentStop
       || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -1853,6 +1864,7 @@ export function selectRotatingHandoffEntries<T>(
 
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
+  private stopped = false;
   private liveEntryWarmupComplete = false;
   // Preserve stop/error evidence across paginated member batches. A later
   // eligible member must never erase a blocked member from the same rotation.
@@ -1864,6 +1876,8 @@ export class MemberAutoTradingBackgroundWorker {
   private handoffEntryOffset = 0;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
+
+  stop() { this.stopped = true; this.liveEntryWarmupComplete = false; }
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
@@ -1924,6 +1938,14 @@ export class MemberAutoTradingBackgroundWorker {
       executionSyncFailures: 0,
       liveEntryArmPresent: liveEntryArmPresentThisTick,
     };
+    if (this.stopped) {
+      result.handoffStatus = 'BLOCKED_DATA';
+      result.handoffErrorCode = 'BACKGROUND_WORKER_STOPPED';
+      result.newEntriesFailClosed = true;
+      result.liveEntriesArmed = false;
+      result.liveEntryWarmupComplete = false;
+      return result;
+    }
     if (this.running) {
       result.overlapSkipped = true;
       return result;
@@ -1983,6 +2005,7 @@ export class MemberAutoTradingBackgroundWorker {
       let adminDbGuardThisTick: boolean | null = null;
 
       for (const member of members) {
+        if (this.stopped) break;
         // Losing membership must revoke ALL execution while preserving
         // read-only visibility of previously filled automatic Live positions.
         const memberCanRunAutomation = hasCapability(member.profile, 'canAccessAutoTrading');
@@ -2147,6 +2170,7 @@ export class MemberAutoTradingBackgroundWorker {
               fxCache,
               now,
               live: false,
+              isActive: () => !this.stopped,
             });
             if (exit.orderCreated) exitChanged = true;
             if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
@@ -2185,6 +2209,7 @@ export class MemberAutoTradingBackgroundWorker {
                   fxCache,
                   now,
                   live: true,
+                  isActive: () => !this.stopped,
                 });
                 result.privateTradingRequests += exit.privateRequests;
                 if (exit.orderCreated) exitChanged = true;
@@ -2312,6 +2337,7 @@ export class MemberAutoTradingBackgroundWorker {
                 paperInput = issueRulePackPilotDynamicCapReceipt(member.userId, paperInput, nowMs);
               }
               const paperRun = await executeAutomaticPlan({
+                isActive: () => !this.stopped,
                 repository,
                 userId: member.userId,
                 planInput: paperInput,
@@ -2444,6 +2470,7 @@ export class MemberAutoTradingBackgroundWorker {
                 break;
               }
               const liveRun = await executeAutomaticPlan({
+                isActive: () => !this.stopped,
                 repository,
                 userId: member.userId,
                 planInput: liveInput,
@@ -2508,7 +2535,7 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
 
-        const hardWarmupBlock = !result.handoffReady
+        const hardWarmupBlock = this.stopped || !result.handoffReady
           || result.nativeProtectionErrorCode !== null
           || result.liveExitsSuppressedByPolicy > 0
           || result.executionSyncFailures > 0
@@ -2550,6 +2577,12 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleAllFourWitnessUserId = null;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
+      if (this.stopped) {
+        result.newEntriesFailClosed = true;
+        result.liveEntriesArmed = false;
+        result.liveEntryWarmupComplete = false;
+        result.handoffErrorCode = 'BACKGROUND_WORKER_STOPPED';
+      }
       return result;
     } catch (error) {
       this.liveEntryWarmupComplete = false;
@@ -2824,6 +2857,9 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
+  // Repeated startup must not create a second timer/worker. PM2 replicas still
+  // rely on the durable order/budget claim, not this process-local singleton.
+  if (backgroundWorkerHandle) return backgroundWorkerHandle;
   const mode = memberAutoTradingWorkerMode();
   if (mode === 'DISABLED') {
     backgroundRuntimeHealth = Object.freeze({
@@ -2933,9 +2969,14 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     errorCode: null,
   });
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
+  const generation = ++backgroundWorkerGeneration;
+  let stopped = false;
+  const current = () => !stopped && generation === backgroundWorkerGeneration;
   const tick = async () => {
+    if (!current()) return;
     try {
       const result = await worker.runOnce(new Date());
+      if (!current()) return; // stopped/replaced asynchronous ticks cannot resurrect health
       if (result.overlapSkipped) return;
       const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
         && result.liveEntryWarmupComplete;
@@ -2990,6 +3031,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
+      if (!current()) return;
       backgroundRuntimeHealth = Object.freeze({
         ...backgroundRuntimeHealth,
         enabled: true,
@@ -3010,13 +3052,29 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       });
     }
   };
-  void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
+  const handle = { stop: () => {
+    if (stopped) return;
+    stopped = true;
+    worker.stop();
+    clearInterval(timer);
+    if (backgroundWorkerHandle === handle) {
+      backgroundWorkerHandle = null;
+      backgroundWorkerGeneration += 1;
+      backgroundRuntimeHealth = Object.freeze({ ...backgroundRuntimeHealth,
+        enabled: false, tickOk: null, newEntriesFailClosed: true,
+        liveEntriesArmed: false, liveEntryWarmupComplete: false,
+        liveCycleOrderEligible: false, liveCyclePolicyReady: false, liveCycleAllFourPolicyReady: false,
+        errorCode: 'BACKGROUND_WORKER_STOPPED' });
+    }
+  } };
+  backgroundWorkerHandle = handle;
+  void tick();
   console.log(mode === 'PAPER_ONLY'
     ? '[member-auto-trading-background] started with explicit Paper-only activation; Live override blocked'
     : liveBackgroundEnabled()
       ? '[member-auto-trading-background] started in Paper+Live guarded mode'
       : '[member-auto-trading-background] started in Paper-only mode');
-  return { stop: () => clearInterval(timer) };
+  return handle;
 }
