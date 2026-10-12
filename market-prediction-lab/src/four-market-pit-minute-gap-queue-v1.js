@@ -75,6 +75,7 @@ export function planPITNativeMinuteSourceGapsV1({
   // Full ledger has already checked exact member order, source SHA, day,
   // venue, session boundaries, status counters and missing requests.
   const raw = page.missingSourcePlan;
+  const partial = page.partialSourcePlan;
   if (!Array.isArray(raw) || raw.length > 320
     || raw.some(x => !members.has(x.symbol)
       || x.market !== market || x.venue !== MARKETS[market].venue
@@ -82,6 +83,12 @@ export function planPITNativeMinuteSourceGapsV1({
       || x.selectionDate !== day)) {
     error("PIT_MINUTE_GAP_QUEUE_RECEIPT_REJECTED");
   }
+  // Full-day audit has already verified exact member/session/price digest
+  // structure; these are reviewer tickets only, never executable GET tasks.
+  if(!Array.isArray(partial)||partial.length>320
+    ||!SHA.test(page.partialSourcePlanDigestSha256??"")
+    ||sha(partial)!==page.partialSourcePlanDigestSha256)
+    error("PIT_MINUTE_GAP_QUEUE_PARTIAL_RECEIPT_INVALID");
   const provider = MARKETS[market].provider;
   const fixture = audit.sourceStatus === "TEST_FIXTURE_ONLY";
   const eligibleForProposedPublicRead = provider !== null && !fixture;
@@ -97,6 +104,24 @@ export function planPITNativeMinuteSourceGapsV1({
     sourceReadRequiresExplicitConsent: true,
     independentlyAuthenticatedPIT: false,
     historicalMinuteAvailabilityProven: false,
+  }));
+  const partialRetryReviewTasks=partial.map(item=>Object.freeze({
+    market,venue:MARKETS[market].venue,symbol:item.symbol,
+    tradingDate:day,sessionStartMs:item.sessionStartMs,
+    sessionEndMs:item.sessionEndMs,sessionKind:item.sessionKind,
+    ...(market==="CRYPTO_SPOT"||market==="CRYPTO_FUTURES"
+      ?{utcDay:item.dayUtc}:{tradingDateLocal:item.tradingDateLocal}),
+    action:"REVIEW_PARTIAL_NATIVE_MINUTE_RETRY",
+    expectedExistingSourceDigestSha256:item.expectedExistingSourceDigestSha256,
+    priorOriginalMinuteRows:item.priorOriginalMinuteRows,
+    missingUnverifiedMinuteSlots:item.missingUnverifiedMinuteSlots,
+    proposedProvider:eligibleForProposedPublicRead?provider:null,
+    sourceReadRequiresExplicitConsent:true,
+    independentlyAuthenticatedPIT:false,
+    historicalMinuteAvailabilityProven:false,
+    originalMinuteNoTradeGapsVerified:false,
+    sourceRevisionAutoSelected:false,
+    providerGETCount:0,autoExecuteAllowed:false,
   }));
   const candidateTasks = eligibleForProposedPublicRead ? allMissing : [];
   const unsupportedCount = allMissing.length - candidateTasks.length;
@@ -142,5 +167,9 @@ export function planPITNativeMinuteSourceGapsV1({
     manualReviewMemberCount: blockedMemberReview.length,
     blockedMemberReview, candidateTasks,
     candidateTaskDigestSha256: sha(candidateTasks),
+    partialRetryReviewTasks:Object.freeze(partialRetryReviewTasks),
+    partialRetryReviewCount:partialRetryReviewTasks.length,
+    partialRetryReviewDigestSha256:sha(partialRetryReviewTasks),
+    partialRetryCannotAutoExecute:true,
   });
 }

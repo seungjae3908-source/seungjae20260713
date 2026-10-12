@@ -204,7 +204,7 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     sourceMinuteRows: 0, sourceSessionsCovered: 0,
     retrospectiveSourceMembers: 0, retrospectiveMinuteRows: 0,
   };
-  const members = [], missingSourcePlan = [];
+  const members = [], missingSourcePlan = [], partialSourcePlan = [];
   for (const row of selected) {
     const symbol = row.symbol;
     const lifecycle = lifecycleBlock(row, sessions);
@@ -230,6 +230,17 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
       counters.missingSourceMembers++;
       missingSourcePlan.push(...r.missingCollectionPlan.map(item => ({
         market, venue: VENUES[market], symbol, ...item,
+      })));
+    }
+    if (r.sourceLimitedSessionCount > 0) {
+      // Keep the EXACT verified previous SHA with each selected source day.
+      // A zero-authority recovery proposal cannot infer the digest from
+      // incomplete member-level counters or retrieve it from public listings.
+      if(!Array.isArray(r.partialRetryReviewPlan)
+        ||r.partialRetryReviewPlan.length!==r.sourceLimitedSessionCount)
+        return stop(market,day,"PIT_PARTIAL_SOURCE_DIGEST_PLAN_INVALID");
+      partialSourcePlan.push(...r.partialRetryReviewPlan.map(item=>Object.freeze({
+        ...item,market,venue:VENUES[market],symbol,
       })));
     }
     if (r.revisionConflictSessionCount > 0) counters.revisedSourceMembers++;
@@ -275,7 +286,11 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     requestedOffset: offset, requestedLimit: limit,
     inspectedMemberCount: selected.length, nextOffset,
     historicalDelistedSymbolsRetainedInRoster: true,
-    memberSourceStatuses: members, missingSourcePlan, ...counters,
+    memberSourceStatuses: members, missingSourcePlan,
+    partialSourcePlan:Object.freeze(partialSourcePlan),
+    partialSourcePlanDigestSha256:createHash("sha256")
+      .update(JSON.stringify(partialSourcePlan)).digest("hex"),
+    ...counters,
     completeRequestedMarketDayChecked: nextOffset === null
       && offset === 0,
     stockCalendarIndependentlyAuthenticated: false,
