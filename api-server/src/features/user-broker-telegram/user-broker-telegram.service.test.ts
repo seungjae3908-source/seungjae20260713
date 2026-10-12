@@ -22,6 +22,7 @@ import type {
 } from './user-broker-telegram.types';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from './user-broker-telegram.worker';
+import { HttpUserTelegramTransport } from './user-broker-telegram.transport';
 
 class FakeTelegramTransport implements TelegramTransport {
   readonly sent: Array<{ chatId: string; text: string }> = [];
@@ -354,6 +355,63 @@ test('Telegram delivery retries are bounded and end in dead letter without chang
   const delivery = await repository.getDelivery('user-a', deliveryId);
   assert.equal(delivery?.attempts, 3);
   assert.equal(transport.sent.length, 3);
+});
+
+test('real member Telegram HTTP transport requires an acknowledged message id and never retries ambiguous POST', async()=>{
+ const original=globalThis.fetch;
+ const transport=new HttpUserTelegramTransport('mock-token-do-not-send');
+ let calls=0;
+ try{
+   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({
+     ok:true,result:{message_id:451},
+   }),{status:200});};
+   assert.deepEqual(await transport.send('mock-chat','safe message'),{ok:true});
+   assert.equal(calls,1);
+
+   globalThis.fetch=async()=>{calls++;return new Response(JSON.stringify({
+     ok:true,
+   }),{status:200});};
+   assert.deepEqual(await transport.send('mock-chat','missing receipt'),{
+     ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+   });
+   assert.equal(calls,2);
+
+   globalThis.fetch=async()=>{calls++;return new Response('unavailable',{status:502});};
+   assert.deepEqual(await transport.send('mock-chat','http 502'),{
+     ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+   });
+   assert.equal(calls,3);
+
+   globalThis.fetch=async()=>{calls++;throw new Error('SENSITIVE_HTTP_ERROR_MUST_NOT_LEAK');};
+   const failed=await transport.send('mock-chat','network loss');
+   assert.deepEqual(failed,{ok:false,errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED'});
+   assert.equal(calls,4);
+   assert.equal(JSON.stringify(failed).includes('SENSITIVE_HTTP_ERROR'),false);
+ }finally{globalThis.fetch=original;}
+});
+
+test('uncertain Telegram POST stops persistent personal outbox retry without revoking a valid connection', async () => {
+  const { service, repository, transport } = fixture();
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'ambiguous-response', userId: 'user-a', symbol: 'BTC',
+    market: 'spot', quantity: 0.01, price: 100000000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  const first = await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:01:01.000Z'));
+  assert.equal(first.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 1);
+  const stored = await repository.getDelivery('user-a', queued.deliveryId!);
+  assert.equal(stored?.lastErrorCode, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED');
+  assert.equal(stored?.nextRetryAt, null);
+  assert.equal(stored?.attempts, 1);
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'ACTIVE');
+  assert.equal((await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:05:00.000Z'))).processed, false);
+  assert.equal(transport.sent.length, 1);
 });
 
 test('Telegram 403 is permanent, dead-letters once, and revokes the stale personal connection', async () => {

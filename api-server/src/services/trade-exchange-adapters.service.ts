@@ -303,6 +303,11 @@ export function prepareBitgetTicker(symbol: string): PreparedExchangeRequest {
   };
 }
 
+function isBitgetAutomaticEntry(plan: TradingPlanInput): boolean {
+  return !plan.reduceOnly && (('executionMode' in plan && plan.executionMode === 'automatic')
+    || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF'));
+}
+
 export function validateBitgetContractRules(
   plan: TradingPlanInput, contract: Record<string, unknown>, referencePrice?: number,
 ) {
@@ -318,6 +323,22 @@ export function validateBitgetContractRules(
   if (maximumQuantity > 0 && quantity > maximumQuantity) throw new Error('BITGET_MAXIMUM_QUANTITY');
   const contractStatus = String(contract.symbolStatus ?? '').toLowerCase();
   if (contractStatus && contractStatus !== 'normal') throw new Error('BITGET_CONTRACT_NOT_TRADABLE');
+  if (isBitgetAutomaticEntry(plan)) {
+    const priceStep = Number(contract.priceEndStep ?? 1) * 10 ** -Number(contract.pricePlace ?? 0);
+    for (const value of [plan.stopPrice, ...plan.targetPrices]) {
+      if (!Number.isFinite(value) || value <= 0
+        || priceStep > 0 && Math.abs(value / priceStep - Math.round(value / priceStep)) > 1e-8) {
+        throw new Error('BITGET_AUTOMATIC_PROTECTION_PRICE_STEP');
+      }
+    }
+    const reference = Number(referencePrice ?? plan.entryPrice ?? plan.limitPrice ?? plan.marketSnapshot.currentPrice);
+    const target = plan.targetPrices.at(-1);
+    const long = plan.side === 'long' || plan.side === 'buy';
+    if (!Number.isFinite(reference) || reference <= 0 || target == null
+      || (long ? !(plan.stopPrice < reference && target > reference) : !(plan.stopPrice > reference && target < reference))) {
+      throw new Error('BITGET_AUTOMATIC_NATIVE_PROTECTION_INVALID');
+    }
+  }
   if (plan.orderType === 'limit') {
     const price = Number(plan.limitPrice);
     const pricePlace = Number(contract.pricePlace ?? 0);
@@ -353,6 +374,21 @@ export function prepareBitgetOrder(
     clientOid: clientOrderId,
     reduceOnly: plan.reduceOnly ? 'YES' : 'NO',
   };
+  if (isBitgetAutomaticEntry(plan)) {
+    const stop = Number(plan.stopPrice);
+    // Final target protects the residual position without converting the
+    // worker's earlier partial take-profit targets into a full close.
+    const target = Number(plan.targetPrices.at(-1));
+    const reference = Number(plan.entryPrice ?? plan.limitPrice ?? plan.marketSnapshot.currentPrice);
+    if (![stop, target, reference].every((value) => Number.isFinite(value) && value > 0)
+      || (isOpenLong ? !(stop < reference && target > reference) : !(stop > reference && target < reference))) {
+      throw new Error('BITGET_AUTOMATIC_NATIVE_PROTECTION_INVALID');
+    }
+    // Exchange-side protection is attached atomically to entry. A stopped
+    // worker must not leave a new automatic Futures position unprotected.
+    body.presetStopLossPrice = String(stop);
+    body.presetStopSurplusPrice = String(target);
+  }
   if (plan.orderType === 'limit') {
     body.price = String(plan.limitPrice ?? '');
     body.force = 'gtc';
@@ -439,6 +475,17 @@ export function prepareBitgetPositions(credentials: BitgetCredentials, timestamp
     credentials, 'GET', '/api/v2/mix/position/all-position', null, 'productType=USDT-FUTURES&marginCoin=USDT', timestamp,
     bitgetReadonlyDiagnostic(credentials, 'CLASSIC', 'POSITIONS'),
   );
+}
+
+export function prepareBitgetSinglePosition(credentials: BitgetCredentials, symbol: string, timestamp?: string) {
+  if (!/^[A-Z0-9]{3,30}$/u.test(symbol)) throw new Error('BITGET_PROTECTION_SYMBOL_INVALID');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/position/single-position', null,
+    `?productType=USDT-FUTURES&symbol=${symbol}&marginCoin=USDT`, timestamp);
+}
+export function prepareBitgetPendingProtection(credentials: BitgetCredentials, symbol: string, orderId: string, timestamp?: string) {
+  if (!/^[A-Z0-9]{3,30}$/u.test(symbol) || !/^[1-9][0-9]{0,39}$/u.test(orderId)) throw new Error('BITGET_PROTECTION_IDENTITY_INVALID');
+  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-plan-pending', null,
+    `?planType=profit_loss&productType=USDT-FUTURES&symbol=${symbol}&orderId=${orderId}`, timestamp);
 }
 
 export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbol?: string, timestamp?: string) {
@@ -738,6 +785,15 @@ function kiwoomOrderHeaders(credentials: KiwoomCredentials, apiId: string) {
   };
 }
 
+function kiwoomOrderabilityPrice(plan: TradingPlanInput, market: 'KR' | 'US') {
+  const price = Number(plan.orderType === 'limit' ? plan.limitPrice
+    : plan.marketSnapshot.currentPrice ?? plan.entryPrice);
+  if (plan.exchange !== 'kiwoom' || plan.market.toUpperCase() !== market
+    || !['buy', 'sell'].includes(plan.side) || plan.leverage != null || plan.marginMode != null
+    || !Number.isFinite(price) || price <= 0) throw new Error('KIWOOM_ORDERABILITY_INPUT_INVALID');
+  return String(price);
+}
+
 
 export function prepareKiwoomUsOrderable(
   credentials: KiwoomCredentials,
@@ -751,6 +807,7 @@ export function prepareKiwoomUsOrderable(
     body: jsonBody({
       stk_cd: plan.symbol.trim().toUpperCase(),
       stex_tp: kiwoomUsExchange(plan),
+      uv: kiwoomOrderabilityPrice(plan, 'US'),
     }),
   };
 }
@@ -774,14 +831,16 @@ export function prepareKiwoomUsHoldings(
 export function prepareKiwoomUsUnfilled(
   credentials: KiwoomCredentials,
   plan: TradingPlanInput,
+  orderDate = '',
 ): PreparedExchangeRequest {
+  if (orderDate && !/^\d{8}$/.test(orderDate)) throw new Error('KIWOOM_ORDER_DATE_INVALID');
   return {
     method: 'POST',
     path: '/api/us/acnt',
     query: '',
     headers: kiwoomOrderHeaders(credentials, 'ust21050'),
     body: jsonBody({
-      ord_dt: '',
+      ord_dt: orderDate,
       slby_tp: '0',
       stex_tp: kiwoomUsExchange(plan),
       stk_cd: plan.symbol.trim().toUpperCase(),
@@ -935,10 +994,9 @@ export function prepareKiwoomDomesticOrderHistory(
     method: 'POST',
     path: '/api/dostk/acnt',
     query: '',
-    headers: kiwoomOrderHeaders(credentials, 'kt00009'),
+    headers: kiwoomOrderHeaders(credentials, 'kt00007'),
     body: jsonBody({
       stk_bond_tp: '1',
-      mrkt_tp: '0',
       sell_tp: '0',
       qry_tp: '1',
       dmst_stex_tp: '%',
@@ -974,7 +1032,7 @@ export function prepareKiwoomUsOrderHistory(
   };
 }
 
-export function prepareKiwoomOrderable(credentials: KiwoomCredentials): PreparedExchangeRequest {
+export function prepareKiwoomOrderable(credentials: KiwoomCredentials, plan: TradingPlanInput): PreparedExchangeRequest {
   if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
   return {
     method: 'POST', path: '/api/dostk/acnt', query: '',
@@ -983,7 +1041,8 @@ export function prepareKiwoomOrderable(credentials: KiwoomCredentials): Prepared
       'Content-Type': 'application/json;charset=UTF-8',
       'api-id': 'kt00010',
     },
-    body: '{}',
+    body: jsonBody({ stk_cd: plan.symbol.trim().toUpperCase(),
+      trde_tp: plan.side === 'buy' ? '2' : '1', uv: kiwoomOrderabilityPrice(plan, 'KR') }),
   };
 }
 
@@ -996,7 +1055,9 @@ export function prepareKiwoomUnfilled(credentials: KiwoomCredentials): PreparedE
       'Content-Type': 'application/json;charset=UTF-8',
       'api-id': 'ka10075',
     },
-    body: '{}',
+    // Inspect both sides and KRX/NXT across the account. A target-symbol-only
+    // query cannot rule out orphan or competing orders in another instrument.
+    body: jsonBody({ all_stk_tp: '0', trde_tp: '0', stex_tp: '0' }),
   };
 }
 
