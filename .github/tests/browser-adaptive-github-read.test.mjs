@@ -48,3 +48,24 @@ test('canonical Full CI uses the same bounded helper for run-list and artifact-l
   assert.ok(workflow.includes("node --test .github/tests/browser-adaptive-github-read.test.mjs"));
   assert.ok(workflow.includes('Run full Playwright adaptive runtime-weighted shard without retry-to-pass'));
 });
+
+test('exact-head Fast dispatcher retries only metadata reads and never repeats createWorkflowDispatch',()=>{
+  const fast=fs.readFileSync('.github/workflows/application-fast-ci.yml','utf8');
+  const begin=fast.indexOf('name: Dispatch exact-head canonical Application CI once');
+  const end=fast.indexOf('      - name: Boundary',begin);
+  assert.ok(begin>0&&end>begin);
+  const dispatch=fast.slice(begin,end);
+  for(const required of [
+    'const getMetadata = async',
+    'GITHUB_READ_ONLY_TRANSIENT_RETRY',
+    'attempt === 3',
+    '[500,502,503,504]',
+    'getMetadata(() => github.rest.pulls.get(',
+    'getMetadata(() => github.rest.actions.listWorkflowRuns(',
+    "const exactRuns = existing",
+    "const reusable = exactRuns",
+  ])assert.ok(dispatch.includes(required),required);
+  assert.equal((dispatch.match(/github\.rest\.actions\.createWorkflowDispatch\(/g)||[]).length,1);
+  assert.ok(!dispatch.includes('getMetadata(() => github.rest.actions.createWorkflowDispatch('));
+  assert.ok(fast.includes('node --test .github/tests/browser-adaptive-github-read.test.mjs'));
+});
