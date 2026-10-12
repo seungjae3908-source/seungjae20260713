@@ -119,14 +119,15 @@ export function createPublicStockQualityCounter() {
  * All attempts are serial, capped, and injectable for bounded tests.
  */
 export async function withPublicStockProviderFallback(
-  candidates, operation, { retryCount = 3, pause = async () => {} } = {},
+  candidates, operation, { retryCount = 3, pause = async () => {}, validValue = null } = {},
 ) {
   if(!Array.isArray(candidates)||candidates.length===0
     ||candidates.length>2
     ||candidates.some(x=>typeof x!=='string'||x.length<1||x.length>40)
     ||typeof operation!=='function'
     ||!Number.isSafeInteger(retryCount)||retryCount<1||retryCount>3
-    ||typeof pause!=='function'){
+    ||typeof pause!=='function'
+    ||(validValue!==null&&typeof validValue!=='function')){
     throw new TypeError('PUBLIC_STOCK_FALLBACK_INVALID');
   }
   let lastError=null;
@@ -135,9 +136,13 @@ export async function withPublicStockProviderFallback(
       try{
         const value=await operation(candidate);
         if(Array.isArray(value)&&value.length===0){
-          // No candles is deterministic for this response. Skip useless
-          // identical retries and inspect the next allowed venue instead.
           lastError=new Error('PUBLIC_STOCK_EMPTY_CANDLES');
+          break;
+        }
+        if(value==null||(validValue!==null&&validValue(value)!==true)){
+          // A malformed candle response cannot suppress the next authorized
+          // public symbol. Regular stock quotes remain object-valued.
+          lastError=new Error('PUBLIC_STOCK_INVALID_PROVIDER_RESPONSE');
           break;
         }
         return value;

@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, open, unlink } from 'node:fs/promises';
+import { constants as fileConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
@@ -24,6 +25,7 @@ import {runV3OutOfCursorResearch} from '../src/public-watch-v3-offpage-research.
 import {validV3PublicPriorityRequest} from '../src/public-v3-priority-public-route.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
+import {commitPublicV3CycleCheckpoint,recoverPublicV3CycleCheckpoint} from '../src/public-cycle-checkpoint.mjs';
 import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
 import {
   bindPublicStockCandleSource,
@@ -57,6 +59,7 @@ const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').tr
 const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './state');
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
+const CHECKPOINT_FILE = path.join(STATE_DIR, 'pending-public-cycle.json');
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
 const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
@@ -98,10 +101,24 @@ async function readJson(file, fallback) {
 }
 
 async function atomicJson(file, value) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(temp, file);
+  // A rename is not a power-loss durability barrier without file/dir fsync.
+  const dir=path.dirname(file);
+  await mkdir(dir,{recursive:true});
+  const temp=file+'.'+process.pid+'.'+randomUUID()+'.tmp';
+  let handle=null,renamed=false;
+  try{
+    handle=await open(temp,fileConstants.O_WRONLY|fileConstants.O_CREAT
+      |fileConstants.O_EXCL|fileConstants.O_NOFOLLOW,0o600);
+    await handle.writeFile(JSON.stringify(value,null,2)+'\n',{encoding:'utf8'});
+    await handle.sync();
+    await handle.close();handle=null;
+    await rename(temp,file);renamed=true;
+    const directory=await open(dir,fileConstants.O_RDONLY);
+    try{await directory.sync();}finally{await directory.close();}
+  }finally{
+    if(handle)await handle.close().catch(()=>{});
+    if(!renamed)await unlink(temp).catch(()=>{});
+  }
 }
 
 function retainedKey(input) {
@@ -186,8 +203,8 @@ async function usPublicUniverse() {
 function yahooProviderCandidates(lane,ticker,entry){
   return publicYahooProviderCandidates(lane.market,ticker,entry);
 }
-async function withProviderFallback(candidates,operation){
-  return withPublicStockProviderFallback(candidates,operation,{pause:sleep});
+async function withProviderFallback(candidates,operation,requirements={}){
+  return withPublicStockProviderFallback(candidates,operation,{pause:sleep,...requirements});
 }
 
 async function withUpbitPacing(operation) {
@@ -280,7 +297,7 @@ async function withStockPublicOnly(lane, operation) {
       const rows = await yahoo.getCandles(providerSymbol, timeframe);
       if (Array.isArray(rows) && rows.length>0) successfulSymbol = providerSymbol;
       return rows;
-    });
+    },{validValue:Array.isArray});
     let candles = native;
     // Only a BLOCKING missing-candle defect triggers one bounded public
     // shorter-interval Yahoo query. Verified complete lower bars may fill
@@ -511,6 +528,19 @@ async function scanSingleV3WatchResearch(row) {
 
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
+  const recovered=await recoverPublicV3CycleCheckpoint({
+    journalFile:CHECKPOINT_FILE,cycleStateFile:CYCLE_STATE_FILE,
+    snapshotFile:SNAPSHOT_FILE,serviceSha:SERVICE_SHA,
+    atomicWrite:atomicJson,validateSnapshot:assertSignalIntelligenceV3Snapshot,
+  });
+  if(recovered.recovered){
+    // Restore exact prior page without extra public HTTP or new source epoch.
+    process.stdout.write(JSON.stringify({
+      ok:true,checkpointRecovered:true,serviceSha:SERVICE_SHA,
+      dataRequestCountAdded:0,telegramSent:0,executionAuthority:'NONE',
+    })+'\n');
+    return;
+  }
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
   const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2;
   const state = releaseChanged ? freshState() : persistedState;
@@ -715,8 +745,11 @@ async function main() {
   };
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
-  await atomicJson(CYCLE_STATE_FILE, state);
-  await atomicJson(SNAPSHOT_FILE, snapshot);
+  await commitPublicV3CycleCheckpoint({
+    journalFile:CHECKPOINT_FILE,cycleStateFile:CYCLE_STATE_FILE,
+    snapshotFile:SNAPSHOT_FILE,serviceSha:SERVICE_SHA,state,snapshot,
+    atomicWrite:atomicJson,validateSnapshot:assertSignalIntelligenceV3Snapshot,
+  });
 
   process.stdout.write(`${JSON.stringify({
     ok: true,

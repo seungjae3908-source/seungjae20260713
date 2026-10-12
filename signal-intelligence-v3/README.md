@@ -442,3 +442,22 @@ without separate owner approval and a least-privilege design.
 
 Source observations are never profitability OOS PASS, Paper approval,
 full-market historical coverage or real Telegram receipt. Replit banned.
+
+## Draft: restart-safe 12-lane public Scanner checkpoint and malformed Yahoo source fallback
+
+Signal V3 now writes a bounded, SHA-bound, service-owned checkpoint journal
+before persisting its updated twelve market/timeframe cursors and signal
+snapshot. File and directory fsyncs enforce durable atomic file publishes.
+After a crash between cursor and snapshot writes, the next flock-serialized
+cycle replays the exact same snapshot and exits without additional public
+provider requests. Corrupt, inconsistent, symlinked, old-release and
+otherwise unsafe journals fail closed until operator reconciliation. This
+does not promise exactly-once Bot API delivery or economic OOS validation.
+
+Malformed or absent Yahoo candle responses may use the existing permitted
+alternate public instrument symbol, rather than declaring a non-array
+response a completed candle fetch. The quote path still accepts quote objects.
+There are no additional requests for previously complete source pages or
+any source-quality threshold exceptions. Neither the 2496 excluded KRX
+product codes nor genuine Yahoo/Upbit candle gaps are claimed resolved.
+No fabricated no-trade candles, backtest PASS, Telegram sends or orders.
