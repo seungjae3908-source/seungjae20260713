@@ -379,7 +379,7 @@ test('malformed pinned JSON errors stay sanitized and descriptors are closed', (
 test('independent collector refuses unreadable final crontab before any cron mutation', () => {
   const script=buildIndependentAutoLivePublicInstallScript();
   const finalRead=script.indexOf('CURRENT_CRON="$(LC_ALL=C crontab -l 2>&1)" || cron_final_rc=$?');
-  const noCrontab=script.indexOf('[[ "$CURRENT_CRON" == no\ crontab\ for\ * ]]');
+  const noCrontab=script.indexOf(String.raw`[[ "$CURRENT_CRON" == no\ crontab\ for\ * ]]`);
   const reject=script.indexOf("abort 'final crontab unreadable'");
   const compare=script.indexOf('[[ "$CURRENT_CRON" == "$OLD_CRON" ]] || abort');
   const rollbackArmed=script.indexOf('CRON_MUTATED=1',compare);
