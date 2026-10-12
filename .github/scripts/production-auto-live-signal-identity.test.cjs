@@ -480,6 +480,7 @@ test('protected independent source Bash is syntax-valid and sealed tar smoke is 
     'Transfer sealed PUBLIC source into private isolated scratch only',
     'Install only isolated public data collection schedule with zero order authority',
     'Read back exact scheduled public source without scanner or trading claims',
+    'Disable only the newly installed public observer if postinstall readback fails',
     'Delete only private GitHub public-source scratch (never application or Paper)',
   ];
   for(const name of names) {
