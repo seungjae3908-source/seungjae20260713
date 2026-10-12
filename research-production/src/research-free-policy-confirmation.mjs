@@ -35,8 +35,9 @@ export function buildConfirmedResearchPolicies({ aiText, videoText, targetSha, a
   const videoPolicy = {
     RESEARCH_VIDEO_DISCOVERY_APPROVED: 'true',
     RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS: String(boundedInteger(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS, 3, 1, 3)),
-    // Keep inline '#' from becoming a Node env-file comment on readback.
-    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: JSON.stringify(queries).replaceAll('#', '\\u0023'),
+    // Both Node parseEnv and systemd EnvironmentFile preserve a single-quoted
+    // value verbatim. Escape embedded apostrophes in JSON, not as shell text.
+    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: "'" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'",
     RESEARCH_VIDEO_DISCOVERY_REGION_CODE: region,
     RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE: language,
     RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS: String(boundedInteger(video.RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS, 720, 1, 2160)),
