@@ -399,3 +399,48 @@ a complete original day; missing minutes remain blocked and are never filled.
   private APIs, actual 24h provider reads, historic PIT/delistings,
   stock-source licensing, OOS and profitability remain unverified. Replit
   and Replit Agent prohibited.
+
+
+### 2026-10-13 — Dormant two-provider lane experiment (not activated)
+
+A single global queue using 16 calls every 5 minutes cannot keep up with
+the *modelled* 760 dense crypto symbols, even at 180-minute source pages.
+A guarded **test-only / programmatic** dual-venue experiment processes
+up to 16 Upbit calls and up to 16 Bitget calls per 5-minute cycle:
+sequential within each venue, overlapping only the independent venues.
+No more than one provider GET is in flight for the same venue, so the
+durable venue-wide 429 quarantine still blocks follow-on sibling requests.
+
+- New read-only `dualVenuePacingProposal` in the existing `--capacity` output
+  estimates two market-specific independent budgets and worst-case runtime.
+  For illustrative 294 spot/466 futures symbols, 180m page, 20% headroom,
+  the minimum per-venue actions are **10 spot + 16 futures per 5 minutes**.
+  This fits the theoretical 16 calls/venue cap; each lane of 16 worst-case
+  8-second HTTP calls + 300ms spacing is about 132.5s versus the existing
+  195s usable worker allowance. A theoretical bound is NOT proof of server
+  processing latency, reserved shared-IP quota, correct no-trade data or
+  market-wide availability.
+- The ordinary `--execute` CLI **does not expose or enable** the dual-venue
+  mode. Existing defaults, worker/timer, single-lane max 16, 120m scope
+  and all production settings remain unchanged. The experimental
+  `runDurableMinuteBackfillCycle` arguments require all three booleans
+  `dualVenueMode=true`, `dualVenueOwnerApproved=true`, and
+  `dualVenueHostAttested=true`; these are only used with injected fixture
+  HTTP, not with actual provider GETs.
+- In this experiment, both results from one cross-venue round are awaited
+  before the globally flock-protected immutable cursor is committed
+  serially. A crash between source write and cursor persistence remains
+  idempotent through the existing sealed page readback. Provider 429 is
+  venue-wide and pauses subsequent calls in that venue while the other
+  venue may advance independently. The hard 210s worker and shutdown
+  reserve remain enforced, with a deadline hold before a new fetch.
+- 120m dense 760-symbol dual-lane collection **still fails** the separate
+  futures capacity test. 180m merely creates an arithmetic possibility,
+  not Staging approval or a turnkey production all-symbol collector.
+  Real source-holder approval, shared-IP rate tests, CPU/IO/inodes/backup,
+  24h restart/HTTP-429/gap chaos validation, stock source permissions and
+  PIT, OOS, fees, and actual Paper settlement are all still required.
+
+**Prohibitions unchanged:** Replit/Replit Agent, Ready/Merge, server
+service changes, Staging/Production, DB/Secrets/permissions, account
+calls, real/Paper orders and Telegram sends are not part of this Draft.

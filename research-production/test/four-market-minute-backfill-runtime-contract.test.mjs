@@ -101,6 +101,10 @@ test('capacity-only CLI reads protected scope and performs zero provider calls/w
     assert.equal(next.pacingPreflight.activeManifestPageMinutes,180);
     assert.equal(next.storageEstimate.assumedPageWindowMinutes,180);
     assert.equal(next.storageEstimate.projectedPageFiles,400*8*365);
+    assert.equal(next.dualVenuePacingProposal.status,'DRAFT_THEORETICAL_ONLY');
+    assert.equal(next.dualVenuePacingProposal.workerEnabled,false);
+    assert.equal(next.dualVenuePacingProposal.providerCalls,0);
+    assert.equal(next.dualVenuePacingProposal.executionAuthority,'NONE');
     assert.equal(next.providerCalls,0);
     assert.equal(next.filesWritten,0);
     assert.equal(next.executionAuthority,'NONE');

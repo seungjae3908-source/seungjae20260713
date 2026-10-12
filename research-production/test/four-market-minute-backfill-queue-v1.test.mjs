@@ -324,6 +324,151 @@ test('unapproved KR/US sources block only their rows, not already admitted publi
     assert.equal(r.independentOosProven,false);
   });
 });
+
+test('dual venue lanes remain default-OFF and require both operator and host evidence',async()=>{
+  const m={...manifest([SPOT,FUTURE]),pageWindowMinutes:180};
+  let calls=0;
+  for(const config of [
+    {dualVenueMode:true},
+    {dualVenueMode:true,dualVenueOwnerApproved:true},
+    {dualVenueMode:true,dualVenueHostAttested:true},
+  ]){
+    const result=await runDurableMinuteBackfillCycle({
+      enabled:true,queueRoot:'/nonexistent-private-queue',
+      archiveRoot:'/nonexistent-private-archive',
+      manifest:m,researchSha:SHA1,...config,
+      fetchImpl:async()=>{calls++;throw Error('NEVER_NETWORK');},
+    });
+    assert.equal(result.status,'HOLD_DUAL_VENUE_OPERATOR_ATTESTATION');
+    assert.equal(result.providerCalls,0);
+    assert.equal(result.filesWritten,0);
+    assert.equal(result.executionAuthority,'NONE');
+  }
+  assert.equal(calls,0);
+  assert.throws(()=>pickBackfillWindow(
+    createBackfillQueue({scope:validateBackfillScope(m),researchSha:SHA1,atMs:NOW}),
+    NOW,'KR_STOCK'),/MINUTE_QUEUE_MARKET_FILTER_INVALID/);
+});
+
+test('two owner-attested 180m public provider lanes interleave without concurrent same-venue requests',async()=>{
+  await workspace(async({queue,archive})=>{
+    const ranges=[
+      ...Array.from({length:294},(_,i)=>({market:'CRYPTO_SPOT',
+        symbol:'T'+String(i).padStart(4,'0'),
+        mode:'CONTINUOUS',startMs:START})),
+      ...Array.from({length:466},(_,i)=>({market:'CRYPTO_FUTURES',
+        symbol:'Q'+String(i).padStart(4,'0')+'USDT',
+        mode:'CONTINUOUS',startMs:START})),
+    ];
+    const m={...manifest(ranges),pageWindowMinutes:180};
+    let spotCalls=0,futuresCalls=0,spotInFlight=0,futuresInFlight=0;
+    const provider=async input=>{
+      const url=new URL(input);
+      const spot=url.hostname==='api.upbit.com';
+      if(spot){spotCalls++;spotInFlight++;}
+      else{futuresCalls++;futuresInFlight++;}
+      assert.ok(spotInFlight<=1);
+      assert.ok(futuresInFlight<=1);
+      await Promise.resolve(); // exercise overlap without real networking
+      if(spot){
+        spotInFlight--;
+        const stamp=Date.parse(url.searchParams.get('to'))-MINUTE_MS;
+        return apiResponse([{
+          market:url.searchParams.get('market'),
+          candle_date_time_utc:new Date(stamp).toISOString().slice(0,19),
+          opening_price:100,high_price:110,low_price:90,trade_price:105,
+          candle_acc_trade_volume:2,candle_acc_trade_price:1000,
+        }]);
+      }
+      futuresInFlight--;
+      const stamp=Number(url.searchParams.get('startTime'))+MINUTE_MS;
+      return apiResponse({code:'00000',
+        data:[[String(stamp),'100','110','90','105','2','1000']]});
+    };
+    const result=await runDurableMinuteBackfillCycle({
+      enabled:true,dualVenueMode:true,dualVenueOwnerApproved:true,
+      dualVenueHostAttested:true,queueRoot:queue,archiveRoot:archive,
+      manifest:m,researchSha:SHA1,now:()=>NOW,maxActions:16,
+      fetchImpl:provider,sleep:async()=>{},freeBytes:6*1024**3,
+    });
+    assert.equal(result.capacity.dailyRequired,6080);
+    assert.equal(result.capacity.dailyAvailable,9216);
+    assert.equal(result.venueCapacities.length,2);
+    assert.deepEqual(result.venueCapacities.map(v=>v.status),
+      ['CAPACITY_MODEL_POSSIBLE','CAPACITY_MODEL_POSSIBLE']);
+    assert.equal(result.sourceOnlyConcurrentProviderLimit,2);
+    assert.equal(result.providerLaneMaxActionsPerCycle,16);
+    assert.equal(result.providerCalls,32);
+    assert.equal(result.filesWritten,32);
+    assert.equal(result.attempts,32);
+    assert.equal(spotCalls,16);
+    assert.equal(futuresCalls,16);
+    assert.equal(result.executionAuthority,'NONE');
+    assert.equal(result.profitabilityProven,false);
+    const saved=await readBackfillQueue(queue,validateBackfillScope(m));
+    assert.equal(saved.ranges.filter(r=>r.completedPages===1).length,32);
+    assert.equal(saved.executionAuthority,'NONE');
+  });
+});
+
+test('dual lanes hold a shared 429 venue but finish remaining independent provider work',async()=>{
+  await workspace(async({queue,archive})=>{
+    const ranges=[
+      {market:'CRYPTO_SPOT',symbol:'BTC',mode:'CONTINUOUS',startMs:START},
+      {market:'CRYPTO_SPOT',symbol:'ETH',mode:'CONTINUOUS',startMs:START},
+      {market:'CRYPTO_FUTURES',symbol:'BTCUSDT',mode:'CONTINUOUS',startMs:START},
+    ];
+    const m={...manifest(ranges),pageWindowMinutes:180};
+    let spotCalls=0,futureCalls=0;
+    const provider=async urlStr=>{
+      const url=new URL(urlStr);
+      if(url.hostname==='api.upbit.com'){
+        spotCalls++;
+        return {ok:false,status:429,headers:{get:()=>null}};
+      }
+      futureCalls++;
+      const stamp=Number(url.searchParams.get('startTime'))+MINUTE_MS;
+      return apiResponse({code:'00000',
+        data:[[String(stamp),'100','110','90','105','2','1000']]});
+    };
+    const result=await runDurableMinuteBackfillCycle({
+      enabled:true,dualVenueMode:true,dualVenueOwnerApproved:true,
+      dualVenueHostAttested:true,queueRoot:queue,archiveRoot:archive,
+      manifest:m,researchSha:SHA1,now:()=>NOW+4_000*MINUTE_MS,maxActions:16,
+      fetchImpl:provider,sleep:async()=>{},freeBytes:6*1024**3,
+    });
+    assert.equal(result.status,'HOLD_PROVIDER_RATE_LIMIT');
+    assert.deepEqual(result.providerRateLimitedMarkets,['CRYPTO_SPOT']);
+    assert.equal(spotCalls,1);
+    assert.equal(futureCalls,16);
+    assert.equal(result.providerCalls,17);
+    assert.equal(result.executionAuthority,'NONE');
+  });
+});
+
+test('dual dense legacy 120m and unlicensed stock markets remain capacity-held',async()=>{
+  const dense={
+    schemaVersion:SCOPE_CONTRACT,ranges:[
+      ...Array.from({length:294},(_,i)=>({market:'CRYPTO_SPOT',
+        symbol:'T'+String(i).padStart(4,'0'),mode:'CONTINUOUS',startMs:START})),
+      ...Array.from({length:466},(_,i)=>({market:'CRYPTO_FUTURES',
+        symbol:'Q'+String(i).padStart(4,'0')+'USDT',
+        mode:'CONTINUOUS',startMs:START})),
+    ],
+  };
+  let called=0;
+  const r=await runDurableMinuteBackfillCycle({
+    enabled:true,dualVenueMode:true,dualVenueOwnerApproved:true,
+    dualVenueHostAttested:true,queueRoot:'/no-queue',archiveRoot:'/no-archive',
+    manifest:dense,researchSha:SHA1,
+    fetchImpl:async()=>{called++;throw Error('NO_PROVIDER_CALL');},
+  });
+  assert.equal(r.status,'HOLD_CAPACITY');
+  assert.equal(r.venueCapacities[1].status,'CAPACITY_MODEL_INSUFFICIENT');
+  assert.equal(r.providerCalls,0);
+  assert.equal(called,0);
+});
+
 test('low disk holds queue without any external request',async()=>{
   await workspace(async({queue,archive})=>{
     const counter={calls:0};

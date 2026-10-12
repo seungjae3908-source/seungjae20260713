@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessMinuteCollectorPacingPreflightV1 as plan }
+import { assessMinuteCollectorPacingPreflightV1 as plan,
+  assessMinuteDualVenuePacingPreflightV1 as dual }
   from '../src/four-market-minute-pacing-preflight-v1.mjs';
 
 const NOW = Date.parse('2026-10-12T10:00:00.000Z');
@@ -167,4 +168,47 @@ test('unsupported, oversized or inconsistent task budgets cannot pass as safe', 
     { headroomPercent: -5 },
   ]) assert.throws(() => plan({ manifest: manifest(1, 0), ...bad }),
     /MINUTE_PACING_PREFLIGHT_/);
+});
+
+
+test('dual independent venue forecast fits 760 dense 180m roster on paper, but never enables',()=>{
+  const input={...manifest(294,466),pageWindowMinutes:180};
+  const v=dual({manifest:input});
+  assert.equal(v.status,'DRAFT_THEORETICAL_ONLY');
+  assert.equal(v.modeledCapacityPossible,true);
+  assert.equal(v.modeledTotalActionsPerCycle,32);
+  assert.equal(v.modeledWallClockWorstCaseMs,132_500);
+  assert.equal(v.conservativeUsableWorkerMs,195_000);
+  assert.equal(v.maxConcurrentIndependentProviders,2);
+  assert.deepEqual(v.lanes.map(l=>l.dailyRequired),[2352,3728]);
+  assert.deepEqual(v.lanes.map(l=>l.minimumActionsPerCycleWithHeadroom),[10,16]);
+  assert.equal(v.actionable,false);
+  assert.equal(v.workerEnabled,false);
+  assert.equal(v.hostAttested,false);
+  assert.equal(v.providerCalls,0);
+  assert.equal(v.filesWritten,0);
+  assert.equal(v.executionAuthority,'NONE');
+});
+test('dual lane model refuses 120m dense futures and stock/license shortcuts',()=>{
+  const old=dual({manifest:manifest(294,466)});
+  assert.equal(old.modeledCapacityPossible,false);
+  assert.ok(old.reasons.includes('SINGLE_VENUE_RATE_CAPACITY_INSUFFICIENT'));
+  const stocks=dual({manifest:manifest(2,2,1)});
+  assert.equal(stocks.stockRanges,1);
+  assert.equal(stocks.modeledCapacityPossible,false);
+  assert.ok(stocks.reasons.includes('STOCK_SOURCE_SESSIONS_AND_LICENSE_NOT_MODELLED'));
+});
+test('dual lane model does not invent a budget for an empty, slow or forged venue',()=>{
+  const one=dual({manifest:manifest(1,0)});
+  assert.equal(one.modeledCapacityPossible,false);
+  assert.ok(one.reasons.includes('BOTH_INDEPENDENT_CRYPTO_PROVIDERS_REQUIRED'));
+  const slow=dual({manifest:{...manifest(294,466),pageWindowMinutes:180},
+    worstCaseRequestMs:15_000});
+  assert.equal(slow.modeledCapacityPossible,false);
+  assert.ok(slow.reasons.includes('SINGLE_VENUE_DEADLINE_EXCEEDED'));
+  for(const input of [{perVenueActionsPerCycle:17},{perVenueActionsPerCycle:0},
+    {worstCaseRequestMs:Number.NaN},{cycleMinutes:7},
+    {safeShutdownReserveMs:220_000}]) {
+    assert.throws(()=>dual({manifest:manifest(1,1),...input}),/MINUTE_DUAL_/);
+  }
 });
