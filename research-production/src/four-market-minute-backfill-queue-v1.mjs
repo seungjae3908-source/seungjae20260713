@@ -164,6 +164,14 @@ export function pickBackfillWindow(state, atMs, marketFilter=null) {
   if (marketFilter!==null && !PUBLIC_VENUES.includes(marketFilter))
     fail('MINUTE_QUEUE_MARKET_FILTER_INVALID');
   const rateLimitedMarkets = provider429HoldMarkets(state, atMs);
+  // A global nextIndex cannot provide independent venue fairness: after
+  // each paired round it returns to the same futures symbol while the
+  // spot index advances. The durable per-range lastSuccessAt is already
+  // sealed, so select the least recently successful eligible range
+  // within EACH venue, including after process restart. For source
+  // continuity prefer CONTINUOUS before discretionary BACKFILL.
+  let laneChoice=null, laneRank=Number.POSITIVE_INFINITY,
+    laneLastSuccessAt=Number.POSITIVE_INFINITY;
   for (let offset=0; offset<state.ranges.length; offset++) {
     const index=(state.nextIndex + offset) % state.ranges.length;
     const r=state.ranges[index];
@@ -176,12 +184,20 @@ export function pickBackfillWindow(state, atMs, marketFilter=null) {
     const end = Math.min(horizon, r.cursorMs
       + (state.pageWindowMinutes ?? 120) * MINUTE_MS);
     if (end <= r.cursorMs || end > closedEnd) continue;
-    return Object.freeze({
+    const choice=Object.freeze({
       index, task:Object.freeze({ market:r.market, symbol:r.symbol,
         windowStartMs:r.cursorMs, windowEndMs:end }),
     });
+    if(marketFilter===null) return choice; // legacy single-lane untouched
+    const rank=r.mode==='CONTINUOUS'?0:1;
+    if(laneChoice===null || rank<laneRank
+      || (rank===laneRank && r.lastSuccessAt<laneLastSuccessAt)){
+      laneChoice=choice;
+      laneRank=rank;
+      laneLastSuccessAt=r.lastSuccessAt;
+    }
   }
-  return null;
+  return laneChoice;
 }
 export function applyBackfillOutcome(state, selection, result, atMs, researchSha) {
   if (!positive(atMs) || !SHA40.test(researchSha ?? '')
