@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const manualReceipts = read('.github/scripts/production-manual-live-receipts.cjs');
 const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
 const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
 const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
@@ -155,11 +156,16 @@ for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) 
   requireText(workflow, market, 'AUTO_GATE_MARKET_MISSING');
 }
 
-requireText(workflow, 'providers: kiwoom,toss,upbit', 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
-requireText(workflow, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
-requireText(workflow, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_SPOT_MANUAL_GATE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_FUTURES_MANUAL_GATE_MISSING');
+requireText(workflow, 'await inspectManualLiveReceipts({', 'AUTO_GATE_MANUAL_RECEIPT_VERIFIER_WIRING_MISSING');
+requireText(manualReceipts, "field(body, 'providers') !== 'kiwoom,toss,upbit'", 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
+requireText(manualReceipts, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
+requireText(manualReceipts, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
+requireText(manualReceipts, 'AUTOMATIC_TRADING_EXACT_${kind.toUpperCase()}_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_BOTH_MANUAL_RECEIPTS_REQUIRED');
+for (const proof of ["comment?.user?.login !== 'github-actions[bot]'", 'at < deploymentAt',
+  "field(body, 'target_sha') !== targetSha", '/^[2-7]$/u', 'run.head_sha === targetSha',
+  "run.status === 'completed' && run.conclusion === 'success'", 'run.path === expectedPath']) {
+  requireText(manualReceipts, proof, 'AUTO_GATE_MANUAL_RECEIPT_PROVENANCE_MISSING');
+}
 requireText(workflow, 'const ciRunId = release.requiredCiRunId;', 'AUTO_GATE_REQUIRED_CI_HELPER_WIRING_MISSING');
 requireText(workflow, 'Date.parse(release.productionDeployCompletedAt)', 'AUTO_GATE_DEPLOYMENT_BOUNDARY_HELPER_WIRING_MISSING');
 requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_6_OF_6', 'AUTO_GATE_REQUIRED_CI_6_OF_6_HELPER_MISSING');

@@ -1,7 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { loginProductionReadOnly, productionReadOnlyAccessToken } from './support/production-readonly-login';
+
+const { assertMemberAccountSignalAudit } = createRequire(import.meta.url)(
+  '../../.github/scripts/automatic-live-preactivation-audit.cjs',
+);
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/u, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -102,6 +107,42 @@ test('Production Automatic LIVE-only preactivation is responsive, exact-SHA and 
   expect(healthWorker?.liveEntriesArmed, 'LIVE entries must remain disarmed during QA').toBe(false);
   expect(healthWorker?.errorCode ?? null, 'Disabled worker must not carry a runtime error').toBeNull();
 
+  // Collect the complete read-only component rehearsal before UI assertions.
+  // Persist only its explicitly safe contract, even on failure, so a stopped
+  // worker or an empty handoff cannot erase the original runtime blockers.
+  const auditResponse = await appGet(page, '/api/trade-automation/live-preactivation-readiness');
+  const auditBody = auditResponse.body;
+  const safeCode = (value: unknown) => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,120}$/u.test(value)
+    ? value : 'PREACTIVATION_EVIDENCE_UNAVAILABLE';
+  const memberAccountSignalAudit = {
+    schemaVersion: auditBody?.schemaVersion === 'automatic-live-preactivation-audit-v1' ? auditBody.schemaVersion : null,
+    targetSha: /^[a-f0-9]{40}$/u.test(String(auditBody?.targetSha ?? '')) ? auditBody.targetSha : null,
+    generatedAt: Number.isFinite(Date.parse(auditBody?.generatedAt)) ? auditBody.generatedAt : null,
+    scope: auditBody?.scope === 'MEMBER_ACCOUNT_AND_SIGNAL_READONLY_REHEARSAL' ? auditBody.scope : null,
+    ready: auditBody?.ready === true,
+    activationReady: auditBody?.activationReady,
+    checks: Array.isArray(auditBody?.checks) ? auditBody.checks.map((item: any) => ({
+      id: safeCode(item?.id), status: item?.status === 'PASS' ? 'PASS' : 'BLOCKED',
+      codes: Array.isArray(item?.codes) ? item.codes.map(safeCode) : ['PREACTIVATION_EVIDENCE_UNAVAILABLE'],
+    })) : [],
+    additionalRequiredControls: Array.isArray(auditBody?.additionalRequiredControls)
+      ? auditBody.additionalRequiredControls.map(safeCode) : [],
+    paperOutOfScope: auditBody?.paperOutOfScope === true,
+    telegramOutOfScope: auditBody?.telegramOutOfScope === true,
+    ...Object.fromEntries(['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']
+      .map((key) => [key, auditBody?.[key] === 0 ? 0 : -1])),
+    liveTradingAuthorityGrantedByAudit: auditBody?.liveTradingAuthorityGrantedByAudit,
+    autoTradingAuthorityGrantedByAudit: auditBody?.autoTradingAuthorityGrantedByAudit,
+  };
+  mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(outputDir, 'production-auto-live-preactivation-rehearsal.json'), `${JSON.stringify({
+    httpStatus: auditResponse.status, targetSha, productionDeployRunId,
+    memberAccountSignalAudit, rawResponseRecorded: false, secretValuesRecorded: false,
+  }, null, 2)}\n`, { mode: 0o600 });
+  expect(auditResponse.ok, `Read-only component rehearsal HTTP ${auditResponse.status}`).toBe(true);
+  expect(auditResponse.body?.ok).toBe(true);
+  assertMemberAccountSignalAudit(memberAccountSignalAudit, { targetSha, generatedAt: new Date().toISOString() });
+
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -201,13 +242,14 @@ test('Production Automatic LIVE-only preactivation is responsive, exact-SHA and 
 
   mkdirSync(outputDir, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(outputDir, 'production-auto-live-qa.json'), `${JSON.stringify({
-    schemaVersion: 'production-auto-live-readonly-qa-v2',
+    schemaVersion: 'production-auto-live-readonly-qa-v3',
     targetSha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     identityMatch: true,
+    memberAccountSignalAudit,
     viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
     providers: Object.fromEntries(PROVIDERS.map((provider) => [provider, 'PASS'])),
     markets: Object.fromEntries(MARKETS.map((market) => [market, 'PASS'])),

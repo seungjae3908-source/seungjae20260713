@@ -212,3 +212,21 @@ test('roster probe rejects oversized pages and partial provider failures without
   }),/MINUTE_ROSTER_PROVIDER_HTTP_BLOCKED/);
   assert.equal(calls,2);
 });
+
+
+test('one-character and Han-based Bitget USDT contracts remain in exact current source roster',()=>{
+  const raw={code:'00000',data:[
+    {symbol:'AUSDT',quoteCoin:'USDT',symbolType:'perpetual',
+      symbolStatus:'normal',isRwa:'NO'},
+    {symbol:'币USDT',quoteCoin:'USDT',symbolType:'perpetual',
+      symbolStatus:'normal',isRwa:'NO'},
+  ]};
+  const r=normalizeBitgetUsdtMinuteRoster(raw,NOW);
+  assert.deepEqual(r.symbols,['AUSDT','币USDT']);
+  assert.equal(verifyPublicMinuteRoster(r),r);
+  assert.equal(r.historicalPITProven,false);
+  assert.equal(r.canTrade,false);
+  assert.throws(()=>normalizeBitgetUsdtMinuteRoster({
+    code:'00000',data:[{...raw.data[1],symbol:'币/USDT'}],
+  },NOW),/MINUTE_BITGET_ROSTER_INVALID/);
+});

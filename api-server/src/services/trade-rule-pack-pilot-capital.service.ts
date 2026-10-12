@@ -13,6 +13,7 @@ import {
 } from './trade-automation.types';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import { tradingHistoryComplete } from './trade-history-completeness.service';
 import {
   isEvidenceBackedAutoStrategyId,
   RULE_PACK_PILOT_PROFILE,
@@ -92,9 +93,9 @@ function normalizedSymbol(value: string) {
   return value.trim().toUpperCase().replace(/^KRW-/u, '');
 }
 
-// Canonical TradingRepository.listOrders/listPlans are presently bounded to
-// 500/200 newest rows. A truncated history must never reset the high-water
-// mark and re-credit old profits as new compoundable gains.
+// Legacy/unattested arrays remain fail-closed at the former 500/200 bounds.
+// The repository's cursor-paged history uses an internal completeness proof;
+// counts alone must never let partial history reset HWM or credit gains twice.
 export function rulePackPilotLedgerHistoryComplete(orderCount: number, planCount: number): boolean {
   return Number.isSafeInteger(orderCount) && Number.isSafeInteger(planCount)
     && orderCount >= 0 && planCount >= 0 && orderCount < 500 && planCount < 200;
@@ -508,7 +509,7 @@ export function verifyRulePackPilotDynamicCapReceipt(
  * A missing/expired/forged token never falls back to manual order authority.
  */
 export async function resolveRulePackPilotDynamicCapPolicy(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   plan: TradingPlan,
   policy: TradingPolicy,
@@ -594,7 +595,7 @@ function planForBrokerOrder(
 }
 
 export async function readRulePackPilotCapitalState(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
@@ -644,7 +645,7 @@ export async function readRulePackPilotCapitalState(
   if (journal.integrityIssues.length > 0) {
     blockers.push('PILOT_CAPITAL_AUTO_LIVE_JOURNAL_INTEGRITY_REQUIRED');
   }
-  if (!rulePackPilotLedgerHistoryComplete(allOrders.length, allPlans.length)) {
+  if (!tradingHistoryComplete(allOrders, 500) || !tradingHistoryComplete(allPlans, 200)) {
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.

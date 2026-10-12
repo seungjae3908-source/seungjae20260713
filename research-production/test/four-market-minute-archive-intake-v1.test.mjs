@@ -260,3 +260,14 @@ test('network failures never leak URLs/credentials, and return a retryable class
     }),/MINUTE_SOURCE_TIMEOUT/);
   } finally { clearInterval(keepAlive); }
 });
+
+
+test('Bitget one-character and Han USDT symbols preserve exact safe original identifiers',()=>{
+  const make=symbol=>({market:'CRYPTO_FUTURES',symbol,
+    windowStartMs:BEGIN,windowEndMs:END});
+  assert.equal(validateMinuteTask(make('AUSDT')).symbol,'AUSDT');
+  assert.equal(validateMinuteTask(make('币USDT')).symbol,'币USDT');
+  for(const symbol of ['USDT','aUSDT','币/USDT','币..USDT','币-USDT','币USDC']){
+    assert.throws(()=>validateMinuteTask(make(symbol)),/MINUTE_SYMBOL_INVALID/);
+  }
+});
