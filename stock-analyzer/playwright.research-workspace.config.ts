@@ -9,6 +9,6 @@ export default defineConfig({
   retries:0,
   webServer:{
     command:'node ./e2e/support/start-vite-e2e-server.mjs vite.research-workspace.config.ts',
-    url:'http://127.0.0.1:4173',reuseExistingServer:false,timeout:120000,
+    url:`http://127.0.0.1:${Number(process.env.RESEARCH_E2E_PORT ?? 4173)}`,reuseExistingServer:false,timeout:120000,
   },
 });
