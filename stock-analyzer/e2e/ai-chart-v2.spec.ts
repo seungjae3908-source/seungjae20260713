@@ -1,4 +1,6 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { buildChartAnalysis, type ChartAnalysisInput } from '../src/lib/chart-analysis';
 import {
   aggregateMultiTimeframe,
@@ -263,6 +265,14 @@ test('current AI evidence fails closed on stale shared chart data without duplic
   expect(mock.privateTradingRequests).toEqual([]);
 });
 
+test('read-only dual provider failure uses one bounded attempt and a cooldown instead of endless request amplification', () => {
+  const source = readFileSync(
+    path.resolve(process.cwd(), 'src/components/unified-analysis-chart.tsx'), 'utf8');
+  expect(source).toContain("if (query.state.status === 'error') return 60_000;");
+  expect(source).toContain("error.kind === 'server' || error.kind === 'network'");
+  expect(source).toContain("refetchOnReconnect: true");
+});
+
 test('current AI evidence fails closed when the shared chart provider is unavailable', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   const mock = await installMocks(context, { unavailable: true });
@@ -281,20 +291,28 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
   const mock = await installMocks(context);
   await page.goto(chartUrl);
 
-  await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
-  expect(totalChartCalls(mock.calls)).toBe(0);
+  await expect(page.getByTestId('ai-chart-mobile-tabs').getByRole('tab')).toHaveCount(3);
+  await expect(page.getByRole('tab', { name: '차트', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   await expectNoHorizontalOverflow(page);
 
   await page.getByRole('tab', { name: '차트', exact: true }).click();
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   await page.getByRole('button', { name: /지표 설정/ }).click();
   await expect(page.getByTestId('overlay-markers')).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
-  await page.getByRole('tab', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
+  await expect(page.getByTestId('unified-analysis-chart')).toBeHidden();
+  await expect(page.getByTestId('unified-analysis-chart')).toHaveCount(1);
   await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
+  // The read-only signal is portalled into the preserved, currently hidden
+  // chart. Returning to its tab must show it without another chart request.
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toHaveCount(1);
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
+  await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
   await expect(page.getByTestId('multi-timeframe-ai')).toBeVisible();
   await expect(page.getByTestId('mtf-not-loaded')).toBeVisible();
   await page.getByTestId('load-multi-timeframe').click();
@@ -302,5 +320,10 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
     await expect(page.getByTestId(`mtf-${timeframe}`)).toBeVisible();
   }
   await expectNoHorizontalOverflow(page);
+  await page.getByRole('tab', { name: 'AI 생중계', exact: true }).click();
+  await expect(page.getByTestId('ai-chart-live-feed')).toBeVisible();
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
+  await expect.poll(() => mock.calls.get('5m') ?? 0).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
 });

@@ -3,9 +3,9 @@ import { expect, test, type Page, type Request } from '@playwright/test';
 const CHART_URL = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m';
 const BASE_TIME = 1_775_000_000;
 
-function candles(count = 240) {
+function candles(count = 240, stepSeconds = 300) {
   return Array.from({ length: count }, (_, index) => ({
-    time: BASE_TIME + index * 300,
+    time: BASE_TIME + index * stepSeconds,
     open: 70_000 + index * 10,
     high: 70_080 + index * 10,
     low: 69_940 + index * 10,
@@ -44,18 +44,25 @@ async function installMocks(page: Page, candleCount = 240) {
     contentType: 'application/json',
     body: '{}',
   }));
-  await page.route('**/api/stocks/*/candles**', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({
-      ticker: '005930',
-      timeframe: '5m',
-      provider: 'professional-crosshair-fixture',
-      fetchedAt: '2026-08-04T06:30:00.000Z',
-      updatedAt: '2026-08-04T06:30:00.000Z',
-      candles: candles(candleCount),
-    }),
-  }));
+  await page.route('**/api/stocks/*/candles**', (route) => {
+    // The source timeframe must follow the request. Reusing a 5m marker for
+    // 15m would correctly be rejected by the four-market identity guard and
+    // conceal the actual resize-observer lifecycle being tested.
+    const timeframe = new URL(route.request().url()).searchParams.get('tf') ?? '5m';
+    const stepSeconds = timeframe === '15m' ? 900 : 300;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ticker: '005930',
+        timeframe,
+        provider: 'professional-crosshair-fixture',
+        fetchedAt: '2026-08-04T06:30:00.000Z',
+        updatedAt: '2026-08-04T06:30:00.000Z',
+        candles: candles(candleCount, stepSeconds),
+      }),
+    });
+  });
 }
 
 test('crosshair exposes a live OHLCV legend without intercepting chart interaction', async ({ page }) => {
@@ -77,6 +84,7 @@ test('crosshair exposes a live OHLCV legend without intercepting chart interacti
   expect(await legend.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe('none');
 
   const latestTime = await legend.getAttribute('data-candle-time');
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * 0.3, box!.y + box!.height * 0.45);
@@ -135,6 +143,7 @@ test('five-thousand-candle history keeps crosshair, pan, and zoom responsive', a
   await expect(legend).toHaveAttribute('data-candle-time', String(BASE_TIME + 4_999 * 300));
   const interactiveAt = performance.now();
   const initialRange = await page.getByTestId('unified-chart-wrapper').getAttribute('data-visible-logical-range');
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 

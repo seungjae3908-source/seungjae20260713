@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('search keeps StockInfo outside the static App bootstrap graph until coin mode needs it', () => {
+test('search and StockInfo stay demand-loaded outside the App bootstrap graph', () => {
   const appSource = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf8');
   const searchSource = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/search.tsx'), 'utf8');
   const wrapperSource = fs.readFileSync(
@@ -10,9 +10,12 @@ test('search keeps StockInfo outside the static App bootstrap graph until coin m
     'utf8',
   );
 
-  // SearchPage is still part of the App bootstrap graph, so it must not pull
-  // the much larger stock-info page into that graph through a static import.
-  expect(appSource).toContain("import SearchPage from '@/pages/search';");
+  // Chart cold starts must not fetch the rankings or stock-info graph. Keep
+  // the rankings route identity while loading both pages only on demand.
+  expect(appSource).not.toContain("import SearchPage from '@/pages/search';");
+  expect(appSource).toContain("const loadMarketRankingsPage = () => import('@/pages/search');");
+  expect(appSource).toContain('const SearchPage = lazy(loadMarketRankingsPage);');
+  expect(appSource).toContain('<Route path="/market-rankings" component={SearchPage} />');
   expect(searchSource).toContain('import { CoinInfo } from "@/components/lazy-coin-info";');
   expect(searchSource).not.toContain('@/pages/stock-info');
 

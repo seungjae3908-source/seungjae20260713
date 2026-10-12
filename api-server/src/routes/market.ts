@@ -12,8 +12,15 @@ import {
 } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
+import { loadChartPublicFxQuotes } from '../services/public-fx.service';
 
 const router: IRouter = Router();
+
+router.get('/market/fx', async (_req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try { return res.json(await loadChartPublicFxQuotes()); }
+  catch { return res.json({ quotes: [], missing: ['FX:UNAVAILABLE'], fetchedAt: new Date().toISOString() }); }
+});
 
 type MarketScope = 'ALL' | 'KR' | 'US';
 

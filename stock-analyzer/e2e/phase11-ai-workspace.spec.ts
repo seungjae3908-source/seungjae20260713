@@ -158,8 +158,8 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
     await expect(page).toHaveURL(/\/ai-chart\?/);
     await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
+    await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('SK하이닉스');
-    await page.getByRole('tab', { name: '상세', exact: true }).click();
     await expect(page.getByRole('heading', { name: '현재 상태' })).toBeVisible();
     await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);

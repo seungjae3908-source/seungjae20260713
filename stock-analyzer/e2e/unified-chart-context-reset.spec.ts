@@ -1,7 +1,14 @@
 import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
-const BASE_TIME = 1_775_600_000;
+// Keep test source candles recent; stale historical fixtures must never
+// masquerade as current decisions. Source cadence follows each requested frame.
+const TEST_NOW = Date.now();
 const STEP_SECONDS = 300;
+const stepFor = (timeframe: string) => timeframe === '1m' ? 60 : timeframe === '15m' ? 900 : STEP_SECONDS;
+const lastComplete = (timeframe: string) => {
+  const step = stepFor(timeframe);
+  return Math.floor(TEST_NOW / (step * 1_000)) * step - step;
+};
 const DOUBLE_TOP = [100, 104, 110, 104, 100, 103, 109.5, 104, 102, 103, 104];
 
 type BrowserEvidence = {
@@ -16,9 +23,11 @@ type UnhandledWindow = Window & {
   __contextResetUnhandled?: string[];
 };
 
-function rows(values: number[]) {
+function rows(values: number[], timeframe = '5m') {
+  const step = stepFor(timeframe);
+  const end = lastComplete(timeframe);
   return values.map((close, index) => ({
-    time: BASE_TIME + index * STEP_SECONDS,
+    time: end - (values.length - 1 - index) * step,
     open: close,
     high: close + 0.5,
     low: close - 0.5,
@@ -28,8 +37,8 @@ function rows(values: number[]) {
   }));
 }
 
-function trend(base: number, count = 24) {
-  return rows(Array.from({ length: count }, (_, index) => base + index));
+function trend(base: number, count = 24, timeframe = '5m') {
+  return rows(Array.from({ length: count }, (_, index) => base + index), timeframe);
 }
 
 async function monitorBrowser(page: Page): Promise<BrowserEvidence> {
@@ -84,27 +93,27 @@ async function fulfillStockChart(route: Route, onOneMinuteCall: () => void) {
   const timeframe = timeframeFrom(url);
 
   let provider = 'context-reset-unknown';
-  let candles = trend(900);
+  let candles = trend(900, 24, timeframe);
   let delay = 0;
 
   if (ticker === '005930' && timeframe === '5m') {
     provider = 'context-reset-kr-5m';
-    candles = rows(DOUBLE_TOP);
+    candles = rows(DOUBLE_TOP, '5m');
   } else if (ticker === '005930' && timeframe === '1m') {
     onOneMinuteCall();
     provider = 'context-reset-kr-1m-late';
-    candles = trend(10_000);
+    candles = trend(10_000, 24, '1m');
     delay = 900;
   } else if (ticker === '005930' && timeframe === '15m') {
     provider = 'context-reset-kr-15m';
-    candles = trend(20_000);
+    candles = trend(20_000, 24, '15m');
   } else if (ticker === '000660' && timeframe === '15m') {
     provider = 'context-reset-kr-000660';
-    candles = rows(DOUBLE_TOP.map((value) => value + 300));
+    candles = rows(DOUBLE_TOP.map((value) => value + 300), '15m');
     delay = 250;
   } else if (ticker === 'AAPL' && timeframe === '15m') {
     provider = 'context-reset-us-aapl';
-    candles = trend(500);
+    candles = trend(500, 24, '15m');
   }
 
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
@@ -113,8 +122,8 @@ async function fulfillStockChart(route: Route, onOneMinuteCall: () => void) {
     contentType: 'application/json',
     body: JSON.stringify({
       provider,
-      fetchedAt: '2026-08-04T11:40:00.000Z',
-      updatedAt: '2026-08-04T11:40:00.000Z',
+      fetchedAt: new Date(TEST_NOW).toISOString(),
+      updatedAt: new Date(TEST_NOW).toISOString(),
       candles,
     }),
   }).catch(() => undefined);
@@ -141,7 +150,8 @@ async function installMocks(page: Page) {
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
   await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
-  await expect(page.getByText('context-reset-kr-5m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-5m');
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();
 }
@@ -163,7 +173,7 @@ function timeline(page: Page) {
 }
 
 function currentAnalysis(page: Page) {
-  return page.locator('section').filter({ hasText: '현재 판단' }).last();
+  return page.getByTestId('ai-chart-current-judgment');
 }
 
 async function expectLatestCandle(page: Page, expectedTime: number) {
@@ -198,8 +208,8 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await expect(timeline(page)).toContainText('이중천장');
 
   const firstPastTime = await selectPastCandle(page);
-  expect(firstPastTime).toBeGreaterThanOrEqual(BASE_TIME);
-  expect(firstPastTime).toBeLessThan(BASE_TIME + (DOUBLE_TOP.length - 1) * STEP_SECONDS);
+  expect(firstPastTime).toBeGreaterThanOrEqual(lastComplete('5m') - (DOUBLE_TOP.length - 1) * STEP_SECONDS);
+  expect(firstPastTime).toBeLessThan(lastComplete('5m'));
 
   await page.getByTestId('timeframe-1m').click();
   await expect(page).toHaveURL(/timeframe=1m/);
@@ -211,8 +221,9 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
 
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
-  await expect(page.getByText('context-reset-kr-15m', { exact: false })).toBeVisible();
-  await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-15m');
+  await expectLatestCandle(page, lastComplete('15m'));
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
   await expect(timeline(page)).not.toContainText('이중천장');
@@ -223,17 +234,18 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await page.waitForTimeout(1_050);
   await expect(page).toHaveURL(/timeframe=15m/);
   await expect(currentPrice).toContainText('20,023원');
-  await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
+  await expectLatestCandle(page, lastComplete('15m'));
   await expect(timeline(page)).toContainText('최근 1건');
 
   const secondPastTime = await selectPastCandle(page);
-  expect(secondPastTime).toBeGreaterThanOrEqual(BASE_TIME);
+  expect(secondPastTime).toBeGreaterThanOrEqual(lastComplete('15m') - 23 * stepFor('15m'));
   const symbolInput = page.getByLabel('차트 종목 심볼');
   await symbolInput.fill('000660');
   await page.getByTestId('apply-chart-symbol').click();
   await expect(page).toHaveURL(/ticker=000660/);
-  await expect(page.getByText('context-reset-kr-000660', { exact: false })).toBeVisible();
-  await expectLatestCandle(page, BASE_TIME + (DOUBLE_TOP.length - 1) * STEP_SECONDS);
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-000660');
+  await expectLatestCandle(page, lastComplete('15m'));
   const secondOverlay = page.getByTestId('chart-pattern-overlay');
   await expect(secondOverlay).toHaveCount(1);
   await expect(secondOverlay).toHaveAttribute('data-pattern-type', 'double-top');
@@ -244,12 +256,13 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await expect(timeline(page)).toContainText('이중천장');
 
   const thirdPastTime = await selectPastCandle(page);
-  expect(thirdPastTime).toBeGreaterThanOrEqual(BASE_TIME);
+  expect(thirdPastTime).toBeGreaterThanOrEqual(lastComplete('15m') - (DOUBLE_TOP.length - 1) * stepFor('15m'));
   await page.getByTestId('market-US').click();
   await expect(page).toHaveURL(/market=US/);
   await expect(page).toHaveURL(/ticker=AAPL/);
-  await expect(page.getByText('context-reset-us-aapl', { exact: false })).toBeVisible();
-  await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-us-aapl');
+  await expectLatestCandle(page, lastComplete('15m'));
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
   await expect(timeline(page)).not.toContainText('이중천장');

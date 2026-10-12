@@ -27,8 +27,11 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
-import SearchPage from '@/pages/search';
 import RecommendationsPage from '@/pages/recommendations';
+// Market rankings are independent of the AI Chart cold-start graph. Keep the
+// existing recommendations route eager and load only rankings on demand.
+const loadMarketRankingsPage = () => import('@/pages/search');
+const SearchPage = lazy(loadMarketRankingsPage);
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -422,6 +425,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-unified-search-e2e" component={UnifiedAssetSearchPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-workspace-e2e" component={ScannerRoute} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
+    {phase11E2EEnabled ? <Route path="/__phase11-stock-detail-ai-e2e" component={DetailPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase11E2EEnabled ? <Route path="/auto-trading" component={Phase11AutoTradingRoute} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
