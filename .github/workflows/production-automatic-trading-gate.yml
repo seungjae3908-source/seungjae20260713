@@ -1081,6 +1081,12 @@ jobs:
           TARGET_SHA: ${{ steps.source_command.outputs.sha }}
         run: |
           set -Eeuo pipefail
+          # The checked-out source must itself be the authorized exact main.
+          # A main update between checkout and approval cannot supply mixed code.
+          [[ "$(git rev-parse --verify HEAD)" == "$TARGET_SHA" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_CHECKOUT_SHA_MISMATCH' >&2
+            exit 1
+          }
           remote_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" 'tr -d "[:space:]" < /opt/stock-app/.deploy/current-sha')"
