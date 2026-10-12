@@ -385,12 +385,13 @@ test('two owner-attested 180m public provider lanes interleave without concurren
       return apiResponse({code:'00000',
         data:[[String(stamp),'100','110','90','105','2','1000']]});
     };
-    const result=await runDurableMinuteBackfillCycle({
+    const opts={
       enabled:true,dualVenueMode:true,dualVenueOwnerApproved:true,
       dualVenueHostAttested:true,queueRoot:queue,archiveRoot:archive,
       manifest:m,researchSha:SHA1,now:()=>NOW,maxActions:16,
       fetchImpl:provider,sleep:async()=>{},freeBytes:6*1024**3,
-    });
+    };
+    const result=await runDurableMinuteBackfillCycle(opts);
     assert.equal(result.capacity.dailyRequired,6080);
     assert.equal(result.capacity.dailyAvailable,9216);
     assert.equal(result.venueCapacities.length,2);
@@ -408,7 +409,42 @@ test('two owner-attested 180m public provider lanes interleave without concurren
     const saved=await readBackfillQueue(queue,validateBackfillScope(m));
     assert.equal(saved.ranges.filter(r=>r.completedPages===1).length,32);
     assert.equal(saved.executionAuthority,'NONE');
+    // Restart with a new producer SHA: next batch must visit 32 distinct
+    // unvisited symbols, not repeatedly backfill the same futures symbol.
+    const second=await runDurableMinuteBackfillCycle({
+      ...opts,researchSha:SHA2,
+    });
+    assert.equal(second.providerCalls,32);
+    const after=await readBackfillQueue(queue,validateBackfillScope(m));
+    assert.equal(after.ranges.filter(r=>r.completedPages===1).length,64);
+    assert.equal(after.ranges.filter(r=>r.completedPages>1).length,0);
+    assert.equal(after.executionAuthority,'NONE');
   });
+});
+
+
+test('dual selection prioritizes continuous across restart and round-robins same-market symbols',()=>{
+  const one={market:'CRYPTO_SPOT',symbol:'BTC',mode:'CONTINUOUS',startMs:START};
+  const two={market:'CRYPTO_SPOT',symbol:'ETH',mode:'CONTINUOUS',startMs:START};
+  const backlog={market:'CRYPTO_SPOT',symbol:'LTC',mode:'BACKFILL',
+    startMs:START,endMs:START+360*MINUTE_MS};
+  const m={...manifest([one,two,backlog]),pageWindowMinutes:180};
+  const scope=validateBackfillScope(m);
+  const q=createBackfillQueue({scope,researchSha:SHA1,atMs:NOW});
+  const first=pickBackfillWindow(q,NOW,'CRYPTO_SPOT');
+  assert.equal(first.task.symbol,'BTC');
+  const progressed=applyBackfillOutcome(q,first,{
+    market:'CRYPTO_SPOT',symbol:'BTC',status:'ARCHIVED',candleCount:1,
+  },NOW,SHA1);
+  const second=pickBackfillWindow(progressed,NOW,'CRYPTO_SPOT');
+  assert.equal(second.task.symbol,'ETH');
+  const afterSecond=applyBackfillOutcome(progressed,second,{
+    market:'CRYPTO_SPOT',symbol:'ETH',status:'ARCHIVED',candleCount:1,
+  },NOW,SHA1);
+  // Persisted lastSuccessAt enables the next cycle to return to BTC,
+  // not to prefer historical BACKFILL over active minute capture.
+  assert.equal(pickBackfillWindow(afterSecond,NOW+5*MINUTE_MS,'CRYPTO_SPOT')
+    .task.symbol,'BTC');
 });
 
 test('dual lanes hold a shared 429 venue but finish remaining independent provider work',async()=>{
