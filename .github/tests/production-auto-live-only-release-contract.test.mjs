@@ -69,7 +69,13 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.ok(!production.includes('PAPER_FORWARD_STATE_ROOT=/opt/stock-app-data/paper-forward-v1'));
   assert.ok(!production.includes('bash ops/install-paper-forward-schedule.sh'));
 
-  assert.ok(production.includes('PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=false'));
+  // Public source is now installed through the separately gated owner CLI.
+  // Verify the actual pinned installer, not a retired workflow inline env.
+  assert.ok(signalIdentity.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'"));
+  assert.ok(signalIdentity.includes("RESEARCH_PRODUCTION='false'"));
+  assert.ok(signalIdentity.includes("LIVE_TRADING='false'"));
+  assert.ok(signalIdentity.includes("REAL_ORDER_ENABLED='false'"));
+  assert.ok(signalIdentity.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
   assert.ok(production.includes('production-auto-live-signal-refresh.json'));
   assert.ok(production.includes('tail -n 1 "$state_root/logs/cron.log"'));
   assert.ok(production.includes('value?.naturalRuntimeSha !== process.env.TARGET_SHA'));
