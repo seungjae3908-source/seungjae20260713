@@ -58,7 +58,7 @@ printf 'FINALIZED\n'
   assert.equal(readdirSync(root).filter(x=>x.startsWith('tmp.')).length,0);
 }));
 
-function activation({workerReady=true,unsafeEvidence=false,oldCleanup=false}={}) {
+function activation({workerReady=true,unsafeEvidence=false,oldCleanup=false,oneShotFailures=false}={}) {
   return sandbox(root=>{
     const state=join(root,'state');
     writeFileSync(join(root,'events'),'');
@@ -100,7 +100,8 @@ systemctl() {
     enable) enabled=1 ;;
     is-active|is-enabled) (( enabled == 1 )) ;;
     show) case "$4" in LoadState) printf 'loaded\n';; ActiveState) printf 'inactive\n';;
-      Result) printf 'success\n';; ExecMainStatus) printf '0\n';; *) return 90;; esac ;;
+      Result) if [[ "$TEST_ONESHOT_FAILURES" == true && "$2" != research-production@forward.service ]]; then printf 'exit-code\n'; else printf 'success\n'; fi;;
+      ExecMainStatus) if [[ "$TEST_ONESHOT_FAILURES" == true && "$2" != research-production@forward.service ]]; then printf '75\n'; else printf '0\n'; fi;; *) return 90;; esac ;;
     start) if [[ "$2" == research-production-ai-review.service || "$2" == research-production-video-discovery.service ]]; then
       "$REAL_NODE" -e 'const fs=require("node:fs");const p=process.argv[1];const v=JSON.parse(fs.readFileSync(p));v.observedAt=v.schemaVersion==="research-production-ai-scan-v1"?Date.now():new Date().toISOString();fs.writeFileSync(p,JSON.stringify(v));' "$STATE_ROOT/$( [[ "$2" == research-production-ai-review.service ]] && printf ai-review || printf video-research )/latest.json"
       fi ;;
@@ -118,7 +119,7 @@ runuser() {
 activate
 printf 'SCRIPT_FINALIZED=true\n'
 `;
-    const r=invoke('id() { printf "0\\n"; }\n'+script+'\n'+mocks,root,{TEST_WORKER_READY:String(workerReady)});
+    const r=invoke('id() { printf "0\\n"; }\n'+script+'\n'+mocks,root,{TEST_WORKER_READY:String(workerReady),TEST_ONESHOT_FAILURES:String(oneShotFailures)});
     return {...r,temporaryFiles:readdirSync(root).filter(x=>x.startsWith('tmp.')),
       events:readFileSync(join(root,'events'),'utf8')};
   });
@@ -155,6 +156,15 @@ test('unsafe one-shot fixture cannot reach timer enable or success finalization'
   assert.match(r.stderr,/AI_RESEARCH_ONE_SHOT_SAFETY_INVALID/u);
   assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/u);
   assert.doesNotMatch(r.events,/^enable /mu);
+});
+
+test('all already-started one-shot results are reported, then failures keep every timer and worker off',()=>{
+  const r=activation({oneShotFailures:true});assert.notEqual(r.status,0);
+  for(const unit of ['ai-review','video-discovery','approved-job-intake']){
+    assert.match(r.stdout,new RegExp('AI_RESEARCH_ONE_SHOT_RESULT:research-production-'+unit+'[.]service:result=exit-code:status=75'));
+  }
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/);
+  assert.doesNotMatch(r.events,/^enable /mu);assert.doesNotMatch(r.stdout,/AI_RESEARCH_ACTIVATED=true/);
 });
 
 for(const [remote,capture,reason] of [[0,0,null],

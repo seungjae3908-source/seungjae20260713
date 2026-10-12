@@ -142,7 +142,7 @@ test("same-SHA cadence change fails before provider calls and preserves existing
     assert.equal(providerCalls, 4);
     nowMs += 15 * 60_000;
     await assert.rejects(runPaperForwardScheduledInvocation({ ...options, autoLiveSignalRefresh: true }),
-      /identity/u);
+      { message: "PAPER_LOOP_PREDECESSOR_IDENTITY_MISMATCH" });
     assert.equal(providerCalls, 4, "incompatible state must block before any new source read");
     assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, "utf8"))), before);
   } finally { await rm(sandbox, { recursive: true, force: true }); }
