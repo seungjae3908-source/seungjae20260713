@@ -53,3 +53,21 @@
 - 직접 확인 CLI: `node research-production/bin/research-ai-formula-readback.mjs --read-only --research-sha <정확한 SHA> --state-root <승인된 연구 상태 폴더>`. 기본 flag 없이는 실행 거부. 코드 내 provider HTTP 요청, 서버/DB/거래 변경, 자동 스케줄 설치가 없습니다. 민감한 원본 본문은 출력하지 않습니다.
 - 신규 회귀 테스트는 실제 연구 AI worker **모의 제공사** 출력으로 만든 원본 회차/AI 파일과 정합성을 검증합니다. 회차 변경, 다른 모델·프로필, 위조 정책, 잘못된 SHA, 파일 링크 탈취, 깨진 JSON, 아직 생성되지 않은 profile을 모두 안전 차단합니다.
 - 이 기능은 운영 AI 타이머를 바꾸지 않으며 연구용 검증된 실제 데이터 소유자와의 연동이 자동으로 끝났다는 의미가 아닙니다. 전체 시장 원본·독립 OOS/비용/포워드/수익성/모의 증빙은 별도입니다.
+
+## 후속: TRAIN 결과 → AI 정성적 연구 개선 검토 연결 (Draft)
+
+`ai-formula-iteration-review-v1.mjs`는 기존 원본 연구 회차 검증기, 무료 AI, 안전 FormulaCandidate 검증, TRAIN 큐 피드백을 새로운 백테스트/매매 엔진을 만들지 않고 연결합니다.
+
+- **1단계: 실제 출처 재검증**: `inspectAiFormulaResearchEvidenceV1`이 PROPOSER와 정확한 원본 회차 SHA·해시를 확인합니다. 이후 호출자가 제공한 AI 아티팩트의 **전체 파일 내용 digest + 검토 본문 digest**까지 같은 값으로 대조합니다. CLI 또는 UI 출력은 주문·수익 정보가 아닌 상태만 전달합니다.
+- **2단계: 수식·원본 TRAIN 검증**: 기존 `prepareAiFormulaTrainProposalsV1`로 별도 승인된 FormulaCandidate 및 원본 데이터 검증을 실시하되 `stage=false`로 고정합니다. 원본 증빙·라이선스 검증 콜백이 없거나 검증되지 않으면 차단합니다. 이 모듈만으로 외부 검증 콜백의 독립성이나 원본 공급자의 권리를 확증하지 않습니다.
+- **3단계: 기존 TRAIN 결과 연결**: 입력 digest가 정확한 후보에 대해서만 기존 `buildAiFormulaTrainFeedbackV1`을 실행합니다. 다른 후보·다른 명시된 릴리스, 미실행 후보, 허위 PASS 또는 Paper 승격 정보는 차단하거나 대기 처리합니다.
+- **4단계: 다음 연구 개선**: TRAIN `HOLD`는 데이터·OOS가 부족한 상태이지 최적화 실패가 아니므로 AI 호출도 없이 `BLOCKED_INDEPENDENT_EVIDENCE`로 남깁니다. `RESERVE/EXCLUDE`가 있고 원본 검증 조건이 맞을 때만 `READY_FOR_OPTIONAL_FREE_AI_CRITIQUE`를 반환합니다.
+- **5단계: 요청 시 1회 무료 AI 정성 검토**: `requestFreeAi=true`, 승인된 `RESEARCH_AI_ITERATION_FREE_REVIEW_ENABLED=true`, 기존 무료 AI 모델·키 조건을 모두 만족해야 하나의 Gemini/Groq 구조화 응답을 호출할 수 있습니다. **기본값은 모델 호출 없음**이며, 이 Draft에는 CLI 자동 발행이나 운영 타이머/설치/활성화가 전혀 없습니다. 모델 반환은 기존 엄격한 AI JSON 정규화 검증기를 재사용하고, 정성적 연구 가설만 표기합니다. 수식 자동 수정·병합·OOS PASS·매매 전략 승인·Paper/LIVE 주문은 항상 0입니다.
+
+### 반드시 남겨둘 운영 차단 조건
+
+이번 코드는 Draft 코드 및 테스트 모의만으로 검증합니다. 실제 `sourceVerifier`는 **신뢰할 수 있는 별도 원본 소유자**가 구현·서명/감사/저장 정합성을 검증해야 하고, 소스/데이터 사용권과 필요 충분한 4시장 시세가 공급돼야 합니다. 현재 #1859의 공급원 및 장기 저장기는 미병합 Draft이고 실제 Vultr 24시간 데이터 확보나 전체 4시장 OOS가 입증되지 않았습니다.
+
+현행 `queueSummary`는 기존 백테스트 메타데이터이므로 이 어댑터의 FAIL/HOLD 분석은 **정성적 조언에만 사용**합니다. 특히 외부 증명 없이 TRAIN 결과를 전략 수익성, 최종 OOS, 데이터 포워드 증거로 쓰지 않습니다. 이 기능의 운영 자동 스케줄링·하루 호출 예산·중복 모델 호출의 영구 원장·승인된 원본 공급원 구현은 추가 QA 대상입니다.
+
+금지: Replit/Replit Agent, Ready/Merge/Deploy, Vultr/systemd/PM2/DB/Secret 변경, 개인 계좌/API 호출, 실거래/모의 체결, 텔레그램 발송. `executionAuthority=NONE`.
