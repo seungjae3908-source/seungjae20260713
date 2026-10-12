@@ -61,7 +61,7 @@ test('budget DDL is server-only and durable; no provider execution or expiration
   assert.ok(installer.includes('reservation_before is distinct from'));
   // The installer and DDL must both work with a restricted DB owner. A custom
   // parameter SET privilege cannot be required by the preflight or installer.
-  assert.doesNotMatch(installer, /(?:set_config|current_setting)\\(\\s*'app\\./iu);
+  assert.doesNotMatch(installer, /(?:set_config|current_setting)\(\s*'app\./iu);
   const deploy = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
   assert.ok(deploy.includes('environment: production'));
   assert.ok(deploy.includes('ops/apply-production-auto-live-budget.mjs'));
