@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import './paper-flat-recovery-backend.test';
+import './paper-trade-review.test';
+import './four-market-paper-status.test';
+import './manual-four-market-paper-status.test';
 import { applyPaperTradingAction, createPaperTradingState } from '../../../api-server/src/services/paper-trading-engine.service';
 import { manualCanonicalFixture } from '../../../api-server/src/services/manual-paper-canonical-contract.fixture';
 import { manualPaperEvidenceSha256 } from '../../../api-server/src/services/manual-paper-canonical-contract.service';
@@ -8,6 +13,11 @@ import {
   PAPER_STORAGE_KEY,
   clearPaperState,
   createLocalPaperState,
+  PAPER_MANUAL_ROUNDS_KEY,
+  MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,
+  startNextLocalManualPaperRound,
+  getManualPaperRoundSummary,
+  exportManualPaperRounds,
   exportPaperState,
   importPaperState,
   loadPaperState,
@@ -117,4 +127,103 @@ test('clear removes state and returns new account', () => {
   const storage = new MemoryStorage(); savePaperState(storage, createLocalPaperState(10_000, NOW));
   const reset = clearPaperState(storage, 20_000);
   assert.equal(storage.getItem(PAPER_STORAGE_KEY), null); assert.equal(reset.account.initialBalance, 20_000);
+});
+
+test('manual local Paper starts a new round only after confirmation and preserves bankrupt snapshot', () => {
+  const storage = new MemoryStorage();
+  const state=createLocalPaperState(10_000,NOW);
+  state.account.cashBalance=0;state.account.equity=0;
+  state.account.availableMargin=0;state.account.realizedPnl=-10_000;
+  state.journal=[{id:'bankrupt-last-trade',status:'closed',netPnl:-10_000} as any];
+  savePaperState(storage,state);
+  assert.throws(()=>startNextLocalManualPaperRound(storage,state,''),/명시적으로/);
+  assert.equal(storage.getItem(PAPER_MANUAL_ROUNDS_KEY),null);
+  const next=startNextLocalManualPaperRound(storage,state,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+1_000));
+  assert.equal(next.account.initialBalance,10_000);
+  assert.equal(next.account.equity,10_000);
+  assert.notEqual(next.account.id,state.account.id);
+  const archive=JSON.parse(exportManualPaperRounds(storage));
+  assert.deepEqual(archive.rounds[0].archived.journal,state.journal);
+  assert.equal(archive.rounds[0].archived.account.equity,0);
+  assert.equal(archive.rounds[0].bankrupt,true);
+  const summary=getManualPaperRoundSummary(storage);
+  assert.equal(summary.bankruptcies,1);
+  assert.equal(summary.totalNet,-10_000);
+  assert.equal(summary.totalIssued,10_000);
+  assert.equal(summary.issuedCapitalReturnPercent,-100);
+});
+test('manual second profitable ongoing round cannot hide prior bankruptcy in combined ROI', () => {
+  const storage=new MemoryStorage();
+  const first=createLocalPaperState(10_000,NOW);
+  first.account.cashBalance=0;first.account.equity=0;first.account.availableMargin=0;
+  savePaperState(storage,first);
+  const second=startNextLocalManualPaperRound(storage,first,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+1_000));
+  second.account.cashBalance=12_000;
+  second.account.equity=12_000;
+  second.account.availableMargin=12_000;
+  savePaperState(storage,second);
+  assert.throws(()=>startNextLocalManualPaperRound(storage,second,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+2_000)),/자본이 남아/);
+  const report=getManualPaperRoundSummary(storage, second);
+  assert.equal(report.completedRounds,1);
+  assert.equal(report.bankruptcies,1);
+  assert.equal(report.cumulativeIncludingActive.rounds,2);
+  assert.equal(report.cumulativeIncludingActive.totalIssued,20_000);
+  assert.equal(report.cumulativeIncludingActive.totalNet,-8_000);
+  assert.equal(report.cumulativeIncludingActive.totalReturnPercent,-40);
+});
+
+test('manual round refuses open exposure, pending order and forged current account identity', () => {
+  const storage=new MemoryStorage();
+  const old=createLocalPaperState(10_000,NOW);
+  old.account.cashBalance=0; old.account.equity=0; old.account.availableMargin=0;
+  savePaperState(storage,old);
+  const open={...old,positions:[{status:'open',remainingQuantity:1}] as any};
+  assert.throws(()=>startNextLocalManualPaperRound(storage,open,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION),/열린 포지션/);
+  const pending={...old,orders:[{status:'pending'}] as any};
+  assert.throws(()=>startNextLocalManualPaperRound(storage,pending,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION),/미체결 주문/);
+  const forged=createLocalPaperState(10_000,new Date(NOW.getTime()+5_000));
+  forged.account.cashBalance=0;forged.account.equity=0;forged.account.availableMargin=0;
+  assert.throws(()=>startNextLocalManualPaperRound(storage,forged,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION),/다른 화면에서/);
+  assert.equal(getManualPaperRoundSummary(storage).completedRounds,0);
+});
+test('a failed manual round state write can retry the SAME archived next round without multiplying capital', () => {
+  const storage=new MemoryStorage();
+  const state=createLocalPaperState(10_000,NOW);
+  state.account.cashBalance=0;state.account.equity=0;state.account.availableMargin=0;
+  savePaperState(storage,state);
+  const original=storage.setItem.bind(storage);
+  let failOnce=true;
+  storage.setItem=(key,value)=>{
+    if(key===PAPER_STORAGE_KEY && failOnce) {
+      failOnce=false;throw new Error('simulated quota failure');
+    }
+    original(key,value);
+  };
+  assert.throws(()=>startNextLocalManualPaperRound(storage,state,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+1_000)),/quota/);
+  assert.equal(getManualPaperRoundSummary(storage).completedRounds,1);
+  const retry=startNextLocalManualPaperRound(storage,state,
+    MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+3_000));
+  assert.equal(retry.account.id,getManualPaperRoundSummary(storage).records[0].nextAccountId);
+  assert.equal(getManualPaperRoundSummary(storage).completedRounds,1);
+});
+
+test('Paper composite page keeps both owner-scoped panels and the original backtest/Paper mode', () => {
+  const root = path.basename(process.cwd()) === 'api-server'
+    ? path.resolve(process.cwd(), '..') : process.cwd();
+  const source = readFileSync(path.join(root, 'stock-analyzer/src/pages/paper-trading.tsx'), 'utf8');
+  assert.match(source, /import \{ FourMarketPaperStatusPanel \}/);
+  assert.match(source, /import \{ManualFourMarketWalletPanel\}/);
+  assert.match(source, /<FourMarketPaperStatusPanel \/>/);
+  assert.match(source, /<ManualFourMarketWalletPanel \/>/);
+  assert.match(source, /<AutoTradingPage key=\{search\} initialMode="paper"/);
+  assert.match(source, /paperOrigin=\{new URLSearchParams\(search\)\.get\('kind'\) === 'manual' \? 'manual' : 'automatic'\}/);
+  assert.match(source, /<BacktestPaperCandidatePreview imported=\{imported\} \/>/);
+  assert.doesNotMatch(source, /initialMode="live"/);
 });

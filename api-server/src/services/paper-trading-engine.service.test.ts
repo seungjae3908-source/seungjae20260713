@@ -16,6 +16,7 @@ import {
 } from './paper-trading-engine.service.js';
 import type { RiskEngineInput } from './trading-risk-engine.service.js';
 import { manualCanonicalFixture } from './manual-paper-canonical-contract.fixture';
+import { dayKey, normalizedRiskState } from './paper-trading-core.service';
 import { MANUAL_PAPER_CANONICAL_FIELDS, manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
 import { settleFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-settlement-v1.js';
 
@@ -193,6 +194,33 @@ test('long limit fills when completed candle low reaches limit', () => {
   assert.equal(result.fills[0]?.fillReason, 'limit');
 });
 
+test('historical OHLC before manual order/position cannot retroactively trigger or exit', () => {
+  const pending=place(undefined,{request:{
+    orderType:'limit',requestedPrice:95,stopLossPrice:92,
+    takeProfitPrice1:100,takeProfitPrice2:105,
+  },eventId:'historical-pending'});
+  assert.equal(pending.order?.status,'pending');
+  const preOrder = process(pending.state, {
+    timestamp:NOW.getTime()-15*60_000,open:95,high:98,low:94,close:96,
+  }, 'historical-pre-order');
+  assert.equal(preOrder.order,null);
+  assert.equal(preOrder.fills.length,0);
+  assert.equal(preOrder.state.orders[0].status,'pending');
+  const valid = process(preOrder.state, {
+    timestamp:NOW.getTime()+15*60_000,open:95,high:98,low:94,close:96,
+  }, 'historical-valid-order');
+  assert.equal(valid.order?.status,'filled');
+
+  const entered = place(undefined,{eventId:'historical-open'});
+  assert.equal(entered.position?.status,'open');
+  const beforeEntry=process(entered.state, {
+    timestamp:NOW.getTime()-15*60_000,open:80,high:105,low:79,close:99,
+  },'historical-pre-position');
+  assert.equal(beforeEntry.fills.length,0);
+  assert.equal(beforeEntry.state.positions[0].status,'open');
+  assert.equal(beforeEntry.state.positions[0].currentPrice,entered.position?.currentPrice);
+});
+
 test('short limit fills when completed candle high reaches limit', () => {
   const pending = place(undefined, { request: { side: 'short', orderType: 'limit', requestedPrice: 105, stopLossPrice: 108, takeProfitPrice1: 100, takeProfitPrice2: 98 }, risk: { side: 'short' } });
   const result = process(pending.state, { open: 103, high: 106, low: 102, close: 104 });
@@ -289,14 +317,15 @@ test('invalid short stop direction is rejected', () => {
   assert.ok(result.order?.rejectionCodes.includes('INVALID_STOP_LOSS'));
 });
 
-test('app leverage limit is enforced', () => {
-  const result = place(undefined, { request: { leverage: 11 }, risk: { leverage: 11 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_APP_LIMIT'));
+test('manual Paper 125x hard ceiling is enforced before risk calculation', () => {
+  assert.throws(() => place(undefined, { request: { leverage: 126 }, risk: { leverage: 126 } }), /1~125/);
 });
 
-test('exchange leverage limit is enforced', () => {
+test('manual Paper can hypothetically exceed a real provider contract limit without a broker call', () => {
   const result = place(undefined, { request: { leverage: 6 }, risk: { leverage: 6 }, rules: { maximumLeverage: 5 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_EXCHANGE_LIMIT'));
+  assert.equal(result.order?.status, 'filled', JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
 });
 
 test('minimum quantity is enforced', () => {
@@ -320,25 +349,114 @@ test('insufficient margin is rejected', () => {
   assert.ok(result.order?.rejectionCodes.includes('INSUFFICIENT_MARGIN') || result.order?.status === 'rejected');
 });
 
-test('daily loss limit is enforced', () => {
+test('manual Paper daily drawdown is a warning, not a loss-only trading stop', () => {
   const state = createPaperTradingState(10_000, NOW);
-  state.riskState.dailyRealizedPnl = -100;
+  state.riskState.dailyRealizedPnl = -1_000;
   const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('DAILY_LOSS_LIMIT'));
+  assert.equal(result.order?.status,'filled',JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.order?.rejectionCodes.includes('DAILY_LOSS_LIMIT'),false);
+  assert.ok(result.warnings.includes('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED'));
+  assert.equal(result.orderSubmitted,false);
+  assert.equal(result.exchangeRequestSent,false);
 });
 
-test('weekly loss limit is enforced', () => {
+test('manual Paper weekly loss remains recorded but is not a new-entry stop', () => {
   const state = createPaperTradingState(10_000, NOW);
-  state.riskState.weeklyRealizedPnl = -300;
+  state.riskState.weeklyRealizedPnl = -3_000;
   const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('WEEKLY_LOSS_LIMIT'));
+  assert.equal(result.order?.status,'filled',JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.order?.rejectionCodes.includes('WEEKLY_LOSS_LIMIT'),false);
 });
 
-test('consecutive loss limit is enforced', () => {
+test('manual Paper observes five KST closed losses but keeps simulating without LIVE streak rules', () => {
   const state = createPaperTradingState(10_000, NOW);
   state.riskState.consecutiveLosses = 3;
-  const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('CONSECUTIVE_LOSS_LIMIT'));
+  const makeLoss = (id: number, closedAt = NOW_ISO, status = 'closed') => ({
+    id: 'manual-loss-' + id, closedAt, status, netPnl: -1,
+  } as any);
+  state.journal = Array.from({length:4}, (_,i)=>makeLoss(i));
+  const four = place(state);
+  assert.equal(four.order?.rejectionCodes.includes('CONSECUTIVE_LOSS_LIMIT'), false);
+  assert.equal(four.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
+  const fiveState = createPaperTradingState(10_000, NOW);
+  fiveState.journal = [...state.journal,makeLoss(4)];
+  const fifth = place(fiveState);
+  assert.equal(fifth.order?.status,'filled',JSON.stringify(fifth.order?.rejectionCodes));
+  assert.equal(fifth.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
+  assert.ok(fifth.warnings.includes('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED'));
+  assert.equal(fifth.orderSubmitted,false);
+  assert.equal(fifth.exchangeRequestSent,false);
+  const previousDay = createPaperTradingState(10_000, NOW);
+  previousDay.journal = fiveState.journal.map((row)=>({
+    ...row,closedAt:new Date(NOW.getTime() - 24*60*60_000).toISOString(),
+  }));
+  const freshDay = place(previousDay);
+  assert.equal(freshDay.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
+});
+
+test('pending manual entry triggers after five KST losses and still cannot double-fill', () => {
+  const pending = place(undefined, {
+    request: {orderType:'limit',requestedPrice:95,stopLossPrice:92,takeProfitPrice1:100,takeProfitPrice2:105},
+    eventId:'paper-pending-before-losses',
+  });
+  assert.equal(pending.order?.status,'pending');
+  const nowFiveLosses = structuredClone(pending.state);
+  nowFiveLosses.journal = Array.from({length:5},(_,i) => ({
+    id:'loss-before-trigger-'+i,status:'closed',closedAt:NOW_ISO,netPnl:-10,
+  } as any));
+  const triggered = process(nowFiveLosses, {open:97,high:98,low:94,close:96},'paper-trigger-after-fifth-loss');
+  assert.equal(triggered.order?.status,'filled',JSON.stringify(triggered.order?.rejectionCodes));
+  assert.equal(triggered.fills.length,1);
+  assert.equal(triggered.state.positions.length,1);
+  assert.ok(triggered.order?.warnings.includes('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED'));
+  assert.equal(triggered.orderSubmitted,false);
+  assert.equal(triggered.exchangeRequestSent,false);
+  const replay = process(triggered.state, {
+    timestamp: NOW.getTime() + 30*60_000,open:97,high:98,low:94,close:96,
+  },'paper-next-candle-no-double-fill');
+  assert.equal(replay.fills.length,0);
+  // Prior-day five losses must not block a valid fill in the next KST day.
+  const newKstDay = process(nowFiveLosses, {
+    timestamp:Date.parse('2026-08-02T15:01:00.000Z'),
+    open:97,high:98,low:94,close:96,
+  },'paper-trigger-next-kst-day');
+  assert.equal(newKstDay.order?.status,'filled');
+  assert.equal(newKstDay.fills.length,1);
+});
+
+test('manual Paper partial losses stay analytics-only, not fake fully-closed losses', () => {
+  const state=createPaperTradingState(10_000,NOW);
+  state.journal=Array.from({length:5},(_,i)=>({
+    id:'partial-loss-'+i,status:'partially_closed',closedAt:NOW_ISO,netPnl:-100,
+  } as any));
+  const allowed=place(state);
+  assert.equal(allowed.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
+});
+
+test('manual Paper daily realized-loss observation resets at KST midnight, not LIVE settings', () => {
+  const before=new Date('2026-08-02T14:59:00.000Z');
+  const after=new Date('2026-08-02T15:01:00.000Z');
+  // Risk dates are derived from the simulated KST trading calendar.
+  assert.equal(dayKey(before),'2026-08-02');
+  assert.equal(dayKey(after),'2026-08-03');
+  const state=createPaperTradingState(10_000,before);
+  state.riskState.dailyRealizedPnl=-100;
+  state.riskState.weeklyRealizedPnl=-300;
+  const normalized=normalizedRiskState(state.riskState,after);
+  assert.equal(normalized.dailyRealizedPnl,0);
+  assert.equal(normalized.dayKey,'2026-08-03');
+  assert.equal(normalized.weeklyRealizedPnl,0);
+});
+
+test('manual Paper closed-loss observation respects KST midnight rather than UTC midnight', () => {
+  const now=new Date('2026-08-02T15:00:00.000Z'); // 2026-08-03 00:00 KST
+  const state=createPaperTradingState(10_000,now);
+  state.journal=Array.from({length:5},(_,i)=>({
+    id:'prior-kst-loss-'+i,status:'closed',
+    closedAt:'2026-08-02T14:59:59.000Z',netPnl:-1,
+  } as any));
+  const result=place(state,{now});
+  assert.equal(result.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
 });
 
 test('mark price computes long unrealized pnl', () => {
@@ -425,11 +543,110 @@ test('target two closes remaining quantity', () => {
   assert.equal(second.position?.status, 'closed');
 });
 
+test('manual Paper 75%/25% targets settle the final residual fill without rounding dust', () => {
+  const opened = place(undefined, { request: {
+    targetClosePercent1: 75, targetClosePercent2: 25,
+  } });
+  const first = process(opened.state, { open:102,high:106,low:101,close:105 },'split-75');
+  const second = process(first.state, { timestamp:NOW.getTime()+30*60_000,
+    open:106,high:109,low:105,close:108 },'split-25');
+  assert.equal(second.position?.status,'closed');
+  assert.equal(second.position?.remainingQuantity,0);
+  assert.equal(second.state.account.usedMargin,0);
+  assert.equal(second.exchangeRequestSent,false);
+});
+
+test('manual Paper TP2 closes only its configured 25% and preserves the remaining position', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 25, targetClosePercent2: 25 },
+  });
+  const first = process(opened.state, { open: 102, high: 106, low: 101, close: 105 }, 'quarter-tp1');
+  assert.equal(first.fills.length, 1);
+  const original = first.position!.quantity;
+  assert.ok(Math.abs(first.position!.remainingQuantity / original - 0.75) < 0.001);
+  const second = process(first.state, {
+    timestamp: NOW.getTime()+30*60_000, open: 106, high: 109, low: 105, close: 108,
+  }, 'quarter-tp2');
+  assert.equal(second.fills.length, 1);
+  assert.equal(second.fills[0].fillReason, 'take_profit');
+  assert.ok(Math.abs(second.fills[0].quantity / original - 0.25) < 0.001);
+  assert.ok(Math.abs(second.position!.remainingQuantity / original - 0.50) < 0.001);
+  assert.equal(second.position!.status, 'partially_closed');
+  assert.equal(second.state.journal.length, 1);
+  assert.ok(Math.abs(second.state.journal[0].closedQuantity / original - 0.50) < 0.001);
+  assert.equal(second.state.orders[0]?.status, 'filled');
+  assert.equal(second.orderSubmitted, false);
+  assert.equal(second.exchangeRequestSent, false);
+});
+
+test('manual Paper target-2 with a zero-percent allocation does not invent a closing fill', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 50, targetClosePercent2: 0 },
+  });
+  const first = process(opened.state, { open: 102, high: 106, low: 101, close: 105 }, 'half-tp1');
+  const original = first.position!.quantity;
+  const second = process(first.state, {
+    timestamp: NOW.getTime()+30*60_000, open: 106, high: 109, low: 105, close: 108,
+  }, 'zero-tp2');
+  assert.equal(second.fills.length, 0);
+  assert.ok(Math.abs(second.position!.remainingQuantity / original - 0.5) < 0.001);
+  assert.equal(second.position!.status, 'partially_closed');
+  assert.equal(second.position!.target2Executed, true);
+  assert.equal(second.orderSubmitted, false);
+  assert.equal(second.exchangeRequestSent, false);
+});
+
+test('manual Paper both targets touched in one candle respect 25%/25%, without lookahead profit inflation', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 25, targetClosePercent2: 25 },
+  });
+  const result = process(opened.state, { open: 106, high: 110, low: 105, close: 108 }, 'both-quarter-tps');
+  assert.equal(result.fills.length, 2);
+  assert.ok(Math.abs(result.fills[0].quantity / result.position!.quantity - 0.25) < 0.001);
+  assert.ok(Math.abs(result.fills[1].quantity / result.position!.quantity - 0.25) < 0.001);
+  assert.equal(result.position!.status, 'partially_closed');
+  assert.ok(Math.abs(result.position!.remainingQuantity / result.position!.quantity - 0.5) < 0.001);
+});
+
 test('same candle stop and target uses stop first', () => {
   const opened = place();
   const result = process(opened.state, { open: 100, high: 106, low: 97, close: 100 }, 'stop-first');
   assert.equal(result.fills[0]?.fillReason, 'stop_loss');
   assert.equal(result.fills.length, 1);
+});
+
+test('TP2 before TP1 respects original 50/50 or 25/25 allocations, with no duplicate fills', () => {
+  for (const allocation of [50,25]) {
+    const opened = place(undefined, {
+      request: {
+        takeProfitPrice1:110,takeProfitPrice2:105,
+        targetClosePercent1:allocation,targetClosePercent2:allocation,
+      },
+      eventId:'reverse-tp-open-'+allocation,
+    });
+    assert.equal(opened.order?.status,'filled');
+    const first = process(opened.state, {
+      open:100,high:106,low:99,close:105,
+    },'reverse-tp2-'+allocation);
+    assert.equal(first.fills.length,1);
+    assert.equal(first.position?.target1Executed,false);
+    assert.equal(first.position?.target2Executed,true);
+    const second = process(first.state, {
+      timestamp:NOW.getTime()+30*60_000,open:106,high:111,low:105,close:110,
+    },'reverse-tp1-'+allocation);
+    assert.equal(second.fills.length,1);
+    if (allocation===50) {
+      assert.equal(second.position?.status,'closed');
+      assert.equal(second.position?.remainingQuantity,0);
+    } else {
+      assert.equal(second.position?.status,'partially_closed');
+      assert.ok(Math.abs(second.position!.remainingQuantity / second.position!.quantity-0.5)<0.001);
+    }
+    const third = process(second.state, {
+      timestamp:NOW.getTime()+45*60_000,open:108,high:112,low:106,close:110,
+    },'reverse-tp-no-repeat-'+allocation);
+    assert.equal(third.fills.length,0);
+  }
 });
 
 test('target allocation above 100 is rejected', () => {
@@ -851,4 +1068,92 @@ test('owner state readback and actual persisted side/leverage cannot be replaced
     assert.throws(() => applyPaperTradingAction(changed, canonicalClose(f, opened), f.exitNow, ownerStub),
       error => error.code === 'CANONICAL_PAPER_ACTUAL_CONSUMER_IDENTITY_MISMATCH', key);
   }
+});
+
+test('manual-only futures 125x opens as simulated capital without a provider order and liquidates ahead of stop after a gap', () => {
+  const initial = createPaperTradingState(10_000, NOW);
+  const entry = place(initial, {
+    eventId: 'paper-125-open',
+    request: { leverage: 125, stopLossPrice: 99.95 },
+    rules: { maximumLeverage: 10, maintenanceMarginRate: 0.005 },
+  });
+  assert.equal(entry.ok, true);
+  assert.equal(entry.orderSubmitted, false);
+  assert.equal(entry.exchangeRequestSent, false);
+  assert.equal(entry.order?.status, 'filled', JSON.stringify(entry.order?.rejectionCodes));
+  assert.equal(entry.position?.leverage, 125);
+  assert.equal(entry.position?.maintenanceMarginRate, 0.005);
+  const beforeCash = entry.state.account.cashBalance;
+  const initialMargin = entry.position?.initialRequiredMargin ?? Number.NaN;
+  assert.ok(initialMargin > 0);
+
+  // OHLC touches both the stop and the liquidation threshold. A gap that
+  // opens far beyond the threshold must not wipe unrelated isolated capital.
+  const result = process(entry.state, {
+    open: 80, low: 79, high: 101, close: 99,
+  }, 'paper-125-liquidated');
+  assert.equal(result.fills.length, 1);
+  assert.equal(result.fills[0]?.fillReason, 'liquidation');
+  assert.equal(result.state.positions[0]?.status, 'closed');
+  assert.equal(result.state.journal[0]?.exitReason, 'liquidation');
+  assert.ok(result.state.account.cashBalance >= beforeCash - initialMargin - 0.000001);
+  assert.ok(result.state.account.equity > 0);
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
+  const repeated = process(result.state, {
+    open: 80, low: 79, high: 101, close: 99,
+    timestamp: NOW.getTime() + 30 * 60_000,
+  }, 'paper-125-new-candle');
+  assert.equal(repeated.fills.length, 0, 'never liquidate a closed Paper position twice');
+});
+
+test('manual 125x mark-price liquidation is idempotent and invalid non-integer leverages are blocked', () => {
+  const entry = place(createPaperTradingState(10_000, NOW), {
+    eventId: 'mark-125-open',
+    request: { leverage: 125, stopLossPrice: 99.95 },
+  });
+  assert.equal(entry.order?.status, 'filled', JSON.stringify(entry.order?.rejectionCodes));
+  const mark = applyPaperTradingAction(entry.state, {
+    type: 'mark_price',
+    eventId: 'mark-125-liquidate',
+    symbol: 'BTCUSDT',
+    price: 80,
+    at: NOW.toISOString(),
+  }, NOW);
+  assert.equal(mark.fills[0]?.fillReason, 'liquidation');
+  assert.equal(mark.state.positions[0]?.status, 'closed');
+  const repeat = applyPaperTradingAction(mark.state, {
+    type: 'mark_price', eventId: 'mark-125-liquidate', symbol: 'BTCUSDT', price: 80,
+  }, NOW);
+  assert.equal(repeat.duplicateEvent, true);
+  assert.equal(repeat.fills.length, 0);
+
+  for (const leverage of [0, 1.5, 126, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => place(createPaperTradingState(10_000, NOW), {
+        request: { leverage }, eventId: 'invalid-paper-leverage',
+      }),
+      /1~125/,
+    );
+  }
+});
+
+test('manual Paper keeps capital and market safeguards when count-based loss gates are observational', () => {
+  const zero = createPaperTradingState(10_000, NOW);
+  zero.account.cashBalance = 0;
+  zero.account.equity = 0;
+  zero.account.availableMargin = 0;
+  zero.riskState.dailyRealizedPnl = -10_000;
+  zero.riskState.weeklyRealizedPnl = -10_000;
+  zero.riskState.consecutiveLosses = 99;
+  const blocked = place(zero, {eventId:'no-new-trade-at-zero-equity'});
+  assert.notEqual(blocked.order?.status,'filled');
+  assert.equal(blocked.fills.length,0);
+  assert.ok(blocked.order?.rejectionCodes.includes('INVALID_ACCOUNT_BALANCE') ||
+    blocked.order?.rejectionCodes.includes('INSUFFICIENT_MARGIN'));
+  const stale = createPaperTradingState(10_000,NOW);
+  stale.riskState.consecutiveLosses=99;
+  const noData = place(stale,{market:{status:'delayed'},eventId:'bad-market-still-blocked'});
+  assert.notEqual(noData.order?.status,'filled');
+  assert.ok(noData.order?.rejectionCodes.includes('DATA_NOT_LIVE'));
 });

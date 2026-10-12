@@ -414,6 +414,31 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+ // Exact, independently reviewed automatic-vs-manual Paper-only boundary.
+ // LIVE role policy checks and Production/Paper forward contract gates remain
+ // mandatory whenever these paths change. No wildcard scope expansion.
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+ // Generated from the exact changed Paper source graph. Both must move
+ // together and the authoritative runtime factory still verifies byte equality.
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+ 'api-server/src/services/paper-futures-mode-policy.service.test.ts',
+ 'api-server/src/services/paper-futures-mode-policy.service.ts',
+ 'api-server/src/services/paper-trading-candle.service.ts',
+ 'api-server/src/services/paper-trading-core.service.ts',
+ 'api-server/src/services/paper-trading-engine.service.test.ts',
+ 'api-server/src/services/paper-trading-position.service.ts',
+ 'api-server/src/services/paper-trading.types.ts',
+ 'api-server/src/services/trading-risk-engine.service.ts',
+ 'stock-analyzer/src/components/paper-trading-panel.tsx',
+ 'stock-analyzer/src/lib/paper-trading.ts',
+ // Exact Paper-local archive and evidence-only review. Shared LIVE/provider
+ // modules, secret reads, and production routes are not scope exceptions.
+ 'stock-analyzer/src/lib/paper-trading-storage.ts',
+ 'stock-analyzer/src/lib/paper-trading-storage.test.ts',
+ 'stock-analyzer/src/lib/paper-trade-review.ts',
+ 'stock-analyzer/src/lib/paper-trade-review.test.ts',
  'ops/deploy-production.sh',
 ];
 // Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
@@ -430,6 +455,44 @@ const memberTelegramReviewed=[
  'api-server/src/services/telegram-signal-followup.service.ts',
  'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
 ];
+// Exact Paper-only integration additions reviewed from Draft #1836/#1839/#1840.
+// NO wildcard: original LIVE/Production/RLS/research guards remain enabled.
+const paperFourModeIntegrationReviewed=[
+ // Keep both the exact bounded-path validator and its regression test under review.
+ '.github/scripts/check-paper-forward-bounded-diff.sh',
+ '.github/tests/pr-exact-head-paper-repair-checkout.test.mjs',
+ 'api-server/src/services/automatic-paper-v3-epoch.service.ts',
+ 'api-server/src/services/automatic-paper-v3-epoch.service.test.ts',
+ 'api-server/src/services/automatic-paper-v3-epoch-migration.test.ts',
+ 'api-server/supabase/migrations/2026101104_paper_research_round_wallet_epochs.sql',
+
+ 'api-server/src/services/manual-four-market-paper-cycle.service.ts',
+ 'api-server/src/services/manual-four-market-paper-cycle.service.test.ts',
+ 'api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts',
+ 'api-server/src/routes/manual-four-market-paper-wallets.ts',
+ 'api-server/src/routes/paper-trading.smoke.test.ts',
+ 'api-server/src/routes/paper-trading.ts',
+ 'api-server/src/services/manual-four-market-paper-wallet-migration.test.ts',
+ 'api-server/src/services/manual-four-market-paper-wallets.service.test.ts',
+ 'api-server/src/services/manual-four-market-paper-wallets.service.ts',
+ 'api-server/src/services/paper-journal-service-role.repository.test.ts',
+ 'api-server/src/services/paper-research-round-lifecycle.service.test.ts',
+ 'api-server/src/services/paper-research-round-lifecycle.service.ts',
+ 'api-server/src/services/paper-research-round-proposal-migration.test.ts',
+ 'api-server/src/services/paper-research-round-proposal-store.service.test.ts',
+ 'api-server/src/services/paper-research-round-proposal-store.service.ts',
+ 'api-server/src/services/paper-research-trade-attribution.service.test.ts',
+ 'api-server/src/services/paper-research-trade-attribution.service.ts',
+ 'api-server/supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql',
+ 'api-server/supabase/migrations/2026101103_paper_research_round_proposals.sql',
+ 'stock-analyzer/src/components/four-market-paper-status-panel.tsx',
+ 'stock-analyzer/src/components/manual-four-market-wallet-panel.tsx',
+ 'stock-analyzer/src/lib/four-market-paper-status.test.ts',
+ 'stock-analyzer/src/lib/four-market-paper-status.ts',
+ 'stock-analyzer/src/lib/manual-four-market-paper-status.test.ts',
+ 'stock-analyzer/src/lib/manual-four-market-paper-status.ts',
+ 'stock-analyzer/src/pages/paper-trading.tsx',
+];
 const allowed=new Set([
  ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
@@ -444,6 +507,7 @@ const allowed=new Set([
  ...formulaAiDriftReviewed,
  ...automaticTradingDriftReviewed,
  ...memberTelegramReviewed,
+ ...paperFourModeIntegrationReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 // The personal Telegram member-profile reads share a repository with automatic
@@ -511,6 +575,18 @@ function isPersonalTelegramMembershipOnlyChange(p) {
  }
  return false;
 }
+const reviewedGeneratedPaperRuntimeFiles=[
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+];
+if (reviewedGeneratedPaperRuntimeFiles.some(p=>changed.includes(p))) {
+ if (!reviewedGeneratedPaperRuntimeFiles.every(p=>changed.includes(p))
+   || !changed.includes('api-server/src/services/trading-risk-engine.service.ts')
+   || !changed.includes('api-server/src/services/paper-trading-core.service.ts')
+   || !changed.includes('.github/workflows/paper-forward-schedule-validation.yml')) {
+  throw new Error('AUTHORITATIVE_PAPER_RUNTIME_GENERATED_REVIEW_PAIR_REQUIRED');
+ }
+}
 const preservedPaperIntegration=changed.filter((p)=>isPreservedPaperIntegrationPath(p,
  (ref,file)=>git('rev-parse',`${ref}:${file}`)));
 if(preservedPaperIntegration.length>0){
@@ -546,7 +622,9 @@ if(automaticTradingChanged.length>0){
    throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_ACTIVATION_FORBIDDEN');
  }
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
- for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
+ for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix))
+   && !reviewedGeneratedPaperRuntimeFiles.includes(p))
+  throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
 const canonicalMemberFixtureOnlyPaths=new Set([
  'api-server/src/services/research-workspace-authorization-v5.test.ts',
@@ -678,6 +756,9 @@ const protectedPathExceptions=new Map([
   'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
   'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
   'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+  // Do not exempt any Research source: ONLY byte-for-byte generated runtime
+  // bundle and its digest manifest, cross-checked by Paper Factory CI.
+  ...reviewedGeneratedPaperRuntimeFiles,
  ])],
  ['research-production',new Set([
   'research-production/bin/research-approved-job-intake.mjs',

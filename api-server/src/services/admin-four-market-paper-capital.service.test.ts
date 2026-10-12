@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+// Paper-only deterministic research campaign lifecycle; never a LIVE or wallet writer.
+import './paper-research-round-lifecycle.service.test';
+import './paper-research-trade-attribution.service.test';
+import './paper-research-round-proposal-store.service.test';
+import './paper-research-round-proposal-migration.test';
+import './manual-four-market-paper-wallets.service.test';
+import './manual-four-market-paper-wallet-migration.test';
+import './manual-four-market-paper-cycle.service.test';
+import './automatic-paper-v3-epoch.service.test';
+import './automatic-paper-v3-epoch-migration.test';
 import type { StoredPaperJournalRecord, PaperJournalSyncRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { auditAutomaticPaperExecutionHistory } from './automatic-paper-journal-mirror.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_TOTAL_INITIAL_KRW,
   adminPaperWalletId, adminPaperMarketFromPlan, adminMarketPaperRiskBudget,
@@ -168,7 +179,7 @@ test('market-specific high-water mark produces half compound/half reserve withou
   const loss = projectAdminMarketCapital('us_stock',[trade('loss',-100_000,'us_stock',1)],
     AT.getTime()+5_000);
   assert.equal(loss.operatingCapitalKrw,900_000);
-  assert.equal(loss.newEntriesAllowed,false);
+  assert.equal(loss.newEntriesAllowed,true);
   const duplicate = projectAdminMarketCapital('us_stock',[
     trade('same',10_000,'us_stock',1),trade('same',10_000,'us_stock',1),
   ], AT.getTime()+5_000);
@@ -183,7 +194,7 @@ test('simultaneous net loss never mints a false 50% reserve from ordering', () =
   ],AT.getTime()+5_000);
   assert.equal(projected.operatingCapitalKrw,950_000);
   assert.equal(projected.reserveKrw,0);
-  assert.equal(projected.newEntriesAllowed,false);
+  assert.equal(projected.newEntriesAllowed,true);
 });
 
 test('market budget admits only canonical settlement-backed compounding and never borrows from another market', () => {
@@ -217,7 +228,7 @@ test('market budget admits only canonical settlement-backed compounding and neve
   assert.equal(invalid.availableToTradeKrw,0);
 });
 
-test('admin market daily loss count and 50k net loss guard stay market-specific', () => {
+test('admin Paper loss counters remain market-specific observations after five losses', () => {
   const now=AT.getTime()+10_000;
   const losses=Array.from({length:5},(_,i)=>({
     id:'losing-'+i,market:'crypto_spot' as const,
@@ -226,7 +237,8 @@ test('admin market daily loss count and 50k net loss guard stay market-specific'
   }));
   const projected=projectAdminMarketCapital('crypto_spot',losses,now);
   assert.equal(projected.dailyLosingTrades,5);
-  assert.equal(projected.newEntriesAllowed,false);
+  assert.equal(projected.newEntriesAllowed,true);
+  assert.equal(projected.operatingCapitalKrw,975_000);
   const untouched=projectAdminMarketCapital('domestic_stock',losses,now);
   assert.equal(untouched.dailyLosingTrades,0);
   assert.equal(untouched.newEntriesAllowed,true);
@@ -295,7 +307,8 @@ test('one verified small loss reduces actual collateral but does not falsely tri
       netPnlKrw: -5_000, fullCostsVerified: true, closeTimeFxVerified: true,
     })), now);
   assert.equal(stopped.dailyLosingTrades, 5);
-  assert.equal(stopped.newEntriesAllowed, false);
+  assert.equal(stopped.newEntriesAllowed, true);
+  assert.equal(stopped.operatingCapitalKrw, 975_000);
 });
 
 test('verified 50/50 compound cash is market-local and cannot expand Live order policy', () => {
@@ -327,4 +340,143 @@ test('wallet seed alone cannot authorize Paper trading without canonical closing
   });
   assert.equal(reviewed.ready,true);
   assert.equal(reviewed.availableToTradeKrw,1_000_000);
+});
+
+test('all four markets/roles continue Paper losses until verified capital is exhausted, without reserve refill', () => {
+  const now = AT.getTime() + 60_000;
+  for (const market of ADMIN_FOUR_PAPER_MARKETS) {
+    for (const project of [projectAdminMarketCapital, projectMemberMarketCapital]) {
+      const rows = Array.from({length:10}, (_,i) => ({
+        id:`continuous-${market}-${i}`,market,
+        closedAt:new Date(AT.getTime()+i*1000).toISOString(),
+        netPnlKrw:-50_000,fullCostsVerified:true,closeTimeFxVerified:true,
+      }));
+      const multipleLosses=project(market,rows,now);
+      assert.equal(multipleLosses.dailyLosingTrades,10);
+      assert.equal(multipleLosses.operatingCapitalKrw,500_000);
+      assert.equal(multipleLosses.settlementReady,true);
+      assert.equal(multipleLosses.newEntriesAllowed,true);
+      assert.equal(multipleLosses.reserveKrw,0);
+      // Explicit capital exhaustion is a simulation end, not a hidden seed reset.
+      const exhausted=project(market, [...rows,{
+        id:`exhausted-${market}`,market,
+        closedAt:new Date(now-1_000).toISOString(),
+        netPnlKrw:-500_000,fullCostsVerified:true,closeTimeFxVerified:true,
+      }],now);
+      assert.equal(exhausted.operatingCapitalKrw,0);
+      assert.equal(exhausted.newEntriesAllowed,false);
+      assert.equal(exhausted.reserveKrw,0);
+      assert.equal(exhausted.settledTrades,11);
+      assert.equal(exhausted.settledNetPnlKrw,-1_000_000);
+    }
+  }
+});
+
+
+/** Read-only immutable historical Paper audit. No provider, DB write or
+ * counterfeit tax/funding evidence is permitted in these regressions. */
+test('audit matches 15 Paper mirrors by internal order ID, quarantines two historic zero-fill statuses',()=>{
+  const owner='11111111-1111-1111-1111-111111111111';
+  const plan={id:'historic-spot',userId:owner,accountMode:'paper',
+    executionMode:'automatic',exchange:'upbit',market:'KRW'} as TradingPlan;
+  const orders=Array.from({length:17},(_,i)=>({
+    id:'historic-spot-order-'+i,planId:plan.id,userId:owner,exchange:'upbit',
+    state:'FILLED',filledQuantity:i<15?1:0,averageFillPrice:100,
+    fills:[],feeAmount:null,taxAmount:null,settlementFxEvidence:null,
+  } as unknown as TradingOrder));
+  const storedRows=orders.slice(0,15).map(order=>({
+    kind:'journal',id:'journal-'+order.id,deletedAt:null,
+    payload:{source:'APP_PAPER',recordType:'unified_trade_order',
+      brokerOrderId:order.id,market:'CRYPTO_SPOT',
+      filledQuantity:1,averageFillPrice:100,status:'FILLED'},
+  } as unknown as StoredPaperJournalRecord));
+  const result=auditAutomaticPaperExecutionHistory({
+    ownerId:owner,plans:[plan],orders,storedRows,
+  });
+  assert.equal(result.version,'automatic-paper-history-audit-v1');
+  assert.equal(result.status,'INCOMPLETE_EXECUTION_EVIDENCE');
+  assert.equal(result.totals.paperOrders,17);
+  assert.equal(result.totals.filledOrders,17);
+  assert.equal(result.totals.invalidFilledOrders,2);
+  assert.equal(result.totals.confirmedJournalMirrors,15);
+  assert.equal(result.totals.missingJournalMirrors,0);
+  assert.equal(result.totals.aggregateOnlyFilledOrders,15);
+  assert.equal(result.totals.missingFullCostEvidence,15);
+  assert.equal(result.markets.crypto_spot.filledOrders,17);
+  assert.equal(result.markets.us_stock.filledOrders,0);
+  assert.equal(result.actualSettlementProven,false);
+  assert.equal(result.profitabilityProven,false);
+  assert.equal(result.financialMutationCount,0);
+  assert.equal(result.privateProviderRequests,0);
+  assert.equal(result.executionAuthority,'NONE');
+  assert.equal('orderIds' in result,false);
+});
+
+test('automatic Paper audit reports market-separated risks, mirror conflict and unknown futures funding',()=>{
+  const owner='11111111-1111-1111-1111-111111111111';
+  const scenarios=[
+    {id:'kr',exchange:'kiwoom',market:'KR',target:'domestic_stock'},
+    {id:'us',exchange:'kiwoom',market:'US',target:'us_stock'},
+    {id:'spot',exchange:'upbit',market:'KRW',target:'crypto_spot'},
+    {id:'future',exchange:'bitget',market:'USDT-FUTURES',target:'crypto_futures'},
+  ] as const;
+  const plans=scenarios.map(p=>({
+    id:'plan-'+p.id,userId:owner,accountMode:'paper',executionMode:'automatic',
+    exchange:p.exchange,market:p.market,reduceOnly:p.id==='future',
+  } as unknown as TradingPlan));
+  const orders=plans.map((plan,i)=>({
+    id:'order-'+i,planId:plan.id,userId:owner,exchange:plan.exchange,
+    state:'FILLED',filledQuantity:1,averageFillPrice:100,
+    fills:[{fillId:'positive-'+i}],feeAmount:0,feeCurrency:i===3?'USDT':i===1?'USD':'KRW',
+    taxAmount:0,taxCurrency:i===3?'USDT':i===1?'USD':'KRW',
+    settlementFxEvidence:{krwPerQuoteCurrency:i===0||i===2?1:1400,
+      source:i===0||i===2?'NATIVE_KRW':'PUBLIC',observedAt:'2026-10-12T06:00:00Z'},
+    paperFundingSettlementEvidence:null,
+  } as unknown as TradingOrder));
+  const storedRows=orders.map(order=>({
+    kind:'journal',id:'journal-'+order.id,deletedAt:null,
+    payload:{source:'APP_PAPER',recordType:'unified_trade_order',
+      brokerOrderId:order.id,market:[
+        'KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'
+      ][Number(order.id.split('-').at(-1))],
+      filledQuantity:1,averageFillPrice:100,status:'FILLED'},
+  } as unknown as StoredPaperJournalRecord));
+  const ok=auditAutomaticPaperExecutionHistory({ownerId:owner,plans,orders,storedRows});
+  assert.equal(ok.totals.paperOrders,4);
+  assert.equal(ok.totals.confirmedJournalMirrors,4);
+  assert.equal(ok.totals.missingFullCostEvidence,1,
+    'futures exit cannot assume unknown funding is zero');
+  for(const x of scenarios)assert.equal(ok.markets[x.target].paperOrders,1);
+  assert.equal(ok.status,'UNSETTLED_PAPER_HISTORY');
+  const conflictRows=storedRows.map((x,i)=>i===1
+    ?{...x,payload:{...x.payload,filledQuantity:2}}:x);
+  const bad=auditAutomaticPaperExecutionHistory({ownerId:owner,plans,orders,storedRows:conflictRows});
+  assert.equal(bad.markets.us_stock.conflictingJournalMirrors,1);
+  assert.equal(bad.status,'INCOMPLETE_EXECUTION_EVIDENCE');
+  const noMirror=auditAutomaticPaperExecutionHistory({
+    ownerId:owner,plans,orders,storedRows:storedRows.slice(1),
+  });
+  assert.equal(noMirror.markets.domestic_stock.missingJournalMirrors,1);
+  assert.equal(noMirror.status,'INCOMPLETE_JOURNAL');
+});
+
+test('historical Paper audit rejects mixed owner and duplicate authoritative order identities',()=>{
+  const owner='11111111-1111-1111-1111-111111111111';
+  const plan={id:'paper-owner',userId:owner,accountMode:'paper',
+    executionMode:'automatic',exchange:'upbit',market:'KRW'} as TradingPlan;
+  const order={id:'audit-id',planId:plan.id,userId:owner,
+    state:'FILLED',filledQuantity:1,averageFillPrice:100,
+  } as TradingOrder;
+  const audit=(plans:TradingPlan[],orders:TradingOrder[])=>
+    auditAutomaticPaperExecutionHistory({ownerId:owner,plans,orders,storedRows:[]});
+  assert.throws(()=>audit([{...plan,userId:'different-owner'}],[order]),
+    /PAPER_HISTORY_AUDIT_OWNER_MISMATCH/);
+  assert.throws(()=>audit([plan],[{...order,userId:'different-owner'}]),
+    /PAPER_HISTORY_AUDIT_ORDER_OWNER_MISMATCH/);
+  assert.throws(()=>audit([plan,plan],[order]),/PAPER_HISTORY_AUDIT_DUPLICATE_PLAN/);
+  assert.throws(()=>audit([plan],[order,order]),/PAPER_HISTORY_AUDIT_DUPLICATE_ORDER/);
+  const empty=audit([],[]);
+  assert.equal(empty.status,'NO_HISTORY');
+  assert.equal(empty.totals.paperOrders,0);
+  assert.equal(empty.actualSettlementProven,false);
 });

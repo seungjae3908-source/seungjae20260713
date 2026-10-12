@@ -414,9 +414,10 @@ test('automatic policy fields restrict eligibility and standing activation remov
   assert.ok((submitted as TradingPlanInput & { riskEnvelope?: unknown }).riskEnvelope);
   assert.equal(await repository.findOrderByPlan(USER_A, created.plan!.id), null);
 });
-test('risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
+test('LIVE risk engine blocks emergency, stale/volatile markets, loss limits, and insufficient balance', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
   const decision = evaluateTradingPlan(plan({
+    accountMode: 'live',
     marketSnapshot: { ...plan().marketSnapshot, dataDelayMs: 6_000, oneMinuteMovePercent: -7,
       spreadPercent: 2, orderbookGapPercent: 3, availableBalance: 100, dailyPnlPercent: -5 },
   }), policy, { emergencyStopped: true, serverLiveEnabled: false });
@@ -444,6 +445,37 @@ test('zero daily order quota stays opportunity-driven while an explicit positive
     marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
   }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
+test('only Paper turns observed losing streak/drawdown into warnings; LIVE hard stops and market gates remain', () => {
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const snapshot = {
+    ...plan().marketSnapshot,
+    dailyPnlPercent:-10,
+    weeklyPnlPercent:-20,
+    consecutiveLosses:11,
+  };
+  const options = {emergencyStopped:false,serverLiveEnabled:false};
+  const paper = evaluateTradingPlan(plan({accountMode:'paper',marketSnapshot:snapshot}),policy,options);
+  for (const code of ['DAILY_LOSS_LIMIT','WEEKLY_LOSS_LIMIT','CONSECUTIVE_LOSS_LIMIT']) {
+    assert.equal(paper.blockCodes.includes(code),false,code);
+  }
+  assert.ok(paper.warnings.includes('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED'));
+  assert.ok(paper.warnings.includes('PAPER_RESEARCH_LOSING_STREAK_OBSERVED'));
+
+  const live = evaluateTradingPlan(plan({accountMode:'live',marketSnapshot:snapshot}),policy,options);
+  for (const code of ['DAILY_LOSS_LIMIT','WEEKLY_LOSS_LIMIT','CONSECUTIVE_LOSS_LIMIT']) {
+    assert.ok(live.blockCodes.includes(code),code);
+  }
+  const dataFailure = evaluateTradingPlan(plan({accountMode:'paper',marketSnapshot:{
+    ...snapshot,dataDelayMs:60_000,availableBalance:0,
+  }}),policy,options);
+  assert.ok(dataFailure.blockCodes.includes('MARKET_DATA_DELAYED'));
+  assert.ok(dataFailure.blockCodes.includes('INSUFFICIENT_BALANCE'));
+  const emergency = evaluateTradingPlan(plan({accountMode:'paper',marketSnapshot:snapshot}),policy,{
+    ...options,emergencyStopped:true,
+  });
+  assert.ok(emergency.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
 });
 
 test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
