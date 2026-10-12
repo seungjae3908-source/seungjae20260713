@@ -197,6 +197,15 @@ forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
   'AUTO_GATE_OPTIONAL_FEATURE_COUPLING_FORBIDDEN');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
+requireText(workflow, 'requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID', 'AUTO_GATE_PREARM_HANDOFF_MISSING_BLOCK');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE', 'AUTO_GATE_PREARM_HANDOFF_FRESHNESS_BLOCK');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH', 'AUTO_GATE_PREARM_HANDOFF_SHA_BLOCK');
+const preArmCall = workflow.indexOf('requireFreshPublishedHandoff(before);');
+const pm2Enable = workflow.indexOf('restartAutomatic(true, before);', preArmCall);
+if (preArmCall < 0 || pm2Enable < 0 || preArmCall >= pm2Enable) {
+  throw new Error('AUTO_GATE_PREARM_GUARD_MUST_PRECEDE_ANY_MUTATION');
+}
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
