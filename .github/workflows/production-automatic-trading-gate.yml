@@ -1088,6 +1088,17 @@ jobs:
             echo 'AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH' >&2
             exit 1
           }
+          # An exact current-sha marker alone cannot prove that the installed
+          # installer file has not drifted from the approved main source.
+          expected_source_hash="$(sha256sum ops/production-auto-live-signal-identity.cjs | awk '{print $1}')"
+          remote_source_hash="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'test -f /opt/stock-app/ops/production-auto-live-signal-identity.cjs && test ! -L /opt/stock-app/ops/production-auto-live-signal-identity.cjs && sha256sum /opt/stock-app/ops/production-auto-live-signal-identity.cjs' | awk '{print $1}')"
+          [[ "$remote_source_hash" == "$expected_source_hash" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH' >&2
+            exit 1
+          }
           env_args="$(printf 'AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_DEPLOYED_SHA=%q' "$TARGET_SHA" "$TARGET_SHA")"
           # Source comes from immutable current main; preflight is READ ONLY.
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
@@ -1140,6 +1151,69 @@ jobs:
             || receipt.financialMutationCount !== 0
             || receipt.privateRequestCount !== 0) {
             throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID');
+          }
+          NODE
+
+
+      - name: Read back exact scheduled public source without scanner or trading claims
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$RUNNER_TEMP/public-source-schedule-readback.json" <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          const {
+            inspectManagedPaperForwardSchedule,
+            readProductionAutoLiveScheduleActivation,
+            assertAutoLiveSignalNotDisabled,
+          } = require('/opt/stock-app/ops/production-auto-live-signal-identity.cjs');
+          const sha = String(process.env.TARGET_SHA || '');
+          const root = '/opt/stock-app-data/auto-live-signal-v1';
+          const activation = readProductionAutoLiveScheduleActivation(root + '/activation.json');
+          const cron = spawnSync('crontab',['-l'],{
+            encoding:'utf8',timeout:5000,maxBuffer:1024*1024,
+            env:{...process.env,LC_ALL:'C'},
+          });
+          if (cron.error || cron.signal || cron.status !== 0) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_CRON_READBACK_UNAVAILABLE');
+          }
+          const observed = inspectManagedPaperForwardSchedule(
+            cron.stdout, activation, sha, activation.activationAtMs);
+          assertAutoLiveSignalNotDisabled(root);
+          if (observed.entryCount !== 1 || observed.activationBound !== true
+            || observed.publicOnly !== true || observed.refreshIntervalMs !== 900000
+            || activation.independentPaperRoot !== true
+            || activation.paperRootMutated !== false
+            || activation.paperCronReplaced !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_PROOF_INVALID');
+          }
+          // The readback attests installation CONFIGURATION only. Cron still
+          // needs observed genuine ticks and independent scanner/AI evidence.
+          process.stdout.write(JSON.stringify({
+            schemaVersion:'auto-live-independent-public-schedule-readback-v1',
+            targetSha:sha,status:'CONFIGURATION_VERIFIED_ONLY',
+            exactActiveCommand:true,activationBound:true,
+            independentPaperRoot:true,paperRootMutated:false,
+            paperCronReplaced:false,realOrderSubmitted:false,
+            producerInvocationVerified:false,aiIssuerVerified:false,
+            uninterrupted24hVerified:false,
+          })+'\n');
+          NODE
+          node - "$RUNNER_TEMP/public-source-schedule-readback.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.targetSha !== process.argv[3] ||
+            p.status !== 'CONFIGURATION_VERIFIED_ONLY' ||
+            p.exactActiveCommand !== true || p.activationBound !== true ||
+            p.independentPaperRoot !== true || p.paperRootMutated !== false ||
+            p.paperCronReplaced !== false || p.producerInvocationVerified !== false ||
+            p.aiIssuerVerified !== false || p.uninterrupted24hVerified !== false ||
+            p.realOrderSubmitted !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID');
           }
           NODE
 
