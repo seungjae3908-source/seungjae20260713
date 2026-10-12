@@ -107,19 +107,36 @@ function resetToBackoff(socket,nowMs,reason){
   socket.lastFailure=reason;socket.lastCloseAtMs=nowMs;
   socket.acks=[];socket.subscribedAtMs=0;
 }
+// Collapse contiguous, not-yet-REST-audited minute ranges per symbol.
+// Without this a 760-symbol feed emits >2,048 pending records after only
+// three candle rollovers. Never call missing minutes 'no trade' or 'verified'.
+// Preserve the COMPLETE requested tail, even past a single 180m REST page.
 function gap(state,market,symbol,from,to,reason,observedAtMs){
   if(!goodMs(from)||!goodMs(to)||to<=from)return;
-  // Missing slots might be no-trade (Upbit). Do not invent candles.
-  const range=Math.min(to,from+
-    PUBLIC_WS_SUPERVISOR_LIMITS.maxOutageAuditMinutes*60_000);
-  const x={market,symbol,fromMs:from,toExclusiveMs:range,
-    unverifiedBeyondCap:to>range,reason,
-    observedAtMs,sourceVerified:false,restBackfillRequired:true};
-  if(state.pendingRestAudits.some(v=>v.market===market&&v.symbol===symbol
-    &&v.fromMs===from&&v.toExclusiveMs===range))return;
+  const maxSpan=PUBLIC_WS_SUPERVISOR_LIMITS.maxOutageAuditMinutes*60_000;
+  const prior=state.pendingRestAudits.find(v=>
+    v.market===market&&v.symbol===symbol
+    &&(v.requestedEndExclusiveMs??v.toExclusiveMs)>=from
+    &&v.fromMs<=to);
+  if(prior){
+    const requiredEnd=Math.max(prior.requestedEndExclusiveMs??
+      prior.toExclusiveMs,to);
+    prior.requestedEndExclusiveMs=requiredEnd;
+    prior.toExclusiveMs=Math.min(requiredEnd,prior.fromMs+maxSpan);
+    prior.unverifiedBeyondCap=requiredEnd>prior.toExclusiveMs;
+    prior.reason=prior.reason===reason?reason:'MIXED_WS_REST_AUDIT_REQUIRED';
+    prior.lastObservedAtMs=observedAtMs;
+    return;
+  }
   if(state.pendingRestAudits.length>=PUBLIC_WS_SUPERVISOR_LIMITS.maxPendingRestAudits)
     fail('WS_SUPERVISOR_PENDING_AUDIT_LIMIT');
-  state.pendingRestAudits.push(x);
+  const limitedEnd=Math.min(to,from+maxSpan);
+  state.pendingRestAudits.push({
+    market,symbol,fromMs:from,toExclusiveMs:limitedEnd,
+    requestedEndExclusiveMs:to,unverifiedBeyondCap:to>limitedEnd,
+    reason,observedAtMs,lastObservedAtMs:observedAtMs,
+    sourceVerified:false,restBackfillRequired:true,
+  });
 }
 export function createPublicCryptoWsSupervisorV1({
   enabled=false,plan,nowMs,
@@ -279,7 +296,7 @@ export function observePublicCryptoWsSupervisorV1({
       const previous=socket.provisionalBySymbol[symbol]?.current;
       if(opened&&previous){
         gap(s,socket.market,symbol,
-          previous.row.timestamp+60_000,
+          previous.row.timestamp,
           Math.floor(nowMs/60_000)*60_000,
           'WEBSOCKET_DISCONNECT_UNVERIFIED',nowMs);
       }
