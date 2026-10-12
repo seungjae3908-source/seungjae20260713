@@ -1,6 +1,9 @@
 import test from 'node:test';
 // Run canonical exit identity regressions in the already registered phase12 lane.
 import './member-auto-trading-exit-plan.service.test';
+import './automatic-live-preactivation-audit.service.test';
+import './automatic-live-unrealized-risk.service.test';
+import './bitget-native-protection-readonly.service.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -45,6 +48,7 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticLiveStrategyAllowlisted,
+  currentLiveMemberAccessMatchesBatch,
   automaticPaperCapitalPolicyReady,
   automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
@@ -61,6 +65,50 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
+  const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  const spot = { exchange: 'upbit', accountMode: 'live', leverage: null } as const;
+  const futures = { exchange: 'bitget', accountMode: 'live', leverage: 7 } as const;
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, spot), true);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, futures), true);
+  for (const profile of [{ ...admin, status: 'suspended' }, { ...admin, is_active: false },
+    { ...admin, membership_expires_at: new Date(Date.now() - 1).toISOString() },
+    { ...admin, membership_level: 'regular', role: 'user' }]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(profile, 1_000_000, spot), false);
+  }
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, undefined, spot), false);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 500_000, spot), false, 'upgrade cannot inherit old batch authority');
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...spot, accountMode: 'paper' }), false);
+  for (const leverage of [1, 8, 7.1, null, Number.NaN]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage }), false);
+  }
+});
+
+test('worker stopped during an awaited member read cannot create plans or resume on a later tick', async () => {
+  const repository = new InMemoryTradingRepository();
+  const nowMs = Date.now();
+  let unblock!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async listEligibleMembers() { started(); await blocked; return await base.listEligibleMembers(); },
+  });
+  const first = withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  await entered;
+  worker.stop(); unblock();
+  const stoppedTick = await first;
+  assert.equal(stoppedTick.newEntriesFailClosed, true);
+  assert.equal(stoppedTick.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(stoppedTick.liveOrders + stoppedTick.paperExitOrders + stoppedTick.privateTradingRequests, 0);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  const later = await worker.runOnce(new Date(nowMs + 1_000));
+  assert.equal(later.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(later.liveEntryWarmupComplete, false); assert.equal(later.liveEntriesArmed, false);
+  assert.equal(later.newEntriesFailClosed, true);
+});
 
 test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
   const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
@@ -401,6 +449,8 @@ function source(
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
+    // Explicit fake current-authority reader; never a Production capability.
+    async revalidateLiveMemberAccess() { return !options.expired && options.tier !== 'pending'; },
     async readHandoff() {
       return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
     },
@@ -1687,6 +1737,29 @@ test('first live warmup suppresses automatic exits for existing live positions b
     assert.equal(quarantined.createdPlans, 0);
     assert.equal(quarantined.failures, 0, 'missing Paper state is not a Live worker failure');
     assert.equal(liveReads, 0);
+
+    const futuresRepository = new InMemoryTradingRepository();
+    await futuresRepository.savePolicy(USER, allFourPolicy());
+    const futuresPlan = { ...await repository.getPlan(USER, 'live-plan-existing'),
+      id: 'futures-existing', exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', leverage: 2, marginMode: 'isolated', idempotencyKey: 'futures-existing-key' } as TradingPlan;
+    await futuresRepository.savePlan(futuresPlan);
+    await futuresRepository.saveOrder({ ...await repository.getOrder(USER, 'live-order-existing'),
+      id: 'futures-filled', planId: futuresPlan.id, exchange: 'bitget',
+      clientOrderId: 'futures-filled-client' } as import('./trade-automation.types').TradingOrder);
+    let nativeReads = 0;
+    const unprotected = new MemberAutoTradingBackgroundWorker({
+      ...source(futuresRepository, nowMs, { tier: 'admin', policyOverride: allFourPolicy() }),
+      async auditNativeFuturesProtection() { nativeReads += 1; throw new Error('BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED'); },
+    });
+    const unsafe = await withFetchMock(() => unprotected.runOnce(new Date(nowMs)));
+    assert.equal(nativeReads, 1);
+    assert.equal(unsafe.nativeProtectionErrorCode, 'BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED');
+    assert.equal(unsafe.liveTrackedPositions, 1, 'unknown native close must not hide canonical ownership');
+    assert.equal(unsafe.newEntriesFailClosed, true);
+    assert.equal(unsafe.liveEntryWarmupComplete, false, 'unverified protection cannot become a healthy warmup');
+    assert.equal(unsafe.liveOrders + unsafe.liveExitOrders + unsafe.privateTradingRequests, 0);
+    assert.equal((await futuresRepository.listOrders(USER)).length, 1, 'no invented exit fill or test order');
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -2071,6 +2144,21 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
   assert.equal(result.createdPlans, 0);
   assert.equal(result.liveOrders, 0);
   assert.equal(result.failures, 1);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_PAPER_HANDOFF_STALE');
+});
+
+test('handoff failure reports a sanitized cause without leaking filesystem or secret details', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const result = await new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { throw new Error('HANDOFF_ENTRY_STALE:private-file:secret-value'); },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffErrorCode, 'HANDOFF_ENTRY_STALE');
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 
@@ -2186,7 +2274,7 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
   const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
     ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
   assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
-  const order = { planId: plan.id, userId: plan.userId, exchange: plan.exchange,
+  const order = { id: 'entry-fill', planId: plan.id, userId: plan.userId, exchange: plan.exchange,
     state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
   assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
   const filled = { ...order, state: 'FILLED' as const, filledQuantity: 1 };
@@ -2195,12 +2283,20 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
     { market: 'UPBIT', symbol: 'SOL', quantity: 1, availableQuantity: 1 } as NonNullable<CanonicalAccountSnapshot['positions']>[number]] };
   const exit = { ...plan, id: 'exit', symbol: 'KRW-SOL', side: 'sell' as const, reduceOnly: true,
     signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
+  for (const filledQuantity of [0.5, 1]) {
+    const wrongExit = { ...exit, side: 'buy' as const };
+    const wrongOrder = { ...filled, id: 'exit-fill', planId: exit.id, filledQuantity };
+    assert.throws(() => canonicalAutomaticLivePositions([plan, wrongExit], [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+    assert.throws(() => canonicalAutomaticLivePositions([plan,
+      { ...exit, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto', 'AUTO_EXIT_ENTRY_PLAN:foreign'] }],
+    [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+  }
   assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(withAuto, owned, exit));
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, plan), /AUTOMATIC_POSITION_ALREADY_OPEN/);
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, signalReasons: [] }), /EXIT_OWNERSHIP_REQUIRED/);
   assert.throws(() => canonicalAutomaticLivePositions([plan], [filled, { ...filled, id: 'duplicate' }]), /OWNERSHIP_AMBIGUOUS/);
-  const closedOrder = { ...filled, planId: exit.id };
+  const closedOrder = { ...filled, id: 'exit-fill', planId: exit.id };
   assert.deepEqual(canonicalAutomaticLivePositions([plan, exit], [filled, closedOrder]), []);
   assert.equal(automaticLiveIsolationReceipt(withAuto, [], 3).manualProtectedPositionCount, 3,
     'assets without a proven remaining fill stay manual/protected, including a later manual reacquisition');
@@ -2317,6 +2413,55 @@ async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, n
     createdAt: timestamp, updatedAt: timestamp,
   } as any);
 }
+
+test('restart with a current arm and missing entry handoff still evaluates only owned guarded Live exits', async () => {
+  const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH'] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const root = await mkdtemp(join(tmpdir(), 'auto-owned-exit-restart-'));
+  const armPath = join(root, 'arm.json');
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { return null; },
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      // Stop before order creation: no actual or simulated financial POST.
+      throw new Error('BACKGROUND_EXIT_READONLY_TEST_BOUNDARY');
+    },
+  });
+  try {
+    for (const key of flags.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({ schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha: 'c'.repeat(40), armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString() }), { mode: 0o600 });
+    for (const timestamp of [nowMs, nowMs + 15_000]) {
+      const result = await withFetchMock(() => worker.runOnce(new Date(timestamp)));
+      assert.equal(result.handoffReady, false);
+      assert.equal(result.liveEntriesArmed, false);
+      assert.equal(result.newEntriesFailClosed, true);
+      assert.equal(result.liveTrackedPositions, 1);
+      assert.equal(result.liveExitsSuppressedByWarmupOrArm, 0);
+      assert.equal(result.liveOrders + result.liveExitOrders, 0);
+      assert.equal(result.createdPlans, 0);
+    }
+    assert.equal(providerReads, 2, 'each guarded exit reaches a read-only provider boundary despite missing entry handoff');
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of flags) {
+      const value = previous[key];
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test('expired automatic member retains read-only Live fill visibility and has zero order authority', async () => {
   const flags = [
