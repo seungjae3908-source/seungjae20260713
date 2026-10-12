@@ -297,3 +297,14 @@ PR-only mocked QA, skipped network jobs, or stale successful runs cannot count.
 Neither preflight posts to Telegram or changes a database, server process,
 secret or trading authority. This is an additional NO-GO guard, not a claim of
 real personal/signal delivery; those still require separately verified receipts.
+
+
+## 2026-10-12 — Preserve independently active trading / Paper workers
+
+The Telegram release now blocks **before any Production DB mutation** if the
+current PM2 runtime has any LIVE, AUTO, real-order, private-provider or Paper
+trading activation. Immediately before the Telegram restart it re-reads PM2
+and repeats the same guard. Telegram activation preserves the existing
+non-Telegram environment without rewriting trading flags. If trading is active,
+Telegram must be deployed as a separately reviewed isolated service; never
+turn trading off merely to make Telegram release pass. No Replit is involved.

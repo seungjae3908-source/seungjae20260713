@@ -540,6 +540,28 @@ jobs:
               return true;
             }
             requireIsolatedSixRooms(env);
+            // Telegram release must not disable, interrupt or mutate an
+            // independently active trading or Paper engine.
+            const tradingExecutionFlags = [
+              'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED',
+              'PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED',
+              'LIVE_TRADING_ACTIVATION_APPROVED','SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+              'LIVE_AUTOMATIC_TRADING_ENABLED','MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+              'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+              'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED','FUTURES_LIVE_ACTIVATION_APPROVED',
+              'BITGET_FUTURES_LIVE_ENABLED','CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED',
+              'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            ];
+            const hasTradingAuthority = runtime => tradingExecutionFlags.some(key => {
+              const value = runtime[key];
+              return value != null && String(value).trim() !== ''
+                && !['false','0'].includes(String(value).trim().toLowerCase());
+            }) || !['NONE',''].includes(String(runtime.executionAuthority ?? 'NONE').trim().toUpperCase());
+            if (hasTradingAuthority(env)) {
+              console.error('TELEGRAM_PREFLIGHT_TRADING_RUNTIME_ACTIVE');
+              process.exit(7);
+            }
+
 
             const botToken = String(env.TELEGRAM_BOT_TOKEN).trim();
             const configuredUsername = String(env.TELEGRAM_BOT_USERNAME).trim().replace(/^@/, '').toLowerCase();
@@ -1022,6 +1044,30 @@ jobs:
               if (String(runtime.BACKGROUND_WORKERS_ENABLED ?? 'true') === 'false') {
                 throw new Error('TELEGRAM_BACKGROUND_WORKERS_DISABLED');
               }
+              // Re-read PM2 immediately before a Telegram-only restart; do
+              // not inadvertently stop an independently activated trader.
+              const freshPm2 = JSON.parse(execFileSync('pm2',['jlist'],{encoding:'utf8'}));
+              const freshMatches = Array.isArray(freshPm2)
+                ? freshPm2.filter(x => x?.name === 'stock-app') : [];
+              const fresh = freshMatches.length===1 ? freshMatches[0]?.pm2_env : null;
+              const tradingKeys = [
+                'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED',
+                'PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED',
+                'LIVE_TRADING_ACTIVATION_APPROVED','SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+                'LIVE_AUTOMATIC_TRADING_ENABLED','MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+                'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED','FUTURES_LIVE_ACTIVATION_APPROVED',
+                'BITGET_FUTURES_LIVE_ENABLED','CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED',
+                'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+              ];
+              const activeTrading = obj => !obj || tradingKeys.some(key => {
+                const value = obj[key];
+                return value != null && String(value).trim() !== ''
+                  && !['false','0'].includes(String(value).trim().toLowerCase());
+              }) || !['NONE',''].includes(String(obj.executionAuthority ?? 'NONE').trim().toUpperCase());
+              if (fresh?.status !== 'online' || fresh?.DEPLOY_SHA !== approvedSha
+                || activeTrading(fresh) || activeTrading(runtime))
+                throw new Error('TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE');
               const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));
               if (approved && worker && allTelegramFeaturesEnabled) return false;
               const preservedRuntimeEnv = Object.fromEntries(Object.entries(runtime)
@@ -1040,9 +1086,7 @@ jobs:
                     TELEGRAM_SIGNAL_FOLLOWUP_ENABLED: 'true',
                     MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED: 'true',
                     MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED: 'true',
-                    MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true',
-                    LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
-                    PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE' },
+                    MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' },
                   stdio: ['ignore', 'ignore', 'pipe'],
                 });
               } catch {
