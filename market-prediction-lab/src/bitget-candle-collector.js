@@ -109,6 +109,9 @@ export async function collectBitgetCandles({
   startTime,
   endTime = Date.now(),
   maxCandles = 50_000,
+  // The V2 history API can respond with fewer than the requested 200
+  // candles even while older historical pages remain available.
+  maxPages = 512,
   minCandles = 60,
   requireFullWindow = timeframe === "1m",
   allowPartialSource = false,
@@ -122,6 +125,8 @@ export async function collectBitgetCandles({
   if (!Number.isInteger(endTime) || endTime <= startTime) throw new TypeError("endTime must be greater than startTime");
   if (!Number.isInteger(maxCandles) || maxCandles < 2 || maxCandles > 500_000)
     throw new TypeError("maxCandles must be between 2 and 500000");
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 2048)
+    throw new TypeError("maxPages must be 1..2048");
   if (typeof requireFullWindow !== "boolean")
     throw new TypeError("requireFullWindow must be boolean");
   if (typeof allowPartialSource !== "boolean" || (allowPartialSource
@@ -145,10 +150,16 @@ export async function collectBitgetCandles({
   // an unfinished exchange-day candle when its timezone offset is not UTC.
   let cursorEnd = alignDown(closedAsOfTime, intervalMs);
   let page = 0;
+  let pageRequests = 0;
   let previousOldest = Number.POSITIVE_INFINITY;
   let reachedRequestedStart = false;
 
   while (cursorEnd > startTime && all.length < maxCandles) {
+    // A provider cap, an underfilled page, or a no-trade interval does NOT
+    // certify exhaustion. Fail closed at a finite provider-request budget.
+    if (pageRequests >= maxPages)
+      throw dataError("BITGET_HISTORY_PAGE_BUDGET_EXCEEDED");
+    pageRequests++;
     const params = {
       symbol,
       granularity,
@@ -184,11 +195,10 @@ export async function collectBitgetCandles({
     }
 
     previousOldest = rawOldest;
-    // endTime is exclusive, so using the oldest returned timestamp requests the
-    // immediately preceding candle on the next page. Subtracting an interval here
-    // would skip exactly one candle at every page boundary.
+    // endTime is exclusive: reusing the oldest timestamp prevents a
+    // one-candle gap between pages. Never stop just because a page is short.
+    // Only traversal to startTime (or an empty page / bounded stop) ends it.
     cursorEnd = rawOldest;
-    if (payload.data.length < pageLimit) break;
   }
 
   const candles = sortAndDeduplicate(all)
@@ -209,6 +219,7 @@ export async function collectBitgetCandles({
     requestedStartTime: startTime, requestedEndTime: endTime, closedAsOfTime,
     intervalMs,
     reachedRequestedStart, rawPageWindowTraversed,
+    requestedProviderPages:pageRequests,
     historicalSignalAvailabilityProven: false,
     historicPointInTimeContractUniverseComplete: false,
     missingMinuteNoTradeProof: false,
@@ -226,6 +237,7 @@ export async function collectBitgetFuturesReferenceCandles({
   startTime,
   endTime = Date.now(),
   maxCandles = 50_000,
+  maxPages = 512,
   productType = "usdt-futures",
   onPage,
 }) {
@@ -238,6 +250,8 @@ export async function collectBitgetFuturesReferenceCandles({
   if (!Number.isInteger(maxCandles) || maxCandles < 60 || maxCandles > 500_000) {
     throw new TypeError("maxCandles must be between 60 and 500000");
   }
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 2048)
+    throw new TypeError("maxPages must be 1..2048");
 
   const intervalMs = TIMEFRAME_MS[timeframe];
   const endpoint = priceType === "mark"
@@ -251,9 +265,13 @@ export async function collectBitgetFuturesReferenceCandles({
   const closedAsOfTime = Math.min(endTime, collectedAt);
   let cursorEnd = alignDown(closedAsOfTime, intervalMs);
   let page = 0;
+  let pageRequests = 0;
   let previousOldest = Number.POSITIVE_INFINITY;
 
   while (cursorEnd > startTime && all.length < maxCandles) {
+    if (pageRequests >= maxPages)
+      throw dataError("BITGET_HISTORY_PAGE_BUDGET_EXCEEDED");
+    pageRequests++;
     const payload = await client.get(endpoint, {
       symbol,
       productType,
@@ -287,8 +305,8 @@ export async function collectBitgetFuturesReferenceCandles({
       }));
     }
     previousOldest = rawOldest;
+    // Reference-price history may also have underfilled pages.
     cursorEnd = rawOldest;
-    if (payload.data.length < pageLimit) break;
   }
 
   const candles = sortAndDeduplicate(all)
@@ -305,6 +323,7 @@ export async function collectBitgetFuturesReferenceCandles({
     symbol,
     timeframe,
     productType,
+    requestedProviderPages:pageRequests,
     candles: Object.freeze(candles),
   });
 }
