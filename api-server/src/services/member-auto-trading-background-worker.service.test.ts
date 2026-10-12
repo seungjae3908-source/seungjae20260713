@@ -2280,6 +2280,14 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
     { market: 'UPBIT', symbol: 'SOL', quantity: 1, availableQuantity: 1 } as NonNullable<CanonicalAccountSnapshot['positions']>[number]] };
   const exit = { ...plan, id: 'exit', symbol: 'KRW-SOL', side: 'sell' as const, reduceOnly: true,
     signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
+  for (const filledQuantity of [0.5, 1]) {
+    const wrongExit = { ...exit, side: 'buy' as const };
+    const wrongOrder = { ...filled, planId: exit.id, filledQuantity };
+    assert.throws(() => canonicalAutomaticLivePositions([plan, wrongExit], [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+    assert.throws(() => canonicalAutomaticLivePositions([plan,
+      { ...exit, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto', 'AUTO_EXIT_ENTRY_PLAN:foreign'] }],
+    [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+  }
   assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(withAuto, owned, exit));
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, plan), /AUTOMATIC_POSITION_ALREADY_OPEN/);
   assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);

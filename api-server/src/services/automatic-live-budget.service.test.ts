@@ -30,6 +30,7 @@ function order(parent: TradingPlan, overrides: Partial<TradingOrder> = {}): Trad
     exchange: parent.exchange, state: 'SUBMITTED', version: 0, clientOrderId: `client-${parent.id}`,
     exchangeOrderId: null, requestedQuantity: 1, remainingQuantity: 1, filledQuantity: 0,
     averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+    feeAmount: 0, feeCurrency: 'KRW', taxAmount: 0, taxCurrency: 'KRW',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...overrides };
 }
 async function setup(overrides: Partial<TradingPolicy> = {}) {
@@ -71,7 +72,7 @@ test('unknown submission, elapsed lease and partial fills keep the whole reserva
   await repo.saveOrder({ ...claimed, state: 'RECOVERY_REQUIRED', submissionStartedAt: '2026-01-01T00:00:00Z' });
   const second = await seed(repo, plan('ETH', { estimatedKrw: 40_000 }));
   await assert.rejects(repo.claimAutomaticLiveEntry(second, 0, 'claim-second'), /BUDGET_MARKET_EXCEEDED/);
-  await repo.saveOrder({ ...claimed, state: 'PARTIALLY_FILLED', filledQuantity: 0.1, remainingQuantity: 0.9 });
+    await repo.saveOrder({ ...claimed, state: 'PARTIALLY_FILLED', filledQuantity: 0.1, remainingQuantity: 0.9, averageFillPrice: 100 });
   await assert.rejects(repo.claimAutomaticLiveEntry(second, 0, 'claim-second'), /BUDGET_MARKET_EXCEEDED/);
   await repo.saveOrder({ ...claimed, state: 'CANCELED', filledQuantity: 0, lastReconciledAt: null });
   await assert.rejects(repo.claimAutomaticLiveEntry(second, 0, 'claim-second'), /BUDGET_MARKET_EXCEEDED/);
@@ -141,4 +142,86 @@ test('foreign history, duplicate IDs, missing policy, invalid cap and unknown ho
   ]) await assert.rejects(projectAutomaticLiveBudget(bad, userId, child.id, (value) => {
     if (!value) throw new Error('POLICY_REQUIRED'); return value;
   }));
+});
+
+test('actual fill slippage and fees revalue both held and legacy orders before the next entry', async () => {
+  for (const reserved of [true, false]) {
+    const repo = await setup();
+    const parent = plan(`filled-${reserved}`, { limitPrice: 70_000, stopPrice: 69_000,
+      marketSnapshot: { currentPrice: 70_000, openPositionCount: 0 } as TradingPlan['marketSnapshot'] });
+    const child = await seed(repo, parent);
+    const claimed = reserved ? (await repo.claimAutomaticLiveEntry(child, 0, 'first'))! : child;
+    await repo.saveOrder({ ...claimed, state: 'FILLED', filledQuantity: 1, remainingQuantity: 0,
+      averageFillPrice: 72_000, feeAmount: 100 });
+    const next = await seed(repo, plan(`next-${reserved}`, { estimatedKrw: 29_000 }));
+    await assert.rejects(repo.claimAutomaticLiveEntry(next, 0, 'second'), /BUDGET_MARKET_EXCEEDED/);
+  }
+});
+
+test('one repriced held order remains one position and never frees its original reservation on partial close', async () => {
+  const repo = await setup({ maxOpenPositions: 2, maxAssetClassKrw: { ...policy().maxAssetClassKrw, crypto_spot: 200_000 } });
+  const parent = plan('BTC', { limitPrice: 70_000, stopPrice: 69_000,
+    marketSnapshot: { currentPrice: 70_000, openPositionCount: 0 } as TradingPlan['marketSnapshot'] });
+  const child = await seed(repo, parent);
+  const claimed = (await repo.claimAutomaticLiveEntry(child, 0, 'first'))!;
+  await repo.saveOrder({ ...claimed, state: 'FILLED', filledQuantity: 1, remainingQuantity: 0,
+    averageFillPrice: 72_000, feeAmount: 100 });
+  const next = await seed(repo, plan('ETH', { estimatedKrw: 20_000 }));
+  assert.ok(await repo.claimAutomaticLiveEntry(next, 0, 'second'), 'revaluation is not a duplicate position');
+  const exit = plan('half-exit', { symbol: 'BTC', reduceOnly: true, side: 'sell', signalReasons: ['AUTO_EXIT_ENTRY_PLAN:BTC'] });
+  await repo.savePlan(exit);
+  await repo.saveOrder(order(exit, { state: 'FILLED', filledQuantity: 0.5, averageFillPrice: 73_000 }));
+  await repo.savePolicy(userId, policy({ maxAssetClassKrw: { ...policy().maxAssetClassKrw, crypto_spot: 85_000 } }));
+  await assert.rejects(repo.assertAutomaticLiveEntryBudget(plan('ETH', { estimatedKrw: 20_000 })), /BUDGET_MARKET_EXCEEDED/);
+});
+
+test('slippage expands actual stop risk rather than retaining the smaller planned stop distance', async () => {
+  const repo = await setup({ maxAssetClassKrw: { ...policy().maxAssetClassKrw, crypto_spot: 200_000 } });
+  const parent = plan('BTC', { limitPrice: 70_000, stopPrice: 69_000,
+    marketSnapshot: { currentPrice: 70_000, openPositionCount: 0 } as TradingPlan['marketSnapshot'] });
+  const child = await seed(repo, parent);
+  const claimed = (await repo.claimAutomaticLiveEntry(child, 0, 'first'))!;
+  await repo.saveOrder({ ...claimed, state: 'FILLED', filledQuantity: 1, remainingQuantity: 0,
+    averageFillPrice: 78_000, feeAmount: 100 });
+  const next = await seed(repo, plan('ETH', { estimatedKrw: 10_000 }));
+  await assert.rejects(repo.claimAutomaticLiveEntry(next, 0, 'second'), /BUDGET_RISK_EXCEEDED/);
+});
+
+test('unknown fees, foreign fee denomination, incomplete fills and absent or stale foreign FX never become zero cost', async () => {
+  const parent = plan('filled'); const next = plan('next');
+  const valid = order(parent, { state: 'FILLED', filledQuantity: 1, averageFillPrice: 100 });
+  for (const bad of [
+    { ...valid, feeAmount: null }, { ...valid, feeAmount: 1, feeCurrency: 'BTC' },
+    { ...valid, fills: [{ quantity: 0.5, price: 100, feeAmount: 0, feeCurrency: 'KRW' }] },
+  ]) {
+    await assert.rejects(projectAutomaticLiveBudget({ policy: policy(), emergencyStopped: false,
+      plans: [parent, next], orders: [bad as TradingOrder, order(next)], holds: [] }, userId, order(next).id, (value) => value!),
+    /FILL_COST_UNVERIFIED/);
+  }
+  for (const exchange of ['kiwoom', 'bitget'] as const) {
+    const foreign = plan('foreign', { exchange, market: exchange === 'kiwoom' ? 'US' : 'USDT-FUTURES',
+      side: exchange === 'bitget' ? 'long' : 'buy', leverage: 7 });
+    const filled = order(foreign, { state: 'FILLED', filledQuantity: 1, averageFillPrice: 100 });
+    for (const settlementFxEvidence of [null, { source: exchange === 'kiwoom' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT',
+      krwPerQuoteCurrency: 1400, observedAt: '2000-01-01T00:00:00Z' }]) {
+      await assert.rejects(projectAutomaticLiveBudget({ policy: policy(), emergencyStopped: false,
+        plans: [foreign, next], orders: [{ ...filled, settlementFxEvidence }, order(next)], holds: [] },
+      userId, order(next).id, (value) => value!), /FILL_FX_UNVERIFIED/);
+    }
+  }
+});
+
+test('foreign notional uses genuine fill-time FX once, regardless of preserved futures leverage', async () => {
+  for (const leverage of [2, 7]) {
+    const existing = plan('futures', { exchange: 'bitget', market: 'USDT-FUTURES', side: 'long', leverage,
+      limitPrice: 50, stopPrice: 49, marketSnapshot: { currentPrice: 50, openPositionCount: 0 } as TradingPlan['marketSnapshot'] });
+    const at = new Date().toISOString();
+    const filled = order(existing, { state: 'FILLED', filledQuantity: 1, averageFillPrice: 51, feeAmount: 0.1,
+      feeCurrency: 'USDT', updatedAt: at, settlementFxEvidence: { source: 'UPBIT:KRW-USDT', krwPerQuoteCurrency: 1400, observedAt: at } });
+    const next = plan('next', { estimatedKrw: 10_000 });
+    const projection = await projectAutomaticLiveBudget({ policy: policy(), emergencyStopped: false,
+      plans: [existing, next], orders: [filled, order(next)], holds: [] }, userId, order(next).id, (value) => value!);
+    assert.equal(projection.baseCharges[0]!.amountKrw, 71_540);
+    assert.equal(projection.baseCharges[0]!.riskKrw, 2_940);
+  }
 });

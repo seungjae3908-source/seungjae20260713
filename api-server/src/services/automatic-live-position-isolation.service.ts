@@ -53,6 +53,15 @@ export function canonicalAutomaticLivePositions(plans: readonly TradingPlan[], o
         || symbolKey(exit.symbol) !== symbolKey(plan.symbol) || exit.market !== plan.market) {
         throw new Error('BACKGROUND_LIVE_CANONICAL_EXIT_PARENT_MISMATCH');
       }
+      const closingSide = plan.exchange === 'bitget'
+        ? plan.side === 'long' ? 'short' : plan.side === 'short' ? 'long' : null
+        : plan.side === 'buy' ? 'sell' : null;
+      if (closingSide === null || exit.side !== closingSide
+        || exit.signalReasons.filter((reason) => reason.startsWith(EXIT_PARENT)).length !== 1) {
+        // A same-direction fill cannot reduce AUTO ownership, including partial
+        // closes. Checking only fully closed budget reservations is too late.
+        throw new Error('BACKGROUND_LIVE_CANONICAL_EXIT_DIRECTION_INVALID');
+      }
       const exitOrders = orders.filter((order) => order.planId === exit.id && filled(order));
       if (exitOrders.length > 1 || exitOrders.some((order) => order.userId !== plan.userId || order.exchange !== plan.exchange)) {
         throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');

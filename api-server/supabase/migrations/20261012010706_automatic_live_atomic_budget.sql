@@ -135,22 +135,43 @@ begin
   end if;
   -- All base/release rows must belong to this owner and immutable snapshot.
   if exists(select 1 from jsonb_array_elements(p_projection->'baseCharges') c
-    where not exists(select 1 from public.trade_orders o where o.user_id=p_user_id and o.id::text=c->>'orderId')
-      or (c->>'amountKrw')::numeric<=0 or (c->>'riskKrw')::numeric<0)
+    where jsonb_typeof(c) is distinct from 'object'
+      or not (c ?& array['orderId','market','instrument','strategy','amountKrw','riskKrw'])
+      or exists(select 1 from unnest(array['orderId','market','instrument','strategy']) k
+        where jsonb_typeof(c->k) is distinct from 'string' or length(c->>k)=0)
+      or exists(select 1 from unnest(array['amountKrw','riskKrw']) k
+        where jsonb_typeof(c->k) is distinct from 'number')
+      or not exists(select 1 from public.trade_orders o where o.user_id=p_user_id and o.id::text=c->>'orderId')
+      or c->>'orderId'=p_order_id::text
+      or (c->>'amountKrw')::numeric<=0 or (c->>'amountKrw')::numeric>10000000000
+      or (c->>'riskKrw')::numeric<0 or (c->>'riskKrw')::numeric>10000000000)
+    or (select count(*)<>count(distinct c->>'orderId') from jsonb_array_elements(p_projection->'baseCharges') c)
+    or exists(select 1 from jsonb_array_elements(p_projection->'releases') r where jsonb_typeof(r) is distinct from 'string')
     or exists(select 1 from jsonb_array_elements_text(p_projection->'releases') r
       where not exists(select 1 from public.trade_live_budget_reservations h where h.user_id=p_user_id and h.order_id::text=r.value and h.state='HELD')) then
     raise exception 'AUTOMATIC_LIVE_BUDGET_PROJECTION_SCOPE_INVALID';
   end if;
-  with charges as (
-    select market,instrument,strategy,amount_krw,risk_krw from public.trade_live_budget_reservations
+  -- Actual fill repricing can exceed the original hold. Retain the greater
+  -- amount/risk per order without double-counting its position or principal.
+  if exists(select 1 from jsonb_array_elements(p_projection->'baseCharges') c
+    join public.trade_live_budget_reservations h on h.user_id=p_user_id and h.order_id::text=c->>'orderId' and h.state='HELD'
+    where h.market is distinct from c->>'market' or h.instrument is distinct from c->>'instrument'
+      or h.strategy is distinct from c->>'strategy') then
+    raise exception 'AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT';
+  end if;
+  with candidates as (
+    select order_id::text order_id,market,instrument,strategy,amount_krw,risk_krw from public.trade_live_budget_reservations
       where user_id=p_user_id and state='HELD' and order_id<>p_order_id
         and not (p_projection->'releases' ? order_id::text)
     union all
-    select c->>'market',c->>'instrument',c->>'strategy',(c->>'amountKrw')::numeric,(c->>'riskKrw')::numeric
+    select c->>'orderId',c->>'market',c->>'instrument',c->>'strategy',(c->>'amountKrw')::numeric,(c->>'riskKrw')::numeric
       from jsonb_array_elements(p_projection->'baseCharges') c
     union all
-    select p_projection->>'market',p_projection->>'instrument',p_projection->>'strategy',
+    select p_order_id::text,p_projection->>'market',p_projection->>'instrument',p_projection->>'strategy',
       (p_projection->>'amountKrw')::numeric,(p_projection->>'riskKrw')::numeric
+  ), charges as (
+    select order_id,market,instrument,strategy,max(amount_krw) amount_krw,max(risk_krw) risk_krw
+      from candidates group by order_id,market,instrument,strategy
   ) select sum(amount_krw) total,sum(risk_krw) risk,count(*) positions,
     sum(amount_krw) filter(where market=p_projection->>'market') market,
     sum(amount_krw) filter(where instrument=p_projection->>'instrument') instrument,
@@ -253,7 +274,7 @@ create or replace function public.read_automatic_live_budget_guard()
 returns jsonb language sql stable security invoker set search_path=pg_catalog,public,pg_temp
 set default_transaction_isolation='serializable'
 as $guard$
-  select jsonb_build_object('version','automatic-live-atomic-budget-v1','ready',coalesce(
+  select jsonb_build_object('version','automatic-live-atomic-budget-v2','ready',coalesce(
     current_setting('transaction_isolation')='serializable'
     and
     (select relrowsecurity from pg_class where oid='public.trade_live_budget_reservations'::regclass)
