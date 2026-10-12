@@ -830,3 +830,43 @@ test("source-limited flag in bounded private task CLI is separate from consent",
   assert.equal(calls.length,0);
  }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+
+
+test("all-members PIT one-task picker retains a dated Han named Bitget USDT contract without fake full coverage",async()=>{
+ const root=temp(),market="CRYPTO_FUTURES",calls=[];
+ try{
+  const manifest=makeManifest(market,2);
+  manifest.memberships[0].symbol="龙虾USDT";
+  manifest.rawMembershipDigestSha256=
+    digestPITMembershipRowsV1(manifest.memberships);
+  const pages=await makePageReceipts(root,market,manifest);
+  const planning=plan({market,day:"2026-09-18",manifest,pages,taskPageIndex:0});
+  assert.equal(planning.status,"PLANNED_EXPLICIT_PUBLIC_READ_ONLY");
+  assert.equal(planning.candidateTasks[0].symbol,"龙虾USDT");
+  const t={root,market,manifest,pages,planning};
+  const r=await execute(request(t,{
+   allowPublicReadOnlyFetch:true,
+   bitgetClient:{get:async(path,params)=>{
+     calls.push({path,params});
+     assert.equal(params.symbol,"龙虾USDT");
+     return {code:"00000",data:[
+       [String(START+2*MIN),"100","104","99","102","5"],
+       [String(START+MIN),"100","104","99","102","5"],
+       [String(START),"100","104","99","102","5"],
+     ]};
+   }},
+  }));
+  assert.equal(r.status,"RETROSPECTIVE_SOURCE_STORED_WITHIN_LOCAL_BUDGET");
+  assert.equal(r.plannedSymbol,"龙虾USDT");
+  assert.equal(r.retainedMinuteRows,3);
+  assert.equal(r.fullMarketOpportunityDenominatorVerified,false);
+  assert.equal(r.profitabilityProven,false);
+  assert.equal(r.executionAuthority,"NONE");
+  assert.equal(calls.length,1);
+  const review=await derive({root,market,symbol:"龙虾USDT",
+   sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+  assert.equal(review.sourceMinuteRows,3);
+  assert.equal(review.intervalData["1m"].sourceSessionCoverageComplete,false);
+  assert.equal(review.profitabilityProven,false);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
