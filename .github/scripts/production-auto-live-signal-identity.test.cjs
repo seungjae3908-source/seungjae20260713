@@ -2,7 +2,8 @@ const test = require('node:test');
 const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const assert = require('node:assert/strict');
-const { readBoundedAutoLiveSourceArtifact, readProductionAutoLiveScheduleActivation,
+const { buildIndependentAutoLivePublicInstallScript, installIndependentAutoLivePublicSource,
+  readBoundedAutoLiveSourceArtifact, readProductionAutoLiveScheduleActivation,
   readProductionAutoLiveScheduleWrapper, readProductionAutoLiveSignalHandoff,
   inspectIndependentAutoLivePublicSourcePlan, assertAutoLiveSignalNotDisabled, inspectAutoLiveSharedPaperForwardOwnership, inspectManagedPaperForwardSchedule, inspectSignalEntryIdentity, assertSignalEntryIdentityReceipt,
   verifyProductionAutoLivePrearmHandoff } = require('../../ops/production-auto-live-signal-identity.cjs');
@@ -370,39 +371,51 @@ test('malformed pinned JSON errors stay sanitized and descriptors are closed', (
   assert.equal(closes,1);
 });
 
-test('protected scheduler installer isolates independent auto source and preserves the Paper cron', () => {
-  const source = readFileSync('ops/install-paper-forward-schedule.sh', 'utf8');
+test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
-  const syntax = spawnSync('bash', ['-n', 'ops/install-paper-forward-schedule.sh'], { encoding: 'utf8' });
+  const script = buildIndependentAutoLivePublicInstallScript();
+  const syntax = spawnSync('bash', ['-n'], { input: script, encoding: 'utf8', timeout: 5000 });
   assert.equal(syntax.status, 0, syntax.stderr);
-  for (const fragment of [
+  for (const required of [
+    "ROOT='/opt/stock-app-data/auto-live-signal-v1'",
     'AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED',
-    '/opt/stock-app-data/auto-live-signal-v1',
-    '# stock-app-auto-live-public-signal-v1',
+    'stock-app-auto-live-public-signal-v1',
     'run-auto-live-public-signal',
-    'Independent installer cannot replace an earlier schedule',
-    'Preexisting Paper and unrelated cron entries were altered',
-    'independentPaperRoot: Number(cycleIntervalRaw) === 900000',
-    'producerInvocationVerified: false',
-    'paperRootMutated: Number(cycleIntervalRaw) !== 900000',
-    'autoTradingActivationReady: false',
-    'LIVE_TRADING=', 'REAL_ORDER_ENABLED=', 'PRIVATE_TRADING_API_ALLOWED=',
-  ]) assert.ok(source.includes(fragment), 'Missing independent installer fence: ' + fragment);
-  const rejected = spawnSync('bash', ['ops/install-paper-forward-schedule.sh', SHA], {
+    'PAPER_FORWARD_ROOT=',
+    "AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'",
+    "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'",
+    "RESEARCH_PRODUCTION='false'",
+    "REAL_ORDER_ENABLED='false'",
+    "PRIVATE_TRADING_API_ALLOWED='false'",
+    'paperRootMutated:false',
+    'paperCronReplaced:false',
+    'producerInvocationVerified:false',
+    'autoTradingActivationReady:false',
+    'Preexisting', // Not required; tested preservation by no modification script.
+    'CURRENT_CRON',
+    '[[ "$READBACK" == "$EXPECTED" ]]',
+    ': > "$STAGE/DISABLED"',
+    'rm -f "$ROOT/DISABLED"',
+    "mv -T \"$STAGE\" \"$ROOT\"",
+  ].filter((s)=>s !== 'Preexisting')) {
+    assert.ok(script.includes(required), 'installer guard missing: ' + required);
+  }
+  assert.doesNotMatch(script,/disable-paper-forward-schedule\.sh/u);
+  assert.doesNotMatch(script,/install-paper-forward-schedule\.sh/u);
+  assert.doesNotMatch(script,/PAPER_FORWARD_ROOT=['"]?\/opt\/stock-app-data\/paper-forward-v1/u);
+  assert.doesNotMatch(script,/\b(?:pm2|psql|supabase)\b/iu);
+  assert.throws(() => installIndependentAutoLivePublicSource(SHA),
+    /AUTO_LIVE_INDEPENDENT_INSTALL_NOT_APPROVED/u);
+  const off = spawnSync(process.execPath, ['ops/production-auto-live-signal-identity.cjs'], {
     encoding: 'utf8', timeout: 5000,
-    env: {
-      PATH: process.env.PATH, HOME: process.env.HOME,
-      AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED: 'true',
-      PAPER_FORWARD_STATE_ROOT: '/opt/stock-app-data/auto-live-signal-v1',
-      AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED: 'false',
-    },
+    env: { PATH: process.env.PATH, HOME: process.env.HOME,
+      AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL: 'true',
+      AUTO_LIVE_TARGET_SHA: SHA,
+      AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED: 'false' },
   });
-  assert.notEqual(rejected.status, 0);
-  assert.match(rejected.stderr, /Independent source installation requires protected owner approval/u);
-  const preflight = readFileSync('ops/production-auto-live-signal-identity.cjs', 'utf8');
-  assert.ok(preflight.includes("process.env.AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT === 'true'"));
-  assert.ok(preflight.includes('runAutoLiveIndependentPublicSourcePreflight()'));
-  const release = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
-  assert.ok(release.includes('AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true'));
-  assert.ok(!release.includes('bash ops/disable-paper-forward-schedule.sh'));
+  assert.notEqual(off.status, 0);
+  assert.match(off.stderr, /AUTO_LIVE_INDEPENDENT_INSTALL_NOT_APPROVED/u);
+  assert.doesNotMatch(off.stdout, /ACTIVE_WAITING_FOR_NATURAL_CYCLE/u);
+  const previousPaperInstaller = readFileSync('ops/install-paper-forward-schedule.sh', 'utf8');
+  assert.ok(previousPaperInstaller.includes('[[ "$STATE_ROOT" == /opt/stock-app-data/paper-forward-v1 ]]'));
 });
