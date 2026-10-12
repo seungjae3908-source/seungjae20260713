@@ -254,3 +254,52 @@ verification; selective source-gap reconciliation distinguishing no-trade from
 outages; 4-market source rights and retention costs; integration of verified
 native original-minute evidence with Research/Backtester UI, followed by
 independent OOS/full-cost/WF and only later controlled Paper testing.
+
+
+## Draft v6 — 누락된 원본 1분봉 재조회와 불변 보충 기록
+
+코드 및 모의 fixture 검증만 수행한다. **실제 Vultr provider GET 및 서비스 활성화 없음.**
+
+### 선택적 missing-minute recheck
+- 새 src/four-market-minute-gap-recheck-v1.mjs는 이미 존재하는 원본 페이지 한 개의 1분봉 결측 시각을 공식 Upbit KRW/Bitget USDT 공개 REST에서 다시 확인하는 1회성 연구 기능이다.
+- Upbit는 실제 거래 없는 1분에 캔들을 생성하지 않는다. 공급원 응답에서 비어 있다고 무거래가 검증된 것은 아니며, 반대로 모든 빈 분이 장애라는 뜻도 아니다. NO_NEW_CANDLES_OBSERVED는 실제 재확인 결과 새 분봉 없음, 정상 무거래 확정은 아니다.
+- 이미 있던 분봉의 OHLCV/거래대금 값이 달라지면 MINUTE_RECHECK_CONFLICTING_SOURCE_REVISION으로 차단. **기존 immutable 원본은 절대 고치거나 덮어쓰지 않는다.**
+- 실제 재조회에서 빠졌던 캔들이 추가로 관측될 때만, 분봉을 받은 새 시각 및 생산 코드 SHA를 묶어 별도 minute-rechecks-v1 하위 사유 폴더에 digest 봉인된 immutable supplemental receipt를 기록할 수 있다.
+- 한 원본 페이지에 최대 8개 보충 영수증, 페이지당 개별 256KiB 이하, 폴더 최대 256개 파일. 안전한 디렉터리·파일 권한, O_NOFOLLOW, 충돌/경계/이전 원본 해시 연결, fsync와 읽기 검증을 수행한다. 0개 새 캔들일 때는 새 파일을 만들지 않는다.
+- src/four-market-minute-daily-rollup-v1.mjs가 기존 원본과 보충 영수증을 결합해 **읽기 전용** 시간봉 입력을 만든다. 동일 시각의 값이 충돌하면 block. 뒤늦게 받은 분봉은 실제 최초 수신 시각 전의 과거 신호로 사용하지 않는다.
+- 기존 Backfill queue의 과거 누락 수를 조용히 0으로 수정하지 않으며, 원본 및 supplemental digest는 독립적으로 검증한다. 서비스 설치/DB/Telegram/Paper/실주문 없음.
+
+### 기본 DISABLED 원샷 CLI (이 PR에서는 실행·활성화하지 않음)
+
+    node research-production/bin/four-market-minute-recheck.mjs --dry-run
+
+향후 소유자 승인 시 한 번만 출처 재조회하는 선택적 명령:
+- RESEARCH_MINUTE_ARCHIVE_ROOT: 연구 전용 0700 원본 폴더
+- RESEARCH_MINUTE_QUEUE_ROOT: 기존 Backfill과 같은 flock 잠금 영역, 0700
+- RESEARCH_MINUTE_RECHECK_MANIFEST: 정확한 1개 마켓/심볼/UTC 분 구간을 지정한 0600 파일
+- RESEARCH_CODE_SHA: 실제 checked-out 커밋과 일치하는 40자 SHA
+- RESEARCH_MINUTE_RECHECK_ENABLED=true: 공개 source 1회 GET 진단 승인
+- RESEARCH_MINUTE_RECHECK_WRITE_ALLOWED=true: 재조회 **새 immutable 보충 파일 쓰기**를 별도로 승인
+- --inspect: 공개 API 1회 읽기·원본 보관 변경 없음
+- --execute: 승인 2종, root·manifest 안전 검증, CPU 디스크 여유/파일 잠금 후에만 immutable 보충 영수증 쓰기
+- CLI 출력은 시세 원본·내부 파일 경로·자격 정보를 담지 않고 상태/건수만 표시한다.
+
+manifest 계약 예시:
+
+    {
+      "schemaVersion": "research-minute-recheck-operator-task/v1",
+      "task": {
+        "market": "CRYPTO_SPOT", "symbol": "BTC",
+        "windowStartMs": 1791626400000,
+        "windowEndMs": 1791630000000
+      }
+    }
+
+### 운영 블로커
+1. Vultr CPU·RAM·Disk/Inode/Backups·실제 24h data GET 계측 및 앱과 공유하는 IP API budget.
+2. 국내·미국주식 검증된 1분봉 공급원과 라이선스, 현지 거래 세션·기업행위·상장폐지 PIT.
+3. 모든 종목 source 누락 자동 재조회 작업 큐·429 rate gate·소스 진단 수용량(기존 16/5m로 760 dense symbols 지속 수집 불가).
+4. 앱 Research/Backtester 정식 운영 API 연결, 실제 OOS·워크포워드·수수료/슬리피지 포함 거래 검증, Paper admission.
+5. source-gap 복원이나 모델 회귀 테스트 성공은 실제 수익성 PASS 또는 24h 운영 증거가 아니다. executionAuthority=NONE, profitabilityProven=false.
+
+NO Replit, NO Ready/Merge/Deploy/Production, NO Vultr/PM2/systemd changes, NO live/private broker API or Paper orders.

@@ -4,8 +4,11 @@ import { createHash } from 'node:crypto';
 import { lstat, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import {
-  MINUTE_MS, validateMinuteTask, readOriginalMinutePage,
+  MINUTE_MS, validateMinuteTask,
 } from './four-market-minute-archive-intake-v1.mjs';
+import {
+  readImmutableMinuteRecheckEvidenceV1,
+} from './four-market-minute-gap-recheck-v1.mjs';
 import {
   deriveResearchTimeframesFromMinuteSourceV1,
 } from './research-minute-to-multiframe-reuse-v1.mjs';
@@ -153,12 +156,22 @@ export async function inspectImmutableMinuteDayRollupV1({
     return emptyStatus(selection,'BLOCKED_DATA','NO_ORIGINAL_MINUTE_PAGES',
       {missingOneMinuteSlots:1440});
   const bars=new Map();
-  const sourcePageDigests=[],producerShas=new Set();
+  const sourcePageDigests=[],supplementalReceiptDigests=[],producerShas=new Set();
   let duplicateMinutes=0,earliestRetrievedAt=Number.POSITIVE_INFINITY,
-    latestRetrievedAt=0;
+    latestRetrievedAt=0,supplementalUniqueMinutes=0;
   for(const task of pageTasks){
-    const page=await readOriginalMinutePage(root,task,researchSha);
+    // Each extension is independently source-sealed and anchored to the
+    // immutable original page checksum. Never replace its rows.
+    const evidence=await readImmutableMinuteRecheckEvidenceV1({
+      root,task,researchSha,nowMs:inspectionNowMs,
+    });
+    const page=evidence.base;
     if(!page)fail('MINUTE_ROLLUP_PAGE_DISAPPEARED');
+    supplementalUniqueMinutes+=evidence.supplementalUniqueMinutes;
+    for(const receipt of evidence.receipts){
+      supplementalReceiptDigests.push(receipt.receiptDigest);
+      producerShas.add(receipt.researchSha);
+    }
     if(page.source!==config.source||page.market!==market
       ||page.symbol!==symbol||!SHA40.test(page.researchSha??''))
       fail('MINUTE_ROLLUP_SOURCE_IDENTITY_INVALID');
@@ -170,12 +183,13 @@ export async function inspectImmutableMinuteDayRollupV1({
     latestRetrievedAt=Math.max(latestRetrievedAt,received);
     producerShas.add(page.researchSha);
     sourcePageDigests.push(page.contentDigest);
-    for(const c of page.candles){
+    for(const c of evidence.availableRows){
       if(c.timestamp<selection.start||c.timestamp>=selection.start+DAY)continue;
       const existing=bars.get(c.timestamp);
       const row=Object.freeze({
         market,venue:config.venue,symbol,sourceId:config.source,
-        timestampMs:c.timestamp,availableAtMs:Math.max(received,c.timestamp+MINUTE_MS),
+        timestampMs:c.timestamp,
+        availableAtMs:Math.max(c.availableAtMs,c.timestamp+MINUTE_MS),
         open:c.open,high:c.high,low:c.low,close:c.close,volume:c.volume,
       });
       if(existing){
@@ -223,6 +237,9 @@ export async function inspectImmutableMinuteDayRollupV1({
     reason:derived.reason,market,symbol,day,
     source:config.source,sourceMinutesDigest:minutesDigest,
     sourcePageDigests:Object.freeze(sourcePageDigests),
+    supplementalReceiptDigests:Object.freeze(supplementalReceiptDigests),
+    supplementalReceiptCount:supplementalReceiptDigests.length,
+    supplementalUniqueMinuteObservations:supplementalUniqueMinutes,
     originalProducerShas:Object.freeze([...producerShas].sort()),
     sourceMinutePages:pageTasks.length,
     sourceMinuteRows:minuteBars.length,
