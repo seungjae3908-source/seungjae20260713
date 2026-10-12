@@ -3,6 +3,7 @@ import test from 'node:test';
 import './member-auto-trading-exit-plan.service.test';
 import './automatic-live-preactivation-audit.service.test';
 import './automatic-live-unrealized-risk.service.test';
+import './bitget-native-protection-readonly.service.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -1686,6 +1687,29 @@ test('first live warmup suppresses automatic exits for existing live positions b
     assert.equal(quarantined.createdPlans, 0);
     assert.equal(quarantined.failures, 0, 'missing Paper state is not a Live worker failure');
     assert.equal(liveReads, 0);
+
+    const futuresRepository = new InMemoryTradingRepository();
+    await futuresRepository.savePolicy(USER, allFourPolicy());
+    const futuresPlan = { ...await repository.getPlan(USER, 'live-plan-existing'),
+      id: 'futures-existing', exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', leverage: 2, marginMode: 'isolated', idempotencyKey: 'futures-existing-key' } as TradingPlan;
+    await futuresRepository.savePlan(futuresPlan);
+    await futuresRepository.saveOrder({ ...await repository.getOrder(USER, 'live-order-existing'),
+      id: 'futures-filled', planId: futuresPlan.id, exchange: 'bitget',
+      clientOrderId: 'futures-filled-client' } as import('./trade-automation.types').TradingOrder);
+    let nativeReads = 0;
+    const unprotected = new MemberAutoTradingBackgroundWorker({
+      ...source(futuresRepository, nowMs, { tier: 'admin', policyOverride: allFourPolicy() }),
+      async auditNativeFuturesProtection() { nativeReads += 1; throw new Error('BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED'); },
+    });
+    const unsafe = await withFetchMock(() => unprotected.runOnce(new Date(nowMs)));
+    assert.equal(nativeReads, 1);
+    assert.equal(unsafe.nativeProtectionErrorCode, 'BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED');
+    assert.equal(unsafe.liveTrackedPositions, 1, 'unknown native close must not hide canonical ownership');
+    assert.equal(unsafe.newEntriesFailClosed, true);
+    assert.equal(unsafe.liveEntryWarmupComplete, false, 'unverified protection cannot become a healthy warmup');
+    assert.equal(unsafe.liveOrders + unsafe.liveExitOrders + unsafe.privateTradingRequests, 0);
+    assert.equal((await futuresRepository.listOrders(USER)).length, 1, 'no invented exit fill or test order');
   } finally {
     for (const key of keys) {
       const value = previous[key];

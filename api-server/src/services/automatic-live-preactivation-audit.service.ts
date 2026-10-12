@@ -20,7 +20,7 @@ function safeCode(error: unknown) {
  * Collect independent failures, not just the first failing provider. */
 export async function auditAutomaticLivePreactivation(input: {
   userId: string; profile: MemberAccessProfile; repository: TradingRepository;
-  source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot'>;
+  source: Pick<MemberAutoTradingBackgroundSource, 'readHandoff' | 'readLiveAccountSnapshot' | 'auditNativeFuturesProtection'>;
   nowMs?: number; targetSha: string;
   producerCapability?: Readonly<{ targetSha: string; scannerConnected: boolean; aiReviewConnected: boolean;
     markets: readonly string[]; intervalMs: number }>;
@@ -128,6 +128,14 @@ export async function auditAutomaticLivePreactivation(input: {
     return orders().some((o) => liveIds.has(o.planId)
       && ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'].includes(o.state))
       ? ['PREACTIVATION_LIVE_ORDER_RECONCILIATION_REQUIRED'] : [];
+  });
+  await check('NATIVE_FUTURES_PROTECTION_READBACK', async () => {
+    // A wired reader and actual readback are required. No-position success
+    // proves only that no current AUTO futures needs protection; it cannot
+    // attest future submission/triggered-close correctness or grant authority.
+    if (!input.source.auditNativeFuturesProtection) return ['BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED'];
+    return await input.source.auditNativeFuturesProtection(input.userId, plans(), orders()) === true
+      ? [] : ['BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED'];
   });
   await Promise.all(providers.map((provider) => check(`ACCOUNT_${provider.toUpperCase()}`, async () => {
     const snapshot = await input.source.readLiveAccountSnapshot(input.userId, provider);

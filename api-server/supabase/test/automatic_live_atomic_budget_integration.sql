@@ -47,7 +47,7 @@ declare
   first_id uuid:='57000000-0000-0000-0000-000000000001';
   second_id uuid:='57000000-0000-0000-0000-000000000002';
   claim_id uuid:='67000000-0000-0000-0000-000000000001';
-  snap jsonb; projection jsonb; response jsonb;
+  snap jsonb; projection jsonb; response jsonb; invalid_key text;
 begin
   snap:=public.read_automatic_live_budget_snapshot(owner);
   projection:=jsonb_build_object('userId',owner::text,'orderId',first_id::text,
@@ -56,6 +56,17 @@ begin
     'amountKrw',70000,'riskKrw',700,'baseCharges','[]'::jsonb,'releases','[]'::jsonb,
     'limits',jsonb_build_object('total',400000,'market',100000,'instrument',100000,
       'strategy',400000,'risk',8000,'positions',8,'order',100000));
+  -- JSON null is not a valid owner/budget assertion. SQL's three-valued
+  -- comparisons must never let a missing/null control become an admission.
+  foreach invalid_key in array array['userId','orderId','planId','amountKrw','riskKrw','limits','market','instrument','strategy'] loop
+    begin
+      perform public.reserve_automatic_live_entry_budget(owner,first_id,claim_id,snap,
+        jsonb_set(projection,array[invalid_key],'null'::jsonb),false);
+      raise exception 'null budget projection was accepted: %',invalid_key;
+    exception when raise_exception then
+      if sqlerrm<>'AUTOMATIC_LIVE_BUDGET_PROJECTION_INVALID' then raise; end if;
+    end;
+  end loop;
   response:=public.reserve_automatic_live_entry_budget(owner,first_id,claim_id,snap,projection,false);
   if response->>'status'<>'RESERVED' then raise exception 'first budget claim failed: %',response; end if;
   if (select count(*) from public.trade_live_budget_reservations where user_id=owner and state='HELD')<>1

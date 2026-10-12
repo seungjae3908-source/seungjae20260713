@@ -320,7 +320,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.memberAutoPilotStage, 'validated');
 });
 
-test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Comprehensive receipts', () => {
+test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant overall activation readiness', () => {
   const input = fixture();
   input.qaScope = 'auto_live';
   input.comprehensive = null;
@@ -389,7 +389,10 @@ test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Com
     ...ZERO,
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.qaComplete, true);
+  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.automaticLiveActivationReady, false);
+  assert.deepEqual(evidence.unprovenAutomaticLiveControls, input.autoLive.memberAccountSignalAudit.additionalRequiredControls);
   assert.equal(evidence.qaScope, 'auto_live');
   assert.equal(evidence.autoLiveQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');

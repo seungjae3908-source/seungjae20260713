@@ -1,4 +1,7 @@
 import { automaticLiveUnrealizedPnlKrw } from './automatic-live-unrealized-risk.service';
+import { readAutomaticFuturesNativeProtection, sendBitgetNativeProtectionReadonly } from './bitget-native-protection-readonly.service';
+import { decryptTradingCredentials } from './trade-credential-vault.service';
+import type { BitgetCredentials } from './trade-exchange-adapters.service';
 import { issueProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -368,6 +371,9 @@ export interface MemberAutoTradingBackgroundSource {
     nowMs: number,
   ): Promise<MemberAutoTradingFxQuote>;
   readLiveAccountSnapshot(userId: string, provider: AccountProvider): Promise<CanonicalAccountSnapshot>;
+  /** Read-only native protection watch. Missing/failed proof blocks new entries,
+   * not observation of existing AUTO-owned positions or guarded exits. */
+  auditNativeFuturesProtection?(userId: string, plans: readonly TradingPlan[], orders: readonly TradingOrder[]): Promise<boolean>;
   readMarketMark(
     market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
     symbol: string,
@@ -383,6 +389,7 @@ export interface MemberAutoTradingBackgroundSource {
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
+  nativeProtectionErrorCode: string | null;
   handoffStatus: 'MISSING' | 'BLOCKED_DATA' | 'READY';
   /** Sanitized code only; never include file paths, credentials or candidate payloads. */
   handoffErrorCode: string | null;
@@ -431,6 +438,7 @@ export type MemberAutoTradingBackgroundRunResult = {
 };
 
 export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
+  nativeProtectionErrorCode: string | null;
   enabled: boolean;
   liveModeRequested: boolean;
   lastTickAt: string | null;
@@ -463,6 +471,7 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
 }>;
 
 let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.freeze({
+  nativeProtectionErrorCode: null,
   enabled: false,
   liveModeRequested: false,
   lastTickAt: null,
@@ -1869,6 +1878,7 @@ export class MemberAutoTradingBackgroundWorker {
       && this.liveEntryWarmupComplete
       && !this.liveCycleHardWarmupBlocked;
     const result: MemberAutoTradingBackgroundRunResult = {
+      nativeProtectionErrorCode: null,
       handoffStatus: 'MISSING',
       handoffErrorCode: null,
       handoffReady: false,
@@ -2107,8 +2117,22 @@ export class MemberAutoTradingBackgroundWorker {
         // simulated-trading lane. A Paper DB/RLS or notification outage must
         // never become authority for (or a blocker of) the canonical Live
         // provider path, which has its own exact-SHA, policy and account gates.
+        let nativeProtectionHealthy = true;
+        if (liveModeRequested && canonicalAutomaticLivePositions(runtime.plans, runtime.orders)
+          .some((position) => position.plan.exchange === 'bitget')) {
+          try {
+            nativeProtectionHealthy = await this.source.auditNativeFuturesProtection?.(
+              member.userId, runtime.plans, runtime.orders) === true;
+            if (!nativeProtectionHealthy) throw new Error('BITGET_NATIVE_PROTECTION_RUNTIME_PROOF_REQUIRED');
+          } catch (error) {
+            nativeProtectionHealthy = false;
+            result.nativeProtectionErrorCode = errorCode(error);
+            result.newEntriesFailClosed = true;
+            result.failures += 1;
+          }
+        }
         let entryProjectionHealthy = liveModeRequested
-          ? true
+          ? nativeProtectionHealthy
           : adminWalletDbGuardReady && await syncExecutionProjection();
         let exitChanged = false;
         for (const position of !liveModeRequested
@@ -2485,6 +2509,7 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
 
         const hardWarmupBlock = !result.handoffReady
+          || result.nativeProtectionErrorCode !== null
           || result.liveExitsSuppressedByPolicy > 0
           || result.executionSyncFailures > 0
           || result.executionSyncMissingReferences > 0
@@ -2698,6 +2723,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
         .map((provider) => this.readLiveAccountSnapshot(userId, provider)),
     );
+    const nativeProtectionReady = await this.auditNativeFuturesProtection(userId, plans, orders);
     const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
       liveProviderSnapshotReadyForAutomaticWarmup(snapshot, owned,
         maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
@@ -2708,6 +2734,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       && automaticPolicyHasAllFourMarkets(policy)
       && liveAllFourConnectionVerificationReady(policy, connections, nowMs)
       && liveSnapshotsReady
+      && nativeProtectionReady
       && !persistentGlobalStop
       && process.env.TRADING_EMERGENCY_STOP !== 'true';
   }
@@ -2718,6 +2745,26 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       this.client,
       this.maximumSingleEntryKrwByUserId.get(userId) ?? PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
     );
+  }
+
+  async auditNativeFuturesProtection(userId: string, plans: readonly TradingPlan[], orders: readonly TradingOrder[]) {
+    if (plans.some((p) => p.userId !== userId) || orders.some((o) => o.userId !== userId)) throw new Error('USER_SCOPE_MISMATCH');
+    const positions = canonicalAutomaticLivePositions(plans, orders).filter((p) => p.plan.exchange === 'bitget');
+    if (!positions.length) return true; // Vacant is not an active-protection certificate.
+    const connection = await this.tradingRepositoryFor(userId).getConnection(userId, 'bitget');
+    if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
+      throw new Error('BITGET_NATIVE_PROTECTION_CREDENTIAL_REQUIRED');
+    }
+    const owned = positions.map((position) => {
+      const entryOrder = orders.find((order) => order.planId === position.plan.id
+        && ['FILLED', 'PARTIALLY_FILLED'].includes(order.state) && order.filledQuantity > 0);
+      if (!entryOrder) throw new Error('BITGET_NATIVE_PROTECTION_CANONICAL_OWNERSHIP_REQUIRED');
+      return { ...position, order: entryOrder };
+    });
+    const proof = await readAutomaticFuturesNativeProtection({ positions: owned,
+      credentials: decryptTradingCredentials(connection.encryptedCredentials) as BitgetCredentials,
+      send: sendBitgetNativeProtectionReadonly, now: Date.now });
+    return proof.ready && proof.activeAutomaticPositionCount === owned.length;
   }
 
   paperJournalRepositoryFor(userId: string) {
@@ -2781,6 +2828,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   if (mode === 'DISABLED') {
     backgroundRuntimeHealth = Object.freeze({
       ...backgroundRuntimeHealth,
+      nativeProtectionErrorCode: null,
       enabled: false,
       liveModeRequested: false,
       lastTickAt: null,
@@ -2817,6 +2865,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   if (!hasSupabaseServerKey()) {
     backgroundRuntimeHealth = Object.freeze({
       ...backgroundRuntimeHealth,
+      nativeProtectionErrorCode: null,
       enabled: true,
       liveModeRequested: liveBackgroundEnabled(),
       lastTickAt: null,
@@ -2852,6 +2901,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   }
   backgroundRuntimeHealth = Object.freeze({
     ...backgroundRuntimeHealth,
+    nativeProtectionErrorCode: null,
     enabled: true,
     liveModeRequested: liveBackgroundEnabled(),
     lastTickAt: null,
@@ -2890,6 +2940,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
         && result.liveEntryWarmupComplete;
       backgroundRuntimeHealth = Object.freeze({
+        nativeProtectionErrorCode: result.nativeProtectionErrorCode,
         enabled: true,
         liveModeRequested: liveBackgroundEnabled(),
         lastTickAt: new Date().toISOString(),

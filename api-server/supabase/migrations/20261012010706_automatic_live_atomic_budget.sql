@@ -72,6 +72,23 @@ begin
   if current_setting('transaction_isolation')<>'serializable' then raise exception 'AUTOMATIC_LIVE_BUDGET_SERIALIZABLE_REQUIRED'; end if;
   if p_user_id is null or p_order_id is null or p_claim_id is null
     or (auth.uid() is not null and auth.uid()<>p_user_id) then raise exception 'USER_SCOPE_MISMATCH'; end if;
+  -- Validate container/scalar shapes before any set-returning function or
+  -- numeric cast. SQL OR evaluation order is not a type-validation fence.
+  if p_verify_only is null or jsonb_typeof(p_projection) is distinct from 'object'
+    or jsonb_typeof(limits) is distinct from 'object'
+    or jsonb_typeof(p_projection->'baseCharges') is distinct from 'array'
+    or jsonb_typeof(p_projection->'releases') is distinct from 'array'
+    or exists(select 1 from unnest(array['expectedVersion','amountKrw','riskKrw']) k
+      where jsonb_typeof(p_projection->k) is distinct from 'number')
+    or exists(select 1 from unnest(array['market','instrument','strategy']) k
+      where jsonb_typeof(p_projection->k) is distinct from 'string' or length(p_projection->>k)=0) then
+    raise exception 'AUTOMATIC_LIVE_BUDGET_PROJECTION_INVALID';
+  end if;
+  if (p_projection->>'expectedVersion')::numeric<0
+    or (p_projection->>'expectedVersion')::numeric<>floor((p_projection->>'expectedVersion')::numeric)
+    or (p_projection->>'expectedVersion')::numeric>9007199254740991 then
+    raise exception 'AUTOMATIC_LIVE_BUDGET_PROJECTION_INVALID';
+  end if;
   -- Short DB transaction only. No lock is retained during provider HTTP calls.
   perform pg_advisory_xact_lock(hashtextextended('automatic-live-budget:'||p_user_id::text,0));
   if public.read_automatic_live_budget_snapshot(p_user_id) is distinct from p_expected_snapshot then
@@ -79,22 +96,33 @@ begin
   end if;
   select * into current_order from public.trade_orders where user_id=p_user_id and id=p_order_id for update;
   select payload into current_plan from public.trade_order_plans where user_id=p_user_id and id=current_order.plan_id for share;
-  if not found or current_order.state<>'SUBMITTED' or current_order.version<>(p_projection->>'expectedVersion')::bigint
+  if not found or current_order.state is distinct from 'SUBMITTED'
+    or jsonb_typeof(p_projection) is distinct from 'object'
+    or jsonb_typeof(p_projection->'expectedVersion') is distinct from 'number'
+    or current_order.version is distinct from (p_projection->>'expectedVersion')::bigint
     or coalesce(current_order.payload->>'submissionStartedAt','')<>'' then
     return jsonb_build_object('status','CLAIM_UNAVAILABLE');
   end if;
-  if current_plan->>'accountMode'<>'live' or current_plan->>'state'<>'SUBMITTED'
+  if current_plan->>'accountMode' is distinct from 'live' or current_plan->>'state' is distinct from 'SUBMITTED'
     or coalesce((current_plan->>'reduceOnly')::boolean,false)
-    or not (current_plan->>'executionMode'='automatic' or current_plan->'signalReasons' ? 'CANONICAL_LIVE_AUTO_HANDOFF')
+    or not coalesce(current_plan->>'executionMode'='automatic' or current_plan->'signalReasons' ? 'CANONICAL_LIVE_AUTO_HANDOFF',false)
     or not (p_projection ?& array['userId','orderId','planId','expectedVersion','market','instrument','strategy','amountKrw','riskKrw','limits','baseCharges','releases'])
-    or p_projection->>'userId'<>p_user_id::text or p_projection->>'orderId'<>p_order_id::text
-    or p_projection->>'planId'<>current_order.plan_id::text
-    or (p_projection->>'amountKrw')::numeric<>ceil((current_plan->>'estimatedKrw')::numeric*100)/100
-    or (p_projection->>'riskKrw')::numeric<0 or jsonb_typeof(limits)<>'object'
+    or p_projection->>'userId' is distinct from p_user_id::text or p_projection->>'orderId' is distinct from p_order_id::text
+    or p_projection->>'planId' is distinct from current_order.plan_id::text
+    or jsonb_typeof(p_projection->'amountKrw') is distinct from 'number'
+    or jsonb_typeof(p_projection->'riskKrw') is distinct from 'number'
+    or (p_projection->>'amountKrw')::numeric is distinct from ceil((current_plan->>'estimatedKrw')::numeric*100)/100
+    or (p_projection->>'amountKrw')::numeric<=0 or (p_projection->>'amountKrw')::numeric>10000000000
+    or (p_projection->>'riskKrw')::numeric<0 or (p_projection->>'riskKrw')::numeric>10000000000
+    or jsonb_typeof(limits) is distinct from 'object'
     or not (limits ?& array['total','market','instrument','strategy','risk','positions','order'])
-    or exists(select 1 from jsonb_each(limits) v where jsonb_typeof(v.value)<>'number'
-      or (v.value::text)::numeric<=0 or (v.value::text)::numeric>10000000000)
-    or jsonb_typeof(p_projection->'baseCharges')<>'array' or jsonb_typeof(p_projection->'releases')<>'array' then
+    or exists(select 1 from jsonb_each(limits) v where case when jsonb_typeof(v.value) is distinct from 'number' then true
+      else (v.value::text)::numeric<=0 or (v.value::text)::numeric>10000000000 end)
+    or p_projection->>'market' not in ('domestic_stock','us_stock','crypto_spot','crypto_futures')
+    or exists(select 1 from unnest(array['market','instrument','strategy']) k
+      where jsonb_typeof(p_projection->k) is distinct from 'string' or length(p_projection->>k)=0)
+    or jsonb_typeof(p_projection->'baseCharges') is distinct from 'array'
+    or jsonb_typeof(p_projection->'releases') is distinct from 'array' then
     raise exception 'AUTOMATIC_LIVE_BUDGET_PROJECTION_INVALID';
   end if;
   if p_verify_only then
