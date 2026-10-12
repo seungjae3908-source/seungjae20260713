@@ -381,8 +381,8 @@ function schedulePush(): void {
  * The source quarantine is retained until an exact server read-back succeeds.
  */
 export async function importConfirmedLegacyWatchlist(): Promise<{ imported: number; alreadyPresent: number }> {
-  if (!activeMemberId || !identityHydrated || explicitIdentityOverrideActive
-    || serverDisabled || pushInFlight || legacyImportInFlight)
+  if (typeof window === 'undefined' || !activeMemberId || !identityHydrated
+    || explicitIdentityOverrideActive || serverDisabled || pushInFlight || legacyImportInFlight)
     throw new Error('LEGACY_WATCHLIST_IMPORT_UNAVAILABLE');
   const memberId = activeMemberId;
   const version = identityGeneration;
@@ -556,5 +556,5 @@ export function stopWatchlistSync(): void {
   pushInFlight = false;
   pushPending = false;
   legacyImportInFlight = false;
-  window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(LEGACY_WATCHLIST_REVIEW_EVENT));
 }
