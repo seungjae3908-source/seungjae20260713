@@ -11,7 +11,7 @@ async function mockPublicAi(page: Page, handler: (body: any) => Record<string, u
   const financialWrites: string[] = [];
   page.on('request', (request) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())
-      && /\\/api\\/.*(?:order|trade-automation|margin|leverage|transfer|withdraw|positions)/i.test(request.url())) {
+      && /\/api\/.*(?:order|trade-automation|margin|leverage|transfer|withdraw|positions)/i.test(request.url())) {
       financialWrites.push(`${request.method()} ${request.url()}`);
     }
   });
