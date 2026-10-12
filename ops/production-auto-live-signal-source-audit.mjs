@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import signalIdentity from './production-auto-live-signal-identity.cjs';
 import {
@@ -10,7 +10,6 @@ const targetSha = String(targetRaw ?? '').trim().toLowerCase();
 const productionDeployRunId = Number(runIdRaw);
 const scheduleActivatedAtMs = Number(scheduleActivatedAtRaw);
 const maximumAgeMs = 30 * 60_000;
-const scheduleTag = '# stock-app-paper-forward-v1';
 
 if (!handoffPath || !/^[0-9a-f]{40}$/u.test(targetSha)
   || !Number.isSafeInteger(productionDeployRunId) || productionDeployRunId <= 0
@@ -44,11 +43,44 @@ if (handoff.safety.executionAuthority !== 'NONE'
 
 const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8' });
 if (cron.status !== 0 && cron.status !== 1) throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
-const taggedLines = String(cron.stdout ?? '').split(/\r?\n/u)
-  .filter((line) => line.includes(scheduleTag));
-if (taggedLines.length !== 1) throw new Error(`AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID:${taggedLines.length}`);
-if (existsSync('/opt/stock-app-data/paper-forward-v1/DISABLED')) {
+const scheduleRoot = '/opt/stock-app-data/paper-forward-v1';
+const activationPath = scheduleRoot + '/activation.json';
+const wrapperPath = scheduleRoot + '/bin/run-paper-forward-schedule';
+let activation;
+try {
+  const activationStat = lstatSync(activationPath);
+  if (!activationStat.isFile() || activationStat.isSymbolicLink()
+    || activationStat.size <= 0 || activationStat.size > 32 * 1024) {
+    throw new Error('INVALID_ACTIVATION_FILE');
+  }
+  activation = JSON.parse(readFileSync(activationPath, 'utf8'));
+} catch {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_MISSING_OR_INVALID');
+}
+signalIdentity.inspectManagedPaperForwardSchedule(
+  String(cron.stdout ?? ''), activation, targetSha, scheduleActivatedAtMs, nowMs,
+);
+if (existsSync(scheduleRoot + '/DISABLED')
+  || existsSync(scheduleRoot + '/runtime-state/DISABLED')) {
   throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED');
+}
+try {
+  const wrapperStat = lstatSync(wrapperPath);
+  if (!wrapperStat.isFile() || wrapperStat.isSymbolicLink()
+    || (wrapperStat.mode & 0o111) === 0
+    || (wrapperStat.mode & 0o077) !== 0 || wrapperStat.size > 64 * 1024) {
+    throw new Error('INVALID_WRAPPER_MODE');
+  }
+  const wrapper = readFileSync(wrapperPath, 'utf8');
+  if (!wrapper.includes("PAPER_FORWARD_RESEARCH_SHA='" + targetSha + "'")
+    || !wrapper.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'")
+    || !wrapper.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'")
+    || !wrapper.includes("LIVE_TRADING='false'")
+    || !wrapper.includes("PRIVATE_TRADING_API_ALLOWED='false'")) {
+    throw new Error('INVALID_WRAPPER_IDENTITY');
+  }
+} catch {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID');
 }
 
 const identity = signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha);
