@@ -26,6 +26,22 @@ test('shared Paper repair is accepted only from the pinned immutable snapshot', 
   assert.deepEqual(refs, [PAPER_INTEGRATION_SHA, 'HEAD']);
 });
 
+test('activation lifecycle additions are exactly reviewed validators and tests, not execution exemptions', () => {
+  for (const file of ['.github/scripts/research-ai-activation-result.cjs',
+    'research-production/test/research-ai-activation-lifecycle.test.mjs',
+    'research-production/test/research-ai-activation-result.test.mjs']) {
+    assert.ok(RESEARCH_CENTER_BATCH_PATHS.includes(file));
+    assert.equal(isPreservedPaperIntegrationPath(file, () => blob), false);
+  }
+  for (const file of ['.github/scripts/research-unreviewed-helper.cjs',
+    'research-production/test/unreviewed.test.mjs', 'ops/install-paper-forward-schedule.sh.new',
+    'api-server/src/services/unreviewed-trade-execution.service.ts']) {
+    assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes(file), false);
+    assert.equal(isPreservedPaperIntegrationPath(file, () => blob), false);
+  }
+  assert.ok(read('.github/scripts/research-ai-activation-result.cjs').includes('grantsExecutionAuthority: false'));
+});
+
 test('a one-byte equivalent blob identity change restores the automatic-trading gate', () => {
   assert.equal(isPreservedPaperIntegrationPath(sharedPath, (ref) => ref === 'HEAD' ? 'b'.repeat(40) : blob), false);
 });
