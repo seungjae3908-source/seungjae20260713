@@ -268,7 +268,7 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/src/pages/phase5-backtest-e2e.tsx",
   "stock-analyzer/e2e/backtester-korean-result-ui.spec.ts",
   "stock-analyzer/src/lib/excel-export.ts",
-  ".github/scripts/paper-forward-reviewed-paths.mjs"
+  ".github/scripts/paper-forward-reviewed-paths.mjs",
   ".github/scripts/verify-research-workspace-sync-v3.mjs",
   ".github/workflows/production-automatic-trading-gate.yml",
   "api-server/scripts/verify-production-automatic-trading-gate.mjs",
