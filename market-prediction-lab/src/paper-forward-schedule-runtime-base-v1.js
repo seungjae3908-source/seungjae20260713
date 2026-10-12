@@ -37,6 +37,11 @@ export const PAPER_FORWARD_SCHEDULE_CADENCE = Object.freeze({
   intervalMs: FOUR_HOURS_MS,
 });
 
+export const AUTO_LIVE_PUBLIC_SIGNAL_CADENCE = Object.freeze({
+  version: "auto-live-public-signal-15m-v1",
+  intervalMs: 15 * 60_000,
+});
+
 export const PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT = Object.freeze({
   version: "paper-forward-schedule-activation-v1",
   scheduleActive: true,
@@ -159,7 +164,8 @@ function activationContract(outcomeAccumulationEnabled, authoritativeAccountRequ
   });
 }
 
-function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, authoritativeAccountRequired = false) {
+function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, authoritativeAccountRequired = false,
+  cadence = PAPER_FORWARD_SCHEDULE_CADENCE) {
   if (!immutableSha(researchCodeSha)) throw new TypeError("immutable Paper Forward research SHA is required");
   if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
     throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
@@ -168,7 +174,7 @@ function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, auth
     ? authoritativeAccountRequired
       ? {
         authority: "canonical-paper-forward-provider-v1",
-        cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+        cadence,
         financialMutationAdaptersEnabled: true,
         authoritativeAccount: "authenticated-paper-state-v2",
         accountCurrency: "USDT",
@@ -176,13 +182,13 @@ function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, auth
       }
       : {
         authority: "canonical-paper-forward-provider-v1",
-        cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+        cadence,
         financialMutationAdaptersEnabled: true,
         simulatedOnly: true,
       }
     : {
       authority: "canonical-paper-forward-provider-v1",
-      cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+      cadence,
       financialMutationAdaptersEnabled: false,
     }));
   return Object.freeze({
@@ -356,6 +362,7 @@ function activeRuntimeStatus(
   activationAtMs,
   outcomeAccumulationEnabled = false,
   authoritativeAccountRequired = false,
+  cadence = PAPER_FORWARD_SCHEDULE_CADENCE,
 ) {
   const replayed = value?.status === "REPLAYED";
   const lanes = replayed && Array.isArray(previous?.lanes)
@@ -376,7 +383,7 @@ function activeRuntimeStatus(
     activationVersion: activationContract(outcomeAccumulationEnabled, authoritativeAccountRequired).version,
     activationAtMs,
     trigger: PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT.trigger,
-    canonicalCycleIntervalMs: FOUR_HOURS_MS,
+    canonicalCycleIntervalMs: cadence.intervalMs,
     lanes: Object.freeze(lanes.map((lane) => Object.freeze({ ...lane }))),
     allProvidersReady: allReady,
     publicForwardEvidenceAccumulating: replayed
@@ -402,6 +409,7 @@ function createPersistentRuntimeStatusStore(
   activationAtMs,
   outcomeAccumulationEnabled,
   authoritativeAccountRequired,
+  cadence,
 ) {
   return Object.freeze({
     load: () => readJsonOrNull(paths.runtimeStatus),
@@ -413,6 +421,7 @@ function createPersistentRuntimeStatusStore(
         activationAtMs,
         outcomeAccumulationEnabled,
         authoritativeAccountRequired,
+        cadence,
       ));
     },
   });
@@ -468,6 +477,7 @@ export async function runPaperForwardScheduledInvocation({
   runRuntime = runPaperForwardEvidenceRuntime,
   leaseDurationMs = DEFAULT_LEASE_DURATION_MS,
   outcomeAccumulationEnabled = false,
+  autoLiveSignalRefresh = false,
   accountingEvidenceForSettlement,
   settlementCostProducer = null,
   authoritativeAccountRequired = false,
@@ -484,6 +494,9 @@ export async function runPaperForwardScheduledInvocation({
   }
   if (typeof outcomeAccumulationEnabled !== "boolean" || typeof authoritativeAccountRequired !== "boolean") {
     throw new TypeError("Paper Forward mode flags must be boolean");
+  }
+  if (typeof autoLiveSignalRefresh !== "boolean" || autoLiveSignalRefresh && outcomeAccumulationEnabled) {
+    throw new Error("AUTO_LIVE_SIGNAL_REFRESH_REQUIRES_OBSERVATION_ONLY_MODE");
   }
   if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
     throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
@@ -504,7 +517,8 @@ export async function runPaperForwardScheduledInvocation({
   const nowMs = clock();
   if (!finite(nowMs)) throw new TypeError("clock must return a finite number");
 
-  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired);
+  const cadence = autoLiveSignalRefresh ? AUTO_LIVE_PUBLIC_SIGNAL_CADENCE : PAPER_FORWARD_SCHEDULE_CADENCE;
+  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired, cadence);
   const boundRunCycle = bindRecurringPaperCycle({ identity, settlementCostProducer });
   const state = await loadOrCreateState(paths, identity, nowMs, {
     authoritativeAccountRequired,
@@ -517,6 +531,7 @@ export async function runPaperForwardScheduledInvocation({
     activationAtMs,
     outcomeAccumulationEnabled,
     authoritativeAccountRequired,
+    cadence,
   );
   const { ledgerAdapter, learningAdapter } = buildFinancialAdapters({
     paths,
@@ -535,7 +550,7 @@ export async function runPaperForwardScheduledInvocation({
     runtimeStatusStore,
     runtimeClock: clock,
     state,
-    cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+    cadence,
     nowMs,
     ownerId,
     leaseStore,
@@ -617,6 +632,7 @@ export async function runPaperForwardScheduledInvocation({
     publicForwardEvidenceAccumulating,
     paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
     paperTradeOutcomeAccumulating,
+    canonicalCycleIntervalMs: cadence.intervalMs,
     financialMutationAdaptersEnabled: outcomeAccumulationEnabled,
     simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
     authoritativeAccountRequired,
