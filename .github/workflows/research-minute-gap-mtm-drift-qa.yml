@@ -9,6 +9,7 @@ on:
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
       - 'market-prediction-lab/src/research-public-minute-prewire-bridge-v1.js'
       - 'market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js'
+      - 'market-prediction-lab/tests/four-market-original-minute-current-source-v1.test.js'
       - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
       - 'market-prediction-lab/src/four-market-original-minute-*.js'
       - 'market-prediction-lab/src/research-minute-*.js'
@@ -22,6 +23,7 @@ on:
       - 'market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js'
       - 'market-prediction-lab/src/research-public-minute-prewire-bridge-v1.js'
       - 'market-prediction-lab/tests/research-public-minute-prewire-bridge-v1.test.js'
+      - 'market-prediction-lab/tests/four-market-original-minute-current-source-v1.test.js'
       - 'market-prediction-lab/docs/native-original-minute-clean-port-20261013.md'
       - 'market-prediction-lab/src/four-market-original-minute-*.js'
       - 'market-prediction-lab/src/research-minute-*.js'
@@ -97,6 +99,7 @@ jobs:
           node --test market-prediction-lab/tests/research-native-original-minute-dependency-closure-v1.test.js
           node --test \
             market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js \
+            market-prediction-lab/tests/four-market-original-minute-current-source-v1.test.js \
             market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js \
             market-prediction-lab/tests/four-market-original-minute-batch-v1.test.js \
             market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js \
