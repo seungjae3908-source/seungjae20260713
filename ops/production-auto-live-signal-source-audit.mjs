@@ -47,9 +47,9 @@ const cron = spawnSync('crontab', ['-l'], {
 if (cron.error || cron.signal || cron.status !== 0 || typeof cron.stdout !== 'string') {
   throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
 }
-const scheduleRoot = '/opt/stock-app-data/paper-forward-v1';
+const scheduleRoot = '/opt/stock-app-data/auto-live-signal-v1';
 const activationPath = scheduleRoot + '/activation.json';
-const wrapperPath = scheduleRoot + '/bin/run-paper-forward-schedule';
+const wrapperPath = scheduleRoot + '/bin/run-auto-live-public-signal';
 let activation;
 try {
   activation = signalIdentity.readProductionAutoLiveScheduleActivation(activationPath);
@@ -63,6 +63,7 @@ signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot);
 try {
   const wrapper = signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath);
   if (!wrapper.includes("PAPER_FORWARD_RESEARCH_SHA='" + targetSha + "'")
+    || !wrapper.includes("PAPER_FORWARD_ROOT='/opt/stock-app-data/auto-live-signal-v1/runtime-state'")
     || !wrapper.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'")
     || !wrapper.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'")
     || !wrapper.includes("LIVE_TRADING='false'")
