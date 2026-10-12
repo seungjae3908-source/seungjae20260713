@@ -1,8 +1,10 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
+import { currentPublicV3CycleReady, currentPagePublication } from './public-v3-current-page-gate.mjs';
+import {v3PublicCycleLockCommand,V3_PUBLIC_CYCLE_CONFLICT_EXIT} from './public-cycle-singleflight.mjs';
+import { readV3StableSnapshot } from './public-snapshot-safe-read.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
@@ -14,28 +16,74 @@ const PRODUCER_PATH = String(process.env.SIGNAL_INTELLIGENCE_PRODUCER_PATH || ''
 if (!/^([0-9a-f]{40})$/.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 if (HOST !== '127.0.0.1' && HOST !== '::1') throw new Error('SIGNAL_INTELLIGENCE_LOOPBACK_ONLY');
 if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) throw new Error('SIGNAL_INTELLIGENCE_PORT_INVALID');
+if (!Number.isSafeInteger(MAX_STATE_AGE_MS) || MAX_STATE_AGE_MS < 1000 || MAX_STATE_AGE_MS > 15*60_000)
+  throw new Error('SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID');
 if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mjs'))) throw new Error('SIGNAL_INTELLIGENCE_PRODUCER_PATH_INVALID');
 
-let cache = { mtimeMs: -1, snapshot: null, loadedAt: null, error: 'SNAPSHOT_NOT_READY' };
+const EMPTY_STAT = Object.freeze({mtimeMs:-1,ctimeMs:-1,ino:null,size:null});
+let cache={...EMPTY_STAT,snapshot:null,loadedAt:null,
+  publicationIntegrity:false,error:'SNAPSHOT_NOT_READY'};
+/** Read boundary revalidates the exact producer's current-public lists/events
+ * against its research rows and source page. A saved file is not a trusted
+ * recommendation just because its policyVersion and SHA parse correctly.
+ */
+function validatePublicationReadback(snapshot){
+  const trusted= currentPagePublication(snapshot,snapshot.coverage);
+  const safeSnapshot={...snapshot,lists:trusted.lists,events:trusted.events};
+  const actual=snapshot.lists;
+  const publicationIntegrity=snapshot.profile?.fullStrategyCoverage===true
+    &&Array.isArray(snapshot.coverage)&&snapshot.coverage.length===12
+    &&actual&&typeof actual==='object'
+    &&Object.entries(trusted.lists).every(([k,rows])=>
+      JSON.stringify(rows)===JSON.stringify(actual[k]))
+    &&JSON.stringify(trusted.events)===JSON.stringify(snapshot.events);
+  return Object.freeze({snapshot:safeSnapshot,
+    publicationIntegrity:publicationIntegrity===true});
+}
+function safeSnapshotError(error){
+  if(error?.code==='ENOENT')return 'SNAPSHOT_NOT_READY';
+  if(error?.code==='EACCES'||error?.code==='EPERM')
+    return 'SNAPSHOT_READ_PERMISSION_DENIED';
+  if(error?.code==='EISDIR'||error?.message==='SNAPSHOT_NOT_A_FILE')return 'SNAPSHOT_NOT_A_FILE';
+  if(error?.message==='SNAPSHOT_SIZE_OUT_OF_BOUNDS')return 'SNAPSHOT_SIZE_OUT_OF_BOUNDS';
+  if(error instanceof SyntaxError)return 'SNAPSHOT_INVALID_JSON';
+  if(error?.message==='SNAPSHOT_SERVICE_SHA_MISMATCH')
+    return 'SNAPSHOT_SERVICE_SHA_MISMATCH';
+  if(error?.message==='SNAPSHOT_FILE_CHANGED_DURING_READ')
+    return 'SNAPSHOT_FILE_CHANGED_DURING_READ';
+  return 'SNAPSHOT_CONTRACT_OR_READ_FAILED';
+}
 let rescanRunning = false;
 let lastRescanStartedAt = null;
 let lastRescanFinishedAt = null;
 let lastRescanExitCode = null;
+let lastRescanOutcome = null;
 
 async function loadSnapshot() {
   try {
-    const metadata = await stat(STATE_FILE);
-    if (cache.snapshot && cache.mtimeMs === metadata.mtimeMs) return cache;
-    const parsed = JSON.parse(await readFile(STATE_FILE, 'utf8'));
+    // Atomic publication may overlap one stat/read pair. The helper retries
+    // only once against fresh metadata, never returning the old snapshot.
+    const read = await readV3StableSnapshot(STATE_FILE,{cached:cache});
+    if(read.cached)return cache;
+    const verified=read.metadata;
+    const parsed=JSON.parse(read.content);
     assertSignalIntelligenceV3Snapshot(parsed);
-    cache = { mtimeMs: metadata.mtimeMs, snapshot: parsed, loadedAt: new Date().toISOString(), error: null };
+    // Never present a previous release's snapshot under this service SHA.
+    // The current public producer stamps every snapshot with its exact head.
+    if(parsed.serviceSha!==SERVICE_SHA)throw Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
+    const normalized=validatePublicationReadback(parsed);
+    cache={mtimeMs:verified.mtimeMs,ctimeMs:verified.ctimeMs,
+      ino:verified.ino,size:verified.size,
+      snapshot:normalized.snapshot,
+      publicationIntegrity:normalized.publicationIntegrity,
+      loadedAt:new Date().toISOString(),error:null};
     return cache;
   } catch (error) {
     cache = {
-      mtimeMs: -1,
-      snapshot: null,
-      loadedAt: new Date().toISOString(),
-      error: error instanceof Error ? error.message.split(':')[0] : 'SNAPSHOT_LOAD_FAILED',
+      ...EMPTY_STAT,snapshot:null,publicationIntegrity:false,
+      loadedAt:new Date().toISOString(),
+      // Never expose raw JSON snippets, filesystem paths or private contents.
+      error:safeSnapshotError(error),
     };
     return cache;
   }
@@ -54,7 +102,10 @@ function json(res, status, body) {
 
 function snapshotAgeMs(snapshot) {
   const generatedAt = Date.parse(snapshot?.generatedAt || '');
-  return Number.isFinite(generatedAt) ? Math.max(0, Date.now() - generatedAt) : Number.POSITIVE_INFINITY;
+  if(!Number.isFinite(generatedAt))return Number.POSITIVE_INFINITY;
+  const ageMs=Date.now()-generatedAt;
+  // A future generatedAt is not a freshly completed scanner cycle.
+  return ageMs < -5000 ? Number.POSITIVE_INFINITY : Math.max(0,ageMs);
 }
 
 function publicList(snapshot, name) {
@@ -68,12 +119,16 @@ function triggerPublicRescan() {
   rescanRunning = true;
   lastRescanStartedAt = new Date().toISOString();
   lastRescanExitCode = null;
-  const child = spawn(process.execPath, [PRODUCER_PATH], {
+  lastRescanOutcome = 'RUNNING';
+  const locked = v3PublicCycleLockCommand(STATE_FILE, PRODUCER_PATH);
+  const child = spawn(locked.command, locked.args, {
     cwd: dirname(PRODUCER_PATH),
     env: {
       ...process.env,
       SIGNAL_INTELLIGENCE_SERVICE_SHA: SERVICE_SHA,
+      SIGNAL_INTELLIGENCE_STATE_DIR: dirname(STATE_FILE),
       SIGNAL_INTELLIGENCE_STATE_FILE: STATE_FILE,
+      SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true',
       LIVE_TRADING: 'false',
       PRIVATE_API_ENABLED: 'false',
       ORDER_AUTHORITY: 'false',
@@ -85,12 +140,16 @@ function triggerPublicRescan() {
     rescanRunning = false;
     lastRescanFinishedAt = new Date().toISOString();
     lastRescanExitCode = Number.isInteger(code) ? code : -1;
+    lastRescanOutcome = lastRescanExitCode===V3_PUBLIC_CYCLE_CONFLICT_EXIT
+      ? 'ALREADY_RUNNING_IN_TIMER_OR_ANOTHER_RESCAN'
+      : lastRescanExitCode===0 ? 'COMPLETED' : 'PROCESS_FAILED';
     cache.mtimeMs = -1;
   });
   child.once('error', () => {
     rescanRunning = false;
     lastRescanFinishedAt = new Date().toISOString();
     lastRescanExitCode = -1;
+    lastRescanOutcome = 'SPAWN_FAILED';
   });
   return { started: true };
 }
@@ -107,6 +166,16 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${HOST}:${PORT}`);
 
   if (req.method === 'POST' && url.pathname === '/internal/rescan') {
+    // A localhost-bound daemon is not permission for arbitrary websites to
+    // trigger rate-limited public scans through browser cross-site requests.
+    // No CORS response headers, no credential, no remote/public re-scan.
+    const origin=req.headers.origin;
+    const fetchSite=req.headers['sec-fetch-site'];
+    const expectedOrigin='http://'+HOST+':'+PORT;
+    if((origin!=null&&origin!==expectedOrigin)
+      ||fetchSite==='cross-site'||fetchSite==='same-site')
+      return json(res,403,{ok:false,error:'INTERNAL_RESCAN_ORIGIN_FORBIDDEN',
+        executionAuthority:'NONE'});
     const result = triggerPublicRescan();
     if (result.reason === 'PRODUCER_NOT_CONFIGURED') return json(res, 503, { ok: false, error: result.reason, executionAuthority: 'NONE' });
     return json(res, 202, {
@@ -121,9 +190,24 @@ const server = createServer(async (req, res) => {
 
   if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
 
+  // Unknown routes are 404 even before a first snapshot is published;
+  // do not create false 503 alerts for typos or browser favicon probes.
+  const listName = routes.get(url.pathname);
+  if (url.pathname !== '/health' && url.pathname !== '/v1/signals' && !listName)
+    return json(res, 404, { ok: false, error: 'NOT_FOUND' });
+
   if (url.pathname === '/health') {
     const state = await loadSnapshot();
     const ageMs = state.snapshot ? snapshotAgeMs(state.snapshot) : null;
+    const sourceComplete = state.snapshot?.profile?.fullStrategyCoverage === true
+      ? currentPublicV3CycleReady(state.snapshot.coverage) : null;
+    const clockReady = ageMs != null && ageMs <= MAX_STATE_AGE_MS;
+    const dataBlocker=!state.snapshot?(state.error??'SNAPSHOT_NOT_READY')
+      :!clockReady?'SNAPSHOT_AGE_EXPIRED'
+      :sourceComplete===false?'CURRENT_SOURCE_PAGES_BLOCKED'
+      :sourceComplete===null?'FULL_STRATEGY_SOURCE_NOT_VERIFIED'
+      :state.publicationIntegrity!==true?'CURRENT_PUBLICATION_PROOF_MISMATCH'
+        :null;
     return json(res, 200, {
       ok: true,
       service: 'signal-intelligence-v3',
@@ -133,9 +217,17 @@ const server = createServer(async (req, res) => {
       port: PORT,
       snapshotReady: Boolean(state.snapshot),
       snapshotAgeMs: ageMs,
-      snapshotFresh: ageMs != null ? ageMs <= MAX_STATE_AGE_MS : false,
+      snapshotFresh: clockReady && sourceComplete===true
+        &&state.publicationIntegrity===true,
+      snapshotClockReady: clockReady,
+      snapshotPublicationReady: clockReady && sourceComplete===true
+        &&state.publicationIntegrity===true,
+      snapshotPublicationIntegrity:state.publicationIntegrity===true,
+      snapshotBlockedReason: dataBlocker,
+      // Current-page health is separate from full-roster historical coverage.
+      snapshotCurrentPageSourceReady: sourceComplete,
       snapshotError: state.error,
-      rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode },
+      rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode, lastOutcome: lastRescanOutcome },
       executionAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -156,7 +248,6 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, snapshot: state.snapshot, executionAuthority: 'NONE' });
   }
 
-  const listName = routes.get(url.pathname);
   if (listName) {
     return json(res, 200, {
       ok: true,

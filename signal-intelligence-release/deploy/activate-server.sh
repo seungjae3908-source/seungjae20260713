@@ -25,6 +25,10 @@ export PRIVATE_API_ENABLED=false
 export ORDER_AUTHORITY=false
 export SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
 export SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true
+export SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=false
+export SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=false
+export SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=
+export SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false
 
 if [[ "$(id -u)" -eq 0 ]]; then
   SUDO=()
@@ -41,6 +45,7 @@ preflight() {
   command -v node >/dev/null || fail "NODE_REQUIRED"
   command -v corepack >/dev/null || fail "COREPACK_REQUIRED"
   command -v systemctl >/dev/null || fail "SYSTEMD_REQUIRED"
+  test -x /usr/bin/flock || fail "FLOCK_REQUIRED"
   command -v curl >/dev/null || fail "CURL_REQUIRED"
   printf '%s\n' \
     "preflight_ok=true" \
@@ -84,13 +89,7 @@ build_public_cycle() {
     cd "$RELEASE_DIR"
     corepack pnpm install --frozen-lockfile --filter '@workspace/api-server...'
     install -d -m 0755 api-server/.signal-intelligence
-    corepack pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
-      --bundle \
-      --platform=node \
-      --format=esm \
-      --target=node20 \
-      --packages=external \
-      --outfile=./.signal-intelligence/public-cycle.mjs
+    node signal-intelligence-v3/scripts/build-public-producer.mjs --external-packages
     node --check api-server/.signal-intelligence/public-cycle.mjs
   )
 }
@@ -98,6 +97,7 @@ build_public_cycle() {
 run_initial_cycle() {
   (
     cd "$RELEASE_DIR/api-server"
+    /usr/bin/flock -n -E 75 "$STATE_DIR" /usr/bin/env \
     SIGNAL_INTELLIGENCE_SERVICE_SHA="$TARGET_SHA" \
     SIGNAL_INTELLIGENCE_STATE_DIR="$STATE_DIR" \
     SIGNAL_INTELLIGENCE_STATE_FILE="$STATE_FILE" \
@@ -106,6 +106,10 @@ run_initial_cycle() {
     PRIVATE_API_ENABLED=false \
     ORDER_AUTHORITY=false \
     SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE \
+    SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=false \
+    SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=false \
+    SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA= \
+    SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false \
       node .signal-intelligence/public-cycle.mjs
   )
   test -s "$STATE_FILE" || fail "INITIAL_SNAPSHOT_MISSING"
@@ -146,6 +150,10 @@ Environment=LIVE_TRADING=false
 Environment=PRIVATE_API_ENABLED=false
 Environment=ORDER_AUTHORITY=false
 Environment=SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=false
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=false
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=
+Environment=SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false
 ExecStart=/usr/bin/env node $CURRENT_LINK/signal-intelligence-v3/src/server.mjs
 Restart=on-failure
 RestartSec=5
@@ -179,7 +187,11 @@ Environment=LIVE_TRADING=false
 Environment=PRIVATE_API_ENABLED=false
 Environment=ORDER_AUTHORITY=false
 Environment=SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
-ExecStart=/usr/bin/env node $CURRENT_LINK/api-server/.signal-intelligence/public-cycle.mjs
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_HANDOFF_ENABLED=false
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_OFFPAGE_RESEARCH_ENABLED=false
+Environment=SIGNAL_INTELLIGENCE_V3_WATCH_RESEARCH_SHA=
+Environment=SIGNAL_INTELLIGENCE_V3_ECONOMIC_BRIDGE_ENABLED=false
+ExecStart=/usr/bin/flock -n -E 75 $STATE_DIR /usr/bin/env node $CURRENT_LINK/api-server/.signal-intelligence/public-cycle.mjs
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

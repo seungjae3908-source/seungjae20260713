@@ -21,21 +21,27 @@ function immutableSha(value) {
 }
 
 function marketOf(card) {
-  const assetClass = String(card?.assetClass ?? '').toLowerCase();
-  const market = String(card?.market ?? '').toUpperCase();
-  if (assetClass === 'stock' && market === 'KR') return 'KR_STOCK';
-  if (assetClass === 'stock' && market === 'US') return 'US_STOCK';
-  if (assetClass === 'coin_spot') return 'CRYPTO_SPOT';
-  if (assetClass === 'coin_futures') return 'CRYPTO_FUTURES';
+  const assetClass=String(card?.assetClass??'').toLowerCase();
+  const market=String(card?.market??'').toUpperCase();
+  const exchange=String(card?.exchange??'').toUpperCase();
+  if(assetClass==='stock' && market==='KR')return 'KR_STOCK';
+  if(assetClass==='stock' && market==='US')return 'US_STOCK';
+  // Never interpret a futures-labelled price card as a Spot BUY or
+  // borrow Spot prices to form a futures LONG/SHORT recommendation.
+  if(assetClass==='coin_spot' && ['UPBIT_KRW','SPOT'].includes(market)
+    &&(!exchange||exchange==='UPBIT'))return 'CRYPTO_SPOT';
+  if(assetClass==='coin_futures'
+    &&['BITGET_USDT_FUTURES','FUTURES'].includes(market)
+    &&(!exchange||exchange==='BITGET'))return 'CRYPTO_FUTURES';
   return null;
 }
 
-function directionOf(card, market) {
-  const action = String(card?.action ?? '').toUpperCase();
-  const direction = String(card?.direction ?? '').toUpperCase();
-  if (market !== 'CRYPTO_FUTURES') return action === 'BUY' ? 'BUY' : null;
-  if (action === 'LONG' || action === 'SHORT') return action;
-  return direction === 'LONG' || direction === 'SHORT' ? direction : null;
+function directionOf(card,market){
+  const action=String(card?.action??'').toUpperCase();
+  const direction=String(card?.direction??'').toUpperCase();
+  if(market!=='CRYPTO_FUTURES')
+    return action==='BUY'&&['LONG','BUY'].includes(direction)?'BUY':null;
+  return ['LONG','SHORT'].includes(action)&&direction===action?action:null;
 }
 
 function entryMid(card) {
@@ -53,26 +59,44 @@ export function stopDistancePercent(card) {
 
 function dataReady(card, nowMs) {
   if (String(card?.dataState ?? '').toLowerCase() !== 'complete') return false;
-  if (card?.dataQuality?.state === 'DATA_UNTRUSTED') return false;
-  if (card?.dataQuality && card.dataQuality.strongSignalAllowed !== true) return false;
+  // No trusted quality receipt means the source is NOT independently ready.
+  if(card?.dataQuality?.state!=='TRUSTED'
+    ||card.dataQuality.strongSignalAllowed!==true
+    ||(Array.isArray(card.dataQuality.issues)
+      &&card.dataQuality.issues.some(x=>x?.severity==='blocking')))
+    return false;
   const observed = Date.parse(String(card?.observedAt ?? ''));
   const expires = Date.parse(String(card?.expiresAt ?? ''));
   return Number.isFinite(observed) && observed <= nowMs + 60_000 && Number.isFinite(expires) && expires > nowMs;
 }
 
 function quantReady(card) {
-  if (card?.strongSignalEligible !== true) return false;
-  if (card?.candidateRanking?.hardFilterPassed === false) return false;
-  const grade = String(card?.signalGrade ?? '').toUpperCase();
-  return !grade || grade === 'S' || grade === 'A';
+  if(card?.strongSignalEligible!==true
+    ||card?.candidateRanking?.hardFilterPassed===false)return false;
+  return ['S','A'].includes(String(card?.signalGrade??'').toUpperCase());
 }
 
-function riskReady(card) {
+function riskReady(card, direction) {
   if (!['LOW', 'MEDIUM'].includes(String(card?.riskLevel ?? '').toUpperCase())) return false;
+  if (!['BUY', 'LONG', 'SHORT'].includes(direction)) return false;
   const entry = entryMid(card);
   const stop = positive(card?.pricePlan?.stopLoss);
-  const targets = Array.isArray(card?.pricePlan?.targets) ? card.pricePlan.targets.map(positive).filter(Boolean) : [];
-  return entry != null && stop != null && stop !== entry && targets.length > 0;
+  const zone = card?.pricePlan?.entryZone;
+  const from = positive(zone?.from), to = positive(zone?.to);
+  if (entry == null || stop == null
+    || (zone && (from == null || to == null || from > to))) return false;
+  const low = zone ? from : entry;
+  const high = zone ? to : entry;
+  const rawTargets = card?.pricePlan?.targets;
+  if (!Array.isArray(rawTargets) || rawTargets.length === 0) return false;
+  const targets = rawTargets.map(positive);
+  if (targets.some(target => target == null)) return false;
+  // A long/BUY stop must be below the WHOLE entry zone, with profit targets
+  // above it. Futures SHORT requires the exact inverse geometry. Merely
+  // having a different stop price can mistakenly bless an inverted order.
+  return direction === 'SHORT'
+    ? stop > high && targets.every(target => target < low)
+    : stop < low && targets.every(target => target > high);
 }
 
 function addBlocker(blockers, blocker) {
@@ -139,6 +163,66 @@ function validateCostPolicy(policy, { market, costPolicyId }, blockers) {
   return blockers.length === 0;
 }
 
+/**
+ * A READY profit number alone never proves that the corresponding scanner
+ * formula has survived OOS, walk-forward and all-in cost validation.
+ * Require exact same-candidate immutable lineage and measurable genuine
+ * backtest dimensions. This is a structural check, NOT proof of the external
+ * evaluator's independence or an OOS PASS by itself.
+ */
+function validateBacktestLineage(card, identity, profit, blockers) {
+  // Missing Paper identity must not hide a SECOND independent missing
+  // prerequisite. Audit actual backtest fields without promoting a card.
+  if (!identity) addBlocker(blockers, 'BACKTEST_IDENTITY_REQUIRED_FOR_LINEAGE');
+  const quality = card?.backtestQuality;
+  if (!quality || quality.status !== 'verified') {
+    addBlocker(blockers, 'BACKTEST_QUALITY_VERIFICATION_REQUIRED');
+    return;
+  }
+  if (quality.oos !== true || quality.walkForward !== true)
+    addBlocker(blockers, 'BACKTEST_OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED');
+  if (quality.costsIncluded !== true || quality.slippageIncluded !== true)
+    addBlocker(blockers, 'BACKTEST_ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED');
+  if (quality.lookaheadGuarded !== true || quality.survivorshipGuarded !== true)
+    addBlocker(blockers, 'BACKTEST_PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED');
+  const lineage = identity ? {
+    signalId: identity.signalId,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    researchCodeSha: identity.researchCodeSha,
+    costPolicyId: identity.costPolicyVersion,
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    direction: identity.direction,
+  } : null;
+  if (!lineage || !quality.canonicalLineage || typeof quality.canonicalLineage !== 'object'
+    || Object.entries(lineage).some(([key, value]) =>
+      quality.canonicalLineage[key] !== value))
+    addBlocker(blockers, 'BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED');
+  const verifiedSamples =
+    Number.isSafeInteger(quality.tradeCount) && quality.tradeCount > 0
+    && Number.isSafeInteger(quality.minimumTradeCount) && quality.minimumTradeCount > 0
+    && quality.tradeCount >= quality.minimumTradeCount
+    && Number.isSafeInteger(quality.oosTradeCount) && quality.oosTradeCount > 0
+    && Number.isSafeInteger(quality.walkForwardTradeCount)
+    && quality.walkForwardTradeCount > 0
+    && Number.isSafeInteger(profit?.sampleSize) && profit.sampleSize > 0;
+  if (!verifiedSamples)
+    addBlocker(blockers, 'BACKTEST_OOS_WALK_FORWARD_SAMPLE_EVIDENCE_REQUIRED');
+  if (!(typeof quality.netReturnPercent === 'number'
+      && Number.isFinite(quality.netReturnPercent)
+      && quality.netReturnPercent > 0)
+    || !(typeof quality.expectancyPercent === 'number'
+      && Number.isFinite(quality.expectancyPercent)
+      && quality.expectancyPercent > 0)
+    || !(typeof quality.profitFactor === 'number'
+      && Number.isFinite(quality.profitFactor)
+      && quality.profitFactor > 1))
+    addBlocker(blockers, 'BACKTEST_NET_ECONOMIC_EVIDENCE_REQUIRED');
+}
+
 function canonicalProfitEvidence(input, card, context) {
   const blockers = [];
   const identity = validatePaperIdentity(input?.paperIdentity, { card, ...context }, blockers);
@@ -162,6 +246,7 @@ function canonicalProfitEvidence(input, card, context) {
 
   const costPolicyId = nonEmpty(profit?.costPolicyId) ? profit.costPolicyId : null;
   validateCostPolicy(input?.costPolicy, { market: context.market, costPolicyId }, blockers);
+  validateBacktestLineage(card, identity, profit, blockers);
 
   const stopPct = stopDistancePercent(card);
   if (stopPct == null || stopPct <= 0) addBlocker(blockers, 'STOP_DISTANCE_REQUIRED_FOR_EDGE_NORMALIZATION');
@@ -215,13 +300,16 @@ export function adaptCanonicalScannerCard(input, options = {}) {
     dataStatus: dataReady(card, nowMs) ? 'READY' : 'BLOCKED',
     quantEligible: quantReady(card),
     profitEligible: Boolean(evidence),
-    riskReady: riskReady(card),
+    riskReady: riskReady(card, direction),
     evidence: evidence ?? {},
     ai: aiEvidence(card, input?.ai),
     leverageEvidence: market === 'CRYPTO_FUTURES' ? input?.leverageEvidence : undefined,
     sourceAsOf: card.observedAt ?? null,
     provenance: {
       scannerSignalId: card.signalId ?? null,
+      // Persist provider card expiry: the twelve sequential V3 scans may
+      // finish after an initially valid card has already expired.
+      sourceExpiresAt: card.expiresAt ?? null,
       scannerSources: Array.isArray(card.dataSources) ? card.dataSources : [],
       edgeSource: evidence?.source ?? null,
       profitEvidenceStatus: input?.profitEvidence?.status ?? null,

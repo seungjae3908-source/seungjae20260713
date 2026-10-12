@@ -78,8 +78,17 @@ function identity(candidate) {
   ].join('|');
 }
 
+const PUBLIC_V3_CYCLE_UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 function directionalIdentity(candidate) {
-  return [candidate.market, candidate.symbol, candidate.strategy, candidate.timeframe].join('|');
+  // Only same-cycle LONG/SHORT proposals can compete in the direction
+  // auction. A prior retained research epoch cannot veto a current source
+  // page merely because its old utility was higher. Without a verified epoch
+  // retain the legacy conservative same-symbol auction.
+  const supplied=candidate?.provenance?.sourceCycleId;
+  const epoch=typeof supplied==='string'&&PUBLIC_V3_CYCLE_UUID.test(supplied)
+    ?supplied:'NO_VERIFIED_SOURCE_CYCLE';
+  return [candidate.market,candidate.symbol,candidate.strategy,
+    candidate.timeframe,epoch].join('|');
 }
 
 function array(value) {
@@ -320,9 +329,51 @@ function candidateStateMap(rows) {
   return Object.fromEntries(rows.map((row) => [row.id, row.state]));
 }
 
+// V3 persists the whole rolling research pool in rows/stateById, but the
+// separately verified current-page projection alone grants publication.
+// Treating a prior unpublishable research CANDIDATE as already announced
+// silently loses the first real NEW_CANDIDATE when its source recovers.
+function signalEpisodeIdentity(row) {
+  const stamp = row?.sourceAsOf;
+  const observed = typeof stamp === 'string' ? Date.parse(stamp) : NaN;
+  if (!Number.isFinite(observed) || new Date(observed).toISOString() !== stamp) return null;
+  const proof = row?.provenance, identity = proof?.paperIdentity;
+  if (typeof proof?.scannerSignalId !== 'string' || !identity
+    || typeof identity.strategyVersion !== 'string'
+    || typeof identity.parameterHash !== 'string'
+    || typeof identity.researchCodeSha !== 'string'
+    || typeof identity.costPolicyVersion !== 'string') return null;
+  // Closed-market opportunities may recur on a later UTC trading date.
+  // No raw source cycle UUID: retried scans/worker restarts are not new alerts.
+  return [stamp.slice(0, 10), proof.scannerSignalId, identity.strategyVersion,
+    identity.parameterHash, identity.researchCodeSha, identity.costPolicyVersion].join('|');
+}
+function previouslyPublishedCandidateIds(snapshot) {
+  const published = new Map();
+  const slots = [
+    ['krBuy', 'KR_STOCK', 'BUY'],
+    ['usBuy', 'US_STOCK', 'BUY'],
+    ['spotBuy', 'CRYPTO_SPOT', 'BUY'],
+    ['futuresLong', 'CRYPTO_FUTURES', 'LONG'],
+    ['futuresShort', 'CRYPTO_FUTURES', 'SHORT'],
+  ];
+  for (const [key, market, direction] of slots) {
+    const rows = snapshot?.lists?.[key];
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (row?.market === market && row?.direction === direction
+        && row?.state === 'CANDIDATE' && row?.id === identity(row)) {
+        published.set(row.id, signalEpisodeIdentity(row));
+      }
+    }
+  }
+  return published;
+}
+
 export function buildSignalEvents(snapshot, previousSnapshot = null) {
   const events = [];
   const previousStates = previousSnapshot?.stateById ?? {};
+  const previouslyPublished = previouslyPublishedCandidateIds(previousSnapshot);
   for (const row of snapshot.rows) {
     const before = previousStates[row.id] ?? null;
     if (row.ai.rescanRequested) {
@@ -338,7 +389,10 @@ export function buildSignalEvents(snapshot, previousSnapshot = null) {
         validationTier: row.validationTier,
       }));
     }
-    if (row.state === 'CANDIDATE' && before !== 'CANDIDATE') {
+    const episode = signalEpisodeIdentity(row);
+    if (row.state === 'CANDIDATE' &&
+      (!previouslyPublished.has(row.id)
+        || (episode !== null && episode !== previouslyPublished.get(row.id)))) {
       events.push(Object.freeze({
         type: 'NEW_CANDIDATE',
         id: row.id,

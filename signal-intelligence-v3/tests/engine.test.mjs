@@ -214,3 +214,106 @@ test('requested max is a ceiling and never force-fills missing candidates', () =
   const snapshot = runSignalIntelligenceV3([baseCandidate()], { maxCandidatesPerList: 10 });
   assert.equal(snapshot.lists.krBuy.length, 1);
 });
+
+test('historical futures LONG cannot veto a distinct current-source SHORT epoch',()=>{
+ const older='11111111-1111-4111-8111-111111111111';
+ const current='22222222-2222-4222-8222-222222222222';
+ const oldLong=futuresCandidate('LONG',{
+   provenance:{sourceCycleId:older},
+   evidence:{expectedNetEdgeR:2.5},
+ });
+ const newShort=futuresCandidate('SHORT',{
+   provenance:{sourceCycleId:current},
+   evidence:{expectedNetEdgeR:0.9},
+ });
+ const snapshot=runSignalIntelligenceV3([oldLong,newShort]);
+ assert.equal(snapshot.rows.find(row=>row.direction==='LONG').state,'CANDIDATE');
+ assert.equal(snapshot.rows.find(row=>row.direction==='SHORT').state,'CANDIDATE');
+ assert.equal(snapshot.lists.futuresShort.length,1,
+   'an old LONG is not same-time evidence against a new SHORT');
+ // The auction remains mandatory for contradictory same-epoch candidates.
+ const together=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:current}},
+   newShort,
+ ]);
+ assert.equal(together.lists.futuresShort.length,0);
+ assert.ok(together.rows.find(row=>row.direction==='SHORT')
+   .reasons.includes('DIRECTION_LOST_AUCTION'));
+ // Unverified epoch metadata must never bypass the conservative auction.
+ const invalid=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:'INVALID_EPOCH'}},
+   {...newShort,provenance:{sourceCycleId:'INVALID_EPOCH'}},
+ ]);
+ assert.equal(invalid.lists.futuresShort.length,0);
+});
+test('previous cycle near-tie cannot make an independently sourced SHORT abstain',()=>{
+ const oldLong=futuresCandidate('LONG',{
+   provenance:{sourceCycleId:'11111111-1111-4111-8111-111111111111'},
+   evidence:{expectedNetEdgeR:1.00},
+ });
+ const newShort=futuresCandidate('SHORT',{
+   provenance:{sourceCycleId:'22222222-2222-4222-8222-222222222222'},
+   evidence:{expectedNetEdgeR:0.91},
+ });
+ const snapshot=runSignalIntelligenceV3([oldLong,newShort]);
+ assert.equal(snapshot.rows.find(row=>row.direction==='SHORT').state,'CANDIDATE');
+ const sameTime=runSignalIntelligenceV3([
+   {...oldLong,provenance:{sourceCycleId:'22222222-2222-4222-8222-222222222222'}},
+   newShort,
+ ]);
+ assert.equal(sameTime.rows.filter(row=>row.state==='ABSTAIN').length,2);
+});
+
+test('a prior research-only CANDIDATE cannot suppress the first newly publishable source event',()=>{
+ const previousEngine=runSignalIntelligenceV3([baseCandidate()]);
+ assert.equal(previousEngine.stateById[previousEngine.rows[0].id],'CANDIDATE');
+ const unpublished={...previousEngine,lists:{
+   ...previousEngine.lists,krBuy:[],
+ },events:[]}; // matches public source gating of a blocked page
+ const next=runSignalIntelligenceV3([baseCandidate()],{
+   previousSnapshot:unpublished,
+ });
+ assert.equal(next.events.filter(e=>e.type==='NEW_CANDIDATE').length,1,
+   'a raw prior CANDIDATE was never actually published');
+ const alreadyPublished=runSignalIntelligenceV3([baseCandidate()],{
+   previousSnapshot:previousEngine,
+ });
+ assert.equal(alreadyPublished.events.some(e=>e.type==='NEW_CANDIDATE'),false,
+   'a still-published candidate must not produce a duplicate episode');
+});
+
+test('previous publication history is market and direction scoped, not arbitrary state aliases',()=>{
+ const initial=runSignalIntelligenceV3([
+   baseCandidate({market:'US_STOCK',symbol:'AAPL',direction:'BUY'}),
+ ]);
+ const unknown={...initial,lists:{...initial.lists,usBuy:[],
+   krBuy:initial.lists.usBuy}};
+ const next=runSignalIntelligenceV3([
+   baseCandidate({market:'US_STOCK',symbol:'AAPL',direction:'BUY'}),
+ ],{previousSnapshot:unknown});
+ assert.equal(next.events.filter(e=>e.type==='NEW_CANDIDATE').length,1,
+   'a forged cross-market list must not suppress a real current candidate');
+});
+
+test('a genuinely new dated source opportunity survives prior published identity; same-day replay does not',()=>{
+ const opportunity={
+   sourceAsOf:'2026-10-12T12:00:00.000Z',
+   provenance:{
+     scannerSignalId:'scanner-stable-1',
+     paperIdentity:{strategyVersion:'v1',parameterHash:'p1',
+       researchCodeSha:'a'.repeat(40),costPolicyVersion:'cost1'},
+   },
+ };
+ const first=runSignalIntelligenceV3([baseCandidate(opportunity)]);
+ const sameDay=runSignalIntelligenceV3([baseCandidate({
+   ...opportunity,sourceAsOf:'2026-10-12T13:30:00.000Z',
+ })],{previousSnapshot:first});
+ assert.equal(sameDay.events.filter(e=>e.type==='NEW_CANDIDATE').length,0);
+ const nextDay=runSignalIntelligenceV3([baseCandidate({
+   ...opportunity,sourceAsOf:'2026-10-13T12:00:00.000Z',
+ })],{previousSnapshot:first});
+ assert.equal(nextDay.events.filter(e=>e.type==='NEW_CANDIDATE').length,1);
+ const retest=runSignalIntelligenceV3([baseCandidate(opportunity)],
+   {previousSnapshot:{...first,lists:{...first.lists,krBuy:[]}}});
+ assert.equal(retest.events.filter(e=>e.type==='NEW_CANDIDATE').length,1);
+});
