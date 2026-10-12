@@ -419,6 +419,10 @@ check('Telegram activation blocks active trading and rechecks PM2 before mutatio
   const unsafe = [
     { LIVE_TRADING: 'true' }, { AUTO_TRADING: 'true' },
     { MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'true' },
+    { BITGET_LIVE_ORDER_ENABLED: 'true' },
+    { UPBIT_LIVE_ORDER_ENABLED: 'true' },
+    { SPOT_LIVE_CAPABILITY_ALLOWLIST: 'KR_STOCK' },
+    { SPOT_LIVE_MARKET_ALLOWLIST: 'CRYPTO_SPOT' },
     { executionAuthority: 'BROKER' },
   ];
   for (const flags of unsafe) {
