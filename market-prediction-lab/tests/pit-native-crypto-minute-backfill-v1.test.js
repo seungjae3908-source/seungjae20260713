@@ -430,3 +430,146 @@ test("private CLI dry-run outputs blocked receipt; explicit GET stores and dupli
       /PIT_NATIVE_MINUTE_CLI_PRIVATE_INPUT_REQUIRED/);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test("reviewed retry never rereads a missing or wrong immutable 1m revision",async()=>{
+ const root=tmp(),calls=[];
+ try{
+   const premature=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:SHA,
+     upbitFetchImpl:upbitMock(calls),
+   }));
+   assert.equal(premature.reason,"RETRY_EXISTING_PARTIAL_ARCHIVE_REQUIRED");
+   assert.equal(calls.length,0);
+   const initial=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitMock(calls)}));
+   const oldDigest=initial.archiveSourceDigestSha256;
+   assert.match(oldDigest,/^[0-9a-f]{64}$/u);
+   const wrong=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:SHA,upbitFetchImpl:upbitMock(calls),
+   }));
+   assert.equal(wrong.reason,"RETRY_SOURCE_REVISION_DIGEST_MISMATCH");
+   assert.equal(calls.length,1,"wrong or stale lease must not make GET");
+   await assert.rejects(()=>collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     upbitFetchImpl:upbitMock(calls),
+   })),/PIT_NATIVE_MINUTE_BACKFILL_ARGUMENTS_INVALID/);
+   assert.equal(calls.length,1);
+   const same=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:oldDigest,
+     upbitFetchImpl:upbitMock(calls),
+   }));
+   assert.equal(same.reason,"RETRY_NO_ADDITIONAL_ORIGINAL_MINUTES");
+   const still=await derive({root,market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(still.archiveRevisionCount,1);
+   assert.equal(still.sourceMinuteRows,3);
+   assert.equal(still.profitabilityProven,false);
+   assert.equal(calls.length,2);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("retry conflicts/erased minutes are blocked without creating a second archive revision",async()=>{
+ const root=tmp(),calls=[];
+ try{
+   const original=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitMock(calls)}));
+   const reviewed=original.archiveSourceDigestSha256;
+   const newer=rows=>async(url,options)=>{
+     calls.push({url,method:options?.method??"GET"});
+     return {ok:true,status:200,json:async()=>rows};
+   };
+   const conflict=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:reviewed,
+     upbitFetchImpl:newer([
+       {...nativeMinute(START+MIN),high_price:108},
+       nativeMinute(START),nativeMinute(START-MIN),
+     ]),
+   }));
+   assert.equal(conflict.reason,"RETRY_PRIOR_MINUTE_DISAPPEARED");
+   const adjusted=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:reviewed,
+     upbitFetchImpl:newer([
+       nativeMinute(START+3*MIN),
+       {...nativeMinute(START+2*MIN),high_price:108},
+       nativeMinute(START+MIN),nativeMinute(START),nativeMinute(START-MIN),
+     ]),
+   }));
+   assert.equal(adjusted.reason,"RETRY_HISTORICAL_PRICE_CONFLICT");
+   const read=await derive({root,market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(read.archiveRevisionCount,1);
+   assert.equal(read.sourceMinuteRows,3);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("strictly extended native 1m retry preserves old source and requires explicit SHA selection",async()=>{
+ const root=tmp(),calls=[];
+ const more=async(url,options)=>{
+   calls.push({url,method:options?.method??"GET"});
+   return {ok:true,status:200,json:async()=>[
+     nativeMinute(START+3*MIN),nativeMinute(START+2*MIN),
+     nativeMinute(START+MIN),nativeMinute(START),nativeMinute(START-MIN),
+   ]};
+ };
+ try{
+   const first=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitMock(calls),
+   }));
+   const retry=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:first.archiveSourceDigestSha256,
+     upbitFetchImpl:more,
+   }));
+   assert.equal(retry.status,"RETROSPECTIVE_IMMUTABLE_SUPERSET_AWAITING_REVISION_REVIEW");
+   assert.equal(retry.reason,"EXPLICIT_ARCHIVE_REVISION_SELECTION_REQUIRED");
+   assert.equal(retry.sourceMinuteCount,4);
+   assert.equal(retry.priorSourceDigestSha256,first.archiveSourceDigestSha256);
+   assert.equal(retry.sourceRevisionAutoSelected,false);
+   assert.notEqual(retry.archiveSourceDigestSha256,first.archiveSourceDigestSha256);
+   const undecided=await derive({root,market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     sessionStartMs:START,asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(undecided.status,"BLOCKED_DATA");
+   assert.equal(undecided.reason,"MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION");
+   const previous=await derive({root,market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     sessionStartMs:START,sourceDigestSha256:first.archiveSourceDigestSha256,
+     asOfMs:NOW,timeframes:["1m"]});
+   const expanded=await derive({root,market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     sessionStartMs:START,sourceDigestSha256:retry.archiveSourceDigestSha256,
+     asOfMs:NOW,timeframes:["1m"]});
+   assert.equal(previous.sourceMinuteRows,3);
+   assert.equal(expanded.sourceMinuteRows,4);
+   assert.equal(expanded.profitabilityProven,false);
+   const noFurther=await collect(config(root,"CRYPTO_SPOT","KRW-BTC",{
+     allowPublicReadOnlyFetch:true,retryPartialSource:true,
+     expectedExistingSourceDigestSha256:retry.archiveSourceDigestSha256,
+     upbitFetchImpl:more,
+   }));
+   assert.equal(noFurther.reason,"EXISTING_ARCHIVE_REQUIRES_MANUAL_SOURCE_REVIEW");
+   assert.equal(calls.length,2);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("PIT native 1m CLI retry requires explicit public read and prior immutable digest",()=>{
+ const root=tmp(),m=manifest("CRYPTO_SPOT","KRW-BTC");
+ const args=["--market","CRYPTO_SPOT","--symbol","KRW-BTC","--day","2026-09-18",
+   "--manifest",join(root,"manifest.json"),
+   "--expected-roster-sha",m.rawMembershipDigestSha256,
+   "--root",root,"--output",join(root,"result.json")];
+ try{
+   assert.throws(()=>parse([...args,"--retry-partial"]),
+     /PIT_NATIVE_MINUTE_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--read-public","--retry-partial"]),
+     /PIT_NATIVE_MINUTE_CLI_SCOPE_INVALID/);
+   assert.throws(()=>parse([...args,"--expected-existing-sha",SHA]),
+     /PIT_NATIVE_MINUTE_CLI_SCOPE_INVALID/);
+   const accepted=parse([...args,"--read-public","--retry-partial",
+     "--expected-existing-sha",SHA]);
+   assert.equal(accepted.retryPartialSource,true);
+   assert.equal(accepted.expectedExistingSourceDigestSha256,SHA);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
