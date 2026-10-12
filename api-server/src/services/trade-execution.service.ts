@@ -709,6 +709,9 @@ export class TradeExecutionService {
     // Server-only revocation fence. It can only remove execution permission;
     // it never substitutes for policy, account, budget or exact-SHA arm gates.
     private readonly executionGenerationIsActive: (() => boolean) | null = null,
+    // Background execution supplies a fresh server membership read. This
+    // revocation-only check cannot grant authority or replace any trade gate.
+    private readonly memberAccessIsCurrent: ((userId: string, plan: TradingPlan) => Promise<boolean>) | null = null,
   ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
@@ -1075,6 +1078,7 @@ export class TradeExecutionService {
         errorCode: 'REDUCE_ONLY_SIDE_INVALID', orderSubmissionAttempted: false,
       });
     }
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (plan.accountMode !== 'paper') {
       if (!connection?.configured || !connection.encryptedCredentials) {
@@ -1320,6 +1324,7 @@ export class TradeExecutionService {
 
   private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
     this.assertExecutionGenerationActive();
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
     if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
       || isRiskReducingExitPlan(plan)) return;
     await this.assertAutomaticLiveEntryControls(userId, plan);
@@ -1327,7 +1332,21 @@ export class TradeExecutionService {
     // Private reads can take time. Recheck revocable authority and member caps
     // AFTER them, rather than trusting a pre-read arm/policy decision.
     await this.assertAutomaticLiveEntryControls(userId, plan);
+    await this.assertCurrentAutomaticMemberAccess(userId, plan);
     this.assertExecutionGenerationActive();
+  }
+
+  private async assertCurrentAutomaticMemberAccess(userId: string, plan: TradingPlan) {
+    if (!this.memberAccessIsCurrent || plan.accountMode !== 'live'
+      || (plan.executionMode !== 'automatic'
+        && !plan.signalReasons.some((reason) => reason === 'CANONICAL_LIVE_AUTO_HANDOFF'
+          || reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))) return;
+    this.assertExecutionGenerationActive();
+    let current = false;
+    try { current = await this.memberAccessIsCurrent(userId, plan) === true; }
+    catch { /* Unknown profile state cannot authorize a financial mutation. */ }
+    this.assertExecutionGenerationActive();
+    if (!current) throw new Error('AUTOMATIC_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
   }
 
   private assertExecutionGenerationActive() {

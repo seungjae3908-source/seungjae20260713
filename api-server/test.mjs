@@ -117,6 +117,7 @@ const groups = {
     path.join(root, 'src/services/kiwoom-readonly-order-recovery.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-ai-review-evidence.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-readiness.service.test.ts'),
     path.join(root, 'src/services/admin-four-market-paper-capital.service.test.ts'),
     path.join(root, 'src/services/admin-four-market-paper-readback.service.test.ts'),
