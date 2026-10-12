@@ -15,9 +15,13 @@ const PROFILES=Object.freeze({
 });
 const SLOTS=['SCALPING_15M','SWING_60M','MID_LONG_1D'];
 const integer=x=>Number.isSafeInteger(x)&&x>=0;
+const EPOCH=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 export function planV3FourMarketDataRecovery(coverage){
  if(!Array.isArray(coverage)||coverage.length!==12)
   throw Error('V3_RECOVERY_LANES_INVALID');
+ const cycle=coverage[0]?.sourceCycleId;
+ if(!EPOCH.test(cycle??'')||coverage.some(x=>x?.sourceCycleId!==cycle))
+  throw Error('V3_RECOVERY_MIXED_SOURCE_CYCLES');
  const seen=new Set(),markets={};
  for(const [market,profile] of Object.entries(PROFILES)){
   markets[market]={market,sourceReadyPages:0,blockedPages:0,
