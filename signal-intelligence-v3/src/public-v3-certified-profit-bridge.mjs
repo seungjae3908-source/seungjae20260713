@@ -32,8 +32,22 @@ export function v3SignedResearchPayload(bundle){
  const {signature,...body}=bundle;
  return Buffer.from(JSON.stringify(canonical(body)),'utf8');
 }
+// A frozen Map still has working .set/.delete. Never expose mutable proof.
+const verifiedBridges=new WeakSet();
+function sealedRecords(entries){
+ const owned=new Map();
+ const deepFreeze=x=>{
+  if(x&&typeof x==='object'&&!Object.isFrozen(x)){
+   for(const child of Object.values(x))deepFreeze(child);
+   Object.freeze(x);
+  }
+  return x;
+ };
+ for(const [key,value] of entries)owned.set(key,deepFreeze(structuredClone(value)));
+ return Object.freeze({size:owned.size,get(key){return owned.get(key);}});
+}
 function blocked(status){
- return Object.freeze({status,records:new Map(),
+ return Object.freeze({status,records:sealedRecords([]),
    diagnostic:Object.freeze({schemaVersion:V3_ECONOMIC_BRIDGE_SCHEMA,
      status,linkedRecords:0,publicRequestsAdded:0,realOrders:0,
      independentlyVerifiedOperationalProof:false,executionAuthority:'NONE'})});
@@ -129,11 +143,19 @@ function validatedBundle(bundle,publicKeyPem,expectedResearchSha,nowMs){
   if(records.has(key))return blocked('DUPLICATE_RESEARCH_IDENTITY');
   records.set(key,entry);
  }
- return Object.freeze({status:'SIGNED_EVIDENCE_AVAILABLE',records,
-   diagnostic:Object.freeze({schemaVersion:V3_ECONOMIC_BRIDGE_SCHEMA,
-     status:'SIGNED_EVIDENCE_AVAILABLE',linkedRecords:records.size,
-     publicRequestsAdded:0,realOrders:0,
-     independentlyVerifiedOperationalProof:false,executionAuthority:'NONE'})});
+ // Only this module can brand a bridge as cryptographically verified;
+ // sealed copies prevent mutation after the signature check.
+ let handle;
+ try{
+  handle=Object.freeze({status:'SIGNED_EVIDENCE_AVAILABLE',
+    records:sealedRecords(records),
+    diagnostic:Object.freeze({schemaVersion:V3_ECONOMIC_BRIDGE_SCHEMA,
+      status:'SIGNED_EVIDENCE_AVAILABLE',linkedRecords:records.size,
+      publicRequestsAdded:0,realOrders:0,
+      independentlyVerifiedOperationalProof:false,executionAuthority:'NONE'})});
+ }catch{return blocked('INDEPENDENT_EVIDENCE_INVALID');}
+ verifiedBridges.add(handle);
+ return handle;
 }
 export function inspectV3SignedResearchBundle(bundle,{publicKeyPem,expectedResearchSha,
   nowMs=Date.now(),enabled=false}={}){
@@ -186,8 +208,8 @@ export async function loadV3SignedResearchBundle({enabled=false,root,fileName,
 }
 export function attachV3SignedResearchEvidence(card,{lane,bridge}={}){
  const fallback=Object.freeze({card,timeframe:lane?.timeframe});
- if(!object(card)||!object(lane)||bridge?.status!=='SIGNED_EVIDENCE_AVAILABLE')
-   return fallback;
+ if(!object(card)||!object(lane)||bridge?.status!=='SIGNED_EVIDENCE_AVAILABLE'
+   ||!verifiedBridges.has(bridge))return fallback;
  const market=lane.market;
  const direction=market==='CRYPTO_FUTURES'
    ?(['LONG','SHORT'].includes(card.direction)&&card.action===card.direction

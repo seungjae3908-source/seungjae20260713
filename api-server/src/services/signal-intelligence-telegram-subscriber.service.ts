@@ -386,10 +386,14 @@ export class SignalIntelligenceTelegramDeliveryState {
   // Migration safety: a pre-v2 confirmed/uncertain Telegram POST must not be
   // replayed just because the current source service was redeployed. Legacy
   // receipts retain their existing conservative 14-day/no-auto-replay policy.
-  async hasLegacyCandidate(id: string, now = new Date()): Promise<boolean> {
+  async hasLegacyCandidate(id: string, now = new Date(), sourceAsOf?: string): Promise<boolean> {
     await this.load();
+    const observed = Date.parse(sourceAsOf ?? '');
     if (typeof id !== 'string' || id.length === 0 || id.length > 400
-      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+      || !Number.isFinite(now.getTime()) || !Number.isFinite(observed)
+      || observed > now.getTime() + 5_000
+      || new Date(observed).toISOString() !== sourceAsOf)
+      throw new Error(LEDGER_ERROR);
     const suffix = ':NEW_CANDIDATE:' + id + '::CANDIDATE';
     const legacy = /^signal-intelligence-v3:[0-9a-f]{40}:NEW_CANDIDATE:/u;
     for (const [key, timestamp] of [...this.delivered, ...this.unconfirmed]) {
@@ -398,7 +402,12 @@ export class SignalIntelligenceTelegramDeliveryState {
       if (!Number.isFinite(at) || at > now.getTime() + 5_000) {
         this.blocked = true; throw new Error(LEDGER_ERROR);
       }
-      if (this.unconfirmed.has(key) || at >= now.getTime() - MAX_DELIVERED_AGE_MS)
+      // Unknown v1 POST outcomes are always blocked pending reconciliation.
+      // A confirmed v1 send may block only its original source UTC day;
+      // otherwise new opportunities disappear for fourteen days after deploy.
+      if(this.unconfirmed.has(key))return true;
+      if(at >= now.getTime() - MAX_DELIVERED_AGE_MS
+        && sourceAsOf.slice(0,10) <= new Date(at).toISOString().slice(0,10))
         return true;
     }
     return false;
@@ -410,7 +419,11 @@ export class SignalIntelligenceTelegramDeliveryState {
   async markUnconfirmed(key: string, now: Date): Promise<void> {
     return this.persist(key, now, false);
   }
-  private async persist(key: string, now: Date, delivered: boolean): Promise<void> {
+  /** A sender explicitly performed ZERO Bot API attempts. */
+  async releaseExplicitNoSend(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, null);
+  }
+  private async persist(key: string, now: Date, delivered: boolean | null): Promise<void> {
     await this.load();
     if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
       || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
@@ -421,15 +434,19 @@ export class SignalIntelligenceTelegramDeliveryState {
     // permanent tombstones pending explicit reconciliation, not normal TTLs.
     for (const [id, timestamp] of next)
       if (Date.parse(timestamp) < cutoff) next.delete(id);
-    if (delivered) {
+    if (delivered === true) {
       uncertain.delete(key);
       next.set(key, now.toISOString());
-    } else {
+    } else if (delivered === false) {
       if (next.has(key)) {
-        this.blocked = true;
-        throw new Error(LEDGER_ERROR);
+        this.blocked = true; throw new Error(LEDGER_ERROR);
       }
       uncertain.set(key, now.toISOString());
+    } else {
+      if(next.has(key)||!uncertain.has(key)){
+        this.blocked=true;throw new Error(LEDGER_ERROR);
+      }
+      uncertain.delete(key);
     }
     if (next.size + uncertain.size > MAX_LEDGER_ENTRIES) {
       this.blocked = true; throw new Error(LEDGER_ERROR);
@@ -450,6 +467,9 @@ export class SignalIntelligenceTelegramDeliveryState {
         await fd.sync();
       } finally { await fd.close(); }
       await rename(temp, this.file);
+      // Preserve pending/sent ledger rename across a host crash.
+      const dir=await open(path.dirname(this.file),fileConstants.O_RDONLY);
+      try{await dir.sync();}finally{await dir.close();}
       this.delivered = next;
       this.unconfirmed = uncertain;
     } catch {
@@ -543,7 +563,7 @@ export class SignalIntelligenceTelegramSubscriber {
         const row = snapshot.rows?.find(candidate => candidate?.id===event.id);
         const episodeKey = verifiedTelegramV3EpisodeKey(row,now.getTime());
         if (!episodeKey) { result.failed += 1; continue; }
-        if (await this.store.hasLegacyCandidate(event.id,now)) {
+        if (await this.store.hasLegacyCandidate(event.id,now,row?.sourceAsOf)) {
           result.deduped += 1; continue;
         }
         try {
@@ -573,6 +593,10 @@ export class SignalIntelligenceTelegramSubscriber {
         if (await this.store.hasUnconfirmed(alert.dedupeKey, now)) {
           result.failed += 1; continue;
         }
+        // Reserve an UNKNOWN outcome BEFORE the remote POST. If the worker
+        // crashes between Telegram accepting a message and the next ledger
+        // checkpoint, the restart must not automatically send it again.
+        await this.store.markUnconfirmed(alert.dedupeKey,now);
         result.attempted += 1;
         const sent = await this.deliver(alert);
         if (sent.ok || sent.skipped === 'DUPLICATE') {
@@ -581,10 +605,14 @@ export class SignalIntelligenceTelegramSubscriber {
             result.delivered += 1;
             result.publicDelivered += 1;
           } else result.deduped += 1;
-        } else if (sent.skipped === 'NOT_CONFIGURED') result.skipped += 1;
-        else if (sent.skipped === 'OUTCOME_UNCONFIRMED'
+        } else if (sent.attempts === 0
+          && ['NOT_CONFIGURED','COOLDOWN'].includes(sent.skipped)) {
+          // No Bot API attempt occurred. A definitive local no-send can
+          // safely release its pre-send reservation for a later retry.
+          await this.store.releaseExplicitNoSend(alert.dedupeKey,now);
+          result.skipped += 1;
+        } else if (sent.skipped === 'OUTCOME_UNCONFIRMED'
           || sent.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
-          await this.store.markUnconfirmed(alert.dedupeKey, now);
           result.failed += 1;
         } else result.failed += 1;
       }
