@@ -1,16 +1,20 @@
 import { classifyAssetType, type AssetType } from '../data/asset-type';
 import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { getKrUniverse } from '../providers/krx';
+import { isKiwoomConfigured } from '../providers/kiwoom';
 import { getUsUniverse } from '../providers/us-universe';
+import { createHash } from 'node:crypto';
 
 export type ScannerListingStatus = 'LISTED' | 'UNKNOWN';
 export type ScannerUniverseSource =
   | 'krx-symbol-master'
   | 'finnhub-symbol-master'
+  | 'nasdaq-trader-public-directory'
   | 'last-good-cache'
   | 'curated-fallback';
 
 export interface ScannerUniverseEntry extends CatalogEntry {
+  sourceAsOf?: string;
   assetType: AssetType;
   exchange: string | null;
   listingStatus: ScannerListingStatus;
@@ -43,6 +47,7 @@ export interface ScannerUniverseBatch extends ScannerUniverseResult {
   cursor: number;
   nextCursor: number | null;
   batchSize: number;
+  rosterId: string;
 }
 
 type MarketScope = 'KR' | 'US';
@@ -55,6 +60,43 @@ type CacheRow = {
 };
 const lastGood = new Map<MarketScope, CacheRow>();
 const CACHE_MS = 12 * 60 * 60_000;
+// These lower bounds are outage/truncation anomaly guards, NOT proof that an
+// external source supplied the complete stock exchange universe.
+export const SCANNER_PROVIDER_ROSTER_MINIMUM: Readonly<Record<MarketScope, number>> =
+  Object.freeze({ KR: 500, US: 1_000 });
+
+export function classifyScannerUniverseSource(
+  market: MarketScope,
+  entries: readonly ScannerUniverseEntry[],
+): Readonly<{ source: ScannerUniverseSource; partial: boolean; stale: boolean; providerErrorCount: number }> {
+  const expected: ScannerUniverseSource = market === 'KR' ? 'krx-symbol-master'
+    : entries[0]?.source === 'nasdaq-trader-public-directory' ? 'nasdaq-trader-public-directory' : 'finnhub-symbol-master';
+  const allExpected = entries.length > 0 && entries.every((row) =>
+    row.market === market && row.listingStatus === 'LISTED' && row.source === expected);
+  if (allExpected && entries.length >= SCANNER_PROVIDER_ROSTER_MINIMUM[market]) {
+    return { source: expected, partial: false, stale: false, providerErrorCount: 0 };
+  }
+  const cached = entries.length > 0 && entries.every((row) => row.source === 'last-good-cache');
+  return {
+    source: cached ? 'last-good-cache' : allExpected ? expected : 'curated-fallback',
+    partial: true,
+    stale: cached || !allExpected,
+    providerErrorCount: 1,
+  };
+}
+
+// A provider outage invalidates the CURRENT listing assertion even if a
+// previously verified roster is still useful for cautious symbol lookup.
+// Apply identically to failed/partial provider refresh paths.
+export function markScannerUniverseFallbackUnknown(
+  entries: readonly ScannerUniverseEntry[],
+): ScannerUniverseEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    listingStatus: 'UNKNOWN' as const,
+    source: 'last-good-cache' as const,
+  }));
+}
 
 function catalogFallback(market: MarketScope): ScannerUniverseEntry[] {
   return CATALOG
@@ -79,23 +121,21 @@ function dedupe(entries: ScannerUniverseEntry[]): ScannerUniverseEntry[] {
   return [...rows.values()].sort((left, right) => left.ticker.localeCompare(right.ticker));
 }
 
-function publicOnlyCapability(
-  market: MarketScope,
-  entries: ScannerUniverseEntry[],
-): { entries: ScannerUniverseEntry[]; rawTotalCount: number; exclusions: ScannerUniverseExplainedExclusion[] } {
-  const rawTotalCount = entries.length;
-  const publicOnly = String(process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE ?? '').trim().toLowerCase() === 'true';
-  if (!publicOnly || market !== 'KR') return { entries, rawTotalCount, exclusions: [] };
+export function requiresPublicOnlyKrUniverse(
+  configuredValue: string | undefined = process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE,
+  kiwoomConfigured = isKiwoomConfigured(),
+): boolean {
+  return configuredValue?.trim().toLowerCase() === 'true' || !kiwoomConfigured;
+}
 
+export function excludeUnsupportedKrPublicProviderSymbols(
+  entries: ScannerUniverseEntry[],
+): { entries: ScannerUniverseEntry[]; exclusions: ScannerUniverseExplainedExclusion[] } {
   const exclusions: ScannerUniverseExplainedExclusion[] = [];
   const supported = entries.filter((entry) => {
     const ticker = String(entry.ticker ?? '').trim().toUpperCase();
-    // The standalone public-only V3 uses Yahoo for KR candles/quotes. Yahoo
-    // supports the traditional numeric KRX short-code form via .KS/.KQ, but
-    // not the newer alphanumeric KRX short codes. Keep those symbols visible
-    // as explained capability exclusions instead of counting them as provider
-    // outages. The normal app universe is unchanged because this branch is
-    // enabled only by SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true.
+    // Yahoo supports the traditional numeric KRX short-code form via .KS/.KQ,
+    // but not the newer alphanumeric KRX short codes.
     const unsupported = !/^\d{6}$/u.test(ticker);
     if (!unsupported) return true;
     exclusions.push({
@@ -107,6 +147,22 @@ function publicOnlyCapability(
     });
     return false;
   });
+  return { entries: supported, exclusions };
+}
+
+function publicOnlyCapability(
+  market: MarketScope,
+  entries: ScannerUniverseEntry[],
+): { entries: ScannerUniverseEntry[]; rawTotalCount: number; exclusions: ScannerUniverseExplainedExclusion[] } {
+  const rawTotalCount = entries.length;
+  const publicOnly = requiresPublicOnlyKrUniverse();
+  if (!publicOnly || market !== 'KR') return { entries, rawTotalCount, exclusions: [] };
+
+  // When Kiwoom credentials are absent, the normal app has the same public
+  // provider limitation as the standalone public-only runtime. Do not send an
+  // impossible alphanumeric KRX request into the bounded scanner; preserve it
+  // as an explained exclusion instead.
+  const { entries: supported, exclusions } = excludeUnsupportedKrPublicProviderSymbols(entries);
 
   if (exclusions.length > 0) {
     const tickers = exclusions.slice(0, 20).map((row) => row.ticker).join(',');
@@ -189,8 +245,11 @@ async function liveUniverse(market: MarketScope, signal?: AbortSignal): Promise<
     currency: 'USD',
     assetType: row.assetType,
     exchange: row.exchange,
-    listingStatus: 'LISTED',
-    source: 'finnhub-symbol-master',
+    // Respect the provider's fallback provenance; a curated or expired
+    // cache row is not an authenticated/current LISTED symbol.
+    listingStatus: row.listingStatus,
+    source: row.source === 'static-catalog' ? 'curated-fallback' : row.source,
+    sourceAsOf: row.sourceAsOf,
   }));
 }
 
@@ -204,17 +263,24 @@ export const ScannerUniverseService = {
     signal?: AbortSignal,
     deadlineMs?: number,
   ): Promise<ScannerUniverseResult> {
+    if (signal?.aborted) throw signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED');
     const now = Date.now();
     const cached = lastGood.get(market);
-    if (cached && now - cached.at < CACHE_MS) {
+    if (cached && now >= cached.at && now - cached.at < CACHE_MS && cached.entries.every(row => row.sourceAsOf == null
+      || (Number.isFinite(Date.parse(row.sourceAsOf)) && Date.parse(row.sourceAsOf) <= now + 5 * 60_000
+        && now - Date.parse(row.sourceAsOf) <= 7 * 24 * 60 * 60_000))) {
+      // The current provider capability may differ from the one that loaded
+      // the cache. Reapply exclusions; a credential/capability change cannot
+      // turn unsupported KRX symbols into successful public data requests.
+      const capability = publicOnlyCapability(market, cached.entries);
       return {
-        entries: cached.entries,
-        totalCount: cached.entries.length,
+        entries: capability.entries.map(row => ({ ...row })),
+        totalCount: capability.entries.length,
         rawTotalCount: cached.rawTotalCount,
-        explainedExcludedCount: cached.explainedExclusions.length,
-        explainedExclusions: cached.explainedExclusions,
+        explainedExcludedCount: capability.exclusions.length,
+        explainedExclusions: capability.exclusions.map(row => ({ ...row })),
         source: cached.source,
-        partial: false,
+        partial: capability.exclusions.length > 0,
         stale: false,
         providerErrorCount: 0,
         loadedAt: new Date(cached.at).toISOString(),
@@ -227,26 +293,42 @@ export const ScannerUniverseService = {
       const capability = publicOnlyCapability(market, rawLive);
       const live = capability.entries;
       if (live.length > 0) {
-        const source: ScannerUniverseSource = market === 'KR'
-          ? 'krx-symbol-master'
-          : 'finnhub-symbol-master';
-        lastGood.set(market, {
-          at: now,
-          entries: live,
-          source,
-          rawTotalCount: capability.rawTotalCount,
-          explainedExclusions: capability.exclusions,
-        });
+        const source = classifyScannerUniverseSource(market, live);
+        const evidence = capability.exclusions.length > 0 && !source.partial
+          ? { ...source, partial: true } : source;
+        // A previously source-backed roster is retained as an explicitly
+        // stale, unverified fallback when the current provider returns only
+        // a subset or a curated list. No stale entry remains LISTED.
+        if (evidence.partial && cached?.entries.length) {
+          return {
+            entries: markScannerUniverseFallbackUnknown(cached.entries),
+            totalCount: cached.entries.length,
+            rawTotalCount: cached.rawTotalCount,
+            explainedExcludedCount: cached.explainedExclusions.length,
+            explainedExclusions: cached.explainedExclusions,
+            source: 'last-good-cache', partial: true, stale: true,
+            providerErrorCount: 1,
+            loadedAt: new Date(cached.at).toISOString(),
+          };
+        }
+        // Never replace a previously attested roster with a tiny provider
+        // response or silently upgrade a fallback catalog to whole-market.
+        if (!evidence.partial) {
+          lastGood.set(market, {
+            at: now,
+            entries: live.map(row => ({ ...row })),
+            source: evidence.source,
+            rawTotalCount: capability.rawTotalCount,
+            explainedExclusions: capability.exclusions.map(row => ({ ...row })),
+          });
+        }
         return {
           entries: live,
           totalCount: live.length,
           rawTotalCount: capability.rawTotalCount,
           explainedExcludedCount: capability.exclusions.length,
           explainedExclusions: capability.exclusions,
-          source,
-          partial: false,
-          stale: false,
-          providerErrorCount: 0,
+          ...evidence,
           loadedAt: new Date(now).toISOString(),
         };
       }
@@ -258,7 +340,7 @@ export const ScannerUniverseService = {
 
     if (cached?.entries.length) {
       return {
-        entries: cached.entries.map((entry) => ({ ...entry, source: 'last-good-cache' })),
+        entries: markScannerUniverseFallbackUnknown(cached.entries),
         totalCount: cached.entries.length,
         rawTotalCount: cached.rawTotalCount,
         explainedExcludedCount: cached.explainedExclusions.length,
@@ -294,12 +376,15 @@ export const ScannerUniverseService = {
     deadlineMs?: number,
   ): Promise<ScannerUniverseBatch> {
     const universe = await this.get(market, signal, deadlineMs);
+    const rosterId = createHash('sha256').update(JSON.stringify([market, universe.source,
+      universe.rawTotalCount ?? universe.totalCount, universe.partial,
+      universe.entries.map(row => [row.ticker, row.market, row.exchange, row.assetType, row.listingStatus])])).digest('hex');
     const batchSize = Math.max(10, Math.min(200, Math.floor(batchSizeValue) || 120));
     const cursor = Math.max(0, Math.min(universe.totalCount, Math.floor(cursorValue) || 0));
     const entries = universe.entries.slice(cursor, cursor + batchSize);
     const nextCursor = cursor + entries.length < universe.totalCount
       ? cursor + entries.length
       : null;
-    return { ...universe, entries, cursor, nextCursor, batchSize };
+    return { ...universe, entries, cursor, nextCursor, batchSize, rosterId };
   },
 };

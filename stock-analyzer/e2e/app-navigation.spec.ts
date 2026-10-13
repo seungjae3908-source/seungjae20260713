@@ -260,6 +260,12 @@ test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async
   await expect(assetsMenu).toBeVisible();
   await assetsTrigger.press('Space');
   await expect(assetsMenu).toBeHidden();
+
+  // Enter toggles an already-open menu without a keyboard-focus race.
+  await assetsTrigger.press('Enter');
+  await expect(assetsMenu).toBeVisible();
+  await assetsTrigger.press('Enter');
+  await expect(assetsMenu).toBeHidden();
   assertClean();
 });
 
@@ -301,7 +307,7 @@ test('technical menu reaches scanner, AI chart, and auto-trading routes without 
   const cases = [
     ['검색기', '/scanner', /AI 신호검색기/],
     ['AI차트', '/ai-chart', /AI 차트 생중계/],
-    ['자동매매', '/auto-trading', /자동매매/],
+    ['기술매매', '/auto-trading', /자동매매/],
   ] as const;
 
   for (const [label, route, heading] of cases) {

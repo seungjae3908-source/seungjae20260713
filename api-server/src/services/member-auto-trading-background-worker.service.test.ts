@@ -1,17 +1,129 @@
 import test from 'node:test';
+// Run canonical exit identity regressions in the already registered phase12 lane.
+import './member-auto-trading-exit-plan.service.test';
+import './automatic-live-preactivation-audit.service.test';
+import './automatic-live-unrealized-risk.service.test';
+import './bitget-native-protection-readonly.service.test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
+import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
+import { automaticLiveExecutionEnabled } from './trade-automation.service';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type ExchangeConnection,
+  type TradingPlan,
+  type TradingPolicy,
+} from './trade-automation.types';
+import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  automaticLiveIsolationReceipt,
+} from './automatic-live-position-isolation.service';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  liveBackgroundEnabled,
+  memberAutoTradingWorkerMode,
+  costPercent,
+  marketMapping,
   resolveMemberStockBroker,
+  readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
+  selectRotatingHandoffEntries,
+  formulaAiReviewReasonsForLive,
+  automaticTradingStoredEntryReasons,
+  assertCanonicalLiveProviderPositions,
+  liveProviderSnapshotReadyForAutomaticWarmup,
+  memberTelegramProofMatchesCurrentBinding,
+  liveAllFourConnectionVerificationReady,
+  selectAutomaticPaperAccountEquity,
+  AUTOMATIC_PAPER_ACCOUNT_ID,
+  AUTOMATIC_PAPER_INITIAL_KRW,
+  automaticPaperWalletBootstrapReadiness,
+  automaticLiveStrategyAllowlisted,
+  currentLiveMemberAccessMatchesBatch,
+  automaticPaperCapitalPolicyReady,
+  automaticPaperLegacyEpochIsolationReadiness,
+  automaticExecutionProjectionOrderIds,
+  automaticPaperOrderWithinWalletEpoch,
+  automaticPaperWalletServerEpochMs,
+  automaticPaperRiskEvidenceFromCanonicalLedger,
+  deriveFourMarketPaperExecutionPolicy,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import {
+  buildAdminFourMarketPaperBootstrap,
+  ADMIN_MARKET_INITIAL_KRW,
+} from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
+  const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  const spot = { exchange: 'upbit', accountMode: 'live', leverage: null } as const;
+  const futures = { exchange: 'bitget', accountMode: 'live', leverage: 7 } as const;
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, spot), true);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, futures), true);
+  for (const profile of [{ ...admin, status: 'suspended' }, { ...admin, is_active: false },
+    { ...admin, membership_expires_at: new Date(Date.now() - 1).toISOString() },
+    { ...admin, membership_level: 'regular', role: 'user' }]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(profile, 1_000_000, spot), false);
+  }
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, undefined, spot), false);
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 500_000, spot), false, 'upgrade cannot inherit old batch authority');
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...spot, accountMode: 'paper' }), false);
+  for (const leverage of [1, 8, 7.1, null, Number.NaN]) {
+    assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage }), false);
+  }
+});
+
+test('worker stopped during an awaited member read cannot create plans or resume on a later tick', async () => {
+  const repository = new InMemoryTradingRepository();
+  const nowMs = Date.now();
+  let unblock!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async listEligibleMembers() { started(); await blocked; return await base.listEligibleMembers(); },
+  });
+  const first = withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  await entered;
+  worker.stop(); unblock();
+  const stoppedTick = await first;
+  assert.equal(stoppedTick.newEntriesFailClosed, true);
+  assert.equal(stoppedTick.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(stoppedTick.liveOrders + stoppedTick.paperExitOrders + stoppedTick.privateTradingRequests, 0);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  const later = await worker.runOnce(new Date(nowMs + 1_000));
+  assert.equal(later.handoffErrorCode, 'BACKGROUND_WORKER_STOPPED');
+  assert.equal(later.liveEntryWarmupComplete, false); assert.equal(later.liveEntriesArmed, false);
+  assert.equal(later.newEntriesFailClosed, true);
+});
+
+test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
+  const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
+    direction: 'BUY', timeframe: '5m', regime: 'TREND' },
+    signal: { learningSnapshot: { reasons: ['실제 저장된 진입 조건', null, ''] } },
+    riskEvidence: { actualRiskPercent: 0.2, riskReward1: 2 } } as any;
+  const reasons = automaticTradingStoredEntryReasons(entry);
+  assert.equal(reasons[0], '실제 저장된 진입 조건');
+  assert.ok(reasons.includes('진입 전략: trend-breakout-v1 · 버전 v1'));
+  assert.ok(reasons.includes('진입 당시 검증 위험비율: 0.2%'));
+  assert.ok(reasons.includes('진입 당시 목표 1 손익비: 2'));
+  const withoutDescription = automaticTradingStoredEntryReasons({ ...entry, signal: { learningSnapshot: null },
+    riskEvidence: { actualRiskPercent: null, riskReward1: null } });
+  assert.doesNotMatch(withoutDescription.join('|'), /거래량|캔들|AI 승인|위험비율/);
+});
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({
@@ -24,7 +136,9 @@ function policy(): TradingPolicy {
       crypto_spot: true,
       crypto_futures: false,
     },
-    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    // Explicitly permit the fixture strategy; an empty Paper allowlist is not a wildcard.
+    enabledStrategies: ['trend-breakout-v1'],
     totalCapitalKrw: 1_000_000,
     maxOrderKrw: 100_000,
     maxInstrumentKrw: 300_000,
@@ -37,6 +151,115 @@ function policy(): TradingPolicy {
     },
   });
 }
+
+function allFourPolicy(): TradingPolicy {
+  return normalizeTradingPolicy({
+    ...policy(),
+    pilotStage: 'validated',
+    marketEnabled: {
+      domestic_stock: true,
+      us_stock: true,
+      crypto_spot: true,
+      crypto_futures: true,
+    },
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
+  });
+}
+
+test('all-four live readiness requires fresh verified Toss, Kiwoom, Upbit, and Bitget connections', () => {
+  const nowMs = Date.now();
+  const readyPolicy = normalizeTradingPolicy({
+    ...allFourPolicy(),
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+  });
+  const connection = (exchange: ExchangeConnection['exchange'], overrides: Partial<ExchangeConnection> = {}): ExchangeConnection => ({
+    userId: USER,
+    exchange,
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: 'encrypted',
+    lastVerifiedAt: new Date(nowMs - 60_000).toISOString(),
+    lastErrorCode: null,
+    updatedAt: new Date(nowMs - 60_000).toISOString(),
+    ...overrides,
+  });
+  const all = [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget'),
+  ];
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, all, nowMs), true);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, all.filter((row) => row.exchange !== 'toss'), nowMs), false);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget', { lastVerifiedAt: new Date(nowMs - 31 * 24 * 60 * 60_000).toISOString() }),
+  ], nowMs), false);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget', { lastErrorCode: 'AUTH_REVOKED' }),
+  ], nowMs), false);
+});
+
+
+test('dedicated automatic Paper equity never borrows manual simulator cash or corrupt wallets', () => {
+  const at = new Date().toISOString();
+  const manual = {
+    kind: 'account' as const, id: 'paper-manual-wallet', version: 1,
+    updatedAt: at, deletedAt: null, createdAt: at, serverUpdatedAt: at,
+    payload: { id: 'paper-manual-wallet', equity: 1_000_000 },
+  };
+  const dedicated = {
+    kind: 'account' as const, id: AUTOMATIC_PAPER_ACCOUNT_ID, version: 1,
+    updatedAt: at, deletedAt: null, createdAt: at, serverUpdatedAt: at,
+    payload: {
+      id: AUTOMATIC_PAPER_ACCOUNT_ID, initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      equity: AUTOMATIC_PAPER_INITIAL_KRW, cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      usedMargin: 0, availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+    },
+  };
+  assert.equal(selectAutomaticPaperAccountEquity([]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 1_000_000);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, { ...dedicated, deletedAt: at }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, initialBalance: 500_000 },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, equity: -1 },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, availableMargin: Number.POSITIVE_INFINITY },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([dedicated, dedicated]), null);
+});
+
+test('FILLED Paper rows with zero quantity or unknown fees remain blocked without guessing fills', () => {
+  const plan = {
+    id: 'bad-paper-plan', accountMode: 'paper', executionMode: 'automatic',
+  } as never;
+  const orders = [
+    { id: 'bad-filled-zero', planId: 'bad-paper-plan', state: 'FILLED',
+      filledQuantity: 0, averageFillPrice: 100_000, feeAmount: null, fills: [] },
+    { id: 'valid-filled', planId: 'bad-paper-plan', state: 'FILLED',
+      filledQuantity: 0.05, averageFillPrice: 100_000,
+      feeAmount: 50, feeCurrency: 'KRW', fills: [] },
+  ] as never;
+  const proof = automaticPaperWalletBootstrapReadiness(orders, [plan]);
+  assert.equal(proof.safeToInitialize, false);
+  assert.equal(proof.executedAutomaticPaperOrderCount, 2);
+  assert.equal(proof.missingFilledQuantityEvidence, 1);
+  assert.equal(proof.missingFeeEvidence, 1);
+  assert.ok(proof.blockers.includes('AUTOMATIC_PAPER_FILLED_QUANTITY_EVIDENCE_MISSING'));
+  assert.ok(proof.blockers.includes('AUTOMATIC_PAPER_FEE_EVIDENCE_MISSING'));
+  assert.equal(proof.orderSubmitted, false);
+  assert.equal(proof.privateTradingRequests, 0);
+});
 
 function handoff(nowMs: number, missingRecentMove = false) {
   const dataTimestamp = new Date(nowMs - (missingRecentMove ? 120_000 : 20_000)).toISOString();
@@ -181,20 +404,25 @@ function handoff(nowMs: number, missingRecentMove = false) {
   } as const;
 }
 
-function paperRepository(nowMs: number): PaperJournalRepository {
+function paperRepository(nowMs: number, originalWalletCreatedMs = nowMs): PaperJournalRepository {
   return {
     async listSnapshot() {
       return [{
         kind: 'account',
-        id: 'paper-account',
+        id: AUTOMATIC_PAPER_ACCOUNT_ID,
         version: 1,
         updatedAt: new Date(nowMs).toISOString(),
+        createdAt: new Date(originalWalletCreatedMs).toISOString(),
+        serverUpdatedAt: new Date(nowMs).toISOString(),
         deletedAt: null,
         payload: {
-          id: 'paper-account',
-          equity: 1_000_000,
-          cashBalance: 1_000_000,
-          availableMargin: 1_000_000,
+          id: AUTOMATIC_PAPER_ACCOUNT_ID,
+          initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+          equity: AUTOMATIC_PAPER_INITIAL_KRW,
+          cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+          usedMargin: 0,
+          availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+          createdAt: new Date(originalWalletCreatedMs).toISOString(),
         },
       }];
     },
@@ -204,24 +432,55 @@ function paperRepository(nowMs: number): PaperJournalRepository {
 function source(
   repository: InMemoryTradingRepository,
   nowMs: number,
-  options: { missingRecentMove?: boolean; tier?: 'pending' | 'associate' } = {},
+  options: {
+    missingRecentMove?: boolean;
+    tier?: 'pending' | 'associate' | 'admin';
+    expired?: boolean;
+    handoffMissing?: boolean;
+    markPrice?: number;
+    walletCreatedAtMs?: number;
+    syncCalls?: { count: number };
+    syncFailure?: boolean;
+    syncMissingReferences?: number;
+    adminFourWallets?: boolean;
+    adminWalletsPartial?: boolean;
+    adminRlsGuardReady?: boolean;
+    policyOverride?: TradingPolicy;
+  } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
-    async readHandoff() { return handoff(nowMs, options.missingRecentMove) as never; },
+    // Explicit fake current-authority reader; never a Production capability.
+    async revalidateLiveMemberAccess() { return !options.expired && options.tier !== 'pending'; },
+    async readHandoff() {
+      return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
+    },
     async listEligibleMembers() {
       return [{
         userId: USER,
-        policy: policy(),
+        policy: options.policyOverride ?? policy(),
         profile: {
           membership_level: options.tier ?? 'associate',
-          role: 'user',
+          role: options.tier === 'admin' ? 'admin' : 'user',
           status: options.tier === 'pending' ? 'pending' : 'approved',
           is_active: true,
+          membership_expires_at: options.expired ? new Date(nowMs - 1_000).toISOString() : null,
         },
       }];
     },
     tradingRepositoryFor() { return repository; },
-    paperJournalRepositoryFor() { return paperRepository(nowMs); },
+    paperJournalRepositoryFor() {
+      if (options.adminFourWallets) {
+        const at = new Date(nowMs - 60_000);
+        const records = buildAdminFourMarketPaperBootstrap(at)
+          .map((row) => ({
+            ...row, createdAt: at.toISOString(), serverUpdatedAt: at.toISOString(),
+          }));
+        return { async listSnapshot() {
+          return options.adminWalletsPartial ? records.slice(0,3) : records;
+        } } as unknown as PaperJournalRepository;
+      }
+      return paperRepository(nowMs, options.walletCreatedAtMs ?? nowMs);
+    },
     async resolveFx() {
       return {
         market: 'CRYPTO_SPOT',
@@ -231,6 +490,33 @@ function source(
         stale: false,
       };
     },
+    telegramDeliveryHealthy() { return true; },
+    async adminPaperDatabaseGuardReady() {
+      return options.adminRlsGuardReady !== false;
+    },
+    async readLiveAccountSnapshot() {
+      throw new Error('LIVE_ACCOUNT_READ_MUST_NOT_RUN_WHEN_DISABLED');
+    },
+    async readMarketMark() {
+      return {
+        market: 'CRYPTO_SPOT',
+        symbol: 'BTC',
+        price: options.markPrice ?? 100_050,
+        observedAt: new Date(nowMs).toISOString(),
+        source: 'test-public-mark',
+      };
+    },
+    ...(options.syncCalls ? {
+      async syncExecutionEvents() {
+        options.syncCalls!.count += 1;
+        if (options.syncFailure) throw new Error('TEST_EXECUTION_SYNC_FAILED');
+        return {
+          inserted: 1,
+          deliveryQueued: 1,
+          missingReferences: options.syncMissingReferences ?? 0,
+        };
+      },
+    } : {}),
   };
 }
 
@@ -272,6 +558,77 @@ async function withFetchMock<T>(run: () => Promise<T>) {
   try { return await run(); } finally { globalThis.fetch = original; }
 }
 
+
+test('automatic Paper risk excludes user-imported manual loss journals and uses only canonical automatic orders', async () => {
+  const nowMs = Date.now();
+  const repo = new InMemoryTradingRepository();
+  await repo.savePolicy(USER, policy());
+  const fakeLocalClose = {
+    kind: 'journal' as const, id: 'forged-manual-loss', version: 1,
+    updatedAt: new Date(nowMs).toISOString(), deletedAt: null,
+    payload: {
+      source: 'APP_MANUAL', recordType: 'unified_trade_cycle',
+      status: 'CLOSED', closedAt: new Date(nowMs).toISOString(),
+      netPnl: -500_000, strategy: 'manual-only',
+    },
+  };
+  const paper = paperRepository(nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...source(repo, nowMs),
+    paperJournalRepositoryFor() {
+      return {
+        async listSnapshot(userId: string) {
+          return [...await paper.listSnapshot(userId), fakeLocalClose] as never;
+        },
+      } as unknown as PaperJournalRepository;
+    },
+  });
+  const risk = automaticPaperRiskEvidenceFromCanonicalLedger(USER, [], [], nowMs, 500_000);
+  assert.equal(risk.ready, true);
+  assert.equal(risk.dailyPnlPercent, 0);
+  assert.equal(risk.consecutiveLosses, 0);
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 1, 'client-uploaded manual loss cannot block automatic Paper');
+  assert.equal(result.filledOrders, 1);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
+test('automatic Paper risk fails closed for terminal fills without quantity, fee and complete history', () => {
+  const nowMs = Date.now();
+  const plan = {
+    id: 'bad-history-plan', userId: USER,
+    accountMode: 'paper', executionMode: 'automatic', exchange: 'upbit',
+    market: 'KRW', symbol: 'BTC', side: 'buy',
+  } as never;
+  const corrupted = [{
+    id: 'bad-history-order', planId: 'bad-history-plan',
+    state: 'FILLED', filledQuantity: 0, averageFillPrice: 100_000,
+    feeAmount: null, feeCurrency: null,
+  }] as never;
+  const proof = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, corrupted, [plan], nowMs, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
+  assert.equal(proof.ready, false);
+  assert.ok(proof.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+  assert.ok(proof.blockers.includes('BACKGROUND_PAPER_FEE_EVIDENCE_REQUIRED'));
+  assert.equal(proof.dailyPnlPercent, 0, 'unknown fill cannot be counted as a winning day');
+  const truncated = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [], Array.from({ length: 200 }, (_, i) => ({
+      id: 'old-plan-' + i, accountMode: 'mock', executionMode: 'manual',
+    })) as never, nowMs, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
+  assert.equal(truncated.ready, false);
+  assert.ok(truncated.blockers.includes('BACKGROUND_PAPER_CANONICAL_HISTORY_TRUNCATED'));
+});
+
+test('unpriced multi-currency Paper settlement cannot masquerade as verified KRW risk', () => {
+  const nowMs = Date.now();
+  const badEquity = automaticPaperRiskEvidenceFromCanonicalLedger(USER, [], [], nowMs, 0);
+  assert.equal(badEquity.ready, false);
+  assert.ok(badEquity.blockers.includes('BACKGROUND_PAPER_EQUITY_UNVERIFIED'));
+});
+
 test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
   const selected = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -287,15 +644,304 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
 });
 
+test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom', () => {
+  const base = policy();
+  const toss = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: true, kiwoom: false },
+  });
+  assert.deepEqual(marketMapping('KR_STOCK', toss), {
+    exchange: 'toss', assetClass: 'domestic_stock', planMarket: 'KR', stockBroker: 'toss',
+  });
+  assert.deepEqual(marketMapping('US_STOCK', toss), {
+    exchange: 'kiwoom', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'kiwoom',
+  });
+  const kiwoom = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: false, kiwoom: true },
+  });
+  assert.equal(marketMapping('KR_STOCK', kiwoom).exchange, 'kiwoom');
+  assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
+});
+
+test('Bitget futures worker preserves administrator 4x-7x and blocks the same evidence for members', async () => {
+  for (const expectedLeverage of [4, 5, 6, 7] as const) {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const futuresPolicy = normalizeTradingPolicy({
+    ...policy(),
+    marketEnabled: {
+      domestic_stock: false,
+      us_stock: false,
+      crypto_spot: false,
+      crypto_futures: true,
+    },
+    exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
+    bitgetLeverage: expectedLeverage,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  await repository.savePolicy(USER, futuresPolicy);
+
+  const futuresHandoff = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  const entry = futuresHandoff.entries[0];
+  entry.identity.market = 'CRYPTO_FUTURES';
+  entry.identity.symbol = 'BTCUSDT';
+  entry.identity.direction = 'LONG';
+  entry.signal.market = 'CRYPTO_FUTURES';
+  entry.signal.symbol = 'BTCUSDT';
+  entry.signal.direction = 'LONG';
+  entry.execution.marketAdapterIdentity = { id: 'bitget-paper-v1', version: '1' };
+  entry.execution.dataEvidence = {
+    ...entry.execution.dataEvidence,
+    provider: 'bitget',
+    leverage: expectedLeverage,
+    marginMode: 'isolated',
+    marketStatus: 'TRADABLE',
+    tickSize: 0.1,
+    minOrderNotional: 5,
+  };
+  entry.signal.learningSnapshot.referencePrice = 100;
+  entry.signal.learningSnapshot.entryPrice = 100;
+  entry.signal.learningSnapshot.stopLoss = 95;
+  entry.signal.learningSnapshot.target1 = 110;
+  entry.signal.learningSnapshot.target2 = 120;
+  entry.publicQuote = {
+    bid: 100,
+    ask: 100.1,
+    last: 100.05,
+    asOfMs: nowMs - 1_000,
+    maxAgeMs: 30_000,
+  };
+
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 1);
+  const plans = await repository.listPlans(USER);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.exchange, 'bitget');
+  assert.equal(plans[0]?.leverage, expectedLeverage);
+  assert.equal(plans[0]?.marginMode, 'isolated');
+
+  const memberRepository = new InMemoryTradingRepository();
+  await memberRepository.savePolicy(USER, futuresPolicy);
+  const memberBase = source(memberRepository, nowMs);
+  const memberWorker = new MemberAutoTradingBackgroundWorker({
+    ...memberBase,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+  const memberResult = await withFetchMock(() => memberWorker.runOnce(new Date(nowMs)));
+  assert.equal(memberResult.createdPlans, 0);
+  assert.equal((await memberRepository.listPlans(USER)).length, 0);
+  }
+});
+
 test('background worker is default OFF without explicit activation flag', () => {
   const previous = process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+  const paperOnlyPrevious = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
   delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+  delete process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
   try {
     assert.equal(startMemberAutoTradingBackgroundWorker(), null);
+    const health = readMemberAutoTradingBackgroundRuntimeHealth();
+    assert.equal(health.enabled, false);
+    assert.equal(health.lastTickAt, null);
+    assert.equal(health.liveTrackedPositions, 0);
+    assert.equal(health.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(health.startupWarmupObserved, false);
+    assert.equal(health.firstWarmupTickLiveOrders, null);
+    assert.equal(health.firstWarmupTickLiveExitOrders, null);
   } finally {
     if (previous == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
     else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previous;
+    if (paperOnlyPrevious == null) delete process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+    else process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = paperOnlyPrevious;
   }
+});
+
+test('dedicated Paper-only worker activation is default OFF, exact-flag-only, and independent of shared AUTO/LIVE switches', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // The dedicated pilot does NOT require or implicitly turn on general AUTO.
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // A Paper-only pilot remains Paper-only even if stale Live flags all read true.
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // Invalid Paper-only values must never fall through to previously armed
+    // shared automatic Live settings. Only unset/'false' permit shared mode.
+    for (const malformed of ['TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      assert.equal(memberAutoTradingWorkerMode(), 'DISABLED', malformed);
+      assert.equal(liveBackgroundEnabled(), false, malformed);
+    }
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'false';
+    assert.equal(memberAutoTradingWorkerMode(), 'SHARED_BACKGROUND');
+    assert.equal(liveBackgroundEnabled(), true);
+
+    // No permissive case folding, nonboolean coercion, or automatic fallback.
+    process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = 'false';
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'TRUE';
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = '1';
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+  } finally {
+    for (const key of keys) {
+      const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only pilot also blocks the shared automatic Live service for every broker', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    for (const malformed of ['true', 'TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+        assert.equal(automaticLiveExecutionEnabled(exchange), false, `${exchange}:${malformed}`);
+      }
+    }
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only override produces a canonical simulated fill and zero private/live calls even with all Live flags true', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let liveAccountReads = 0;
+  const original = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...original,
+    async readLiveAccountSnapshot() {
+      liveAccountReads += 1;
+      throw new Error('PAPER_ONLY_FORBIDS_PRIVATE_ACCOUNT_READ');
+    },
+  });
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.filledOrders, 1);
+    assert.equal(first.positionLifecycles, 1);
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.livePlans, 0);
+    assert.equal(first.privateTradingRequests, 0);
+    assert.equal(liveAccountReads, 0);
+    const order = (await repository.listOrders(USER))[0];
+    assert.ok(order);
+    assert.equal(order.state, 'FILLED');
+    const plan = await repository.getPlan(USER, order.planId);
+    assert.equal(plan?.accountMode, 'paper');
+    assert.equal(order.exchangeOrderId?.startsWith('paper-'), true);
+    const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(second.createdPlans, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+    assert.equal(liveAccountReads, 0);
+  } finally {
+    for (const key of keys) {
+      const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('expired associate is excluded from automatic trading before any plan or order work', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const worker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { expired: true }));
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });
 
 test('associate automatic policy creates exactly one Paper FILLED order through canonical services', async () => {
@@ -329,15 +975,195 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).executionAuthority, 'NONE');
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).economicSampleCredit, 0);
 
+  const riskEvidence = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, await repository.listOrders(USER), await repository.listPlans(USER),
+    nowMs + 1_000, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
   const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
   assert.equal((await repository.listOrders(USER)).length, 1);
   assert.equal(second.createdPlans, 0);
-  assert.ok(second.duplicates >= 1);
+  if (riskEvidence.ready) {
+    assert.ok(second.duplicates >= 1, 'verified Paper replay must remain idempotent');
+    assert.equal(second.lifecycleIdempotent, 1);
+  } else {
+    assert.equal(second.newEntriesFailClosed, true,
+      'unverified Paper risk must stop fresh evaluations, including replay');
+    assert.equal(second.lifecycleIdempotent, 0);
+    assert.ok(second.blocked >= 1);
+  }
   assert.equal(second.positionLifecycles, 0);
-  assert.equal(second.lifecycleIdempotent, 1);
   assert.equal((await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
+});
+
+test('Signal V3 admission may only remove canonical handoff entries before automatic evaluation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  let exactHandoffSeen = false;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async admitHandoffEntries(value) {
+      exactHandoffSeen = value.entries[0]?.identity.signalId === 'signal-worker-1';
+      return [];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(exactHandoffSeen, true);
+  assert.equal(result.handoffReady, true);
+  assert.equal(result.entries, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('Signal V3 admission cannot inject or duplicate an entry outside the validated handoff', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async admitHandoffEntries(value) {
+      return [{ ...value.entries[0], handoffId: 'paper-auto-handoff:sha256:' + '0'.repeat(64) }];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_SIGNAL_SELECTION_NOT_VETO_ONLY');
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('same-tick automatic entries refresh canonical exposure before evaluating the next signal', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const bounded = normalizeTradingPolicy({ ...policy(), maxOpenPositions: 1, maxDailyOrders: 100 });
+  await repository.savePolicy(USER, bounded);
+
+  const two = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  const second = JSON.parse(JSON.stringify(two.entries[0]));
+  second.handoffId = 'paper-auto-handoff:sha256:' + '9'.repeat(64);
+  second.identity.signalId = 'signal-worker-2';
+  second.identity.candidateId = 'paper-candidate-v1:' + '8'.repeat(64);
+  second.identity.symbol = 'ETH';
+  second.signal.signalId = 'signal-worker-2';
+  second.signal.symbol = 'ETH';
+  second.signal.strategyIdentity.candidateId = second.identity.candidateId;
+  second.signal.learningSnapshot.referencePrice = 50_000;
+  second.signal.learningSnapshot.entryPrice = 50_000;
+  second.signal.learningSnapshot.stopLoss = 47_500;
+  second.signal.learningSnapshot.target1 = 55_000;
+  second.signal.learningSnapshot.target2 = 60_000;
+  second.publicQuote = { bid: 50_000, ask: 50_050, last: 50_025, asOfMs: nowMs - 1_000, maxAgeMs: 30_000 };
+  two.entries.push(second);
+  two.entryCount = 2;
+
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return two as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: bounded,
+        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 1);
+  assert.equal(result.filledOrders, 1);
+  assert.ok(result.runtimeRefreshes >= 1);
+  assert.ok(result.blocked >= 1);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+});
+
+test('background worker automatically projects canonical execution events without requiring the manual sync endpoint', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { handoffMissing: true, syncCalls }),
+  );
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionEventsInserted, 1);
+  assert.equal(result.notificationDeliveriesQueued, 1);
+  assert.equal(result.executionSyncMissingReferences, 0);
+  assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
+test('execution projection missing references fail-close new entries before canonical order mutation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { syncCalls, syncMissingReferences: 1 }),
+  );
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionSyncMissingReferences, 1);
+  assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.executionSyncBlocks, 1);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('execution event fan-out failure fail-closes new entries before canonical order mutation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { syncCalls, syncFailure: true }),
+  );
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.executionSyncBlocks, 1);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('execution projection failure is isolated from canonical trading state', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { handoffMissing: true });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async syncExecutionEvents() {
+      throw new Error('EXECUTION_EVENT_PROJECTION_UNAVAILABLE');
+    },
+  });
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 test('missing <=60s reference move evidence blocks before plan creation', async () => {
@@ -395,4 +1221,1886 @@ test('market OFF policy skips candidate without creating a plan', async () => {
   assert.equal(result.skipped, 1);
   assert.equal(result.createdPlans, 0);
   assert.equal((await repository.listPlans(USER)).length, 0);
+});
+
+
+test('live background lane requires every explicit live authority flag', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'false';
+    assert.equal(liveBackgroundEnabled(), true);
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+    assert.equal(liveBackgroundEnabled(), false);
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'false';
+    assert.equal(liveBackgroundEnabled(), false);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('first live-enabled worker tick is a read-only warmup and cannot create a live entry', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const syncCalls = { count: 0 };
+  let liveReads = 0;
+  const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('FIRST_TICK_LIVE_READ_FORBIDDEN');
+    },
+  });
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveEntriesArmed, false);
+    assert.equal(result.liveEntriesSuppressedByWarmupOrArm, 1);
+    assert.equal(result.liveEntryWarmupComplete, true);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(liveReads, 0);
+    assert.equal(syncCalls.count, 0, 'Live readiness must not depend on Paper journal/Telegram projection');
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('live warmup survives an empty intermediate member batch and drops only after a full empty rotation cycle', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const readyMember = {
+    userId: USER,
+    policy: readyPolicy,
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  } as const;
+  let members: readonly any[] = [readyMember];
+  let cycleComplete = true;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() { return members as never; },
+    memberBatchCycleCompleted() { return cycleComplete; },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.liveReadinessCycleComplete, true);
+    assert.equal(first.liveCycleOrderEligible, true);
+    assert.equal(first.liveCyclePolicyReady, true);
+    assert.equal(first.liveEntryWarmupComplete, true);
+
+    members = [];
+    cycleComplete = false;
+    const middle = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(middle.liveReadinessCycleComplete, false);
+    assert.equal(middle.liveEntryWarmupComplete, true);
+    assert.equal(middle.newEntriesFailClosed, false);
+
+    cycleComplete = true;
+    const end = await withFetchMock(() => worker.runOnce(new Date(nowMs + 60_000)));
+    assert.equal(end.liveReadinessCycleComplete, true);
+    assert.equal(end.liveCycleOrderEligible, false);
+    assert.equal(end.liveCyclePolicyReady, false);
+    assert.equal(end.liveEntryWarmupComplete, false);
+    assert.equal(end.newEntriesFailClosed, true);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('completed rotation revalidates the all-four readiness witness before live warmup can pass', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const readyMember = {
+    userId: USER,
+    policy: readyPolicy,
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  } as const;
+  let members: readonly any[] = [readyMember];
+  let cycleComplete = false;
+  let witnessReady = true;
+  let revalidationCalls = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() { return members as never; },
+    memberBatchCycleCompleted() { return cycleComplete; },
+    async revalidateLiveAllFourReadiness(userId) {
+      revalidationCalls += 1;
+      assert.equal(userId, USER);
+      return witnessReady;
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+
+    const partial = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(partial.liveReadinessCycleComplete, false);
+    assert.equal(partial.liveCycleAllFourPolicyReady, true);
+    assert.equal(partial.liveEntryWarmupComplete, false);
+    assert.equal(revalidationCalls, 0);
+
+    members = [];
+    cycleComplete = true;
+    witnessReady = false;
+    const completed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(revalidationCalls, 1);
+    assert.equal(completed.liveReadinessCycleComplete, true);
+    assert.equal(completed.liveCycleOrderEligible, false);
+    assert.equal(completed.liveCyclePolicyReady, false);
+    assert.equal(completed.liveCycleAllFourPolicyReady, false);
+    assert.equal(completed.liveEntryWarmupComplete, false);
+    assert.equal(completed.newEntriesFailClosed, true);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('worker failure clears partial rotation readiness before the recovery cycle', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const readyMember = {
+    userId: USER,
+    policy: policy(),
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  } as const;
+  let members: readonly any[] = [readyMember];
+  let cycleComplete = false;
+  let failHandoff = false;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      if (failHandoff) throw new Error('ROTATION_TEST_HANDOFF_FAILURE');
+      return base.readHandoff(nowMs);
+    },
+    async listEligibleMembers() { return members as never; },
+    memberBatchCycleCompleted() { return cycleComplete; },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+
+    const partial = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(partial.liveReadinessCycleComplete, false);
+    assert.equal(partial.liveCycleOrderEligible, true);
+    assert.equal(partial.liveEntryWarmupComplete, false);
+
+    failHandoff = true;
+    const quarantined = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(quarantined.handoffStatus, 'BLOCKED_DATA');
+    assert.equal(quarantined.newEntriesFailClosed, true);
+    assert.equal(quarantined.liveEntryWarmupComplete, false);
+    assert.equal(quarantined.failures, 1);
+
+    failHandoff = false;
+    members = [];
+    cycleComplete = true;
+    const recovered = await withFetchMock(() => worker.runOnce(new Date(nowMs + 60_000)));
+    assert.equal(recovered.liveReadinessCycleComplete, true);
+    assert.equal(recovered.liveCycleOrderEligible, false);
+    assert.equal(recovered.liveCyclePolicyReady, false);
+    assert.equal(recovered.liveEntryWarmupComplete, false);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('live activation warmup stays fail-closed when no member can place real orders', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const worker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { tier: 'associate' }));
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.handoffReady, true);
+    assert.equal(result.liveOrderEligibleMembers, 0);
+    assert.equal(result.livePolicyReadyMembers, 0);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('new-entry-stopped member is not reported live-order eligible', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const stoppedPolicy = normalizeTradingPolicy({ ...allFourPolicy(), newEntriesStopped: true });
+  await repository.savePolicy(USER, stoppedPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: stoppedPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 0);
+    assert.equal(result.livePolicyReadyMembers, 0);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('partial-market automatic policy cannot complete live warmup even with order capability', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const partialPolicy = policy();
+  await repository.savePolicy(USER, partialPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: partialPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 1);
+    assert.equal(result.livePolicyReadyMembers, 1);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(result.liveCycleAllFourPolicyReady, false);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('all-four activation readiness requires one order-capable futures member with all four markets enabled', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 1);
+    assert.equal(result.livePolicyReadyMembers, 1);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 1);
+    assert.equal(result.liveEntryWarmupComplete, true);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('first live warmup suppresses automatic exits for existing live positions before exact-SHA arm', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await repository.savePlan({
+    exchange: 'upbit',
+    accountMode: 'live',
+    strategyId: 'trend-breakout-v1',
+    signalId: 'live-signal-existing',
+    symbol: 'BTC',
+    market: 'UPBIT',
+    side: 'buy',
+    orderType: 'market',
+    quantity: 0.1,
+    quoteAmount: null,
+    limitPrice: null,
+    estimatedKrw: 100_000,
+    stopPrice: 95_000,
+    targetPrices: [110_000],
+    splitRatios: [1],
+    leverage: null,
+    marginMode: null,
+    reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: {
+      observedAt: new Date(nowMs - 1_000).toISOString(),
+      dataDelayMs: 1_000,
+      oneMinuteMovePercent: 0,
+      spreadPercent: 0.05,
+      orderbookGapPercent: 0,
+      halted: false,
+      availableBalance: 900_000,
+      accountValueKrw: 1_000_000,
+      dailyPnlPercent: 0,
+      openPositionCount: 1,
+      dailyOrderCount: 1,
+      consecutiveLosses: 0,
+      currentPrice: 100_000,
+      signalState: 'approved',
+    },
+    entryPrice: 100_000,
+    executionMode: 'automatic',
+    id: 'live-plan-existing',
+    userId: USER,
+    idempotencyKey: 'live-plan-existing-key',
+    state: 'FILLED',
+    version: 1,
+    approvalExpiresAt: null,
+    approvedAt: new Date(nowMs - 10_000).toISOString(),
+    createdAt: new Date(nowMs - 10_000).toISOString(),
+    updatedAt: new Date(nowMs - 5_000).toISOString(),
+  } as any);
+  await repository.saveOrder({
+    id: 'live-order-existing',
+    userId: USER,
+    planId: 'live-plan-existing',
+    exchange: 'upbit',
+    clientOrderId: 'live-order-existing-client',
+    exchangeOrderId: 'live-order-existing-provider',
+    state: 'FILLED',
+    version: 1,
+    requestedQuantity: 0.1,
+    remainingQuantity: 0,
+    filledQuantity: 0.1,
+    averageFillPrice: 100_000,
+    retryCount: 0,
+    lastErrorCode: null,
+    createdAt: new Date(nowMs - 10_000).toISOString(),
+    updatedAt: new Date(nowMs - 5_000).toISOString(),
+  } as any);
+
+  let liveReads = 0;
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('WARMUP_LIVE_EXIT_PRIVATE_READ_FORBIDDEN');
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveEntriesArmed, false);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(result.liveTrackedPositions, 1);
+    assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);
+    assert.equal(result.privateTradingRequests, 0);
+    assert.equal(liveReads, 0);
+
+    // A broken/missing Paper account can no longer suppress visibility of
+    // this independently persisted Live position. Entries stay fail-closed.
+    const missingPaper = new MemberAutoTradingBackgroundWorker({
+      ...base,
+      paperJournalRepositoryFor() {
+        return {
+          async listSnapshot() { return []; },
+        } as unknown as PaperJournalRepository;
+      },
+      async readLiveAccountSnapshot() {
+        liveReads += 1;
+        throw new Error('NO_PRIVATE_EXIT_DURING_WARMUP');
+      },
+    });
+    const quarantined = await withFetchMock(() => missingPaper.runOnce(new Date(nowMs)));
+    assert.equal(quarantined.liveTrackedPositions, 1);
+    assert.equal(quarantined.liveExitOrders, 0);
+    assert.equal(quarantined.newEntriesFailClosed, true);
+    assert.equal(quarantined.createdPlans, 0);
+    assert.equal(quarantined.failures, 0, 'missing Paper state is not a Live worker failure');
+    assert.equal(liveReads, 0);
+
+    const futuresRepository = new InMemoryTradingRepository();
+    await futuresRepository.savePolicy(USER, allFourPolicy());
+    const futuresPlan = { ...await repository.getPlan(USER, 'live-plan-existing'),
+      id: 'futures-existing', exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', leverage: 2, marginMode: 'isolated', idempotencyKey: 'futures-existing-key' } as TradingPlan;
+    await futuresRepository.savePlan(futuresPlan);
+    await futuresRepository.saveOrder({ ...await repository.getOrder(USER, 'live-order-existing'),
+      id: 'futures-filled', planId: futuresPlan.id, exchange: 'bitget',
+      clientOrderId: 'futures-filled-client' } as import('./trade-automation.types').TradingOrder);
+    let nativeReads = 0;
+    const unprotected = new MemberAutoTradingBackgroundWorker({
+      ...source(futuresRepository, nowMs, { tier: 'admin', policyOverride: allFourPolicy() }),
+      async auditNativeFuturesProtection() { nativeReads += 1; throw new Error('BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED'); },
+    });
+    const unsafe = await withFetchMock(() => unprotected.runOnce(new Date(nowMs)));
+    assert.equal(nativeReads, 1);
+    assert.equal(unsafe.nativeProtectionErrorCode, 'BITGET_NATIVE_CLOSE_RECONCILIATION_REQUIRED');
+    assert.equal(unsafe.liveTrackedPositions, 1, 'unknown native close must not hide canonical ownership');
+    assert.equal(unsafe.newEntriesFailClosed, true);
+    assert.equal(unsafe.liveEntryWarmupComplete, false, 'unverified protection cannot become a healthy warmup');
+    assert.equal(unsafe.liveOrders + unsafe.liveExitOrders + unsafe.privateTradingRequests, 0);
+    assert.equal((await futuresRepository.listOrders(USER)).length, 1, 'no invented exit fill or test order');
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA',
+    'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const syncCalls = { count: 0 };
+  const root = await mkdtemp(join(tmpdir(), 'auto-trading-activation-rehearsal-'));
+  const armPath = join(root, 'live-entry-arm.json');
+  const targetSha = 'b'.repeat(40);
+  const empty = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  empty.entries = [];
+  empty.entryCount = 0;
+  const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+    async readHandoff() { return empty as never; },
+    async readLiveAccountSnapshot() {
+      throw new Error('ZERO_MUTATION_REHEARSAL_LIVE_ACCOUNT_READ_FORBIDDEN');
+    },
+  });
+
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+
+    const warmup = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(warmup.handoffReady, true);
+    assert.equal(warmup.liveEntryArmPresent, false);
+    assert.equal(warmup.liveEntriesArmed, false);
+    assert.equal(warmup.liveEntryWarmupComplete, true);
+    assert.equal(warmup.liveOrders, 0);
+    assert.equal(warmup.liveExitOrders, 0);
+    assert.equal(warmup.liveTrackedPositions, 0);
+    assert.equal(warmup.privateTradingRequests, 0);
+    assert.equal(warmup.executionSyncFailures, 0);
+    assert.equal(warmup.executionSyncMissingReferences, 0);
+    assert.equal(warmup.liveOrderEligibleMembers, 1);
+    assert.equal(warmup.livePolicyReadyMembers, 1);
+    assert.equal(warmup.liveAllFourPolicyReadyMembers, 1);
+    assert.equal(warmup.globalEmergencyStopActive, false);
+
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      targetSha,
+      armed: true,
+      armedAt: new Date(nowMs + 500).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 1_500).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+
+    const quarantined = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(quarantined.handoffReady, true);
+    assert.equal(quarantined.liveEntryArmPresent, false);
+    assert.equal(quarantined.liveEntriesArmed, false);
+    assert.equal(quarantined.liveOrders, 0);
+    assert.equal(quarantined.liveExitOrders, 0);
+    assert.equal(quarantined.privateTradingRequests, 0);
+
+    const armed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
+    assert.equal(armed.handoffReady, true);
+    assert.equal(armed.liveEntryArmPresent, true);
+    assert.equal(armed.liveEntriesArmed, true);
+    assert.equal(armed.liveEntryWarmupComplete, true);
+    assert.equal(armed.liveOrders, 0);
+    assert.equal(armed.liveExitOrders, 0);
+    assert.equal(armed.liveTrackedPositions, 0);
+    assert.equal(armed.privateTradingRequests, 0);
+    assert.equal(armed.executionSyncFailures, 0);
+    assert.equal(armed.executionSyncMissingReferences, 0);
+    assert.equal((await repository.listOrders(USER)).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only worker never touches live account reader when live lane is disabled', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let liveReads = 0;
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    readLiveAccountSnapshot: async () => {
+      liveReads += 1;
+      throw new Error('LIVE_READ_MUST_NOT_RUN');
+    },
+  });
+  try {
+    for (const key of keys) delete process.env[key];
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(liveReads, 0);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.privateTradingRequests, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+
+test('automatic Paper exit closes a tracked position even when the next handoff is missing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const firstWorker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { markPrice: 100_050 }));
+  const first = await withFetchMock(() => firstWorker.runOnce(new Date(nowMs)));
+  assert.equal(first.filledOrders, 1);
+  assert.equal(first.paperExitOrders, 0);
+
+  const secondWorker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs + 5_000, {
+      handoffMissing: true, markPrice: 90_000, walletCreatedAtMs: nowMs,
+    }),
+  );
+  const second = await withFetchMock(() => secondWorker.runOnce(new Date(nowMs + 5_000)));
+  assert.equal(second.handoffStatus, 'MISSING');
+  assert.equal(second.paperExitOrders, 1);
+  assert.equal(second.liveExitOrders, 0);
+  const plans = await repository.listPlans(USER);
+  const exitPlan = plans.find((plan) => plan.reduceOnly === true);
+  assert.ok(exitPlan);
+  assert.ok(exitPlan.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
+  const orders = await repository.listOrders(USER);
+  const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
+  assert.equal(exitOrder?.state, 'FILLED');
+  assert.equal(exitOrder?.filledQuantity, 0.1);
+});
+
+test('Paper target progress survives worker restarts, avoids duplicate exits, and trails the remainder', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const run = (at: number, markPrice: number, handoffMissing: boolean) => withFetchMock(() =>
+    new MemberAutoTradingBackgroundWorker(source(repository, at, {
+      markPrice, handoffMissing, walletCreatedAtMs: nowMs,
+    })).runOnce(new Date(at)));
+
+  const entry = await run(nowMs, 100_050, false);
+  assert.equal(entry.filledOrders, 1);
+
+  const firstTarget = await run(nowMs, 110_500, true);
+  assert.equal(firstTarget.paperExitOrders, 1);
+  let exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 1);
+  assert.ok(exits[0]!.signalReasons.includes('AUTO_EXIT_TARGET_INDEX:0'));
+  let exitOrders = (await repository.listOrders(USER)).filter((order) =>
+    exits.some((plan) => plan.id === order.planId));
+  assert.equal(exitOrders[0]?.filledQuantity, 0.05);
+
+  const sameTargetAfterRestart = await run(nowMs, 111_000, true);
+  assert.equal(sameTargetAfterRestart.paperExitOrders, 0);
+  exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 1, 'filled target stage is not submitted twice after restart');
+
+  const trailing = await run(nowMs, 100_000, true);
+  assert.equal(trailing.paperExitOrders, 1);
+  exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 2);
+  const trailingPlan = exits.find((plan) =>
+    plan.signalReasons.includes('AUTO_EXIT_REASON:TRAILING_TAKE_PROFIT'));
+  assert.ok(trailingPlan);
+  exitOrders = (await repository.listOrders(USER)).filter((order) =>
+    exits.some((plan) => plan.id === order.planId));
+  assert.deepEqual(exitOrders.map((order) => order.filledQuantity).sort(), [0.05, 0.05]);
+});
+
+
+test('Live readiness and entry do not require Paper wallet or Telegram binding', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const root = await mkdtemp(join(tmpdir(), 'auto-telegram-gate-'));
+  const armPath = join(root, 'arm.json');
+  const targetSha = 'c'.repeat(40);
+  let liveReads = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    telegramDeliveryHealthy() { return false; },
+    async memberTelegramConnected() { return false; },
+    paperJournalRepositoryFor() {
+      return { async listSnapshot() { return []; } } as unknown as PaperJournalRepository;
+    },
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
+    },
+  });
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    const warmup = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(warmup.liveEntryWarmupComplete, true);
+    assert.equal(warmup.liveEntriesArmed, false);
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha,
+      armedAt: new Date(nowMs + 100).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+    const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
+    assert.equal(blocked.liveEntryArmPresent, true);
+    assert.equal(blocked.liveEntryWarmupComplete, true);
+    assert.equal(blocked.liveEntriesArmed, true);
+    assert.equal(blocked.liveEntriesSuppressedByTelegram, 0);
+    assert.equal(blocked.liveOrders, 0);
+    assert.equal(liveReads, 1, 'armed Live path must reach its own provider preflight');
+    assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of keys) {
+      const value = saved[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+
+test('fair automatic handoff rotation visits more than 40 sorted signals without permanent starvation', () => {
+  const all = Array.from({ length: 91 }, (_, index) => index);
+  let offset = 0;
+  const visited: number[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const result = selectRotatingHandoffEntries(all, offset, 40);
+    visited.push(...result.entries);
+    offset = result.nextOffset;
+  }
+  assert.deepEqual(visited.slice(0, 91), all);
+  assert.equal(offset, 40);
+  assert.deepEqual(selectRotatingHandoffEntries([], 50, 40), { entries: [], nextOffset: 0 });
+});
+
+test('exact SHA entry arm is invalid after revocation even if an earlier check succeeded', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const root = await mkdtemp(join(tmpdir(), 'auto-arm-revocation-'));
+  const armPath = join(root, 'arm.json');
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true,
+      targetSha: 'c'.repeat(40),
+      armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString(),
+    }), { mode: 0o600 });
+    assert.equal(await liveEntryArmPresent(nowMs), true);
+    await rm(armPath);
+    assert.equal(await liveEntryArmPresent(nowMs), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('a broken handoff is fail-closed for entries without terminating the member worker tick', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let selectedMembers = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { throw new Error('BROKEN_HANDOFF_DIGEST'); },
+    async listEligibleMembers() {
+      selectedMembers += 1;
+      return base.listEligibleMembers();
+    },
+  });
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(result.handoffStatus, 'BLOCKED_DATA');
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.failures, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(selectedMembers, 1);
+});
+
+
+test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper handoff', () => {
+  const nowMs = Date.now();
+  const entry = handoff(nowMs).entries[0] as any;
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
+  const immutable = {
+    schemaVersion: 'canonical-signal-ai-review-v1',
+    source: 'CANONICAL_SIGNAL_AI_REVIEW',
+    signalId: entry.identity.signalId,
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    researchCodeSha: entry.identity.researchCodeSha,
+    decision: 'PASS',
+    liveEligibility: 'PASS_ONLY_ELIGIBLE',
+    evidenceDigest: 'f'.repeat(64),
+    reviewedAtMs: nowMs - 2_000,
+    expiresAtMs: nowMs + 60_000,
+  };
+  const canonical = (v: any): string => Array.isArray(v)
+    ? `[${v.map(canonical).join(',')}]`
+    : v && typeof v === 'object'
+      ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`
+      : JSON.stringify(v);
+  entry.aiReviewEvidence = {
+    ...immutable,
+    reviewDigest: createHash('sha256').update(canonical(immutable)).digest('hex'),
+  };
+  const reasons = formulaAiReviewReasonsForLive(entry, nowMs);
+  assert.ok(reasons.includes('AI_REVIEW_DECISION:PASS'));
+  assert.ok(reasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
+  assert.ok(reasons.includes('STRATEGY_RULE_PACK:' + entry.identity.strategyId));
+  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + 'f'.repeat(64)));
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs + 60_001), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
+});
+
+
+test('missing Paper account never produces a new entry or a false live warmup', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    paperJournalRepositoryFor() {
+      return { async listSnapshot() { return []; } } as unknown as PaperJournalRepository;
+    },
+  });
+  const r = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(r.newEntriesFailClosed, true);
+  assert.equal(r.createdPlans, 0);
+  assert.equal(r.livePlans, 0);
+  assert.equal(r.failures, 1);
+});
+
+
+test('an old empty READY Paper handoff cannot certify current live warmup or authorize new entries', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const stale = { ...handoff(nowMs - 31 * 60_000), entries: [], entryCount: 0 };
+  const result = await new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return stale as never; },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffStatus, 'BLOCKED_DATA');
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.failures, 1);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_PAPER_HANDOFF_STALE');
+});
+
+test('handoff failure reports a sanitized cause without leaking filesystem or secret details', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const result = await new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { throw new Error('HANDOFF_ENTRY_STALE:private-file:secret-value'); },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffErrorCode, 'HANDOFF_ENTRY_STALE');
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
+
+test('manual holdings remain protected without becoming canonical AUTO assets; unknown or mixed ownership blocks', () => {
+  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 2 } as TradingPlan;
+  const position = (symbol: string, quantity: number | null, side: string | null = 'long') =>
+    ({ market: 'USDT', symbol, quantity, availableQuantity: quantity, side, leverage: 2 }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
+  const bitget = (positions: CanonicalAccountSnapshot['positions']) =>
+    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [{ plan: tracked, remainingQuantity: 1 }]);
+  assert.doesNotThrow(() => bitget([position('BTCUSDT', 1)]));
+  const crossProviderPlan = { symbol: '005930', side: 'buy', exchange: 'kiwoom' } as TradingPlan;
+  const protectedToss = assertCanonicalLiveProviderPositions({
+    provider: 'toss', positions: [position('005930', 1, null)],
+  }, [{ plan: crossProviderPlan, remainingQuantity: 1 }]);
+  assert.equal(protectedToss.manualProtected.length, 1, 'another broker cannot adopt manual assets');
+  assert.equal(protectedToss.automaticOwned.length, 0);
+  assert.throws(() => bitget([position('ETHUSDT', 1)]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
+  assert.throws(() => bitget([position('BTCUSDT', 1, 'short')]),
+    /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
+  assert.throws(() => bitget(null), /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
+  assert.throws(() => bitget([position('BTCUSDT', null)]),
+    /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
+  assert.throws(() => bitget([]), /BACKGROUND_LIVE_OWNED_POSITION_MISSING/);
+  assert.throws(() => bitget([position('BTCUSDT', 1.2)]), /BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT/);
+
+  // Upbit includes its KRW cash wallet in positions; that is NOT an open
+  // market exposure. A separately held ETH coin is protected, not adopted.
+  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions({
+    provider: 'upbit', positions: [position('KRW', 500_000, null)],
+  }, []));
+  const protectedUpbit = assertCanonicalLiveProviderPositions({
+    provider: 'upbit', positions: [
+      position('KRW', 500_000, null), position('ETH', 0.4, null),
+    ],
+  }, []);
+  assert.equal(protectedUpbit.manualProtected.length, 1);
+  assert.equal(protectedUpbit.automaticOwned.length, 0);
+});
+
+
+test('live warmup rechecks current provider exposure, open orders, and Bitget one-way isolated policy', () => {
+  const now = new Date().toISOString();
+  const snapshot = (provider: CanonicalAccountSnapshot['provider'], overrides: Partial<CanonicalAccountSnapshot> = {}): CanonicalAccountSnapshot => ({
+    provider,
+    readOnly: true,
+    connected: true,
+    status: 'CONNECTED',
+    accounts: [],
+    balances: [],
+    positions: [],
+    openOrders: [],
+    checkedAt: now,
+    lastGoodAt: now,
+    stale: false,
+    errorCode: null,
+    orderRequests: 0,
+    cancelRequests: 0,
+    amendRequests: 0,
+    transferRequests: 0,
+    withdrawalRequests: 0,
+    credentialsReturned: false,
+    liveTradingEnabled: false,
+    autoTradingEnabled: false,
+    ...(provider === 'bitget' ? { positionMode: 'one_way_mode' as const } : {}),
+    ...overrides,
+  });
+  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget', leverage: 7 } as TradingPlan;
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss'), []), true);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
+    openOrders: [{ id: 'manual-open', market: 'KR', symbol: '005930', side: 'buy', price: 1, quantity: 1, remainingQuantity: 1, status: 'OPEN' }],
+  }), []), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
+    positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
+  }), []), true);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positionMode: 'hedge_mode',
+  }), []), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 7, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), true);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 8, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 3, liquidationPrice: null, marginMode: 'cross', side: 'long' }],
+  }), [{ plan: bitgetPlan, remainingQuantity: 1 }]), false);
+});
+
+test('same-account manual assets cannot be entered or exited by AUTO, while a separate symbol remains eligible', () => {
+  const snapshot = {
+    provider: 'upbit', connected: true, status: 'CONNECTED', stale: false, errorCode: null,
+    readOnly: true, accounts: [], balances: [], checkedAt: new Date().toISOString(), lastGoodAt: new Date().toISOString(),
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false,
+    openOrders: [], positions: [
+      { market: 'UPBIT', symbol: 'KRW', quantity: 1_000_000, availableQuantity: 1_000_000 },
+      { market: 'UPBIT', symbol: 'BTC', quantity: 0.2, availableQuantity: 0.2 },
+      { market: 'UPBIT', symbol: 'ETH', quantity: 2, availableQuantity: 2 },
+    ],
+  } as unknown as CanonicalAccountSnapshot;
+  const plan = { userId: 'owner', id: 'auto', exchange: 'upbit', market: 'KRW', symbol: 'KRW-SOL',
+    accountMode: 'live', executionMode: 'automatic', side: 'buy', quantity: 1, reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlan;
+  const proof = automaticLiveIsolationReceipt(snapshot, [], 3);
+  assert.equal(proof.manualProtectedPositionCount, 2);
+  assert.equal(proof.automaticOwnedPositionCount, 0);
+  assert.equal(proof.ready, true);
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(snapshot, [], plan));
+  for (const symbol of ['BTC', 'KRW-BTC']) {
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol }), /MANUAL_ASSET_PROTECTED/);
+    assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol, side: 'sell', reduceOnly: true }), /MANUAL_ASSET_PROTECTED/);
+  }
+  const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
+    ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
+  assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
+  const order = { id: 'entry-fill', planId: plan.id, userId: plan.userId, exchange: plan.exchange,
+    state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
+  assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
+  const filled = { ...order, state: 'FILLED' as const, filledQuantity: 1 };
+  const owned = canonicalAutomaticLivePositions([plan], [filled]);
+  const withAuto = { ...snapshot, positions: [...snapshot.positions!,
+    { market: 'UPBIT', symbol: 'SOL', quantity: 1, availableQuantity: 1 } as NonNullable<CanonicalAccountSnapshot['positions']>[number]] };
+  const exit = { ...plan, id: 'exit', symbol: 'KRW-SOL', side: 'sell' as const, reduceOnly: true,
+    signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto'] };
+  for (const filledQuantity of [0.5, 1]) {
+    const wrongExit = { ...exit, side: 'buy' as const };
+    const wrongOrder = { ...filled, id: 'exit-fill', planId: exit.id, filledQuantity };
+    assert.throws(() => canonicalAutomaticLivePositions([plan, wrongExit], [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+    assert.throws(() => canonicalAutomaticLivePositions([plan,
+      { ...exit, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:auto', 'AUTO_EXIT_ENTRY_PLAN:foreign'] }],
+    [filled, wrongOrder]), /EXIT_DIRECTION_INVALID/);
+  }
+  assert.doesNotThrow(() => assertAutomaticLiveTargetIsolation(withAuto, owned, exit));
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, plan), /AUTOMATIC_POSITION_ALREADY_OPEN/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, quantity: 2 }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => assertAutomaticLiveTargetIsolation(withAuto, owned, { ...exit, signalReasons: [] }), /EXIT_OWNERSHIP_REQUIRED/);
+  assert.throws(() => canonicalAutomaticLivePositions([plan], [filled, { ...filled, id: 'duplicate' }]), /OWNERSHIP_AMBIGUOUS/);
+  const closedOrder = { ...filled, id: 'exit-fill', planId: exit.id };
+  assert.deepEqual(canonicalAutomaticLivePositions([plan, exit], [filled, closedOrder]), []);
+  assert.equal(automaticLiveIsolationReceipt(withAuto, [], 3).manualProtectedPositionCount, 3,
+    'assets without a proven remaining fill stay manual/protected, including a later manual reacquisition');
+});
+
+test('member Telegram live admission requires a SENT receipt after this chat binding, never from a former chat', () => {
+  const now = Date.parse('2026-10-08T05:30:00.000Z');
+  const connection = {
+    status: 'ACTIVE' as const,
+    telegramChatId: 'telegram-chat-new',
+    connectedAt: new Date(now - 60_000).toISOString(),
+  };
+  const accepted = { state: 'SENT', updated_at: new Date(now - 5_000).toISOString() };
+  assert.equal(memberTelegramProofMatchesCurrentBinding(connection, accepted, now), true);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(
+    connection, { ...accepted, updated_at: new Date(now - 90_000).toISOString() }, now,
+  ), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(connection, { ...accepted, state: 'RETRY_SCHEDULED' }, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding({ ...connection, status: 'REVOKED' }, accepted, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding({ ...connection, connectedAt: 'unparseable' }, accepted, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(null, accepted, now), false);
+});
+
+test('stopped automatic member with a stored Live fill remains visible without reactivating exits or new entries', async () => {
+  const env = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(env.map((key) => [key, process.env[key]]));
+  const now = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const stopped = normalizeTradingPolicy({
+    ...policy(), mode: 'approval', automaticEnabled: false,
+    emergencyStopped: true,
+  });
+  await repository.savePolicy(USER, stopped);
+  await repository.savePlan({
+    id: 'live-stopped-plan', userId: USER, idempotencyKey: 'live-stopped-entry',
+    state: 'FILLED', version: 1, accountMode: 'live', executionMode: 'automatic',
+    exchange: 'upbit', strategyId: 'trend-breakout-v1',
+    signalId: 'stopped-signal', symbol: 'BTC', market: 'UPBIT',
+    side: 'buy', orderType: 'market', quantity: 0.1, quoteAmount: null,
+    limitPrice: null, estimatedKrw: 100_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null,
+    marginMode: null, reduceOnly: false, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: new Date(now).toISOString() },
+    approvedAt: new Date(now).toISOString(), approvalExpiresAt: null,
+    createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  } as any);
+  await repository.saveOrder({
+    id: 'live-stopped-order', userId: USER, planId: 'live-stopped-plan',
+    exchange: 'upbit', clientOrderId: 'live-stopped-oid',
+    exchangeOrderId: 'live-stopped-exchange-order', state: 'FILLED',
+    requestedQuantity: 0.1, filledQuantity: 0.1,
+    averageFillPrice: 100_000, retryCount: 0, lastErrorCode: null,
+    createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  } as any);
+  const base = source(repository, now, { tier: 'admin', markPrice: 90_000 });
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: stopped,
+        profile: { role: 'admin', membership_level: 'admin', status: 'approved', is_active: true },
+      }] as never;
+    },
+    async readLiveAccountSnapshot() {
+      providerReads++;
+      throw new Error('NO_PROVIDER_REQUEST_AFTER_AUTO_STOP');
+    },
+  });
+  try {
+    for (const key of env) process.env[key] = 'true';
+    const result = await worker.runOnce(new Date(now));
+    assert.equal(result.liveTrackedPositions, 1);
+    assert.equal(result.liveExitsSuppressedByPolicy, 1);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.createdPlans, 0);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(providerReads, 0);
+  } finally {
+    for (const key of env) {
+      const oldValue = previous[key];
+      if (oldValue == null) delete process.env[key];
+      else process.env[key] = oldValue;
+    }
+  }
+});
+async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, nowMs: number) {
+  const timestamp = new Date(nowMs).toISOString();
+  await repository.savePlan({
+    id: 'retained-live-plan', userId: USER, idempotencyKey: 'retained-live-entry',
+    state: 'FILLED', version: 1, accountMode: 'live', executionMode: 'automatic',
+    exchange: 'upbit', strategyId: 'trend-breakout-v1',
+    signalId: 'retained-live-signal', symbol: 'BTC', market: 'UPBIT',
+    side: 'buy', orderType: 'market', quantity: 0.1, quoteAmount: null,
+    limitPrice: null, estimatedKrw: 100_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null,
+    marginMode: null, reduceOnly: false, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: timestamp },
+    approvedAt: timestamp, approvalExpiresAt: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as any);
+  await repository.saveOrder({
+    id: 'retained-live-order', userId: USER, planId: 'retained-live-plan',
+    exchange: 'upbit', clientOrderId: 'retained-live-oid',
+    exchangeOrderId: 'retained-live-exchange-order', state: 'FILLED',
+    requestedQuantity: 0.1, filledQuantity: 0.1,
+    averageFillPrice: 100_000, retryCount: 0, lastErrorCode: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as any);
+}
+
+test('restart with a current arm and missing entry handoff still evaluates only owned guarded Live exits', async () => {
+  const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH'] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const root = await mkdtemp(join(tmpdir(), 'auto-owned-exit-restart-'));
+  const armPath = join(root, 'arm.json');
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+    async readHandoff() { return null; },
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      // Stop before order creation: no actual or simulated financial POST.
+      throw new Error('BACKGROUND_EXIT_READONLY_TEST_BOUNDARY');
+    },
+  });
+  try {
+    for (const key of flags.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({ schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha: 'c'.repeat(40), armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString() }), { mode: 0o600 });
+    for (const timestamp of [nowMs, nowMs + 15_000]) {
+      const result = await withFetchMock(() => worker.runOnce(new Date(timestamp)));
+      assert.equal(result.handoffReady, false);
+      assert.equal(result.liveEntriesArmed, false);
+      assert.equal(result.newEntriesFailClosed, true);
+      assert.equal(result.liveTrackedPositions, 1);
+      assert.equal(result.liveExitsSuppressedByWarmupOrArm, 0);
+      assert.equal(result.liveOrders + result.liveExitOrders, 0);
+      assert.equal(result.createdPlans, 0);
+    }
+    assert.equal(providerReads, 2, 'each guarded exit reaches a read-only provider boundary despite missing entry handoff');
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of flags) {
+      const value = previous[key];
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('expired automatic member retains read-only Live fill visibility and has zero order authority', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { expired: true, tier: 'associate' });
+  let providerReads = 0;
+  let projectionCalls = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      throw new Error('REVOKED_MEMBER_PROVIDER_IO_FORBIDDEN');
+    },
+    async syncExecutionEvents() {
+      projectionCalls += 1;
+      throw new Error('REVOKED_MEMBER_PROJECTION_IO_FORBIDDEN');
+    },
+  });
+  try {
+    for (const flag of flags) process.env[flag] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveTrackedPositions, 1);
+    assert.equal(result.liveExitsSuppressedByPolicy, 1);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(result.createdPlans, 0);
+    assert.equal(providerReads, 0);
+    assert.equal(projectionCalls, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    for (const flag of flags) {
+      const value = previous[flag];
+      if (value == null) delete process.env[flag];
+      else process.env[flag] = value;
+    }
+  }
+});
+
+test('blocked member evidence survives paginated warmup and cannot be erased by a ready later batch', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyUser = '22222222-2222-2222-2222-222222222222';
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, policy());
+  await repository.savePolicy(readyUser, readyPolicy);
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs);
+  let batch = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    // Isolate the pagination/warmup regression from unrelated Paper risk
+    // evaluations, which can legitimately trip the persistent kill switch.
+    async readHandoff() {
+      const ready = await base.readHandoff(nowMs);
+      return ready ? { ...ready, entries: [], entryCount: 0 } as never : null;
+    },
+    async listEligibleMembers() {
+      batch += 1;
+      if (batch === 1) return [{
+        userId: USER,
+        policy: policy(),
+        profile: {
+          role: 'user', membership_level: 'associate', status: 'approved',
+          is_active: false,
+        },
+      }] as never;
+      return [{
+        userId: readyUser,
+        policy: readyPolicy,
+        profile: {
+          role: 'admin', membership_level: 'admin', status: 'approved',
+          is_active: true,
+        },
+      }] as never;
+    },
+    memberBatchCycleCompleted() { return batch > 1; },
+    async readLiveAccountSnapshot() {
+      throw new Error('UNARMED_LIVE_IO_FORBIDDEN');
+    },
+  });
+  try {
+    for (const flag of flags) process.env[flag] = 'true';
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.liveReadinessCycleComplete, false);
+    assert.equal(first.liveTrackedPositions, 1);
+    assert.equal(first.liveExitsSuppressedByPolicy, 1);
+    assert.equal(first.liveEntryWarmupComplete, false);
+
+    const completed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 15_000)));
+    assert.equal(completed.liveReadinessCycleComplete, true);
+    assert.equal(completed.liveAllFourPolicyReadyMembers, 1);
+    assert.equal(completed.liveCycleAllFourPolicyReady, false);
+    assert.equal(completed.liveEntryWarmupComplete, false);
+    assert.equal(completed.newEntriesFailClosed, true);
+    assert.equal(completed.liveOrders, 0);
+
+    // A wholly new clean rotation may re-establish readiness. A blocked
+    // completed cycle must never count as its own clean recovery proof.
+    const recovered = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(recovered.liveEntryWarmupComplete, true);
+    assert.equal(recovered.liveEntriesArmed, false);
+    assert.equal(recovered.liveOrders, 0);
+  } finally {
+    for (const flag of flags) {
+      const value = previous[flag];
+      if (value == null) delete process.env[flag];
+      else process.env[flag] = value;
+    }
+  }
+});
+test('armed Live worker evaluates its provider path without requiring a filled Paper mirror', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const rule = normalizeTradingPolicy({ ...allFourPolicy(), maxOrderKrw: 5_000 });
+  await repository.savePolicy(USER, rule);
+  const root = await mkdtemp(join(tmpdir(), 'auto-paper-paired-admission-'));
+  const armPath = join(root, 'arm.json');
+  const targetSha = 'f'.repeat(40);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: rule,
+        profile: { role: 'admin', membership_level: 'admin', status: 'approved', is_active: true },
+      }] as never;
+    },
+    async readLiveAccountSnapshot() {
+      providerReads++;
+      throw new Error('BACKGROUND_TEST_PRIVATE_PROVIDER_STOP');
+    },
+  });
+  try {
+    for (const flag of flags.slice(0, 6)) process.env[flag] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.liveEntryWarmupComplete, true);
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.filledOrders, 0);
+
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true,
+      targetSha,
+      armedAt: new Date(nowMs + 100).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+
+    const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
+    assert.equal(blocked.liveEntriesArmed, true);
+    assert.equal(blocked.filledOrders, 0);
+    assert.equal(blocked.liveOrders, 0);
+    assert.equal(providerReads, 1);
+    assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const flag of flags) {
+      const old = previous[flag];
+      if (old == null) delete process.env[flag];
+      else process.env[flag] = old;
+    }
+  }
+});
+
+test('automatic outbox selects post-wallet Paper orders and all automatic Live orders, never legacy QA fills', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const plans = [
+    { id: 'historic-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-09T00:00:01.000Z' },
+    { id: 'live-existing', accountMode: 'live', executionMode: 'automatic', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-paper', accountMode: 'paper', executionMode: 'manual', createdAt: '2026-10-09T00:00:01.000Z' },
+  ] as TradingPlan[];
+  const orders = [
+    { id: 'historic-order', planId: 'historic-paper', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-order', planId: 'fresh-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'live-old-order', planId: 'live-existing', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-order', planId: 'manual-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'future-order', planId: 'fresh-paper', createdAt: '2026-10-10T00:00:00.000Z' },
+    { id: 'late-old-plan-order', planId: 'historic-paper', createdAt: '2026-10-09T00:00:04.000Z' },
+  ] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, epoch, epoch + 10_000),
+    ['fresh-order', 'live-old-order'],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, null, epoch + 10_000),
+    ['live-old-order'],
+  );
+});
+
+test('long-running worker must use a fresh clock so a later same-tick Paper fill is selected', () => {
+  const walletStartedAtMs = Date.parse('2026-10-09T00:00:00.000Z');
+  const plan = [{
+    id: 'late-paper-plan', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z',
+  }] as TradingPlan[];
+  const orders = [{
+    id: 'late-paper-order', planId: 'late-paper-plan',
+    createdAt: '2026-10-09T00:00:45.000Z',
+  }] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs),
+    [],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs + 50_000),
+    ['late-paper-order'],
+  );
+});
+
+test('automatic Paper epoch uses immutable server row time, never forged wallet payload timestamps', () => {
+  const currentMs = Date.parse('2026-10-09T09:00:00.000Z');
+  const row = {
+    kind: 'account' as const, id: AUTOMATIC_PAPER_ACCOUNT_ID,
+    version: 1, updatedAt: '2026-10-09T08:00:00.000Z',
+    createdAt: '2026-10-09T08:00:00.000Z',
+    serverUpdatedAt: '2026-10-09T08:00:00.000Z',
+    deletedAt: null,
+    payload: {
+      id: AUTOMATIC_PAPER_ACCOUNT_ID,
+      initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      equity: AUTOMATIC_PAPER_INITIAL_KRW, cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      usedMargin: 0, availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+      createdAt: '2021-01-01T00:00:00.000Z',
+    },
+  };
+  const trustedMs = Date.parse(row.createdAt);
+  assert.equal(automaticPaperWalletServerEpochMs([row], currentMs), trustedMs);
+  assert.equal(
+    automaticPaperWalletServerEpochMs([{
+      ...row, payload: { ...row.payload, createdAt: '2035-01-01T00:00:00.000Z' },
+    }], currentMs), trustedMs,
+  );
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: 'malformed' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, deletedAt: row.createdAt }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:58.000Z' }], currentMs), trustedMs);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: '2030-01-01T00:00:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([row, row], currentMs), null);
+});
+
+test('new wallet epoch rejects old Paper positions, including post-epoch retries on old plans', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const newPlan = { id: 'new', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z' } as TradingPlan;
+  const oldPlan = { ...newPlan, id: 'old', createdAt: '2026-10-06T00:00:00.000Z' };
+  const newOrder = { id: 'order-new', planId: 'new', createdAt: '2026-10-09T00:00:02.000Z' } as import('./trade-automation.types').TradingOrder;
+  const retriedOld = { ...newOrder, id: 'order-retried-old', planId: 'old' };
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, epoch, epoch + 10_000), true);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(oldPlan, retriedOld, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, null, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, { ...newOrder, createdAt: '2027-01-01T00:00:00.000Z' }, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch({ ...newPlan, accountMode: 'live' }, newOrder, epoch, epoch + 10_000), false);
+});
+
+test('legacy Paper fill cannot trigger a new wallet automatic exit even when historically FILLED', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await repository.savePlan({
+    id: 'legacy-paper-plan', userId: USER, executionMode: 'automatic',
+    accountMode: 'paper', exchange: 'upbit', market: 'spot', symbol: 'BTC',
+    state: 'SUBMITTED', reduceOnly: false, signalReasons: ['CANONICAL_PAPER_HANDOFF'],
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as TradingPlan);
+  await repository.saveOrder({
+    id: 'legacy-paper-order', userId: USER, planId: 'legacy-paper-plan',
+    exchange: 'upbit', state: 'FILLED', requestedQuantity: 0.1,
+    filledQuantity: 0.1, averageFillPrice: 100_000, feeAmount: null,
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+    updatedAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as import('./trade-automation.types').TradingOrder);
+  const base = source(repository, nowMs, { handoffMissing: true });
+  let legacyPriceReads = 0;
+  const result = await new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readMarketMark() {
+      legacyPriceReads++;
+      throw new Error('LEGACY_PAPER_POSITION_MUST_NOT_TRIGGER_EXIT');
+    },
+  }).runOnce(new Date(nowMs));
+  assert.equal(legacyPriceReads, 0);
+  assert.equal(result.paperExitOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+  assert.equal(result.liveOrders, 0);
+});
+
+test('legacy Paper isolation is explicit, immutable, Paper-only and audit-preserving', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const plan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', reduceOnly: false, createdAt: old } as TradingPlan;
+  const order = { id: 'old-fill', userId: USER, planId: plan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  const journal = { kind: 'journal' as const, id: 'old-fill', version: 1,
+    createdAt: old, updatedAt: old, serverUpdatedAt: old, deletedAt: null,
+    payload: { source: 'APP_PAPER', status: 'FILLED', positionEffect: 'OPEN' } };
+  const result = automaticPaperLegacyEpochIsolationReadiness([order], [plan], [journal], now);
+  assert.equal(result.safeToIsolate, true);
+  assert.equal(result.legacyFilledWithoutQuantity, 1);
+  assert.equal(result.historicalPositionsClosed, false);
+  assert.equal(result.realOrderSubmitted, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [{
+    ...plan, accountMode: 'live',
+  }], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([{
+    ...order, state: 'RECOVERY_REQUIRED',
+  }], [plan], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [plan], [{
+    ...journal, payload: { ...journal.payload, status: 'OPEN' },
+  }], now).safeToIsolate, false);
+});
+
+test('new wallet calculates only scoped Paper risk, still blocking new invalid fills', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const epoch = now - 60_000;
+  const oldPlan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', exchange: 'upbit', createdAt: old } as TradingPlan;
+  const oldOrder = { id: 'bad', userId: USER, planId: oldPlan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  assert.equal(automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000,
+  ).ready, false);
+  const isolated = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000, epoch,
+  );
+  assert.equal(isolated.ready, true);
+  assert.equal(isolated.closedTrades, 0);
+  const newPlan = { ...oldPlan, id: 'new', createdAt: new Date(epoch + 1_000).toISOString() };
+  const newOrder = { ...oldOrder, id: 'new-bad', planId: newPlan.id,
+    createdAt: new Date(epoch + 2_000).toISOString() };
+  const blocked = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder, newOrder], [oldPlan, newPlan], now, 500_000, epoch,
+  );
+  assert.equal(blocked.ready, false);
+  assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+});
+
+test('automatic Paper capital remains independent from the smaller LIVE role budget', () => {
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 9_999 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 500_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
+});
+
+test('four-market Paper projection gives every member a 1m lane and compounds without changing Live policy', () => {
+  const stored = policy();
+  const projected = deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: true,
+    newEntriesAllowed: true,
+    operatingCapitalKrw: 1_050_000,
+  });
+  assert.equal(projected.totalCapitalKrw, 1_050_000);
+  assert.equal(projected.maxOrderKrw, 1_050_000);
+  assert.equal(projected.maxInstrumentKrw, 1_050_000);
+  assert.equal(projected.maxAssetClassKrw.crypto_spot, 1_050_000);
+  assert.equal(projected.bitgetLeverage, stored.bitgetLeverage);
+  assert.equal(stored.maxOrderKrw, 100_000, 'stored/Live policy must remain unchanged');
+  assert.throws(() => deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: false,
+    newEntriesAllowed: false,
+    operatingCapitalKrw: 1_000_000,
+  }), /BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY/);
+});
+
+test('admin four-market Paper worker isolates the 1m capital floor without creating private orders', async () => {
+  const nowMs = Date.now();
+  const makePolicy = (capital: number) => normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw: capital,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {bitget:true,upbit:true,kiwoom:true,toss:true},
+    stockBrokerByMarket: {domestic_stock:'kiwoom',us_stock:'kiwoom'},
+  });
+  const underfundedRepo = new InMemoryTradingRepository();
+  await underfundedRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW-1));
+  const underfunded = new MemberAutoTradingBackgroundWorker(source(underfundedRepo, nowMs, {
+    adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW-1),
+  }));
+  const skipped = await withFetchMock(() => underfunded.runOnce(new Date(nowMs)));
+  assert.equal(skipped.createdPlans,0);
+  assert.equal(skipped.liveOrders,0);
+  assert.equal(skipped.privateTradingRequests,0);
+  assert.equal((await underfundedRepo.listPlans(USER)).length,0);
+
+  const fundedRepo = new InMemoryTradingRepository();
+  await fundedRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW));
+  const funded = new MemberAutoTradingBackgroundWorker(source(fundedRepo, nowMs, {
+    adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
+  }));
+  const admitted = await withFetchMock(() => funded.runOnce(new Date(nowMs)));
+  assert.equal(admitted.failures,0);
+  assert.equal(admitted.createdPlans,1);
+  assert.equal(admitted.liveOrders,0);
+  assert.equal(admitted.privateTradingRequests,0);
+  const plans = await fundedRepo.listPlans(USER);
+  assert.equal(plans.length,1);
+  assert.equal(plans[0]!.accountMode,'paper');
+  assert.equal(plans[0]!.exchange,'upbit');
+  assert.equal(plans[0]!.marketSnapshot.accountValueKrw,ADMIN_MARKET_INITIAL_KRW);
+
+  const missingRepo = new InMemoryTradingRepository();
+  await missingRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW));
+  const incomplete = new MemberAutoTradingBackgroundWorker(source(missingRepo,nowMs,{
+    adminFourWallets:true,adminWalletsPartial:true,tier:'admin',
+    policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
+  }));
+  const denied=await withFetchMock(() => incomplete.runOnce(new Date(nowMs)));
+  assert.equal(denied.createdPlans,0);
+  assert.equal(denied.liveOrders,0);
+});
+test('admin V2 Worker blocks new Paper evaluation and projection when database RLS guard is unavailable', async () => {
+  const nowMs = Date.now();
+  const current = normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw: ADMIN_MARKET_INITIAL_KRW,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {bitget:true,upbit:true,kiwoom:true,toss:true},
+  });
+  const setup = async (probe: boolean | undefined) => {
+    const repository = new InMemoryTradingRepository();
+    await repository.savePolicy(USER,current);
+    const count={count:0};
+    const base=source(repository,nowMs,{
+      tier:'admin',adminFourWallets:true,
+      policyOverride:current,adminRlsGuardReady:probe,
+      syncCalls:count,
+    });
+    const worker=new MemberAutoTradingBackgroundWorker(
+      probe === undefined ? {...base,adminPaperDatabaseGuardReady:undefined} : base
+    );
+    const result=await withFetchMock(()=>worker.runOnce(new Date(nowMs)));
+    return {result,plans:await repository.listPlans(USER),count:count.count};
+  };
+  for(const probe of [false,undefined]) {
+    const blocked=await setup(probe);
+    assert.equal(blocked.result.createdPlans,0);
+    assert.equal(blocked.result.liveOrders,0);
+    assert.equal(blocked.result.privateTradingRequests,0);
+    assert.equal(blocked.result.newEntriesFailClosed,true);
+    assert.equal(blocked.plans.length,0);
+    assert.equal(blocked.count,0, 'unsafe canonical events must not be projected');
+  }
+  const ready=await setup(true);
+  assert.equal(ready.result.failures,0);
+  assert.equal(ready.result.createdPlans,1);
+  assert.ok(ready.count>0,'valid V2 guard permits Paper projection');
+});
+
+test('automatic Paper background uses the same explicit member strategy allowlist as Live', () => {
+  const noStrategies = normalizeTradingPolicy({ ...policy(), enabledStrategies: [] });
+  assert.equal(automaticLiveStrategyAllowlisted(noStrategies, 'trend-breakout-v1'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), 'trend-breakout-v1'), true);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), 'unapproved-strategy'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), ''), false);
+});
+
+test('blank live strategy allowlist is never wildcard authorization for a real order', () => {
+  const unset = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: [],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(unset, 'safe-canonical-setup'), false);
+  const approved = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: ['safe-canonical-setup'],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'safe-canonical-setup'), true);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'unapproved-setup'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, ''), false);
+  assert.equal(automaticLiveStrategyAllowlisted({
+    enabledStrategies: undefined as never,
+  }, 'safe-canonical-setup'), false);
+});
+
+test('Cost missing is not an allowed zero-rate estimate in automatic Paper handoff', () => {
+  const shape = (value: unknown) => ({
+    execution: { costPolicy: value },
+  }) as Parameters<typeof costPercent>[0];
+  assert.equal(costPercent(shape({commissionRate:0}), 'commissionRate'), 0);
+  assert.equal(costPercent(shape({commissionRate:0.001}), 'commissionRate'), 0.1);
+  for (const cost of [
+    undefined, null, {}, {commissionRate:null}, {commissionRate:''},
+    {commissionRate:NaN}, {commissionRate:Infinity}, {commissionRate:-0.1},
+    {commissionRate:1.1}, {commissionRate:' '}, {commissionRate:'0'},
+    {commissionRate:false}, {commissionRate:[]}, {commissionRate:{}},
+  ]) assert.equal(costPercent(shape(cost), 'commissionRate'), null);
+});
+
+
+test('automatic Paper worker persists cost-policy tax/fee/FX receipts while missing policy stays blocked', async () => {
+  const nowMs = Date.now();
+  const prior = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+  const serverOnly = JSON.stringify({
+    contract: 'member-auto-paper-cost-rules/v1',
+    rules: [{
+      market: 'CRYPTO_SPOT', exchange: 'upbit',
+      policyId: 'server-paper-cost-v1:worker-scope-fixture',
+      feeRatePercent: 0.05, taxRatePercent: 0,
+      effectiveAt: new Date(nowMs - 60_000).toISOString(),
+      expiresAt: new Date(nowMs + 60_000).toISOString(),
+    }],
+  });
+  try {
+    const repository = new InMemoryTradingRepository();
+    await repository.savePolicy(USER, policy());
+    process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = serverOnly;
+    const ready = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(repository, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(ready.createdPlans, 1);
+    assert.equal(ready.filledOrders, 1);
+    assert.equal(ready.privateTradingRequests, 0);
+    assert.equal(ready.liveOrders, 0);
+    const orders = await repository.listOrders(USER);
+    const plans = await repository.listPlans(USER);
+    assert.equal(orders.length, 1);
+    assert.equal(orders[0]?.state, 'FILLED');
+    assert.equal(orders[0]?.taxAmount, 0);
+    assert.equal(orders[0]?.taxCurrency, 'KRW');
+    assert.ok((orders[0]?.feeAmount ?? -1) > 0);
+    assert.equal(orders[0]?.feeCurrency, 'KRW');
+    assert.equal(orders[0]?.settlementFxEvidence?.source, 'NATIVE_KRW');
+    const journal = tradeAutomationJournalPayloadsFromSnapshot(USER, orders, plans);
+    assert.equal(journal[0]?.tax, 0);
+    assert.ok(typeof journal[0]?.fees === 'number' && journal[0].fees > 0);
+    const withoutPolicy = new InMemoryTradingRepository();
+    await withoutPolicy.savePolicy(USER, policy());
+    delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    const missing = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(withoutPolicy, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(missing.createdPlans, 1);
+    assert.equal(missing.liveOrders, 0);
+    const [unverified] = await withoutPolicy.listOrders(USER);
+    assert.equal(unverified?.taxAmount ?? null, null,
+      'a missing protected rule cannot mint an apparent zero-tax receipt');
+  } finally {
+    if (prior === undefined) delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    else process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = prior;
+  }
 });

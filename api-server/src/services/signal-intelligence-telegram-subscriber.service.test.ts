@@ -1,0 +1,245 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
+  resolveSignalIntelligenceTelegramEndpoint,
+  SignalIntelligenceTelegramDeliveryState,
+  SignalIntelligenceTelegramSubscriber,
+  classifyTelegramSubscriberSend,
+} from './signal-intelligence-telegram-subscriber.service';
+
+test('Signal V3 market alert requires confirmed Bot API receipt before SENT', () => {
+  assert.equal(classifyTelegramSubscriberSend({ok:true,attempts:1}),'ACCEPTED');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'DUPLICATE',
+  }),'UNCONFIRMED','duplicate-in-flight has no delivery receipt');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:1,skipped:'OUTCOME_UNCONFIRMED',
+    errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+  }),'UNCONFIRMED');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'DELIVERY_FAILED',
+  }),'UNCONFIRMED','unclassified failure cannot release pre-send tombstone');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'NOT_CONFIGURED',
+  }),'KNOWN_NO_SEND');
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:0,skipped:'COOLDOWN',
+  }),'KNOWN_NO_SEND');
+  for(const status of [400,403,429]) {
+    assert.equal(classifyTelegramSubscriberSend({
+      ok:false,attempts:1,skipped:'DELIVERY_FAILED',
+      errorCode:`TELEGRAM_HTTP_${status}`,
+    }),'KNOWN_NO_SEND');
+  }
+  assert.equal(classifyTelegramSubscriberSend({
+    ok:false,attempts:1,skipped:'DELIVERY_FAILED',
+    errorCode:'TELEGRAM_HTTP_500',
+  }),'UNCONFIRMED');
+});
+
+test('V3 Telegram source is local exact public endpoint only', () => {
+  assert.equal(resolveSignalIntelligenceTelegramEndpoint('http://127.0.0.1:8790/v1/signals'),
+    'http://127.0.0.1:8790/v1/signals');
+  assert.equal(resolveSignalIntelligenceTelegramEndpoint('http://[::1]:8790/v1/signals'),
+    'http://[::1]:8790/v1/signals');
+  for (const url of [
+    'http://127.0.0.1:8790/admin', 'http://127.0.0.1:8790/health',
+    'http://127.0.0.1:8790/v1/signals?private=1',
+    'http://127.0.0.1:8790/v1/signals#token',
+    'http://user:pass@127.0.0.1:8790/v1/signals',
+    'https://127.0.0.1:8790/v1/signals',
+    'http://evil.example/v1/signals', 'file:///etc/passwd', 'bad-value',
+  ]) assert.throws(() => resolveSignalIntelligenceTelegramEndpoint(url),
+    /SIGNAL_INTELLIGENCE_SUBSCRIBER_(LOOPBACK_ONLY|ENDPOINT_INVALID)/);
+});
+
+test('V3 Telegram corrupt and linked dedupe files block rather than erase', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'signal-tg-ledger-'));
+  try {
+    const file = path.join(directory, 'corrupt.json');
+    await writeFile(file, '{BROKEN');
+    const bad = new SignalIntelligenceTelegramDeliveryState(file);
+    await assert.rejects(bad.ready(), /LEDGER_UNREADABLE/);
+    await assert.rejects(bad.has('signal-intelligence-v3:old'), /LEDGER_UNREADABLE/);
+    assert.equal(await readFile(file, 'utf8'), '{BROKEN');
+    const linked = path.join(directory, 'linked.json');
+    await symlink(file, linked);
+    await assert.rejects(new SignalIntelligenceTelegramDeliveryState(linked).ready(), /LEDGER_UNREADABLE/);
+    const empty = new SignalIntelligenceTelegramDeliveryState(path.join(directory, 'new.json'));
+    const key = 'signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:test::';
+    assert.equal(await empty.has(key), false);
+    await empty.mark(key, new Date('2026-10-11T00:00:00.000Z'));
+    assert.equal(await new SignalIntelligenceTelegramDeliveryState(path.join(directory, 'new.json')).has(key),true);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('V3 corrupt state prevents member and public sends even with valid source event', async () => {
+  const dir=await mkdtemp(path.join(tmpdir(),'signal-tg-sends-'));
+  const before=process.env.SIGNAL_INTELLIGENCE_URL;
+  try {
+    const file=path.join(dir,'bad.json'); await writeFile(file,'{BAD');
+    process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+    let marketSends=0,memberSends=0;
+    const sha='a'.repeat(40);
+    const fake={ok:true,serviceSha:sha,executionAuthority:'NONE',
+      snapshot:{serviceSha:sha,safety:{executionAuthority:'NONE',
+        privateTradingApiAllowed:false,realOrderAllowed:false},
+        events:[{id:'1',type:'NEW_CANDIDATE',market:'US_STOCK',symbol:'TEST',
+          strategy:'SWING',timeframe:'5m',direction:'BUY'}]}};
+    const service=new SignalIntelligenceTelegramSubscriber(
+      new SignalIntelligenceTelegramDeliveryState(file),
+      async()=>{marketSends++;return {ok:true as const,attempts:1};},
+      async()=>new Response(JSON.stringify(fake),{status:200}),
+      async()=>{memberSends++;return {eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+        skipped:0,failed:0,reason:'DISABLED' as const};});
+    assert.equal((await service.runOnce()).sourceStatus,'LEDGER_UNREADABLE');
+    assert.equal((await service.runOnce()).sourceStatus,'LEDGER_UNREADABLE');
+    assert.equal(marketSends,0); assert.equal(memberSends,0);
+    assert.equal(await readFile(file,'utf8'),'{BAD');
+  } finally {
+    if(before===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+    else process.env.SIGNAL_INTELLIGENCE_URL=before;
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('V3 HTTP 503 and unsafe source remain distinct with zero Telegram sends',async()=>{
+  const before=process.env.SIGNAL_INTELLIGENCE_URL;
+  let sends=0;
+  const service=new SignalIntelligenceTelegramSubscriber(
+    new SignalIntelligenceTelegramDeliveryState('/nonexistent-test-ledger-v3.json'),
+    async()=>{sends++;return {ok:true as const,attempts:1};},
+    async()=>new Response('',{status:503}),
+    async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+      skipped:0,failed:0,reason:'DISABLED' as const}));
+  try {
+    process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+    assert.equal((await service.runOnce()).sourceStatus,'HTTP_503');
+    process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/admin';
+    assert.equal((await service.runOnce()).sourceStatus,'UNSAFE_ENDPOINT');
+    assert.equal(sends,0);
+  } finally {
+    if(before===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+    else process.env.SIGNAL_INTELLIGENCE_URL=before;
+  }
+});
+
+test('a 14-day V3 Telegram dedupe receipt expires even without any other send', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'signal-tg-ttl-'));
+  try {
+    const file = path.join(dir, 'receipt.json');
+    const key = 'signal-intelligence-v3:' + 'a'.repeat(40)
+      + ':NEW_CANDIDATE:US_STOCK|AAPL|SWING|60m|BUY::CANDIDATE';
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const ttlMs = 14 * 24 * 60 * 60_000;
+    const state = new SignalIntelligenceTelegramDeliveryState(file);
+    await state.mark(key, start);
+    assert.equal(await state.has(key, new Date(start.getTime() + ttlMs - 1)), true);
+    assert.equal(await state.has(key, new Date(start.getTime() + ttlMs + 1)), false);
+    const reopened = new SignalIntelligenceTelegramDeliveryState(file);
+    assert.equal(await reopened.has(key, new Date(start.getTime() + ttlMs + 1)), false);
+    // The expiration check is read-only; it does not erase the historical
+    // receipt or infer that a new Signal V3 source event is trustworthy.
+    const before = await readFile(file, 'utf8');
+    await reopened.has(key, new Date(start.getTime() + ttlMs + 2));
+    assert.equal(await readFile(file, 'utf8'), before);
+    const future = new SignalIntelligenceTelegramDeliveryState(file);
+    await assert.rejects(future.has(key, new Date(start.getTime() - 60_000)),
+      /LEDGER_UNREADABLE/);
+    await assert.rejects(future.has(key, new Date(start.getTime() + ttlMs + 1)),
+      /LEDGER_UNREADABLE/, 'future ledger evidence blocks the instance');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('V3 Telegram ledger never writes through a preexisting temporary symlink', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'signal-telegram-trap-'));
+  try {
+    const ledger = path.join(directory, 'delivered.json');
+    const unrelated = path.join(directory, 'private-note.txt');
+    const trap = `${ledger}.${process.pid}.tmp`;
+    const prior = 'SENSITIVE_LOCAL_FILE_MUST_NOT_CHANGE';
+    await writeFile(unrelated, prior, 'utf8');
+    await symlink(unrelated, trap);
+    const state = new SignalIntelligenceTelegramDeliveryState(ledger);
+    const key='signal-intelligence-v3:'+'a'.repeat(40)
+      +':NEW_CANDIDATE:US_STOCK|AAPL|SWING|60m|BUY::CANDIDATE';
+    const when=new Date('2026-10-11T06:00:00.000Z');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),prior,
+      'preexisting temporary symlink must never overwrite an unrelated file');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/,
+      'blocked process cannot attempt another send after ambiguous persistence');
+    assert.equal(await readFile(unrelated,'utf8'),prior);
+  } finally {
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('an unknown V3 Bot API outcome stays blocked beyond 14 days and unrelated ledger updates',async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'signal-tg-unknown-ttl-'));
+  try{
+    const file=path.join(directory,'delivered.json');
+    const first='signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:unknown::';
+    const unrelated='signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:other::';
+    const start=new Date('2026-09-01T00:00:00.000Z');
+    const future=new Date('2026-10-12T00:00:00.000Z');
+    const ledger=new SignalIntelligenceTelegramDeliveryState(file);
+    await ledger.markUnconfirmed(first,start);
+    assert.equal(await ledger.hasUnconfirmed(first,future),true,
+      'a 14-day dedupe expiry must not unlock an unconfirmed Bot API POST');
+    await ledger.mark(unrelated,future);
+    const stored=JSON.parse(await readFile(file,'utf8'));
+    assert.equal(Object.keys(stored.unconfirmed).length,1);
+    assert.equal(Object.keys(stored.delivered).length,1);
+    const restarted=new SignalIntelligenceTelegramDeliveryState(file);
+    assert.equal(await restarted.hasUnconfirmed(first,future),true,
+      'restarting the worker retains the unknown-outcome tombstone');
+    assert.equal(await restarted.has(unrelated,future),true);
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test('V3 at-most-once ledger reservation survives a simulated send crash before receipt',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-pre-send-crash-'));
+ const key='signal-intelligence-v3:episode-v2:'+'b'.repeat(64);
+ const ledgerFile=path.join(dir,'ledger.json');
+ const at=new Date('2026-10-12T04:00:00.000Z');
+ try{
+   const state=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   await state.markUnconfirmed(key,at); // Represents durable pre-POST marker
+   const persisted=JSON.parse(await readFile(ledgerFile,'utf8'));
+   assert.ok(persisted.unconfirmed[key]);
+   const restarted=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   assert.equal(await restarted.hasUnconfirmed(key,new Date(at.getTime()+1000)),true);
+   assert.equal(await restarted.has(key,new Date(at.getTime()+1000)),false);
+   await state.mark(key,new Date(at.getTime()+2000));
+   const confirmed=new SignalIntelligenceTelegramDeliveryState(ledgerFile);
+   assert.equal(await confirmed.has(key,new Date(at.getTime()+3000)),true);
+   assert.equal(await confirmed.hasUnconfirmed(key,new Date(at.getTime()+3000)),false);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('explicit zero-attempt no-send can release a pending marker, not a confirmed receipt',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'v3-pre-send-release-'));
+ const file=path.join(dir,'ledger.json');
+ const key='signal-intelligence-v3:episode-v2:'+'c'.repeat(64);
+ const at=new Date('2026-10-12T04:00:00.000Z');
+ try{
+   const state=new SignalIntelligenceTelegramDeliveryState(file);
+   await state.markUnconfirmed(key,at);
+   await state.releaseExplicitNoSend(key,at);
+   assert.equal(await state.hasUnconfirmed(key,at),false);
+   await state.markUnconfirmed(key,at);
+   assert.equal(await new SignalIntelligenceTelegramDeliveryState(file)
+     .hasUnconfirmed(key,at),true);
+   await state.mark(key,new Date(at.getTime()+1000));
+   await assert.rejects(state.releaseExplicitNoSend(key,at),
+     /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});

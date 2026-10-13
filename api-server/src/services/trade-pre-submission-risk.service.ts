@@ -1,7 +1,9 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder,
@@ -16,7 +18,7 @@ const MAX_SIGNAL_AGE_MS = 30_000;
 const MAX_ESTIMATED_SLIPPAGE_PERCENT = 1;
 const MAX_ESTIMATED_FEE_PERCENT = 1;
 const FAST_MOVE_PERCENT = 5;
-const OPEN_POSITION_STATES = new Set(['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED']);
+const OPEN_POSITION_STATES = new Set(['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED']);
 const MAINTAINED_SIGNAL_STATES = new Set(['condition_maintained', 'entry_ready', 'approved', 'READY_FOR_APPROVAL']);
 const BROKEN_SIGNAL_STATES = new Set(['condition_broken', 'expired', 'invalidated', 'WEAKENED', 'INVALIDATED', 'EXPIRED']);
 
@@ -136,6 +138,8 @@ export class TradePreSubmissionRiskService {
     else if (input.order.approvedPlanVersion !== planVersion(currentPlan)) blockCodes.push('APPROVAL_VERSION_CHANGED');
 
     const policy = await this.repository.getPolicy(input.userId);
+    const riskReducing = isRiskReducingExitPlan(currentPlan);
+    if (currentPlan.reduceOnly === true && !riskReducing) blockCodes.push('REDUCE_ONLY_SIDE_INVALID');
     if (!currentPlan.approvedAt) blockCodes.push('APPROVAL_MISSING');
     const approvedAt = Date.parse(currentPlan.approvedAt ?? '');
     const expiresAt = Date.parse(currentPlan.approvalExpiresAt ?? '');
@@ -189,7 +193,7 @@ export class TradePreSubmissionRiskService {
     if (currentPlan.accountMode !== 'paper' && !snapshot.source?.trim()) blockCodes.push('MARKET_DATA_SOURCE_UNAVAILABLE');
     if (snapshot.marketStatus !== 'OPEN') blockCodes.push('MARKET_NOT_OPEN');
     if (snapshot.halted) blockCodes.push('MARKET_HALTED');
-    if (finite(snapshot.oneMinuteMovePercent) && Math.abs(snapshot.oneMinuteMovePercent) >= FAST_MOVE_PERCENT) {
+    if (!riskReducing && finite(snapshot.oneMinuteMovePercent) && Math.abs(snapshot.oneMinuteMovePercent) >= FAST_MOVE_PERCENT) {
       blockCodes.push('FAST_MOVE_DETECTED');
     }
 
@@ -201,50 +205,67 @@ export class TradePreSubmissionRiskService {
       else blockCodes.push('CURRENT_PRICE_UNAVAILABLE');
     }
     if (approvedPrice == null) {
-      if (currentPlan.accountMode === 'paper') warnings.push('승인 기준가격이 없어 모의 실행에서 가격 괴리 검사를 생략했습니다.');
+      if (riskReducing) warnings.push('위험축소 청산은 승인 기준가격 괴리 제한을 적용하지 않습니다.');
+      else if (currentPlan.accountMode === 'paper') warnings.push('승인 기준가격이 없어 모의 실행에서 가격 괴리 검사를 생략했습니다.');
       else blockCodes.push('APPROVAL_REFERENCE_PRICE_UNAVAILABLE');
     } else if (finite(currentPrice) && currentPrice > 0) {
       priceDriftPercent = Math.abs(currentPrice - approvedPrice) / approvedPrice * 100;
-      if (priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) blockCodes.push('APPROVAL_PRICE_DRIFT_EXCEEDED');
+      if (!riskReducing && priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) {
+        blockCodes.push('APPROVAL_PRICE_DRIFT_EXCEEDED');
+      } else if (riskReducing && priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) {
+        warnings.push('위험축소 청산은 가격 급변 중에도 현재가·수량 검증 후 계속 진행합니다.');
+      }
     }
 
     const signalState = snapshot.signalState;
-    if (signalState && BROKEN_SIGNAL_STATES.has(signalState)) blockCodes.push('SIGNAL_CONDITION_BROKEN');
-    else if (signalState && !MAINTAINED_SIGNAL_STATES.has(signalState)) blockCodes.push('SIGNAL_NOT_ENTRY_READY');
-    else if (!signalState) {
-      if (currentPlan.accountMode === 'paper') warnings.push('모의 실행 신호 상태를 별도 공급자가 확인하지 않았습니다.');
-      else blockCodes.push('SIGNAL_STATE_UNAVAILABLE');
-    }
-    if (snapshot.signalObservedAt) {
-      validateTimestamp({
-        value: snapshot.signalObservedAt,
-        now,
-        missingCode: 'SIGNAL_TIMESTAMP_UNAVAILABLE',
-        invalidCode: 'SIGNAL_TIMESTAMP_INVALID',
-        staleCode: 'SIGNAL_STATE_STALE',
-        maximumAgeMs: MAX_SIGNAL_AGE_MS,
-        blockCodes,
-      });
-    } else if (currentPlan.accountMode !== 'paper') {
-      blockCodes.push('SIGNAL_TIMESTAMP_UNAVAILABLE');
+    if (!riskReducing) {
+      if (signalState && BROKEN_SIGNAL_STATES.has(signalState)) blockCodes.push('SIGNAL_CONDITION_BROKEN');
+      else if (signalState && !MAINTAINED_SIGNAL_STATES.has(signalState)) blockCodes.push('SIGNAL_NOT_ENTRY_READY');
+      else if (!signalState) {
+        if (currentPlan.accountMode === 'paper') warnings.push('모의 실행 신호 상태를 별도 공급자가 확인하지 않았습니다.');
+        else blockCodes.push('SIGNAL_STATE_UNAVAILABLE');
+      }
+      if (snapshot.signalObservedAt) {
+        validateTimestamp({
+          value: snapshot.signalObservedAt,
+          now,
+          missingCode: 'SIGNAL_TIMESTAMP_UNAVAILABLE',
+          invalidCode: 'SIGNAL_TIMESTAMP_INVALID',
+          staleCode: 'SIGNAL_STATE_STALE',
+          maximumAgeMs: MAX_SIGNAL_AGE_MS,
+          blockCodes,
+        });
+      } else if (currentPlan.accountMode !== 'paper') {
+        blockCodes.push('SIGNAL_TIMESTAMP_UNAVAILABLE');
+      }
     }
 
     const liquidity = snapshot.availableLiquidityKrw;
-    if (!finite(liquidity) || liquidity < 0) {
-      if (currentPlan.accountMode !== 'paper') blockCodes.push('LIQUIDITY_UNAVAILABLE');
-    } else if (liquidity < currentPlan.estimatedKrw) blockCodes.push('INSUFFICIENT_ORDERBOOK_LIQUIDITY');
+    if (!riskReducing) {
+      if (!finite(liquidity) || liquidity < 0) {
+        if (currentPlan.accountMode !== 'paper') blockCodes.push('LIQUIDITY_UNAVAILABLE');
+      } else if (liquidity < currentPlan.estimatedKrw) blockCodes.push('INSUFFICIENT_ORDERBOOK_LIQUIDITY');
+    }
 
     const slippage = snapshot.estimatedSlippagePercent;
     if (!finite(slippage) || slippage < 0) {
-      if (currentPlan.accountMode !== 'paper') blockCodes.push('SLIPPAGE_ESTIMATE_UNAVAILABLE');
-    } else if (slippage > MAX_ESTIMATED_SLIPPAGE_PERCENT) blockCodes.push('ESTIMATED_SLIPPAGE_TOO_HIGH');
+      if (riskReducing) warnings.push('위험축소 청산의 슬리피지 추정치가 없어도 계좌·가격·수량 검증을 우선합니다.');
+      else if (currentPlan.accountMode !== 'paper') blockCodes.push('SLIPPAGE_ESTIMATE_UNAVAILABLE');
+    } else if (slippage > MAX_ESTIMATED_SLIPPAGE_PERCENT) {
+      if (riskReducing) warnings.push('위험축소 청산의 슬리피지가 높지만 포지션 축소를 우선합니다.');
+      else blockCodes.push('ESTIMATED_SLIPPAGE_TOO_HIGH');
+    }
 
     const fee = snapshot.estimatedFeePercent;
     if (!finite(fee) || fee < 0) {
-      if (currentPlan.accountMode !== 'paper') blockCodes.push('FEE_ESTIMATE_UNAVAILABLE');
-    } else if (fee > MAX_ESTIMATED_FEE_PERCENT) blockCodes.push('ESTIMATED_FEE_TOO_HIGH');
+      if (riskReducing) warnings.push('위험축소 청산의 수수료 추정치가 없어도 포지션 축소를 우선합니다.');
+      else if (currentPlan.accountMode !== 'paper') blockCodes.push('FEE_ESTIMATE_UNAVAILABLE');
+    } else if (fee > MAX_ESTIMATED_FEE_PERCENT) {
+      if (riskReducing) warnings.push('위험축소 청산의 비용이 높지만 포지션 축소를 우선합니다.');
+      else blockCodes.push('ESTIMATED_FEE_TOO_HIGH');
+    }
 
-    if (finite(currentPrice) && currentPrice > 0 && finite(slippage) && finite(fee)) {
+    if (!riskReducing && finite(currentPrice) && currentPrice > 0 && finite(slippage) && finite(fee)) {
       const targetPercent = targetMovePercent(currentPlan, currentPrice);
       const roundTripCostPercent = (slippage + fee) * 2;
       if (targetPercent != null && targetPercent <= roundTripCostPercent) blockCodes.push('EXPECTED_COST_EXCEEDS_TARGET_MOVE');
@@ -254,7 +275,13 @@ export class TradePreSubmissionRiskService {
     blockCodes.push(...envelopeDecision.blockCodes);
 
     const refreshedPlan: TradingPlan = { ...currentPlan, marketSnapshot: snapshot };
-    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, policy, {
+    // Current settled-profit proof must still authorize the growing ceiling
+    // immediately before ANY provider financial mutation. A stale/replayed
+    // signed approval cannot override today's stored member risk limits.
+    const effectivePolicy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, input.userId, refreshedPlan, policy, now, snapshot.openPositionCount,
+    );
+    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, effectivePolicy, {
       emergencyStopped: policy.emergencyStopped
         || process.env.TRADING_EMERGENCY_STOP === 'true'
         || await this.repository.getGlobalEmergencyStop(),

@@ -53,7 +53,7 @@ begin
   select count(*) into missing_columns
   from unnest(array[
     'id', 'login_name', 'display_name', 'role', 'status', 'approved_at',
-    'approved_by', 'membership_level', 'is_active',
+    'approved_by', 'membership_level', 'is_active', 'membership_expires_at',
     'permissions_updated_at', 'created_at', 'updated_at'
   ]) as required(column_name)
   where not exists (
@@ -94,9 +94,21 @@ begin
     raise exception 'staging bootstrap missing profiles membership constraint';
   end if;
 
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'paper_journal_entries'
+      and policyname = 'paper_journal_entries select own'
+      and qual ilike '%associate%'
+  ) then
+    raise exception 'staging bootstrap missing associate own-journal analytics read policy';
+  end if;
+
   foreach required_index in array array[
     'profiles_login_name_unique_idx',
     'profiles_membership_active_idx',
+    'profiles_membership_expiry_idx',
     'watchlist_items_device_idx',
     'market_cache_expires_idx',
     'portfolio_holdings_user_idx',
@@ -258,3 +270,99 @@ end
 $staging_bootstrap_assert$;
 
 drop function if exists public.raise_exception(text);
+
+
+do $staging_member_security_definer_assert$
+begin
+  if exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('PUBLIC','anon')
+  ) then
+    raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT';
+  end if;
+
+  if exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'
+  ) or not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type = 'SELECT'
+  ) then
+    raise exception 'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable','is_full_member')
+      and grantee in ('PUBLIC','anon','authenticated')
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('current_membership_level','is_approved_member','is_admin')
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT';
+  end if;
+  if exists (
+    select required.routine_name
+    from (
+      values ('current_membership_level'), ('is_approved_member'), ('is_admin')
+    ) as required(routine_name)
+    where not exists (
+      select 1 from information_schema.routine_privileges p
+      where p.specific_schema = 'public'
+        and p.routine_name = required.routine_name
+        and p.grantee = 'authenticated'
+        and p.privilege_type = 'EXECUTE'
+    )
+  ) then
+    raise exception 'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID';
+  end if;
+end
+$staging_member_security_definer_assert$;
+
+-- A successful staging release must exercise the V2 wallet + 15 canonical
+-- Paper order write barriers. Merely including a migration file is not proof.
+-- Keep the assertion read-only; account creation and provider order execution
+-- are intentionally outside the staging bootstrap.
+do $staging_admin_v2_rls_assert$
+begin
+  if to_regprocedure('public.admin_four_paper_wallet_rls_guard_ready()') is null then
+    raise exception 'STAGING_ADMIN_V2_RLS_GUARD_REQUIRED';
+  end if;
+  if public.admin_four_paper_wallet_rls_guard_ready() is not true then
+    raise exception 'STAGING_ADMIN_V2_RLS_GUARD_REQUIRED';
+  end if;
+end
+$staging_admin_v2_rls_assert$;

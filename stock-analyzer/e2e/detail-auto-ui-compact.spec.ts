@@ -20,26 +20,40 @@ test('stock detail removes long primary guidance and blocking skeleton UI', () =
   expect(detail).not.toContain('현재가 정보를 불러오지 못했습니다.');
 });
 
-test('auto trading uses Korean-first compact copy and desktop two-column layout', () => {
+test('trading workspace keeps Auto and Paper routes separate with compact four-market controls', () => {
   const auto = source('src/pages/auto-trading.tsx');
+  const paper = source('src/pages/paper-trading.tsx');
+  const settings = source('src/components/trade-automation-settings.tsx');
+  const journal = source('src/components/unified-trade-journal-panel.tsx');
 
-  expect(auto).toContain('<CenteredPageHeader title="자동매매" />');
-  expect(auto).not.toContain('eyebrow="승인형 주문"');
-  expect(auto).toContain('label="위험검사" value="매 주문 재검증"');
-  expect(auto).toContain('<h2 className="text-base font-bold">자동매매 실행 방식</h2>');
-  expect(auto).toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
-  expect(auto).toContain('data-testid="auto-trading-settings-column"');
-  expect(auto).toContain('<span>자동매매 · 시장별 설정</span>');
-  expect(auto).toContain('<span>알림 · 텔레그램</span>');
-  expect(auto).not.toContain('Risk Engine');
-  expect(auto).not.toContain('infoItems={[');
-  expect(auto).not.toContain('화면 버튼만으로 실전 주문이 제출되지 않습니다.');
+  expect(auto).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
+  expect(auto).not.toContain('data-testid="trading-mode-tabs"');
+  expect(auto).toContain('data-testid="trading-market-select"');
+  for (const label of ['국내주식', '미국주식', '코인현물', '코인선물']) expect(auto).toContain(label);
+  for (const label of ['상태', '주문', '일지', '설정']) expect(auto).toContain(label);
+  expect(auto).toContain('data-testid="auto-trading-rehearsal-settings"');
+  expect(auto).not.toContain("forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}");
+  expect(auto).toContain('title="매매일지"');
+  for (const label of ['직접매매', '자동매매', '자동모의매매']) expect(journal).toContain(label);
+  for (const book of ['MANUAL', 'AUTO_REAL', 'AUTO_PAPER']) expect(journal).toContain(book);
+  expect(auto).toContain('selectedMarket={market}');
+  expect(auto).toContain("initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'");
+  expect(paper).toContain('<AutoTradingPage key={search} initialMode="paper"');
+  expect(paper).toContain("paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'}");
+  expect(settings).toContain('selectedMarket?: Market');
+  expect(settings).toContain('visibleMarkets');
+  expect(settings).toContain('visibleExchanges');
+  expect(journal).toContain('forcedMarket?: UnifiedJournalFilters');
+  expect(journal).toContain('forcedSource?: UnifiedJournalFilters');
+  expect(auto).not.toContain('min-[1200px]:grid-cols-[minmax(0,1.05fr)_minmax(380px,0.95fr)]');
 });
 
 for (const width of [360, 390, 412, 430]) {
-  test(`auto trading mobile ${width}px has no horizontal overflow or status overlap`, async ({ page }) => {
+  test(`trading workspace mobile ${width}px has no horizontal overflow`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('/__phase12-trade-automation-e2e');
+
+    await expect(page.getByTestId('trading-market-select')).toBeVisible();
 
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toBeVisible();
@@ -47,7 +61,8 @@ for (const width of [360, 390, 412, 430]) {
     await expect(safety).toContainText('주문별 승인');
     await expect(safety).toContainText('불필요');
     await expect(safety).toContainText('위험검사');
-    await expect(safety).not.toContainText('Risk Engine');
+
+    await expect(page.getByTestId('trading-market-domestic_stock')).toBeHidden();
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
@@ -59,23 +74,22 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('auto trading desktop places settings beside the safety and runtime column', async ({ page }) => {
+test('desktop settings follow the selected market instead of showing all provider controls at once', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/__phase12-trade-automation-e2e');
 
-  const layout = page.getByTestId('auto-trading-responsive-layout');
-  const safety = page.getByTestId('auto-trading-safety-summary');
-  const settings = page.getByTestId('auto-trading-settings-column');
+  await page.getByTestId('trading-section-settings').click();
+  await expect(page.getByTestId('auto-trading-settings-column')).toBeVisible();
+  await expect(page.getByTestId('auto-market-domestic_stock')).toBeVisible();
+  await expect(page.getByTestId('stock-broker-domestic_stock')).toBeVisible();
+  await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
 
-  await expect(layout).toBeVisible();
-  await expect(safety).toBeVisible();
-  await expect(settings).toBeVisible();
+  await page.getByTestId('trading-market-crypto_futures').click();
+  await expect(page.getByTestId('auto-market-crypto_futures')).toBeVisible();
+  await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
+  await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
+  await expect(page.getByTestId('connection-bitget')).toBeVisible();
+  await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
 
-  const safetyBox = await safety.boundingBox();
-  const settingsBox = await settings.boundingBox();
-  expect(safetyBox).not.toBeNull();
-  expect(settingsBox).not.toBeNull();
-  if (safetyBox && settingsBox) {
-    expect(settingsBox.x).toBeGreaterThan(safetyBox.x + safetyBox.width - 1);
-  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

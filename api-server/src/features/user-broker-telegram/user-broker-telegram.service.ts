@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
+import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
 import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
+import { telegramSixRoomRoutingIsolated } from '../../services/telegram-market-room.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -13,6 +14,42 @@ const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
 type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
+
+export function telegramDeliveryRequiresReconnect(errorCode: string | null | undefined): boolean {
+  const code = String(errorCode ?? '').trim().toUpperCase();
+  return code === 'TELEGRAM_HTTP_403' || code.startsWith('TELEGRAM_FORBIDDEN_');
+}
+
+/** A timed out/crashed Telegram POST can already be accepted remotely.
+ * Keep it in the durable outbox as unresolved DEAD_LETTER, not RETRY_SCHEDULED.
+ */
+export function telegramDeliveryOutcomeUnknown(errorCode: string | null | undefined): boolean {
+  return ['TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+    'TELEGRAM_NETWORK_ERROR','TELEGRAM_TRANSPORT_ERROR']
+    .includes(String(errorCode ?? '').trim().toUpperCase());
+}
+
+export function telegramConnectionRecovery(
+  connection: { status: string; connectedAt: string } | null | undefined,
+  deliveries: ReadonlyArray<Pick<NotificationDelivery, 'state' | 'lastErrorCode' | 'updatedAt'>>,
+) {
+  if (!connection || connection.status !== 'ACTIVE') {
+    return { required: false, errorCode: null as string | null, failedAt: null as string | null };
+  }
+  const connectedAtMs = Date.parse(connection.connectedAt);
+  if (!Number.isFinite(connectedAtMs)) {
+    return { required: true, errorCode: 'TELEGRAM_CONNECTION_TIMESTAMP_INVALID', failedAt: null as string | null };
+  }
+  const latest = deliveries
+    .filter((delivery) => delivery.state === 'DEAD_LETTER'
+      && telegramDeliveryRequiresReconnect(delivery.lastErrorCode)
+      && Number.isFinite(Date.parse(delivery.updatedAt))
+      && Date.parse(delivery.updatedAt) >= connectedAtMs)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return latest
+    ? { required: true, errorCode: latest.lastErrorCode, failedAt: latest.updatedAt }
+    : { required: false, errorCode: null as string | null, failedAt: null as string | null };
+}
 
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 export function maskBrokerAccount(value: string | null | undefined): string | null {
@@ -119,11 +156,28 @@ export function manualPortfolioEvent(input: {
 }
 
 function formatNumber(value: number | null): string { return value == null ? '-' : value.toLocaleString('ko-KR', { maximumFractionDigits: 8 }); }
+function signedPlanPercent(
+  entry: number | null,
+  price: number | null,
+  side: UserExecutionEvent['side'],
+): number | null {
+  if (entry == null || entry <= 0 || price == null || price <= 0) return null;
+  const descendingProfit = side === 'sell' || side === 'short';
+  const raw = descendingProfit ? ((entry - price) / entry) * 100 : ((price - entry) / entry) * 100;
+  return Number(raw.toFixed(2));
+}
+function formatSignedPercent(value: number | null): string {
+  if (value == null) return 'N/A';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
 function title(event: UserExecutionEvent): string {
   switch (event.type) {
     case 'ORDER_SUBMITTED': return '🟦 주문 제출';
     case 'ORDER_PARTIALLY_FILLED': return '🔵 부분 체결';
-    case 'ORDER_FILLED': return event.side === 'sell' || event.side === 'short' ? '✅ 매도 체결' : '✅ 매수 체결';
+    case 'ORDER_FILLED':
+      if (event.side === 'long') return '✅ LONG 체결';
+      if (event.side === 'short') return '✅ SHORT 체결';
+      return event.side === 'sell' ? '✅ 매도 체결' : '✅ 매수 체결';
     case 'ORDER_CANCELLED': return '⛔ 주문 취소';
     case 'ORDER_REJECTED': return '⚠️ 주문 거절';
     case 'POSITION_OPENED': return '📈 포지션 시작';
@@ -132,14 +186,77 @@ function title(event: UserExecutionEvent): string {
     case 'POSITION_CLOSED': return '🏁 포지션 종료';
     case 'TAKE_PROFIT_FILLED': return '💰 익절 체결';
     case 'STOP_FILLED': return '🛑 손절 체결';
-    case 'MANUAL_PORTFOLIO_ENTRY': return '📌 포트폴리오 등록';
+    case 'MANUAL_PORTFOLIO_ENTRY': return '📌 보유종목 등록';
   }
 }
+function executionStateLabel(event: UserExecutionEvent): string {
+  switch (event.type) {
+    case 'ORDER_SUBMITTED': return '주문 제출';
+    case 'ORDER_PARTIALLY_FILLED': return '부분 체결';
+    case 'ORDER_FILLED': return '체결 완료';
+    case 'ORDER_CANCELLED': return '주문 취소';
+    case 'ORDER_REJECTED': return '주문 거절';
+    case 'POSITION_OPENED': return '포지션 시작';
+    case 'POSITION_INCREASED': return '포지션 추가';
+    case 'POSITION_REDUCED': return '일부 청산';
+    case 'POSITION_CLOSED': return '포지션 종료';
+    case 'TAKE_PROFIT_FILLED': return '익절 체결';
+    case 'STOP_FILLED': return '손절 체결';
+    case 'MANUAL_PORTFOLIO_ENTRY': return '보유종목 등록';
+  }
+}
+
+function strategyLabel(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'scalping') return '단타';
+  if (normalized === 'swing') return '스윙';
+  if (normalized === 'position') return '중장기';
+  return value;
+}
+
+function marginModeLabel(value: string | null): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'isolated') return '격리';
+  if (normalized === 'cross') return '교차';
+  return value;
+}
+
+function kstTimestamp(value: string): string | null {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  const formatter = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  return formatter.format(new Date(time));
+}
+
+function autoTradingSignalLabel(event: UserExecutionEvent): string {
+  if (event.side === 'long') return 'LONG 신호';
+  if (event.side === 'short') return 'SHORT 신호';
+  if (event.side === 'sell') return '매도 신호';
+  if (event.side === 'buy') return '매수 신호';
+  return '상태 알림';
+}
+
 export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): string {
-  const lines = [title(event), '', event.symbol];
-  if (event.quantity != null || event.price != null) lines.push(`${formatNumber(event.quantity)} × ${formatNumber(event.price)}`);
-  if (event.maskedAccount) lines.push('', `계좌 ${event.maskedAccount}`);
-  if (event.strategy) lines.push(`전략 ${event.strategy}`);
+  const lane = event.executionMethod === 'AUTO_POLICY'
+    ? `🤖 자동매매 · ${autoTradingSignalLabel(event)}`
+    : event.type === 'MANUAL_PORTFOLIO_ENTRY'
+      ? '👤 보유종목'
+      : '👤 개인 주문/체결';
+  const lines = [lane, title(event), '', event.symbol];
+  if (event.quantity != null) lines.push(`수량: ${formatNumber(event.quantity)}`);
+  if (event.price != null) lines.push(`가격: ${formatNumber(event.price)}`);
+  if (event.maskedAccount) lines.push('', `계좌: ${event.maskedAccount}`);
+  const strategy = strategyLabel(event.strategy);
+  if (strategy) lines.push(`전략: ${strategy}`);
   if (event.remainingQuantity != null) lines.push(`잔여수량 ${formatNumber(event.remainingQuantity)}`);
 
   const transitionReason = metadataText(event.metadata.reason);
@@ -159,15 +276,28 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   const marginMode = metadataText(event.metadata.marginMode, 24);
 
   if (event.executionMethod === 'AUTO_POLICY') {
-    lines.push('', '[자동매매 체결 근거]');
+    const planEntry = entryPrice ?? (
+      entryZoneLow != null && entryZoneHigh != null
+        ? (entryZoneLow + entryZoneHigh) / 2
+        : null
+    );
+    lines.push('', '[자동매매 판단 근거]');
+    lines.push(`판단: ${autoTradingSignalLabel(event).replace(' 신호', '')}`);
+    lines.push(`상태: ${executionStateLabel(event)}`);
     if (signalReasons.length) signalReasons.forEach((reason) => lines.push(`• ${reason}`));
     else lines.push('• 검증된 진입 근거 N/A');
-    if (transitionReason) lines.push(`상태 전환 이유: ${transitionReason}`);
+    if (transitionReason && !['FILLED', 'SUBMITTED', 'ACCEPTED'].includes(transitionReason.toUpperCase())) {
+      lines.push('상태 이유: 정책/브로커 상태가 변경되었습니다.');
+    }
     if (entryPrice != null) lines.push(`기준 진입가: ${formatNumber(entryPrice)}`);
     if (entryZoneLow != null && entryZoneHigh != null) lines.push(`진입구간: ${formatNumber(entryZoneLow)}~${formatNumber(entryZoneHigh)}`);
-    if (targets.length) lines.push(`목표가: ${targets.map((value, index) => `TP${index + 1} ${formatNumber(value)}`).join(' · ')}`);
-    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)}`);
-    if (leverage != null) lines.push(`레버리지: ${formatNumber(leverage)}x${marginMode ? ` · ${marginMode}` : ''}`);
+    if (targets.length) lines.push(`익절 계획: ${targets.map((value, index) =>
+      `TP${index + 1} ${formatNumber(value)} (${formatSignedPercent(signedPlanPercent(planEntry, value, event.side))})`).join(' · ')}`);
+    if (stopPrice != null) lines.push(`손절/무효: ${formatNumber(stopPrice)} (${formatSignedPercent(signedPlanPercent(planEntry, stopPrice, event.side))})`);
+    if (leverage != null) {
+      const mode = marginModeLabel(marginMode);
+      lines.push(`레버리지: ${formatNumber(leverage)}x${mode ? ` · ${mode}` : ''}`);
+    }
   } else if (transitionReason) {
     lines.push('', `체결/상태 이유: ${transitionReason}`);
   }
@@ -186,6 +316,8 @@ export function renderUserExecutionTelegramMessage(event: UserExecutionEvent): s
   }
   if (event.type === 'MANUAL_PORTFOLIO_ENTRY') lines.push('', '등록방식: 수동등록');
   if (event.executionMethod) lines.push('', `실행방식: ${event.executionMethod === 'AUTO_POLICY' ? '자동매매 정책' : '사용자 승인'}`);
+  const occurredAt = kstTimestamp(event.occurredAt);
+  if (occurredAt) lines.push(`시각: ${occurredAt}`);
   return lines.join('\n');
 }
 function nextRetryAt(now: Date, attempts: number): string {
@@ -200,11 +332,13 @@ export class UserBrokerTelegramService {
     private readonly portfolioSink: PortfolioSyncSink,
     private readonly botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
     private readonly personalAlertSender?: PersonalAlertSender,
+    private readonly ownerMemberId: string | null = process.env.TELEGRAM_OWNER_MEMBER_ID?.trim() || null,
+    private readonly ownerAutoTradingChatId: string | null = process.env.TELEGRAM_AUTO_TRADING_CHAT_ID?.trim() || null,
   ) {}
 
   private async personalTelegramEligible(userId: string) {
     const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
-    return hasCapability(profile, 'canConnectPersonalTelegram');
+    return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');
   }
 
   async createTelegramLink(userId: string, now = new Date()) {
@@ -232,7 +366,15 @@ export class UserBrokerTelegramService {
     const connection = await this.repository.getTelegramConnection(userId);
     const preferences = await this.repository.getPreferences(userId);
     const deliveries = await this.repository.listDeliveries(userId);
-    return { telegram: { connected: connection?.status === 'ACTIVE', status: connection?.status ?? 'DISCONNECTED', connectedAt: connection?.connectedAt ?? null }, preferences,
+    const recovery = telegramConnectionRecovery(connection, deliveries);
+    return { telegram: {
+      connected: connection?.status === 'ACTIVE' && !recovery.required,
+      status: recovery.required ? 'RECOVERY_REQUIRED' : connection?.status ?? 'DISCONNECTED',
+      connectedAt: connection?.connectedAt ?? null,
+      recoveryRequired: recovery.required,
+      recoveryErrorCode: recovery.errorCode,
+      recoveryFailedAt: recovery.failedAt,
+    }, preferences,
       deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, payload: _payload, ...delivery }) => delivery) };
   }
   async savePreferences(userId: string, patch: Partial<NotificationPreferences>, now = new Date()) {
@@ -244,24 +386,61 @@ export class UserBrokerTelegramService {
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
   async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
-    const inserted = await this.repository.insertExecutionEvent(event);
-    if (!inserted) return { inserted: false, deliveryQueued: false };
-    if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
+    // Capture whether delivery was authorized AT FIRST PERSISTENCE. A crash
+    // may be replayed, but a user connecting Telegram or enabling preferences
+    // later must not receive a flood of historical orders retroactively.
     const preferences = await this.repository.getPreferences(event.userId);
-    if (!preferences[event.type]) return { inserted: true, deliveryQueued: false };
-    if (!personalTelegramEventAllowed(membership, event)) {
-      return { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
-    }
     const connection = await this.repository.getTelegramConnection(event.userId);
-    if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
+    const connectionRecovery = connection?.status === 'ACTIVE'
+      ? telegramConnectionRecovery(connection, await this.repository.listDeliveries(event.userId))
+      : { required: false, errorCode: null, failedAt: null };
+    const eligible = personalTelegramEventAllowed(membership, event);
+    const eventAtMs = Date.parse(event.occurredAt);
+    const connectionAtMs = Date.parse(connection?.connectedAt ?? '');
+    const deliveryIntended = Boolean(preferences[event.type] && eligible
+      && connection?.status === 'ACTIVE'
+      && !connectionRecovery.required
+      && Number.isFinite(eventAtMs) && Number.isFinite(connectionAtMs)
+      && eventAtMs >= connectionAtMs);
+    const proposed: UserExecutionEvent = {
+      ...event,
+      metadata: { ...event.metadata, telegramDeliveryIntendedAtInsert: deliveryIntended },
+    };
+    const inserted = await this.repository.insertExecutionEvent(proposed);
+    // Replay the persisted source identity after a crash; never turn an
+    // earlier USER_APPROVED event into AUTO_POLICY under the same source ID.
+    const canonical = inserted
+      ? proposed
+      : await this.repository.getExecutionEventBySource(event.userId, event.sourceEventId);
+    if (!canonical || canonical.userId !== event.userId || canonical.sourceEventId !== event.sourceEventId) {
+      throw new Error('EXECUTION_SOURCE_EVENT_RECOVERY_REQUIRED');
+    }
+    if (canonical.type !== event.type || canonical.source !== event.source
+      || canonical.executionMethod !== event.executionMethod
+      || canonical.orderPlanId !== event.orderPlanId
+      || canonical.executionId !== event.executionId
+      || canonical.symbol !== event.symbol || canonical.market !== event.market
+      || canonical.side !== event.side) {
+      throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+    }
+    if (canonical.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(canonical);
+    if (!preferences[canonical.type]) return { inserted, deliveryQueued: false };
+    if (!eligible) return { inserted, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    if (!connection || connection.status !== 'ACTIVE') return { inserted, deliveryQueued: false };
+    if (connectionRecovery.required) {
+      return { inserted, deliveryQueued: false, skipped: 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED' as const };
+    }
+    if (canonical.metadata.telegramDeliveryIntendedAtInsert !== true) {
+      return { inserted, deliveryQueued: false };
+    }
     const timestamp = now.toISOString();
     const delivery: NotificationDelivery = {
-      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      id: randomUUID(), userId: canonical.userId, eventId: canonical.id, dedupeKey: `${canonical.id}:${canonical.type}`,
       state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
       kind: 'EXECUTION_EVENT', payload: null,
     };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
-    return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
+    return { inserted, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
@@ -322,11 +501,24 @@ export class UserBrokerTelegramService {
           cooldownMs: 0,
         });
       } catch {
-        alertResult = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
+        alertResult = { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
       }
       if (alertResult.ok) {
         await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
         return { processed: true, state: 'SENT' as const };
+      }
+      if (telegramDeliveryRequiresReconnect(alertResult.errorCode)) {
+        await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+          alertResult.errorCode ?? 'TELEGRAM_HTTP_403', timestamp);
+        await this.repository.revokeTelegramConnection(userId, timestamp);
+        return { processed: true, state: 'DEAD_LETTER' as const };
+      }
+      if (alertResult.skipped === 'OUTCOME_UNCONFIRMED'
+        || telegramDeliveryOutcomeUnknown(alertResult.errorCode)) {
+        await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER',
+          attempt, null, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED', timestamp);
+        return { processed: true, state: 'DEAD_LETTER' as const };
       }
       const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
       const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
@@ -347,12 +539,41 @@ export class UserBrokerTelegramService {
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
     const attempt = claimed.attempts + 1;
+    const rendered = renderUserExecutionTelegramMessage(event);
     let transportResult: Awaited<ReturnType<TelegramTransport['send']>>;
-    try { transportResult = await this.transport.send(connection.telegramChatId, renderUserExecutionTelegramMessage(event)); }
-    catch { transportResult = { ok: false, errorCode: 'TELEGRAM_TRANSPORT_ERROR' }; }
+    try { transportResult = await this.transport.send(connection.telegramChatId, rendered); }
+    catch { transportResult = { ok: false, errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' }; }
     if (transportResult.ok) {
+      if (
+        event.executionMethod === 'AUTO_POLICY'
+        && this.ownerMemberId
+        && this.ownerMemberId === event.userId
+        && this.ownerAutoTradingChatId
+        && this.ownerAutoTradingChatId !== connection.telegramChatId
+        && telegramSixRoomRoutingIsolated({
+          ...process.env,
+          TELEGRAM_AUTO_TRADING_CHAT_ID: this.ownerAutoTradingChatId,
+        })
+      ) {
+        try {
+          await this.transport.send(this.ownerAutoTradingChatId, rendered);
+        } catch {
+          // Owner mirror is advisory and never changes the canonical member delivery state.
+        }
+      }
       await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
       return { processed: true, state: 'SENT' as const };
+    }
+    if (telegramDeliveryRequiresReconnect(transportResult.errorCode)) {
+      await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+        transportResult.errorCode?.slice(0, 120) || 'TELEGRAM_HTTP_403', timestamp);
+      await this.repository.revokeTelegramConnection(userId, timestamp);
+      return { processed: true, state: 'DEAD_LETTER' as const };
+    }
+    if (telegramDeliveryOutcomeUnknown(transportResult.errorCode)) {
+      await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER',
+        attempt, null, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED', timestamp);
+      return { processed: true, state: 'DEAD_LETTER' as const };
     }
     const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
     const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;

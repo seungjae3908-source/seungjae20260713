@@ -18,7 +18,7 @@ const ACCENTS: Record<string, string> = {
 	pink: '330 81% 60%',
 };
 
-const AI_CHART_SERVICE_WORKER_DELAY_MS = 6_000;
+const AI_CHART_SERVICE_WORKER_DELAY_MS = 15_000;
 
 function applyInitialAccent() {
 	try {

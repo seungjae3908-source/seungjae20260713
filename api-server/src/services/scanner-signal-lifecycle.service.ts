@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { scannerTimestampMs } from './scanner-data-quality.service';
 import type {
   ScannerAlertCandidate,
   ScannerSignalCard,
@@ -12,6 +13,9 @@ type LifecycleRecord = {
   confirmationStreak: number;
   firstSeenAt: number;
   lastSeenAt: number;
+  lastEvidenceAt: number;
+  expiresAt: number;
+  pricePlan: ScannerSignalCard['pricePlan'];
   lastAlertKey: string | null;
 };
 
@@ -44,9 +48,9 @@ const ORDER_OWNED_STATES = new Set<ScannerSignalState>([
   'CANCELLED',
 ]);
 
-function alertKey(signalId: string, expiresAt: string): string {
+function alertKey(signalId: string): string {
   return `scanner-alert:${createHash('sha256')
-    .update(`${signalId}:APPROVAL_PENDING:${expiresAt}`)
+    .update(`${signalId}:APPROVAL_PENDING`)
     .digest('hex')
     .slice(0, 32)}`;
 }
@@ -100,16 +104,18 @@ function nextState(
   previousState: ScannerSignalState | null,
   card: ScannerSignalCard,
   now: number,
+  freshEvidence: boolean,
 ): ScannerSignalState {
   const previous = normalizedPrevious(previousState);
-  if (Date.parse(card.expiresAt) <= now) return 'EXPIRED';
   if (previous && ORDER_OWNED_STATES.has(previous)) return previous;
+  if (!Number.isFinite(Date.parse(card.expiresAt)) || Date.parse(card.expiresAt) <= now) return 'EXPIRED';
   if (invalid(card)) return 'INVALIDATED';
   if (!card.strongSignalEligible) {
     return previous && ['CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING'].includes(previous)
       ? 'INVALIDATED'
       : 'CANDIDATE';
   }
+  if (!freshEvidence) return previous ?? 'CANDIDATE';
   if (previous == null || previous === 'INVALIDATED' || previous === 'EXPIRED') return 'CANDIDATE';
   if (previous === 'CANDIDATE') return 'CONFIRMED';
   if (previous === 'CONFIRMED') return 'ARMED';
@@ -160,25 +166,25 @@ export function clearScannerSignalLifecycleForTests(): void {
   records.clear();
 }
 
-export function getScannerLifecycleSnapshot(memberId: string, signalId: string) {
+export function getScannerLifecycleSnapshot(memberId: string, signalId: string, now = Date.now()) {
   const { baseSignalId, cycle } = splitSignalId(signalId);
   const record = records.get(lifecycleKey(memberId, baseSignalId));
   if (!record || record.cycle !== cycle) return null;
   return {
     signalId,
-    state: record.state,
-    observedAt: new Date(record.lastSeenAt).toISOString(),
+    state: record.expiresAt <= now && !ORDER_OWNED_STATES.has(record.state) ? 'EXPIRED' : record.state,
+    observedAt: new Date(record.lastEvidenceAt).toISOString(),
   };
 }
 
 // Backward-compatible, one-way bridge for the existing Risk/Order execution snapshot.
 // The Scanner owns its richer lifecycle; unknown/future states fail closed.
-export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string): {
+export function getScannerSignalLifecycleSnapshot(memberId: string, signalId: string, now = Date.now()): {
   signalId: string;
   state: LegacyTradingLifecycleState;
   observedAt: string;
 } | null {
-  const snapshot = getScannerLifecycleSnapshot(memberId, signalId);
+  const snapshot = getScannerLifecycleSnapshot(memberId, signalId, now);
   if (!snapshot) return null;
   return {
     signalId: snapshot.signalId,
@@ -226,6 +232,10 @@ export function applyScannerSignalLifecycle(
     const baseSignalId = strategyScopedBaseSignalId(card);
     const key = lifecycleKey(memberId, baseSignalId);
     const existing = records.get(key);
+    const observed = card.evidence.find((item) => item.key === 'data-quality')?.observedAt ?? card.observedAt;
+    const evidenceAt = scannerTimestampMs(observed);
+    const validEvidence = evidenceAt != null && evidenceAt <= now;
+    const freshEvidence = validEvidence && (!existing || evidenceAt > existing.lastEvidenceAt);
     let cycle = existing?.cycle ?? 1;
     const existingState = normalizedPrevious(existing?.state ?? null);
     if (
@@ -233,19 +243,24 @@ export function applyScannerSignalLifecycle(
       && existingState != null
       && SCANNER_TERMINAL_STATES.has(existingState)
       && card.strongSignalEligible
+      && freshEvidence
       && !['APPROVED', 'EXECUTING', 'PARTIALLY_FILLED', 'FILLED', 'MANAGING'].includes(existingState)
     ) {
       cycle += 1;
     }
     const resetCycle = !existing || cycle !== existing.cycle;
     const previous = resetCycle ? null : existingState;
-    const state = nextState(previous, card, now);
+    const expiresAt = resetCycle ? Date.parse(card.expiresAt) : existing!.expiresAt;
+    const pricePlan = structuredClone(resetCycle ? card.pricePlan : existing!.pricePlan);
+    const stableCard = { ...card, expiresAt: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : '', pricePlan };
+    const state = nextState(previous, validEvidence ? stableCard : { ...stableCard, dataState: 'untrusted' }, now, freshEvidence);
     const confirmationStreak = card.strongSignalEligible
-      ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + 1
+      ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + (freshEvidence ? 1 : 0)
       : 0;
     const signalId = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
-    const nextCard: ScannerSignalCard = { ...card, signalId, signalState: state };
-    const idempotencyKey = alertKey(signalId, card.expiresAt);
+    const nextCard: ScannerSignalCard = { ...stableCard, signalId, signalState: state,
+      strongSignalEligible: card.strongSignalEligible && !SCANNER_TERMINAL_STATES.has(state) };
+    const idempotencyKey = alertKey(signalId);
     let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
     if (state === 'APPROVAL_PENDING' && lastAlertKey !== idempotencyKey) {
       alerts.push(alertFrom(nextCard, idempotencyKey));
@@ -258,6 +273,9 @@ export function applyScannerSignalLifecycle(
       confirmationStreak,
       firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
       lastSeenAt: now,
+      lastEvidenceAt: validEvidence ? Math.max(evidenceAt, resetCycle ? 0 : existing!.lastEvidenceAt) : resetCycle ? now : existing!.lastEvidenceAt,
+      expiresAt,
+      pricePlan: structuredClone(pricePlan),
       lastAlertKey,
     });
     return nextCard;

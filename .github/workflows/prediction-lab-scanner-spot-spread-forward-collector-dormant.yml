@@ -1,0 +1,193 @@
+name: Prediction Lab Scanner Spot Spread Forward Collector Dormant
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact 40-character producer commit SHA
+        required: true
+        type: string
+      previous_run_id:
+        description: Optional prior successful collector run ID to rehydrate
+        required: false
+        type: string
+      symbol:
+        description: Upbit KRW spot symbol
+        required: false
+        default: BTC
+        type: string
+      required_days:
+        description: Forward archive target horizon in days
+        required: false
+        default: '730'
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: scanner-spot-spread-forward-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Manual dormant spread accumulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve exact producer SHA
+        id: ref
+        shell: bash
+        env:
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$INPUT_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=Exact SHA required::Spread collector requires one exact 40-character producer SHA"
+            exit 1
+          fi
+          echo "value=${INPUT_REF,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact producer revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.value }}
+          persist-credentials: false
+
+      - name: Verify detached exact producer
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate optional previous-run lineage
+        if: ${{ inputs.previous_run_id != '' }}
+        id: previous
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS_RUN_ID: ${{ inputs.previous_run_id }}
+        with:
+          script: |
+            const runId = Number(process.env.PREVIOUS_RUN_ID);
+            if (!Number.isSafeInteger(runId) || runId <= 0 || runId === context.runId) {
+              core.setFailed('SPREAD_ARCHIVE_PREVIOUS_RUN_ID_INVALID');
+              return;
+            }
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.name !== 'Prediction Lab Scanner Spot Spread Forward Collector Dormant'
+                || run.event !== 'workflow_dispatch'
+                || run.status !== 'completed'
+                || run.conclusion !== 'success') {
+              core.setFailed('SPREAD_ARCHIVE_PREVIOUS_RUN_NOT_SUCCESSFUL_COLLECTOR');
+              return;
+            }
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100,
+            });
+            const expectedName = `scanner-spot-spread-forward-state-${runId}`;
+            const artifact = data.artifacts.find((item) => item.name === expectedName && !item.expired);
+            if (!artifact || !/^sha256:[0-9a-f]{64}$/.test(String(artifact.digest ?? ''))) {
+              core.setFailed('SPREAD_ARCHIVE_PREVIOUS_ARTIFACT_INVALID');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+            core.setOutput('artifact_name', artifact.name);
+            core.setOutput('artifact_digest', String(artifact.digest));
+
+      - name: Download previous immutable chain state
+        if: ${{ inputs.previous_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.previous.outputs.artifact_name }}
+          path: ${{ runner.temp }}/previous-spread-state
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Capture and append one genuine public Upbit orderbook
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.ref.outputs.value }}
+          OUTPUT_ROOT: ${{ runner.temp }}/spread-state
+          PREVIOUS_RUN_ID: ${{ inputs.previous_run_id }}
+          SYMBOL: ${{ inputs.symbol }}
+          REQUIRED_DAYS: ${{ inputs.required_days }}
+        run: |
+          set -euo pipefail
+          args=(--output-dir "$OUTPUT_ROOT" --symbol "$SYMBOL" --required-days "$REQUIRED_DAYS")
+          if [ -n "$PREVIOUS_RUN_ID" ]; then
+            args+=(--seed-root "$RUNNER_TEMP/previous-spread-state")
+          fi
+          node market-prediction-lab/scripts/run-scanner-spot-spread-archive-v1.js "${args[@]}"             | tee "$RUNNER_TEMP/spread-forward-status.json"
+
+      - name: Assert accumulation remains evidence-only
+        shell: bash
+        env:
+          OUTPUT_ROOT: ${{ runner.temp }}/spread-state
+          EXPECTED_SHA: ${{ steps.ref.outputs.value }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const summary = JSON.parse(
+            await readFile(`${process.env.OUTPUT_ROOT}/scanner-spot-spread-archive-readiness.json`, 'utf8'),
+          );
+          if (summary.researchCodeSha !== process.env.EXPECTED_SHA
+              || summary.consumerResearchCodeSha !== process.env.EXPECTED_SHA) {
+            throw new Error('SPREAD_ARCHIVE_CONSUMER_SHA_MISMATCH');
+          }
+          if (!(summary.observationCount >= 1)
+              || !(summary.producerCodeShaCount >= 1)
+              || !Array.isArray(summary.producerCodeShas)) {
+            throw new Error('SPREAD_ARCHIVE_LINEAGE_INCOMPLETE');
+          }
+          if (summary.economicSampleCredit !== 0
+              || summary.profitabilityClaimAllowed !== false
+              || summary.automaticPromotionAuthority !== false) {
+            throw new Error('SPREAD_ARCHIVE_ECONOMIC_CREDIT_FORBIDDEN');
+          }
+          if (summary.safety?.executionAuthority !== 'NONE'
+              || summary.safety?.financialMutationAllowed !== false
+              || summary.safety?.liveOrderAllowed !== false
+              || summary.safety?.privateTradingApiAllowed !== false
+              || summary.safety?.historicalBackfillAllowed !== false
+              || summary.safety?.syntheticSpreadAllowed !== false
+              || summary.safety?.currentSpreadHistoricalBackfillAllowed !== false
+              || summary.safety?.scheduleActivated !== false
+              || summary.safety?.crossProducerShaAccumulationAllowed !== true
+              || summary.safety?.producerShaProvenanceRequired !== true) {
+            throw new Error('SPREAD_ARCHIVE_SAFETY_INVALID');
+          }
+          NODE
+
+      - name: Upload next immutable chain state
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-spot-spread-forward-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/spread-state
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert dormant workflow performed no repository mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          echo "scheduleActivated=false"
+          echo "executionAuthority=NONE"

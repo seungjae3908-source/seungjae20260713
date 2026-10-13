@@ -56,6 +56,7 @@ export const POSITION_LIMITS: Readonly<ScannerStrategyLimits> = Object.freeze({
 });
 
 export interface ScannerQuantStrategyInput {
+  sessionTimeZone?: string;
   mode: ScannerStrategyMode;
   timeframe: string;
   candles: ScannerQualityCandle[];
@@ -135,6 +136,11 @@ function trendDirection(snapshot: ScannerIndicatorSnapshot): -1 | 0 | 1 {
   const fast = snapshot.ema20 ?? snapshot.ema12; const slow = snapshot.ema60 ?? snapshot.ema26;
   if (fast == null || slow == null || fast === slow) return 0; return fast > slow ? 1 : -1;
 }
+function waveDirection(snapshot: ScannerIndicatorSnapshot): -1 | 0 | 1 {
+  if (snapshot.waveStructure === 'BULLISH') return 1;
+  if (snapshot.waveStructure === 'BEARISH') return -1;
+  return 0;
+}
 
 function scalpingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndicatorSnapshot, input: ScannerQuantStrategyInput): ScannerQuantFactors {
   const close = primary.close ?? input.price;
@@ -143,12 +149,14 @@ function scalpingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndi
   if (primary.resistance20 != null && close >= primary.resistance20) technical += 15;
   let trend = 45; if (primary.ema12 != null && primary.ema26 != null) trend += primary.ema12 > primary.ema26 ? 25 : -20;
   const contextTrend = trendDirection(context); if (contextTrend > 0) trend += 20; if (contextTrend < 0) trend -= 20;
+  const primaryWave = waveDirection(primary); if (primaryWave > 0) trend += 8; if (primaryWave < 0) trend -= 8;
   let momentum = 45; if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 20 : -18;
   if (primary.rsi14 != null) { if (primary.rsi14 >= 45 && primary.rsi14 <= 68) momentum += 20; else if (primary.rsi14 > 78) momentum -= 25; else if (primary.rsi14 < 30) momentum -= 10; }
   if (primary.momentum5 != null) momentum += clamp(primary.momentum5 * 700, -15, 15);
   let volume = scoreRelativeVolume(primary.relativeVolume20);
   if (primary.tradeIntensityProxy != null) { momentum += clamp(primary.tradeIntensityProxy * 10, -12, 12); technical += clamp(primary.tradeIntensityProxy * 5, -8, 8); volume += clamp(primary.tradeIntensityProxy * 8, -12, 12); }
   let marketRegime = 50; if (contextTrend > 0) marketRegime += 30; if (contextTrend < 0) marketRegime -= 30;
+  const contextWave = waveDirection(context); if (contextWave > 0) marketRegime += 8; if (contextWave < 0) marketRegime -= 8;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 12;
   return { technical: clamp(technical), trend: clamp(trend), momentum: clamp(momentum), volume: clamp(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreScalpingVolatility(primary, input.price), marketRegime: clamp(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -159,14 +167,17 @@ function swingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndicat
   if (primary.sma20 != null && primary.sma60 != null) trend += primary.sma20 > primary.sma60 ? 14 : -12;
   if (primary.sma60 != null && primary.sma120 != null) trend += primary.sma60 > primary.sma120 ? 12 : -10;
   if (primary.adx14 != null) trend += primary.adx14 >= 25 ? 12 : primary.adx14 < 15 ? -8 : 0;
+  const primaryWave = waveDirection(primary); if (primaryWave > 0) trend += 12; if (primaryWave < 0) trend -= 12;
   let technical = 45; if (primary.resistance20 != null && close > primary.resistance20) technical += 28;
   if (primary.ema20 != null && close >= primary.ema20 * 0.98 && close <= primary.ema20 * 1.04) technical += 14;
   if (primary.support20 != null && close < primary.support20) technical -= 28;
+  if (primaryWave > 0) technical += 8; if (primaryWave < 0) technical -= 8;
   let momentum = 45; if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 22 : -18;
   if (primary.rsi14 != null) { if (primary.rsi14 >= 45 && primary.rsi14 <= 70) momentum += 18; else if (primary.rsi14 > 80) momentum -= 22; else if (primary.rsi14 < 32) momentum -= 10; }
   let volume = scoreRelativeVolume(primary.relativeVolume20) * 0.65 + 35;
   if (primary.volumeTrend20 != null) volume += clamp(primary.volumeTrend20 * 80, -20, 20);
   let marketRegime = 50; const contextTrend = trendDirection(context); if (contextTrend > 0) marketRegime += 28; if (contextTrend < 0) marketRegime -= 28;
+  const contextWave = waveDirection(context); if (contextWave > 0) marketRegime += 10; if (contextWave < 0) marketRegime -= 10;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 15;
   return { technical: clamp(technical), trend: clamp(trend), momentum: clamp(momentum), volume: clamp(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreSwingVolatility(primary, input.price), marketRegime: clamp(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -187,8 +198,15 @@ function positionFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndi
   };
 }
 
-function weightedScore(factors: ScannerQuantFactors, weights: Record<keyof ScannerQuantFactors, number>): number {
-  return Math.round(clamp((Object.keys(weights) as Array<keyof ScannerQuantFactors>).reduce((sum, key) => sum + factors[key] * weights[key] / 100, 0)));
+function alignedDirectionalScore(value: number, direction: ScannerSignalDirection): number {
+  return direction === 'SHORT' ? 100 - value : value;
+}
+function weightedScore(factors: ScannerQuantFactors, weights: Record<keyof ScannerQuantFactors, number>, direction: ScannerSignalDirection): number {
+  const directional = new Set<keyof ScannerQuantFactors>(['technical', 'trend', 'momentum', 'marketRegime']);
+  return Math.round(clamp((Object.keys(weights) as Array<keyof ScannerQuantFactors>).reduce((sum, key) => {
+    const value = directional.has(key) ? alignedDirectionalScore(factors[key], direction) : factors[key];
+    return sum + value * weights[key] / 100;
+  }, 0)));
 }
 function inferDirection(factors: ScannerQuantFactors, primary: ScannerIndicatorSnapshot, context: ScannerIndicatorSnapshot, allowShort: boolean): ScannerSignalDirection {
   const longBias = (factors.trend + factors.momentum + factors.marketRegime + factors.technical) / 4;
@@ -217,24 +235,30 @@ function gradeFor(score: number, factors: ScannerQuantFactors, input: ScannerQua
   const sEligible = score >= limits.sGradeScore && hasIndependentSignalEvidence(factors, direction)
     && input.dataQuality.state === 'TRUSTED' && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= 90
     && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore && factors.liquidity >= 70 && factors.volatility >= 60
-    && factors.marketRegime >= 70 && aiValidation.status === 'PASS';
+    && alignedDirectionalScore(factors.marketRegime, direction) >= 70 && aiValidation.status === 'PASS';
   if (sEligible) return 'S'; if (score >= 78) return 'A'; if (score >= 68) return 'B'; if (score >= 55) return 'C'; return 'D';
 }
 
 export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): ScannerQuantStrategyResult {
-  const primary = buildScannerIndicatorSnapshot(input.candles);
-  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles);
+  const primary = buildScannerIndicatorSnapshot(input.candles, input.sessionTimeZone ?? 'UTC');
+  const context = buildScannerIndicatorSnapshot(input.contextCandles, input.sessionTimeZone ?? 'UTC');
+  const contextMissing = input.contextCandles.length === 0;
+  const contextInsufficient = input.contextCandles.length < 60;
   const aiValidation = input.aiValidation ?? DEFAULT_AI_VALIDATION;
   const factors = input.mode === 'scalping' ? scalpingFactors(primary, context, input) : input.mode === 'position' ? positionFactors(primary, context, input) : swingFactors(primary, context, input);
   const limits = limitsFor(input.mode);
-  let score = weightedScore(factors, weightsFor(input.mode));
+  const direction = inferDirection(factors, primary, context, input.allowShort);
+  // Keep raw bullish/bearish factors for direction and policy overlays, but
+  // score evidence in the selected direction. Otherwise SHORT can never
+  // reach the strong-signal threshold even with perfect bearish evidence.
+  let score = weightedScore(factors, weightsFor(input.mode), direction);
   if (input.dataQuality.state === 'DEGRADED') score = Math.min(score, 74);
   if (input.dataQuality.state === 'DATA_UNTRUSTED') score = Math.min(score, 49);
   if (aiValidation.status === 'VETO') score = Math.min(score, 49);
   if (aiValidation.status === 'PARTIAL') score = Math.min(score, 79);
-  const direction = inferDirection(factors, primary, context, input.allowShort);
+  if (contextInsufficient) score = Math.min(score, 74);
   const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
-  const strongSignalEligible = direction !== 'NEUTRAL' && independentSignalEvidence && score >= limits.strongScore
+  const strongSignalEligible = !contextInsufficient && direction !== 'NEUTRAL' && independentSignalEvidence && score >= limits.strongScore
     && input.dataQuality.state !== 'DATA_UNTRUSTED' && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore
     && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor
     && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== 'VETO';
@@ -243,6 +267,7 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     `전략 ${input.mode}`, `기술 ${Math.round(factors.technical)}`, `추세 ${Math.round(factors.trend)}`,
     `모멘텀 ${Math.round(factors.momentum)}`, `거래량 ${Math.round(factors.volume)}`, `유동성 ${Math.round(factors.liquidity)}`,
     `변동성 ${Math.round(factors.volatility)}`, `시장국면 ${Math.round(factors.marketRegime)}`, `리스크 ${Math.round(factors.risk)}`,
+    `확정파동 ${primary.waveStructure}(${primary.confirmedPivotHighs}H/${primary.confirmedPivotLows}L)`,
     `독립근거 ${independentSignalEvidence ? '충족' : '부족'}`,
     ...(input.mode === 'scalping' && primary.tradeIntensityProxy != null ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`] : []),
   ];
@@ -251,6 +276,8 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     ...aiValidation.counterEvidence.map((reason) => `AI 반대근거: ${reason}`),
     ...aiValidation.missingData.map((reason) => `AI 데이터부족: ${reason}`),
     ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`),
+    ...(contextMissing ? ['CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'] : []),
+    ...(!contextMissing && contextInsufficient ? ['CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT'] : []),
   ];
   return { mode: input.mode, score, grade, direction, factors, primary, context, strongSignalEligible, reasons, warnings, aiValidation };
 }

@@ -9,6 +9,13 @@ import { buildResearchDataReadinessV1 } from './research-data-factory.mjs';
 
 export const RESEARCH_DATASET_SNAPSHOT_MANIFEST_CONTRACT_V1 = 'research-dataset-snapshot-manifest/v1';
 
+export const RESEARCH_SCANNER_DATASET_PROFILES_V1 = Object.freeze([
+  Object.freeze({profileId:'KR_STOCK:SCANNER_SWING_60M',market:'KR_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'US_STOCK:SCANNER_SWING_60M',market:'US_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',market:'CRYPTO_SPOT',timeframe:'4H'}),
+  Object.freeze({profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',market:'CRYPTO_FUTURES',timeframe:'60m'}),
+]);
+
 const SHA40=/^[0-9a-f]{40}$/i;
 const HASH64=/^[0-9a-f]{64}$/i;
 const SYMBOL=/^[A-Z0-9._:-]{1,64}$/;
@@ -61,7 +68,8 @@ async function safeRoot(value){
   return root;
 }
 function profile(profileId){
-  const row=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(item=>item.profileId===profileId);
+  const row=ADAPTIVE_MULTI_MARKET_PROFILES_V1.find(item=>item.profileId===profileId)
+    ??RESEARCH_SCANNER_DATASET_PROFILES_V1.find(item=>item.profileId===profileId);
   if(!row) throw new TypeError('profileId invalid');
   return row;
 }
@@ -95,6 +103,44 @@ function normalizeScope(raw,expectedProfile){
     publicDataOnly:true,
   });
 }
+function scannerDatasetProfile(profileId){
+  return RESEARCH_SCANNER_DATASET_PROFILES_V1.find(item=>item.profileId===profileId)??null;
+}
+function buildScannerDatasetReadinessV1(expectedProfile,evidence,scope){
+  const blockers=[];
+  const raw=evidence&&typeof evidence==='object'&&!Array.isArray(evidence)?evidence:{};
+  const primaryDatasetDigest=String(raw.primaryDatasetDigest??'').trim().toLowerCase();
+  const source=String(raw.source??'').trim();
+  const sourceType=String(raw.sourceType??'').trim().toUpperCase();
+  if(!HASH64.test(primaryDatasetDigest)) blockers.push('SCANNER_PRIMARY_DATASET_DIGEST_REQUIRED');
+  if(primaryDatasetDigest!==scope.primaryDatasetDigest) blockers.push('SCANNER_PRIMARY_DATASET_DIGEST_SCOPE_MISMATCH');
+  if(raw.primaryDatasetCoverage!==1) blockers.push('SCANNER_PRIMARY_DATASET_COVERAGE_INCOMPLETE');
+  if(raw.missingIntervalCount!==0) blockers.push('SCANNER_PRIMARY_DATASET_INTERVAL_GAPS_PRESENT');
+  if(raw.duplicateRowCount!==0) blockers.push('SCANNER_PRIMARY_DATASET_DUPLICATES_PRESENT');
+  if(raw.closedCandlesOnly!==true) blockers.push('SCANNER_CLOSED_CANDLES_ONLY_REQUIRED');
+  if(raw.publicDataOnly!==true||sourceType!=='PUBLIC_MARKET_DATA'||!source) blockers.push('SCANNER_PUBLIC_MARKET_DATA_PROVENANCE_REQUIRED');
+  if(raw.syntheticDataAllowed!==false) blockers.push('SCANNER_SYNTHETIC_DATA_FORBIDDEN');
+  const evidenceIdentity={
+    contract:'research-scanner-primary-ohlcv-readiness/v1',profileId:expectedProfile.profileId,
+    market:expectedProfile.market,timeframe:expectedProfile.timeframe,primaryDatasetDigest,
+    primaryDatasetCoverage:raw.primaryDatasetCoverage??null,missingIntervalCount:raw.missingIntervalCount??null,
+    duplicateRowCount:raw.duplicateRowCount??null,closedCandlesOnly:raw.closedCandlesOnly===true,
+    publicDataOnly:raw.publicDataOnly===true,syntheticDataAllowed:raw.syntheticDataAllowed===true,source,sourceType,
+  };
+  const evidenceDigest=digest(evidenceIdentity);
+  const ready=blockers.length===0;
+  const datasetSnapshotHash=ready?digest({
+    contract:evidenceIdentity.contract,profileId:expectedProfile.profileId,market:expectedProfile.market,
+    timeframe:expectedProfile.timeframe,primaryDatasetDigest:scope.primaryDatasetDigest,evidenceDigest,
+  }):null;
+  return Object.freeze({
+    schemaVersion:'research-scanner-primary-ohlcv-readiness-v1',market:expectedProfile.market,ready,
+    requiredFeatures:Object.freeze(['primaryOhlcv']),
+    features:Object.freeze([Object.freeze({feature:'primaryOhlcv',state:ready?'HISTORICAL_READY':'BLOCKED_DATA',reason:ready?null:blockers[0],owner:source||'UNLINKED',publicOnly:true})]),
+    blockers:Object.freeze(blockers.map(reason=>Object.freeze({feature:'primaryOhlcv',state:'BLOCKED_DATA',reason,owner:source||null}))),
+    evidenceDigest,datasetSnapshotHash,
+  });
+}
 function snapshotIdentity({market,profileId,scope,marketReadinessHash,evidenceDigest}){
   return digest({market,profileId,scope,marketReadinessHash,evidenceDigest});
 }
@@ -114,14 +160,17 @@ export function buildResearchDatasetSnapshotManifestV1({
   const sha=exactSha(researchSha);
   const at=exactIso(createdAt);
   const adaptiveProfile=profile(profileId);
-  const readiness=buildResearchDataReadinessV1({market:adaptiveProfile.market,evidence});
+  const normalizedScope=normalizeScope(scope,adaptiveProfile);
+  const scannerProfile=scannerDatasetProfile(profileId);
+  const readiness=scannerProfile
+    ? buildScannerDatasetReadinessV1(scannerProfile,evidence,normalizedScope)
+    : buildResearchDataReadinessV1({market:adaptiveProfile.market,evidence});
   if(readiness.ready!==true||!HASH64.test(readiness.datasetSnapshotHash??'')){
     const error=new Error('DATASET_NOT_RESEARCH_READY');
     error.code='DATASET_NOT_RESEARCH_READY';
     error.blockers=readiness.blockers;
     throw error;
   }
-  const normalizedScope=normalizeScope(scope,adaptiveProfile);
   const featureManifest=readiness.features.map(row=>Object.freeze({
     feature:row.feature,
     state:row.state,

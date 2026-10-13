@@ -1,0 +1,240 @@
+name: Research Workspace One-shot Read-only Preflight V13
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-one-shot-preflight-v13.yml'
+      - 'api-server/scripts/research-workspace-one-shot-preflight-v13.cjs'
+      - 'api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs'
+      - 'scripts/agent_hub_rollover_v2.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-workspace-one-shot-readonly-preflight
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate Phase13 read-only preflight contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
+          node --test api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
+          workflow=.github/workflows/research-workspace-one-shot-preflight-v13.yml
+          grep -Fq "/research-workspace-one-shot-preflight " "$workflow"
+          grep -Fq "environment: production" "$workflow"
+          grep -Fq "providerCalls,0" api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
+          grep -Fq "serverFilesWritten,0" api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
+          grep -Fq "secretValuesCollected,0" api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
+          ! grep -Eq 'pm2 (restart|reload|save)|systemctl (start|restart|enable)|--execute|curl .*api\.groq|generativelanguage\.googleapis' \
+            api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
+
+  preflight:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/research-workspace-one-shot-preflight ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Authorize exact-main read-only preflight
+        id: authorize
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/research-workspace-one-shot-preflight ([0-9a-fA-F]{40})$/);
+            if (!match) {
+              core.setFailed('Expected /research-workspace-one-shot-preflight <40-char-current-main-sha>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || Number(context.payload.issue?.number ?? 0) !== canonicalHub) {
+              core.setFailed('Command must be posted on the canonical Central Hub.');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha.toLowerCase();
+            if (targetSha !== main) {
+              core.setFailed('PREFLIGHT_TARGET_NOT_EXACT_CURRENT_MAIN');
+              return;
+            }
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const combined = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha,
+            });
+            const latest = new Map();
+            for (const row of combined.data.statuses ?? []) if (!latest.has(row.context)) latest.set(row.context, row.state);
+            const missing = required.filter(name => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed('PREFLIGHT_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const deploys = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml', per_page: 20,
+            });
+            if ((deploys.data.workflow_runs ?? []).some(run => ['queued','in_progress','waiting','pending'].includes(String(run.status)))) {
+              core.setFailed('PREFLIGHT_BLOCKED_PRODUCTION_DEPLOY_ACTIVE');
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('source_comment_id', String(context.payload.comment.id));
+
+      - name: Configure canonical Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Run zero-call zero-mutation Production preflight
+        id: probe
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/research-one-shot-preflight-v13.json"
+          quoted_sha="$(printf '%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA=$quoted_sha node -" \
+            < api-server/scripts/research-workspace-one-shot-preflight-v13.cjs > "$artifact"
+          test -s "$artifact"
+          node - "$artifact" "$TARGET_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const [file,targetSha]=process.argv.slice(2);
+          const value=JSON.parse(fs.readFileSync(file,'utf8'));
+          if(value?.schemaVersion!=='research-one-shot-operational-preflight-v13'
+            || value?.targetSha!==targetSha
+            || !['READY_FOR_REVIEWED_ONE_SHOT','BLOCKED'].includes(value?.status)
+            || value?.providerCalls!==0
+            || value?.serverFilesWritten!==0
+            || value?.serverFilesDeleted!==0
+            || value?.serverProcessesRestarted!==0
+            || value?.databaseChanges!==0
+            || value?.secretValuesCollected!==0
+            || value?.executionAuthority!=='NONE') process.exit(1);
+          const serialized=JSON.stringify(value);
+          if (/Bearer\s+\S+|sk-[A-Za-z0-9_-]{12,}|BEGIN .*PRIVATE KEY|api[_ -]?key\s*[:=]/i.test(serialized)) process.exit(1);
+          process.stdout.write('preflight_status='+value.status+'\n');
+          process.stdout.write('reason_codes='+(value.reasonCodes??[]).join(',')+'\n');
+          NODE
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized preflight evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-workspace-one-shot-preflight-${{ steps.authorize.outputs.target_sha }}
+          path: ${{ steps.probe.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized preflight to Central Hub
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          SOURCE_COMMENT_ID: ${{ steps.authorize.outputs.source_comment_id }}
+          ARTIFACT: ${{ steps.probe.outputs.artifact }}
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const value = JSON.parse(fs.readFileSync(process.env.ARTIFACT, 'utf8'));
+            const body = [
+              '[RESEARCH_WORKSPACE_ONE_SHOT_PREFLIGHT_V13]',
+              'status: ' + value.status,
+              'target_sha: ' + process.env.TARGET_SHA,
+              'active_deploy_sha: ' + (value.activeDeploySha ?? 'UNKNOWN'),
+              'pm2_online: ' + String(value.pm2Online ?? false),
+              'root_configured: ' + String(value.rootConfigured ?? false),
+              'root_safe: ' + String(value.rootSafe ?? false),
+              'source_file_safe: ' + String(value.files?.source ?? false),
+              'spec_file_safe: ' + String(value.files?.spec ?? false),
+              'manifest_file_safe: ' + String(value.files?.manifest ?? false),
+              'video_approval_safe: ' + String(value.files?.videoApproval ?? false),
+              'groq_approval_safe: ' + String(value.files?.groqApproval ?? false),
+              'gemini_credential: ' + String(value.providers?.geminiCredential ?? 'UNKNOWN'),
+              'groq_credential: ' + String(value.providers?.groqCredential ?? 'UNKNOWN'),
+              'groq_model: ' + String(value.providers?.groqModel ?? 'UNKNOWN'),
+              'approval_binding: ' + String(value.approvalBinding ?? false),
+              'reason_codes: ' + (value.reasonCodes ?? []).join(','),
+              'provider_calls: 0',
+              'server_files_written: 0',
+              'server_processes_restarted: 0',
+              'database_changes: 0',
+              'secret_values_collected: 0',
+              'execution_authority: NONE',
+              'workflow_run: ' + context.runId,
+              'source_comment_id: ' + process.env.SOURCE_COMMENT_ID,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.HUB_ISSUE_NUMBER), body,
+            });
+
+      - name: Clean runner SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts

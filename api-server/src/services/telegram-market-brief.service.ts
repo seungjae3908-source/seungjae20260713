@@ -49,15 +49,25 @@ function roomLabel(room: MarketInformationRoomId): string {
 }
 
 function destinationLabel(destination: TelegramReportDestination): string {
-  if (destination === 'STOCK_ROOM') return '주식방 · 국내주식 / 미국주식';
-  if (destination === 'CRYPTO_ROOM') return '코인방 · 코인현물 / 코인선물';
-  return '개인 브리핑 · 전체 공개시장';
+  switch (destination) {
+    case 'KR_STOCK_ROOM': return '🇰🇷 국내주식';
+    case 'US_STOCK_ROOM': return '🇺🇸 해외주식';
+    case 'CRYPTO_SPOT_ROOM': return '🪙 코인현물';
+    case 'CRYPTO_FUTURES_ROOM': return '⚡ 코인선물';
+  }
 }
 
 function destinationRooms(destination: TelegramReportDestination): ReadonlySet<MarketInformationRoomId> {
-  if (destination === 'STOCK_ROOM') return new Set(STOCK_ROOMS);
-  if (destination === 'CRYPTO_ROOM') return new Set(CRYPTO_ROOMS);
-  return new Set(ROOMS);
+  switch (destination) {
+    case 'KR_STOCK_ROOM': return new Set(['stocks-kr']);
+    case 'US_STOCK_ROOM': return new Set(['stocks-us']);
+    case 'CRYPTO_SPOT_ROOM': return new Set(['coins-spot']);
+    case 'CRYPTO_FUTURES_ROOM': return new Set(['coins-futures']);
+  }
+}
+
+function stockDestination(destination: TelegramReportDestination): boolean {
+  return destination === 'KR_STOCK_ROOM' || destination === 'US_STOCK_ROOM';
 }
 
 function number(value: number | null, digits = 2): string {
@@ -71,8 +81,33 @@ function percent(value: number | null): string {
 }
 
 function safeError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}:${error.message}`.replace(/https?:\/\/\S+/giu, '<provider>').slice(0, 160);
-  return 'UNKNOWN_PROVIDER_ERROR';
+  // Never forward raw provider exception text into a Telegram digest.
+  // Exceptions can contain URL query strings, account refs, or secrets.
+  return error instanceof Error && error.name === 'AbortError'
+    ? 'PUBLIC_PROVIDER_TIMEOUT' : 'PUBLIC_PROVIDER_UNAVAILABLE';
+}
+
+/** Hard bound for OPTIONAL public market/theme sources.
+ * Abort is passed to market-room fetches where supported; sources without
+ * AbortSignal (sector rankings) cannot hold up the scheduled report.
+ * Late results are discarded, never promoted as current Telegram evidence.
+ */
+export async function boundedTelegramBriefRead<T>(
+  read: () => Promise<T>,
+  timeoutMs = BRIEF_TIMEOUT_MS,
+): Promise<T | null> {
+  if (typeof read !== 'function' || !Number.isSafeInteger(timeoutMs)
+    || timeoutMs < 1 || timeoutMs > BRIEF_TIMEOUT_MS)
+    return null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T | null>([
+      Promise.resolve().then(read).catch(() => null),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefSnapshot> {
@@ -81,15 +116,17 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
   try {
     const roomPromises = ROOMS.map(async (room): Promise<BriefRoom> => {
       try {
-        return { room, response: await MarketInformationService.getRoom(room, controller.signal), error: null };
+        const response = await boundedTelegramBriefRead(
+          () => MarketInformationService.getRoom(room, controller.signal));
+        return { room, response, error: response ? null : 'PUBLIC_PROVIDER_TIMEOUT_OR_UNAVAILABLE' };
       } catch (error) {
         return { room, response: null, error: safeError(error) };
       }
     });
     const [rooms, krThemeResult, usThemeResult] = await Promise.all([
       Promise.all(roomPromises),
-      SectorPopularService.getSectorPopular('KR').catch(() => null),
-      SectorPopularService.getSectorPopular('US').catch(() => null),
+      boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('KR')),
+      boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('US')),
     ]);
     const warnings = rooms.flatMap((item) => item.error ? [`${item.room}:${item.error}`] : []);
     if (!krThemeResult) warnings.push('KR_THEME_UNAVAILABLE');
@@ -106,30 +143,55 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
   }
 }
 
+function marketTone(response: MarketInformationResponse): string {
+  if (response.partial || response.sections.indices.status !== 'ready') return '자료 확인 중';
+  const moves = response.sections.indices.data.map((row) => row.changePercent)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (moves.length < 2) return '판정 보류 (지수 근거 부족)';
+  const positive = moves.filter((n) => n > 0).length;
+  const negative = moves.filter((n) => n < 0).length;
+  if (positive >= Math.ceil(moves.length * 0.7)) return '상승 우위';
+  if (negative >= Math.ceil(moves.length * 0.7)) return '하락 우위';
+  return '혼조';
+}
+
 function roomLines(room: BriefRoom): string[] {
-  if (!room.response) return [`[${roomLabel(room.room)}] 데이터 공급 장애 · ${room.error ?? '원인 미확인'}`];
+  if (!room.response) return [
+    '[' + roomLabel(room.room) + '] 데이터 공급 지연',
+    '지수·종목·수급: N/A (검증된 자료 없음)',
+  ];
   const response = room.response;
-  const lines = [`[${roomLabel(room.room)}] ${response.partial ? 'PARTIAL' : 'READY'}`];
+  const lines = [
+    '[' + roomLabel(room.room) + '] ' + (response.partial ? '일부 데이터 확인 중' : '데이터 정상'),
+    '시장 분위기: ' + marketTone(response) + ' (지수 등락 기준 · 매매 신호 아님)',
+  ];
   if (response.sections.indices.data.length) {
-    const indices = response.sections.indices.data.slice(0, 4)
-      .map((item) => `${item.label} ${number(item.value)} (${percent(item.changePercent)})`)
-      .join(' · ');
-    lines.push(`지수: ${indices}`);
+    lines.push('', '[주요 지수]');
+    response.sections.indices.data.slice(0, 4).forEach((item) => {
+      lines.push('• ' + item.label + ': ' + number(item.value) + ' (' + percent(item.changePercent) + ')');
+    });
   }
-  const leaders = response.sections.rankings.data.slice(0, 3)
-    .map((item) => `${item.name || item.symbol} ${percent(item.changePercent)}`)
-    .join(' · ');
-  if (leaders) lines.push(`거래대금/주요: ${leaders}`);
+  const leaders = response.sections.rankings.data.slice(0, 5);
+  if (leaders.length) {
+    lines.push('', '[시장 주목 종목 TOP 5 · 관찰용]');
+    leaders.forEach((item, index) => lines.push(
+      String(index + 1) + '. ' + (item.name || item.symbol) + ' (' + item.symbol + ') ' +
+      percent(item.changePercent) + ' · 매수 신호 아님',
+    ));
+  } else lines.push('', '[시장 주목 종목] N/A (확인된 순위 없음)');
+
   if (room.room === 'coins-futures' && response.sections.derivatives.data) {
     const derivatives = response.sections.derivatives.data;
     if (derivatives.longRatio != null || derivatives.shortRatio != null) {
-      lines.push(`선물 수급: LONG ${number(derivatives.longRatio)} · SHORT ${number(derivatives.shortRatio)} · L/S ${number(derivatives.longShortRatio)}`);
+      lines.push('', '[선물 수급]');
+      lines.push('LONG: ' + number(derivatives.longRatio));
+      lines.push('SHORT: ' + number(derivatives.shortRatio));
+      lines.push('LONG/SHORT 비율: ' + number(derivatives.longShortRatio));
     }
   }
-  const problemSections = Object.entries(response.sections)
-    .filter(([, section]) => ['error', 'unavailable', 'stale'].includes(section.status))
-    .map(([name, section]) => `${name}:${section.status}`);
-  if (problemSections.length) lines.push(`데이터 상태: ${problemSections.join(' · ')}`);
+  const delayed = Object.values(response.sections)
+    .filter((section) => ['error', 'unavailable', 'stale'].includes(section.status)).length;
+  if (delayed) lines.push('', '⚠️ ' + delayed + '개 데이터 항목 확인 지연');
   return lines;
 }
 
@@ -153,7 +215,10 @@ function themeLines(label: string, data: SectorPopularResult | null): string[] {
 function newsRows(rooms: readonly BriefRoom[]) {
   const seen = new Set<string>();
   return rooms
-    .flatMap((room) => room.response?.sections.news.data ?? [])
+    .flatMap((room) => [
+      ...(room.response?.sections.news.data ?? []),
+      ...(room.response?.sections.disclosures.data ?? []),
+    ])
     .filter((item) => {
       const url = normalizeTelegramHttpUrl(item.url);
       if (!url || seen.has(url)) return false;
@@ -164,13 +229,23 @@ function newsRows(rooms: readonly BriefRoom[]) {
     .slice(0, 6);
 }
 
+function warningLabel(warning: string): string {
+  if (warning.startsWith('stocks-kr:')) return '국내주식 데이터 일부 확인 지연';
+  if (warning.startsWith('stocks-us:')) return '해외주식 데이터 일부 확인 지연';
+  if (warning.startsWith('coins-spot:')) return '코인현물 데이터 일부 확인 지연';
+  if (warning.startsWith('coins-futures:')) return '코인선물 데이터 일부 확인 지연';
+  if (warning === 'KR_THEME_UNAVAILABLE') return '국내 테마 정보 확인 지연';
+  if (warning === 'US_THEME_UNAVAILABLE') return '해외 테마 정보 확인 지연';
+  return '일부 시장데이터 확인 필요';
+}
+
 function scopedWarnings(snapshot: TelegramMarketBriefSnapshot, destination: TelegramReportDestination): string[] {
-  if (destination === 'PERSONAL') return snapshot.warnings;
   const allowed = destinationRooms(destination);
   return snapshot.warnings.filter((warning) => {
     const room = ROOMS.find((candidate) => warning.startsWith(`${candidate}:`));
     if (room) return allowed.has(room);
-    if (destination === 'STOCK_ROOM') return warning === 'KR_THEME_UNAVAILABLE' || warning === 'US_THEME_UNAVAILABLE';
+    if (destination === 'KR_STOCK_ROOM') return warning === 'KR_THEME_UNAVAILABLE';
+    if (destination === 'US_STOCK_ROOM') return warning === 'US_THEME_UNAVAILABLE';
     return false;
   });
 }
@@ -189,28 +264,35 @@ export function buildTelegramMarketBriefInput(input: {
   const news = newsRows(rooms);
   const warnings = scopedWarnings(input.snapshot, input.destination);
   const lines = [
-    `${reportLabel(input.kind)} · ${input.localDate}`,
+    reportLabel(input.kind) + ' · ' + input.localDate,
     destinationLabel(input.destination),
+    '',
     ...rooms.flatMap(roomLines),
   ];
-
-  if (input.destination !== 'CRYPTO_ROOM') {
-    lines.push(
-      '',
-      '[오늘의 테마/주도주]',
-      ...themeLines('KR', input.snapshot.krThemes),
-      ...themeLines('US', input.snapshot.usThemes),
-    );
+  if (input.destination === 'KR_STOCK_ROOM') {
+    lines.push('', '[오늘의 테마/주도주]', ...themeLines('KR', input.snapshot.krThemes));
+  } else if (input.destination === 'US_STOCK_ROOM') {
+    lines.push('', '[오늘의 테마/주도주]', ...themeLines('US', input.snapshot.usThemes));
   }
-
+  if (input.kind === 'WEEKLY') {
+    lines.push('', '[주간 성과]', '1주 누적 수익률: N/A (검증된 기간별 시계열 미연결)');
+  }
+  if (stockDestination(input.destination) && (input.kind === 'MORNING' || input.kind === 'US_PREMARKET')) {
+    lines.push('', '[주요 경제 일정]', '검증된 발표 일정: N/A (경제 일정 데이터 미연결)');
+  }
+  const newsScope = stockDestination(input.destination) ? '주식' : '코인';
+  lines.push('', '[주요 뉴스·공시 · ' + newsScope + ']');
   if (news.length) {
-    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}]`);
-    news.forEach((item, index) => lines.push(`${index + 1}. ${item.provider} · ${item.symbol} · ${item.title}`));
-  } else {
-    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}] 검증된 최신 뉴스 N/A`);
-  }
-  if (warnings.length) lines.push('', `데이터 경고: ${warnings.slice(0, 6).join(' · ')}`);
-  lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
+    for (const [index, item] of news.slice(0, 5).entries()) {
+      const kind = item.kind === 'disclosure' ? '공시' : '뉴스';
+      lines.push(String(index + 1) + '. [' + kind + '] ' + item.provider + ' · ' + item.symbol);
+      lines.push(item.title);
+      const summary = typeof item.summary === 'string' ? item.summary.trim() : '';
+      if (summary) lines.push('기사 요약: ' + summary.slice(0, 180));
+    }
+  } else lines.push('검증된 최신 뉴스 N/A · 확인된 공시 N/A');
+  if (warnings.length) lines.push('', '⚠️ ' + [...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · '));
+  lines.push('', '※ 근거 없는 수익률·신호·목표가는 만들지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
   for (const [index, item] of news.slice(0, 3).entries()) {

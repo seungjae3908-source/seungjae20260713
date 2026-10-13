@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import {
   FuturesMarketDataError,
   getFuturesCandles,
+  getFuturesMarketFlow,
   getFuturesMarketSnapshot,
   getFuturesMarketStatus,
 } from '../services/futures-market-data.service';
@@ -152,6 +153,20 @@ router.get('/crypto/futures/scanner/directional', async (req: AuthenticatedReque
     lease?.release();
     req.removeListener('aborted', abort);
     res.removeListener('close', abort);
+  }
+});
+
+router.get('/crypto/futures/:symbol/flow', async (req, res) => {
+  try {
+    const data = await getFuturesMarketFlow(req.params.symbol);
+    return res.json({
+      ok: true,
+      publicDataOnly: true,
+      orderCapability: false,
+      data,
+    });
+  } catch (error) {
+    return sendError(res, error);
   }
 });
 

@@ -1,0 +1,375 @@
+name: Move Hunter Server Backtest V1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/move-hunter-server-backtest-v1.yml'
+      - 'ops/run-move-hunter-daily-target-fast-v1.mjs'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: move-hunter-server-backtest-v1
+  cancel-in-progress: true
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate fast runner and isolated server contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ops/run-move-hunter-daily-target-fast-v1.mjs
+          workflow='.github/workflows/move-hunter-server-backtest-v1.yml'
+          grep -Fq "startsWith(github.event.comment.body, '/run-move-hunter-server-backtest-v1 ')" "$workflow"
+          grep -Fq 'environment: staging' "$workflow"
+          grep -Fq '/opt/backtest-worker' "$workflow"
+          grep -Fq '/var/lib/backtest-worker' "$workflow"
+          grep -Fq 'MOVE_HUNTER_CACHE_DIR' "$workflow"
+          grep -Fq 'executionAuthority' ops/run-move-hunter-daily-target-fast-v1.mjs
+          grep -Fq "profitabilityClaimAllowed: false" ops/run-move-hunter-daily-target-fast-v1.mjs
+          WORKFLOW_PATH="$workflow" node <<'NODE'
+          const fs = require('node:fs');
+          const source = fs.readFileSync(process.env.WORKFLOW_PATH, 'utf8');
+          const forbidden = [
+            ['pm2', 'restart'].join(' '),
+            ['pm2', 'stop'].join(' '),
+            ['pm2', 'delete'].join(' '),
+            ['p', 'sql'].join(''),
+            ['LIVE_TRADING', 'true'].join('='),
+            ['AUTO_TRADING', 'true'].join('='),
+            ['REAL_ORDER_ENABLED', 'true'].join('='),
+            ['PRIVATE_TRADING_API_ALLOWED', 'true'].join('='),
+          ];
+          for (const token of forbidden) {
+            if (source.includes(token)) throw new Error('FORBIDDEN_SERVER_BACKTEST_AUTHORITY:' + token);
+          }
+          NODE
+
+  run-server-backtest:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-move-hunter-server-backtest-v1 ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      ARTIFACT_DIR: ${{ github.workspace }}/move-hunter-server-backtest-artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          read -r command main_sha research_sha extra <<< "$COMMENT_BODY"
+          [[ "$command" == '/run-move-hunter-server-backtest-v1' ]]
+          [[ "$main_sha" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$research_sha" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ -z "$extra" ]]
+          printf 'main_sha=%s\n' "${main_sha,,}" >> "$GITHUB_OUTPUT"
+          printf 'research_sha=%s\n' "${research_sha,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Require exact current main and exact research commit
+        shell: bash
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --depth=1 origin main
+          current_main="$(git rev-parse FETCH_HEAD^{commit})"
+          [[ "$current_main" == "$MAIN_SHA" ]] || {
+            echo "CURRENT_MAIN_MOVED expected=$MAIN_SHA actual=$current_main" >&2
+            exit 1
+          }
+          git fetch --no-tags --depth=1 origin "$RESEARCH_SHA"
+          resolved="$(git rev-parse FETCH_HEAD^{commit})"
+          [[ "$resolved" == "$RESEARCH_SHA" ]]
+          git show "$RESEARCH_SHA:research-lab/move-hunter-v1/src/one-year-benchmark.mjs" >/dev/null
+          git show "$RESEARCH_SHA:research-lab/move-hunter-v1/test/engine.test.mjs" >/dev/null
+
+      - name: Configure pinned shared-server SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$STAGING_SSH_HOST"
+          test -n "$STAGING_SSH_USER"
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh "$ARTIFACT_DIR"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Copy fast runner to isolated server temp
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT"             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes             ops/run-move-hunter-daily-target-fast-v1.mjs             "$STAGING_SSH_USER@$STAGING_SSH_HOST:/tmp/move-hunter-daily-target-fast-v1-${{ github.run_id }}.mjs"
+
+      - name: Run one-year four-market fast audit on server
+        id: remote
+        shell: bash
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'MAIN_SHA=%q RESEARCH_SHA=%q RUN_ID=%q bash -s' "$MAIN_SHA" "$RESEARCH_SHA" "$RUN_ID")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT"             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes             "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_env" <<'REMOTE'
+          set -Eeuo pipefail
+          export LC_ALL=C
+
+          [[ "$MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RESEARCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+
+          uid="$(id -u)"
+          gid="$(id -g)"
+          privileged() {
+            if [[ "$uid" == 0 ]]; then
+              "$@"
+            else
+              sudo -n "$@"
+            fi
+          }
+          if [[ "$uid" != 0 ]]; then
+            sudo -n true
+          fi
+
+          work="/opt/backtest-worker/github-runs/$RESEARCH_SHA"
+          source_dir="$work/source"
+          result_dir="/var/lib/backtest-worker/results/server-fast-$RESEARCH_SHA"
+          cache_dir="/var/lib/backtest-worker/cache/move-hunter-v1"
+          log_dir="/var/log/backtest-worker"
+          log_file="$log_dir/move-hunter-server-fast-$RESEARCH_SHA.log"
+          runner_tmp="/tmp/move-hunter-daily-target-fast-v1-$RUN_ID.mjs"
+
+          privileged install -d -m 0755 -o "$uid" -g "$gid"             "$work" "$result_dir" "$cache_dir" "$log_dir"
+
+          marker="/opt/stock-app/.deploy/current-sha"
+          live_before=''
+          if [[ -r "$marker" ]]; then live_before="$(tr -d '[:space:]' < "$marker")"; fi
+
+          if [[ ! -f "$source_dir/research-lab/move-hunter-v1/src/one-year-benchmark.mjs" ]]; then
+            temp_source="$work/source.tmp-$RUN_ID"
+            archive="$work/source-$RESEARCH_SHA.tar.gz"
+            rm -rf "$temp_source"
+            mkdir -p "$temp_source"
+            curl -fL --connect-timeout 10 --max-time 240 --retry 3 --retry-delay 2               "https://github.com/seungjae3908-source/seungjae20260713/archive/$RESEARCH_SHA.tar.gz"               -o "$archive"
+            tar -xzf "$archive" -C "$temp_source" --strip-components=1
+            test -f "$temp_source/research-lab/move-hunter-v1/src/one-year-benchmark.mjs"
+            rm -rf "$source_dir"
+            mv "$temp_source" "$source_dir"
+          fi
+
+          test -f "$runner_tmp"
+          install -m 0644 "$runner_tmp"             "$source_dir/research-lab/move-hunter-v1/scripts/run-daily-target-fast-v1.mjs"
+
+          {
+            echo "=== MOVE HUNTER SERVER FAST AUDIT ==="
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "research_sha=$RESEARCH_SHA"
+            echo "node=$(node -v)"
+            echo "cpu=$(nproc)"
+            echo "=== ENGINE CONTRACT TEST ==="
+            node --test "$source_dir/research-lab/move-hunter-v1/test/engine.test.mjs"
+            echo "=== FAST FOUR-MARKET DAILY TARGET RUN ==="
+            cd "$source_dir"
+            MOVE_HUNTER_CACHE_DIR="$cache_dir"             MOVE_HUNTER_RESEARCH_SHA="$RESEARCH_SHA"               timeout 1800 node                 research-lab/move-hunter-v1/scripts/run-daily-target-fast-v1.mjs                 "$result_dir/result.json"                 "$result_dir/result.md"
+            (cd "$result_dir" && sha256sum result.json result.md > SHA256SUMS)
+            printf '%s\n' "$RESEARCH_SHA" > "$result_dir/research-sha.txt"
+            printf '%s\n' "$MAIN_SHA" > "$result_dir/orchestrator-main-sha.txt"
+            echo "finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } 2>&1 | tee "$log_file"
+
+          cp "$log_file" "$result_dir/run.log"
+
+          live_after=''
+          if [[ -r "$marker" ]]; then live_after="$(tr -d '[:space:]' < "$marker")"; fi
+          [[ "$live_before" == "$live_after" ]] || {
+            echo 'PRODUCTION_MARKER_CHANGED_DURING_ISOLATED_BACKTEST' >&2
+            exit 1
+          }
+
+          rm -f "$runner_tmp"
+          test -s "$result_dir/result.json"
+          test -s "$result_dir/result.md"
+          test -s "$result_dir/SHA256SUMS"
+          echo "SERVER_BACKTEST_RESULT_DIR=$result_dir"
+          echo 'SERVER_BACKTEST_COMPLETE'
+          REMOTE
+
+      - name: Fetch result evidence from server
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_dir="/var/lib/backtest-worker/results/server-fast-$RESEARCH_SHA"
+          scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT"             -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/result.json"             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/result.md"             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/SHA256SUMS"             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/research-sha.txt"             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/orchestrator-main-sha.txt"             "$STAGING_SSH_USER@$STAGING_SSH_HOST:$remote_dir/run.log"             "$ARTIFACT_DIR/"
+
+      - name: Verify fetched evidence and write compact summary
+        id: summary
+        shell: bash
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+        run: |
+          set -Eeuo pipefail
+          cd "$ARTIFACT_DIR"
+          sha256sum -c SHA256SUMS
+          test "$(tr -d '[:space:]' < research-sha.txt)" = "$RESEARCH_SHA"
+          test "$(tr -d '[:space:]' < orchestrator-main-sha.txt)" = "$MAIN_SHA"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync('result.json', 'utf8'));
+          if (!['BOUNDED_FOUR_MARKET_RESULT', 'PARTIAL_MARKET_RESULT'].includes(r.status)) process.exit(1);
+          if (r.evidenceBoundary?.executionAuthority !== 'NONE') process.exit(1);
+          if (r.evidenceBoundary?.profitabilityClaimAllowed !== false) process.exit(1);
+          if (r.evidenceBoundary?.realOrder !== false) process.exit(1);
+          const out = {
+            status: r.status,
+            researchSha: r.researchSha,
+            datasetCount: r.collection?.datasetCount ?? 0,
+            coverage: r.collection?.coverage ?? {},
+            cache: r.collection?.cache ?? [],
+            failures: r.collection?.failures ?? [],
+            markets: Object.fromEntries(Object.entries(r.markets ?? {}).map(([market, row]) => [market, {
+              totalReturn: row?.performance?.totalReturn ?? null,
+              trades: row?.performance?.tradeCount ?? 0,
+              pf: row?.performance?.profitFactor ?? null,
+              maxMdd: row?.performance?.conservativeLaneMaxMdd ?? null,
+              hit3: row?.daily?.hit3PctDays ?? 0,
+              hit5: row?.daily?.hit5PctDays ?? 0,
+              hit10: row?.daily?.hit10PctDays ?? 0,
+              negativeDays: row?.daily?.negativeDays ?? 0,
+            }])),
+            combined: r.combined?.daily ? {
+              totalReturn: r.combined?.performance?.totalReturn ?? null,
+              realizedWindowTotalReturn: r.combined.daily.realizedWindowTotalReturn ?? null,
+              tradingDays: r.combined.daily.tradingDays ?? 0,
+              hit3: r.combined.daily.hit3PctDays ?? 0,
+              hit5: r.combined.daily.hit5PctDays ?? 0,
+              hit10: r.combined.daily.hit10PctDays ?? 0,
+              negativeDays: r.combined.daily.negativeDays ?? 0,
+              bestDay: r.combined.daily.bestDay ?? null,
+              worstDay: r.combined.daily.worstDay ?? null,
+            } : null,
+          };
+          fs.writeFileSync('summary.json', JSON.stringify(out, null, 2) + '\n');
+          NODE
+
+      - name: Upload server-computed evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: move-hunter-server-fast-${{ steps.command.outputs.research_sha }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report compact result to Release Control
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          REMOTE_OUTCOME: ${{ steps.remote.outcome }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const summaryPath = path.join(process.env.ARTIFACT_DIR, 'summary.json');
+            let summary = null;
+            try { summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')); } catch {}
+            const pct = (value) => Number.isFinite(value) ? (value * 100).toFixed(2) + '%' : '-';
+            const lines = [
+              process.env.REMOTE_OUTCOME === 'success'
+                ? '[MOVE_HUNTER_SERVER_FAST] server-computed audit completed.'
+                : '[MOVE_HUNTER_SERVER_FAST] server-computed audit failed closed.',
+              '',
+              '- Orchestrator current-main SHA: `' + process.env.MAIN_SHA + '`',
+              '- Research SHA: `' + process.env.RESEARCH_SHA + '`',
+              '- Compute location: isolated shared server `/opt/backtest-worker`',
+              '- Production application deploy/mutation: `false`',
+              '- PM2 restart/stop: `0`',
+              '- Database changes: `0`',
+              '- Real orders/private trading: `0` / `false`',
+              '- Replit: `not used`',
+              '- Run ID: `' + context.runId + '`',
+            ];
+            if (summary) {
+              lines.push(
+                '- Result status: `' + summary.status + '`',
+                '- Dataset count: `' + summary.datasetCount + '`',
+              );
+              for (const [market, row] of Object.entries(summary.markets ?? {})) {
+                lines.push(
+                  '- ' + market + ': return=' + pct(row.totalReturn)
+                  + ', trades=' + row.trades
+                  + ', PF=' + (Number.isFinite(row.pf) ? row.pf.toFixed(3) : '-')
+                  + ', lane MDD=' + pct(row.maxMdd)
+                  + ', +3/+5/+10 days=' + row.hit3 + '/' + row.hit5 + '/' + row.hit10
+                  + ', negative days=' + row.negativeDays,
+                );
+              }
+              if (summary.combined) {
+                lines.push(
+                  '- COMBINED: modeled return=' + pct(summary.combined.totalReturn)
+                  + ', realized-window=' + pct(summary.combined.realizedWindowTotalReturn)
+                  + ', exit trading days=' + summary.combined.tradingDays
+                  + ', +3/+5/+10 days=' + summary.combined.hit3 + '/' + summary.combined.hit5 + '/' + summary.combined.hit10
+                  + ', negative days=' + summary.combined.negativeDays,
+                );
+              }
+              if ((summary.failures ?? []).length) {
+                lines.push('- Provider failures: `' + summary.failures.length + '` (see artifact)');
+              }
+            }
+            lines.push(
+              '',
+              '> Daily target counts are realized exit-day equity changes in KST, not intraday peak/MTM NAV and not OOS/Forward profitability proof.',
+            );
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: lines.join('\n'),
+            });
+            if (process.env.REMOTE_OUTCOME !== 'success') core.setFailed('SERVER_BACKTEST_FAILED');
+          

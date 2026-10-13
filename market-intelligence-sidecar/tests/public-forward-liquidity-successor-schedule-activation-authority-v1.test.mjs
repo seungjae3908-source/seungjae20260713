@@ -38,11 +38,11 @@ function evidenceInput(overrides = {}) {
     currentMainSha: MAIN_SHA,
     workflowCandidateHeadSha: CANDIDATE_SHA,
     workflowBlobSha: WORKFLOW_BLOB_SHA,
-    issueNumber: 23,
-    issueTitle: 'Staging Readiness Control',
+    issueNumber: 1555,
+    issueTitle: 'Staging Readiness Control — Rollover 2026-10-02',
     commentId: 5500000001,
     commentUrl:
-      'https://github.com/seungjae3908-source/seungjae20260713/issues/23#issuecomment-5500000001',
+      'https://github.com/seungjae3908-source/seungjae20260713/issues/1555#issuecomment-5500000001',
     commandCreatedAt: '2026-09-02T00:00:00Z',
     approvedBy: 'seungjae3908-source',
     authorAssociation: 'OWNER',
@@ -108,7 +108,7 @@ test('A04 malformed, appended, or policy-free authorize commands fail closed', (
   );
 });
 
-test('A05 #23 body registration is a mandatory precondition', () => {
+test('A05 archived #23 command registry remains a mandatory precondition', () => {
   const body = [SUCCESSOR_SCHEDULE_AUTHORITY_COMMANDS.authorize, SUCCESSOR_SCHEDULE_AUTHORITY_COMMANDS.revoke].join(
     '\n',
   );
@@ -211,6 +211,23 @@ test('A08 revocation evidence is append-only authority revocation semantics, not
   assert.equal(evidence.executionAuthority, 'NONE');
 });
 
+test('A08b old #23 approval comments cannot become current #1555 authority evidence', () => {
+  assert.throws(
+    () => buildSuccessorScheduleAuthorityEvidence(evidenceInput({
+      issueNumber: 23,
+      issueTitle: 'Staging Readiness Control',
+      commentUrl: 'https://github.com/seungjae3908-source/seungjae20260713/issues/23#issuecomment-5500000001',
+    })),
+    /SUCCESSOR_AUTHORITY_WRONG_RELEASE_CONTROL_ISSUE/,
+  );
+  assert.throws(
+    () => buildSuccessorScheduleAuthorityEvidence(evidenceInput({
+      commentUrl: 'https://github.com/seungjae3908-source/seungjae20260713/issues/23#issuecomment-5500000001',
+    })),
+    /SUCCESSOR_AUTHORITY_COMMENT_URL_INVALID/,
+  );
+});
+
 test('A09 authority workflow is issue-comment evidence only and tracks active Successor contract files', () => {
   const workflow = readFileSync(
     new URL('../../.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml', import.meta.url),
@@ -233,6 +250,11 @@ test('A09 authority workflow is issue-comment evidence only and tracks active Su
     /^\s*(?:pm2\s+(?:start|restart|reload)|systemctl\s+(?:enable|start|restart)|ssh\s+)/im,
   );
   assert.match(workflow, /SUCCESSOR_AUTHORIZE_COMMAND_NOT_REGISTERED_ON_RELEASE_CONTROL/);
+  assert.match(workflow, /issue_number: 1555/);
+  assert.match(workflow, /issue_number: 23/); // Read-only predecessor registry, not approval destination.
+  assert.match(workflow, /release-control-predecessor:23/);
+  assert.match(workflow, /issueNumber: 1555/);
+  assert.match(workflow, /issue_number: context.issue.number/);
   assert.match(workflow, /authorityStaleOnUnexpectedMainMoveBeforeMerge/);
   assert.match(workflow, /authorityConsumedByExactAuthorizedMerge/);
 });

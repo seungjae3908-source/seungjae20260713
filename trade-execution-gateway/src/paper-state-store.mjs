@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { directoryFsyncSupported, fsyncDirectoryAfterRename } from "./durable-file-sync.mjs";
 
 const SCHEMA_VERSION = 1;
 const MODE = "PAPER_ONLY";
@@ -197,12 +198,7 @@ export class FilePaperStateStore {
       await rename(tempPath, this.#filePath);
       renamed = true;
       await chmod(this.#filePath, 0o600);
-      const directoryHandle = await open(stateDir, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
+      await fsyncDirectoryAfterRename(stateDir);
     } finally {
       if (!renamed) {
         try { await unlink(tempPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
@@ -223,7 +219,8 @@ export class FilePaperStateStore {
       durableLocalFile: true,
       atomicRename: true,
       fileFsyncBeforeRename: true,
-      directoryFsyncAfterRename: true,
+      directoryFsyncAfterRename: directoryFsyncSupported(),
+      directoryFsyncRequiredWhenSupported: true,
       integrityChecksum: "SHA256",
       previousSnapshotBackup: true,
       productionDatabaseUsed: false,

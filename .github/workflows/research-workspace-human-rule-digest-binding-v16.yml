@@ -1,0 +1,371 @@
+name: Research Workspace Human Rule Digest Binding V16
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-human-rule-digest-binding-v16.yml'
+      - 'api-server/scripts/run-research-workspace-one-shot-bind-v16.ts'
+      - 'packages/external-research/src/research-workspace-one-shot-bind-v16.*'
+      - 'packages/external-research/src/research-workspace-one-shot-review-v15.*'
+      - 'scripts/agent_hub_rollover_v2.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-workspace-human-rule-digest-binding
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate Phase16 human binding contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          workflow=.github/workflows/research-workspace-human-rule-digest-binding-v16.yml
+          grep -Fq "/research-workspace-one-shot-bind-for-research " "$workflow"
+          grep -Fq "[RESEARCH_WORKSPACE_ONE_SHOT_EXECUTION_V14]" "$workflow"
+          grep -Fq "HUMAN_RULE_DIGEST_REVIEW" "$workflow"
+          grep -Fq "environment: production" "$workflow"
+          grep -Fq "human-rule-digest-decision-v16.json" packages/external-research/src/research-workspace-one-shot-bind-v16.js
+          grep -Fq "maxCanonicalEvaluationRuns:1" packages/external-research/src/research-workspace-one-shot-bind-v16.js
+          grep -Fq "providerCalls:0" packages/external-research/src/research-workspace-one-shot-bind-v16.js
+          grep -Fq "compilerRuns:0" packages/external-research/src/research-workspace-one-shot-bind-v16.js
+          grep -Fq "backtestRuns:0" packages/external-research/src/research-workspace-one-shot-bind-v16.js
+          ! grep -Eq '^\s*schedule:|^\s*workflow_dispatch:' "$workflow"
+          ! grep -Eq 'api\.groq\.com|generativelanguage\.googleapis|pm2 (restart|reload|save)|systemctl (start|restart|enable)' "$workflow"
+          node --test packages/external-research/test/research-workspace-one-shot-bind-v16.test.js
+
+  bind-reviewed-rule-digest:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/research-workspace-one-shot-bind-for-research ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Authorize exact human-reviewed digest binding
+        id: authorize
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/research-workspace-one-shot-bind-for-research ([0-9a-fA-F]{40}) ([0-9a-fA-F]{64}) ([0-9a-fA-F]{64}) ([0-9a-fA-F]{64})$/);
+            if (!match) {
+              core.setFailed('Expected /research-workspace-one-shot-bind-for-research <current-main-sha> <manifest-digest> <package-digest> <reviewed-rule-digest>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            const issueNumber = Number(context.payload.issue?.number ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || issueNumber !== canonicalHub) {
+              core.setFailed('Binding command must be posted on the canonical Central Hub.');
+              return;
+            }
+            const [targetSha,manifestDigest,packageDigest,reviewedRuleDigest] = match.slice(1).map(value => value.toLowerCase());
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha.toLowerCase();
+            if (targetSha !== main) {
+              core.setFailed('HUMAN_RULE_DIGEST_TARGET_NOT_EXACT_CURRENT_MAIN');
+              return;
+            }
+            const required = [
+              'application-ci/verified','browser-ui/verified','database-rls/verified',
+              'security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified',
+            ];
+            const combined = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha,
+            });
+            const latest = new Map();
+            for (const row of combined.data.statuses ?? []) if (!latest.has(row.context)) latest.set(row.context, row.state);
+            const missing = required.filter(name => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed('HUMAN_RULE_DIGEST_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const deploys = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml', per_page: 20,
+            });
+            if ((deploys.data.workflow_runs ?? []).some(run => ['queued','in_progress','waiting','pending'].includes(String(run.status)))) {
+              core.setFailed('HUMAN_RULE_DIGEST_BLOCKED_PRODUCTION_DEPLOY_ACTIVE');
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, per_page: 100,
+            });
+            const now = Date.now();
+            const execution = [...comments].reverse().find(comment => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
+              const lines = String(comment.body ?? '').trim().split(/\r?\n/).map(line => line.trim());
+              const ageMs = now - Date.parse(comment.created_at);
+              return ageMs >= 0 && ageMs <= 24 * 60 * 60_000
+                && lines[0] === '[RESEARCH_WORKSPACE_ONE_SHOT_EXECUTION_V14]'
+                && lines.includes('status: REVIEW_REQUIRED')
+                && lines.includes('target_sha: ' + targetSha)
+                && lines.includes('manifest_digest: ' + manifestDigest)
+                && lines.includes('package_digest: ' + packageDigest)
+                && lines.includes('reviewed_rule_digest_candidate: ' + reviewedRuleDigest)
+                && lines.includes('reason: HUMAN_RULE_DIGEST_REVIEW_REQUIRED')
+                && lines.includes('gemini_calls: 1')
+                && lines.includes('groq_calls: 1')
+                && lines.includes('required_next_step: HUMAN_RULE_DIGEST_REVIEW')
+                && lines.includes('automatic_compiler_run: false')
+                && lines.includes('automatic_backtest_run: false')
+                && lines.includes('automatic_adoption: false')
+                && lines.includes('execution_authority: NONE');
+            });
+            if (!execution) {
+              core.setFailed('HUMAN_RULE_DIGEST_MATCHING_PHASE14_RECEIPT_REQUIRED');
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('manifest_digest', manifestDigest);
+            core.setOutput('package_digest', packageDigest);
+            core.setOutput('reviewed_rule_digest', reviewedRuleDigest);
+            core.setOutput('binding_id', 'github-comment-' + String(context.payload.comment.id));
+            core.setOutput('reviewer_id', String(context.payload.comment.user.login));
+            core.setOutput('source_comment_id', String(context.payload.comment.id));
+            core.setOutput('execution_comment_id', String(execution.id));
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies for exact-main bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build exact-main human binding bundle
+        id: bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bundle="$RUNNER_TEMP/research-workspace-human-bind-v16.mjs"
+          pnpm --dir api-server exec esbuild scripts/run-research-workspace-one-shot-bind-v16.ts \
+            --bundle --platform=node --format=esm --target=node22 --outfile="$bundle"
+          node "$bundle" --help > "$RUNNER_TEMP/research-workspace-human-bind-v16-help.txt"
+          grep -Fq 'one canonical research evaluation only' "$RUNNER_TEMP/research-workspace-human-bind-v16-help.txt"
+          grep -Fq 'Provider calls, compiler runs and backtests remain zero' "$RUNNER_TEMP/research-workspace-human-bind-v16-help.txt"
+          digest="$(sha256sum "$bundle" | awk '{print $1}')"
+          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+          echo "bundle_path=$bundle" >> "$GITHUB_OUTPUT"
+          echo "bundle_sha256=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Configure canonical Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Bind exact reviewed rule digest once
+        id: bind
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          MANIFEST_DIGEST: ${{ steps.authorize.outputs.manifest_digest }}
+          PACKAGE_DIGEST: ${{ steps.authorize.outputs.package_digest }}
+          REVIEWED_RULE_DIGEST: ${{ steps.authorize.outputs.reviewed_rule_digest }}
+          BINDING_ID: ${{ steps.authorize.outputs.binding_id }}
+          REVIEWER_ID: ${{ steps.authorize.outputs.reviewer_id }}
+          BUNDLE_PATH: ${{ steps.bundle.outputs.bundle_path }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.bundle_sha256 }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/research-human-bind-v16-result.json"
+          remote_bundle="/tmp/research-human-bind-v16-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.mjs"
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$BUNDLE_PATH" "$SSH_USER@$SSH_HOST:$remote_bundle"
+
+          q_target="$(printf '%q' "$TARGET_SHA")"
+          q_manifest="$(printf '%q' "$MANIFEST_DIGEST")"
+          q_package="$(printf '%q' "$PACKAGE_DIGEST")"
+          q_reviewed="$(printf '%q' "$REVIEWED_RULE_DIGEST")"
+          q_binding="$(printf '%q' "$BINDING_ID")"
+          q_reviewer="$(printf '%q' "$REVIEWER_ID")"
+          q_bundle="$(printf '%q' "$remote_bundle")"
+          q_bundle_sha="$(printf '%q' "$BUNDLE_SHA256")"
+
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "TARGET_SHA=$q_target MANIFEST_DIGEST=$q_manifest PACKAGE_DIGEST=$q_package REVIEWED_RULE_DIGEST=$q_reviewed BINDING_ID=$q_binding REVIEWER_ID=$q_reviewer REMOTE_BUNDLE=$q_bundle BUNDLE_SHA256=$q_bundle_sha bash -s" \
+            > "$artifact" <<'REMOTE'
+          set -Eeuo pipefail
+          marker=/opt/stock-app/.deploy/current-sha
+          test -f "$marker"
+          test "$(tr -d '[:space:]' < "$marker")" = "$TARGET_SHA"
+          test -f "$REMOTE_BUNDLE"
+          chmod 600 "$REMOTE_BUNDLE"
+          test "$(sha256sum "$REMOTE_BUNDLE" | awk '{print $1}')" = "$BUNDLE_SHA256"
+          pm2_file="$(mktemp /tmp/research-human-bind-v16.XXXXXX.json)"
+          trap 'rm -f "$pm2_file" "$REMOTE_BUNDLE"' EXIT
+          pm2 jlist > "$pm2_file"
+
+          node - "$pm2_file" "$TARGET_SHA" "$REMOTE_BUNDLE" "$BINDING_ID" "$REVIEWER_ID" "$MANIFEST_DIGEST" "$PACKAGE_DIGEST" "$REVIEWED_RULE_DIGEST" <<'NODE'
+          const fs=require('node:fs');
+          const {spawnSync}=require('node:child_process');
+          const [pm2File,target,bundle,bindingId,reviewerId,manifestDigest,packageDigest,reviewedRuleDigest]=process.argv.slice(2);
+          const rows=JSON.parse(fs.readFileSync(pm2File,'utf8'));
+          const matches=rows.filter(row=>row?.name==='stock-app'&&row?.pm2_env);
+          const fail=code=>{process.stderr.write(JSON.stringify({status:'BLOCKED',reason:code})+'\n');process.exit(1);};
+          if(matches.length!==1)fail('HUMAN_RULE_DIGEST_PM2_AMBIGUOUS');
+          const row=matches[0],env=row.pm2_env;
+          if(env.status!=='online'||String(env.DEPLOY_SHA??'').toLowerCase()!==target)fail('HUMAN_RULE_DIGEST_PM2_IDENTITY_INVALID');
+          const authority=String(env.executionAuthority??env.EXECUTION_AUTHORITY??'NONE').trim().toUpperCase();
+          for(const name of ['LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED']){
+            const value=String(env[name]??'false').trim().toLowerCase();
+            if(!['true','false'].includes(value)||value==='true')fail('HUMAN_RULE_DIGEST_TRADING_AUTHORITY_ENABLED');
+          }
+          if(authority!=='NONE')fail('HUMAN_RULE_DIGEST_EXECUTION_AUTHORITY_ENABLED');
+          const root=String(env.RESEARCH_WORKSPACE_ONE_SHOT_ROOT??'').trim();
+          if(!root.startsWith('/')||root.includes('\n')||root.includes('\r'))fail('HUMAN_RULE_DIGEST_ROOT_INVALID');
+          const stat=fs.lstatSync(root),uid=fs.statSync('/proc/'+Number(row.pid)).uid;
+          if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==uid||(stat.mode&0o077)||fs.realpathSync(root)!==root)
+            fail('HUMAN_RULE_DIGEST_ROOT_UNSAFE');
+          const child=spawnSync(process.execPath,[bundle,
+            '--root',root,'--binding-id',bindingId,'--reviewer-id',reviewerId,
+            '--manifest-digest',manifestDigest,'--package-digest',packageDigest,'--reviewed-rule-digest',reviewedRuleDigest,
+          ],{encoding:'utf8',maxBuffer:1024*1024,env:{
+            PATH:process.env.PATH??'/usr/local/bin:/usr/bin:/bin',HOME:process.env.HOME??'/tmp',NODE_ENV:'production',
+            LIVE_TRADING:'false',AUTO_TRADING:'false',REAL_ORDER_ENABLED:'false',PRIVATE_TRADING_API_ALLOWED:'false',
+            ORDER_EXECUTION_ENABLED:'false',executionAuthority:'NONE',
+          }});
+          process.stdout.write(String(child.stdout??''));
+          process.stderr.write(String(child.stderr??''));
+          process.exitCode=Number.isInteger(child.status)?child.status:1;
+          NODE
+          REMOTE
+
+          test -s "$artifact"
+          node - "$artifact" "$MANIFEST_DIGEST" "$PACKAGE_DIGEST" "$REVIEWED_RULE_DIGEST" <<'NODE'
+          const fs=require('node:fs');
+          const [file,manifestDigest,packageDigest,reviewedRuleDigest]=process.argv.slice(2);
+          const lines=fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean);
+          let value=null;
+          for(const line of lines){try{const row=JSON.parse(line);if(row?.status)value=row;}catch{}}
+          if(value?.status!=='BOUND_FOR_RESEARCH_EVALUATION'
+            || value?.reviewedRuleDigest!==reviewedRuleDigest
+            || value?.allowedNextAction!=='CANONICAL_RESEARCH_EVALUATION_ONE_SHOT'
+            || value?.maxCanonicalEvaluationRuns!==1
+            || value?.providerCalls!==0||value?.compilerRuns!==0||value?.backtestRuns!==0
+            || value?.automaticAdoption!==false||value?.profitabilityProven!==false||value?.executionAuthority!=='NONE'
+            || value?.serverFilesWritten!==1
+            || !/^[a-f0-9]{64}$/.test(String(value?.decisionDigest??''))) process.exit(1);
+          const sanitized={schemaVersion:'research-human-rule-digest-binding-receipt-v16',status:value.status,
+            manifestDigest,packageDigest,reviewedRuleDigest,decisionDigest:value.decisionDigest,expiresAt:value.expiresAt,
+            allowedNextAction:value.allowedNextAction,maxCanonicalEvaluationRuns:value.maxCanonicalEvaluationRuns,
+            providerCalls:0,compilerRuns:0,backtestRuns:0,serverFilesWritten:1,automaticAdoption:false,
+            profitabilityProven:false,executionAuthority:'NONE'};
+          fs.writeFileSync(file,JSON.stringify(sanitized,null,2)+'\n');
+          NODE
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized binding receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-workspace-human-rule-digest-binding-${{ steps.authorize.outputs.target_sha }}
+          path: ${{ steps.bind.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized binding receipt to Central Hub
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.authorize.outputs.target_sha }}
+          SOURCE_COMMENT_ID: ${{ steps.authorize.outputs.source_comment_id }}
+          EXECUTION_COMMENT_ID: ${{ steps.authorize.outputs.execution_comment_id }}
+          ARTIFACT: ${{ steps.bind.outputs.artifact }}
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const fs=require('node:fs');
+            const value=JSON.parse(fs.readFileSync(process.env.ARTIFACT,'utf8'));
+            const body=[
+              '[RESEARCH_WORKSPACE_HUMAN_RULE_DIGEST_BINDING_V16]',
+              'status: '+value.status,
+              'target_sha: '+process.env.TARGET_SHA,
+              'manifest_digest: '+value.manifestDigest,
+              'package_digest: '+value.packageDigest,
+              'reviewed_rule_digest: '+value.reviewedRuleDigest,
+              'decision_digest: '+value.decisionDigest,
+              'expires_at: '+value.expiresAt,
+              'allowed_next_action: '+value.allowedNextAction,
+              'max_canonical_evaluation_runs: 1',
+              'provider_calls: 0',
+              'compiler_runs: 0',
+              'backtest_runs: 0',
+              'server_files_written: 1',
+              'automatic_adoption: false',
+              'profitability_proven: false',
+              'execution_authority: NONE',
+              'workflow_run: '+context.runId,
+              'phase14_comment_id: '+process.env.EXECUTION_COMMENT_ID,
+              'source_comment_id: '+process.env.SOURCE_COMMENT_ID,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,
+              issue_number:Number(process.env.HUB_ISSUE_NUMBER),body,
+            });
+
+      - name: Clean runner SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts

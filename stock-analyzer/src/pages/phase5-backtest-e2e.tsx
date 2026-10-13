@@ -45,6 +45,7 @@ function fixtureResult(values: BacktestFormValues): BacktestResult {
     ok: true,
     mode: 'backtest-only',
     orderSubmitted: false,
+    market: values.market,
     symbol: values.symbol,
     timeframe: values.timeframe,
     strategy: values.strategy,

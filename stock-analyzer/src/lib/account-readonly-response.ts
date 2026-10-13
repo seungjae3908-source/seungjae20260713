@@ -1,7 +1,7 @@
 export const INVALID_ACCOUNT_READONLY_RESPONSE = 'INVALID_ACCOUNT_READONLY_RESPONSE';
 
 const FUTURE_SKEW_MS = 60_000;
-const PROVIDERS = ['toss', 'upbit', 'bitget'] as const;
+const PROVIDERS = ['toss', 'kiwoom', 'upbit', 'bitget'] as const;
 const STATUSES = [
   'CONNECTED',
   'CONFIGURED_UNVERIFIED',
@@ -43,7 +43,7 @@ function isTimestamp(value: unknown, nowMs: number): boolean {
 }
 
 function providerFromPath(path: string): Provider | null {
-  const match = path.match(/\/accounts\/read-only\/(toss|upbit|bitget)\/?$/);
+  const match = path.match(/\/accounts\/read-only\/(toss|kiwoom|upbit|bitget)\/?$/);
   return match?.[1] as Provider | undefined ?? null;
 }
 

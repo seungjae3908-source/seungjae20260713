@@ -1,0 +1,268 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import { compiledMomentumFormula } from './research-bundle-formula-fixture.js';
+import { canonicalSerializeStrategyFormulaV1 } from '../src/autonomous-strategy-formula-generator-v1.js';
+import { runPaperForwardScheduleCli } from '../scripts/run-paper-forward-schedule.js';
+import {
+  FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
+  buildFormulaPaperStrategyRegistryV1,
+} from '../src/formula-auto-backtest-queue-v1.js';
+import {
+  FORMULA_PAPER_REGISTRY_READBACK_CONTRACT_V1,
+  readFormulaPaperRegistryReadbackV1,
+} from '../src/formula-paper-registry-readback-v1.js';
+
+const SHA = 'a'.repeat(40);
+
+async function fixture(registry) {
+  const root = await mkdtemp(join(tmpdir(), 'formula-paper-readback-'));
+  const latest = join(root, 'latest');
+  await mkdir(latest, { recursive: true, mode: 0o700 });
+  const registryPath = join(latest, 'formula-paper-strategy-registry.json');
+  await writeFile(registryPath, JSON.stringify(registry), { mode: 0o600 });
+  return { root, registryPath };
+}
+
+function emptyRegistry() {
+  return buildFormulaPaperStrategyRegistryV1([], { researchCodeSha: SHA });
+}
+
+function validOneRegistry() {
+  const { formula } = compiledMomentumFormula();
+  const selectedParameters = Object.fromEntries(formula.parameterSpace.map(p => [p.name, p.min]));
+  const parameterIdentity = createHash('sha256')
+    .update(canonicalSerializeStrategyFormulaV1({
+      formulaHash: formula.formulaHash,
+      selectedParameters,
+    }), 'utf8')
+    .digest('hex');
+  const generatedCandidate = {
+    generatedCandidateId: 'generated-paper-pass-v1',
+    formulaCandidateId: formula.candidateId,
+    formulaHash: formula.formulaHash,
+    parameterIdentity,
+    selectedParameters,
+    safety: { executionAuthority: 'NONE' },
+  };
+  const survivor = {
+    formulaCandidate: formula,
+    generatedCandidate,
+    formulaCandidateId: formula.candidateId,
+    generatedCandidateId: generatedCandidate.generatedCandidateId,
+    parameterIdentity: generatedCandidate.parameterIdentity,
+    strategyHash: formula.formulaHash,
+    strategyFamily: formula.strategyFamily,
+    market: formula.market,
+    timeframe: formula.timeframe,
+    direction: formula.direction,
+    researchSurvivor: true,
+    failure: null,
+    tradingAuthority: false,
+    safety: { executionAuthority: 'NONE' },
+  };
+  return buildFormulaPaperStrategyRegistryV1([{
+    state: 'PASS',
+    itemDigest: 'd'.repeat(64),
+    tournament: { candidates: [survivor] },
+    evaluatedAt: new Date().toISOString(),
+  }], { researchCodeSha: SHA });
+}
+
+function mustNotAdmit(readback) {
+  assert.equal(readback.contract, FORMULA_PAPER_REGISTRY_READBACK_CONTRACT_V1);
+  assert.equal(readback.executionAuthority, 'NONE');
+  assert.equal(readback.paperDispatchAllowed, false);
+  assert.equal(readback.realOrder, false);
+  assert.equal(readback.liveTrading, false);
+  assert.equal(readback.autoTrading, false);
+  assert.equal(readback.privateTradingApi, false);
+  assert.equal(readback.futureSignalVerified, false);
+  assert.equal(readback.canonicalPaperAdmissionVerified, false);
+  assert.equal(readback.fullCostReady, false);
+  assert.equal(readback.profitabilityProven, false);
+  assert.equal(readback.orderCount, 0);
+  assert.equal(JSON.stringify(readback).includes('formulaCandidate'), false);
+  assert.equal(JSON.stringify(readback).includes('/tmp/'), false);
+}
+
+test('absent and empty PASS registry report truth without inventing Paper readiness', async () => {
+  const absent = await readFormulaPaperRegistryReadbackV1({ researchCodeSha: SHA });
+  assert.equal(absent.status, 'MISSING');
+  assert.equal(absent.entryCount, null);
+  mustNotAdmit(absent);
+  const { root, registryPath } = await fixture(emptyRegistry());
+  try {
+    const empty = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+    assert.equal(empty.status, 'EMPTY');
+    assert.equal(empty.entryCount, 0);
+    mustNotAdmit(empty);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('real PASS registry is read-only and still awaits future signal + canonical Paper admission', async () => {
+  const registry = validOneRegistry();
+  assert.equal(registry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
+  assert.equal(registry.entryCount, 1);
+  const { root, registryPath } = await fixture(registry);
+  try {
+    const before = await readFile(registryPath, 'utf8');
+    const result = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+    const after = await readFile(registryPath, 'utf8');
+    assert.equal(result.status, 'WAITING_FUTURE_SIGNAL');
+    assert.equal(result.sourceShaExact, true);
+    assert.equal(result.entryCount, 1);
+    assert.equal(after, before);
+    mustNotAdmit(result);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid registry SHA, permission and forged candidate admission cannot become Paper signals', async () => {
+  const registry = validOneRegistry();
+  const { root, registryPath } = await fixture(registry);
+  try {
+    const wrong = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: 'b'.repeat(40) });
+    assert.equal(wrong.status, 'INVALID');
+    mustNotAdmit(wrong);
+    const broken = [
+      { ...registry, entries: [{ ...registry.entries[0], futureSignalRequired: false }] },
+      { ...registry, entries: [{ ...registry.entries[0], registryId: 'e'.repeat(64) }] },
+      { ...registry, realOrder: true },
+      { ...registry, entries: [...registry.entries, registry.entries[0]], entryCount: 2 },
+      { ...registry, executionAuthority: 'LIVE' },
+      { ...registry, acceptedSourceState: 'HOLD' },
+      { ...registry, rejectedSourceStates: ['RESERVE'] },
+      { ...registry, entries: [{ ...registry.entries[0], market: 'CRYPTO_SPOT', direction: 'SHORT' }] },
+      { ...registry, entries: [{ ...registry.entries[0], formulaCandidate: {
+        ...registry.entries[0].formulaCandidate, formulaHash: 'f'.repeat(64),
+      } }] },
+      { ...registry, entries: [{ ...registry.entries[0], generatedCandidate: {
+        ...registry.entries[0].generatedCandidate,
+        selectedParameters: { ...registry.entries[0].generatedCandidate.selectedParameters,
+          [Object.keys(registry.entries[0].generatedCandidate.selectedParameters)[0]]: 999999 },
+      } }] },
+    ];
+    for (const record of broken) {
+      await writeFile(registryPath, JSON.stringify(record), { mode: 0o600 });
+      const out = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+      assert.equal(out.status, 'INVALID');
+      assert.equal(out.entryCount, null);
+      mustNotAdmit(out);
+    }
+    await writeFile(registryPath, JSON.stringify(registry));
+    await chmod(registryPath, 0o644);
+    const worldReadable = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+    assert.equal(worldReadable.status, 'INVALID');
+    mustNotAdmit(worldReadable);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('symlink and malformed path are explicitly blocked without following private files', async () => {
+  const { root, registryPath } = await fixture(emptyRegistry());
+  try {
+    const dir = join(root, 'alias');
+    await mkdir(dir);
+    const symlinkPath = join(dir, 'formula-paper-strategy-registry.json');
+    await symlink(registryPath, symlinkPath);
+    const result = await readFormulaPaperRegistryReadbackV1({ registryPath: symlinkPath, researchCodeSha: SHA });
+    assert.equal(result.status, 'INVALID');
+    mustNotAdmit(result);
+    const relative = await readFormulaPaperRegistryReadbackV1({
+      registryPath: 'formula-paper-strategy-registry.json',
+      researchCodeSha: SHA,
+    });
+    assert.equal(relative.status, 'INVALID');
+    mustNotAdmit(relative);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('hardlink and symlinked parent are blocked before registry is reported as a valid PASS', async () => {
+  const { root, registryPath } = await fixture(validOneRegistry());
+  try {
+    const alias = join(root, 'alias');
+    await mkdir(alias, { mode: 0o700 });
+    const linkedPath = join(alias, 'formula-paper-strategy-registry.json');
+    await link(registryPath, linkedPath);
+    const hardlinked = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+    assert.equal(hardlinked.status, 'INVALID');
+    mustNotAdmit(hardlinked);
+    await import('node:fs/promises').then(({ unlink }) => unlink(linkedPath));
+    const symlinkedParent = join(root, 'aliased-latest');
+    await symlink(join(root, 'latest'), symlinkedParent, 'dir');
+    const parentPath = join(symlinkedParent, 'formula-paper-strategy-registry.json');
+    const parentResult = await readFormulaPaperRegistryReadbackV1({ registryPath: parentPath, researchCodeSha: SHA });
+    assert.equal(parentResult.status, 'INVALID');
+    mustNotAdmit(parentResult);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Paper scheduled CLI shows exact registry readiness but never injects historical PASS into admission', async () => {
+  const registry = validOneRegistry();
+  const { root, registryPath } = await fixture(registry);
+  const inputs = [];
+  const priorExitCode = process.exitCode;
+  try {
+    const output = await runPaperForwardScheduleCli({
+      PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
+      PAPER_FORWARD_INITIAL_CAPITAL_KRW: '1000000',
+      PAPER_FORWARD_RESEARCH_SHA: SHA,
+      PAPER_FORWARD_ROOT: join(root, 'paper'),
+      PAPER_FORWARD_ACTIVATION_AT_MS: '1',
+      PAPER_FORWARD_TRIGGER_SOURCE: 'cron',
+      PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH: registryPath,
+    }, {
+      runScheduledInvocation: async (input) => {
+        inputs.push(input);
+        return {
+          status: 'BLOCKED_DATA',
+          cycleId: null,
+          mutationCount: 0,
+          invocation: { naturalScheduleInvocation: false },
+          persistedStatus: { simulatedFinancialAdaptersEnabled: false },
+          summary: {},
+        };
+      },
+      alphaArchitectureReadinessBuilder: () => ({ status: 'BLOCKED_DATA' }),
+      alphaHandoffReader: async () => null,
+    });
+    assert.equal(inputs.length, 1);
+    assert.equal(Object.hasOwn(inputs[0], 'formulaPaperRegistryReadback'), false);
+    assert.equal(Object.hasOwn(inputs[0], 'formulaStrategyRegistry'), false);
+    assert.equal(output.paperPilotCapital.targetInitialCapitalKrw, 1_000_000);
+    assert.equal(output.paperPilotCapital.policyConfiguredExact, true);
+    assert.equal(output.paperPilotCapital.canonicalPaperWalletSeedVerified, false);
+    assert.equal(output.paperPilotCapital.settlementCurrencyConversionVerified, false);
+    assert.equal(output.formulaPaperRegistryReadback.status, 'WAITING_FUTURE_SIGNAL');
+    assert.equal(output.formulaPaperRegistryReadback.entryCount, 1);
+    mustNotAdmit(output.formulaPaperRegistryReadback);
+    assert.equal(output.privateRequestCount, 0);
+    assert.equal(output.financialMutationCount, 0);
+    assert.equal(output.orderCount, 0);
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy 500k Paper capital configuration is blocked before any Paper runtime call', async () => {
+  const previousExitCode = process.exitCode;
+  let executed = false;
+  try {
+    const result = await runPaperForwardScheduleCli({
+      PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
+      PAPER_FORWARD_INITIAL_CAPITAL_KRW: '500000',
+      PAPER_FORWARD_RESEARCH_SHA: SHA,
+    }, {
+      runScheduledInvocation: async () => { executed = true; throw new Error('unexpected Paper execution'); },
+    });
+    assert.equal(result, undefined);
+    assert.equal(executed, false);
+    assert.equal(process.exitCode, 72);
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+});

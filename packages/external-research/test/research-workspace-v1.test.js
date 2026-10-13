@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { AUTHORITY, REGISTRY_SCHEMA, backtestProjectionDigest, buildResearchWorkspace, snapshotSources, strategyDigest, selectWorkspaceStrategies } from '../src/research-workspace-v1.js';
+const time='2026-09-25T06:00:00.000Z', head='a'.repeat(40), hash='b'.repeat(64);
+const policy={now:'2026-09-25T06:05:00.000Z',expectedSourceHeadSha:head,maxAgeMs:3600000};
+function input(){return {runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,
+ records:[{videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST ONLY — not an observed video',publishedAt:'2026-09-24T00:00:00.000Z',discoveredAt:time,durationSec:300,transcriptStatus:'AVAILABLE',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'}],
+ safety:{researchOnly:true,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',paidProviderEnabled:false,scheduleActive:false,automaticDiscoveryEnabled:false,liveTrading:false,privateTradingApi:false,realOrderEnabled:false,credentialMutation:false,transcriptDownloadEnabled:false},
+ snapshotProvenance:{schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:head,observedAt:time,publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'}};}
+function entry(){return {strategyId:'fixture',version:'v1',sourceId:'youtube:TEST_ONLY_VIDEO',market:'CRYPTO_SPOT',timeframe:'5m',
+ contentProof:{sourceId:'youtube:TEST_ONLY_VIDEO',accessLevel:'AUTHORIZED_TRANSCRIPT',provider:'FIXTURE',model:'FIXTURE_ONLY',receiptId:'TEST_ONLY',inputDigest:hash,outputDigest:hash,authorized:true,paidFallback:false,completedAt:time},
+ segments:[{id:'segment1',sourceId:'youtube:TEST_ONLY_VIDEO',contentDigest:hash,startSec:10,endSec:20,excerpt:'Synthetic test statement, not a creator quote.'}],
+ rules:['ENTRY','EXIT','STOP_LOSS','POSITION_SIZING','EXECUTION_ASSUMPTION'].map((kind,i)=>({id:'r'+i,kind,text:'Synthetic test rule '+i,origin:i===4?'AI_ASSUMPTION':'SOURCE_RULE',segmentIds:i===4?[]:['segment1'],...(i===4?{rationale:'Test assumption — absent from supplied transcript.'}:{})})), run:null};}
+function bundle(e=entry(),evidence=input()){return {schemaVersion:REGISTRY_SCHEMA,sourceSnapshotDigest:snapshotSources(evidence,policy).snapshotDigest,generatedAt:policy.now,entries:[e]};}
+const view=(e=entry())=>buildResearchWorkspace({videoEvidence:input(),registry:bundle(e),policy});
+const bad=(mutate,reason)=>{const e=entry();mutate(e);const v=view(e);assert.equal(v.registryState,'INVALID');assert.equal(v.registryReason,reason);assert.deepEqual(v.strategies,[]);};
+function withRun(){const e=entry();e.run={schemaVersion:'research-linked-backtest-v1',strategyDigest:strategyDigest(e),strategyId:e.strategyId,version:e.version,market:e.market,timeframe:e.timeframe,runId:'FIXTURE_RUN',resultDigest:hash,datasetDigest:hash,codeSha:head,startAt:'2026-09-01T00:00:00.000Z',endAt:'2026-09-24T00:00:00.000Z',completedAt:time,tradeCount:1,netReturn:-.01,maxDrawdown:.02,costsIncluded:true,validationClass:'EXPLORATORY',executionAuthority:'NONE',actualOrders:0,canonicalSampleDelta:0};e.run.summaryDigest=backtestProjectionDigest(e.run);return e;}
+test('missing input does not become a measured zero',()=>{const v=buildResearchWorkspace({policy});assert.equal(v.sourceCount,null);assert.equal(v.sourceState,'MISSING');});
+test('actual empty source collection remains measured zero',()=>{const e=input();e.records=[];e.sourceCount=0;const v=buildResearchWorkspace({videoEvidence:e,policy});assert.equal(v.sourceCount,0);assert.equal(v.sourceState,'MEASURED');});
+test('trust policy may not be inferred from the supplied snapshot',()=>{const v=buildResearchWorkspace({videoEvidence:input(),policy:{}});assert.equal(v.sourceReason,'TRUST_POLICY_REQUIRED');});
+test('wrong SHA cannot be adopted by read model',()=>{const e=input();e.snapshotProvenance.sourceHeadSha='c'.repeat(40);assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SNAPSHOT_HEAD_MISMATCH');});
+test('stale snapshot remains stale, not zero or running',()=>{const v=buildResearchWorkspace({videoEvidence:input(),policy:{...policy,now:'2026-09-26T06:00:00.000Z'}});assert.equal(v.sourceState,'STALE');assert.equal(v.sourceCount,null);assert.equal(v.workerState,'UNVERIFIED');});
+test('future snapshot fails closed',()=>{const e=input();e.snapshotProvenance.observedAt='2027-01-01T00:00:00.000Z';assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SNAPSHOT_TIME_INVALID');});
+test('metadata and captions availability are not an analysis receipt',()=>{const v=buildResearchWorkspace({videoEvidence:input(),policy});assert.equal(v.sources[0].accessLevel,'METADATA_ONLY');assert.equal(v.strategies.length,0);assert.equal(v.registryState,'MISSING');});
+test('ambiguous record dates rejected on consumer seam',()=>{const e=input();e.records[0].publishedAt='09/24/2026';assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SOURCE_TIMESTAMP_INVALID');});
+test('future discoveredAt rejected',()=>{const e=input();e.records[0].discoveredAt='2027-01-01T00:00:00.000Z';assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SOURCE_TIMESTAMP_INVALID');});
+test('unsafe source URL cannot reach view',()=>{const e=input();e.records[0].canonicalUrl='javascript:alert(1)';assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SOURCE_URL_INVALID');});
+test('duplicate source IDs are not extra samples',()=>{const e=input();e.records.push({...e.records[0]});e.sourceCount=2;assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'DUPLICATE_SOURCE');});
+test('sensitive text fails before rendering',()=>{const e=input();e.records[0].title='api_key=do-not-echo-this-secret';const v=buildResearchWorkspace({videoEvidence:e,policy});assert.equal(v.sourceReason,'SENSITIVE_INPUT');assert.ok(!JSON.stringify(v).includes('do-not-echo'));});
+test('source-declared trading authority rejected',()=>{const e=input();e.safety.executionAuthority='LIVE';assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SOURCE_AUTHORITY_INVALID');});
+test('live schedule may not masquerade as bounded inactive evidence',()=>{const e=input();e.safety.scheduleActive=true;assert.equal(buildResearchWorkspace({videoEvidence:e,policy}).sourceReason,'SNAPSHOT_SAFETY_INVALID');});
+test('source snapshot mismatch does not drop source metadata',()=>{const r=bundle();r.sourceSnapshotDigest='c'.repeat(64);const v=buildResearchWorkspace({videoEvidence:input(),registry:r,policy});assert.equal(v.sourceCount,1);assert.equal(v.registryReason,'REGISTRY_SOURCE_MISMATCH');assert.deepEqual(v.strategies,[]);});
+test('orphan strategy source rejected',()=>{const e=entry();e.sourceId='youtube:OTHER';assert.equal(view(e).registryReason,'REGISTRY_ORPHAN_SOURCE');});
+test('different content source rejected',()=>bad(e=>e.contentProof.sourceId='youtube:OTHER','CONTENT_IDENTITY_MISMATCH'));
+test('unapproved transcript rejected',()=>bad(e=>e.contentProof.authorized=false,'CONTENT_ACCESS_INVALID'));
+test('paid fallback rejected',()=>bad(e=>e.contentProof.paidFallback=true,'CONTENT_ACCESS_INVALID'));
+test('content request identity required',()=>bad(e=>e.contentProof.receiptId=null,'CONTENT_RECEIPT_REQUIRED'));
+test('metadata proof cannot be used for extracted trading rules',()=>bad(e=>e.contentProof.accessLevel='METADATA_ONLY','CONTENT_PROOF_REQUIRED'));
+test('future AI completion rejected',()=>bad(e=>e.contentProof.completedAt='2027-01-01T00:00:00.000Z','CONTENT_ACCESS_INVALID'));
+test('segment cannot cite another video',()=>bad(e=>e.segments[0].sourceId='youtube:OTHER','SEGMENT_IDENTITY_INVALID'));
+test('segment must bind content digest',()=>bad(e=>e.segments[0].contentDigest='d'.repeat(64),'SEGMENT_IDENTITY_INVALID'));
+test('segment beyond video duration rejected',()=>bad(e=>e.segments[0].endSec=301,'SEGMENT_RANGE_INVALID'));
+test('duplicate segment rejected',()=>bad(e=>e.segments.push({...e.segments[0]}),'DUPLICATE_SEGMENT'));
+test('source rule without exact supporting segment rejected',()=>bad(e=>e.rules[0].segmentIds=[],'RULE_SUPPORT_MISSING'));
+test('AI assumption is not silently relabeled source rule',()=>{const v=view();assert.equal(v.strategies[0].assumptionCount,1);assert.equal(v.strategies[0].rules[4].origin,'AI_ASSUMPTION');assert.equal(v.strategies[0].rules[4].evidence.length,0);});
+test('AI assumption requires explanation',()=>bad(e=>delete e.rules[4].rationale,'ASSUMPTION_RATIONALE_REQUIRED'));
+test('missing exit blocks compiler handoff',()=>{const e=entry();e.rules=e.rules.filter(r=>r.kind!=='EXIT');const v=view(e);assert.equal(v.strategies[0].state,'RULES_INCOMPLETE');assert.deepEqual(v.strategies[0].missingRules,['EXIT']);});
+test('all rules means review required, never compiled or profitable',()=>{const s=view().strategies[0];assert.equal(s.state,'COMPILER_REVIEW_REQUIRED');assert.equal(s.actions.scannerApply,false);assert.equal(s.actions.paperApply,false);assert.equal(s.actions.liveApply,false);});
+test('changed assumptions change identity',()=>{const a=entry(),b=entry();b.rules[4].text='Different cost assumption';assert.notEqual(strategyDigest(a),strategyDigest(b));});
+test('stored negative backtest survives projection, never turns into target success',()=>{const s=view(withRun()).strategies[0];assert.equal(s.run.netReturn,-.01);assert.equal(s.run.dailyReturn,null);assert.equal(s.run.dayTargetStatus,'NOT_EVALUATED');assert.equal(s.run.independentlyVerified,false);});
+for(const [key,value] of [['market','US_STOCK'],['version','v2'],['timeframe','1h'],['strategyDigest','c'.repeat(64)]]) test(`backtest ${key} mismatch rejected`,()=>{const e=withRun();e.run[key]=value;assert.equal(view(e).registryReason,'RUN_STRATEGY_MISMATCH');});
+test('missing costs cannot appear as net backtest',()=>{const e=withRun();e.run.costsIncluded=false;assert.equal(view(e).registryReason,'RUN_METRICS_INVALID');});
+test('zero trades with profit cannot be a stored valid result',()=>{const e=withRun();e.run.tradeCount=0;assert.equal(view(e).registryReason,'EMPTY_RUN_METRICS_INVALID');});
+test('claimed validation phase is not independent evidence authority',()=>{const e=withRun();e.run.validationClass='VALIDATION';e.run.summaryDigest=backtestProjectionDigest(e.run);const v=view(e);assert.equal(v.strategies[0].run.reportedValidationClass,'VALIDATION');assert.equal(v.strategies[0].run.independentlyVerified,false);assert.deepEqual(v.authority,AUTHORITY);});
+test('multiple markets retain source count and separate strategies',()=>{const a=entry(),b=entry();b.strategyId='stock-fixture';b.market='US_STOCK';const r=bundle(a);r.entries.push(b);const v=buildResearchWorkspace({videoEvidence:input(),registry:r,policy});assert.equal(v.sourceCount,1);assert.equal(selectWorkspaceStrategies(v,'STOCK').length,1);assert.equal(selectWorkspaceStrategies(v,'CRYPTO','CRYPTO_SPOT').length,1);assert.equal(selectWorkspaceStrategies(v,'CRYPTO','CRYPTO_FUTURES').length,0);});
+test('same strategy version under different markets is a conflict',()=>{const r=bundle();r.entries.push({...entry(),market:'US_STOCK'});assert.equal(buildResearchWorkspace({videoEvidence:input(),registry:r,policy}).registryReason,'DUPLICATE_STRATEGY_VERSION');});
+test('invalid filter cannot broaden query silently',()=>assert.throws(()=>selectWorkspaceStrategies(view(),'LIVE'),/FILTER_INVALID/));
+test('deterministic projection and immutable input',()=>{const e=input(),r=bundle(),before=JSON.stringify({e,r});assert.deepEqual(buildResearchWorkspace({videoEvidence:e,registry:r,policy}),buildResearchWorkspace({videoEvidence:e,registry:r,policy}));assert.equal(JSON.stringify({e,r}),before);});
+export { input, entry, bundle, policy, withRun };
+
+test('changed numerical summary cannot keep an old digest',()=>{const e=withRun();e.run.netReturn=.50;assert.equal(view(e).registryReason,'RUN_SUMMARY_DIGEST_MISMATCH');});

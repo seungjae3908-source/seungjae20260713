@@ -25,6 +25,9 @@ function canonical(overrides: Record<string, unknown> = {}) {
       connected: false,
       status: 'DISCONNECTED',
       connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
     },
     preferences: {
       ORDER_SUBMITTED: true,
@@ -80,6 +83,13 @@ function canonical(overrides: Record<string, unknown> = {}) {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: false,
+      personalWorkerEnabled: false,
+      personalWorkerStarted: false,
+      personalWorkerHealthy: false,
+      personalWorkerErrorCode: null,
+      personalWorkerLastTickAt: null,
+      personalWorkerLastConfirmedDeliveryAt: null,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -161,8 +171,29 @@ test('requires Telegram connection state and timestamp to agree', () => {
     telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-09-10T00:00:06.000Z' },
   }));
   expect(requireUserIntegrationsResponse(canonical({
-    telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-09-10T00:00:00.000Z' },
+    telegram: {
+      connected: true,
+      status: 'ACTIVE',
+      connectedAt: '2026-09-10T00:00:00.000Z',
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
   }), USER_ID, NOW)).toBeTruthy();
+});
+
+test('accepts only explicit fail-closed Telegram recovery state', () => {
+  const recovery = {
+    connected: false,
+    status: 'RECOVERY_REQUIRED',
+    connectedAt: '2026-09-09T23:00:00.000Z',
+    recoveryRequired: true,
+    recoveryErrorCode: 'TELEGRAM_HTTP_403',
+    recoveryFailedAt: '2026-09-09T23:30:00.000Z',
+  };
+  expect(requireUserIntegrationsResponse(canonical({ telegram: recovery }), USER_ID, NOW)).toBeTruthy();
+  rejects(canonical({ telegram: { ...recovery, recoveryErrorCode: null } }));
+  rejects(canonical({ telegram: { ...recovery, connected: true } }));
 });
 
 test('rejects cross-user alert-policy identity and malformed policy evidence', () => {
@@ -177,7 +208,7 @@ test('rejects cross-user alert-policy identity and malformed policy evidence', (
   }));
 });
 
-test('binds canonical broker evidence to the authenticated user', () => {
+test('binds canonical broker evidence to the authenticated user across all four providers', () => {
   const connection = {
     userId: USER_ID,
     exchange: 'upbit',
@@ -188,8 +219,10 @@ test('binds canonical broker evidence to the authenticated user', () => {
     updatedAt: '2026-09-10T00:00:00.000Z',
     credentialsExposed: false,
   };
-  expect(requireUserIntegrationsResponse(canonical({ brokerConnections: [connection] }), USER_ID, NOW))
-    .toBeTruthy();
+  for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+    expect(requireUserIntegrationsResponse(canonical({ brokerConnections: [{ ...connection, exchange }] }), USER_ID, NOW))
+      .toBeTruthy();
+  }
   rejects(canonical({ brokerConnections: [{ ...connection, userId: 'user-b' }] }));
 });
 
@@ -245,4 +278,17 @@ test('rejects policy values outside the producer validity bounds', () => {
       deliveryMode: 'BATCHED',
     },
   }));
+});
+
+
+test('frontend provider visibility matches the canonical four-provider response contract', async () => {
+  const fs = await import('node:fs/promises');
+  const [responseSource, panelSource] = await Promise.all([
+    fs.readFile(new URL('../src/lib/user-integrations-response.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../src/components/user-broker-telegram-panel.tsx', import.meta.url), 'utf8'),
+  ]);
+  for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+    expect(responseSource).toContain("'" + provider + "'");
+    expect(panelSource).toContain("'" + provider + "'");
+  }
 });

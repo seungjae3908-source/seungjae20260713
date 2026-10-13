@@ -34,10 +34,16 @@ export interface YahooIndexQuote {
 }
 
 // The stock Scanner has a four-second per-symbol budget. Keep each Yahoo
-// public chart attempt comfortably below that budget so a bounded retry can
-// still finish instead of being reported as an item timeout.
-const YAHOO_CHART_BUDGET_MS = 1_650;
+// public chart attempt below that budget, including the delayed hedge. The
+// deadline also terminates non-cooperative transports; abort alone is not enough.
+const YAHOO_CHART_BUDGET_MS = 2_800;
 const YAHOO_HEDGE_DELAY_MS = 180;
+
+export interface YahooChartRequestOptions {
+  signal?: AbortSignal;
+  purpose?: 'scanner';
+  exchange?: string | null;
+}
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -75,21 +81,24 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
   return String((entryOrTicker as any).name ?? fallback);
 }
 
-function yahooSymbol(ticker: string) {
+function yahooSymbol(ticker: string, options: YahooChartRequestOptions = {}) {
   const clean = cleanTicker(ticker);
 
   // Preserve an already-qualified Korean Yahoo symbol. Without this guard,
   // 005930.KS / 247540.KQ can be mistaken for a US class-share ticker and
   // rewritten to 005930-KS / 247540-KQ, which Yahoo correctly returns as 404.
   if (isQualifiedKrTicker(clean)) return clean;
-  if (isKrTicker(clean)) return `${clean}.KS`;
+  if (isKrTicker(clean)) {
+    const exchange = String(options.exchange ?? '').toUpperCase();
+    if (/KOSDAQ|코스닥/u.test(exchange)) return `${clean}.KQ`;
+    if (options.purpose === 'scanner' && !/^(?:KOSPI|코스피|유가증권)$/u.test(exchange)) {
+      throw new Error('YAHOO_PROVIDER_KR_EXCHANGE_MAPPING_UNAVAILABLE');
+    }
+    return `${clean}.KS`;
+  }
   if (/^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean)) return clean.replace(/\./gu, '-');
 
   return clean;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -118,20 +127,30 @@ async function validChart(url: string, signal: AbortSignal): Promise<YahooChartR
   return result as YahooChartResult;
 }
 
-async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResult> {
+async function hedgedYahooChart(urls: [string, string], signal?: AbortSignal): Promise<YahooChartResult> {
+  if (signal?.aborted) throw signal.reason ?? new Error('YAHOO_CHART_ABORTED');
   const controllers = [new AbortController(), new AbortController()];
-  const timer = setTimeout(() => {
-    controllers[0].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
-    controllers[1].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
-  }, YAHOO_CHART_BUDGET_MS);
+  let finished = false;
+  let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
+  let rejectDeadline: (reason: unknown) => void = () => {};
+  const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
+  const abort = (reason: unknown) => {
+    controllers.forEach(controller => controller.abort(reason));
+    rejectDeadline(reason);
+  };
+  const onAbort = () => abort(signal?.reason ?? new Error('YAHOO_CHART_ABORTED'));
+  signal?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED')), YAHOO_CHART_BUDGET_MS);
   const first = validChart(urls[0], controllers[0].signal);
-  const second = (async () => {
-    await sleep(YAHOO_HEDGE_DELAY_MS);
-    return validChart(urls[1], controllers[1].signal);
-  })();
+  const second = new Promise<YahooChartResult>((resolve, reject) => {
+    hedgeTimer = setTimeout(() => {
+      if (finished || signal?.aborted) return;
+      validChart(urls[1], controllers[1].signal).then(resolve, reject);
+    }, YAHOO_HEDGE_DELAY_MS);
+  });
 
   try {
-    return await Promise.any([first, second]);
+    return await Promise.race([Promise.any([first, second]), deadline]);
   } catch (error) {
     if (error instanceof AggregateError) {
       const details = error.errors.map((item) => item instanceof Error ? item.message : String(item)).join('|');
@@ -139,7 +158,10 @@ async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResul
     }
     throw error;
   } finally {
+    finished = true;
     clearTimeout(timer);
+    clearTimeout(hedgeTimer);
+    signal?.removeEventListener('abort', onAbort);
     controllers[0].abort();
     controllers[1].abort();
   }
@@ -148,6 +170,7 @@ async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResul
 async function fetchYahooChart(
   symbol: string,
   params?: { range: string; interval: string },
+  signal?: AbortSignal,
 ): Promise<YahooChartResult> {
   const encoded = encodeURIComponent(symbol);
 
@@ -168,7 +191,12 @@ async function fetchYahooChart(
       return await hedgedYahooChart([
         `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
         `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-      ]);
+      ], signal).then(result => {
+        if (result.meta?.symbol && cleanTicker(result.meta.symbol) !== cleanTicker(symbol)) {
+          throw new Error('YAHOO_PROVIDER_SYMBOL_MISMATCH');
+        }
+        return result;
+      });
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -285,10 +313,11 @@ export function aggregateYahooDerivedTimeframe(timeframe: string, rows: Candle[]
 
 export async function getQuote(
   entryOrTicker: CatalogEntry | string,
+  options: YahooChartRequestOptions = {},
 ): Promise<Partial<Quote>> {
   const ticker = getTickerFromEntry(entryOrTicker);
-  const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol);
+  const symbol = yahooSymbol(ticker, options);
+  const result = await fetchYahooChart(symbol, undefined, options.signal);
   const quote = result.indicators?.quote?.[0];
 
   if (!quote?.close?.length) {
@@ -386,16 +415,24 @@ export function yahooChartParams(tf?: string): { range: string; interval: string
 export async function getCandles(
   entryOrTicker: CatalogEntry | string,
   timeframe?: string,
+  options: YahooChartRequestOptions = {},
 ): Promise<Candle[]> {
   const ticker = getTickerFromEntry(entryOrTicker);
-  const symbol = yahooSymbol(ticker);
+  const symbol = yahooSymbol(ticker, options);
   const requestedTimeframe = String(timeframe ?? '1D');
   const sourceTimeframe = requestedTimeframe === '3m'
     ? '1m'
     : requestedTimeframe === '4H'
       ? '60m'
       : requestedTimeframe;
-  const result = await fetchYahooChart(symbol, yahooChartParams(sourceTimeframe));
+  const params = yahooChartParams(sourceTimeframe);
+  // Scanning current signals does not need ten years of daily or two years of
+  // hourly history per symbol. Long-history chart/research callers are unchanged.
+  if (options.purpose === 'scanner') {
+    if (sourceTimeframe === '1D') params.range = '1y';
+    if (sourceTimeframe === '60m' || sourceTimeframe === '1H') params.range = '6mo';
+  }
+  const result = await fetchYahooChart(symbol, params, options.signal);
   const rows = normalizeYahooCandles(result);
 
   return aggregateYahooDerivedTimeframe(requestedTimeframe, rows);

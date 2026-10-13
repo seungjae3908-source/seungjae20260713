@@ -104,7 +104,7 @@ export function PaperClosedLoopObserver({
   const triggerStage: ClosedLoopStage = journalBindingLoading && !journalBinding
     ? {
         key: 'trigger',
-        label: 'Trigger',
+        label: '청산 조건',
         value: '조회 중',
         detail: 'authenticated journal binding의 canonical Trigger evidence를 읽고 있습니다.',
         tone: 'progress',
@@ -112,7 +112,7 @@ export function PaperClosedLoopObserver({
     : journalBindingError
       ? {
           key: 'trigger',
-          label: 'Trigger',
+          label: '청산 조건',
           value: '미관측',
           detail: 'Trigger readback 조회에 실패했습니다. 실패를 완료로 바꾸지 않습니다.',
           tone: 'missing',
@@ -120,7 +120,7 @@ export function PaperClosedLoopObserver({
       : !candidateId
         ? {
             key: 'trigger',
-            label: 'Trigger',
+            label: '청산 조건',
             value: '미관측',
             detail: '현재 Research candidateId가 없어 Trigger evidence를 같은 후보에 바인딩하지 않습니다.',
             tone: 'missing',
@@ -128,7 +128,7 @@ export function PaperClosedLoopObserver({
         : triggerBoundJournalBindings.length > 0
           ? {
               key: 'trigger',
-              label: 'Trigger',
+              label: '청산 조건',
               value: `${triggerBoundJournalBindings.length.toLocaleString('ko-KR')}건 검증`,
               detail: `canonical settlement lineage · exitTriggerId ${triggerBoundJournalBindings.map((trade) => trade.exitTriggerId).join(' · ')}`,
               tone: 'ready',
@@ -136,7 +136,7 @@ export function PaperClosedLoopObserver({
           : exactJournalBindings.length > 0
             ? {
                 key: 'trigger',
-                label: 'Trigger',
+                label: '청산 조건',
                 value: '미관측',
                 detail: 'candidate binding은 VERIFIED지만 완전 검증된 settlement lineage의 exitTriggerId가 없습니다.',
                 tone: 'missing',
@@ -144,14 +144,14 @@ export function PaperClosedLoopObserver({
             : journalBinding?.source === 'AUTHENTICATED_PAPER_STATE'
               ? {
                   key: 'trigger',
-                  label: 'Trigger',
+                  label: '청산 조건',
                   value: '미관측',
                   detail: '현재 candidateId와 VERIFIED journal binding이 없어 Trigger를 연결하지 않습니다.',
                   tone: journalBinding.mismatchTradeCount > 0 ? 'blocked' : 'missing',
                 }
               : {
                   key: 'trigger',
-                  label: 'Trigger',
+                  label: '청산 조건',
                   value: '미관측',
                   detail: 'canonical Trigger readback이 아직 공개되지 않았습니다. Settlement 존재만으로 Trigger 완료를 추정하지 않습니다.',
                   tone: 'missing',
@@ -211,28 +211,28 @@ export function PaperClosedLoopObserver({
     candidateReady
       ? {
           key: 'candidate',
-          label: 'Candidate',
-          value: 'identity 확인',
+          label: '후보',
+          value: '후보 일치 확인',
           detail: `후보 ${performance?.candidateId ?? ''} · identity14 검증됨`,
           tone: 'ready',
         }
       : {
           key: 'candidate',
-          label: 'Candidate',
-          value: performance?.status ?? 'MISSING',
+          label: '후보',
+          value: performance?.status === 'PRESENT' ? '수집됨' : '미확인·차단',
           detail: '동일 후보 identity가 확정되지 않으면 뒤 단계 수치를 다른 후보와 합치지 않습니다.',
           tone: performance?.status === 'BLOCKED' || performance?.status === 'INVALID' ? 'blocked' : 'missing',
         },
     countStage(
       'entry',
-      'Entry',
+      '진입',
       performance?.Entry_N,
       '동일 후보의 진입 근거가 관측됐습니다.',
       '아직 동일 후보의 진입이 관측되지 않았습니다.',
     ),
     countStage(
       'position',
-      'Position',
+      '포지션',
       performance?.Position_N,
       '동일 후보의 Paper 포지션 근거가 관측됐습니다.',
       '진입 후 포지션 생성 근거를 기다립니다.',
@@ -240,7 +240,7 @@ export function PaperClosedLoopObserver({
     triggerStage,
     countStage(
       'settlement',
-      'Settlement',
+      '정산',
       performance?.Settlement_N,
       '동일 후보의 Settlement 수가 관측됐습니다.',
       '청산·정산 근거가 아직 없습니다.',
@@ -248,7 +248,7 @@ export function PaperClosedLoopObserver({
     journalBindingLoading && !journalBinding
       ? {
           key: 'cost',
-          label: '8 Cost',
+          label: '총비용 8항목',
           value: '조회 중',
           detail: '동일 candidate의 authenticated canonical Full Cost readback을 확인하고 있습니다.',
           tone: 'progress',
@@ -256,7 +256,7 @@ export function PaperClosedLoopObserver({
       : journalBindingError
         ? {
             key: 'cost',
-            label: '8 Cost',
+            label: '총비용 8항목',
             value: '미관측',
             detail: 'Full Cost readback 조회에 실패했습니다. 실패를 8/8 완료로 바꾸지 않습니다.',
             tone: 'missing',
@@ -264,7 +264,7 @@ export function PaperClosedLoopObserver({
         : !candidateId
           ? {
               key: 'cost',
-              label: '8 Cost',
+              label: '총비용 8항목',
               value: '미관측',
               detail: '현재 candidateId가 없어 비용 근거를 다른 후보에서 빌려오지 않습니다.',
               tone: 'missing',
@@ -272,21 +272,21 @@ export function PaperClosedLoopObserver({
           : canonicalFullCostReady
             ? {
                 key: 'cost',
-                label: '8 Cost',
+                label: '총비용 8항목',
                 value: `8/8 검증 · ${fullCostBoundJournalBindings.length.toLocaleString('ko-KR')}건`,
                 detail: `AUTHENTICATED_PAPER_STATE · settlement/Trigger/Execution/digest 일치 · fullCostEvidenceDigest ${fullCostBoundJournalBindings.map((trade) => trade.fullCostEvidenceDigest).join(' · ')}`,
                 tone: 'ready',
               }
             : {
                 key: 'cost',
-                label: '8 Cost',
+                label: '총비용 8항목',
                 value: `${measuredCostN}/8 진단`,
                 detail: `candidate별 canonical 8 Cost는 아직 검증되지 않았습니다. Research overview 진단: MODELED ${modeledCostN}개 · UNKNOWN/BLOCKED ${unknownCostN}개. MODELED/UNKNOWN을 실제 비용 0으로 승격하지 않습니다.`,
                 tone: exactJournalBindings.length > 0 || overviewFullCostReady || measuredCostN > 0 ? 'blocked' : 'missing',
               },
     {
       key: 'net-pnl',
-      label: 'Net PnL',
+      label: '비용 후 손익',
       value: canonicalNetPnlReady
         ? `${netPnlBoundJournalBindings.length.toLocaleString('ko-KR')}건 검증 · ${netPnlBoundJournalBindings.map((trade) => money(trade.canonicalNetPnl)).join(' · ')}`
         : money(performance?.Net_PnL),
@@ -308,80 +308,38 @@ export function PaperClosedLoopObserver({
   const firstZero = performance?.FIRST_ZERO ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING';
 
   return (
-    <section
-      className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
-      data-testid="paper-closed-loop-observer"
-      aria-label="Paper closed loop 관측"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Read-only observer</p>
-          <h3 className="mt-1 text-base font-black">Paper closed loop</h3>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            Candidate → Entry → Position → Trigger → Settlement → 8 Cost → Net PnL → 매매일지를 같은 후보 기준으로 봅니다.
-          </p>
-        </div>
-        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-700 dark:text-emerald-300">
-          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-          READ ONLY · executionAuthority=NONE
-        </span>
+    <section className="rounded-2xl border border-card-border bg-card p-3" data-testid="paper-closed-loop-observer" aria-label="모의매매 폐쇄루프">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-base font-bold">모의매매 폐쇄루프</h3>
+        <span className="text-xs text-muted-foreground">조회 전용 · 실주문 없음</span>
       </div>
-
-      <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-3" data-testid="paper-closed-loop-first-zero">
-        <p className="text-[10px] font-black text-primary">화면 기준 첫 미완료 단계</p>
-        <p className="mt-1 text-sm font-black">{firstIncomplete?.label ?? '관측 범위 완료'}</p>
-        <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">Canonical FIRST_ZERO · {firstZero}</p>
-        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
-          화면 단계는 선택적 journal readback까지 반영합니다. Canonical FIRST_ZERO는 Research overview 원본이며 이 UI가 임의로 변경하지 않습니다.
-        </p>
+      <div className="mt-3 rounded-xl bg-muted/40 p-3" data-testid="paper-closed-loop-first-zero">
+        <p className="text-xs text-muted-foreground">화면 기준 첫 미완료 단계</p>
+        <p className="mt-1 font-bold">{firstIncomplete?.label ?? '관측 범위 완료'}</p>
+        <details className="mt-2 text-xs text-muted-foreground">
+          <summary className="min-h-11 cursor-pointer py-3">원본 차단 사유</summary>
+          <p className="break-all">{firstZero}</p>
+        </details>
       </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {stages.map((stage, index) => (
-          <div key={stage.key} className="contents">
-            <article
-              className="min-w-0 rounded-xl border border-card-border bg-background p-3"
-              data-testid={`paper-closed-loop-${stage.key}`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <CircleDot className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  <p className="truncate text-xs font-black">{stage.label}</p>
-                </div>
-                <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${TONE[stage.tone]}`}>
-                  {stage.tone === 'ready' ? '확인' : stage.tone === 'progress' ? '대기' : stage.tone === 'blocked' ? '불충족' : '미관측'}
-                </span>
-              </div>
-              <p className="mt-3 break-words text-sm font-black tabular-nums">{stage.value}</p>
-              <p className="mt-2 break-keep text-[10px] leading-4 text-muted-foreground">{stage.detail}</p>
-            </article>
-            {index < stages.length - 1 ? <ArrowRight className="hidden" aria-hidden="true" /> : null}
-          </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {stages.map(stage => (
+          <article key={stage.key} className="min-w-0 rounded-xl border border-card-border p-3" data-testid={`paper-closed-loop-${stage.key}`}>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-bold">{stage.label}</p>
+              <span className={`rounded-full border px-2 py-0.5 text-xs ${TONE[stage.tone]}`}>{stage.tone === 'ready' ? '확인' : stage.tone === 'progress' ? '대기' : stage.tone === 'blocked' ? '불충족' : '미관측'}</span>
+            </div>
+            <p className="mt-2 break-words text-sm font-bold tabular-nums">{stage.value}</p>
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="min-h-11 cursor-pointer py-3">연결 근거</summary>
+              <p className="break-all">{stage.detail}</p>
+            </details>
+          </article>
         ))}
       </div>
-
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <a
-          href="/paper-trading"
-          className="flex min-h-11 items-center justify-between rounded-xl border border-card-border bg-background px-3 text-xs font-black"
-          data-testid="paper-closed-loop-paper-link"
-        >
-          <span className="flex items-center gap-2"><Link2 className="h-4 w-4 text-primary" />모의매매 상태 보기</span>
-          <ArrowRight className="h-4 w-4" aria-hidden="true" />
-        </a>
-        <a
-          href="/portfolio?tab=journal"
-          className="flex min-h-11 items-center justify-between rounded-xl border border-card-border bg-background px-3 text-xs font-black"
-          data-testid="paper-closed-loop-journal-link"
-        >
-          <span className="flex items-center gap-2"><BookOpenCheck className="h-4 w-4 text-primary" />통합 매매일지 보기</span>
-          <ArrowRight className="h-4 w-4" aria-hidden="true" />
-        </a>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <a href="/paper-trading" className="flex min-h-11 items-center justify-between rounded-xl border border-card-border px-3 text-sm font-bold" data-testid="paper-closed-loop-paper-link"><span className="flex items-center gap-2"><Link2 className="h-4 w-4" />모의매매 상태 보기</span><ArrowRight className="h-4 w-4" /></a>
+        <a href="/portfolio?tab=journal" className="flex min-h-11 items-center justify-between rounded-xl border border-card-border px-3 text-sm font-bold" data-testid="paper-closed-loop-journal-link"><span className="flex items-center gap-2"><BookOpenCheck className="h-4 w-4" />통합 매매일지 보기</span><ArrowRight className="h-4 w-4" /></a>
       </div>
-
-      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
-        이 화면은 read-only Research overview와 선택적 authenticated journal binding만 재구성합니다. 누락된 Trigger·journal binding을 임의로 완료 처리하지 않고, UNKNOWN 비용을 0으로 바꾸지 않습니다.
-      </p>
     </section>
   );
 }

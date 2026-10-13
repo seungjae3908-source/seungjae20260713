@@ -25,6 +25,7 @@ import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
+import { TradingAiReviewPanel } from '@/components/trading-ai-review-panel';
 import {
 	getRememberedPurchaseDate,
 	rememberPurchaseDate,
@@ -736,6 +737,11 @@ function isManualTicker(
 	);
 }
 
+function localDateValue(date: Date): string {
+	const offset = date.getTimezoneOffset() * 60_000;
+	return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
 function portfolioSectionFromLocation(location: string): 'holdings' | 'journal' {
 	const locationQuery = location.includes('?') ? location.split('?')[1] ?? '' : '';
 	const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
@@ -765,6 +771,15 @@ export default function PortfolioPage() {
 
 	const auth =
 		useAuth();
+	const aiReviewPeriod = useMemo(() => {
+		const end = new Date();
+		const start = new Date(end);
+		start.setDate(start.getDate() - 29);
+		return {
+			periodStart: localDateValue(start),
+			periodEnd: localDateValue(end),
+		};
+	}, []);
 	const assetMode = useAssetMode();
 
 	const [
@@ -1368,7 +1383,16 @@ export default function PortfolioPage() {
 
 			{portfolioSection === 'journal' ? (
 				<main className="flex-none px-4 pb-28 pt-4" data-testid="portfolio-journal">
-					<UnifiedTradeJournalPanel />
+					<div className="space-y-4">
+						<UnifiedTradeJournalPanel />
+						{auth.user && auth.can('canAccessAiTradingReview') ? (
+							<TradingAiReviewPanel
+								userId={auth.user.id}
+								periodStart={aiReviewPeriod.periodStart}
+								periodEnd={aiReviewPeriod.periodEnd}
+							/>
+						) : null}
+					</div>
 				</main>
 			) : assetMode.asset === 'coin' ? (
 				<main className="min-w-0 px-4 pb-28 pt-4" data-testid="portfolio-coin-readonly">

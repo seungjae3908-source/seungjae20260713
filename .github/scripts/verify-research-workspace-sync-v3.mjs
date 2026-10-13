@@ -1,0 +1,899 @@
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_SOURCE_SHA, verifyPinnedScannerScope, createScannerBlobReader } from './scanner-readonly-repair-scope.mjs';
+import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
+import {
+ AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+ AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
+} from './paper-forward-reviewed-paths.mjs';
+import { ONE_PASS_BASE_MAIN, ONE_PASS_SOURCE_ANCESTOR, ONE_PASS_NATIVE_PINS, ONE_PASS_RESEARCH_PINS, ONE_PASS_PROTECTED_MAIN_PINS, ONE_PASS_SUPPORT_PATHS } from '../../research-production/src/research-one-pass-source-pins-v1.mjs';
+const MAIN=process.env.EXPECTED_BASE_SHA;
+const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
+const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
+if(!/^[0-9a-f]{40}$/i.test(MAIN??''))throw new Error('EXPECTED_BASE_SHA_REQUIRED');
+const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
+const isAncestor=(ancestor,descendant)=>{try{git('merge-base','--is-ancestor',ancestor,descendant);return true}catch{return false}};
+const added=[
+ 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-executor-v18.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-runtime-v18.test.js',
+ 'packages/external-research/scripts/run-canonical-evaluation-v18.mjs',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-runtime-v18.js',
+ 'packages/external-research/scripts/run-research-one-shot-v12.mjs',
+ 'packages/external-research/test/research-workspace-one-shot-runtime-v12.test.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-executor-v18.test.js',
+ '.github/workflows/research-workspace-canonical-evaluation-execution-v18.yml',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.d.ts',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js',
+ 'packages/external-research/docs/research-workspace-phase18.md',
+ '.github/workflows/research-workspace-canonical-evaluation-contract-v18.yml',
+ '.github/workflows/research-workspace-current-main-runtime-proof-v18.yml',
+ 'packages/external-research/scripts/verify-current-main-runtime-proof-v18.mjs',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.d.ts',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
+ 'packages/external-research/docs/research-workspace-phase17.md',
+ 'api-server/scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts',
+ '.github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml',
+ 'packages/external-research/src/research-workspace-one-shot-bind-v16.js',
+ 'packages/external-research/src/research-workspace-one-shot-bind-v16.d.ts',
+ 'packages/external-research/test/research-workspace-one-shot-bind-v16.test.js',
+ 'packages/external-research/docs/research-workspace-phase16.md',
+ 'api-server/scripts/run-research-workspace-one-shot-bind-v16.ts',
+ '.github/workflows/research-workspace-human-rule-digest-binding-v16.yml',
+ 'packages/external-research/src/research-workspace-one-shot-review-v15.js',
+ 'packages/external-research/src/research-workspace-one-shot-review-v15.d.ts',
+ 'packages/external-research/test/research-workspace-one-shot-review-v15.test.js',
+ 'packages/external-research/docs/research-workspace-phase15.md',
+ 'stock-analyzer/src/lib/research-one-shot-review.js',
+ 'stock-analyzer/src/lib/research-one-shot-review.d.ts',
+ 'stock-analyzer/src/components/research-workspace-one-shot-review.tsx',
+ '.github/workflows/research-workspace-one-shot-execution-v14.yml',
+ 'packages/external-research/docs/research-workspace-phase14.md',
+ 'api-server/src/services/market-intelligence-ai-analysis.service.test.ts',
+ 'api-server/scripts/research-workspace-one-shot-preflight-v13.cjs',
+ 'api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs',
+ '.github/workflows/research-workspace-one-shot-preflight-v13.yml',
+ 'packages/external-research/docs/research-workspace-phase13.md',
+ 'packages/external-research/src/research-workspace-one-shot-v12.js',
+ 'packages/external-research/src/video-intelligence.d.ts',
+ 'packages/external-research/src/research-workspace-video-v7.d.ts',
+ 'packages/external-research/src/research-workspace-one-shot-v12.d.ts',
+ 'packages/external-research/test/research-workspace-one-shot-v12.test.js',
+ 'packages/external-research/docs/research-workspace-phase12.md',
+ 'packages/external-research/scripts/run-existing-research-providers-v8.d.mts',
+ 'api-server/src/services/ai-chat.service.ts',
+ 'api-server/src/services/ai-chat.service.test.ts',
+ 'stock-analyzer/src/pages/ai-chat.tsx',
+ 'api-server/src/services/research-groq-one-shot-transport.service.test.ts',
+ 'api-server/src/services/research-groq-json-transport.service.ts',
+ 'api-server/src/tools/research-workspace-one-shot-v12.ts',
+ 'api-server/src/tools/research-workspace-one-shot-v12.test.ts',
+ 'api-server/scripts/run-research-workspace-one-shot-v12.ts',
+ 'api-server/test.mjs',
+ 'packages/external-research/src/research-workspace-runtime-binding-v11.js',
+ 'packages/external-research/test/research-workspace-runtime-binding-v11.test.js',
+ 'packages/external-research/docs/research-workspace-phase11.md',
+ 'packages/external-research/src/research-workspace-orchestrator-v10.js',
+ 'packages/external-research/src/research-workspace-orchestrator-v10.d.ts',
+ 'packages/external-research/test/research-workspace-orchestrator-v10.test.js',
+ 'packages/external-research/docs/research-workspace-phase10.md',
+ 'stock-analyzer/src/lib/research-orchestrator-status.js',
+ 'stock-analyzer/src/lib/research-orchestrator-status.d.ts',
+ 'stock-analyzer/src/components/research-workspace-orchestrator.tsx',
+ 'packages/external-research/src/research-workspace-worker-v9.js',
+ 'packages/external-research/src/research-workspace-worker-v9.d.ts',
+ 'packages/external-research/scripts/run-research-worker-v9.mjs',
+ 'packages/external-research/test/research-workspace-worker-v9.test.js',
+ 'packages/external-research/docs/research-workspace-phase9.md',
+ 'stock-analyzer/src/lib/research-worker-status.js',
+ 'stock-analyzer/src/lib/research-worker-status.d.ts',
+ 'stock-analyzer/src/components/research-workspace-worker.tsx',
+ 'packages/external-research/src/research-workspace-providers-v8.js',
+ 'packages/external-research/src/research-workspace-providers-v8.d.ts',
+ 'packages/external-research/scripts/run-existing-research-providers-v8.mjs',
+ 'packages/external-research/test/research-workspace-providers-v8.test.js',
+ 'packages/external-research/docs/research-workspace-phase8.md',
+ 'stock-analyzer/src/lib/research-provider-status.js',
+ 'stock-analyzer/src/lib/research-provider-status.d.ts',
+ 'stock-analyzer/src/components/research-workspace-providers.tsx',
+
+ 'packages/external-research/src/research-workspace-video-v7.js',
+ 'packages/external-research/scripts/run-research-video-v7.mjs',
+ 'packages/external-research/test/research-workspace-video-v7.test.js',
+ 'packages/external-research/docs/research-workspace-phase7.md',
+ 'packages/external-research/src/research-workspace-transcript-v6.js',
+ 'packages/external-research/test/research-workspace-transcript-v6.test.js',
+ 'packages/external-research/docs/research-workspace-phase6.md',
+ 'api-server/src/services/research-workspace-transcript-v6.ts',
+ 'api-server/src/services/research-workspace-transcript-v6.test.ts',
+ 'packages/external-research/src/research-workspace-archive-v5.js',
+ 'packages/external-research/src/research-workspace-approval-v5.js',
+ 'packages/external-research/src/research-workspace-approval-v5.d.ts',
+ 'packages/external-research/test/research-workspace-archive-v5.test.js',
+ 'packages/external-research/test/research-workspace-approval-v5.test.js',
+ 'api-server/src/services/research-workspace-authorization-v5.ts',
+ 'api-server/src/services/research-workspace-authorization-v5.test.ts',
+ 'packages/external-research/docs/research-workspace-phase5.md',
+ 'packages/external-research/src/research-workspace-publisher-v4.js',
+ 'packages/external-research/test/research-workspace-publisher-v4.test.js',
+ 'packages/external-research/docs/research-workspace-phase4.md',
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ 'packages/external-research/docs/research-workspace-phase3.md',
+ 'packages/external-research/test/research-workspace-reconciliation-v3.test.js',
+ 'packages/external-research/src/research-workspace-v1.d.ts',
+ 'stock-analyzer/vite.research-workspace.config.ts',
+ 'stock-analyzer/playwright.research-workspace.config.ts',
+];
+const supplemental=[
+ 'stock-analyzer/playwright.config.ts',
+ 'stock-analyzer/e2e/support/start-vite-e2e-server.mjs',
+ '.github/workflows/research-workspace-integration-v1.yml',
+];
+const original=git('diff','--name-only',BASE,OWNER).split('\n');
+const portfolioReviewed=[
+ 'api-server/src/features/account-readonly/account-readonly.journal-history.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.journal-history.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-adapter.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-adapter.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-source.test.ts',
+ 'api-server/src/features/account-readonly/account-readonly.portfolio-source.ts',
+ 'api-server/src/features/account-readonly/account-readonly.runtime-service.ts',
+ 'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/portfolio-intelligence.ts',
+ 'api-server/src/routes/unified-trade-journal.route.test.ts',
+ 'api-server/src/services/portfolio-intelligence.service.ts',
+ 'api-server/src/services/trade-exchange-adapters.service.ts',
+ 'api-server/src/services/unified-trade-journal.service.test.ts',
+ 'api-server/src/services/unified-trade-journal.service.ts',
+ 'stock-analyzer/e2e/phase7-journal-sync.spec.ts',
+ 'stock-analyzer/playwright.critical.config.ts',
+ 'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
+ 'stock-analyzer/src/lib/labels.ts',
+ 'stock-analyzer/src/lib/paper-journal-sync.ts',
+ 'stock-analyzer/src/lib/unified-journal-safety.test.ts',
+ 'stock-analyzer/src/lib/unified-journal-safety.ts',
+ 'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
+ 'stock-analyzer/src/pages/portfolio-v2.tsx',
+];
+const researchCenterIntegrationReviewed=[
+ '.github/tests/pr-exact-head-workflows.test.mjs',
+ '.github/workflows/fast-profitability-v1-activation.yml',
+ '.github/workflows/fast-profitability-v1-collector.yml',
+ '.github/workflows/fast-profitability-v1-preactivation-watch.yml',
+ '.github/workflows/prediction-lab-52d-validation.yml',
+ '.github/workflows/prediction-lab-canonical-shadow-cycle.yml',
+ '.github/workflows/research-center-predeploy-validation.yml',
+ 'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
+ 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs',
+ 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/src/routes/market-summary-availability.smoke.test.ts',
+ 'api-server/src/routes/video-research-source-evidence.ts',
+ 'api-server/src/services/research-center-readonly-contract.service.ts',
+ 'api-server/src/services/research-center-readonly-contract.service.test.ts',
+ 'api-server/src/services/fast-profitability-activation.service.ts',
+ 'api-server/src/services/fast-profitability-evidence-runtime.service.ts',
+ 'api-server/src/services/forward-recommendation-observer.service.ts',
+ 'api-server/src/services/unified-trade-journal-canonical-binding.service.ts',
+ 'api-server/src/scripts/run-fast-profitability-collector.ts',
+ 'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
+ 'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
+ 'research-dashboard/server.py',
+ 'research-dashboard/test/test_server.py',
+ 'stock-analyzer/src/lib/research-center.ts',
+ 'stock-analyzer/src/pages/research-center.tsx',
+ // Exact Research Center zero-fabrication regression; not a scope wildcard.
+ 'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
+ 'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/src/components/research-video-source-panel.tsx',
+];
+const researchProductionClosureReviewed=[
+ '.github/workflows/research-ai-production-activation.yml',
+ '.github/workflows/research-production-activation.yml',
+ 'market-prediction-lab/src/video-research-canonical-handoff-v1.js',
+ 'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+ 'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+ 'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js',
+ 'packages/external-research/src/research-workspace-runtime-binding-v11.js',
+ 'packages/external-research/src/video-intelligence-phase2.js',
+ 'packages/external-research/src/video-intelligence-phase3-runtime.js',
+ 'packages/external-research/src/video-intelligence-phase3-snapshot-caller.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
+ 'research-production/bin/research-approved-job-intake.mjs',
+ 'research-production/bin/research-maintenance.mjs',
+ 'research-production/deploy/activate-ai-research.sh',
+ 'research-production/deploy/activate-server.sh',
+ 'research-production/deploy/install-ai-research-units.sh',
+ 'research-production/deploy/research-production-ai-review.timer',
+ 'research-production/deploy/research-production-approved-job-intake.service',
+ 'research-production/deploy/research-production-approved-job-intake.timer',
+ 'research-production/deploy/research-production-factory-status.timer',
+ 'research-production/deploy/research-production-fast-historical.timer',
+ 'research-production/deploy/research-production-forward.timer',
+ 'research-production/deploy/research-production-long-history.timer',
+ 'research-production/deploy/research-production-maintenance.service',
+ 'research-production/deploy/research-production-maintenance.timer',
+ 'research-production/deploy/research-production-temporal-evidence.timer',
+ 'research-production/deploy/research-production-video-discovery.timer',
+ 'research-production/deploy/research-production-workspace-worker.service',
+ 'research-production/deploy/research-video.env.example',
+ 'research-production/src/research-ai-review-worker.mjs',
+ 'research-production/src/research-video-discovery-worker.mjs',
+ 'research-production/test/research-ai-activation-contract.test.mjs',
+ 'research-production/test/research-ai-review-worker.test.mjs',
+ 'research-production/test/research-ai-units-install-contract.test.mjs',
+ 'research-production/test/research-approved-job-intake.test.mjs',
+ 'research-production/test/research-maintenance.test.mjs',
+ 'research-production/test/research-engine.test.mjs', 'research-production/test/server-risk-policy-env-transport.test.mjs',
+];
+const memberAccessReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/production-deploy.yml',
+ '.github/workflows/production-postdeploy-qa.yml',
+ '.github/workflows/research-center-predeploy-validation.yml',
+ '.github/scripts/run-production-readonly-qa.sh',
+ '.github/scripts/production-postdeploy-qa-evidence.cjs',
+ '.github/scripts/verify-production-qa-receipt.cjs',
+ '.github/scripts/verify-production-postdeploy-qa-contract.mjs',
+ 'api-server/scripts/apply-staging-supabase-bootstrap.mjs',
+ 'api-server/scripts/verify-member-permission-audit-contract.mjs',
+ 'api-server/scripts/verify-phase8-db.sh',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/scripts/verify-staging-bootstrap-contract.mjs',
+ 'api-server/src/middleware/auth.ts',
+ 'api-server/src/routes/admin.ts',
+ 'stock-analyzer/src/lib/auth-bootstrap.ts',
+ 'stock-analyzer/src/lib/auth-bootstrap.test.ts',
+ 'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
+ 'api-server/src/routes/member-access-phase8.smoke.test.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/paper-journal.smoke.test.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/signal-scanner-auth.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'api-server/src/services/member-access-phase8.test.ts',
+ 'api-server/src/services/member-administration.service.test.ts',
+ 'api-server/src/services/member-administration.service.ts',
+ 'api-server/src/services/member-auth-admin.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/scanner-access-control.service.test.ts',
+ 'api-server/src/services/scanner-access-control.service.ts',
+ 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+ 'api-server/supabase/bootstrap/staging-audit-privilege-assert.sql',
+ 'api-server/supabase/bootstrap/staging-bootstrap.sql',
+ 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+ 'api-server/supabase/test/member_access_s_ai_hardening_integration.sql',
+ 'ops/apply-production-member-access-hardening.mjs',
+ 'ops/verify-production-member-access-hardening.mjs',
+ 'packages/member-access/src/index.d.ts',
+ 'packages/member-access/src/index.js',
+ 'stock-analyzer/e2e/scanner-member-access.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/account-touch-korean-ui.spec.ts',
+ 'stock-analyzer/e2e/admin-read-timeout-contract.spec.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
+ 'stock-analyzer/e2e/account-connection-credentials.spec.ts',
+ 'stock-analyzer/e2e/production-member-readonly-qa.spec.ts',
+ 'stock-analyzer/playwright.production-member.config.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/capability-gate.tsx',
+ 'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/lib/auth-initial-bootstrap.ts',
+ 'stock-analyzer/src/lib/auth.tsx',
+ 'stock-analyzer/src/pages/account.tsx',
+ 'stock-analyzer/src/pages/admin.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/portfolio.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+];
+const tradingQaReviewed=[
+ 'api-server/src/services/trade-execution.service.ts',
+ 'api-server/src/services/trade-execution-toss-verification.test.ts',
+ 'stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts',
+];
+const telegramReleaseReviewed=[
+ '.github/workflows/telegram-production-release.yml',
+ 'api-server/scripts/verify-telegram-production-release-contract.mjs',
+];
+const formulaAiDriftReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/pr-auto-rehearsal-preview.yml',
+ 'api-server/src/routes/auto-rehearsal-preview.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/pages/auto-rehearsal-preview.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+];
+const automaticTradingDriftReviewed=[
+ // Exact owner-approved AUTO safety paths still require both Trading guards
+ // below; protected Research prefixes, main ancestry and route bytes stay gated.
+ ...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+ // Scanner-repair overlap is intentionally sent through this full gate, never
+ // through the immutable historical-repair exemption.
+ ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
+ // Read-only holdings UI and entry evidence, with no new database or financial scope.
+ 'stock-analyzer/src/components/bottom-nav.tsx',
+ 'stock-analyzer/e2e/app-navigation.spec.ts',
+ 'stock-analyzer/e2e/technical-workspace-professional.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/responsive-ai-chart-unification.spec.ts',
+ 'stock-analyzer/e2e/scanner-chart-broadcast.spec.ts',
+ 'stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts',
+ 'stock-analyzer/e2e/full-product-browser-flow.spec.ts',
+ '.github/tests/production-auto-live-only-release-contract.test.mjs',
+ 'stock-analyzer/e2e/platform-canonical-integration-contract.spec.ts',
+ 'stock-analyzer/e2e/stock-detail-ai-chart-ui-remediation.spec.ts',
+ 'stock-analyzer/e2e/detail-auto-ui-compact.spec.ts',
+ 'stock-analyzer/e2e/paper-bottom-nav-inset-contract.spec.ts',
+ 'stock-analyzer/e2e/scanner-member-access.spec.ts',
+ 'api-server/src/services/trading-holdings-readonly.service.ts',
+ 'api-server/src/features/account-readonly/account-readonly.contract.ts',
+ 'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
+ 'api-server/src/features/account-readonly/providers/toss-readonly.provider.ts',
+ 'stock-analyzer/src/components/trading-holdings-panel.tsx',
+ 'stock-analyzer/src/pages/paper-trading.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/e2e/staging-auto-live-only.spec.ts',
+ 'stock-analyzer/e2e/production-auto-live-only-qa.spec.ts',
+ // Manual holdings isolation is Trading-only; both activation guards below
+ // remain mandatory when either runtime or receipt validation changes.
+ '.github/scripts/verify-production-preactivation-evidence.cjs',
+ 'api-server/src/services/automatic-live-position-isolation.service.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts',
+ 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts',
+ '.github/scripts/production-postdeploy-qa-evidence.cjs',
+ '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
+ '.github/tests/production-telegram-active-readiness.test.mjs',
+ '.github/tests/production-trading-core-qa-contract.test.mjs',
+ '.github/tests/trading-ops-consolidated-preflight.test.mjs',
+ '.github/workflows/production-automatic-trading-gate.yml',
+ '.github/workflows/production-futures-live-trading-gate.yml',
+ '.github/workflows/production-live-trading-gate.yml',
+ '.github/workflows/production-trading-core-qa.yml',
+ 'api-server/scripts/verify-production-automatic-trading-gate.mjs',
+ 'api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts',
+ 'api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts',
+ 'api-server/src/index.ts',
+ 'api-server/src/routes/paper-journal.smoke.test.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'api-server/src/services/admin-four-market-paper-capital.service.test.ts',
+ 'api-server/src/services/admin-four-market-paper-capital.service.ts',
+ 'api-server/src/services/admin-four-market-paper-readback.service.test.ts',
+ 'api-server/src/services/admin-four-market-paper-readback.service.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/live-connection-verification.service.ts',
+ 'api-server/src/services/member-auto-trading-ai-review-evidence.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/member-auto-trading-live-arm.service.ts',
+ 'api-server/src/services/member-auto-trading-readiness.service.test.ts',
+ 'api-server/src/services/member-auto-trading-readiness.service.ts',
+ 'api-server/src/services/member-four-market-paper-wallet-migration.test.ts',
+ 'api-server/src/services/paper-journal-supabase.repository.ts',
+ 'api-server/src/services/trade-automation-integration.test.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-automation-policy-guard.service.test.ts',
+ 'api-server/src/services/trade-automation-policy-guard.service.ts',
+ 'api-server/src/services/trade-automation-unified-journal-adapter.ts',
+ 'api-server/src/services/trade-automation-risk.service.ts',
+ 'api-server/src/services/trade-automation.service.ts',
+ 'api-server/src/services/trade-automation.types.ts',
+ 'api-server/src/services/trade-execution-pre-submission.test.ts',
+ 'api-server/src/services/trade-execution.service.ts',
+ 'api-server/src/services/trade-pre-submission-risk.service.ts',
+ 'api-server/src/services/trade-risk-envelope.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+ 'api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql',
+ 'stock-analyzer/e2e/auto-trading-professional-ui.spec.ts',
+ 'stock-analyzer/e2e/platform-canonical-integration-contract.spec.ts',
+ 'stock-analyzer/e2e/production-trading-core-qa.spec.ts',
+ 'stock-analyzer/src/components/trade-automation-settings.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+ 'ops/deploy-production.sh',
+];
+// Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
+const memberTelegramReviewed=[
+ '.github/tests/telegram-six-room-gate.test.mjs',
+ 'stock-analyzer/e2e/telegram-durable-personal-outbox.spec.ts',
+ 'api-server/src/services/member-holdings-telegram-producer.service.test.ts',
+ 'api-server/src/services/member-holdings-telegram-producer.service.ts',
+ 'api-server/src/services/member-holdings-telegram-alert.service.ts',
+ 'api-server/src/services/scanner-telegram-delivery.service.ts',
+ 'api-server/src/services/telegram-investment-intelligence.service.ts',
+ 'api-server/src/services/telegram-notification.service.test.ts',
+ 'api-server/src/services/telegram-notification.service.ts',
+ 'api-server/src/services/telegram-signal-followup.service.ts',
+ 'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
+];
+// Exactly one isolated, admin-only and READ-ONLY PIT minute source-inventory bridge.
+// These paths are not trading owners and their changes do not grant orders,
+// source entitlements, model adoption, or Production authority.
+const researchPITReadOnlyReviewed=[
+  'market-prediction-lab/src/research-selected-window-v1.js',
+  'market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js',
+  'market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.d.ts',
+  'market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js',
+  'market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.d.ts',
+  'market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js',
+  'api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts',
+  'stock-analyzer/src/lib/research-pit-minute-coverage-period.ts',
+  'stock-analyzer/src/components/research-pit-minute-coverage.tsx',
+  'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
+  '.github/workflows/research-pit-minute-readonly-drift.yml',
+];
+const allowed=new Set([
+ ...SCANNER_REPAIR_PATHS,
+ ...RESEARCH_CENTER_BATCH_PATHS,
+ ...original,
+ ...added,
+ ...supplemental,
+ ...portfolioReviewed,
+ ...researchCenterIntegrationReviewed,
+ ...researchProductionClosureReviewed,
+ ...memberAccessReviewed,
+ ...tradingQaReviewed,
+ ...telegramReleaseReviewed,
+ ...formulaAiDriftReviewed,
+ ...automaticTradingDriftReviewed,
+ ...memberTelegramReviewed,
+ ...researchPITReadOnlyReviewed,
+]);
+const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const pinnedScannerRepair=verifyPinnedScannerScope(changed,MAIN,createScannerBlobReader(changed,MAIN));
+if(pinnedScannerRepair.length>0)git('merge-base','--is-ancestor',SCANNER_REPAIR_SOURCE_SHA,'HEAD');
+// Owner-approved single-pass release: no prefix exemption. Validate every
+// exact source blob and current-main LIVE guard before admitting any new path.
+const onePassRequested=changed.includes('research-production/src/research-one-pass-source-pins-v1.mjs');
+const onePassReviewedPaths=new Set([...ONE_PASS_NATIVE_PINS.map(x=>x[0]),
+  ...ONE_PASS_RESEARCH_PINS.map(x=>x[0]),...ONE_PASS_SUPPORT_PATHS]);
+if(onePassRequested){
+ if(MAIN!==ONE_PASS_BASE_MAIN||!isAncestor(ONE_PASS_SOURCE_ANCESTOR,'HEAD')
+    ||ONE_PASS_NATIVE_PINS.length!==49||ONE_PASS_RESEARCH_PINS.length!==62
+    ||ONE_PASS_SUPPORT_PATHS.length!==4||changed.length!==115)
+   throw new Error('RESEARCH_ONE_PASS_SOURCE_PROVENANCE_INVALID');
+ for(const path of changed)if(!onePassReviewedPaths.has(path))
+   throw new Error('RESEARCH_ONE_PASS_UNREVIEWED_PATH:'+path);
+ for(const path of onePassReviewedPaths)if(!changed.includes(path))
+   throw new Error('RESEARCH_ONE_PASS_REQUIRED_PATH_MISSING:'+path);
+ for(const [path,expected] of [...ONE_PASS_NATIVE_PINS,...ONE_PASS_RESEARCH_PINS])
+   if(git('rev-parse',`HEAD:${path}`)!==expected)
+     throw new Error('RESEARCH_ONE_PASS_IMMUTABLE_SOURCE_CHANGED:'+path);
+ for(const [path,expected] of ONE_PASS_PROTECTED_MAIN_PINS)
+   if(git('rev-parse',`HEAD:${path}`)!==expected||git('rev-parse',`${MAIN}:${path}`)!==expected)
+     throw new Error('RESEARCH_ONE_PASS_LIVE_PROTECTION_DRIFT:'+path);
+ for(const path of onePassReviewedPaths)allowed.add(path);
+}
+const pitReadOnlyChanged=changed.some((p)=>researchPITReadOnlyReviewed.includes(p));
+if(pitReadOnlyChanged){
+ // Keep the unrelated Paper-triggering predeploy workflow byte-identical to main.
+ const predeployPath='.github/workflows/research-center-predeploy-validation.yml';
+ if(git('rev-parse',`HEAD:${predeployPath}`)!==git('rev-parse',`${MAIN}:${predeployPath}`))
+  throw new Error('PIT_READONLY_UNRELATED_PAPER_GATE_MUTATED');
+ const required=[...researchPITReadOnlyReviewed,
+  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+  '.github/scripts/verify-research-workspace-sync-v3.mjs',
+  'api-server/src/routes/research-workspace.ts',
+  'stock-analyzer/src/pages/research-center.tsx'];
+ for(const path of required)if(!changed.includes(path))
+  throw new Error('PIT_READONLY_COMPLETE_GATE_REQUIRED:'+path);
+ const permitted=new Set(onePassRequested?onePassReviewedPaths:required);
+ for(const path of changed)if(!permitted.has(path))
+  throw new Error('PIT_READONLY_UNRELATED_OWNER_SCOPE_FORBIDDEN:'+path);
+ // The canonical auth/video/worker/orchestrator route graph must be
+ // byte-for-byte identical to current main after removing just this GET.
+ const route='api-server/src/routes/research-workspace.ts';
+ let currentRoute=git('show','HEAD:'+route);
+ currentRoute=currentRoute.replace(
+  "import {\n  readResearchPITMinuteCoverageV1,\n  type ResearchPITMarket,\n} from '../../../market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js';\n",'');
+ const start=currentRoute.indexOf('  // Research 1m original-source COVERAGE ONLY.');
+ const end=currentRoute.indexOf('  // .all intentionally rejects HEAD',start);
+ if(start<0||end<=start)throw new Error('PIT_READONLY_ROUTE_BOUNDARY_MISSING');
+ const pitRoute=currentRoute.slice(start,end);
+ currentRoute=currentRoute.slice(0,start)+currentRoute.slice(end);
+ if(currentRoute!==git('show',MAIN+':'+route))
+  throw new Error('PIT_READONLY_MAIN_ADMIN_WORKSPACE_MUTATED');
+ for(const token of [
+  "router.all('/pit-minute-coverage'",
+  "res.setHeader('Cache-Control', 'no-store, max-age=0')",
+  "if (req.method !== 'GET')",
+  "readResearchPITMinuteCoverageV1({",
+  "financialMutationCount: 0",
+  "executionAuthority: 'NONE'",
+  "realOrders: false",
+ ])if(!pitRoute.includes(token))throw new Error('PIT_READONLY_ROUTE_SAFETY_MISSING:'+token);
+ if(pitRoute.includes("router.post(")||pitRoute.includes("router.put(")
+  ||pitRoute.includes("router.delete("))
+  throw new Error('PIT_READONLY_WRITE_VERB_FORBIDDEN');
+ // Existing Research Center detailed evidence is preserved exactly.
+ const page='stock-analyzer/src/pages/research-center.tsx';
+ const currentPage=git('show','HEAD:'+page)
+  .replace("import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';\n",'')
+  .replace("        {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}\n",'');
+ if(currentPage!==git('show',MAIN+':'+page))
+  throw new Error('PIT_READONLY_MAIN_RESEARCH_CENTER_MUTATED');
+ const e2e='stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts';
+ let currentE2e=git('show','HEAD:'+e2e).replace(
+  "import {\n  checkedPITSelection, collectPITMinuteCoveragePeriod, isValidPITCoverageResponse,\n  type PITSelection,\n} from '../src/lib/research-pit-minute-coverage-period';\n",'');
+ const addedStart=currentE2e.indexOf("test('admin historical 1m coverage reads and aggregates");
+ if(addedStart<0)throw new Error('PIT_READONLY_BROWSER_REGRESSIONS_MISSING');
+ currentE2e=currentE2e.slice(0,addedStart).trimEnd();
+ if(currentE2e!==git('show',MAIN+':'+e2e))
+  throw new Error('PIT_READONLY_EXISTING_BROWSER_TESTS_MUTATED');
+ const source=git('show','HEAD:market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js');
+ for(const token of [
+  'providerGETCount:0','financialMutationCount:0',
+  'profitabilityProven:false','executionAuthority:"NONE"',
+  'constants.O_RDONLY|constants.O_NOFOLLOW',
+ ])if(!source.includes(token))throw new Error('PIT_READONLY_PRIVATE_SOURCE_GUARD_MISSING:'+token);
+ if(/\b(?:fetch|axios)\s*\(/u.test(source))
+  throw new Error('PIT_READONLY_PROVIDER_NETWORK_FORBIDDEN');
+ const frontend=git('show','HEAD:stock-analyzer/src/components/research-pit-minute-coverage.tsx');
+ for(const token of ['authorizedFetch','method: \'GET\'','gcTime: 0',
+  'collectPITMinuteCoveragePeriod'])
+  if(!frontend.includes(token))throw new Error('PIT_READONLY_BROWSER_SAFETY_MISSING:'+token);
+ if(/fetch\(\s*['"]https?:/u.test(frontend))
+  throw new Error('PIT_READONLY_EXTERNAL_BROWSER_REQUEST_FORBIDDEN');
+ const gate=git('show','HEAD:.github/workflows/research-pit-minute-readonly-drift.yml');
+ if(!gate.includes('node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js')
+  ||!gate.includes('research-workspace-pit-minute-coverage.smoke.test.ts')
+  ||!gate.includes('EXECUTION_AUTHORITY: "NONE"'))
+  throw new Error('PIT_READONLY_SCOPED_QA_REQUIRED');
+}
+// The personal Telegram member-profile reads share a repository with automatic
+// execution. Do not require automatic-trading deployment gates for ONLY the
+// proven expiry/permissions read patch and additive membership regression
+// fixtures. Any other change to these files restores the full trading gate.
+function exactSignedDiff(p, expectedRemoved, expectedAdded) {
+ const signed=git('diff','--unified=0',MAIN,'HEAD','--',p).split('\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ const removed=signed.filter((line)=>line.startsWith('-')).map((line)=>line.slice(1).trim()).sort();
+ const added=signed.filter((line)=>line.startsWith('+')).map((line)=>line.slice(1).trim()).sort();
+ return JSON.stringify(removed)===JSON.stringify([...expectedRemoved].sort())
+  && JSON.stringify(added)===JSON.stringify([...expectedAdded].sort());
+}
+function isPersonalTelegramMembershipOnlyChange(p) {
+ // Existing Paper/Telegram tests are structurally unchanged. Only make
+ // their synthetic approved-member profiles satisfy the new canonical proof.
+ const fixture="membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+ if(p==='api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts') {
+  return exactSignedDiff(p,[],[fixture,fixture]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts') {
+  return exactSignedDiff(p,[],[fixture]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts') {
+  return exactSignedDiff(p,
+   [".select('status,membership_level,is_active,role')"],
+   [
+    "membership_expires_at: typeof row.membership_expires_at === 'string' ? row.membership_expires_at : null,",
+    "permissions_updated_at: typeof row.permissions_updated_at === 'string' ? row.permissions_updated_at : null,",
+    ".select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts') {
+  return exactSignedDiff(p,
+   [
+    "import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCapability(profile, 'canConnectPersonalTelegram');",
+   ],
+   [
+    "import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts') {
+  const base=git('show',`${MAIN}:${p}`);
+  let head=git('show',`HEAD:${p}`);
+  const fixture="  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+  if(head.split(fixture).length!==2)return false;
+  head=head.replace('\n'+fixture,'');
+  const blocks=[
+   ["expired and schema-incomplete members cannot bind a Telegram link","expired Telegram link cannot be consumed"],
+   ["membership expiration after queueing prevents Telegram send and dead-letters the delivery","duplicate execution event is ignored by source-event id and does not duplicate Telegram delivery"],
+  ];
+  for(const [name,next] of blocks) {
+   const first=`test('${name}'`;
+   const after=`test('${next}'`;
+   if(head.split(first).length!==2||head.split(after).length!==2)return false;
+   const start=head.indexOf(first);
+   const end=head.indexOf(after,start);
+   if(start<0||end<=start)return false;
+   head=head.slice(0,start)+head.slice(end);
+  }
+  return head===base;
+ }
+ return false;
+}
+const preservedPaperIntegration=changed.filter((p)=>isPreservedPaperIntegrationPath(p,
+ (ref,file)=>git('rev-parse',`${ref}:${file}`)));
+if(preservedPaperIntegration.length>0){
+  git('merge-base','--is-ancestor',PAPER_INTEGRATION_SHA,'HEAD');
+  for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA);
+}
+const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)
+ &&!pinnedScannerRepair.includes(p)
+ &&!isPersonalTelegramMembershipOnlyChange(p)&&!preservedPaperIntegration.includes(p)
+ &&!isResearchOnlyNavigationDiff(p,git('diff','--unified=0',MAIN,'HEAD','--',p)));
+const automaticSignalGeneratedRuntimeOutputs=new Set([
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+]);
+if(automaticTradingChanged.length>0){
+ const requiredAutomaticTradingGuards=[
+  '.github/workflows/production-automatic-trading-gate.yml',
+  'api-server/scripts/verify-production-automatic-trading-gate.mjs',
+ ];
+ for(const p of requiredAutomaticTradingGuards)if(!changed.includes(p))throw new Error('AUTOMATIC_TRADING_SCOPE_GUARD_MISSING:'+p);
+ // Production deployment is inside this Trading Core Paper-only change only
+ // when its existing strict OFF and readback checks are preserved.
+ if(changed.includes('ops/deploy-production.sh')){
+  const deploy=git('show','HEAD:ops/deploy-production.sh');
+  const requiredPaperOnlyDeployProof=[
+   '"MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED",',
+   'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false',
+   'bool("MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED")',
+   'member_paper_only',
+   '[[ "$member_background" == false && "$member_live_background" == false && "$member_paper_only" == false ]] || return 1',
+  ];
+  for(const token of requiredPaperOnlyDeployProof)if(!deploy.includes(token))
+   throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_GUARD_MISSING:'+token);
+  if(!deploy.includes('assert_live_trading_inactive_before_deploy()') || !deploy.includes('application_runtime_ready()'))
+   throw new Error('AUTOMATIC_TRADING_DEPLOY_PREPOSTCHECK_MISSING');
+  const deployDiff=git('diff','--unified=0',MAIN,'HEAD','--','ops/deploy-production.sh');
+  if(/^\+[^+].*MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=(?:true|TRUE|1)\b/m.test(deployDiff))
+   throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_ACTIVATION_FORBIDDEN');
+ }
+ const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
+ for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix))
+  &&!automaticSignalGeneratedRuntimeOutputs.has(p))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
+}
+const canonicalMemberFixtureOnlyPaths=new Set([
+ 'api-server/src/services/research-workspace-authorization-v5.test.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
+ 'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+]);
+function isCanonicalMemberFixtureOnlyChange(p){
+ if(!canonicalMemberFixtureOnlyPaths.has(p))return false;
+ const diff=git('diff','--unified=0',MAIN,'HEAD','--',p)
+  .split('\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ if(diff.length===0||!diff.some((line)=>line.startsWith('+')&&line.includes('permissions_updated_at')))return false;
+ const normalize=(line)=>line.slice(1)
+  .replace(/,?permissions_updated_at:'[^']*'/gu,'')
+  .replace(/,?permissions_updated_at:"[^"]*"/gu,'')
+  .trim();
+ const removed=diff.filter((line)=>line.startsWith('-')).map(normalize).sort();
+ const added=diff.filter((line)=>line.startsWith('+')).map(normalize).sort();
+ return removed.length===added.length&&JSON.stringify(removed)===JSON.stringify(added);
+}
+const researchCenterChanged=changed.filter((p)=>
+ researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
+);
+if(researchCenterChanged.length>0){
+ // This PIT-only readback has its own exact two-job protected GET/source QA
+ // workflow. Its general Research Center predeploy workflow MUST remain
+ // bit-identical to main, or Paper Forward's unrelated ownership gate fires.
+ // The PIT-specific block above already checks that invariant, including
+ // every source/UI/API path and the dedicated PIT workflow.
+ const requiredIntegrationGuards=[
+  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ ];
+ if (!pitReadOnlyChanged)
+  requiredIntegrationGuards.push('.github/workflows/research-center-predeploy-validation.yml');
+ for(const p of requiredIntegrationGuards)if(!changed.includes(p))throw new Error('RESEARCH_CENTER_INTEGRATION_GUARD_MISSING:'+p);
+}
+for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
+git('merge-base','--is-ancestor',MAIN,'HEAD');
+git('merge-base','--is-ancestor',OWNER,'HEAD');
+if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-only',BASE,OWNER).split('\n').filter(Boolean)){
+ let existed=false;try{git('cat-file','-e',`${MAIN}:${p}`);existed=true;}catch{}
+ if(existed)throw new Error('UNREVIEWED_ADD_ADD_CONFLICT:'+p);
+}
+const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
+let current=git('show','HEAD:api-server/src/routes/index.ts');
+const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
+// Normalize only the exact additive, authenticated, sanitized GET mount.
+// Do not normalize any admin guard, existing route, or mutation endpoint.
+if(!mainRoute.includes("import researchOverviewRouter from './research-overview';"))current=current
+ .replace("\nimport researchOverviewRouter from './research-overview';",'')
+ .replace(
+  "\n// Approved active members can read sanitized shared research. Administrative\n// research operations and AI generation retain their independent admin guard.\nrouter.use('/research', requireCapability('canAccessBasicInfo'), researchOverviewRouter);\n",
+  '',
+ );
+const memberAccessContractChanged=changed.some((p)=>(
+ memberAccessReviewed.includes(p)
+ && !formulaAiDriftReviewed.includes(p)
+ && !automaticTradingDriftReviewed.includes(p)
+));
+const memberAccessRouteContractChanged=memberAccessContractChanged
+ && changed.includes('api-server/src/routes/index.ts');
+if(memberAccessRouteContractChanged){
+ const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\\/[^/]+\\/(?:snapshot|flow)$/u.test(req.path)
+    );
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});`;
+ const canonicalFuturesGate="router.use('/crypto/futures', requireCapability('canAccessFutures'));";
+ const journalSplitGate=`router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});`;
+ const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
+ if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
+ if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
+ if(!mainRoute.includes(aiChartFuturesGate))current=current.replace(aiChartFuturesGate,canonicalFuturesGate);
+ if(!mainRoute.includes(journalSplitGate))current=current.replace(journalSplitGate,canonicalJournalGate);
+ const expirationLine="    membership_expires_at: profile.membership_expires_at ?? null,\n";
+ if(!mainRoute.includes(expirationLine))current=current.replace(expirationLine,'');
+}
+// Older owner history may not be an ancestor after squash/integration merges. Only
+// normalize away the legacy video mount when the exact current main itself does
+// not contain that reviewed mount. Never delete content that main now owns.
+if(!isAncestor(OWNER,MAIN) && !mainRoute.includes("import videoResearchEvidenceRouter from './video-research-evidence';"))current=current
+ .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
+// #1463 intentionally shares one existing READ_ONLY account service instance.
+// Only normalize that reviewed refactor when exact current main still uses the
+// older constructor form. If current main already owns accountReadonlyRuntimeService,
+// preserving main means leaving it byte-for-byte unchanged.
+if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';"))current=current
+ .replace(
+   "import { createAccountReadonlyRouter } from '../features/account-readonly/account-readonly.route';\nimport { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';",
+   "import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';\nimport { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';\nimport { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';\nimport { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';",
+ )
+ .replace(
+   "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
+   "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
+ );
+// PR #1682 adds one runtime-flagged, staging-only public rehearsal endpoint.
+// Normalize only these exact reviewed lines before comparing with current main;
+// every other main route byte remains protected.
+if(!mainRoute.includes("import autoRehearsalPreviewRouter from './auto-rehearsal-preview';"))current=current
+ .replace("\nimport autoRehearsalPreviewRouter from './auto-rehearsal-preview';",'')
+ .replace(
+   "\n// PR-only isolated rehearsal preview. This route is runtime-flagged and only\n// runs synthetic safety gates plus the local Paper engine; it never reads member,\n// credential, Telegram, or production data and is disabled outside staging.\nrouter.use('/', autoRehearsalPreviewRouter);\n",
+   '',
+ );
+if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
+const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
+const protectedPathExceptions=new Map([
+ ['market-prediction-lab',new Set([
+  ...researchPITReadOnlyReviewed.filter((p)=>p.startsWith('market-prediction-lab/')),
+  'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
+  'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
+  'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
+  'market-prediction-lab/src/video-research-canonical-handoff-v1.js',
+  'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+  'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+  'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+ ])],
+ ['research-production',new Set([
+  'research-production/bin/research-approved-job-intake.mjs',
+  'research-production/bin/research-maintenance.mjs',
+  'research-production/deploy/activate-ai-research.sh',
+  'research-production/deploy/activate-server.sh',
+  'research-production/deploy/install-ai-research-units.sh',
+  'research-production/deploy/research-production-ai-review.timer',
+  'research-production/deploy/research-production-approved-job-intake.service',
+  'research-production/deploy/research-production-approved-job-intake.timer',
+  'research-production/deploy/research-production-factory-status.timer',
+  'research-production/deploy/research-production-fast-historical.timer',
+  'research-production/deploy/research-production-forward.timer',
+  'research-production/deploy/research-production-long-history.timer',
+  'research-production/deploy/research-production-maintenance.service',
+  'research-production/deploy/research-production-maintenance.timer',
+  'research-production/deploy/research-production-temporal-evidence.timer',
+  'research-production/deploy/research-production-video-discovery.timer',
+  'research-production/deploy/research-production-workspace-worker.service',
+  'research-production/deploy/research-video.env.example',
+  'research-production/src/research-ai-review-worker.mjs',
+  'research-production/src/research-video-discovery-worker.mjs',
+  'research-production/test/research-ai-activation-contract.test.mjs',
+  'research-production/test/research-ai-review-worker.test.mjs',
+  'research-production/test/research-ai-units-install-contract.test.mjs',
+  'research-production/test/research-approved-job-intake.test.mjs',
+  'research-production/test/research-maintenance.test.mjs',
+  'research-production/test/research-engine.test.mjs',
+  'research-production/test/server-risk-policy-env-transport.test.mjs',
+ ])],
+ ['research-dashboard',new Set([
+  'research-dashboard/server.py',
+  'research-dashboard/test/test_server.py',
+ ])],
+ ['stock-analyzer/src/pages/research-center.tsx',new Set([
+  'stock-analyzer/src/pages/research-center.tsx',
+ ])],
+ ['api-server/src/middleware/auth.ts',memberAccessContractChanged
+   ? new Set(['api-server/src/middleware/auth.ts'])
+   : new Set()],
+ ['packages/member-access',memberAccessContractChanged
+   ? new Set(['packages/member-access/src/index.js','packages/member-access/src/index.d.ts'])
+   : new Set()],
+]);
+for(const p of protectedPaths){
+ const exceptions=protectedPathExceptions.get(p);
+ if(exceptions){
+  // Exact Research Center-owned paths only. Auth, lockfile and member-access
+  // restrictions remain unchanged; no directory-wide exception is introduced.
+  if(['market-prediction-lab','research-production','research-dashboard','stock-analyzer/src/pages/research-center.tsx'].includes(p))
+   for(const item of RESEARCH_CENTER_BATCH_PATHS)if(item===p||item.startsWith(p+'/'))exceptions.add(item);
+  // One-pass Research-owned file exceptions are individually Git-blob pinned.
+  // Never exempt member/auth/credentials, lockfile, Paper or LIVE paths.
+  if(onePassRequested&&['market-prediction-lab','research-production'].includes(p))
+   for(const path of onePassReviewedPaths)if(path.startsWith(p+'/'))exceptions.add(path);
+  // Only these two exact scanner-generated Paper artifacts may share a protected
+  // runtime package; unchanged Paper authority is still checked byte-for-byte.
+  if(p==='market-prediction-lab')for(const path of pinnedScannerRepair)if([
+   'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+   'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+  ].includes(path))exceptions.add(path);
+  // Deterministic runtime outputs regenerated from reviewed Scanner sources
+  // remain exact-file exceptions only after the full Trading guards above run.
+  if(p==='market-prediction-lab')for(const path of automaticSignalGeneratedRuntimeOutputs)
+   if(automaticTradingChanged.includes(path))exceptions.add(path);
+  const unexpected=git('diff','--name-only',MAIN,'HEAD','--',p).split('\n').filter(Boolean).filter((item)=>!exceptions.has(item));
+  if(unexpected.length>0)throw new Error('PROTECTED_PATH_CHANGED:'+p+':'+unexpected.join(','));
+  continue;
+ }
+ if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
+}
+const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
+  pinnedScannerRepair,scannerScopeGrantsTradingApproval:false,
+  preservedPaperIntegrationSha:PAPER_INTEGRATION_SHA,preservedPaperIntegration,
+  reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,
+  protectedPathExceptions:Object.fromEntries([...protectedPathExceptions].map(([key,value])=>[key,[...value]])),
+  ancestryPreserved:true,mainUpdated:false,
+  liveOrders:0,providerCalls:0,fixtureResultsAreEconomicEvidence:false};
+const output=process.argv[2];if(output)writeFileSync(output,JSON.stringify(proof,null,2)+'\n');
+console.log(JSON.stringify(proof,null,2));

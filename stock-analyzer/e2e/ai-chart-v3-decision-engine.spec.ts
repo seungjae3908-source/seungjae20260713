@@ -222,7 +222,7 @@ test('AI Chart intelligence panel is wired to the V3 decision gate and keeps pro
   expect(panel).toContain("from '@/lib/ai-chart-v3-decision-engine'");
   expect(panel).toContain('decideAiChartV3');
   expect(panel).toContain('data-testid="ai-chart-v3-decision-gate"');
-  expect(panel).toContain('Calibrated Probability');
-  expect(panel).toContain('Cost-adjusted EV');
-  expect(panel).toContain('NOT AVAILABLE');
+  expect(panel).toContain('검증 확률');
+  expect(panel).toContain('비용 반영 EV');
+  expect(panel).toContain('미검증');
 });

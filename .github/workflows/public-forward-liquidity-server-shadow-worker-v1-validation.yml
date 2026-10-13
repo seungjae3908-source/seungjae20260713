@@ -1,0 +1,112 @@
+name: Public Forward Liquidity Server Shadow Worker V1 Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-server-shadow-worker-v1-validation.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-shadow-worker-v1.test.mjs'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer'
+      - 'market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.env.example'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-server-shadow-worker-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify exact pull request head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Syntax check shadow worker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-server-shadow-worker-v1.test.mjs
+
+      - name: Run focused shadow worker regression suite
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-server-shadow-worker-v1.test.mjs
+
+      - name: Run zero-network self-check
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs self-check
+
+      - name: Verify systemd schedule and no-backfill contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          timer='market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer'
+          service='market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service'
+          grep -Fq 'OnCalendar=*-*-* *:17:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:27:00 UTC' "$timer"
+          grep -Fq 'OnCalendar=*-*-* *:37:00 UTC' "$timer"
+          grep -Fq 'AccuracySec=1s' "$timer"
+          grep -Fq 'RandomizedDelaySec=0' "$timer"
+          grep -Fq 'Persistent=false' "$timer"
+          grep -Fq 'Environment=SERVER_EVIDENCE_SHADOW_ONLY=true' "$service"
+          grep -Fq 'Environment=SERVER_EVIDENCE_SERVER_CANONICAL=false' "$service"
+          grep -Fq 'NoNewPrivileges=true' "$service"
+          grep -Fq 'ProtectSystem=strict' "$service"
+
+      - name: Verify zero economic/trading authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src='market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs'
+          grep -Fq 'prospectiveSlotCredit: 0' "$src"
+          grep -Fq 'canonicalEconomicCredit: 0' "$src"
+          grep -Fq 'economicSampleCredit: 0' "$src"
+          grep -Fq 'profitabilityCredit: 0' "$src"
+          grep -Fq 'replayCredit: 0' "$src"
+          grep -Fq 'backfillCredit: 0' "$src"
+          grep -Fq 'manualCredit: 0' "$src"
+          grep -Fq 'syntheticCredit: 0' "$src"
+          grep -Fq 'hindsightCredit: 0' "$src"
+          grep -Fq "executionAuthority: 'NONE'" "$src"
+          grep -Fq 'liveTrading: false' "$src"
+          grep -Fq 'autoTrading: false' "$src"
+          grep -Fq 'realOrderEnabled: false' "$src"
+          grep -Fq 'privateTradingApiAllowed: false' "$src"
+          grep -Fq 'serverCanonical: false' "$src"
+          grep -Fq 'replitAllowed: false' "$src"
+          grep -Fq 'SERVER_EVIDENCE_CANONICAL_CUTOVER_NOT_AUTHORIZED' "$src"
+          ! grep -R -E 'LIVE_TRADING=.?(true|1)|AUTO_TRADING=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)' \
+            market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs \
+            market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs \
+            market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service
+
+      - name: Verify PR-only validation boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-server-shadow-worker-v1-validation.yml'
+          grep -Fq '  pull_request:' "$workflow"
+          ! grep -Eq '^[[:space:]]{2}(schedule|workflow_dispatch|issue_comment):' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write|issues:[[:space:]]+write|actions:[[:space:]]+write|deployments:[[:space:]]+write' "$workflow"
+          ! grep -Eq '^[[:space:]]+environment:' "$workflow"

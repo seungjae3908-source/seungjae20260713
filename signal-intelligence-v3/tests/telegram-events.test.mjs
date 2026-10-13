@@ -6,13 +6,18 @@ import {
   toCanonicalTelegramAlert,
 } from '../src/telegram-events.mjs';
 
-const room = (name) => ({ STOCK_ROOM: 'stock-chat', CRYPTO_ROOM: 'crypto-chat' })[name] ?? null;
+const room = (name) => ({
+  KR_STOCK_ROOM: 'kr-stock-chat',
+  US_STOCK_ROOM: 'us-stock-chat',
+  CRYPTO_SPOT_ROOM: 'crypto-spot-chat',
+  CRYPTO_FUTURES_ROOM: 'crypto-futures-chat',
+})[name] ?? null;
 
-test('KR/US BUY routes to stock room and spot/futures routes to crypto room', () => {
-  assert.equal(telegramRoomForSignalEvent({ market: 'KR_STOCK' }), 'STOCK_ROOM');
-  assert.equal(telegramRoomForSignalEvent({ market: 'US_STOCK' }), 'STOCK_ROOM');
-  assert.equal(telegramRoomForSignalEvent({ market: 'CRYPTO_SPOT' }), 'CRYPTO_ROOM');
-  assert.equal(telegramRoomForSignalEvent({ market: 'CRYPTO_FUTURES' }), 'CRYPTO_ROOM');
+test('KR, US, spot, and futures each route to their own Telegram room', () => {
+  assert.equal(telegramRoomForSignalEvent({ market: 'KR_STOCK' }), 'KR_STOCK_ROOM');
+  assert.equal(telegramRoomForSignalEvent({ market: 'US_STOCK' }), 'US_STOCK_ROOM');
+  assert.equal(telegramRoomForSignalEvent({ market: 'CRYPTO_SPOT' }), 'CRYPTO_SPOT_ROOM');
+  assert.equal(telegramRoomForSignalEvent({ market: 'CRYPTO_FUTURES' }), 'CRYPTO_FUTURES_ROOM');
 });
 
 test('new futures LONG/SHORT use existing canonical Telegram alert types', () => {
@@ -27,7 +32,8 @@ test('new futures LONG/SHORT use existing canonical Telegram alert types', () =>
   }, room);
   assert.equal(long.type, 'crypto_futures_long');
   assert.equal(short.type, 'crypto_futures_short');
-  assert.equal(long.destinationChatId, 'crypto-chat');
+  assert.equal(long.destinationChatId, 'crypto-futures-chat');
+  assert.match(long.details, /신호 LONG/);
   assert.match(long.details, /적정 레버리지/);
   assert.match(long.details, /INDICATIVE_ONLY/);
 });

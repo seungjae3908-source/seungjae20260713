@@ -146,12 +146,37 @@ test('sanitize removes duplicate timestamps', () => assert.equal(sanitizeClosedC
 test('sanitize sorts timestamps ascending', () => assert.deepEqual(sanitizeClosedCandles([makeCandle(2, 100), makeCandle(1, 100)]).data.map((row) => row.timestamp), [START + STEP, START + 2 * STEP]));
 
 test('request validation rejects unsupported strategy', () => assert.throws(() => validateBacktestRequest(request({ strategy: 'volume_breakout' })), BacktestValidationError));
-test('request validation rejects more than 10x leverage', () => assert.throws(() => validateBacktestRequest(request({ leverage: 11 })), /레버리지/));
+test('request validation rejects more than 7x leverage', () => assert.throws(() => validateBacktestRequest(request({ leverage: 8 })), /레버리지/));
 test('request validation rejects risk above one percent', () => assert.throws(() => validateBacktestRequest(request({ riskPercent: 1.1 })), /위험률/));
 test('request validation rejects inverted period', () => assert.throws(() => validateBacktestRequest(request({ startTime: START + STEP, endTime: START })), /기간/));
 test('request validation rejects split not totaling 100', () => assert.throws(() => validateBacktestRequest(request({ validationSplit: { trainingPercent: 60, validationPercent: 30, testPercent: 30 } })), /합은 100/));
 test('request validation accepts the three implemented strategies', () => {
   for (const strategy of ['trend_pullback', 'breakout', 'vwap_reclaim'] as const) assert.doesNotThrow(() => validateBacktestRequest(request({ strategy })));
+});
+
+test('four-market direction and leverage policy keeps cash markets long-only at 1x', () => {
+  for (const [market, symbol] of [
+    ['kr-stock', '005930'],
+    ['us-stock', 'AAPL'],
+    ['crypto-spot', 'BTC'],
+  ] as const) {
+    assert.doesNotThrow(() => validateBacktestRequest(request({ market, symbol, side: 'long', leverage: 1 })));
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'short', leverage: 1 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'LONG_ONLY_MARKET',
+    );
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'both', leverage: 1 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'LONG_ONLY_MARKET',
+    );
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'long', leverage: 2 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'INVALID_LEVERAGE',
+    );
+  }
+  assert.doesNotThrow(() => validateBacktestRequest(request({
+    market: 'crypto-futures', symbol: 'BTCUSDT', side: 'both', leverage: 3,
+  })));
 });
 
 test('breakout long signal uses prior completed highs', () => {
@@ -273,7 +298,7 @@ test('maximum loss remains bounded by configured risk budget', () => {
 test('leverage change does not change riskPercent input', () => {
   const rows = breakoutFixture('long');
   const low = runBacktest(request({ side: 'long', leverage: 2, endTime: rows.at(-1)!.timestamp }), rows);
-  const high = runBacktest(request({ side: 'long', leverage: 5, endTime: rows.at(-1)!.timestamp }), rows);
+  const high = runBacktest(request({ side: 'long', leverage: 3, endTime: rows.at(-1)!.timestamp }), rows);
   assert.ok(Math.abs(low.trades[0].quantity - high.trades[0].quantity) < 1e-9);
 });
 test('result preserves backtest-only safety contract', () => {
@@ -337,11 +362,15 @@ test('warnings document stop-first policy', () => {
 test('warnings document UTC VWAP session', () => {
   const rows = breakoutFixture('long');
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
-  assert.ok(result.warnings.some((warning) => warning.includes('UTC 일 단위')));
+  assert.ok(result.warnings.some((warning) => warning.includes('협정세계시 기준 하루 단위')));
 });
 test('performance measurement returns finite duration and memory delta', () => {
   const rows = breakoutFixture('long');
   const measured = measureBacktestPerformance(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
   assert.ok(Number.isFinite(measured.durationMs));
   assert.ok(Number.isFinite(measured.heapDeltaBytes));
+});
+
+test('futures 7x analytical ceiling is accepted with no provider order', () => {
+  assert.doesNotThrow(() => validateBacktestRequest(request({ market: 'crypto-futures', symbol: 'BTCUSDT', side: 'long', leverage: 7 })));
 });

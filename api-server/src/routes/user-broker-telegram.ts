@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Router, type IRouter, type RequestHandler } from 'express';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
-import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { TradeExecutionEventBridgeService, parseExecutionSyncOrderId } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
 import { createSupabaseTelegramAlertPolicyRepository } from '../features/user-broker-telegram/telegram-alert-policy.repository';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import {
@@ -20,6 +20,10 @@ import type {
 } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
 import { sendPersonalTelegramTestMessage } from '../services/telegram-test-message.service';
+import {
+  readUserTelegramDeliveryWorkerHealth,
+  userTelegramDeliveryWorkerHealthy,
+} from '../features/user-broker-telegram/user-broker-telegram.worker';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -55,7 +59,14 @@ function errorCode(error: unknown): string {
 
 function unavailableTelegramState() {
   return {
-    telegram: { connected: false, status: 'UNAVAILABLE', connectedAt: null },
+    telegram: {
+      connected: false,
+      status: 'UNAVAILABLE',
+      connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
     preferences: defaultNotificationPreferences(),
     deliveries: [],
     telegramStorageAvailable: false,
@@ -73,6 +84,15 @@ function unavailableAlertPolicyState(userId: string) {
 }
 
 function telegramRuntimeState() {
+  const personalWorkerHealth = readUserTelegramDeliveryWorkerHealth();
+  const personalWorkerHealthy = userTelegramDeliveryWorkerHealthy(personalWorkerHealth);
+  const personalTickAt = Date.parse(personalWorkerHealth.lastTickAt ?? '');
+  // "enabled" also appears in failure snapshots when no real worker started.
+  // Count a worker as started only after a recent observed processing tick.
+  const personalWorkerStarted = personalWorkerHealth.enabled === true
+    && Number.isFinite(personalTickAt)
+    && personalTickAt <= Date.now() + 5_000
+    && Date.now() - personalTickAt <= 360_000;
   const deliveryReady = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
   const webhookConfigured = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim());
   const botUsernameConfigured = Boolean(process.env.TELEGRAM_BOT_USERNAME?.trim());
@@ -83,6 +103,15 @@ function telegramRuntimeState() {
     botUsernameConfigured,
     stockRoomReady: Boolean(process.env.TELEGRAM_STOCK_CHAT_ID?.trim()),
     cryptoRoomReady: Boolean(process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()),
+    backgroundWorkersEnabled: process.env.BACKGROUND_WORKERS_ENABLED !== 'false',
+    personalWorkerEnabled: process.env.PERSONAL_TELEGRAM_WORKER_ENABLED === 'true',
+    personalWorkerStarted,
+    personalWorkerHealthy,
+    personalWorkerErrorCode: personalWorkerHealth.errorCode,
+    personalWorkerLastTickAt: personalWorkerHealth.lastTickAt,
+    personalWorkerLastConfirmedDeliveryAt: personalWorkerHealth.lastConfirmedDeliveryAt,
+    workerActivationApproved: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true',
+    intelligenceWorkerEnabled: process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true',
     richSignalEnabled: process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED === 'true',
     aiExplanationEnabled: process.env.TELEGRAM_SIGNAL_AI_ENABLED === 'true',
     signalFollowupEnabled: process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED === 'true',
@@ -303,11 +332,12 @@ userBrokerTelegramRouter.patch('/telegram-policy', async (req, res) => {
 userBrokerTelegramRouter.post('/execution/sync', requireCapability('canAccessJournalSync'), async (req, res) => {
   try {
     const { userId, accessToken } = member(req as AuthenticatedRequest);
+    const orderId = parseExecutionSyncOrderId(req.body);
     const tradingRepository = createSupabaseTradingRepository(accessToken, userId);
     const journalRepository = createSupabasePaperJournalRepository(accessToken, userId);
     const integrationService = service(new CanonicalPortfolioSyncSink(journalRepository, userId));
     const result = await new TradeExecutionEventBridgeService(tradingRepository, integrationService)
-      .syncUser(userId, (req as AuthenticatedRequest).membershipLevel ?? 'pending');
+      .syncUser(userId, (req as AuthenticatedRequest).membershipLevel ?? 'pending', orderId ? { orderId } : {});
     res.json({ ok: true, ...result, runtimeSync: true });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error), privateApiRequests: 0, ordersSubmitted: 0, ordersCancelled: 0 });

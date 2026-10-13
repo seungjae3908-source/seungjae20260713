@@ -13,6 +13,44 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-signin-verification-gate-contract] ${message}`);
 };
 
+function firstIndexAfter(source, needles, start) {
+  const matches = needles
+    .map((needle) => source.indexOf(needle, start))
+    .filter((index) => index >= 0);
+  return matches.length ? Math.min(...matches) : -1;
+}
+
+function profileVerificationCompletion(source, verifiedApply, signUpStart) {
+  const directProfileLoad = source.indexOf(
+    'await loadProfileWithDeadline(nextSession.user);',
+    verifiedApply,
+  );
+  if (directProfileLoad >= 0 && directProfileLoad < signUpStart) return directProfileLoad;
+
+  const reconcileStart = source.indexOf(
+    'await reconcileInitialSessionProfile({',
+    verifiedApply,
+  );
+  if (reconcileStart < 0 || reconcileStart >= signUpStart) return -1;
+
+  const loadProfile = source.indexOf('loadProfileWithDeadline(', reconcileStart);
+  const hasProfile = source.indexOf('hasProfile:', reconcileStart);
+  const identityCheck = source.indexOf('isSessionCurrent:', reconcileStart);
+  const reconcileEnd = source.indexOf('});', reconcileStart);
+  if (
+    loadProfile < 0
+    || hasProfile < 0
+    || identityCheck < 0
+    || reconcileEnd < 0
+    || loadProfile > reconcileEnd
+    || hasProfile > reconcileEnd
+    || identityCheck > reconcileEnd
+    || reconcileEnd >= signUpStart
+  ) return -1;
+
+  return reconcileEnd;
+}
+
 function hasVerifiedSignInGate(source) {
   const callbackStart = source.indexOf('getSupabase().auth.onAuthStateChange(');
   const callbackGuard = source.indexOf('if (signingInRef.current && next) return;', callbackStart);
@@ -21,13 +59,16 @@ function hasVerifiedSignInGate(source) {
   const signInStart = source.indexOf('async signIn(loginName, password) {');
   const signUpStart = source.indexOf('async signUp(loginName, password) {', signInStart);
   const barrierStart = source.indexOf('signingInRef.current = true;', signInStart);
-  const verifiedSession = source.indexOf(
+  const verifiedSession = firstIndexAfter(source, [
     'const nextSession = await signInWithSupabase(name, password);',
-    signInStart,
-  );
-  const verifiedApply = source.indexOf('applySession(nextSession);', verifiedSession);
-  const profileLoad = source.indexOf('await loadProfileWithDeadline(nextSession.user);', verifiedApply);
-  const barrierRelease = source.indexOf('signingInRef.current = false;', profileLoad);
+    'authenticatedSession = await signInWithSupabase(name, password);',
+  ], signInStart);
+  const verifiedApply = firstIndexAfter(source, [
+    'applySession(nextSession);',
+    'applySession(authenticatedSession);',
+  ], verifiedSession);
+  const profileCompletion = profileVerificationCompletion(source, verifiedApply, signUpStart);
+  const barrierRelease = source.indexOf('signingInRef.current = false;', verifiedApply);
 
   return callbackStart >= 0
     && callbackGuard > callbackStart
@@ -37,8 +78,8 @@ function hasVerifiedSignInGate(source) {
     && barrierStart > signInStart
     && barrierStart < verifiedSession
     && verifiedSession < verifiedApply
-    && verifiedApply < profileLoad
-    && profileLoad < barrierRelease
+    && verifiedApply < profileCompletion
+    && profileCompletion < barrierRelease
     && barrierRelease < signUpStart;
 }
 
@@ -55,6 +96,29 @@ for (const [name, source] of [
         const nextSession = await signInWithSupabase(name, password);
         applySession(nextSession);
         await loadProfileWithDeadline(nextSession.user);
+      } finally {
+        signingInRef.current = false;
+      }
+    },
+    async signUp(loginName, password) {}
+  `],
+  ['verified recoverable profile reconciliation gate', `
+    const signingInRef = useRef(false);
+    getSupabase().auth.onAuthStateChange((_event, next) => {
+      if (signingInRef.current && next) return;
+      applySession(next);
+    });
+    async signIn(loginName, password) {
+      signingInRef.current = true;
+      let authenticatedSession = null;
+      try {
+        authenticatedSession = await signInWithSupabase(name, password);
+        applySession(authenticatedSession);
+        await reconcileInitialSessionProfile({
+          loadProfile: () => loadProfileWithDeadline(authenticatedSession.user, { force: true }),
+          hasProfile: () => profileRef.current !== null,
+          isSessionCurrent: () => sessionRef.current?.user.id === authenticatedSession.user.id,
+        });
       } finally {
         signingInRef.current = false;
       }
@@ -113,6 +177,26 @@ for (const [name, source] of [
     },
     async signUp(loginName, password) {}
   `],
+  ['gate released before recoverable profile reconciliation completes', `
+    const signingInRef = useRef(false);
+    getSupabase().auth.onAuthStateChange((_event, next) => {
+      if (signingInRef.current && next) return;
+      applySession(next);
+    });
+    async signIn(loginName, password) {
+      signingInRef.current = true;
+      let authenticatedSession = null;
+      authenticatedSession = await signInWithSupabase(name, password);
+      applySession(authenticatedSession);
+      signingInRef.current = false;
+      await reconcileInitialSessionProfile({
+        loadProfile: () => loadProfileWithDeadline(authenticatedSession.user, { force: true }),
+        hasProfile: () => profileRef.current !== null,
+        isSessionCurrent: () => sessionRef.current?.user.id === authenticatedSession.user.id,
+      });
+    },
+    async signUp(loginName, password) {}
+  `],
 ]) {
   assert(!hasVerifiedSignInGate(source), `fixture must reject ${name}`);
 }
@@ -132,4 +216,4 @@ assert(
   'password sign-in must verify the server-side user before returning the session',
 );
 
-console.log('[staging-signin-verification-gate-contract] explicit sign-in blocks early auth-state exposure until token verification and profile loading complete');
+console.log('[staging-signin-verification-gate-contract] explicit sign-in blocks early auth-state exposure until token verification and finite profile verification/reconciliation complete');

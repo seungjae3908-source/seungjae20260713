@@ -21,7 +21,14 @@ assert(
   workflow.includes("group: fast-profitability-v1-preactivation-forward-watch-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'schedule' }}"),
   'schedule and pull-request validation concurrency must be isolated',
 );
-assert(workflow.includes("run.data.event !== 'schedule'"), 'prior watch state must come from a natural schedule run');
+assert(
+  workflow.includes('listArtifactsForRepo')
+    && workflow.includes('name,')
+    && workflow.includes("run.event !== 'schedule'")
+    && workflow.includes("String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-preactivation-watch.yml'")
+    && workflow.includes("String(run.head_sha ?? '').toLowerCase() !== targetSha"),
+  'prior watch state must come from exact-name artifacts whose source run is the successful exact-SHA natural schedule workflow',
+);
 assert(workflow.includes('getBranch') && workflow.includes('mainSha'), 'current-main resolution required');
 for (const status of [
   'application-ci/verified',

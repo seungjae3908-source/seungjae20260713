@@ -23,6 +23,7 @@ import {
 } from '@/lib/backup-sync-lifecycle';
 import {
   deriveMemberTier,
+  hasCanonicalMemberAccessState,
   hasCapability,
   permissionsFor,
   type MemberCapability,
@@ -47,13 +48,14 @@ type AuthContextValue = {
   retryBootstrap(): void;
   signIn(loginName: string, password: string): Promise<void>;
   signUp(loginName: string, password: string): Promise<void>;
+  changePassword(password: string): Promise<void>;
   signOut(): Promise<void>;
   refreshProfile(): Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
-const PROFILE_AUTO_REFRESH_MS = 30_000;
+const PROFILE_AUTO_REFRESH_MS = 5_000;
 
 function validate(loginName: string, password: string) {
   const name = loginName.trim();
@@ -156,6 +158,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { data, error } = await (options.signal ? query.abortSignal(options.signal) : query).maybeSingle();
             if (error) throw error;
             const nextProfile = (data as MemberProfile | null) ?? null;
+            if (nextProfile && !hasCanonicalMemberAccessState(nextProfile)) {
+              throw new Error('MEMBER_SCHEMA_NOT_READY');
+            }
             if (
               hasCapability(profileRef.current, 'canAccessBasicInfo')
               && !hasCapability(nextProfile, 'canAccessBasicInfo')
@@ -373,13 +378,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signingInRef.current = true;
       setBootstrapError(null);
       setLoading(true);
+      let authenticatedSession: Session | null = null;
       try {
-        const nextSession = await signInWithSupabase(name, password);
-        applySession(nextSession);
-        await loadProfileWithDeadline(nextSession.user);
+        authenticatedSession = await signInWithSupabase(name, password);
+        applySession(authenticatedSession);
+        try {
+          await reconcileInitialSessionProfile({
+            loadProfile: () => loadProfileWithDeadline(authenticatedSession!.user, { force: true }),
+            hasProfile: () => profileRef.current !== null,
+            isSessionCurrent: () => sessionRef.current?.user.id === authenticatedSession!.user.id,
+          });
+          if (profileRef.current === null) throw new Error('AUTH_PROFILE_NOT_FOUND');
+        } catch (cause) {
+          setBootstrapError(authBootstrapErrorMessage(cause));
+          throw new Error('로그인은 완료됐지만 회원 정보를 확인하지 못했습니다. 다시 확인해 주세요.');
+        }
       } catch (cause) {
-        applySession(null);
-        throw new Error(authMessage(cause));
+        if (!authenticatedSession) {
+          applySession(null);
+          throw new Error(authMessage(cause));
+        }
+        throw cause instanceof Error ? cause : new Error('로그인은 완료됐지만 회원 정보를 확인하지 못했습니다. 다시 확인해 주세요.');
       } finally {
         signingInRef.current = false;
         setLoading(false);
@@ -393,6 +412,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         options: { data: { display_name: name, login_name: normalized } },
       });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
+      if (!data.session) {
+        throw new Error('회원가입 확인 메일 설정이 활성화되어 있어 이 아이디 방식으로 로그인할 수 없습니다. 관리자에게 계정 인증 설정 확인을 요청해 주세요.');
+      }
+    },
+    async changePassword(password) {
+      if (password.length < 8 || password.length > 72) throw new Error('비밀번호는 8~72자로 입력해 주세요.');
+      if (!sessionRef.current) throw new Error('로그인이 필요합니다.');
+      const { error } = await getSupabase().auth.updateUser({ password });
+      if (error) throw new Error(authMessage(error));
     },
     async signOut() {
       if (signOutTaskRef.current) return signOutTaskRef.current;

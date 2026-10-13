@@ -1,5 +1,5 @@
 export type FourMarketAutoMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
-export type FourMarketAutoProvider = 'TOSS' | 'UPBIT' | 'BITGET';
+export type FourMarketAutoProvider = 'TOSS' | 'KIWOOM' | 'UPBIT' | 'BITGET';
 export type FourMarketAutoDirection = 'BUY' | 'SELL_EXIT' | 'LONG' | 'SHORT';
 export type FourMarketAutoMarginMode = 'isolated' | 'crossed';
 
@@ -51,6 +51,14 @@ export interface TossAutoEvidence {
   sellableQuantity?: number;
 }
 
+export interface KiwoomAutoEvidence {
+  kind: 'KIWOOM';
+  sessionOpen: boolean;
+  halted: boolean;
+  tickSize: number;
+  sellableQuantity?: number;
+}
+
 export interface UpbitAutoEvidence {
   kind: 'UPBIT';
   tickSize: number;
@@ -71,7 +79,7 @@ export interface BitgetAutoEvidence {
   liquidationDistancePercent: number;
 }
 
-export type FourMarketAutoProviderEvidence = TossAutoEvidence | UpbitAutoEvidence | BitgetAutoEvidence;
+export type FourMarketAutoProviderEvidence = TossAutoEvidence | KiwoomAutoEvidence | UpbitAutoEvidence | BitgetAutoEvidence;
 
 export interface FourMarketAutoReadinessInput {
   market: FourMarketAutoMarket;
@@ -106,6 +114,7 @@ export type FourMarketAutoReadinessReason =
   | 'CASH_DIRECTION_NOT_ALLOWED'
   | 'CASH_SELL_MUST_REDUCE'
   | 'TOSS_EVIDENCE_MISMATCH'
+  | 'KIWOOM_EVIDENCE_MISMATCH'
   | 'TOSS_SESSION_CLOSED'
   | 'TOSS_MARKET_HALTED'
   | 'TOSS_TICK_SIZE_INVALID'
@@ -126,6 +135,8 @@ export interface FourMarketAutoFrozenPlan {
   readonly direction: FourMarketAutoDirection;
   readonly reduceOnly: boolean;
   readonly quantity: number;
+  readonly leverage: 2 | 3 | 4 | 5 | 6 | 7 | null;
+  readonly marginMode: 'isolated' | null;
   readonly costPolicyVersion: string;
   readonly researchCodeSha: string;
 }
@@ -140,11 +151,11 @@ export interface FourMarketAutoReadinessResult {
   liveActivationAllowed: false;
 }
 
-const PROVIDER_AUTHORITY: Readonly<Record<FourMarketAutoMarket, FourMarketAutoProvider>> = Object.freeze({
-  KR_STOCK: 'TOSS',
-  US_STOCK: 'TOSS',
-  CRYPTO_SPOT: 'UPBIT',
-  CRYPTO_FUTURES: 'BITGET',
+const PROVIDER_AUTHORITY: Readonly<Record<FourMarketAutoMarket, readonly FourMarketAutoProvider[]>> = Object.freeze({
+  KR_STOCK: ['TOSS', 'KIWOOM'],
+  US_STOCK: ['KIWOOM'],
+  CRYPTO_SPOT: ['UPBIT'],
+  CRYPTO_FUTURES: ['BITGET'],
 });
 
 const CASH_MARKETS = new Set<FourMarketAutoMarket>(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']);
@@ -177,7 +188,7 @@ function identityMatches(input: FourMarketAutoReadinessInput): boolean {
 }
 
 function validateCommon(input: FourMarketAutoReadinessInput, nowMs: number, reasons: FourMarketAutoReadinessReason[]): void {
-  if (PROVIDER_AUTHORITY[input.market] !== input.provider) reasons.push('PROVIDER_AUTHORITY_MISMATCH');
+  if (!PROVIDER_AUTHORITY[input.market].includes(input.provider)) reasons.push('PROVIDER_AUTHORITY_MISMATCH');
   if (!identityComplete(input.strategyIdentity)) reasons.push('STRATEGY_IDENTITY_INCOMPLETE');
   if (!identityMatches(input)) reasons.push('STRATEGY_IDENTITY_MISMATCH');
 
@@ -234,8 +245,9 @@ function validateCashDirection(input: FourMarketAutoReadinessInput, reasons: Fou
 
 function validateProviderEvidence(input: FourMarketAutoReadinessInput, reasons: FourMarketAutoReadinessReason[]): void {
   if (input.market === 'KR_STOCK' || input.market === 'US_STOCK') {
-    if (input.providerEvidence.kind !== 'TOSS') {
-      reasons.push('TOSS_EVIDENCE_MISMATCH');
+    const expectedKind = input.provider === 'KIWOOM' ? 'KIWOOM' : 'TOSS';
+    if (input.providerEvidence.kind !== expectedKind) {
+      reasons.push(expectedKind === 'KIWOOM' ? 'KIWOOM_EVIDENCE_MISMATCH' : 'TOSS_EVIDENCE_MISMATCH');
       return;
     }
     if (!input.providerEvidence.sessionOpen) reasons.push('TOSS_SESSION_CLOSED');
@@ -278,8 +290,10 @@ function validateProviderEvidence(input: FourMarketAutoReadinessInput, reasons: 
     || !finitePositive(input.providerEvidence.priceTick)) {
     reasons.push('BITGET_CONTRACT_EVIDENCE_INVALID');
   }
-  if (!finitePositive(input.providerEvidence.leverage)
-    || (input.providerEvidence.marginMode !== 'isolated' && input.providerEvidence.marginMode !== 'crossed')) {
+  if (!Number.isInteger(input.providerEvidence.leverage)
+    || input.providerEvidence.leverage < 2
+    || input.providerEvidence.leverage > 7
+    || input.providerEvidence.marginMode !== 'isolated') {
     reasons.push('BITGET_LEVERAGE_OR_MARGIN_INVALID');
   }
   if (!finitePositive(input.providerEvidence.liquidationDistancePercent)) {
@@ -305,6 +319,10 @@ export function evaluateFourMarketAutoPredeployReadiness(
         direction: input.direction,
         reduceOnly: input.reduceOnly,
         quantity: input.risk.quantity,
+        leverage: input.providerEvidence.kind === 'BITGET'
+          ? input.providerEvidence.leverage as 2 | 3 | 4 | 5 | 6 | 7
+          : null,
+        marginMode: input.providerEvidence.kind === 'BITGET' ? 'isolated' : null,
         costPolicyVersion: input.costPolicy.version,
         researchCodeSha: input.strategyIdentity.researchCodeSha,
       })

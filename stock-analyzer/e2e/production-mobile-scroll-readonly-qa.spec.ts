@@ -3,6 +3,7 @@ import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
 } from './support/production-readonly-policy';
+import { loginProductionReadOnly } from './support/production-readonly-login';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -64,12 +65,7 @@ function requestPath(rawUrl: string) {
 }
 
 async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+  await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 }
 
 async function auditDocumentScroll(page: Page) {

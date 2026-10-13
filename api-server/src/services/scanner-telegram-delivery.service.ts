@@ -10,7 +10,13 @@ import {
   fanoutMemberHoldingScannerAlert,
   type MemberHoldingProducerSummary,
 } from './member-holdings-telegram-producer.service';
-import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
+import type { ScannerAlertCandidate } from './scanner-signal.types';
+import {
+  telegramMarketRoomChatId,
+  telegramMarketRoomForLane,
+  telegramStockLaneForMarket,
+  type TelegramMarketRoom,
+} from './telegram-market-room.service';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
   sendTelegramAlert,
@@ -28,7 +34,7 @@ export type ScannerTelegramSender = (
   input: TelegramAlertInput,
 ) => Promise<TelegramAlertResult>;
 
-export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
+export type ScannerTelegramRoom = TelegramMarketRoom;
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
 export type ScannerMemberHoldingProducer = (
   alert: ScannerAlertCandidate,
@@ -40,9 +46,36 @@ export type ScannerMemberNotificationDeliverer = typeof deliverMemberNotificatio
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
-function formatTargetPlan(targets: readonly number[]): string {
-  if (!targets.length) return 'N/A';
-  return targets.slice(0, 3).map((target, index) => `TP${index + 1} ${target}`).join(' · ');
+function entryReference(alert: ScannerAlertCandidate): number | null {
+  if (!alert.entryZone) return null;
+  const { from, to } = alert.entryZone;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return null;
+  return (from + to) / 2;
+}
+
+function planPercent(alert: ScannerAlertCandidate, price: number | null): number | null {
+  const entry = entryReference(alert);
+  if (entry == null || price == null || !Number.isFinite(price) || price <= 0) return null;
+  const raw = alert.direction === 'SHORT'
+    ? ((entry - price) / entry) * 100
+    : ((price - entry) / entry) * 100;
+  return Number(raw.toFixed(2));
+}
+
+function formatPlanPercent(value: number | null): string {
+  if (value == null) return 'N/A';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function signalLabel(alert: ScannerAlertCandidate): string {
+  if (alert.assetClass === 'coin_futures') return alert.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
+}
+
+function formatTargetPlan(alert: ScannerAlertCandidate): string {
+  if (!alert.targets.length) return 'N/A';
+  return alert.targets.slice(0, 3).map((target, index) =>
+    `TP${index + 1} ${target} (${formatPlanPercent(planPercent(alert, target))})`).join(' · ');
 }
 
 function tradePlanLines(alert: ScannerAlertCandidate): string[] {
@@ -50,16 +83,22 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
     : 'N/A';
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
+  const actionState = alert.orderSubmitted || alert.exchangeRequestSent
+    ? '실행 상태 확인 필요'
+    : '주문 미제출 · 거래소 요청 없음';
   return [
-    `진입 ${entry}`,
-    `목표 ${formatTargetPlan(alert.targets)}`,
-    `Stop ${stop}`,
+    `신호: ${signalLabel(alert)}`,
+    `진입구간: ${entry}`,
+    `목표가: ${formatTargetPlan(alert)}`,
+    `손절/무효: ${stop} (${formatPlanPercent(planPercent(alert, alert.stopLoss))})`,
+    `주문상태: ${actionState}`,
   ];
 }
 
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
   const lines = ['🚨 진입가능', ...tradePlanLines(alert)];
-  if (alert.evidence.length) lines.push(`근거 ${alert.evidence.slice(0, 4).join(' · ')}`);
+  if (alert.evidence.length) lines.push(`판단 이유: ${alert.evidence.slice(0, 4).join(' · ')}`);
+  else lines.push('판단 이유: N/A');
   return lines.join('\n');
 }
 
@@ -72,20 +111,22 @@ export function scannerInAppNotificationInput(
   if (alert.assetClass === 'stock' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_spot' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_futures' && alert.direction !== 'LONG' && alert.direction !== 'SHORT') return null;
+  const stockLane = alert.assetClass === 'stock' ? telegramStockLaneForMarket(alert.market) : null;
+  if (alert.assetClass === 'stock' && !stockLane) return null;
 
   const lane = alert.assetClass === 'coin_futures'
     ? '코인선물'
     : alert.assetClass === 'coin_spot'
       ? '코인현물'
-      : alert.market.trim().toUpperCase() === 'US'
+      : stockLane === 'US_STOCK'
         ? '미국주식'
         : '국내주식';
   const reasons = alert.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 3);
   return {
     memberId,
     type: alert.direction === 'SHORT' ? 'ai_sell_signal' : 'ai_strong_buy',
-    title: `검색기 ${alert.direction} · ${alert.symbol}`,
-    body: `${lane} · ${alert.market}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
+    title: `검색기 ${signalLabel(alert)} 신호 · ${alert.symbol}`,
+    body: `${lane}${reasons.length ? ` · 근거 ${reasons.join(' / ')}` : ''} · 실제 주문/체결 아님`,
     url: '/scanner',
     app: true,
     push: false,
@@ -125,17 +166,19 @@ async function runScannerInAppNotification(
   }
 }
 
-export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
-  return assetClass === 'stock' ? 'STOCK_ROOM' : 'CRYPTO_ROOM';
+export function scannerTelegramRoomFor(
+  alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market'>,
+): ScannerTelegramRoom | null {
+  if (alert.assetClass === 'coin_spot') return telegramMarketRoomForLane('CRYPTO_SPOT');
+  if (alert.assetClass === 'coin_futures') return telegramMarketRoomForLane('CRYPTO_FUTURES');
+  if (alert.assetClass !== 'stock') return null;
+  const lane = telegramStockLaneForMarket(alert.market);
+  return lane ? telegramMarketRoomForLane(lane) : null;
 }
 
 export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
-  switch (room) {
-    case 'STOCK_ROOM':
-      return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-    case 'CRYPTO_ROOM':
-      return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
-  }
+  // Dedicated rooms are mandatory: never send a market signal to a shared legacy room.
+  return telegramMarketRoomChatId(room, process.env);
 }
 
 export function scannerTelegramInput(
@@ -144,7 +187,9 @@ export function scannerTelegramInput(
 ): TelegramAlertInput | null {
   if (alert.state !== 'APPROVAL_PENDING' && alert.state !== 'READY_FOR_APPROVAL') return null;
 
-  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert.assetClass));
+  const room = scannerTelegramRoomFor(alert);
+  if (!room) return null;
+  const destinationChatId = resolveRoomChatId(room);
   if (!destinationChatId) return null;
 
   if (alert.assetClass === 'stock') {
@@ -199,6 +244,19 @@ function normalizeRichTradePlan(
   return { ...input, details: lines.join('\n') };
 }
 
+function removeStaleTelegramOrderButtons(buttons: TelegramAlertInput['buttons']): TelegramAlertInput['buttons'] {
+  if (!buttons) return buttons;
+  // Keep charts and news links, but never render a stale order-review button.
+  return buttons.map((row) => row.filter((button) => {
+    try {
+      const parsed = new URL(button.url);
+      return parsed.pathname.replace(/\/+$/u, '') !== '/telegram-order';
+    } catch {
+      return false;
+    }
+  })).filter((row) => row.length > 0);
+}
+
 function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
   if (freshness.status === 'FRESH') return null;
   if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
@@ -223,7 +281,14 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  return { ...input, details: lines.join('\n') };
+  const actionable = freshness.status === 'FRESH'
+    && (alert.state === 'APPROVAL_PENDING' || alert.state === 'READY_FOR_APPROVAL')
+    && !alert.orderSubmitted && !alert.exchangeRequestSent;
+  return {
+    ...input,
+    details: lines.join('\n'),
+    buttons: actionable ? input.buttons : removeStaleTelegramOrderButtons(input.buttons),
+  };
 }
 
 async function richInput(

@@ -17,7 +17,9 @@ export const RESEARCH_CANONICAL_DATASET_COMPONENT_CONTRACT_V1 =
 const HASH64=/^[0-9a-f]{64}$/u;
 const TIMEFRAME_MS=Object.freeze({
   '15m':15*60*1000,
+  '60m':60*60*1000,
   '1h':60*60*1000,
+  '4H':4*60*60*1000,
   '1d':24*60*60*1000,
 });
 

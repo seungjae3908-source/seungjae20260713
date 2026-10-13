@@ -57,8 +57,8 @@ export function approvalOnlyPolicy(policy: TradingPolicy): TradingPolicy {
     ...policy,
     mode: 'approval',
     automaticEnabled: false,
-    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false },
-    enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+    enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
     enabledStrategies: [],
   };
 }

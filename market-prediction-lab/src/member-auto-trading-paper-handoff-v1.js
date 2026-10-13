@@ -143,6 +143,7 @@ function candidateBlockers(candidate, market, evaluatedAtMs) {
     ["quote", candidate?.quote],
     ["learningSnapshot", signal?.learningSnapshot],
     ["riskEvidence", candidate?.riskEvidence],
+    ["aiReviewEvidence", candidate?.aiReviewEvidence],
   ]) {
     const unsafe = unsafeEvidenceKey(value);
     if (unsafe) blockers.push(`HANDOFF_PRIVATE_FIELD_FORBIDDEN:${name}.${unsafe}`);
@@ -191,6 +192,9 @@ function safeEntry(candidate, cycleId, evaluatedAtMs) {
     },
     profitEvidence: clone(candidate.profitEvidence),
     riskEvidence: clone(candidate.riskEvidence ?? null),
+    // Transport an upstream review unchanged. Never manufacture PASS from
+    // formula/profit evidence; the Live consumer validates identity and expiry.
+    ...(candidate.aiReviewEvidence == null ? {} : { aiReviewEvidence: clone(candidate.aiReviewEvidence) }),
     execution: {
       marketAdapterIdentity: clone(candidate.execution?.marketAdapterIdentity ?? null),
       costPolicy: clone(candidate.execution?.costPolicy ?? null),
@@ -384,6 +388,7 @@ function validatePersistedEntry(entry, cycleId, evaluatedAtMs, nowMs) {
     ["publicQuote", entry.publicQuote],
     ["learningSnapshot", entry.signal?.learningSnapshot],
     ["riskEvidence", entry.riskEvidence],
+    ["aiReviewEvidence", entry.aiReviewEvidence],
   ]) {
     const unsafe = unsafeEvidenceKey(value);
     if (unsafe) throw new Error(`HANDOFF_PRIVATE_FIELD_FORBIDDEN:${name}.${unsafe}`);

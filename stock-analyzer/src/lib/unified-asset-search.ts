@@ -76,6 +76,7 @@ export async function fetchUnifiedAssetSuggestions(input: {
   asset?: UnifiedAssetFilter;
   market?: UnifiedMarketFilter | null;
   limit?: number;
+  accessToken?: string | null;
   signal?: AbortSignal;
 }): Promise<UnifiedAssetSuggestResponse> {
   const asset = input.asset ?? 'all';
@@ -101,6 +102,8 @@ export async function fetchUnifiedAssetSuggestions(input: {
     const response = await authorizedFetch(`/api/search/suggest?${params.toString()}`, {
       cache: 'no-store',
       signal: terminalController.signal,
+    }, {
+      accessToken: input.accessToken,
     });
     const payload = await response.json().catch(() => ({})) as Partial<UnifiedAssetSuggestResponse>;
     if (!response.ok) {

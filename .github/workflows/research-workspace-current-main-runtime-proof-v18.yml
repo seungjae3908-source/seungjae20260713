@@ -1,0 +1,117 @@
+name: Research Workspace V18 Current Main Runtime Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/external-research/scripts/verify-current-main-runtime-proof-v18.mjs'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js'
+      - '.github/workflows/research-workspace-current-main-runtime-proof-v18.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-workspace-v18-current-main-runtime-proof-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable current main
+        id: main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin "$current_main"
+          test "$(git rev-parse FETCH_HEAD^{commit})" = "$current_main"
+          printf 'sha=%s\n' "$current_main" >> "$GITHUB_OUTPUT"
+
+      - name: Build current-main Phase18 dependency proof
+        shell: bash
+        env:
+          CURRENT_MAIN_SHA: ${{ steps.main.outputs.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p runtime-proof
+          node packages/external-research/scripts/verify-current-main-runtime-proof-v18.mjs             "$CURRENT_MAIN_SHA" "$PR_HEAD_SHA" runtime-proof/current-main-runtime-proof-v18.json
+
+      - name: Verify proof and no execution authority
+        shell: bash
+        env:
+          CURRENT_MAIN_SHA: ${{ steps.main.outputs.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const fs=require('node:fs');
+          const p=JSON.parse(fs.readFileSync('runtime-proof/current-main-runtime-proof-v18.json','utf8'));
+          const fail=(m)=>{throw new Error(m)};
+          if(p.schemaVersion!=='research-canonical-evaluation-current-main-runtime-proof-v18') fail('SCHEMA');
+          if(p.currentMainSha!==process.env.CURRENT_MAIN_SHA) fail('MAIN_SHA');
+          if(p.prHeadSha!==process.env.PR_HEAD_SHA) fail('PR_SHA');
+          if(p.currentMainDependenciesPresent!==true) fail('DEPENDENCIES_NOT_PRESENT');
+          if(p.prHeadReconciliationRequired!==true) fail('PR_HEAD_RECONCILIATION_MUST_REMAIN_EXPLICIT');
+          const expected={
+            formulaCompiler:['#550','BOUNDED_FORMULA_COMPILER_V1','market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js'],
+            canonicalBacktester:['#690','ONE_PASS_EXECUTION_EQUIVALENT_BACKTESTER_V1','market-prediction-lab/src/independent-strategy-backtest.js'],
+            statisticalFirewall:['#547','CANONICAL_STATISTICAL_FIREWALL_V1','market-prediction-lab/src/global-strategy-statistical-firewall-v1.js'],
+            statisticalFirewallAdapter:['#547','TOURNAMENT_STATISTICAL_FIREWALL_ADAPTER_V1','market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js'],
+          };
+          for(const [key,[owner,capability,path]] of Object.entries(expected)){
+            const row=p.dependencies?.[key];
+            if(row?.status!=='PRESENT'||row.ownerRef!==owner||row.capability!==capability||row.implementationPath!==path
+              ||!/^[0-9a-f]{40}$/.test(row.implementationBlobSha||'')) fail('DEPENDENCY:'+key);
+          }
+          if(p.providerCalls!==0||p.compilerRuns!==0||p.backtestRuns!==0) fail('EXECUTION_OCCURRED');
+          if(p.finalHoldoutPreAccess!==false||p.automaticAdoption!==false||p.paperActivation!==false||p.liveActivation!==false
+            ||p.profitabilityProven!==false||p.executionAuthority!=='NONE') fail('AUTHORITY_WIDENED');
+          if(!/^[0-9a-f]{64}$/.test(p.proofDigest)) fail('DIGEST');
+          NODE
+
+      - name: Verify Phase18 contract expects the same owners and paths
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          contract='packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js'
+          grep -Fq "ownerRef:'#550'" "$contract"
+          grep -Fq "market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js" "$contract"
+          grep -Fq "ownerRef:'#690'" "$contract"
+          grep -Fq "market-prediction-lab/src/independent-strategy-backtest.js" "$contract"
+          grep -Fq "ownerRef:'#547'" "$contract"
+          grep -Fq "market-prediction-lab/src/global-strategy-statistical-firewall-v1.js" "$contract"
+          grep -Fq "market-prediction-lab/src/research-tournament-statistical-firewall-adapter-v1.js" "$contract"
+          grep -Fq "compilerRuns:0" "$contract"
+          grep -Fq "backtestRuns:0" "$contract"
+          grep -Fq "automaticAdoption:false" "$contract"
+          grep -Fq "executionAuthority:'NONE'" "$contract"
+
+      - name: Revalidate main did not move during proof
+        shell: bash
+        env:
+          CURRENT_MAIN_SHA: ${{ steps.main.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          latest="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$latest" = "$CURRENT_MAIN_SHA"
+
+      - name: Upload sanitized current-main proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-workspace-v18-current-main-runtime-proof-${{ steps.main.outputs.sha }}
+          path: runtime-proof/current-main-runtime-proof-v18.json
+          if-no-files-found: error
+          retention-days: 30

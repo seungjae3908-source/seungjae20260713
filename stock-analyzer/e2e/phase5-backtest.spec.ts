@@ -39,6 +39,7 @@ async function runAndWait(page: Page) {
 
 for (const viewport of [
   { name: 'desktop 1440x900', width: 1440, height: 900 },
+  { name: 'tablet 1024x768', width: 1024, height: 768 },
   { name: 'mobile 390x844', width: 390, height: 844 },
   { name: 'small mobile 360x740', width: 360, height: 740 },
 ]) {
@@ -80,6 +81,23 @@ test('form controls remain usable and accessible by labels and touch', async ({ 
   await page.getByTestId('run-backtest').tap();
   await expect(page.getByTestId('backtest-results')).toBeVisible();
   await assertNoHorizontalOverflow(page);
+});
+
+test('advanced settings opens as a closable responsive popup instead of expanding the page', async ({ page }) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await openPage(page);
+    await page.getByTestId('backtest-advanced-settings').click();
+    const dialog = page.getByRole('dialog', { name: '백테스트 세부 설정' });
+    await expect(dialog).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+    await dialog.getByRole('button', { name: '닫기' }).click();
+    await expect(dialog).toHaveCount(0);
+  }
 });
 
 test('empty result renders explicit empty charts and trade state', async ({ page }) => {
