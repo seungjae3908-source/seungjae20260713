@@ -12,14 +12,15 @@ const NOW = Date.UTC(2026, 9, 13, 12);
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
 function entry(market = 'CRYPTO_FUTURES', direction = 'LONG') {
+  const timeframe = market === 'CRYPTO_SPOT' ? '4H' : '60m';
   return {
     identity: {
       signalId: `signal:${market}:${direction}`, market, symbol: market === 'CRYPTO_SPOT' ? 'BTC' : market.includes('STOCK') ? 'AAPL' : 'BTCUSDT',
-      timeframe: '60m', horizon: 1, direction, strategyId: 'profit-first-swing', strategyVersion: 'v1',
+      timeframe, horizon: 1, direction, strategyId: 'profit-first-swing', strategyVersion: 'v1',
       parameterHash: 'params-v1', researchCodeSha: SHA, costPolicyVersion: 'cost-v1', executionAuthority: 'NONE',
     },
     profitEvidence: {
-      status: 'READY', market, timeframe: '60m', direction, strategyVersion: 'v1', costPolicyId: 'cost-v1',
+      status: 'READY', market, timeframe, direction, strategyVersion: 'v1', costPolicyId: 'cost-v1',
       expectedNetEdge: 1.2, expectedNetReturn: 0.8, riskRewardRatio: 2, sampleSize: 100, executionAuthority: 'NONE',
     },
     execution: { costPolicy: {
@@ -52,7 +53,7 @@ function eligibleCard(e, nowMs) {
     dataQuality: { state: 'TRUSTED', strongSignalAllowed: true },
     strongSignalEligible: true,
     candidateRanking: { hardFilterPassed: true },
-    signalGrade: 'A',
+    signalGrade: 'S',
     riskLevel: 'LOW',
     pricePlan: { entryZone: { from: 99, to: 101 }, stopLoss: 95, targets: [110] },
     dataSources: ['fixture-public'],
@@ -123,7 +124,7 @@ test('no-order E2E publishes four-market scanner candidates and gates the same h
   ];
   entries[4].identity.symbol = 'ETHUSDT';
   const handoff = { status: 'READY', entries };
-  const inputs = entries.map((item) => canonicalAdapterInputForCard(eligibleCard(item, nowMs), '60m', handoff));
+  const inputs = entries.map((item) => canonicalAdapterInputForCard(eligibleCard(item, nowMs), item.identity.timeframe, handoff));
   const adapted = adaptCanonicalScannerCards(inputs, { nowMs });
   const published = { ...runSignalIntelligenceV3(adapted), serviceSha: SHA, publicDataOnly: true, rosterBindingVersion: 1 };
   assert.deepEqual(Object.fromEntries(Object.entries(published.lists).map(([key, value]) => [key, value.length])), {

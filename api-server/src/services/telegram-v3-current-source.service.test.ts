@@ -12,7 +12,7 @@ import {
 const SHA='a'.repeat(40),EPOCH='d0b3f7c2-9be7-4a1f-bd93-2d8e9b8e1d6a';
 const NOW=Date.parse('2026-10-11T06:00:00.000Z');
 const LANE_IDS=['KR','US','SPOT','FUTURES'].flatMap(m=>
- ['SCALPING_15M','SWING_60M','MID_LONG_1D'].map(t=>m+'_'+t));
+ ['SCALPING_15M',m==='SPOT'?'SWING_4H':'SWING_60M','MID_LONG_1D'].map(t=>m+'_'+t));
 const ID='US_STOCK|AAPL|SWING|60m|BUY';
 function fixture(){
  const coverage=LANE_IDS.map(laneId=>{
@@ -22,7 +22,7 @@ function fixture(){
    return {
      laneId,sourceCycleId:EPOCH,market,
      strategy:laneId.split('_').slice(1,-1).join('_'),
-     timeframe:laneId.endsWith('15M')?'15m':laneId.endsWith('60M')?'60m':'1D',
+     timeframe:laneId.endsWith('15M')?'15m':laneId.endsWith('60M')?'60m':laneId.endsWith('4H')?'4H':'1D',
      universeSource:market==='US_STOCK'?'nasdaq-trader-public-directory'
        :market==='KR_STOCK'?'krx-symbol-master':
          market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',
@@ -89,6 +89,19 @@ test('current 12-lane V3 current-page proof permits only a valid market candidat
    'the empty snapshot contract is structurally safe');
  assert.equal(verifiedTelegramV3PageCount(blocked),0,
    'structural safety must not be reported as fresh signal-source health');
+});
+test('Spot SWING canonical 4H lane can deliver an exact candidate event',()=>{
+ const shot:any=fixture(),row=shot.rows[0],event=shot.events[0];
+ const id='CRYPTO_SPOT|BTC|SWING|4H|BUY';
+ Object.assign(row,{id,market:'CRYPTO_SPOT',symbol:'BTC',timeframe:'4H'});
+ Object.assign(event,{id,market:'CRYPTO_SPOT',symbol:'BTC',timeframe:'4H'});
+ Object.assign(row.provenance,{laneId:'SPOT_SWING_4H'});
+ Object.assign(row.provenance.paperIdentity,{market:'CRYPTO_SPOT',symbol:'BTC',timeframe:'4H'});
+ const lane=shot.coverage.find((item:any)=>item.laneId==='SPOT_SWING_4H');
+ Object.assign(lane,{status:'CANDIDATES_AVAILABLE',lastGoodPreserved:false,
+   cursorRotatedBlockedOnly:false,responseDataState:'complete',universePartial:false,
+   scannedCards:1,retainedFromBatch:1});
+ assert.equal(validTelegramV3CurrentSource(shot,NOW),true);
 });
 test('mixed rescan/new-candidate and state-change V3 events do not suppress real candidate or send informational events',async()=>{
  const mixed:any=fixture();
