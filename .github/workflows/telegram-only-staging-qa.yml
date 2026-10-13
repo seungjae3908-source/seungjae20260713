@@ -22,6 +22,8 @@ on:
       - 'api-server/src/features/user-broker-telegram/**'
       - 'api-server/scripts/*telegram*'
       - 'stock-analyzer/src/**/*telegram*'
+      - stock-analyzer/src/lib/app-navigation.ts
+      - .github/tests/staging-navigation-release-contract.test.mjs
       - stock-analyzer/src/lib/watchlist-sync.ts
       - stock-analyzer/src/pages/watchlist.tsx
       - stock-analyzer/e2e/telegram-member-watchlist-identity-boundary.spec.ts
@@ -75,7 +77,8 @@ jobs:
             .github/tests/telegram-watchlist-consent-contract.test.mjs \
             .github/tests/telegram-isolated-worker-contract.test.mjs \
             .github/tests/telegram-batch-release-verdict.test.mjs \
-            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs
+            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs \
+            .github/tests/staging-navigation-release-contract.test.mjs
 
   protected-staging-network:
     name: Staging Telegram-only network and exact-SHA evidence, no send/deploy
@@ -154,7 +157,8 @@ jobs:
             .github/tests/telegram-watchlist-consent-contract.test.mjs \
             .github/tests/telegram-isolated-worker-contract.test.mjs \
             .github/tests/telegram-batch-release-verdict.test.mjs \
-            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs
+            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs \
+            .github/tests/staging-navigation-release-contract.test.mjs
       - name: Configure isolated Staging SSH, fail closed without known host pinning
         run: |
           set -Eeuo pipefail
