@@ -185,6 +185,9 @@ function futuresResponse() {
 }
 
 async function fulfill(route: Route, payload: unknown) {
+  if (payload && typeof payload === 'object' && 'cards' in payload) {
+    payload = { ...payload, timeframe: new URL(route.request().url()).searchParams.get('timeframe') };
+  }
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) });
 }
 

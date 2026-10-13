@@ -17,6 +17,60 @@ LONG and SHORT are evaluated independently. When both sides for the same market/
 
 ## AI committee contract
 
+### Manual public-evidence review in the app (Draft)
+
+The signal-detail `AI 근거 검토` button calls the existing authenticated
+`POST /api/market/scan/ai-review` endpoint only on explicit click. Ordinary scans
+and automatic polling capture bounded public snapshots without calling a model.
+The request accepts only `signalId` and a server-produced `evidenceKey`.
+Snapshots are member-scoped, retained for at most five minutes or the card's
+expiry, and checked before and after analysis. Client prices/facts, other-member
+snapshots, expired evidence and revoked access do not authorize a review.
+
+The existing AI provider chain is reused; configured providers may incur cost.
+There is no new credential, provider migration or live model verification in this
+Draft. Grounded structured summaries separate server facts, model inferences,
+missing evidence and risks. They never update ranking/score, provide a profit
+probability, set profitability PASS, place a Paper/real order or send Telegram.
+Missing providers/invalid output are explicit unavailable results, not AI PASS.
+
+### Public-cycle progress and publication
+
+`public-cycle-progress-v2` permits research-only cursor advancement for a fully
+attempted, error-free page from the market-matched roster even when source/data
+coverage is incomplete. Such pages remain `BLOCKED_DATA`, never candidates or
+valid zero trades. Provider failures/timeouts, missing execution fields and
+cursor evidence mismatches hold the cursor. Roster floors only detect anomalous
+truncation, not full-market or historical/PIT coverage.
+
+The normal US app path and public runner share the strict Nasdaq Trader
+`nasdaqlisted.txt` / `otherlisted.txt` parser when a configured Finnhub roster
+is unavailable. Both schemas, final creation-time footers and source timeliness
+must validate; HTML, tiny/truncated pairs and unknown fallback catalogs do not
+become verified current rosters. The footer's New York time remains the search
+index basis time, distinct from the download time. This current listing source
+does not supply delisted/PIT history, corporate actions or licensed minute bars.
+
+Producer state schema 3 binds each lane cursor to a SHA-256 of the ordered
+eligible roster. Listing/source/order changes reset the lane to zero before
+publication. Snapshot roster-binding version 1 also requires matching current
+page and row provenance. Dynamic price/volume changes do not change this binding.
+
+The stock scanner excludes open intraday candles and daily bars before regular
+exchange-local close (US DST-aware); early-close calendars remain outside this
+contract. Requested upper-timeframe candles receive their own OHLC/time/volume
+quality checks and need 60 bars for the existing EMA60 context. Missing, stale,
+invalid or insufficient context cannot be silently replaced by primary candles
+or authorize an S/A plan. A blocked empty page is data-quality rejection, not a
+verified zero-signal result.
+
+Current lists/events require this cycle's page provenance; retained history is
+kept in research rows, not reissued as fresh signals. Health distinguishes a
+recent file timestamp from twelve verified current pages. Neither proves that
+the whole roster was swept, profitability passed, or Paper is ready. Future
+timestamps and a mismatching service revision fail closed. The standalone
+fixture runner remains a contract test, not a live-market profit result.
+
 V3 accepts normalized findings from Catalyst, Technical Change, Risk Critic, and Contradiction AI roles.
 
 AI may:
