@@ -270,9 +270,9 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/src/lib/excel-export.ts",
   ".github/scripts/paper-forward-reviewed-paths.mjs"
 ]);
-// Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
-// directory exemption or permission to deploy/activate. Keep the immutable
-// legacy Paper set separate and preserve every existing safety assertion.
+// Exact AUTO safety paths; this Draft proposes six external-Pilot paths for
+// owner review. This is not a directory exemption or permission to deploy or
+// activate. Keep the immutable legacy Paper set separate.
 export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   ".github/config/automatic-live-preactivation-checklist.json",
   ".github/scripts/automatic-live-preactivation-audit.cjs",
@@ -301,11 +301,16 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/automatic-live-unrealized-risk.service.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.test.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.ts",
+  "api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts",
+  "api-server/src/services/formula-ai-live-exception.service.test.ts",
+  "api-server/src/services/formula-ai-live-exception.service.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
   "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
+  "api-server/src/services/member-auto-trading-live-arm.service.ts",
   "api-server/src/services/public-live-plan-origin.service.test.ts",
   "api-server/src/services/public-live-plan-origin.service.ts",
+  "api-server/src/services/trade-automation-optimization.service.ts",
   "api-server/src/services/trade-automation-repository-compatibility.test.ts",
   "api-server/src/services/trade-execution-snapshot.service.ts",
   "api-server/src/services/trade-history-completeness.service.test.ts",
@@ -324,6 +329,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/production-auto-live-signal-identity.cjs",
   "ops/production-auto-live-signal-source-audit.mjs",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
+  "stock-analyzer/src/components/trade-automation-settings.tsx",
 ]);
 // Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
 // admission bridge. Paths that previously belonged to the immutable Scanner
