@@ -7,7 +7,7 @@ import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURC
 import { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 
 const base = 'b'.repeat(40), blob = 'a'.repeat(40), drift = 'c'.repeat(40);
-const stock = 'api-server/src/services/stock-signal-scanner.service.ts';
+const stock = 'api-server/src/providers/krx.ts';
 const read = path => readFileSync(new URL('../../' + path, import.meta.url), 'utf8').replace(/\r\n/gu, '\n');
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
@@ -57,10 +57,13 @@ test('automatic signal pipeline overlap is routed to full Trading guards, never 
     'api-server/src/services/scanner-indicator-library.service.ts',
     'api-server/src/services/scanner-quant-strategy.service.test.ts',
     'api-server/src/services/scanner-quant-strategy.service.ts',
+    'api-server/src/services/stock-signal-scanner.service.ts',
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
     'signal-intelligence-v3/README.md',
     'signal-intelligence-v3/scripts/run-public-scanner-cycle.ts',
+    'signal-intelligence-v3/src/public-cycle-progress-v2.mjs',
+    'signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs',
   ]);
   assert.deepEqual(verifyPinnedScannerScope(overlap, base, () => {
     throw new Error('FULL_TRADING_REVIEW_MUST_NOT_READ_PINNED_BLOB');

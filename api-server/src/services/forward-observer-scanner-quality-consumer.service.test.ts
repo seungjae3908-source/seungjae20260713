@@ -164,7 +164,7 @@ test('exact direction and Promotion identity select one verified futures quality
     researchCodeSha: SHA,
   });
   assert.equal(selected.status, 'READY');
-  assert.equal(selected.backtests.BTCUSDT?.status, 'verified');
+  assert.equal(selected.backtests['BTCUSDT|LONG']?.status, 'verified');
   assert.deepEqual(selected.matchedSymbols, ['BTCUSDT']);
   assert.equal(selected.executionAuthority, 'NONE');
   assert.equal(selected.automaticPromotionAuthority, false);
@@ -183,18 +183,21 @@ test('opposite-side quality is never borrowed', () => {
   assert.ok(selected.blockers.some((item) => item.code === 'SCANNER_QUALITY_EXACT_ENTRY_REQUIRED'));
 });
 
-test('same-symbol mixed LONG and SHORT request fails closed for symbol-keyed ranking map', () => {
+test('same-symbol mixed LONG and SHORT keep direction-isolated quality keys', () => {
   const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
-  const artifact = artifactFor('BTCUSDT', 'LONG');
+  const long = artifactFor('BTCUSDT', 'LONG');
+  const short = artifactFor('BTCUSDT', 'SHORT');
+  const artifact = { ...long, entries: [...long.entries, ...short.entries] };
   const selected = selectForwardObserverScannerBacktests({
     artifact,
     cards: [card('BTCUSDT', 'LONG'), card('BTCUSDT', 'SHORT')],
     lane,
     researchCodeSha: SHA,
   });
-  assert.equal(selected.status, 'BLOCKED_DATA');
-  assert.deepEqual(selected.backtests, {});
-  assert.ok(selected.blockers.some((item) => item.code === 'SCANNER_QUALITY_SYMBOL_DIRECTION_AMBIGUOUS'));
+  assert.equal(selected.status, 'READY');
+  assert.equal(selected.backtests['BTCUSDT|LONG']?.status, 'verified');
+  assert.equal(selected.backtests['BTCUSDT|SHORT']?.status, 'verified');
+  assert.deepEqual(selected.matchedSymbols, ['BTCUSDT']);
 });
 
 test('missing artifact preserves fail-closed unavailable state with no invented quality', () => {

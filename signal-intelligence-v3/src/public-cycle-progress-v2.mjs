@@ -6,8 +6,26 @@ const sources = {
 };
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const lanes = ['KR', 'US', 'SPOT', 'FUTURES'].flatMap(m =>
-  ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
+  ['SCALPING_15M', m === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
 const marketForLane = lane => ({ KR: 'KR_STOCK', US: 'US_STOCK', SPOT: 'CRYPTO_SPOT', FUTURES: 'CRYPTO_FUTURES' })[lane?.split('_')[0]];
+
+// Stock producers publish the detailed counters directly. The older crypto
+// response contract only publishes completed work plus per-symbol failures.
+// Derive a conservative equivalent instead of turning an omitted optional
+// field into a false zero in public-cycle evidence.
+export function publicExecutionEvidence(execution, failures = []) {
+  const completed = count(execution?.completedCount) ? execution.completedCount : 0;
+  const invalidData = Math.min(completed, Array.isArray(failures)
+    ? failures.filter(failure => failure?.reason === 'invalid_data').length : 0);
+  const value = (candidate, fallback) => count(candidate) ? candidate : fallback;
+  return {
+    providerAcceptedCount: value(execution?.providerAcceptedCount, completed),
+    dataSuccessCount: value(execution?.dataSuccessCount, Math.max(0, completed - invalidData)),
+    insufficientDataCount: value(execution?.insufficientDataCount, invalidData),
+    filteredByStrategyCount: value(execution?.filteredByStrategyCount, 0),
+    staleCount: value(execution?.staleCount, 0),
+  };
+}
 
 export function publicCyclePageDecision(response, market, cursor, expectedRosterId) {
   const hold = (status, reason) => ({ status, nextCursor: cursor, blockedObservationOnly: false, reason });
