@@ -180,6 +180,25 @@ export async function parseBoundedPublicJson(response, maxBytes = 4_000_000) {
     throw new Error('PUBLIC_RESPONSE_JSON_INVALID');
   }
 }
+// Upbit removed market_warning (Nov 2024). Only market_event from an
+// is_details=true current public roster can establish that a KRW symbol is
+// not currently flagged. The ticker page is not authoritative for warnings.
+export function isUnflaggedUpbitKrwMarket(row) {
+  const market=String(row?.market??'').trim().toUpperCase();
+  if(!/^KRW-[A-Z0-9._-]{1,32}$/u.test(market)) return false;
+  const event=row?.market_event;
+  if(!event||typeof event!=='object'||Array.isArray(event)
+    ||typeof event.warning!=='boolean'
+    ||!event.caution||typeof event.caution!=='object'
+    ||Array.isArray(event.caution))
+    throw new Error('UPBIT_MARKET_EVENT_UNVERIFIED');
+  const caution=Object.values(event.caution);
+  if(!caution.length||caution.length>32
+    ||caution.some(v=>typeof v!=='boolean'))
+    throw new Error('UPBIT_MARKET_CAUTION_UNVERIFIED');
+  return !event.warning&&!caution.some(Boolean);
+}
+
 export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   if (!Array.isArray(marketRows) || !Array.isArray(tickerRows))
     throw new Error('UPBIT_PUBLIC_SHAPE_INVALID');
@@ -187,7 +206,8 @@ export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   for (const row of marketRows) {
     const market = String(row?.market ?? '').trim().toUpperCase();
     if (!/^KRW-[A-Z0-9._-]{1,32}$/.test(market)) continue;
-    if (String(row.market_warning ?? 'NONE').toUpperCase() !== 'NONE') continue;
+    if (!isUnflaggedUpbitKrwMarket(row)) continue;
+    if (listed.has(market)) throw new Error('UPBIT_MARKET_ROSTER_DUPLICATE');
     listed.set(market, market.slice(4));
   }
   const quotes = [];

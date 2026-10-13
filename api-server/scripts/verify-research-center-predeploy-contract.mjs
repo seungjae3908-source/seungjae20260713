@@ -218,6 +218,25 @@ requireText(videoSource, 'profitabilityCredit: 0', 'video profitability credit l
 requireText(videoSource, "executionAuthority: 'NONE'", 'video execution authority lock');
 requireText(workspace, "reason:'ONE_SHOT_ROOT_NOT_CONFIGURED'", 'workspace unavailable-not-zero behavior');
 
+// This new original-minute source inventory is an admin GET readback only.
+// It does NOT grant strategy/Paper/LIVE authority, nor prove original-time signals.
+const pitReader = await read('market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js');
+const pitPanel = await read('stock-analyzer/src/components/research-pit-minute-coverage.tsx');
+const pitPeriod = await read('stock-analyzer/src/lib/research-pit-minute-coverage-period.ts');
+requireText(workspace, "router.all('/pit-minute-coverage'", 'admin PIT 1m GET route');
+requireText(workspace, "res.setHeader('Cache-Control', 'no-store, max-age=0')", 'PIT no-cache');
+requireText(workspace, "if (req.method !== 'GET')", 'PIT read-only method gate');
+requireText(pitReader, 'constants.O_RDONLY|constants.O_NOFOLLOW', 'PIT private no-follow');
+requireText(pitReader, 'financialMutationCount:0', 'PIT no mutations');
+requireText(pitReader, 'profitabilityProven:false', 'PIT no invented performance');
+requireText(pitReader, 'executionAuthority:"NONE"', 'PIT no trading authority');
+requireText(pitPanel, 'collectPITMinuteCoveragePeriod', 'PIT bounded period read');
+requireText(pitPanel, 'gcTime: 0', 'PIT auth-scoped cache');
+requireText(pitPeriod, 'const CONCURRENCY = 3', 'PIT bounded concurrent reads');
+requireText(pitPeriod, 'const CHUNK = 31', 'PIT bounded source chunks');
+requireText(pitPeriod, 'fullMarketOpportunityDenominatorVerified: false', 'PIT independent market opportunity not proven');
+if (/\b(?:fetch|axios)\s*\(/u.test(pitReader)) fail('PIT provider calls forbidden in admin source readback');
+
 console.log('[research-center-predeploy] PASS');
 console.log('[research-center-predeploy] overview=CONNECTED admin capability aligned');
 console.log('[research-center-predeploy] video/workspace=CONNECTED read-only/admin nested boundary');

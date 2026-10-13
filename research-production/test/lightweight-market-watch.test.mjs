@@ -7,6 +7,7 @@ import {
   WATCH_CAPPED_AUDIT_CONTRACT, WATCH_CAPPED_AUDIT_LIMITS, blockedSource,
   evaluateMarketOpportunities, evaluateWatchBudget,
   normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
+  isUnflaggedUpbitKrwMarket,
   parseBoundedPublicJson, watchCycleDigest,
 } from '../src/lightweight-market-watch.mjs';
 
@@ -30,11 +31,13 @@ test('2-vCPU/4GB Vultr budget protects existing app under memory, CPU or disk pr
 });
 
 test('Upbit public snapshot scans KRW tickers, excludes warning and stale quotes', () => {
+  const clean = {warning:false,caution:{PRICE_FLUCTUATIONS:false}};
+  const warned = {warning:true,caution:{PRICE_FLUCTUATIONS:false}};
   const markets = [
-    { market: 'KRW-BTC', market_warning: 'NONE' },
-    { market: 'KRW-ETH', market_warning: 'NONE' },
-    { market: 'BTC-ETH', market_warning: 'NONE' },
-    { market: 'KRW-BAD', market_warning: 'CAUTION' },
+    { market: 'KRW-BTC', market_event:clean },
+    { market: 'KRW-ETH', market_event:clean },
+    { market: 'BTC-ETH', market_event:clean },
+    { market: 'KRW-BAD', market_event:warned },
   ];
   const tickers = [
     { market: 'KRW-BTC', trade_price: 100, signed_change_rate: 0.05,
@@ -666,4 +669,38 @@ test('market-watch worker persists private capped evidence before publishing ord
   assert.match(script, /cappedCandidateAudits\.push/);
   assert.match(script, /'watch', 'capped'/);
   assert.doesNotMatch(script, /placeOrder\(|AUTO_TRADING\s*=\s*true/);
+});
+
+
+test('Upbit current 2026 market_event warning/caution controls both watcher and quoted symbol selection',async()=>{
+  const safe={market:'KRW-BTC',market_event:{
+    warning:false,caution:{PRICE_FLUCTUATIONS:false,TRADING_VOLUME_SOARING:false},
+  }};
+  const warning={market:'KRW-ETH',market_event:{
+    warning:true,caution:{PRICE_FLUCTUATIONS:false},
+  }};
+  const caution={market:'KRW-XRP',market_event:{
+    warning:false,caution:{PRICE_FLUCTUATIONS:true},
+  }};
+  assert.equal(isUnflaggedUpbitKrwMarket(safe),true);
+  assert.equal(isUnflaggedUpbitKrwMarket(warning),false);
+  assert.equal(isUnflaggedUpbitKrwMarket(caution),false);
+  assert.throws(()=>isUnflaggedUpbitKrwMarket({
+    market:'KRW-BTC',market_warning:'NONE',
+  }),/UPBIT_MARKET_EVENT_UNVERIFIED/);
+  assert.throws(()=>isUnflaggedUpbitKrwMarket({
+    market:'KRW-BTC',market_event:{warning:false,caution:{X:'false'}},
+  }),/UPBIT_MARKET_CAUTION_UNVERIFIED/);
+  const quote={market:'KRW-BTC',trade_price:100,
+    signed_change_rate:0.02,acc_trade_price_24h:1e9,timestamp:NOW-1000};
+  const verified=normalizeUpbitSnapshot(
+    [safe,warning,caution],[quote],NOW);
+  assert.equal(verified.status,'READY');
+  assert.deepEqual(verified.quotes.map(r=>r.symbol),['BTC']);
+  assert.throws(()=>normalizeUpbitSnapshot([
+    safe,{market:'KRW-DOGE',market_warning:'NONE'},
+  ],[quote],NOW),/UPBIT_MARKET_EVENT_UNVERIFIED/);
+  const src=await readFile(new URL('../bin/lightweight-market-watch.mjs',import.meta.url),'utf8');
+  assert.match(src,/\/v1\/market\/all\?is_details=true/);
+  assert.doesNotMatch(src,/\/v1\/market\/all\?isDetails=true/);
 });
