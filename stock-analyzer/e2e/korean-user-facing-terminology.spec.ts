@@ -21,6 +21,7 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     '코인선물',
     '검색기',
     'AI차트',
+    '기술매매',
     '자동매매',
     '모의매매',
     '과거검증',
@@ -61,8 +62,10 @@ test('primary user-facing navigation uses Korean-first terminology without chang
   for (const canonicalStagingLabel of [
     "name: 'AI차트'",
     "openMenuRoute('technical', 'AI차트'",
-    "openMenuRoute('technical', '모의매매'",
-    "['검색기', 'AI차트', '과거검증', '모의매매']",
+    "openMenuRoute('technical', '기술매매'",
+    "['검색기', 'AI차트', '기술매매', '과거검증']",
+    "getByTestId('technical-mode-paper')",
+    "getByTestId('paper-trading-shell')",
   ]) {
     expect(stagingReadiness).toContain(canonicalStagingLabel);
   }
@@ -71,6 +74,8 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     "name: 'AI 차트'",
     "openMenuRoute('technical', 'AI 차트'",
     "openMenuRoute('technical', '모의자동매매'",
+    "openMenuRoute('technical', '모의매매'",
+    "['검색기', 'AI차트', '과거검증', '모의매매']",
     "['AI 신호검색기', 'AI 차트', '백테스트', '모의자동매매']",
   ]) {
     expect(stagingReadiness).not.toContain(staleStagingLabel);

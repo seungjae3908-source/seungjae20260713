@@ -2686,7 +2686,9 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
+    // A separate Paper menu was removed when technical trading was unified.
+    await expect(page.getByRole('menuitem', { name: '모의매매', exact: true })).toHaveCount(0);
+    for (const label of ['검색기', 'AI차트', '기술매매', '과거검증']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
@@ -2701,6 +2703,15 @@ test.describe('real staging release readiness', () => {
         }
         await item.click();
       });
+      if (label === '기술매매') {
+        // Real user path: consolidated 기술매매 shell -> Paper mode tab.
+        await expect(page.getByTestId('technical-mode-paper')).toBeVisible();
+        await expectNavigationTransition(page, '/paper-trading', async () => {
+          await page.getByTestId('technical-mode-paper').click();
+        });
+        await expect(page.getByTestId('paper-trading-shell')).toBeVisible();
+        await expect(page.getByTestId('technical-mode-paper')).toHaveAttribute('aria-pressed', 'true');
+      }
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');
