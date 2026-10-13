@@ -547,6 +547,85 @@ requireText(paperWorker, 'formulaAiReviewReasonsForLive(input.entry, input.nowMs
 requireText(paperWorker, "if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_BLOCKED_RUNTIME_STATUS_MISSING');
 requireText(paperWorker, "throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_MISSING_PROOF_BLOCK_MISSING');
 requireText(handoffContract, 'canonicalAiReviewEvidenceValid(', 'AUTO_GATE_CANONICAL_AI_REVIEW_VALIDATION_MISSING');
+const { createHash } = await import('node:crypto');
+const { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } = await import(
+  '../../.github/scripts/paper-forward-reviewed-paths.mjs'
+);
+const signalHandoffBridge = read('signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs');
+const signalHandoffBridgeTest = read('signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs');
+const signalPublicRunner = read('signal-intelligence-v3/scripts/run-public-scanner-cycle.ts');
+const publicProviderDiagnostics = read('signal-intelligence-v3/src/public-provider-diagnostics.mjs');
+const publicProviderDiagnosticsTest = read('signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs');
+const scannerIndicators = read('api-server/src/services/scanner-indicator-library.service.ts');
+const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.service.test.ts');
+const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
+const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
+const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 28
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 28
+  || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
+    !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
+  || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
+    !== '70a9ee80bca79e259ba81817c80898a39adbfcb6bd07bf049cfcdc66e1b13f4b') {
+  throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
+}
+for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
+  requireText(workflow, `      - ${path}`, 'AUTO_GATE_SIGNAL_PIPELINE_TRIGGER_MISSING');
+}
+requireText(scannerScope, '!fullAutomaticReview.has(path)', 'AUTO_GATE_SIGNAL_PIPELINE_SCANNER_PRECEDENCE_MISSING');
+requireText(workspaceScope, '...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS', 'AUTO_GATE_SIGNAL_PIPELINE_WORKSPACE_SCOPE_MISSING');
+requireText(paperScopeWorkflow, '--list-auto-signal-pipeline', 'AUTO_GATE_SIGNAL_PIPELINE_PAPER_SCOPE_MISSING');
+for (const token of [
+  'selectSignalAdmittedHandoffEntries',
+  "snapshot?.publicDataOnly !== true || snapshot?.rosterBindingVersion !== 1",
+  "snapshot?.safety?.executionAuthority !== 'NONE'",
+  "snapshot?.serviceSha !== expectedServiceSha",
+  "row?.state === 'CANDIDATE'",
+  'identity?.signalId === entry?.identity?.signalId',
+  'identity.parameterHash === entry.identity.parameterHash',
+]) requireText(signalHandoffBridge, token, 'AUTO_GATE_SIGNAL_V3_HANDOFF_CONTRACT_MISSING');
+for (const token of [
+  'four-market candidates are admitted only when Signal V3 keeps the exact canonical identity',
+  'no-order E2E publishes four-market scanner candidates and gates the same handoff for the worker',
+  'stale snapshots and identity mutations fail closed',
+  'assert.equal(published.safety.realOrderAllowed, false)',
+]) requireText(signalHandoffBridgeTest, token, 'AUTO_GATE_SIGNAL_V3_HANDOFF_REGRESSION_MISSING');
+for (const token of [
+  'enforceVetoOnlyHandoffSelection(',
+  "throw new Error('BACKGROUND_SIGNAL_SELECTION_NOT_VETO_ONLY')",
+  'MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_PATH',
+  'MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_SHA',
+  'expectedServiceSha: this.signalIntelligenceSha',
+  'signalOccurrenceId: `${entry.identity.signalId}@${String(entry.signal.timestampMs ?? entry.evaluatedAtMs)}`',
+]) requireText(paperWorker, token, 'AUTO_GATE_SIGNAL_V3_WORKER_ADMISSION_MISSING');
+for (const token of [
+  'SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE',
+  'validateMemberAutoTradingPaperHandoff(value, nowMs)',
+  'handoffState = await canonicalHandoff(laneNowMs)',
+  'handoffState = await canonicalHandoff(publicationNowMs)',
+  'rosterBindingVersion: 1',
+  'publicDataOnly: true',
+]) requireText(signalPublicRunner, token, 'AUTO_GATE_SIGNAL_V3_PUBLIC_RUNNER_BINDING_MISSING');
+for (const token of [
+  'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
+  'api.upbit.com', 'api.bitget.com', 'MANAGED_PROXY_CONNECT_403', 'PROVIDER_HTTP_403',
+]) requireText(publicProviderDiagnostics, token, 'AUTO_GATE_PUBLIC_PROVIDER_DIAGNOSTIC_MISSING');
+requireText(publicProviderDiagnosticsTest,
+  'CONNECT 403 is distinguished from a provider HTTP 403 response',
+  'AUTO_GATE_PUBLIC_PROVIDER_CLASSIFICATION_REGRESSION_MISSING');
+for (const token of [
+  'index < candles.length - rightBars',
+  "ScannerWaveStructure = 'BULLISH' | 'BEARISH' | 'MIXED' | 'INSUFFICIENT'",
+]) requireText(scannerIndicators, token, 'AUTO_GATE_CONFIRMED_WAVE_CONTRACT_MISSING');
+requireText(scannerQuantTest,
+  'wave structure uses confirmed pivots and ignores an unconfirmed final-bar spike',
+  'AUTO_GATE_CONFIRMED_WAVE_REGRESSION_MISSING');
+requireText(tradeTypes, 'maxDailyOrders: 0', 'AUTO_GATE_UNLIMITED_DAILY_OPPORTUNITY_POLICY_MISSING');
+requireText(tradeTypes, 'signalOccurrenceId?: string | null', 'AUTO_GATE_SIGNAL_OCCURRENCE_ID_MISSING');
+requireText(tradeService, 'input.signalOccurrenceId.trim()', 'AUTO_GATE_SIGNAL_OCCURRENCE_IDEMPOTENCY_MISSING');
+requireText(tradeIntegrationTest,
+  'validated signal occurrences are idempotent within one event and allow a later repeat opportunity',
+  'AUTO_GATE_REPEAT_OPPORTUNITY_REGRESSION_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');

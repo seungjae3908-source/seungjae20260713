@@ -14,14 +14,17 @@ import { withScannerCanonicalActions } from '../../api-server/src/services/scann
 import { withScannerOutcome } from '../../api-server/src/services/scanner-signal.types';
 import * as yahoo from '../../api-server/src/providers/yahoo';
 import { getUsPublicUniverse } from '../../api-server/src/providers/us-universe';
-import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
+import { adaptCanonicalScannerCard, adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
+import { canonicalAdapterInputForCard, canonicalAdapterInputsForCards } from '../src/auto-trading-handoff-bridge.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import { validateMemberAutoTradingPaperHandoff } from '../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './state');
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
+const HANDOFF_FILE = String(process.env.SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE ?? '').trim();
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
@@ -45,7 +48,7 @@ const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.
 
 function freshState() {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     serviceSha: SERVICE_SHA,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
     rosterIds: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
@@ -66,6 +69,18 @@ async function atomicJson(file, value) {
   const temp = `${file}.${process.pid}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(temp, file);
+}
+
+async function canonicalHandoff(nowMs) {
+  if (!HANDOFF_FILE) return { status: 'DISABLED', handoff: null, blocker: null };
+  try {
+    const value = JSON.parse(await readFile(path.resolve(HANDOFF_FILE), 'utf8'));
+    const handoff = validateMemberAutoTradingPaperHandoff(value, nowMs);
+    return { status: handoff.status, handoff, blocker: handoff.status === 'READY' ? null : handoff.blockers?.[0] ?? 'HANDOFF_BLOCKED' };
+  } catch (error) {
+    return { status: 'BLOCKED_DATA', handoff: null,
+      blocker: error?.code === 'ENOENT' ? 'HANDOFF_MISSING' : String(error?.message ?? 'HANDOFF_INVALID').split(':')[0] };
+  }
 }
 
 function retainedKey(input) {
@@ -244,11 +259,12 @@ async function scanCrypto(lane, cursor) {
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
-  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 3;
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 4;
   const state = releaseChanged ? freshState() : persistedState;
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
+  let handoffState = await canonicalHandoff(nowMs);
   const sourceCycleId = randomUUID();
   pruneRetained(state, nowMs);
 
@@ -267,14 +283,20 @@ async function main() {
       const status = decision.status;
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
+      let bridgeDiagnostics = { scanned: response.cards.length, joined: 0,
+        blocked: response.cards.length, handoffStatus: handoffState.status };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
+        const laneNowMs = Date.now();
+        handoffState = await canonicalHandoff(laneNowMs);
         clearScannedWindow(state, lane.id, cursor);
-        adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: lane.timeframe })), { nowMs });
+        const bridge = canonicalAdapterInputsForCards(response.cards, lane.timeframe, handoffState.handoff);
+        bridgeDiagnostics = bridge.diagnostics;
+        adapted = adaptCanonicalScannerCards(bridge.inputs, { nowMs: laneNowMs });
         if (lane.market === 'CRYPTO_FUTURES' && adapted.length > 0) {
           const enriched = await enrichFuturesLeverageInputs(adapted, response.cards, {
             maxCandidates: 2,
             strategy: lane.label,
-            nowMs,
+            nowMs: laneNowMs,
             minimumStartIntervalMs: 100,
           });
           adapted = [...enriched.inputs];
@@ -284,8 +306,11 @@ async function main() {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
-            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId, rosterId } },
-            expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
+            card,
+            timeframe: lane.timeframe,
+            leverageEvidence: input.leverageEvidence,
+            provenance: { laneId: lane.id, cursor, sourceCycleId, rosterId },
+            expiresAt: card?.expiresAt ?? fallbackExpiry(lane, laneNowMs),
             laneId: lane.id,
             cursor,
           };
@@ -320,6 +345,7 @@ async function main() {
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
         leverage: leverageDiagnostics,
+        canonicalHandoffJoin: bridgeDiagnostics,
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
     } catch (error) {
@@ -341,8 +367,16 @@ async function main() {
     }
   }
 
-  pruneRetained(state, nowMs);
-  const inputs = Object.values(state.retained).map((row) => row.input);
+  const publicationNowMs = Date.now();
+  pruneRetained(state, publicationNowMs);
+  handoffState = await canonicalHandoff(publicationNowMs);
+  const inputs = Object.values(state.retained)
+    .map((row) => {
+      const rebound = canonicalAdapterInputForCard(row.card, row.timeframe, handoffState.handoff);
+      const adapted = adaptCanonicalScannerCard({ ...rebound, leverageEvidence: row.leverageEvidence }, { nowMs: publicationNowMs });
+      return adapted ? { ...adapted, provenance: { ...adapted.provenance, ...row.provenance } } : null;
+    })
+    .filter(Boolean);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
   const snapshot = {
     ...baseSnapshot,
@@ -352,6 +386,8 @@ async function main() {
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
     publicDataOnly: true,
+    canonicalHandoff: { status: handoffState.status, blocker: handoffState.blocker,
+      entryCount: handoffState.handoff?.entryCount ?? 0 },
     releaseStateReset: releaseChanged,
   };
   const publication = currentPublicCyclePublication(snapshot);

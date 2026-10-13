@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ScannerQualityCandle } from './scanner-data-quality.service';
-import { buildScannerIndicatorSnapshot, scannerRsi, scannerAtr, scannerAdx, scannerVwap } from './scanner-indicator-library.service';
+import { buildScannerIndicatorSnapshot, scannerRsi, scannerAtr, scannerAdx, scannerVwap, scannerWaveStructure } from './scanner-indicator-library.service';
 import {
   runScannerQuantStrategy,
   SCALPING_LIMITS,
@@ -215,6 +215,22 @@ test('breakout levels exclude the bar being evaluated and flat RSI is neutral', 
   assert.ok(snapshot.close! > snapshot.resistance20!);
   assert.equal(scannerRsi(Array(30).fill(100)), 50);
   assert.equal(buildScannerIndicatorSnapshot(rows.slice(-20)).resistance20, null);
+});
+
+test('wave structure uses confirmed pivots and ignores an unconfirmed final-bar spike', () => {
+  const closes = [10, 11, 13, 11, 10, 12, 15, 13, 12, 14, 17, 15, 14];
+  const rows = closes.map((close, index) => ({
+    time: NOW - (closes.length - index) * 60_000,
+    open: close,
+    high: close + 0.1,
+    low: close - 0.1,
+    close,
+    volume: 100,
+  }));
+  assert.equal(scannerWaveStructure(rows).structure, 'BULLISH');
+  const withUnconfirmedSpike = [...rows, { ...rows.at(-1)!, time: NOW, high: 100, close: 99 }];
+  assert.equal(scannerWaveStructure(withUnconfirmedSpike).structure, 'BULLISH');
+  assert.match(runScannerQuantStrategy({ ...input('swing'), candles: rows.concat(rows), contextCandles: rows.concat(rows) }).reasons.join('|'), /확정파동/);
 });
 
 test('RSI/ATR retain Wilder history and ADX smooths DX instead of returning a one-window DX', () => {
