@@ -36,6 +36,8 @@ on:
       - api-server/src/services/scanner-crypto-price-precision.service.test.ts
       - api-server/src/services/scanner-data-quality.service.test.ts
       - api-server/src/services/scanner-data-quality.service.ts
+      - api-server/src/services/scanner-candidate-ranking.service.test.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
       - api-server/src/services/scanner-indicator-library.service.ts
       - api-server/src/services/scanner-market-profile-overlay.service.ts
       - api-server/src/services/scanner-outcome.test.ts
@@ -503,8 +505,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 28 or len(set(auto_signal)) != 28:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_28')
+          if len(auto_signal) != 39 or len(set(auto_signal)) != 39:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_39')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -540,7 +542,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 28
+          test "${#auto_signal[@]}" -eq 39
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
