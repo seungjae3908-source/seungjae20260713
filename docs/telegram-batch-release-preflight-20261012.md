@@ -193,3 +193,31 @@ correctly blocks the expensive Full run until the whole Telegram QA passes.
 The prior verified Full 26/26 is historical source evidence and cannot be
 borrowed for this modified candidate. Protected server diagnostics and the
 Staging Paper GET400 remain truthful NO_GO until independently resolved.
+
+## 2026-10-13 full-Staging and owner-approved read-only evidence repair
+
+The latest real Full Staging run #38340742857 deployed tested merged main
+1756d0c538e2f75a9fd3636e4959e552fe67f0ad. Importantly, the previous
+GET /api/trade-automation/holdings 400 did NOT recur in this release: 0
+unexpected HTTP errors, 0 browser console errors, and 18 completed browser
+checks succeeded. The real blocker was a missing visible Technical / 모의매매
+menu item; that blocked the admin full-product navigation journey and skipped
+8 downstream routes. Add that existing route to the real capability-gated
+APP_NAVIGATION rather than deleting the E2E expectation. Static mirrored
+full-Staging navigation contract now checks all Technical / Information /
+Settings paths, unique labels and the existing capability gate; the real
+full Staging protected workflow is still required after merge.
+
+A separately authorized six-room Vault/Bot GET read-only run #38334566983
+failed before remote SSH because protected approval completed AFTER the pinned
+requested main SHA ceased to be the latest. For non-mutating diagnostics only,
+pinned exact-source ancestry now permits collecting sanitized Bot/room/Vault
+read-only evidence even if main advances. The final ready gate still requires
+the pinned SHA to be CURRENT as well as correct actual PM2 SHA, Vault and six
+room rights; a changed main can never become a false-green deployment or bot
+activation. Strict write/PM2/trading deployment version guards stay unchanged.
+
+All actual user Bot SEND and private trading authority remain separately
+protected. This is not a claim of real message receipt or Signal V3 source
+freshness, and does not authorize stock-app production restart while manual
+LIVE Spot/Futures trading may be enabled. Replit prohibited.

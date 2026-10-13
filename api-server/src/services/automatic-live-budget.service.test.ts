@@ -107,6 +107,29 @@ test('confirmed full canonical exit releases principal; a wrong-direction or par
   }
 });
 
+test('a fresh signal may re-enter the same instrument only after a confirmed full canonical exit', async () => {
+  const repo = await setup();
+  const parent = plan('BTC-first', { symbol: 'BTC', signalId: 'signal-btc-cycle-1' });
+  const first = await seed(repo, parent);
+  const claimed = (await repo.claimAutomaticLiveEntry(first, 0, 'claim-first'))!;
+  await repo.saveOrder({ ...claimed, state: 'FILLED', filledQuantity: 1, remainingQuantity: 0, averageFillPrice: 100 });
+
+  const whileOpen = await seed(repo, plan('BTC-too-early', {
+    symbol: 'BTC', signalId: 'signal-btc-cycle-2', estimatedKrw: 10_000,
+  }));
+  await assert.rejects(repo.claimAutomaticLiveEntry(whileOpen, 0, 'claim-too-early'), /DUPLICATE_INSTRUMENT/);
+  await repo.saveOrder({ ...whileOpen, state: 'REJECTED', remainingQuantity: 0, lastErrorCode: 'DUPLICATE_INSTRUMENT' });
+
+  const exit = plan('BTC-close', { symbol: 'BTC', reduceOnly: true, side: 'sell',
+    signalReasons: [`AUTO_EXIT_ENTRY_PLAN:${parent.id}`] });
+  await repo.savePlan(exit);
+  await repo.saveOrder(order(exit, { state: 'FILLED', filledQuantity: 1, averageFillPrice: 105 }));
+  const reentry = await seed(repo, plan('BTC-reentry', {
+    symbol: 'BTC', signalId: 'signal-btc-cycle-3', estimatedKrw: 10_000,
+  }));
+  assert.ok(await repo.claimAutomaticLiveEntry(reentry, 0, 'claim-reentry'));
+});
+
 test('already-open legacy AUTO fills are charged without adopting manual or Paper holdings', async () => {
   const repo = await setup(); const existing = plan('legacy');
   await repo.savePlan(existing); await repo.saveOrder(order(existing, { state: 'FILLED', filledQuantity: 1, averageFillPrice: 100 }));
