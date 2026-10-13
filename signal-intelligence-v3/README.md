@@ -74,10 +74,20 @@ remove entries from the already validated canonical handoff but cannot inject,
 replace, duplicate or mutate one. Omitting either path keeps the release
 disabled and does not change deployment or real-order authority.
 
+The rolling public producer reads the same canonical Paper handoff path as the
+background worker by default. `SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE` may
+override that read-only location. Verified scanner quality is separately
+opt-in through `SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT`; its manifest and
+payload must be digest-bound to the exact service SHA. Missing or invalid
+quality never creates a grade. Only an explicit `S` card with an exact Paper
+identity/cost/profit join is retained for worker admission. Stock and crypto
+producer IDs match their existing public-only Paper observers, and Spot SWING
+uses the canonical `4H` lane (the other SWING lanes remain `60m`).
+
 ### Public provider connectivity diagnostic
 
 `scripts/diagnose-public-providers.ts` probes only these public origins:
-`query1.finance.yahoo.com`, `query2.finance.yahoo.com`,
+`data.krx.co.kr`, `query1.finance.yahoo.com`, `query2.finance.yahoo.com`,
 `www.nasdaqtrader.com`, `api.upbit.com`, and `api.bitget.com`. When an HTTP(S)
 proxy is configured, it checks the CONNECT tunnel first. A proxy CONNECT 403 is
 reported separately from an HTTP 403 returned after reaching the provider, and

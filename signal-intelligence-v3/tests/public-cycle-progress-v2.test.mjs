@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { publicCyclePageDecision, currentPublicCyclePublication } from '../src/public-cycle-progress-v2.mjs';
+import {
+  publicCyclePageDecision,
+  currentPublicCyclePublication,
+  publicExecutionEvidence,
+} from '../src/public-cycle-progress-v2.mjs';
 
 function page(overrides = {}) {
   return { cards: [], failures: [], outcome: 'VALID_ZERO_SIGNAL', dataState: 'complete',
@@ -42,11 +46,54 @@ test('invalid candle evidence may progress research but never becomes a valid no
   assert.equal(publicCyclePageDecision(p, 'KR_STOCK', 0).status, 'SEARCH_FAILURE');
 });
 
+test('legacy crypto execution evidence counts completed public data without inventing invalid rows', () => {
+  assert.deepEqual(publicExecutionEvidence({ completedCount: 10 }, []), {
+    providerAcceptedCount: 10,
+    dataSuccessCount: 10,
+    insufficientDataCount: 0,
+    filteredByStrategyCount: 0,
+    staleCount: 0,
+  });
+  assert.deepEqual(publicExecutionEvidence({ completedCount: 5 }, [
+    { reason: 'invalid_data' }, { reason: 'provider_error' },
+  ]), {
+    providerAcceptedCount: 5,
+    dataSuccessCount: 4,
+    insufficientDataCount: 1,
+    filteredByStrategyCount: 0,
+    staleCount: 0,
+  });
+});
+
+test('explicit producer counters take precedence and malformed counters fail to conservative values', () => {
+  assert.deepEqual(publicExecutionEvidence({
+    completedCount: 8,
+    providerAcceptedCount: 7,
+    dataSuccessCount: 6,
+    insufficientDataCount: 1,
+    filteredByStrategyCount: 2,
+    staleCount: 3,
+  }, [{ reason: 'invalid_data' }]), {
+    providerAcceptedCount: 7,
+    dataSuccessCount: 6,
+    insufficientDataCount: 1,
+    filteredByStrategyCount: 2,
+    staleCount: 3,
+  });
+  assert.deepEqual(publicExecutionEvidence({ completedCount: -1 }, [{ reason: 'invalid_data' }]), {
+    providerAcceptedCount: 0,
+    dataSuccessCount: 0,
+    insufficientDataCount: 0,
+    filteredByStrategyCount: 0,
+    staleCount: 0,
+  });
+});
+
 function snapshot() {
   const markets = { KR: ['KR_STOCK', 'krx-symbol-master'], US: ['US_STOCK', 'nasdaq-trader-public-directory'],
     SPOT: ['CRYPTO_SPOT', 'upbit-public'], FUTURES: ['CRYPTO_FUTURES', 'bitget-public'] };
   const coverage = Object.entries(markets).flatMap(([prefix, [market, source]]) =>
-    ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => ({
+    ['SCALPING_15M', prefix === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => ({
       laneId: `${prefix}_${p}`, market, sourceCycleId: 'now', status: 'VALID_NO_TRADE', universeSource: source,
       rosterId: 'a'.repeat(64),
       universePartial: false, universeStale: false, universeProviderErrors: 0, responseDataState: 'complete',

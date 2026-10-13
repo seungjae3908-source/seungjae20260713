@@ -2,6 +2,8 @@ import http from 'node:http';
 import https from 'node:https';
 
 export const PUBLIC_PROVIDER_ENDPOINTS = Object.freeze([
+  Object.freeze({ provider: 'KRX_DATA', market: 'KR_STOCK',
+    url: 'https://data.krx.co.kr/contents/MDC/MAIN/main/index.cmd' }),
   Object.freeze({ provider: 'YAHOO_QUERY1', market: 'KR_STOCK_US_STOCK',
     url: 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=5d' }),
   Object.freeze({ provider: 'YAHOO_QUERY2', market: 'KR_STOCK_US_STOCK',

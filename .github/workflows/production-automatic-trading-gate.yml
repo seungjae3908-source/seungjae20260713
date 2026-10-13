@@ -78,9 +78,16 @@ on:
       - .github/tests/scanner-readonly-repair-scope.test.mjs
       - .github/workflows/paper-forward-schedule-validation.yml
       - .github/workflows/research-workspace-integration-v1.yml
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
       - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-candidate-ranking.service.test.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
       - api-server/src/services/scanner-quant-strategy.service.ts
       - api-server/src/services/scanner-quant-strategy.service.test.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/telegram-v3-current-source.service.test.ts
+      - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/trade-automation-integration.test.ts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
@@ -90,8 +97,12 @@ on:
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
       - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/canonical-adapter.test.mjs
+      - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
   issue_comment:
     types: [created]

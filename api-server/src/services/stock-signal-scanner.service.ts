@@ -19,7 +19,7 @@ import {
   scannerStrategyForTimeframe,
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
-import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
+import type { ScannerBacktestQualitySummary, ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
 import { scannerTimestampMs } from './scanner-data-quality.service';
 
@@ -31,6 +31,8 @@ export interface StockSignalScanRequest {
   cursor: number;
   batchSize: number;
   strategyMode?: ScannerStrategyMode;
+  /** Exact, digest-verified research quality keyed by scanner symbol. */
+  backtests?: Readonly<Record<string, ScannerBacktestQualitySummary | undefined>>;
   signal?: AbortSignal;
 }
 
@@ -285,6 +287,7 @@ export const StockSignalScannerService = {
       cards: broadCandidates,
       market: request.market,
       strategy: strategyMode,
+      backtests: request.backtests,
       softMinimumScore: request.filters.minimumScore,
       limit: 10,
     });

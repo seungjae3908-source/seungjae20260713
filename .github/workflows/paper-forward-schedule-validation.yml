@@ -36,6 +36,8 @@ on:
       - api-server/src/services/scanner-crypto-price-precision.service.test.ts
       - api-server/src/services/scanner-data-quality.service.test.ts
       - api-server/src/services/scanner-data-quality.service.ts
+      - api-server/src/services/scanner-candidate-ranking.service.test.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
       - api-server/src/services/scanner-indicator-library.service.ts
       - api-server/src/services/scanner-market-profile-overlay.service.ts
       - api-server/src/services/scanner-outcome.test.ts
@@ -50,6 +52,8 @@ on:
       - api-server/src/services/scanner-universe.service.ts
       - api-server/src/services/stock-signal-scanner-aggregation.test.ts
       - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/telegram-v3-current-source.service.test.ts
+      - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/unified-asset-search-fallback.test.ts
       - api-server/src/services/unified-asset-search.service.ts
       - api-server/test.mjs
@@ -59,11 +63,13 @@ on:
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/canonical-adapter.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
       - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
       - signal-intelligence-v3/src/public-stock-provider-adapter.mjs
       - signal-intelligence-v3/src/server.mjs
       - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/canonical-adapter.test.mjs
       - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
       - signal-intelligence-v3/tests/public-stock-provider-adapter.test.mjs
@@ -499,8 +505,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 28 or len(set(auto_signal)) != 28:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_28')
+          if len(auto_signal) != 39 or len(set(auto_signal)) != 39:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_39')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -536,7 +542,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 28
+          test "${#auto_signal[@]}" -eq 39
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.

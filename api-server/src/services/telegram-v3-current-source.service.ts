@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
  * evidence of a fresh market event. No Bot API, DB, broker or file actions.
  */
 const IDS=['KR','US','SPOT','FUTURES'].flatMap(m=>
- ['SCALPING_15M','SWING_60M','MID_LONG_1D'].map(x=>m+'_'+x));
+ ['SCALPING_15M',m==='SPOT'?'SWING_4H':'SWING_60M','MID_LONG_1D'].map(x=>m+'_'+x));
 const SHA=/^[0-9a-f]{40}$/u;
 const EPOCH=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const OBJ=(x:unknown):Record<string,any>|null=>
@@ -125,6 +125,7 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
   const expectedId=[market,event.symbol,event.strategy,event.timeframe,dir].join('|');
   const slot=event.timeframe==='15m'?'SCALPING_15M'
     :event.timeframe==='60m'?'SWING_60M'
+      :event.timeframe==='4H'?'SWING_4H'
       :event.timeframe==='1D'?'MID_LONG_1D':null;
   if(event.id!==expectedId||!slot)return false;
   const row=candidates.get(event.id);
