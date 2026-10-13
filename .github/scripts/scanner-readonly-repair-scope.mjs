@@ -11,7 +11,7 @@ export const SCANNER_REPAIR_WORKFLOW_BASE_SHA = '6139042aaef5e7fec6bcc39648ccddd
 // scanner/main reconciliation. They preserve the base AUTO/Trading test
 // registrations and the previous immutable scanner tests. Neither an
 // arbitrary future base nor any other scanner blob can use this exception.
-export const SCANNER_REPAIR_INTEGRATION_BASE_SHA = 'eacf9173fdc42d0e88aa3930a8e66d26cb3b024c';
+export const SCANNER_REPAIR_INTEGRATION_BASE_SHA = '964d3a619b931589e0f31cd9a2b8dce4ebcf3314';
 export const SCANNER_REPAIR_INTEGRATION_BLOBS = Object.freeze({
   'api-server/package.json': 'f403e2c80fe2c25bbb8c9bbe4f03d88c8d1ea6e7',
   'api-server/test.mjs': 'bc409c4eba77b38bf422b2cb1e6916b0a050509e',
