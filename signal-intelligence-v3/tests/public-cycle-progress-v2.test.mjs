@@ -46,7 +46,7 @@ function snapshot() {
   const markets = { KR: ['KR_STOCK', 'krx-symbol-master'], US: ['US_STOCK', 'nasdaq-trader-public-directory'],
     SPOT: ['CRYPTO_SPOT', 'upbit-public'], FUTURES: ['CRYPTO_FUTURES', 'bitget-public'] };
   const coverage = Object.entries(markets).flatMap(([prefix, [market, source]]) =>
-    ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => ({
+    ['SCALPING_15M', prefix === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => ({
       laneId: `${prefix}_${p}`, market, sourceCycleId: 'now', status: 'VALID_NO_TRADE', universeSource: source,
       rosterId: 'a'.repeat(64),
       universePartial: false, universeStale: false, universeProviderErrors: 0, responseDataState: 'complete',

@@ -554,19 +554,28 @@ const { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } = await import(
 const signalHandoffBridge = read('signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs');
 const signalHandoffBridgeTest = read('signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs');
 const signalPublicRunner = read('signal-intelligence-v3/scripts/run-public-scanner-cycle.ts');
+const signalCanonicalAdapter = read('signal-intelligence-v3/src/canonical-adapter.mjs');
+const signalCanonicalAdapterTest = read('signal-intelligence-v3/tests/canonical-adapter.test.mjs');
+const signalPublicProgress = read('signal-intelligence-v3/src/public-cycle-progress-v2.mjs');
 const publicProviderDiagnostics = read('signal-intelligence-v3/src/public-provider-diagnostics.mjs');
 const publicProviderDiagnosticsTest = read('signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs');
+const stockSignalScanner = read('api-server/src/services/stock-signal-scanner.service.ts');
+const telegramV3CurrentSource = read('api-server/src/services/telegram-v3-current-source.service.ts');
+const scannerCandidateRanking = read('api-server/src/services/scanner-candidate-ranking.service.ts');
+const scannerCandidateRankingTest = read('api-server/src/services/scanner-candidate-ranking.service.test.ts');
+const scannerQualityConsumer = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.ts');
+const scannerQualityConsumerTest = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts');
 const scannerIndicators = read('api-server/src/services/scanner-indicator-library.service.ts');
 const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.service.test.ts');
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 28
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 28
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 39
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 39
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== '70a9ee80bca79e259ba81817c80898a39adbfcb6bd07bf049cfcdc66e1b13f4b') {
+    !== '413c463c6c11d762643d558d778bd3d1ba635a213ef83fa44448898ee3f8cbdc') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
@@ -600,14 +609,42 @@ for (const token of [
 ]) requireText(paperWorker, token, 'AUTO_GATE_SIGNAL_V3_WORKER_ADMISSION_MISSING');
 for (const token of [
   'SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE',
+  'SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT',
   'validateMemberAutoTradingPaperHandoff(value, nowMs)',
+  'readForwardObserverScannerQualityArtifact',
+  "const STOCK_MEMBER_ID = 'signal-intelligence-forward-observer-public-only'",
+  "const CRYPTO_MEMBER_ID = 'forward-observer-public-only'",
+  "input.paperIdentity && input.card?.signalGrade === 'S'",
+  "market.prefix === 'SPOT' && profile.label === 'SWING'",
+  'selectSignalAdmittedHandoffEntries({',
+  'canonicalWorkerHandoff',
   'handoffState = await canonicalHandoff(laneNowMs)',
   'handoffState = await canonicalHandoff(publicationNowMs)',
   'rosterBindingVersion: 1',
   'publicDataOnly: true',
 ]) requireText(signalPublicRunner, token, 'AUTO_GATE_SIGNAL_V3_PUBLIC_RUNNER_BINDING_MISSING');
+requireText(signalCanonicalAdapter, "return grade === 'S';", 'AUTO_GATE_SIGNAL_V3_EXACT_S_GRADE_MISSING');
+requireText(signalCanonicalAdapterTest,
+  'only an explicit S grade can cross the automatic-trading quant gate',
+  'AUTO_GATE_SIGNAL_V3_EXACT_S_GRADE_REGRESSION_MISSING');
+requireText(stockSignalScanner, 'backtests: request.backtests', 'AUTO_GATE_SCANNER_QUALITY_BINDING_MISSING');
+requireText(scannerCandidateRanking,
+  'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
+requireText(scannerCandidateRankingTest,
+  'futures quality is selected by symbol and direction without cross-credit',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_RANKING_REGRESSION_MISSING');
+requireText(scannerQualityConsumer, "input.lane.market === 'CRYPTO_FUTURES' ? rankingKey : symbol",
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_MISSING');
+requireText(scannerQualityConsumerTest,
+  'same-symbol mixed LONG and SHORT keep direction-isolated quality keys',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_REGRESSION_MISSING');
+requireText(signalPublicProgress, "m === 'SPOT' ? 'SWING_4H' : 'SWING_60M'",
+  'AUTO_GATE_SPOT_CANONICAL_TIMEFRAME_MISSING');
+requireText(telegramV3CurrentSource, "event.timeframe==='4H'?'SWING_4H'",
+  'AUTO_GATE_TELEGRAM_SPOT_CANONICAL_TIMEFRAME_MISSING');
 for (const token of [
-  'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
+  'data.krx.co.kr', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
   'api.upbit.com', 'api.bitget.com', 'MANAGED_PROXY_CONNECT_403', 'PROVIDER_HTTP_403',
 ]) requireText(publicProviderDiagnostics, token, 'AUTO_GATE_PUBLIC_PROVIDER_DIAGNOSTIC_MISSING');
 requireText(publicProviderDiagnosticsTest,

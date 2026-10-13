@@ -10,12 +10,20 @@ import { StockSignalScannerService } from '../../api-server/src/services/stock-s
 import { CryptoSignalScannerService } from '../../api-server/src/services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../../api-server/src/services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
+import {
+  readForwardObserverScannerQualityArtifact,
+  selectForwardObserverScannerBacktests,
+} from '../../api-server/src/services/forward-observer-scanner-quality-consumer.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
 import { withScannerOutcome } from '../../api-server/src/services/scanner-signal.types';
 import * as yahoo from '../../api-server/src/providers/yahoo';
 import { getUsPublicUniverse } from '../../api-server/src/providers/us-universe';
 import { adaptCanonicalScannerCard, adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
-import { canonicalAdapterInputForCard, canonicalAdapterInputsForCards } from '../src/auto-trading-handoff-bridge.mjs';
+import {
+  canonicalAdapterInputForCard,
+  canonicalAdapterInputsForCards,
+  selectSignalAdmittedHandoffEntries,
+} from '../src/auto-trading-handoff-bridge.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { validateMemberAutoTradingPaperHandoff } from '../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
@@ -24,8 +32,14 @@ const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').tr
 const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './state');
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
-const HANDOFF_FILE = String(process.env.SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE ?? '').trim();
-const MEMBER_ID = 'signal-intelligence-v3-public-only';
+const HANDOFF_FILE = String(process.env.SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE
+  ?? '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json').trim();
+const QUALITY_ROOT = String(process.env.SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT ?? '').trim();
+// These are the existing public-only producer identities used by the canonical
+// Paper observer. Signal IDs include memberId, so a different value makes an
+// exact canonical handoff join structurally impossible.
+const STOCK_MEMBER_ID = 'signal-intelligence-forward-observer-public-only';
+const CRYPTO_MEMBER_ID = 'forward-observer-public-only';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
@@ -40,15 +54,55 @@ const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 }),
   Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
 ]);
-const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
-  ...market,
-  ...strategy,
-  id: `${market.prefix}_${strategy.label}_${strategy.timeframe.toUpperCase()}`,
-}))));
+const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((profile) => {
+  const strategy = market.prefix === 'SPOT' && profile.label === 'SWING'
+    ? { ...profile, timeframe: '4H' }
+    : profile;
+  return Object.freeze({
+    ...market,
+    ...strategy,
+    id: `${market.prefix}_${strategy.label}_${strategy.timeframe.toUpperCase()}`,
+  });
+})));
+
+function forwardObserverLane(lane) {
+  if (lane.label !== 'SWING') return null;
+  const ids = {
+    KR_STOCK: 'KR_SWING_60M',
+    US_STOCK: 'US_SWING_60M',
+    CRYPTO_SPOT: 'SPOT_SWING_4H',
+    CRYPTO_FUTURES: 'FUTURES_SWING_60M',
+  };
+  const id = ids[lane.market];
+  return id ? Object.freeze({
+    id,
+    market: lane.market,
+    scannerMarket: lane.scannerMarket,
+    batchSize: lane.batchSize,
+    timeframe: lane.timeframe,
+  }) : null;
+}
+
+function unavailableQuality(status = 'DISABLED', blocker = null) {
+  return Object.freeze({ status, matchedSymbols: Object.freeze([]), blockers: blocker
+    ? Object.freeze([Object.freeze({ code: blocker, symbol: null })])
+    : Object.freeze([]), backtests: Object.freeze({}) });
+}
+
+function qualitySelectionForCards(scannerQuality, lane, cards) {
+  const qualityLane = forwardObserverLane(lane);
+  if (!qualityLane || !scannerQuality) return unavailableQuality(scannerQuality ? 'NOT_APPLICABLE' : 'DISABLED');
+  return selectForwardObserverScannerBacktests({
+    artifact: scannerQuality,
+    cards,
+    lane: qualityLane,
+    researchCodeSha: SERVICE_SHA,
+  });
+}
 
 function freshState() {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     serviceSha: SERVICE_SHA,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
     rosterIds: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
@@ -80,6 +134,25 @@ async function canonicalHandoff(nowMs) {
   } catch (error) {
     return { status: 'BLOCKED_DATA', handoff: null,
       blocker: error?.code === 'ENOENT' ? 'HANDOFF_MISSING' : String(error?.message ?? 'HANDOFF_INVALID').split(':')[0] };
+  }
+}
+
+async function canonicalScannerQuality() {
+  if (!QUALITY_ROOT) return { status: 'DISABLED', artifact: null, blocker: 'SCANNER_QUALITY_ROOT_NOT_CONFIGURED' };
+  try {
+    const artifact = await readForwardObserverScannerQualityArtifact({
+      artifactRoot: path.resolve(QUALITY_ROOT),
+      researchCodeSha: SERVICE_SHA,
+    });
+    return { status: 'READY', artifact, blocker: null };
+  } catch (error) {
+    return {
+      status: 'BLOCKED_DATA',
+      artifact: null,
+      blocker: error?.code === 'ENOENT'
+        ? 'SCANNER_QUALITY_ARTIFACT_MISSING'
+        : String(error?.message ?? 'SCANNER_QUALITY_ARTIFACT_INVALID').split(':')[0],
+    };
   }
 }
 
@@ -199,27 +272,43 @@ async function withStockPublicOnly(lane, operation) {
   }
 }
 
-async function scanStock(lane, cursor) {
+function qualityArtifactCards(scannerQuality, lane) {
+  if (!scannerQuality || lane.label !== 'SWING') return [];
+  return scannerQuality.entries
+    .filter((entry) => entry.identity.market === lane.market
+      && entry.identity.timeframe === lane.timeframe
+      && entry.identity.direction === 'BUY')
+    .map((entry) => ({ symbol: entry.identity.symbol, action: entry.identity.direction }));
+}
+
+async function scanStock(lane, cursor, scannerQuality) {
   return withStockPublicOnly(lane, async () => {
+    const qualitySelection = qualitySelectionForCards(
+      scannerQuality,
+      lane,
+      qualityArtifactCards(scannerQuality, lane),
+    );
     const scanned = await StockSignalScannerService.scan({
-      memberId: MEMBER_ID,
+      memberId: STOCK_MEMBER_ID,
       market: lane.scannerMarket,
       indicators: [],
       filters: { timeframe: lane.timeframe },
       cursor,
       batchSize: lane.batchSize,
       strategyMode: lane.strategyMode,
+      backtests: qualitySelection.backtests,
     });
     return withScannerCanonicalActions({
       ...scanned,
       cards: scanned.cards.map((card) => ({ ...card, dataSources: [...new Set([...card.dataSources, 'yahoo-public'])] })),
+      scannerQualityDiagnostic: qualitySelection,
     });
   });
 }
 
-async function scanCryptoRaw(lane, cursor) {
+async function scanCryptoRaw(lane, cursor, scannerQuality) {
   const scanned = await CryptoSignalScannerService.scan({
-    memberId: MEMBER_ID,
+    memberId: CRYPTO_MEMBER_ID,
     market: lane.scannerMarket,
     strategyMode: lane.strategyMode,
     timeframe: lane.timeframe,
@@ -228,7 +317,14 @@ async function scanCryptoRaw(lane, cursor) {
     batchSize: lane.scannerMarket === 'spot' ? Math.min(lane.batchSize, 5) : Math.min(lane.batchSize, 10),
   });
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
-  const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
+  const qualitySelection = qualitySelectionForCards(scannerQuality, lane, aligned.cards);
+  const ranking = rankScannerCandidates({
+    cards: aligned.cards,
+    market: aligned.market,
+    strategy: lane.strategyMode,
+    backtests: qualitySelection.backtests,
+    limit: 10,
+  });
   const cards = ranking.cards
     .map((card) => card.signalGrade === 'B' ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' } : card)
     .filter((card) => lane.scannerMarket === 'spot'
@@ -237,6 +333,7 @@ async function scanCryptoRaw(lane, cursor) {
   return withScannerCanonicalActions(withScannerOutcome({
     ...aligned,
     cards,
+    scannerQualityDiagnostic: qualitySelection,
     execution: {
       ...aligned.execution,
       hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
@@ -251,20 +348,21 @@ async function scanCryptoRaw(lane, cursor) {
   }));
 }
 
-async function scanCrypto(lane, cursor) {
-  if (lane.scannerMarket === 'spot') return withUpbitPacing(() => scanCryptoRaw(lane, cursor));
-  return scanCryptoRaw(lane, cursor);
+async function scanCrypto(lane, cursor, scannerQuality) {
+  if (lane.scannerMarket === 'spot') return withUpbitPacing(() => scanCryptoRaw(lane, cursor, scannerQuality));
+  return scanCryptoRaw(lane, cursor, scannerQuality);
 }
 
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
-  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 4;
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 5;
   const state = releaseChanged ? freshState() : persistedState;
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
   let handoffState = await canonicalHandoff(nowMs);
+  const scannerQualityState = await canonicalScannerQuality();
   const sourceCycleId = randomUUID();
   pruneRetained(state, nowMs);
 
@@ -273,8 +371,8 @@ async function main() {
     const cursor = Number.isInteger(state.cursors?.[lane.id]) ? state.cursors[lane.id] : 0;
     try {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
-        ? await scanStock(lane, cursor)
-        : await scanCrypto(lane, cursor);
+        ? await scanStock(lane, cursor, scannerQualityState.artifact)
+        : await scanCrypto(lane, cursor, scannerQualityState.artifact);
       const decision = publicCyclePageDecision(response, lane.market, cursor, state.rosterIds?.[lane.id] ?? null);
       const rosterId = response.universe.rosterId ?? null;
       if (['VERIFIED_BATCH', 'BLOCKED_RESEARCH_ROTATION_ONLY', 'ROSTER_CHANGED_RESTART', 'ROSTER_SHRUNK_RESTART'].includes(decision.reason)) {
@@ -284,14 +382,21 @@ async function main() {
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       let bridgeDiagnostics = { scanned: response.cards.length, joined: 0,
-        blocked: response.cards.length, handoffStatus: handoffState.status };
+        blocked: response.cards.length, sGradeScanned: response.cards.filter((card) => card.signalGrade === 'S').length,
+        joinedSGrade: 0, handoffStatus: handoffState.status };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
         const laneNowMs = Date.now();
         handoffState = await canonicalHandoff(laneNowMs);
         clearScannedWindow(state, lane.id, cursor);
         const bridge = canonicalAdapterInputsForCards(response.cards, lane.timeframe, handoffState.handoff);
-        bridgeDiagnostics = bridge.diagnostics;
-        adapted = adaptCanonicalScannerCards(bridge.inputs, { nowMs: laneNowMs });
+        const admissionInputs = bridge.inputs.filter((input) => input.paperIdentity && input.card?.signalGrade === 'S');
+        bridgeDiagnostics = {
+          ...bridge.diagnostics,
+          handoffStatus: handoffState.status,
+          sGradeScanned: response.cards.filter((card) => card.signalGrade === 'S').length,
+          joinedSGrade: admissionInputs.length,
+        };
+        adapted = adaptCanonicalScannerCards(admissionInputs, { nowMs: laneNowMs });
         if (lane.market === 'CRYPTO_FUTURES' && adapted.length > 0) {
           const enriched = await enrichFuturesLeverageInputs(adapted, response.cards, {
             maxCandidates: 2,
@@ -326,7 +431,12 @@ async function main() {
         pageExecution: { requestedCount: response.execution.requestedCount, startedCount: response.execution.startedCount,
           completedCount: response.execution.completedCount, partial: response.execution.partial,
           timedOut: response.execution.timedOut, cancelled: response.execution.cancelled,
-          failuresObserved: response.failures.length },
+          failuresObserved: response.failures.length,
+          providerAcceptedCount: Number(response.execution.providerAcceptedCount ?? 0),
+          dataSuccessCount: Number(response.execution.dataSuccessCount ?? 0),
+          insufficientDataCount: Number(response.execution.insufficientDataCount ?? 0),
+          filteredByStrategyCount: Number(response.execution.filteredByStrategyCount ?? 0),
+          staleCount: Number(response.execution.staleCount ?? 0) },
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -339,12 +449,20 @@ async function main() {
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
+        sGradeCards: response.cards.filter((card) => card.signalGrade === 'S').length,
         retainedFromBatch: adapted.length,
         status,
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
         leverage: leverageDiagnostics,
+        scannerQuality: {
+          artifactStatus: scannerQualityState.status,
+          artifactBlocker: scannerQualityState.blocker,
+          selectionStatus: response.scannerQualityDiagnostic?.status ?? 'UNAVAILABLE',
+          matchedSymbols: response.scannerQualityDiagnostic?.matchedSymbols?.length ?? 0,
+          blockerCount: response.scannerQualityDiagnostic?.blockers?.length ?? 0,
+        },
         canonicalHandoffJoin: bridgeDiagnostics,
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
@@ -383,17 +501,52 @@ async function main() {
     sourceCycleId,
     rosterBindingVersion: 1,
     serviceSha: SERVICE_SHA,
-    profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
+    profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '4H', '1D'],
+      spotSwingTimeframe: '4H', fullStrategyCoverage: true },
     coverage,
     publicDataOnly: true,
     canonicalHandoff: { status: handoffState.status, blocker: handoffState.blocker,
       entryCount: handoffState.handoff?.entryCount ?? 0 },
+    scannerQuality: { status: scannerQualityState.status, blocker: scannerQualityState.blocker,
+      entryCount: scannerQualityState.artifact?.entries?.length ?? 0 },
     releaseStateReset: releaseChanged,
   };
   const publication = currentPublicCyclePublication(snapshot);
   snapshot.lists = publication.lists;
   snapshot.events = publication.events;
   snapshot.currentPageSourceReady = publication.currentPageReady;
+  const workerSelection = selectSignalAdmittedHandoffEntries({
+    handoff: handoffState.handoff,
+    snapshot,
+    expectedServiceSha: SERVICE_SHA,
+    nowMs: Date.now(),
+  });
+  snapshot.canonicalWorkerHandoff = {
+    status: workerSelection.status,
+    candidateCount: workerSelection.candidateCount ?? 0,
+    admittedCount: workerSelection.admittedCount ?? 0,
+    rejectedCount: workerSelection.rejectedCount ?? (handoffState.handoff?.entryCount ?? 0),
+    blockers: workerSelection.blockers,
+    executionAuthority: 'NONE',
+  };
+  snapshot.marketSummary = Object.fromEntries(marketProfiles.map(({ market }) => {
+    const pages = coverage.filter((row) => row.market === market);
+    const selected = workerSelection.entries?.filter((entry) => entry.identity.market === market) ?? [];
+    const queried = Math.max(0, ...pages.map((row) => Number(row.pageExecution?.requestedCount ?? 0)));
+    const successful = Math.max(0, ...pages.map((row) => Number(row.pageExecution?.dataSuccessCount ?? 0)));
+    return [market, {
+      totalUniverse: Math.max(0, ...pages.map((row) => Number(row.totalUniverse ?? 0))),
+      queriedCount: queried,
+      dataSuccessCount: successful,
+      dataBlockedCount: Math.max(0, queried - successful),
+      sGradeCandidateCount: pages.reduce((sum, row) => sum + Number(row.sGradeCards ?? 0), 0),
+      canonicalJoinCount: pages.reduce((sum, row) => sum + Number(row.canonicalHandoffJoin?.joinedSGrade ?? 0), 0),
+      workerAdmissionCount: selected.length,
+      errorCount: pages.reduce((sum, row) => sum + Number(row.providerErrors ?? 0)
+        + Number(row.timeouts ?? 0) + Number(row.pageExecution?.failuresObserved ?? 0)
+        + (row.error ? 1 : 0), 0),
+    }];
+  }));
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
   await atomicJson(CYCLE_STATE_FILE, state);
@@ -406,6 +559,10 @@ async function main() {
     lists: Object.fromEntries(Object.entries(snapshot.lists).map(([key, rows]) => [key, rows.length])),
     events: snapshot.events.length,
     profile: snapshot.profile,
+    canonicalHandoff: snapshot.canonicalHandoff,
+    canonicalWorkerHandoff: snapshot.canonicalWorkerHandoff,
+    scannerQuality: snapshot.scannerQuality,
+    marketSummary: snapshot.marketSummary,
     releaseStateReset: releaseChanged,
     coverage,
     executionAuthority: 'NONE',
