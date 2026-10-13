@@ -22,6 +22,10 @@ Immutable snapshot/events
         ├─ App reader
         └─ Existing Telegram transport
 
+Digest-validated canonical Paper handoff + immutable V3 snapshot
+        ↓ exact identity, veto-only intersection
+Existing automatic-trading worker (separate opt-in release)
+
 ================ privilege boundary ================
 
 Private Execution Gateway (not included)

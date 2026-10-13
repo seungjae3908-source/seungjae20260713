@@ -266,6 +266,9 @@ export type TradingPlanInput = {
   stockExchange?: 'KRX' | 'NXT' | 'SOR' | 'NASDAQ' | 'NYSE' | 'AMEX' | null;
   strategyId: string;
   signalId: string;
+  /** Server-owned signal occurrence identity. Repeated reads of one occurrence
+   * stay idempotent; a later validated occurrence may re-enter after risk gates. */
+  signalOccurrenceId?: string | null;
   symbol: string;
   market: string;
   side: TradingSide;
