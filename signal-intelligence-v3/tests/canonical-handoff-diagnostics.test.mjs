@@ -88,4 +88,3 @@ test('does not join a handoff whose canonical identity differs despite the same 
   assert.equal(result.canonicalHandoffJoin, 0);
   assert.equal(result.causes.canonicalEvidenceInsufficient.handoffIdentityBlocked, 1);
 });
-

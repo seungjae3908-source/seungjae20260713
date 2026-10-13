@@ -111,4 +111,3 @@ export function selectQualifiedStockPriceProvider({ market, timeframe = null, ob
   qualified.sort((left, right) => preference.indexOf(left.provider) - preference.indexOf(right.provider));
   return qualified[0] ?? null;
 }
-

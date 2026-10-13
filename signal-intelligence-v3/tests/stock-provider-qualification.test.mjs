@@ -71,4 +71,3 @@ test('keeps page-internal endpoints disconnected even if they return data', () =
   assert.equal(naver.connectable, false);
   assert.ok(naver.blockers.includes('CONNECTOR_NOT_ELIGIBLE'));
 });
-
