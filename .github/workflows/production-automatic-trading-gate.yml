@@ -55,6 +55,8 @@ on:
       - api-server/src/index.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - stock-analyzer/src/pages/auto-trading.tsx
+      # Holdings query restrictions are reviewed in the existing Trading safety gate.
+      - stock-analyzer/src/components/trading-holdings-panel.tsx
       - stock-analyzer/src/components/trade-automation-settings.tsx
       - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - api-server/src/services/futures-live-limited-capability.service.ts

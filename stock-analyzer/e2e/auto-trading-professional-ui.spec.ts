@@ -181,3 +181,26 @@ test('associate can see auto and Paper dashboards without probing forbidden jour
   expect(server).toContain("return requireCapability('canAccessJournalSync')(req, res, next)");
   expect(page).not.toContain("auth.can('canAccessPaperTrading') || auth.can('canAccessJournalSync')");
 });
+
+
+test('automatic Paper holdings stay unqueried until role-bound four-market wallet and DB guard are both verified', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const panel = source('src/components/trading-holdings-panel.tsx');
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  const backend = source('../api-server/src/services/trading-holdings-readonly.service.ts');
+  const readonly = source('../api-server/src/services/member-auto-trading-readiness.service.ts');
+  expect(page).toContain("const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync");
+  expect(page).toContain('autoPaperRuntimeReadiness?.paperWalletReady === true');
+  expect(page).toContain('autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true');
+  expect(page).toContain("const paperHoldingsReadAllowed = paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable;");
+  expect(page).toContain("enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}");
+  expect(page).toContain('data-testid="automatic-paper-holdings-awaiting-evidence"');
+  expect(panel).toContain('enabled: enabled && fixture == null');
+  expect(panel).toContain('const snapshots = enabled ? query.data?.snapshots : undefined;');
+  expect(panel).toContain('const pending = enabled && fixture == null && query.isLoading;');
+  expect(panel).toContain("{enabled && query.isError ? <p role=\"alert\"");
+  expect(route).toContain("router.get('/holdings', async");
+  expect(backend).toContain("HOLDINGS_PAPER_WALLET_EPOCH_UNVERIFIED");
+  expect(readonly).toContain('fourMarketDatabaseGuardReady: roleWallets != null ? databaseGuardReady === true : null');
+  expect(page).not.toContain("enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : canPaper}");
+});
