@@ -7,6 +7,15 @@ export const SCANNER_REPAIR_SOURCE_SHA = 'dc15772f67822418c2eb4fa4cfc93b0b07542f
 // Keep the pre-policy workflow baseline immutable even when a later source-only
 // regression fixture is pinned. A repin must not bless removal of safety steps.
 export const SCANNER_REPAIR_WORKFLOW_BASE_SHA = '6139042aaef5e7fec6bcc39648ccdddb949121e6';
+// Exactly two source blobs were reviewed in the 2026-10-13 two-parent
+// scanner/main reconciliation. They preserve the base AUTO/Trading test
+// registrations and the previous immutable scanner tests. Neither an
+// arbitrary future base nor any other scanner blob can use this exception.
+export const SCANNER_REPAIR_INTEGRATION_BASE_SHA = 'eacf9173fdc42d0e88aa3930a8e66d26cb3b024c';
+export const SCANNER_REPAIR_INTEGRATION_BLOBS = Object.freeze({
+  'api-server/package.json': 'f403e2c80fe2c25bbb8c9bbe4f03d88c8d1ea6e7',
+  'api-server/test.mjs': 'bc409c4eba77b38bf422b2cb1e6916b0a050509e',
+});
 export const SCANNER_REPAIR_PINNED_PATHS = Object.freeze([
   "api-server/package.json",
   "api-server/scripts/ai-preview-diagnostic-contract.mjs",
@@ -109,9 +118,14 @@ export function verifyPinnedScannerScope(changed, base, readBlob) {
   if (!scanner.length) return [];
   if (!/^[0-9a-f]{40}$/u.test(base ?? '')) throw new Error('SCANNER_SCOPE_BASE_REQUIRED');
   for (const path of scanner) {
-    const expected = readBlob(SCANNER_REPAIR_SOURCE_SHA, path);
+    const verifiedSourceBlob = readBlob(SCANNER_REPAIR_SOURCE_SHA, path);
+    const reviewedMainMerge = base === SCANNER_REPAIR_INTEGRATION_BASE_SHA
+      && Object.hasOwn(SCANNER_REPAIR_INTEGRATION_BLOBS, path);
+    const expected = reviewedMainMerge ? SCANNER_REPAIR_INTEGRATION_BLOBS[path] : verifiedSourceBlob;
     const actual = readBlob('HEAD', path);
-    if (!/^[0-9a-f]{40}$/u.test(expected ?? '') || actual !== expected) throw new Error('SCANNER_SCOPE_BLOB_DRIFT:' + path);
+    if (!/^[0-9a-f]{40}$/u.test(verifiedSourceBlob ?? '') || !/^[0-9a-f]{40}$/u.test(expected ?? '') || actual !== expected) {
+      throw new Error('SCANNER_SCOPE_BLOB_DRIFT:' + path);
+    }
   }
   for (const path of SCANNER_PROTECTED_AUTHORITY_PATHS) {
     const expected = readBlob(base, path);
