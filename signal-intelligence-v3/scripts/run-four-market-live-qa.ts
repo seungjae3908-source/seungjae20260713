@@ -22,6 +22,12 @@ import {
   selectQualifiedStockPriceProvider,
 } from '../src/stock-provider-qualification.mjs';
 
+import {
+  spotPublicQaProfile,
+  upbitPublicQaCandleUrl,
+  normalizeUpbitPublicQaCandles,
+} from '../src/four-market-qa-upbit-candles.mjs';
+
 const OUTPUT = path.resolve(process.argv[2] ?? 'four-market-live-qa.json');
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 const HANDOFF_PATH = path.resolve(process.env.MEMBER_AUTO_TRADING_HANDOFF_PATH?.trim()
@@ -242,21 +248,9 @@ async function bitgetTicker(symbol) {
 }
 
 function cryptoCandleUrl(market, symbol, timeframe) {
-  if (market === 'spot') {
-    const code = encodeURIComponent(`KRW-${symbol}`);
-    if (timeframe === '1D') return [`https://api.upbit.com/v1/candles/days?market=${code}&count=200`, 'upbit'];
-    const unit = timeframe === '60m' ? 60 : 15;
-    return [`https://api.upbit.com/v1/candles/minutes/${unit}?market=${code}&count=200`, 'upbit'];
-  }
+  if (market === 'spot') return [upbitPublicQaCandleUrl(symbol, timeframe), 'upbit'];
   const granularity = timeframe === '60m' ? '1H' : timeframe;
   return [`https://api.bitget.com/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES&granularity=${encodeURIComponent(granularity)}&limit=200`, 'bitget'];
-}
-
-function normalizeUpbit(rows) {
-  return (Array.isArray(rows) ? rows : []).map((row) => ({ time: Number(row.timestamp ?? Date.parse(`${row.candle_date_time_utc}Z`)),
-    open: Number(row.opening_price), high: Number(row.high_price), low: Number(row.low_price), close: Number(row.trade_price),
-    volume: Number(row.candle_acc_trade_volume), quoteVolume: Number(row.candle_acc_trade_price) || null }))
-    .filter((row) => row.time > 0 && row.close > 0).sort((left, right) => left.time - right.time);
 }
 
 function normalizeBitget(body) {
@@ -277,7 +271,7 @@ async function runCryptoLane(asset, profile) {
       async getCandles(market, symbol, timeframe) {
         const [url, provider] = cryptoCandleUrl(market, symbol, timeframe);
         const body = await fetchPublicJson(url, provider);
-        const rows = market === 'spot' ? normalizeUpbit(body) : normalizeBitget(body);
+        const rows = market === 'spot' ? normalizeUpbitPublicQaCandles(body) : normalizeBitget(body);
         observed.candles = Math.max(observed.candles, rows.length);
         observed.candleVolumeRows = Math.max(
           observed.candleVolumeRows,
@@ -364,7 +358,7 @@ async function main() {
   const rows = [];
   for (const profile of PROFILES) rows.push(await runStockLane(REPRESENTATIVES.KR_STOCK, profile, selectedKr));
   for (const profile of PROFILES) rows.push(await runStockLane(REPRESENTATIVES.US_STOCK, profile, selectedUs));
-  for (const profile of PROFILES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_SPOT, profile));
+  for (const profile of PROFILES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_SPOT, spotPublicQaProfile(profile)));
   for (const profile of PROFILES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_FUTURES, profile));
   const canonicalBySignalId = canonicalFor(rows);
   const riskBySignalId = riskEvidenceBySignal(handoff);
