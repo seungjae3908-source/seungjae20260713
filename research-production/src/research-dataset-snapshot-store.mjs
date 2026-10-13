@@ -10,11 +10,19 @@ import { buildResearchDataReadinessV1 } from './research-data-factory.mjs';
 export const RESEARCH_DATASET_SNAPSHOT_MANIFEST_CONTRACT_V1 = 'research-dataset-snapshot-manifest/v1';
 
 export const RESEARCH_SCANNER_DATASET_PROFILES_V1 = Object.freeze([
+  Object.freeze({profileId:'KR_STOCK:SCANNER_SCALP_5M',market:'KR_STOCK',strategyHorizon:'SCALP',timeframe:'5m'}),
   Object.freeze({profileId:'KR_STOCK:SCANNER_SWING_60M',market:'KR_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'KR_STOCK:SCANNER_POSITION_1D',market:'KR_STOCK',strategyHorizon:'POSITION',timeframe:'1D'}),
+  Object.freeze({profileId:'US_STOCK:SCANNER_SCALP_5M',market:'US_STOCK',strategyHorizon:'SCALP',timeframe:'5m'}),
   Object.freeze({profileId:'US_STOCK:SCANNER_SWING_60M',market:'US_STOCK',timeframe:'60m'}),
+  Object.freeze({profileId:'US_STOCK:SCANNER_POSITION_1D',market:'US_STOCK',strategyHorizon:'POSITION',timeframe:'1D'}),
+  Object.freeze({profileId:'CRYPTO_SPOT:SCANNER_SCALP_15M',market:'CRYPTO_SPOT',strategyHorizon:'SCALP',timeframe:'15m'}),
   Object.freeze({profileId:'CRYPTO_SPOT:SCANNER_SWING_4H',market:'CRYPTO_SPOT',timeframe:'4H'}),
+  Object.freeze({profileId:'CRYPTO_SPOT:SCANNER_POSITION_4H',market:'CRYPTO_SPOT',strategyHorizon:'POSITION',timeframe:'4H'}),
+  Object.freeze({profileId:'CRYPTO_FUTURES:SCANNER_SCALP_5M',market:'CRYPTO_FUTURES',strategyHorizon:'SCALP',timeframe:'5m'}),
   Object.freeze({profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',market:'CRYPTO_FUTURES',timeframe:'60m'}),
-]);
+  Object.freeze({profileId:'CRYPTO_FUTURES:SCANNER_POSITION_4H',market:'CRYPTO_FUTURES',strategyHorizon:'POSITION',timeframe:'4H'}),
+].map(profile=>Object.freeze({strategyHorizon:'SWING',...profile})));
 
 const SHA40=/^[0-9a-f]{40}$/i;
 const HASH64=/^[0-9a-f]{64}$/i;

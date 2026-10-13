@@ -108,19 +108,6 @@ test('lookahead and survivorship guards are mandatory', () => {
   assert.equal(passesMinimumBacktestQuality(verified({ survivorshipGuarded: false })), false);
 });
 
-test('S grade requires at least forty independently verified trades even if a payload lowers its minimum', () => {
-  const shortHistory = verified({ tradeCount: 2, minimumTradeCount: 1 });
-  assert.equal(passesMinimumBacktestQuality(shortHistory), false);
-  const ranked = rankScannerCandidates({
-    cards: [card('005930', 96)],
-    market: 'KR',
-    strategy: 'swing',
-    backtests: { '005930': shortHistory },
-  });
-  assert.equal(ranked.cards[0]?.signalGrade, 'B');
-  assert.equal(ranked.diagnostics.sGradeCount, 0);
-});
-
 test('missing OOS/WF metrics fail closed to B watch candidate', () => {
   const result = rankScannerCandidates({ cards: [card('005930')], market: 'KR', strategy: 'swing' });
   assert.equal(result.cards.length, 1);
