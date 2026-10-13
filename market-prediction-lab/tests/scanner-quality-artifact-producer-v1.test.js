@@ -69,6 +69,7 @@ const identity = Object.freeze({
   parameterHash: PARAMS,
   researchCodeSha: SHA,
   market: "CRYPTO_FUTURES",
+  strategyHorizon: "SWING",
   symbol: "BTCUSDT",
   timeframe: "60m",
   direction: "LONG",
@@ -291,6 +292,7 @@ test("stock quality requires point-in-time removed-name universe audit", () => {
   });
   const stockIdentity = {
     ...identity,
+    strategyId: "KR_STOCK_SWING_V1_BUY",
     market: "KR_STOCK",
     symbol: "005930",
     direction: "BUY",
@@ -390,6 +392,45 @@ test("Scanner dataset binding rejects hidden 1h reuse and accepts only exact Sca
     transactionCostEvidence: costEvidence({ market: "CRYPTO_SPOT" }),
   });
   assert.equal(exact.reason, "QUALITY_EXACT_BINDING_MISMATCH");
+});
+
+test("all twelve canonical Scanner lanes accept only their independent dataset profile", () => {
+  const lanes = [
+    ["KR_STOCK", "SCALP", "5m", "KR_STOCK:SCANNER_SCALP_5M", "005930", "BUY"],
+    ["KR_STOCK", "SWING", "60m", "KR_STOCK:SCANNER_SWING_60M", "005930", "BUY"],
+    ["KR_STOCK", "POSITION", "1D", "KR_STOCK:SCANNER_POSITION_1D", "005930", "BUY"],
+    ["US_STOCK", "SCALP", "5m", "US_STOCK:SCANNER_SCALP_5M", "AAPL", "BUY"],
+    ["US_STOCK", "SWING", "60m", "US_STOCK:SCANNER_SWING_60M", "AAPL", "BUY"],
+    ["US_STOCK", "POSITION", "1D", "US_STOCK:SCANNER_POSITION_1D", "AAPL", "BUY"],
+    ["CRYPTO_SPOT", "SCALP", "15m", "CRYPTO_SPOT:SCANNER_SCALP_15M", "BTC", "BUY"],
+    ["CRYPTO_SPOT", "SWING", "4H", "CRYPTO_SPOT:SCANNER_SWING_4H", "BTC", "BUY"],
+    ["CRYPTO_SPOT", "POSITION", "4H", "CRYPTO_SPOT:SCANNER_POSITION_4H", "BTC", "BUY"],
+    ["CRYPTO_FUTURES", "SCALP", "5m", "CRYPTO_FUTURES:SCANNER_SCALP_5M", "BTCUSDT", "LONG"],
+    ["CRYPTO_FUTURES", "SWING", "60m", "CRYPTO_FUTURES:SCANNER_SWING_60M", "BTCUSDT", "LONG"],
+    ["CRYPTO_FUTURES", "POSITION", "4H", "CRYPTO_FUTURES:SCANNER_POSITION_4H", "BTCUSDT", "LONG"],
+  ];
+  const f = fold(1, START);
+  for (const [market, strategyHorizon, timeframe, profileId, symbol, direction] of lanes) {
+    const manifest = scannerSnapshot({ profileId, timeframe, symbols: [symbol] });
+    const laneIdentity = {
+      ...identity,
+      strategyId: `${market}_${strategyHorizon}_V1_${direction}`,
+      market, strategyHorizon, timeframe, symbol, direction,
+      datasetSnapshotHash: manifest.datasetSnapshotHash,
+    };
+    const built = buildScannerQualityEntryV1({
+      identity: laneIdentity,
+      folds: [f],
+      foldResults: [{ fold: 1, binding: {} }],
+      datasetAudit: { ...datasetAudit, snapshotManifest: manifest },
+      transactionCostEvidence: costEvidence({ market }),
+      stockUniverseBiasAudit: market.endsWith("STOCK") ? {
+        status: "point_in_time_bias_gate_passed", market,
+        safeguards: { currentConstituentListAloneCannotPass: true, missingHistoriesFailClosed: true },
+      } : null,
+    });
+    assert.equal(built.reason, "QUALITY_EXACT_BINDING_MISMATCH", `${market}/${strategyHorizon}`);
+  }
 });
 
 test("materializer produces consumer-compatible immutable quality and manifest digests", () => {
