@@ -221,3 +221,25 @@ All actual user Bot SEND and private trading authority remain separately
 protected. This is not a claim of real message receipt or Signal V3 source
 freshness, and does not authorize stock-app production restart while manual
 LIVE Spot/Futures trading may be enabled. Replit prohibited.
+
+### 2026-10-13 contradictory navigation acceptance reconciled BEFORE merge
+
+Full canonical Browser shard 3/4 in #38343785628 failed an actual
+source-contract check after the earlier Staging fix inserted a duplicate
+Technical / 모의매매 menu entry. The real product rule is intentionally
+ONE Technical / 기술매매 top-level menu with distinct LIVE and Paper modes
+inside a common trading workspace. This is a real quality failure; it must
+NOT be bypassed by deleting the stronger Browser regression check.
+
+Repair keeps APP_NAVIGATION's canonical ONE 技術매매 link to /auto-trading,
+which is capability-gated; remove the duplicate top-level Paper item.
+Update BOTH real Full Staging E2E paths: navigate first through Technical /
+기술매매 to /auto-trading and then the visible technical-mode-paper button
+to /paper-trading. Require trading-paper-modes to appear for automatic/manual
+Paper selection. Leave existing Paper route and its financial safety gates
+unchanged. A static contract now checks the E2E tests, singular visible
+menu and real mode-link against the canonical auto-trading-professional-ui
+contract, so future Stage fixes cannot reintroduce this contradiction.
+Actual protected Staging run remains necessary; this source alignment alone
+does NOT establish live Bot delivery, full Staging readiness or manual LIVE
+provider health.

@@ -2578,7 +2578,15 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의매매', '/paper-trading');
+    // Product navigation has ONE technical trading menu. Paper is the real
+    // reachable execution-scope tab inside that shared trading workspace.
+    await openMenuRoute('technical', '기술매매', '/auto-trading');
+    const paperMode = page.getByTestId('technical-mode-paper');
+    await expect(paperMode).toBeVisible();
+    await expectNavigationTransition(page, '/paper-trading', async () => {
+      await paperMode.click();
+    });
+    await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     await openMenuRoute('information', '연구센터', '/research-center');
@@ -2678,7 +2686,7 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '기술매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
@@ -2693,6 +2701,16 @@ test.describe('real staging release readiness', () => {
         }
         await item.click();
       });
+      if (label === '기술매매') {
+        // Verify the Paper target from its real shared workspace, not a
+        // duplicate/deprecated top-level navigation link.
+        const paperTab = page.getByTestId('technical-mode-paper');
+        await expect(paperTab).toBeVisible();
+        await expectNavigationTransition(page, '/paper-trading', async () => {
+          await paperTab.click();
+        });
+        await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
+      }
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');
