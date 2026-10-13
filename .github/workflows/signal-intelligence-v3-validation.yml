@@ -375,8 +375,9 @@ jobs:
               href: control instanceof HTMLAnchorElement ? control.href : null,
             })).filter((row) => row.text || row.href),
           })));
+          const restrictedIpDeclarationRequired = overlaysBefore.some((row) => /Restricted IP/iu.test(row.text));
           let interaction = { attempted: false, selectedIndex: null, overlaysBefore, download: null, popup: null, error: null };
-          if (downloadControlCount > 0) {
+          if (downloadControlCount > 0 && !restrictedIpDeclarationRequired) {
             const selectedIndex = downloadControlCount - 1;
             interaction = { ...interaction, attempted: true, selectedIndex };
             const downloadPromise = page.waitForEvent('download', { timeout: 8_000 }).catch(() => null);
@@ -436,6 +437,11 @@ jobs:
               finalUrl: pageUrl,
             },
             downloadControlCount,
+            outcome: restrictedIpDeclarationRequired
+              ? 'BLOCKED_GEO_DECLARATION_REQUIRED'
+              : interaction.download || interaction.popup || after.url !== pageUrl
+                ? 'DOWNLOAD_PATH_REACHED'
+                : 'DOWNLOAD_PATH_NOT_REACHED',
             before,
             interaction,
             after,
@@ -444,6 +450,7 @@ jobs:
             safety: {
               publicUiOnly: true,
               singleDownloadControlInteraction: true,
+              restrictedIpDeclarationAccepted: false,
               downloadedBodyPersisted: false,
               credentialsRead: false,
               privateApiUsed: false,
@@ -455,13 +462,166 @@ jobs:
             serviceSha: report.serviceSha,
             navigationStatus: report.navigation.status,
             downloadControlCount,
+            outcome: report.outcome,
             interaction,
             observedResponseCount: dedupedResponses.length,
             relevantResponses,
             pageBodyExcerpt: after.bodyText.slice(0, 4_000),
             responseIdentity,
           }, null, 2));
-          if (report.navigation.status !== 200 || downloadControlCount < 6) process.exit(1);
+          if (report.navigation.status !== 200 || downloadControlCount < 6
+              || (restrictedIpDeclarationRequired && interaction.attempted)) process.exit(1);
+          NODE
+      - name: Collect BTCUSDT 730-day public REST evidence without imputing Depth or OI history
+        working-directory: market-prediction-lab
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/bitget-history-probe
+        run: |
+          set -Eeuo pipefail
+          pnpm exec node --input-type=module - <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import { BitgetPublicClient } from './src/bitget-public-client.js';
+          import {
+            collectBitgetCandles,
+            collectBitgetFuturesContext,
+            collectBitgetFuturesReferenceCandles,
+          } from './src/bitget-candle-collector.js';
+          import {
+            collectFundingRateHistory,
+            createTemporalDerivativesProvider,
+            summarizeTemporalCoverage,
+          } from './src/derivatives-history.js';
+          import {
+            APPROVED_LIQUIDATION_RISK_MODEL_V1,
+            CRYPTO_FUTURES_DERIVATIVES_REQUIRED_EVIDENCE,
+          } from './src/crypto-futures-derivatives-evidence-contract-v1.js';
+
+          const HOUR_MS = 60 * 60_000;
+          const endTime = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+          const startTime = endTime - 730 * 24 * HOUR_MS;
+          const symbol = 'BTCUSDT';
+          const productType = 'usdt-futures';
+          let requestCount = 0;
+          const baseClient = new BitgetPublicClient({ minIntervalMs: 150, maxRetries: 4, timeoutMs: 15_000 });
+          const client = { get: async (...args) => { requestCount += 1; return await baseClient.get(...args); } };
+          const digest = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+          const summarizeCandles = (series) => {
+            let missingIntervals = 0;
+            for (let index = 1; index < series.length; index += 1) {
+              const delta = series[index].timestamp - series[index - 1].timestamp;
+              if (delta > HOUR_MS) missingIntervals += Math.floor(delta / HOUR_MS) - 1;
+            }
+            return {
+              count: series.length,
+              firstTimestamp: series[0]?.timestamp ?? null,
+              lastTimestamp: series.at(-1)?.timestamp ?? null,
+              missingIntervals,
+              duplicateTimestamps: series.length - new Set(series.map((row) => row.timestamp)).size,
+              sha256: digest(series),
+            };
+          };
+
+          const [market, mark, index, funding, context] = await Promise.all([
+            collectBitgetCandles({ client, market: 'CRYPTO_FUTURES', symbol, timeframe: '1h', startTime, endTime, maxCandles: 20_000 }),
+            collectBitgetFuturesReferenceCandles({ client, priceType: 'mark', symbol, timeframe: '1h', startTime, endTime, maxCandles: 20_000 }),
+            collectBitgetFuturesReferenceCandles({ client, priceType: 'index', symbol, timeframe: '1h', startTime, endTime, maxCandles: 20_000 }),
+            collectFundingRateHistory({ client, symbol, startTime, endTime, productType, maxPages: 50 }),
+            collectBitgetFuturesContext({ client, symbol, productType }),
+          ]);
+          const marketSummary = summarizeCandles(market.candles);
+          const markSummary = summarizeCandles(mark.candles);
+          const indexSummary = summarizeCandles(index.candles);
+          const markTimes = new Set(mark.candles.map((row) => row.timestamp));
+          const indexTimes = new Set(index.candles.map((row) => row.timestamp));
+          const alignedMarketMarkIndexCount = market.candles.filter((row) => markTimes.has(row.timestamp) && indexTimes.has(row.timestamp)).length;
+          const temporalFunding = createTemporalDerivativesProvider({ fundingHistory: funding.records });
+          const fundingCoverage = summarizeTemporalCoverage(market.candles.map((row) => temporalFunding({ anchorTimestamp: row.timestamp })));
+          const fundingSummary = {
+            count: funding.records.length,
+            firstTimestamp: funding.records[0]?.timestamp ?? null,
+            lastTimestamp: funding.records.at(-1)?.timestamp ?? null,
+            exhausted: funding.exhausted,
+            sha256: digest(funding.records),
+            alignedCandleCoverage: fundingCoverage,
+          };
+          const complete730Days = [marketSummary, markSummary, indexSummary]
+            .every((row) => row.firstTimestamp <= startTime + HOUR_MS && row.lastTimestamp >= endTime - HOUR_MS);
+          const blockers = [
+            'BITGET_FUTURES_DEPTH_DOWNLOAD_GEO_DECLARATION_REQUIRED',
+            'BITGET_HISTORICAL_TRADE_SERIES_NOT_ACQUIRED',
+            'BITGET_HISTORICAL_OPEN_INTEREST_SERIES_MISSING',
+            'POINT_IN_TIME_POSITION_TIER_HISTORY_REQUIRED',
+            ...(APPROVED_LIQUIDATION_RISK_MODEL_V1 === null ? ['APPROVED_LIQUIDATION_RISK_MODEL_MISSING'] : []),
+          ];
+          const report = {
+            schemaVersion: 'bitget-btcusdt-public-history-readiness-v1',
+            serviceSha: process.env.EXPECTED_SHA,
+            generatedAt: new Date().toISOString(),
+            lane: 'CRYPTO_FUTURES:SCANNER_SWING_60M',
+            strategyTimeframe: '60m',
+            providerTimeframe: '1h',
+            symbol,
+            productType: 'USDT-FUTURES',
+            requestedPeriod: { startTime, endTime, days: 730 },
+            publicRest: {
+              host: 'api.bitget.com',
+              requestCount,
+              marketCandles: marketSummary,
+              markCandles: markSummary,
+              indexCandles: indexSummary,
+              alignedMarketMarkIndexCount,
+              funding: fundingSummary,
+              currentOpenInterest: {
+                value: context.openInterest,
+                observedAt: context.openInterestTimestamp,
+                historicalObservationCountCredited: 0,
+              },
+              currentFunding: {
+                value: context.fundingRate,
+                intervalHours: context.fundingIntervalHours,
+              },
+              complete730Days,
+            },
+            downloadCenter: {
+              host: 'www.bitget.com',
+              historicalDepthRowsAcquired: 0,
+              historicalTradesAcquired: 0,
+              rawFilesPersistedOrUploaded: false,
+              status: 'BLOCKED_GEO_DECLARATION_REQUIRED',
+            },
+            evidenceContract: {
+              required: CRYPTO_FUTURES_DERIVATIVES_REQUIRED_EVIDENCE,
+              approvedLiquidationRiskModel: APPROVED_LIQUIDATION_RISK_MODEL_V1,
+              historicalOpenInterestReady: false,
+              historicalDepthReady: false,
+              historicalTradeFlowReady: false,
+            },
+            datasetIdentity: digest({ market: marketSummary.sha256, mark: markSummary.sha256, index: indexSummary.sha256, funding: fundingSummary.sha256 }),
+            status: 'BLOCKED_DATA',
+            blockers,
+            qualityArtifactWritten: false,
+            genuineSGradeGranted: false,
+            profitabilityMetrics: null,
+            canonicalJoinCount: 0,
+            workerAdmissionCount: 0,
+            safety: {
+              publicGetOnly: true,
+              syntheticImputation: false,
+              currentOpenInterestHistoricalBackfill: false,
+              privateApiUsed: false,
+              rawProviderDataRedistributed: false,
+              orderSubmitted: false,
+              executionAuthority: 'NONE',
+            },
+          };
+          await writeFile(path.join(process.env.EVIDENCE_DIR, 'bitget-btcusdt-public-history-readiness.json'), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+          console.log(JSON.stringify(report, null, 2));
+          if (marketSummary.count === 0 || markSummary.count === 0 || indexSummary.count === 0
+              || fundingCoverage.total !== marketSummary.count || report.qualityArtifactWritten !== false
+              || report.genuineSGradeGranted !== false || report.safety.executionAuthority !== 'NONE') process.exit(1);
           NODE
       - name: Assert no execution authority
         run: |
