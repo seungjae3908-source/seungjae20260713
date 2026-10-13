@@ -65,7 +65,8 @@ export const AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION =
   'authoritative-paper-callback-owner-contract-v1' as const;
 
 const BITGET_BASE_URL = 'https://api.bitget.com';
-const FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === 'CRYPTO_FUTURES');
+const FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) =>
+  lane.market === 'CRYPTO_FUTURES' && lane.strategyHorizon === 'SWING');
 const NATURAL_CYCLE_MAX_SIZING_ITERATIONS = 8;
 const NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS = 30_000;
 

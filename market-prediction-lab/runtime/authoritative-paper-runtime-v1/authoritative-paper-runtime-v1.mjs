@@ -5095,7 +5095,7 @@ function metricScore(backtest, weights) {
 }
 function passesMinimumBacktestQuality(summary) {
   if (summary.status !== "verified") return false;
-  const minTrades = summary.minimumTradeCount ?? 40;
+  const minTrades = Math.max(40, summary.minimumTradeCount ?? 40);
   return (summary.tradeCount ?? 0) >= minTrades && finite10(summary.expectancyPercent) && summary.expectancyPercent > 0 && finite10(summary.profitFactor) && summary.profitFactor >= 1.05 && finite10(summary.maxDrawdownPercent) && Math.abs(summary.maxDrawdownPercent) <= 25 && finite10(summary.netReturnPercent) && summary.netReturnPercent > 0 && summary.costsIncluded === true && summary.slippageIncluded === true && summary.lookaheadGuarded === true && summary.survivorshipGuarded === true && summary.oos === true && summary.walkForward === true;
 }
 function gradeCandidate(card, backtest) {
@@ -6258,14 +6258,20 @@ function prepareForwardRecommendationObservation(input) {
 }
 
 // src/services/forward-recommendation-observer-runtime.service.ts
-var FORWARD_OBSERVER_DEFAULT_TIMEFRAME = "60m";
-var FORWARD_OBSERVER_SPOT_TIMEFRAME = "4H";
 var FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1e3;
 var FORWARD_OBSERVER_LANES = Object.freeze([
-  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
-  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
-  { id: "SPOT_SWING_4H", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME },
-  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME }
+  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: "60m", strategyMode: "swing", strategyHorizon: "SWING", style: "SWING" },
+  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: "60m", strategyMode: "swing", strategyHorizon: "SWING", style: "SWING" },
+  { id: "SPOT_SWING_4H", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: "4H", strategyMode: "swing", strategyHorizon: "SWING", style: "SWING" },
+  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: "60m", strategyMode: "swing", strategyHorizon: "SWING", style: "SWING" },
+  { id: "KR_SCALPING_5M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: "5m", strategyMode: "scalping", strategyHorizon: "SCALP", style: "SCALPING" },
+  { id: "KR_MID_LONG_1D", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: "1D", strategyMode: "position", strategyHorizon: "POSITION", style: "MID_LONG" },
+  { id: "US_SCALPING_5M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: "5m", strategyMode: "scalping", strategyHorizon: "SCALP", style: "SCALPING" },
+  { id: "US_MID_LONG_1D", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: "1D", strategyMode: "position", strategyHorizon: "POSITION", style: "MID_LONG" },
+  { id: "SPOT_SCALPING_15M", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: "15m", strategyMode: "scalping", strategyHorizon: "SCALP", style: "SCALPING" },
+  { id: "SPOT_MID_LONG_4H", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: "4H", strategyMode: "position", strategyHorizon: "POSITION", style: "MID_LONG" },
+  { id: "FUTURES_SCALPING_5M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: "5m", strategyMode: "scalping", strategyHorizon: "SCALP", style: "SCALPING" },
+  { id: "FUTURES_MID_LONG_4H", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: "4H", strategyMode: "position", strategyHorizon: "POSITION", style: "MID_LONG" }
 ]);
 var SAFETY = Object.freeze({
   publicDataOnly: true,
@@ -8795,7 +8801,7 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION = "authoritative-paper-evidence
 var AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION = "authoritative-paper-blocked-data-source-contract-v1";
 var AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION = "authoritative-paper-callback-owner-contract-v1";
 var BITGET_BASE_URL2 = "https://api.bitget.com";
-var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
+var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES" && lane.strategyHorizon === "SWING");
 var NATURAL_CYCLE_MAX_SIZING_ITERATIONS = 8;
 var NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS = 3e4;
 function exactSha8(value) {

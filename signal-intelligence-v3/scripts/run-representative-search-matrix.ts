@@ -6,6 +6,7 @@ import { ScannerUniverseService } from '../../api-server/src/services/scanner-un
 import { StockSignalScannerService } from '../../api-server/src/services/stock-signal-scanner.service';
 import { createCryptoSignalScannerService } from '../../api-server/src/services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../../api-server/src/services/scanner-crypto-price-precision.service';
+import { FORWARD_OBSERVER_LANES } from '../../api-server/src/services/forward-recommendation-observer-runtime.service';
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
 import * as yahoo from '../../api-server/src/providers/yahoo';
@@ -17,11 +18,12 @@ const OUTPUT_MD = path.resolve(process.argv[3] ?? 'representative-search-matrix.
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 const NOW = Date.now();
 
-const PROFILES = Object.freeze([
-  Object.freeze({ id: 'SCALPING', strategyMode: 'scalping', timeframe: '15m' }),
-  Object.freeze({ id: 'SWING', strategyMode: 'swing', timeframe: '60m' }),
-  Object.freeze({ id: 'MID_LONG', strategyMode: 'position', timeframe: '1D' }),
-]);
+const PROFILES_BY_MARKET = Object.freeze(Object.fromEntries(
+  ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((market) => [market,
+    Object.freeze(FORWARD_OBSERVER_LANES.filter((lane) => lane.market === market).map((lane) => Object.freeze({
+      id: lane.style, strategyMode: lane.strategyMode, timeframe: lane.timeframe,
+    })))]),
+));
 
 const STOCKS = Object.freeze([
   Object.freeze({ market: 'KR_STOCK', scannerMarket: 'KR', symbol: '005930', name: 'Samsung Electronics', exchange: 'KOSPI', currency: 'KRW', assetType: 'STOCK' }),
@@ -219,7 +221,7 @@ function cryptoCandleUrl(market, symbol, timeframe) {
   if (market === 'spot') {
     const code = encodeURIComponent(`KRW-${symbol}`);
     if (timeframe === '1D') return [`https://api.upbit.com/v1/candles/days?market=${code}&count=200`, 'upbit'];
-    const unit = timeframe === '60m' ? 60 : timeframe === '15m' ? 15 : 1;
+    const unit = timeframe === '4H' ? 240 : timeframe === '60m' ? 60 : timeframe === '15m' ? 15 : 1;
     return [`https://api.upbit.com/v1/candles/minutes/${unit}?market=${code}&count=200`, 'upbit'];
   }
   const granularity = timeframe === '60m' ? '1H' : timeframe;
@@ -279,24 +281,24 @@ async function runCrypto(asset, profile) {
 async function save(file, text) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, text, 'utf8'); }
 function md(report) {
   const rows = report.rows.map((row) => `| ${row.market} | ${row.symbol} | ${row.profile} | ${row.timeframe} | ${row.status} | ${row.providerErrors ?? '-'} | ${row.timeouts ?? '-'} | ${row.cardCount ?? 0} |`);
-  return `# Signal Intelligence V3 Representative Search Matrix\n\n- service SHA: ${report.serviceSha}\n- public data only: true\n- actual orders/private requests: 0\n- profiles: SCALPING=15m, SWING=60m, MID_LONG=1D\n- CANDIDATE is not a profitability guarantee; VALID_NO_TRADE is a valid search result.\n\n| Market | Symbol | Profile | TF | Result | Provider errors | Timeouts | Cards |\n|---|---|---|---|---|---:|---:|---:|\n${rows.join('\n')}\n`;
+  return `# Signal Intelligence V3 Representative Search Matrix\n\n- service SHA: ${report.serviceSha}\n- public data only: true\n- actual orders/private requests: 0\n- profiles: exact canonical market/horizon timeframes\n- CANDIDATE is not a profitability guarantee; VALID_NO_TRADE is a valid search result.\n\n| Market | Symbol | Profile | TF | Result | Provider errors | Timeouts | Cards |\n|---|---|---|---|---|---:|---:|---:|\n${rows.join('\n')}\n`;
 }
 
 const rows = [];
 for (const asset of STOCKS) {
-  for (const profile of PROFILES) {
+  for (const profile of PROFILES_BY_MARKET[asset.market]) {
     try { rows.push(await runStock(asset, profile)); }
     catch (error) { rows.push({ market: asset.market, symbol: asset.symbol, profile: profile.id, timeframe: profile.timeframe, status: 'TECHNICAL_FAILURE', error: String(error?.message ?? error).slice(0, 700) }); }
   }
 }
 for (const asset of CRYPTO) {
-  for (const profile of PROFILES) {
+  for (const profile of PROFILES_BY_MARKET[asset.market]) {
     try { rows.push(await runCrypto(asset, profile)); }
     catch (error) { rows.push({ market: asset.market, symbol: asset.symbol, profile: profile.id, timeframe: profile.timeframe, status: 'TECHNICAL_FAILURE', error: String(error?.message ?? error).slice(0, 700) }); }
   }
 }
 const summary = Object.fromEntries(['CANDIDATE', 'VALID_NO_TRADE', 'SEARCH_FAILURE', 'TECHNICAL_FAILURE'].map((status) => [status, rows.filter((row) => row.status === status).length]));
-const report = { schemaVersion: 1, serviceSha: SERVICE_SHA || null, generatedAt: new Date().toISOString(), publicDataOnly: true, executionAuthority: 'NONE', profiles: PROFILES, representativeCount: STOCKS.length + CRYPTO.length, rowCount: rows.length, summary, rows };
+const report = { schemaVersion: 1, serviceSha: SERVICE_SHA || null, generatedAt: new Date().toISOString(), publicDataOnly: true, executionAuthority: 'NONE', profilesByMarket: PROFILES_BY_MARKET, representativeCount: STOCKS.length + CRYPTO.length, rowCount: rows.length, summary, rows };
 await save(OUTPUT_JSON, `${JSON.stringify(report, null, 2)}\n`);
 await save(OUTPUT_MD, md(report));
 console.log(JSON.stringify({ ok: summary.TECHNICAL_FAILURE === 0, ...summary, rowCount: rows.length, output: OUTPUT_JSON }, null, 2));

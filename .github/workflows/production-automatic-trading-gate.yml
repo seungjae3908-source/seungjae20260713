@@ -18,7 +18,6 @@ on:
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/tests/production-paper-forward-readiness.test.mjs
       - .github/tests/production-telegram-runtime-readiness.test.mjs
-      - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/scripts/verify-phase8-db.sh
       - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql
       - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
@@ -78,8 +77,23 @@ on:
       - .github/tests/scanner-readonly-repair-scope.test.mjs
       - .github/workflows/paper-forward-schedule-validation.yml
       - .github/workflows/research-workspace-integration-v1.yml
+      - .github/workflows/signal-intelligence-v3-validation.yml
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/providers/yahoo-governor.test.ts
+      - api-server/src/providers/yahoo-timeframe.test.ts
+      - api-server/src/providers/yahoo.test.ts
+      - api-server/src/providers/yahoo.ts
+      - api-server/src/routes/stocks.ts
+      - api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
+      - api-server/src/services/authoritative-paper-evidence-sources.service.ts
+      - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
+      - api-server/src/services/forward-observer-canonical-metadata.service.ts
       - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
       - api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.ts
+      - api-server/src/services/public-fx.service.ts
+      - api-server/src/services/ranking-movers.service.ts
       - api-server/src/services/scanner-indicator-library.service.ts
       - api-server/src/services/scanner-candidate-ranking.service.test.ts
       - api-server/src/services/scanner-candidate-ranking.service.ts
@@ -89,21 +103,32 @@ on:
       - api-server/src/services/telegram-v3-current-source.service.test.ts
       - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/trade-automation-integration.test.ts
+      - api-server/test.mjs
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
       - signal-intelligence-v3/ARCHITECTURE.md
       - signal-intelligence-v3/README.md
+      - signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts
       - signal-intelligence-v3/scripts/diagnose-public-providers.ts
+      - signal-intelligence-v3/scripts/run-four-market-live-qa.ts
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/scripts/run-representative-search-matrix.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
       - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/canonical-handoff-diagnostics.mjs
+      - signal-intelligence-v3/src/four-market-qa-upbit-candles.mjs
       - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
+      - signal-intelligence-v3/src/public-stock-prefetch.mjs
+      - signal-intelligence-v3/src/stock-provider-qualification.mjs
       - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
       - signal-intelligence-v3/tests/canonical-adapter.test.mjs
+      - signal-intelligence-v3/tests/canonical-handoff-diagnostics.test.mjs
+      - signal-intelligence-v3/tests/four-market-qa-upbit-candles.test.mjs
       - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
+      - signal-intelligence-v3/tests/stock-provider-qualification.test.mjs
   issue_comment:
     types: [created]
 

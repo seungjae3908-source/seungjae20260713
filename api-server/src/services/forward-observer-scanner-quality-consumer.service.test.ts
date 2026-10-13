@@ -88,9 +88,9 @@ function card(symbol = 'BTCUSDT', action: 'LONG' | 'SHORT' = 'LONG'): ScannerSig
 }
 
 function artifactFor(symbol = 'BTCUSDT', direction: 'LONG' | 'SHORT' = 'LONG'): ForwardObserverScannerQualityArtifact {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const promotion = new StrategyPromotionService({ sourceSha: SHA })
-    .list({ market: lane.market, strategyHorizon: 'SWING', direction }).items[0]!;
+    .list({ market: lane.market, strategyHorizon: lane.strategyHorizon, direction }).items[0]!;
   return {
     schemaVersion: 'forward-observer-scanner-quality-v1',
     researchCodeSha: SHA,
@@ -101,6 +101,7 @@ function artifactFor(symbol = 'BTCUSDT', direction: 'LONG' | 'SHORT' = 'LONG'): 
         parameterHash: promotion.identity.parameterHash,
         researchCodeSha: SHA,
         market: lane.market,
+        strategyHorizon: lane.strategyHorizon,
         symbol,
         timeframe: lane.timeframe,
         direction,
@@ -156,7 +157,7 @@ test('manifest digest mismatch fails closed', async () => {
 });
 
 test('exact direction and Promotion identity select one verified futures quality row', () => {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const selected = selectForwardObserverScannerBacktests({
     artifact: artifactFor('BTCUSDT', 'LONG'),
     cards: [card('BTCUSDT', 'LONG')],
@@ -171,7 +172,7 @@ test('exact direction and Promotion identity select one verified futures quality
 });
 
 test('opposite-side quality is never borrowed', () => {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const selected = selectForwardObserverScannerBacktests({
     artifact: artifactFor('BTCUSDT', 'LONG'),
     cards: [card('BTCUSDT', 'SHORT')],
@@ -184,7 +185,7 @@ test('opposite-side quality is never borrowed', () => {
 });
 
 test('same-symbol mixed LONG and SHORT keep direction-isolated quality keys', () => {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const long = artifactFor('BTCUSDT', 'LONG');
   const short = artifactFor('BTCUSDT', 'SHORT');
   const artifact = { ...long, entries: [...long.entries, ...short.entries] };
@@ -201,7 +202,7 @@ test('same-symbol mixed LONG and SHORT keep direction-isolated quality keys', ()
 });
 
 test('missing artifact preserves fail-closed unavailable state with no invented quality', () => {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const selected = selectForwardObserverScannerBacktests({
     artifact: null,
     cards: [card()],
@@ -212,9 +213,52 @@ test('missing artifact preserves fail-closed unavailable state with no invented 
   assert.deepEqual(selected.backtests, {});
 });
 
+test('all twelve market and horizon lanes select only an exact independent quality identity', () => {
+  const entries = FORWARD_OBSERVER_LANES.map((lane) => {
+    const direction = lane.market === 'CRYPTO_FUTURES' ? 'LONG' as const : 'BUY' as const;
+    const promotion = new StrategyPromotionService({ sourceSha: SHA })
+      .list({ market: lane.market, strategyHorizon: lane.strategyHorizon, direction }).items[0]!;
+    return {
+      identity: {
+        strategyId: promotion.identity.strategyId,
+        strategyVersion: promotion.identity.strategyVersion,
+        parameterHash: promotion.identity.parameterHash,
+        researchCodeSha: SHA,
+        market: lane.market,
+        strategyHorizon: lane.strategyHorizon,
+        symbol: lane.market === 'KR_STOCK' ? '005930' : lane.market === 'US_STOCK' ? 'AAPL'
+          : lane.market === 'CRYPTO_SPOT' ? 'BTC' : 'BTCUSDT',
+        timeframe: lane.timeframe,
+        direction,
+        datasetSnapshotHash: 'e'.repeat(64),
+      },
+      quality: quality(),
+      executionAuthority: 'NONE' as const,
+      automaticPromotionAuthority: false as const,
+      profitabilityClaimAllowed: false as const,
+    };
+  });
+  const artifact: ForwardObserverScannerQualityArtifact = {
+    schemaVersion: 'forward-observer-scanner-quality-v1', researchCodeSha: SHA, entries,
+    safety: { executionAuthority: 'NONE', financialMutationAllowed: false, liveOrderAllowed: false,
+      privateTradingApiAllowed: false, profitabilityClaimAllowed: false },
+  };
+  for (const lane of FORWARD_OBSERVER_LANES) {
+    const entry = entries.find((row) => row.identity.market === lane.market
+      && row.identity.strategyHorizon === lane.strategyHorizon)!;
+    const direction = entry.identity.direction;
+    const candidate = { ...card(entry.identity.symbol, 'LONG'),
+      action: direction, direction: direction === 'BUY' ? 'LONG' as const : direction } as ScannerSignalCard;
+    const selected = selectForwardObserverScannerBacktests({ artifact, cards: [candidate], lane, researchCodeSha: SHA });
+    assert.equal(selected.status, 'READY', lane.id);
+    const key = lane.market === 'CRYPTO_FUTURES' ? `${entry.identity.symbol}|LONG` : entry.identity.symbol;
+    assert.equal(selected.backtests[key]?.status, 'verified', lane.id);
+  }
+});
+
 
 test('verified artifact can raise an otherwise B-only Forward ranking without changing grade thresholds', () => {
-  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES')!;
+  const lane = FORWARD_OBSERVER_LANES.find((item) => item.market === 'CRYPTO_FUTURES' && item.strategyHorizon === 'SWING')!;
   const candidate = card('BTCUSDT', 'LONG');
   candidate.score = 90;
   const selected = selectForwardObserverScannerBacktests({

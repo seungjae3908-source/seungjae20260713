@@ -17,8 +17,8 @@ import { attachForwardObserverCanonicalMetadata } from '../services/forward-obse
 import type { SignalOutcomeBar } from '../services/signal-performance-learning.service';
 import {
   createForwardObserverRuntimeState,
+  migrateForwardObserverRuntimeState,
   runForwardRecommendationObserverCycle,
-  validateForwardObserverRuntimeState,
   type ForwardObserverLane,
   type ForwardObserverRuntimeState,
 } from '../services/forward-recommendation-observer-runtime.service';
@@ -81,6 +81,9 @@ const FORWARD_OBSERVER_PUBLIC_STOCK_MEMBER_ID =
   'signal-intelligence-forward-observer-public-only';
 
 async function withYahooPublicOnlyStockData<T>(operation: () => Promise<T>): Promise<T> {
+  if (process.env.SIGNAL_INTELLIGENCE_YAHOO_USAGE_CONFIRMED !== 'true') {
+    throw new Error('YAHOO_USAGE_TERMS_NOT_CONFIRMED');
+  }
   const mutable = MarketDataService as unknown as {
     getCandles(ticker: string, timeframe?: Timeframe): Promise<Candle[]>;
     getCandlesMeta(ticker: string, timeframe?: Timeframe): Promise<{
@@ -132,7 +135,7 @@ async function scanStockLane(
       filters: { timeframe: lane.timeframe } as never,
       cursor,
       batchSize: lane.batchSize,
-      strategyMode: 'swing',
+      strategyMode: lane.strategyMode,
     });
     const sourcedCards = scanned.cards.map((card) => addSource(card, 'yahoo-public'));
     if (!scannerQuality) {
@@ -150,7 +153,7 @@ async function scanStockLane(
     const ranking = rankScannerCandidates({
       cards: sourcedCards,
       market: scanned.market,
-      strategy: 'swing',
+      strategy: lane.strategyMode,
       backtests: qualitySelection.backtests,
       limit: lane.batchSize,
     });
@@ -183,7 +186,7 @@ async function scanCryptoLane(
   const scanned = await CryptoSignalScannerService.scan({
     memberId: 'forward-observer-public-only',
     market,
-    strategyMode: 'swing',
+    strategyMode: lane.strategyMode,
     timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
@@ -199,7 +202,7 @@ async function scanCryptoLane(
   const ranking = rankScannerCandidates({
     cards: aligned.cards,
     market: aligned.market,
-    strategy: 'swing',
+    strategy: lane.strategyMode,
     backtests: qualitySelection.backtests,
     limit: 10,
   });
@@ -228,8 +231,8 @@ async function scanCryptoLane(
 }
 
 async function stockFutureBars(observation: ForwardRecommendationObservation): Promise<SignalOutcomeBar[]> {
-  if (observation.identity.timeframe !== '60m') throw new Error('STOCK_FORWARD_TIMEFRAME_UNSUPPORTED');
-  const candles = await yahoo.getCandles(observation.snapshot.symbol, '60m');
+  if (!['5m', '60m', '1D'].includes(observation.identity.timeframe)) throw new Error('STOCK_FORWARD_TIMEFRAME_UNSUPPORTED');
+  const candles = await yahoo.getCandles(observation.snapshot.symbol, observation.identity.timeframe as Timeframe);
   return candles.flatMap((candle) => {
     const at = timestamp(candle.time);
     if (!at) return [];
@@ -250,8 +253,8 @@ async function cryptoFutureBars(observation: ForwardRecommendationObservation): 
   if (observation.identity.market === 'CRYPTO_SPOT') {
     const unit = observation.identity.timeframe === '4H'
       ? 240
-      : observation.identity.timeframe === '60m'
-        ? 60
+      : observation.identity.timeframe === '15m'
+        ? 15
         : null;
     if (unit == null) throw new Error('UPBIT_FORWARD_TIMEFRAME_UNSUPPORTED');
     const rows = await fetchJson<UpbitCandleRow[]>(
@@ -266,9 +269,10 @@ async function cryptoFutureBars(observation: ForwardRecommendationObservation): 
       return [{ timestamp: new Date(at).toISOString(), high, low, close }];
     });
   }
-  if (observation.identity.timeframe !== '60m') throw new Error('BITGET_FORWARD_TIMEFRAME_UNSUPPORTED');
+  const granularity = ({ '5m': '5m', '60m': '1H', '4H': '4H' } as Record<string, string>)[observation.identity.timeframe];
+  if (!granularity) throw new Error('BITGET_FORWARD_TIMEFRAME_UNSUPPORTED');
   const payload = await fetchJson<BitgetEnvelope>(
-    `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=1H&limit=200`,
+    `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${granularity}&limit=200`,
   );
   if (String(payload.code ?? '') !== '00000' || !Array.isArray(payload.data)) throw new Error('BITGET_PUBLIC_CANDLES_INVALID');
   return payload.data.flatMap((raw) => {
@@ -284,9 +288,7 @@ async function cryptoFutureBars(observation: ForwardRecommendationObservation): 
 
 async function readState(file: string | null, researchCodeSha: string): Promise<ForwardObserverRuntimeState> {
   if (!file) return createForwardObserverRuntimeState(researchCodeSha);
-  const parsed = JSON.parse(await readFile(file, 'utf8')) as ForwardObserverRuntimeState;
-  validateForwardObserverRuntimeState(parsed, researchCodeSha);
-  return parsed;
+  return migrateForwardObserverRuntimeState(JSON.parse(await readFile(file, 'utf8')), researchCodeSha);
 }
 
 async function main(): Promise<void> {

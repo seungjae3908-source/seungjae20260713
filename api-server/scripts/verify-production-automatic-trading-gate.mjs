@@ -565,17 +565,22 @@ const scannerCandidateRanking = read('api-server/src/services/scanner-candidate-
 const scannerCandidateRankingTest = read('api-server/src/services/scanner-candidate-ranking.service.test.ts');
 const scannerQualityConsumer = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.ts');
 const scannerQualityConsumerTest = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts');
+const forwardCanonicalMetadata = read('api-server/src/services/forward-observer-canonical-metadata.service.ts');
+const forwardRuntime = read('api-server/src/services/forward-recommendation-observer-runtime.service.ts');
+const forwardRuntimeTest = read('api-server/src/services/forward-recommendation-observer-runtime.service.test.ts');
+const forwardCycleRunner = read('api-server/src/scripts/run-forward-recommendation-observer-cycle.ts');
+const fourMarketLiveQa = read('signal-intelligence-v3/scripts/run-four-market-live-qa.ts');
 const scannerIndicators = read('api-server/src/services/scanner-indicator-library.service.ts');
 const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.service.test.ts');
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 39
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 39
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 64
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 64
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== '413c463c6c11d762643d558d778bd3d1ba635a213ef83fa44448898ee3f8cbdc') {
+    !== 'a5ca23319dbb0ff0cb546bd0cb9b1d8666cf2cbdc8eb5d786c48ddf24ba31f5f') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
@@ -615,7 +620,8 @@ for (const token of [
   "const STOCK_MEMBER_ID = 'signal-intelligence-forward-observer-public-only'",
   "const CRYPTO_MEMBER_ID = 'forward-observer-public-only'",
   "input.paperIdentity && input.card?.signalGrade === 'S'",
-  "market.prefix === 'SPOT' && profile.label === 'SWING'",
+  'FORWARD_OBSERVER_LANES.map((lane)',
+  'entry.identity.strategyHorizon === lane.strategyHorizon',
   'selectSignalAdmittedHandoffEntries({',
   'canonicalWorkerHandoff',
   'handoffState = await canonicalHandoff(laneNowMs)',
@@ -639,10 +645,36 @@ requireText(scannerQualityConsumer, "input.lane.market === 'CRYPTO_FUTURES' ? ra
 requireText(scannerQualityConsumerTest,
   'same-symbol mixed LONG and SHORT keep direction-isolated quality keys',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_REGRESSION_MISSING');
-requireText(signalPublicProgress, "m === 'SPOT' ? 'SWING_4H' : 'SWING_60M'",
-  'AUTO_GATE_SPOT_CANONICAL_TIMEFRAME_MISSING');
-requireText(telegramV3CurrentSource, "event.timeframe==='4H'?'SWING_4H'",
-  'AUTO_GATE_TELEGRAM_SPOT_CANONICAL_TIMEFRAME_MISSING');
+for (const token of ['KR_SCALPING_5M', 'SPOT_SCALPING_15M', 'SPOT_MID_LONG_4H', 'FUTURES_MID_LONG_4H']) {
+  requireText(signalPublicProgress, token, 'AUTO_GATE_TWELVE_LANE_PUBLIC_CYCLE_MISSING');
+  requireText(telegramV3CurrentSource, token, 'AUTO_GATE_TWELVE_LANE_TELEGRAM_MISSING');
+}
+for (const token of [
+  "strategyHorizon: 'SCALP'", "strategyHorizon: 'SWING'", "strategyHorizon: 'POSITION'",
+  'migrateForwardObserverRuntimeState(', "strategies: ['SCALPING', 'SWING', 'MID_LONG']",
+]) requireText(forwardRuntime, token, 'AUTO_GATE_TWELVE_LANE_FORWARD_RUNTIME_MISSING');
+requireText(forwardRuntimeTest,
+  'legacy four-lane restart state migrates without losing SWING cursors or observations',
+  'AUTO_GATE_TWELVE_LANE_RESTART_REGRESSION_MISSING');
+for (const token of [
+  'input.lane.strategyHorizon', 'input.lane.strategyMode', 'style: input.lane.style',
+]) requireText(forwardCanonicalMetadata, token, 'AUTO_GATE_TWELVE_LANE_CANONICAL_METADATA_MISSING');
+for (const token of [
+  "strategyMode: lane.strategyMode", "strategy: lane.strategyMode",
+  "SIGNAL_INTELLIGENCE_YAHOO_USAGE_CONFIRMED !== 'true'",
+  "{ '5m': '5m', '60m': '1H', '4H': '4H' }",
+]) requireText(forwardCycleRunner, token, 'AUTO_GATE_TWELVE_LANE_FORWARD_RUNNER_MISSING');
+requireText(scannerQualityConsumer, 'identity.strategyHorizon === input.lane.strategyHorizon',
+  'AUTO_GATE_TWELVE_LANE_QUALITY_BINDING_MISSING');
+requireText(scannerQualityConsumerTest,
+  'all twelve market and horizon lanes select only an exact independent quality identity',
+  'AUTO_GATE_TWELVE_LANE_QUALITY_REGRESSION_MISSING');
+requireText(scannerCandidateRanking, 'Math.max(40, summary.minimumTradeCount ?? 40)',
+  'AUTO_GATE_SCANNER_QUALITY_SAMPLE_FLOOR_MISSING');
+for (const token of [
+  '/api/v2/mix/market/current-fund-rate', '/api/v2/mix/market/open-interest',
+  '/api/v2/mix/market/merge-depth', 'BITGET_DEPTH_INVALID',
+]) requireText(fourMarketLiveQa, token, 'AUTO_GATE_BITGET_PUBLIC_QUALITY_QA_MISSING');
 for (const token of [
   'data.krx.co.kr', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
   'api.upbit.com', 'api.bitget.com', 'MANAGED_PROXY_CONNECT_403', 'PROVIDER_HTTP_403',
