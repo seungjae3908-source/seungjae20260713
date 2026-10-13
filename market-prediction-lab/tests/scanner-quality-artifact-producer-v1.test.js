@@ -417,6 +417,38 @@ test("materializer produces consumer-compatible immutable quality and manifest d
 });
 
 
+test("operator cannot lower the minimum trade count below forty", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const built = buildScannerQualityEntryV1({
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(), minimumTradeCount: 1,
+  });
+  assert.equal(built.status, "BLOCKED_DATA");
+  assert.equal(built.reason, "QUALITY_MINIMUM_TRADE_COUNT_BELOW_POLICY_FLOOR");
+  assert.equal(built.entry, null);
+});
+
+test("materializer refuses unchecked rows and same active identity in a multi-entry bundle", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const built = buildScannerQualityEntryV1({
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(),
+  });
+  assert.equal(built.status, "READY");
+  assert.throws(
+    () => materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha: SHA, entries: [built.entry],
+    }),
+    /QUALITY_ARTIFACT_ENTRY_INVALID/u,
+  );
+  assert.throws(
+    () => materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha: SHA, entries: [built, built],
+    }),
+    /QUALITY_ARTIFACT_AMBIGUOUS_ACTIVE_IDENTITY/u,
+  );
+});
+
 test("missing trade segment dimensions fail closed before summarization", () => {
   const f = fold(1, START);
   const p = packet(f);
