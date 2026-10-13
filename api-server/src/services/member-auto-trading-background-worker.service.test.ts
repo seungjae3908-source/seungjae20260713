@@ -1930,6 +1930,44 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   assert.equal(exitOrder?.filledQuantity, 0.1);
 });
 
+test('Paper target progress survives worker restarts, avoids duplicate exits, and trails the remainder', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const run = (at: number, markPrice: number, handoffMissing: boolean) => withFetchMock(() =>
+    new MemberAutoTradingBackgroundWorker(source(repository, at, {
+      markPrice, handoffMissing, walletCreatedAtMs: nowMs,
+    })).runOnce(new Date(at)));
+
+  const entry = await run(nowMs, 100_050, false);
+  assert.equal(entry.filledOrders, 1);
+
+  const firstTarget = await run(nowMs, 110_500, true);
+  assert.equal(firstTarget.paperExitOrders, 1);
+  let exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 1);
+  assert.ok(exits[0]!.signalReasons.includes('AUTO_EXIT_TARGET_INDEX:0'));
+  let exitOrders = (await repository.listOrders(USER)).filter((order) =>
+    exits.some((plan) => plan.id === order.planId));
+  assert.equal(exitOrders[0]?.filledQuantity, 0.05);
+
+  const sameTargetAfterRestart = await run(nowMs, 111_000, true);
+  assert.equal(sameTargetAfterRestart.paperExitOrders, 0);
+  exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 1, 'filled target stage is not submitted twice after restart');
+
+  const trailing = await run(nowMs, 100_000, true);
+  assert.equal(trailing.paperExitOrders, 1);
+  exits = (await repository.listPlans(USER)).filter((plan) => plan.reduceOnly);
+  assert.equal(exits.length, 2);
+  const trailingPlan = exits.find((plan) =>
+    plan.signalReasons.includes('AUTO_EXIT_REASON:TRAILING_TAKE_PROFIT'));
+  assert.ok(trailingPlan);
+  exitOrders = (await repository.listOrders(USER)).filter((order) =>
+    exits.some((plan) => plan.id === order.planId));
+  assert.deepEqual(exitOrders.map((order) => order.filledQuantity).sort(), [0.05, 0.05]);
+});
+
 
 test('Live readiness and entry do not require Paper wallet or Telegram binding', async () => {
   const keys = [
