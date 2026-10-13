@@ -121,13 +121,18 @@ on:
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
       - api-server/src/services/automatic-live-position-isolation.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.ts
       - api-server/src/services/member-auto-trading-ai-review-evidence.service.ts
+      - api-server/src/services/member-auto-trading-live-arm.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
       - api-server/src/services/trade-automation-integration.test.ts
       - api-server/src/services/trade-exchange-adapters.service.ts
       - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
       - api-server/supabase/bootstrap/staging-bootstrap.sql
       - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
-      # Owner-approved exact AUTO safety paths; no directory-wide trigger.
+      # Exact AUTO safety paths registered for review; no directory-wide trigger.
       - .github/config/automatic-live-preactivation-checklist.json
       - .github/scripts/automatic-live-preactivation-audit.cjs
       - .github/scripts/automatic-live-preactivation-audit.test.cjs
@@ -177,6 +182,7 @@ on:
       - ops/production-auto-live-signal-identity.cjs
       - ops/production-auto-live-signal-source-audit.mjs
       - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
+      - stock-analyzer/src/components/trade-automation-settings.tsx
       # Frozen read-only automatic Paper holdings Staging repair, no new LIVE scope.
       - stock-analyzer/src/pages/auto-trading.tsx
       - stock-analyzer/src/components/trading-holdings-panel.tsx
@@ -512,8 +518,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 50 or len(set(auto_safety)) != 50:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_50')
+          if len(auto_safety) != 56 or len(set(auto_safety)) != 56:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_56')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -553,7 +559,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 50
+          test "${#auto_safety[@]}" -eq 56
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
@@ -570,7 +576,7 @@ jobs:
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
           # Precise staging-only automatic Paper holdings GET fix. The owner
-          # reviewed 50 AUTO + 19 supplemental safety scopes are unchanged.
+          # registered 56 AUTO + 19 supplemental safety scopes remain exact.
           # These three source/test blobs and BOTH Trading guards are pinned.
           paper_holdings_readonly=(
             stock-analyzer/src/pages/auto-trading.tsx

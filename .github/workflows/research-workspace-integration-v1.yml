@@ -64,13 +64,18 @@ on:
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
       - api-server/src/services/automatic-live-position-isolation.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.ts
       - api-server/src/services/member-auto-trading-ai-review-evidence.service.ts
+      - api-server/src/services/member-auto-trading-live-arm.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
       - api-server/src/services/trade-automation-integration.test.ts
       - api-server/src/services/trade-exchange-adapters.service.ts
       - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
       - api-server/supabase/bootstrap/staging-bootstrap.sql
       - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
-      # The exact owner-approved AUTO safety scope still runs preservation.
+      # The exact AUTO safety scope registered for review still runs preservation.
       - .github/config/automatic-live-preactivation-checklist.json
       - .github/scripts/automatic-live-preactivation-audit.cjs
       - .github/scripts/automatic-live-preactivation-audit.test.cjs
@@ -121,6 +126,7 @@ on:
       - ops/production-auto-live-signal-identity.cjs
       - ops/production-auto-live-signal-source-audit.mjs
       - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
+      - stock-analyzer/src/components/trade-automation-settings.tsx
       - .github/scripts/research-center-batch-scope.mjs
       - .github/tests/research-center-batch-scope.test.mjs
       - .github/scripts/scanner-readonly-repair-scope.mjs
