@@ -8,13 +8,22 @@ export const SCANNER_QUALITY_ARTIFACT_PRODUCER_V1 =
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const STOCK_MARKETS = new Set(["KR_STOCK", "US_STOCK"]);
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
+const STRATEGY_HORIZONS = new Set(["SCALP", "SWING", "POSITION"]);
 const SHA40 = /^[0-9a-f]{40}$/iu;
 const SHA64 = /^[0-9a-f]{64}$/iu;
-const SCANNER_DATASET_PROFILE_BY_MARKET = Object.freeze({
-  KR_STOCK: Object.freeze({ profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
-  US_STOCK: Object.freeze({ profileId: "US_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
-  CRYPTO_SPOT: Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H" }),
-  CRYPTO_FUTURES: Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m" }),
+const SCANNER_DATASET_PROFILE_BY_LANE = Object.freeze({
+  "KR_STOCK|SCALP": Object.freeze({ profileId: "KR_STOCK:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "KR_STOCK|SWING": Object.freeze({ profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  "KR_STOCK|POSITION": Object.freeze({ profileId: "KR_STOCK:SCANNER_POSITION_1D", timeframe: "1D" }),
+  "US_STOCK|SCALP": Object.freeze({ profileId: "US_STOCK:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "US_STOCK|SWING": Object.freeze({ profileId: "US_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  "US_STOCK|POSITION": Object.freeze({ profileId: "US_STOCK:SCANNER_POSITION_1D", timeframe: "1D" }),
+  "CRYPTO_SPOT|SCALP": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SCALP_15M", timeframe: "15m" }),
+  "CRYPTO_SPOT|SWING": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H" }),
+  "CRYPTO_SPOT|POSITION": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_POSITION_4H", timeframe: "4H" }),
+  "CRYPTO_FUTURES|SCALP": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "CRYPTO_FUTURES|SWING": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m" }),
+  "CRYPTO_FUTURES|POSITION": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_POSITION_4H", timeframe: "4H" }),
 });
 
 function deepFreeze(value) {
@@ -74,6 +83,7 @@ function normalizeDirection(identity) {
 function validateIdentity(identity) {
   if (!identity || typeof identity !== "object") return "QUALITY_IDENTITY_REQUIRED";
   if (!MARKETS.has(identity.market)) return "QUALITY_MARKET_UNSUPPORTED";
+  if (!STRATEGY_HORIZONS.has(identity.strategyHorizon)) return "QUALITY_STRATEGY_HORIZON_REQUIRED";
   if (!text(identity.strategyId) || !text(identity.strategyVersion)) return "QUALITY_STRATEGY_IDENTITY_REQUIRED";
   if (!SHA64.test(String(identity.parameterHash ?? ""))) return "QUALITY_PARAMETER_HASH_REQUIRED";
   if (!SHA40.test(String(identity.researchCodeSha ?? ""))) return "QUALITY_RESEARCH_SHA_REQUIRED";
@@ -84,6 +94,10 @@ function validateIdentity(identity) {
       ? "QUALITY_CASH_BUY_ONLY"
       : "QUALITY_DIRECTION_REQUIRED";
   }
+  if (identity.strategyId !== `${identity.market}_${identity.strategyHorizon}_V1_${normalizeDirection(identity)}`
+      || identity.strategyVersion !== "signal-profile-v1") {
+    return "QUALITY_CANONICAL_STRATEGY_IDENTITY_MISMATCH";
+  }
   return null;
 }
 
@@ -91,7 +105,7 @@ function exactBinding(binding, identity) {
   if (!binding || typeof binding !== "object") return false;
   for (const key of [
     "strategyId", "strategyVersion", "parameterHash", "researchCodeSha",
-    "market", "symbol", "timeframe", "datasetSnapshotHash",
+    "market", "strategyHorizon", "symbol", "timeframe", "datasetSnapshotHash",
   ]) {
     if (String(binding[key] ?? "") !== String(identity[key] ?? "")) return false;
   }
@@ -201,7 +215,7 @@ function validateResult(result, identity, window, label) {
 
 function validateScannerDatasetSnapshotBinding(identity, datasetAudit) {
   const blockers = [];
-  const expected = SCANNER_DATASET_PROFILE_BY_MARKET[identity.market];
+  const expected = SCANNER_DATASET_PROFILE_BY_LANE[`${identity.market}|${identity.strategyHorizon}`];
   if (!expected || identity.timeframe !== expected.timeframe) {
     blockers.push("QUALITY_SCANNER_TIMEFRAME_PROFILE_MISMATCH");
   }
@@ -500,7 +514,7 @@ export function materializeForwardObserverScannerQualityArtifactV1(input = {}) {
     const key = [
       identity.strategyId, identity.strategyVersion, identity.parameterHash,
       identity.researchCodeSha.toLowerCase(), identity.market,
-      String(identity.symbol).toUpperCase(), identity.timeframe, identity.direction,
+      identity.strategyHorizon, String(identity.symbol).toUpperCase(), identity.timeframe, identity.direction,
     ].join("|");
     if (seen.has(key)) throw new Error(`QUALITY_ARTIFACT_AMBIGUOUS_ACTIVE_IDENTITY:${index}`);
     seen.add(key);

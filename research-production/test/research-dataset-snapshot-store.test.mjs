@@ -8,6 +8,7 @@ import {
   assertResearchDatasetSnapshotManifestV1,
   buildResearchDatasetSnapshotManifestV1,
   persistResearchDatasetSnapshotManifestV1,
+  RESEARCH_SCANNER_DATASET_PROFILES_V1,
 } from '../src/research-dataset-snapshot-store.mjs';
 
 const SHA='a'.repeat(40);
@@ -94,7 +95,17 @@ test('profile timeframe is enforced, symbol order is canonicalized, and duplicat
   assert.throws(()=>build({scope:scope({symbols:['BTCUSDT','BTCUSDT']})}),/unique canonical symbols/);
 });
 
-test('Scanner SWING dataset profiles use exact 60m/4H labels while adaptive research profiles remain unchanged',()=>{
+test('all twelve Scanner dataset profiles use exact canonical strategy timeframes while adaptive research profiles remain unchanged',()=>{
+  assert.equal(RESEARCH_SCANNER_DATASET_PROFILES_V1.length,12);
+  assert.equal(new Set(RESEARCH_SCANNER_DATASET_PROFILES_V1.map(row=>`${row.market}|${row.strategyHorizon}`)).size,12);
+  for(const profile of RESEARCH_SCANNER_DATASET_PROFILES_V1){
+    const manifest=buildResearchDatasetSnapshotManifestV1({
+      researchSha:SHA,createdAt:AT,profileId:profile.profileId,
+      evidence:scannerEvidence(),scope:scope({timeframe:profile.timeframe}),
+    });
+    assert.equal(manifest.market,profile.market);
+    assert.equal(manifest.scope.timeframe,profile.timeframe);
+  }
   const futuresScanner=buildResearchDatasetSnapshotManifestV1({
     researchSha:SHA,createdAt:AT,profileId:'CRYPTO_FUTURES:SCANNER_SWING_60M',
     evidence:scannerEvidence(),scope:scope({timeframe:'60m'}),
