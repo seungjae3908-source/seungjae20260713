@@ -82,6 +82,7 @@ export interface ScannerPricePlan {
 }
 
 export interface ScannerSignalCard {
+  aiReviewEvidenceKey?: string;
   signalId: string;
   assetClass: ScannerAssetClass;
   market: string;
@@ -265,6 +266,8 @@ export function deriveScannerDisplayOutcome(response: ScannerResponse, renderedC
 }
 
 export interface SignalScannerRequest {
+  // Client cache identity only; never sent as authorization to the API.
+  cacheOwner?: string;
   assetClass: ScannerAssetClass;
   market: 'KR' | 'US' | 'UPBIT' | 'BITGET';
   strategy: ScannerStrategyMode;
@@ -292,11 +295,50 @@ interface ScannerInFlight {
 }
 
 const scannerInFlight = new Map<string, ScannerInFlight>();
-const scannerLastGood = new Map<string, ScannerResponse>();
+const scannerLastGood = new Map<string, { at: number; response: ScannerResponse }>();
 const scannerRetryUntil = new Map<string, number>();
+const LAST_GOOD_TTL_MS = 5 * 60_000;
+const MAX_CACHE_KEYS = 64;
+
+function lastGoodFor(key: string): ScannerResponse | undefined {
+  const cached = scannerLastGood.get(key);
+  if (!cached || Date.now() - cached.at > LAST_GOOD_TTL_MS) {
+    scannerLastGood.delete(key);
+    return undefined;
+  }
+  return cached.response;
+}
+
+function trimCache<T>(cache: Map<string, T>): void {
+  while (cache.size > MAX_CACHE_KEYS) cache.delete(cache.keys().next().value!);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function validScannerPayload(payload: Record<string, unknown>, request: SignalScannerRequest): boolean {
+  const market = payload.market === 'UPBIT_KRW' ? 'UPBIT'
+    : payload.market === 'BITGET_USDT_FUTURES' ? 'BITGET' : payload.market;
+  if (payload.assetClass !== request.assetClass || market !== request.market || payload.timeframe !== request.timeframe) return false;
+  if (!isRecord(payload.execution) || !isRecord(payload.universe)
+    || !Array.isArray(payload.cards) || !Array.isArray(payload.alerts) || !Array.isArray(payload.failures)
+    || typeof payload.message !== 'string' || typeof payload.generatedAt !== 'string'
+    || !Number.isFinite(Date.parse(payload.generatedAt))) return false;
+  for (const key of ['requestedCount', 'startedCount', 'completedCount', 'providerErrorCount', 'timeoutCount']) {
+    if (typeof payload.execution[key] !== 'number' || !Number.isFinite(payload.execution[key]) || payload.execution[key] < 0) return false;
+  }
+  if (typeof payload.execution.partial !== 'boolean' || typeof payload.execution.duplicate !== 'boolean'
+    || typeof payload.universe.totalCount !== 'number' || !Number.isFinite(payload.universe.totalCount)
+    || typeof payload.universe.partial !== 'boolean' || typeof payload.universe.stale !== 'boolean') return false;
+  return payload.cards.every((card) => isRecord(card)
+    && typeof card.signalId === 'string' && typeof card.symbol === 'string' && typeof card.name === 'string'
+    && typeof card.price === 'number' && Number.isFinite(card.price) && card.price > 0
+    && typeof card.score === 'number' && Number.isFinite(card.score)
+    && Array.isArray(card.matched) && Array.isArray(card.notMatched) && Array.isArray(card.unverified)
+    && Array.isArray(card.warnings) && Array.isArray(card.evidence)
+    && isRecord(card.pricePlan) && Array.isArray(card.pricePlan.targets)
+    && typeof card.strongSignalEligible === 'boolean');
 }
 
 function abortError(): DOMException {
@@ -319,6 +361,7 @@ function asLastGoodFallback(response: ScannerResponse, error: SignalScannerReque
     cards: response.cards.map((card) => ({
       ...card,
       dataState: 'stale',
+      aiReviewEvidenceKey: undefined,
       strongSignalEligible: false,
       warnings: card.warnings.includes(reason) ? card.warnings : [...card.warnings, reason],
     })),
@@ -344,8 +387,15 @@ function asLastGoodFallback(response: ScannerResponse, error: SignalScannerReque
   };
 }
 
+// Explicit S-only read on all four markets. The existing API grade gate
+// filters cards and Telegram alerts before publishing them. This never grants
+// execution authority or turns an unavailable market into a fake S signal.
+function scannerSGradeOnlyUrl(request: SignalScannerRequest): string {
+  return `${buildSignalScannerRequestUrl(request)}&grade=S`;
+}
+
 async function requestScannerUpstream(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
-  const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
+  const response = await authorizedFetch(scannerSGradeOnlyUrl(request), {
     signal,
     cache: 'no-store',
     headers: { 'Cache-Control': 'no-cache, no-store, max-age=0', Pragma: 'no-cache' },
@@ -353,9 +403,11 @@ async function requestScannerUpstream(request: SignalScannerRequest, signal: Abo
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const code = isRecord(payload) && typeof payload.error === 'string' ? payload.error : `HTTP_${response.status}`;
-    const retryAfterHeader = Number(response.headers.get('Retry-After'));
-    const retryAfterBody = isRecord(payload) ? Number(payload.retryAfterSeconds) : Number.NaN;
-    const retryAfterSeconds = Number.isFinite(retryAfterHeader) ? retryAfterHeader : Number.isFinite(retryAfterBody) ? retryAfterBody : null;
+    const rawHeader = response.headers.get('Retry-After');
+    const retryAfterHeader = rawHeader == null || !rawHeader.trim() ? Number.NaN : Number(rawHeader);
+    const retryAfterBody = isRecord(payload) && payload.retryAfterSeconds != null ? Number(payload.retryAfterSeconds) : Number.NaN;
+    const retryAfterSeconds = Number.isFinite(retryAfterHeader) && retryAfterHeader >= 0 ? retryAfterHeader
+      : Number.isFinite(retryAfterBody) && retryAfterBody >= 0 ? retryAfterBody : null;
     throw new SignalScannerRequestError(response.status, code, retryAfterSeconds);
   }
   if (!isRecord(payload) || payload.ok !== true || !Array.isArray(payload.cards)) {
@@ -363,6 +415,9 @@ async function requestScannerUpstream(request: SignalScannerRequest, signal: Abo
   }
   if (payload.orderSubmitted !== false || payload.exchangeRequestSent !== false) {
     throw new SignalScannerRequestError(500, 'SCANNER_ORDER_SAFETY_VIOLATION', null);
+  }
+  if (!validScannerPayload(payload, request)) {
+    throw new SignalScannerRequestError(502, 'SCANNER_RESPONSE_INVALID', null);
   }
   return {
     ...(payload as Omit<ScannerResponse, 'failures'>),
@@ -420,14 +475,15 @@ function consumeInFlight(key: string, entry: ScannerInFlight, signal: AbortSigna
 }
 
 export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
-  const key = buildSignalScannerRequestUrl(request);
+  if (signal.aborted) throw abortError();
+  const key = JSON.stringify([request.cacheOwner ?? 'unscoped', scannerSGradeOnlyUrl(request)]);
   const existing = scannerInFlight.get(key);
   if (existing) return consumeInFlight(key, existing, signal);
 
   const retryUntil = scannerRetryUntil.get(key) ?? 0;
   if (retryUntil > Date.now()) {
     const remaining = Math.max(1, Math.ceil((retryUntil - Date.now()) / 1000));
-    const cached = scannerLastGood.get(key);
+    const cached = lastGoodFor(key);
     const rateError = new SignalScannerRequestError(429, 'SCAN_RATE_LIMIT_BACKOFF', remaining);
     if (cached) return asLastGoodFallback(cached, rateError);
     throw rateError;
@@ -443,16 +499,21 @@ export async function fetchSignalScanner(request: SignalScannerRequest, signal: 
   entry.promise = requestScannerUpstream(request, entry.controller.signal)
     .then((result) => {
       scannerRetryUntil.delete(key);
-      if (result.dataState === 'complete' || result.dataState === 'partial') scannerLastGood.set(key, result);
+      if (result.dataState === 'complete' || result.dataState === 'partial') {
+        scannerLastGood.delete(key);
+        scannerLastGood.set(key, { at: Date.now(), response: result });
+        trimCache(scannerLastGood);
+      }
       return result;
     })
     .catch((error: unknown) => {
       if (error instanceof SignalScannerRequestError) {
         if (error.status === 429 && error.retryAfterSeconds !== null) {
           scannerRetryUntil.set(key, Date.now() + Math.max(1, error.retryAfterSeconds) * 1000);
+          trimCache(scannerRetryUntil);
         }
         if (error.status === 409 || error.status === 429 || error.status === 502) {
-          const cached = scannerLastGood.get(key);
+          const cached = lastGoodFor(key);
           if (cached) return asLastGoodFallback(cached, error);
         }
       }
@@ -475,5 +536,35 @@ export function signalScannerDetailPath(card: ScannerSignalCard): string {
   }
   const coinMarket = card.assetClass === 'coin_futures' ? 'futures' : 'spot';
   return `/stock-info?asset=coin&coinMarket=${coinMarket}&symbol=${symbol}`;
+}
+
+export type ScannerAiEvidenceReview = {
+  ok: true; signalId: string; evidenceKey: string; status: 'REVIEWED' | 'UNAVAILABLE' | 'BLOCKED_DATA';
+  reason: string | null; model: string | null; facts: string[];
+  analysis: { summaryShort: string; factEvidenceRefs: number[]; inferences: string[]; uncertainty: string[]; riskFlags: string[] } | null;
+};
+
+export async function fetchScannerAiEvidenceReview(signalId: string, evidenceKey: string, signal: AbortSignal): Promise<ScannerAiEvidenceReview> {
+  const response = await authorizedFetch('/api/market/scan/ai-review', { method: 'POST', signal, cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ signalId, evidenceKey }) });
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new SignalScannerRequestError(response.status,
+    isRecord(value) && typeof value.error === 'string' ? value.error : 'AI_REVIEW_UNAVAILABLE', null);
+  const strings = (v: unknown): v is string[] => Array.isArray(v) && v.length <= 20 && v.every(x => typeof x === 'string' && x.length <= 1000);
+  if (!isRecord(value) || value.ok !== true || value.signalId !== signalId || value.evidenceKey !== evidenceKey
+    || !['REVIEWED', 'UNAVAILABLE', 'BLOCKED_DATA'].includes(String(value.status)) || !strings(value.facts)
+    || !isRecord(value.safety) || value.safety.executionAuthority !== 'NONE' || value.safety.publicEvidenceOnly !== true
+    || value.safety.orderAllowed !== false || value.safety.paperOrderAllowed !== false || value.safety.profitabilityPass !== false
+    || value.safety.profitProbability !== null || value.safety.scoreImpact !== 0 || value.safety.rankImpact !== 0) {
+    throw new SignalScannerRequestError(502, 'AI_REVIEW_RESPONSE_INVALID', null);
+  }
+  const a = value.analysis;
+  const facts = value.facts;
+  if (value.status === 'REVIEWED' ? !isRecord(a) || typeof a.summaryShort !== 'string' || a.summaryShort.length > 1000
+      || !strings(a.inferences) || !strings(a.uncertainty) || !strings(a.riskFlags)
+      || !Array.isArray(a.factEvidenceRefs) || a.factEvidenceRefs.length > 20
+      || a.factEvidenceRefs.some(n => !Number.isInteger(n) || n < 0 || n >= facts.length)
+    : a !== null) throw new SignalScannerRequestError(502, 'AI_REVIEW_RESPONSE_INVALID', null);
+  return value as ScannerAiEvidenceReview;
 }
 

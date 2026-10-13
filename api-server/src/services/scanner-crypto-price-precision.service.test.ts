@@ -26,12 +26,13 @@ function ticker(symbol: string): CryptoTicker {
   };
 }
 
-function candles(count = 40): CryptoCandle[] {
+function candles(timeframe: string, count = 80): CryptoCandle[] {
   const current = Date.now();
+  const interval = Number.parseInt(timeframe, 10) * 60_000;
   return Array.from({ length: count }, (_, index) => {
-    const close = 100 + index * 0.5;
+    const close = 100 + index * 0.25;
     return {
-      time: current - (count - index) * 60_000,
+      time: current - (count - index) * interval,
       open: close - 0.2,
       high: close + 1,
       low: close - 1,
@@ -46,23 +47,25 @@ function universe(rows: CryptoTicker[], source: CryptoUniverse['source']): Crypt
   return { rows, source, providerErrorCount: 0 };
 }
 
-function providers(market: 'spot' | 'futures'): CryptoScannerProviders {
+function providers(market: 'spot' | 'futures', contextCount = 80): CryptoScannerProviders {
   const rows = market === 'spot'
     ? [ticker('BTC'), ticker('ETH')]
     : [ticker('BTCUSDT'), ticker('ETHUSDT')];
   return {
     getUniverse: async () => universe(rows, market === 'spot' ? 'upbit-public' : 'bitget-public'),
-    getCandles: async () => candles(),
+    // Precision tests need an existing eligible plan. Supply complete primary
+    // and EMA60 context history instead of bypassing the scanner quality gate.
+    getCandles: async (_market, _row, timeframe) => candles(timeframe, timeframe === '15m' ? contextCount : 80),
     getSpread: async (_market, row) => ({ bid: row.bid, ask: row.ask }),
     now: Date.now,
   };
 }
 
-async function scan(market: 'spot' | 'futures') {
-  return await createCryptoSignalScannerService(providers(market)).scan({
+async function scan(market: 'spot' | 'futures', contextCount = 80, timeframe: '5m' | '15m' = '15m') {
+  return await createCryptoSignalScannerService(providers(market, contextCount)).scan({
     memberId: 'precision-test-member',
     market,
-    timeframe: '15m',
+    timeframe,
     condition: 'trend',
     cursor: 0,
     batchSize: 10,
@@ -79,6 +82,23 @@ function isTickAligned(value: number, tick: number) {
 function emptyPlan() {
   return { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null };
 }
+
+test('insufficient higher-timeframe history blocks the plan before any precision metadata request', async () => {
+  const raw = await scan('spot', 40, '5m');
+  assert.ok(raw.cards.length >= 2);
+  assert.ok(raw.cards.every(card => card.warnings.includes('CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT')));
+  let calls = 0;
+  const service = createCryptoPricePrecisionService(async () => {
+    calls++;
+    throw new Error('precision must not restore a rejected plan');
+  });
+  const aligned = await service.align('spot', raw);
+  assert.equal(calls, 0);
+  assert.ok(aligned.cards.every(card => !card.strongSignalEligible));
+  for (const card of aligned.cards) assert.deepEqual(card.pricePlan, emptyPlan());
+  assert.equal(aligned.orderSubmitted, false);
+  assert.equal(aligned.exchangeRequestSent, false);
+});
 
 test('Upbit precision aligns every emitted crypto price plan to public tick_size metadata', async () => {
   const raw = await scan('spot');

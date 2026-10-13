@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { publicCyclePageDecision, currentPublicCyclePublication } from '../src/public-cycle-progress-v2.mjs';
+import { withPublicStockProvider } from '../src/public-stock-provider-adapter.mjs';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
 import { StockSignalScannerService } from '../../api-server/src/services/stock-signal-scanner.service';
@@ -8,8 +11,9 @@ import { CryptoSignalScannerService } from '../../api-server/src/services/crypto
 import { CryptoPricePrecisionService } from '../../api-server/src/services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
+import { withScannerOutcome } from '../../api-server/src/services/scanner-signal.types';
 import * as yahoo from '../../api-server/src/providers/yahoo';
-import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/public-coverage-audit-v1.js';
+import { getUsPublicUniverse } from '../../api-server/src/providers/us-universe';
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
@@ -19,8 +23,6 @@ const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './s
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
-const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
-const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
@@ -43,9 +45,10 @@ const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.
 
 function freshState() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     serviceSha: SERVICE_SHA,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
+    rosterIds: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
     retained: {},
     updatedAt: new Date(0).toISOString(),
   };
@@ -108,89 +111,12 @@ function createStartScheduler(minIntervalMs) {
   };
 }
 
-async function fetchText(url) {
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('PUBLIC_DIRECTORY_TIMEOUT')), 8_000);
-    try {
-      const response = await fetch(url, {
-        headers: { accept: 'text/plain', 'user-agent': 'signal-intelligence-v3/1.0' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw Object.assign(new Error(`PUBLIC_DIRECTORY_HTTP_${response.status}`), { status: response.status });
-      return await response.text();
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) await sleep(250 * attempt);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-  throw lastError;
-}
-
-let usPublicUniversePromise;
 async function usPublicUniverse() {
-  if (!usPublicUniversePromise) {
-    usPublicUniversePromise = Promise.all([fetchText(NASDAQ_LISTED_URL), fetchText(OTHER_LISTED_URL)])
-      .then(([nasdaqText, otherText]) => {
-        const parsed = parseNasdaqTraderDirectories({ nasdaqText, otherText });
-        if (!parsed || parsed.partial === true || !Array.isArray(parsed.entries) || parsed.entries.length < 1_000) {
-          throw new Error('NASDAQ_TRADER_UNIVERSE_INCOMPLETE');
-        }
-        return {
-          entries: parsed.entries,
-          totalCount: parsed.entries.length,
-          source: parsed.source,
-          partial: false,
-          stale: false,
-          providerErrorCount: 0,
-          loadedAt: new Date().toISOString(),
-          rawTotal: parsed.rawTotal,
-          exclusionReasons: parsed.exclusionReasons,
-        };
-      })
-      .catch((error) => {
-        usPublicUniversePromise = undefined;
-        throw error;
-      });
-  }
-  return usPublicUniversePromise;
-}
-
-function yahooProviderCandidates(lane, ticker, entry) {
-  const clean = String(ticker ?? '').trim().toUpperCase();
-  if (!clean) return [];
-  if (lane.market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
-    const exchange = String(entry?.exchange ?? '').toUpperCase();
-    const kosdaq = /KOSDAQ|코스닥/u.test(exchange);
-    const primary = `${clean}.${kosdaq ? 'KQ' : 'KS'}`;
-    const alternate = `${clean}.${kosdaq ? 'KS' : 'KQ'}`;
-    return [primary, alternate];
-  }
-  if (lane.market === 'US_STOCK') {
-    const canonical = /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;
-    const candidates = [canonical];
-    if (canonical.includes('-')) candidates.push(canonical.replace(/-/gu, '.'));
-    return [...new Set(candidates)];
-  }
-  return [clean];
-}
-
-async function withProviderFallback(candidates, operation) {
-  let lastError;
-  for (const candidate of candidates) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await operation(candidate);
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) await sleep(150 * attempt);
-      }
-    }
-  }
-  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
+  // Same strict two-source/footer validation as the normal app. No alternate
+  // permissive parser or paid-provider call is used by the public producer.
+  const entries = await getUsPublicUniverse();
+  return { entries, totalCount: entries.length, source: 'nasdaq-trader-public-directory',
+    partial: false, stale: false, providerErrorCount: 0, loadedAt: new Date().toISOString() };
 }
 
 async function withUpbitPacing(operation) {
@@ -229,8 +155,6 @@ async function withUpbitPacing(operation) {
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
-  const originalCandles = marketData.getCandles;
-  const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
 
   let targetUniverse;
@@ -250,32 +174,12 @@ async function withStockPublicOnly(lane, operation) {
     targetUniverse = await originalUniverseGet.call(universe, 'KR');
   }
 
-  const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
-  marketData.getCandles = async (ticker, timeframe = '1D') => {
-    const entry = entryByTicker.get(String(ticker).toUpperCase());
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-  };
-  marketData.getQuote = async (ticker) => {
-    const originalTicker = String(ticker).toUpperCase();
-    const entry = entryByTicker.get(originalTicker);
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    const quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol));
-    return {
-      ...quote,
-      ticker: originalTicker,
-      symbol: originalTicker,
-      name: entry?.name ?? quote?.name ?? originalTicker,
-    };
-  };
   universe.get = async (market, signal, deadlineMs) => {
     if (market === lane.scannerMarket) return targetUniverse;
     return originalUniverseGet.call(universe, market, signal, deadlineMs);
   };
 
-  try { return await operation(); } finally {
-    marketData.getCandles = originalCandles;
-    marketData.getQuote = originalQuote;
+  try { return await withPublicStockProvider({ marketData, yahoo, entries: targetUniverse?.entries ?? [], market: lane.market }, operation); } finally {
     universe.get = originalUniverseGet;
   }
 }
@@ -306,7 +210,7 @@ async function scanCryptoRaw(lane, cursor) {
     timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
-    batchSize: lane.batchSize,
+    batchSize: lane.scannerMarket === 'spot' ? Math.min(lane.batchSize, 5) : Math.min(lane.batchSize, 10),
   });
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
   const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
@@ -315,7 +219,7 @@ async function scanCryptoRaw(lane, cursor) {
     .filter((card) => lane.scannerMarket === 'spot'
       ? card.direction === 'LONG'
       : card.direction === 'LONG' || card.direction === 'SHORT');
-  return withScannerCanonicalActions({
+  return withScannerCanonicalActions(withScannerOutcome({
     ...aligned,
     cards,
     execution: {
@@ -329,7 +233,7 @@ async function scanCryptoRaw(lane, cursor) {
       bGradeCount: cards.filter((card) => card.signalGrade === 'B').length,
       backtestMissingCount: ranking.diagnostics.backtestMissingCount,
     },
-  });
+  }));
 }
 
 async function scanCrypto(lane, cursor) {
@@ -337,23 +241,15 @@ async function scanCrypto(lane, cursor) {
   return scanCryptoRaw(lane, cursor);
 }
 
-function laneStatus(response) {
-  if (!response) return 'SEARCH_FAILURE';
-  if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT' || response.dataState === 'unavailable') return 'SEARCH_FAILURE';
-  if (response.universe?.partial === true || response.universe?.stale === true || Number(response.universe?.providerErrorCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (Number(response.execution?.providerErrorCount ?? 0) > 0 || Number(response.execution?.timeoutCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (response.dataState === 'untrusted' || response.dataState === 'stale') return 'BLOCKED_DATA';
-  return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
-}
-
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
-  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2;
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 3;
   const state = releaseChanged ? freshState() : persistedState;
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
+  const sourceCycleId = randomUUID();
   pruneRetained(state, nowMs);
 
   const coverage = [];
@@ -363,7 +259,12 @@ async function main() {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
-      const status = laneStatus(response);
+      const decision = publicCyclePageDecision(response, lane.market, cursor, state.rosterIds?.[lane.id] ?? null);
+      const rosterId = response.universe.rosterId ?? null;
+      if (['VERIFIED_BATCH', 'BLOCKED_RESEARCH_ROTATION_ONLY', 'ROSTER_CHANGED_RESTART', 'ROSTER_SHRUNK_RESTART'].includes(decision.reason)) {
+        state.rosterIds[lane.id] = rosterId;
+      }
+      const status = decision.status;
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
@@ -383,16 +284,24 @@ async function main() {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
-            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
+            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId, rosterId } },
             expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
             laneId: lane.id,
             cursor,
           };
         }
-        state.cursors[lane.id] = response.universe.nextCursor == null ? 0 : response.universe.nextCursor;
       }
+      state.cursors[lane.id] = decision.nextCursor;
       coverage.push({
         laneId: lane.id,
+        sourceCycleId,
+        rosterId,
+        cursorRotatedBlockedOnly: decision.blockedObservationOnly,
+        cursorRotationReason: decision.reason,
+        pageExecution: { requestedCount: response.execution.requestedCount, startedCount: response.execution.startedCount,
+          completedCount: response.execution.completedCount, partial: response.execution.partial,
+          timedOut: response.execution.timedOut, cancelled: response.execution.cancelled,
+          failuresObserved: response.failures.length },
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -400,8 +309,8 @@ async function main() {
         cursorAfter: state.cursors[lane.id],
         totalUniverse: response.universe.totalCount,
         universeSource: response.universe.source ?? null,
-        universePartial: response.universe.partial === true,
-        universeStale: response.universe.stale === true,
+        universePartial: response.universe.partial,
+        universeStale: response.universe.stale,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
@@ -437,12 +346,18 @@ async function main() {
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
   const snapshot = {
     ...baseSnapshot,
+    sourceCycleId,
+    rosterBindingVersion: 1,
     serviceSha: SERVICE_SHA,
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
     publicDataOnly: true,
     releaseStateReset: releaseChanged,
   };
+  const publication = currentPublicCyclePublication(snapshot);
+  snapshot.lists = publication.lists;
+  snapshot.events = publication.events;
+  snapshot.currentPageSourceReady = publication.currentPageReady;
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
   await atomicJson(CYCLE_STATE_FILE, state);

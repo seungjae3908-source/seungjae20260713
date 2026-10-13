@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_SOURCE_SHA, verifyPinnedScannerScope, createScannerBlobReader } from './scanner-readonly-repair-scope.mjs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
 import { AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
 import { ONE_PASS_BASE_MAIN, ONE_PASS_SOURCE_ANCESTOR, ONE_PASS_NATIVE_PINS, ONE_PASS_RESEARCH_PINS, ONE_PASS_PROTECTED_MAIN_PINS, ONE_PASS_SUPPORT_PATHS } from '../../research-production/src/research-one-pass-source-pins-v1.mjs';
@@ -448,6 +449,7 @@ const researchPITReadOnlyReviewed=[
   '.github/workflows/research-pit-minute-readonly-drift.yml',
 ];
 const allowed=new Set([
+ ...SCANNER_REPAIR_PATHS,
  ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
  ...added,
@@ -464,6 +466,8 @@ const allowed=new Set([
  ...researchPITReadOnlyReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const pinnedScannerRepair=verifyPinnedScannerScope(changed,MAIN,createScannerBlobReader(changed,MAIN));
+if(pinnedScannerRepair.length>0)git('merge-base','--is-ancestor',SCANNER_REPAIR_SOURCE_SHA,'HEAD');
 // Owner-approved single-pass release: no prefix exemption. Validate every
 // exact source blob and current-main LIVE guard before admitting any new path.
 const onePassRequested=changed.includes('research-production/src/research-one-pass-source-pins-v1.mjs');
@@ -634,6 +638,7 @@ if(preservedPaperIntegration.length>0){
   for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA);
 }
 const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)
+ &&!pinnedScannerRepair.includes(p)
  &&!isPersonalTelegramMembershipOnlyChange(p)&&!preservedPaperIntegration.includes(p)
  &&!isResearchOnlyNavigationDiff(p,git('diff','--unified=0',MAIN,'HEAD','--',p)));
 if(automaticTradingChanged.length>0){
@@ -856,6 +861,12 @@ for(const p of protectedPaths){
   // Never exempt member/auth/credentials, lockfile, Paper or LIVE paths.
   if(onePassRequested&&['market-prediction-lab','research-production'].includes(p))
    for(const path of onePassReviewedPaths)if(path.startsWith(p+'/'))exceptions.add(path);
+  // Only these two exact scanner-generated Paper artifacts may share a protected
+  // runtime package; unchanged Paper authority is still checked byte-for-byte.
+  if(p==='market-prediction-lab')for(const path of pinnedScannerRepair)if([
+   'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+   'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+  ].includes(path))exceptions.add(path);
   const unexpected=git('diff','--name-only',MAIN,'HEAD','--',p).split('\n').filter(Boolean).filter((item)=>!exceptions.has(item));
   if(unexpected.length>0)throw new Error('PROTECTED_PATH_CHANGED:'+p+':'+unexpected.join(','));
   continue;
@@ -863,6 +874,7 @@ for(const p of protectedPaths){
  if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 }
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
+  pinnedScannerRepair,scannerScopeGrantsTradingApproval:false,
   preservedPaperIntegrationSha:PAPER_INTEGRATION_SHA,preservedPaperIntegration,
   reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,
   protectedPathExceptions:Object.fromEntries([...protectedPathExceptions].map(([key,value])=>[key,[...value]])),
