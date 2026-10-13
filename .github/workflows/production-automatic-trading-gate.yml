@@ -24,6 +24,7 @@ on:
       - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
       - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
       - .github/tests/production-auto-live-budget-contract.test.mjs
+      - api-server/src/services/automatic-live-budget.service.test.ts
       - ops/verify-production-paper-forward-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
@@ -31,6 +32,8 @@ on:
       - api-server/src/services/trade-automation-policy-guard.service.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.test.ts
       - api-server/src/services/member-auto-trading-readiness.service.ts
       - api-server/src/services/member-auto-trading-readiness.service.test.ts
       - api-server/src/services/admin-four-market-paper-capital.service.ts
@@ -123,7 +126,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Validate Production gate, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
+      - name: Validate Production gate, restart-safe staged exits, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
       - name: Validate non-superuser owner-bound budget proof contracts offline
         run: node --test .github/tests/production-auto-live-budget-contract.test.mjs

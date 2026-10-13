@@ -15,9 +15,12 @@ const paperJournalRoute = read('api-server/src/routes/paper-journal.ts');
 const paperJournalRepo = read('api-server/src/services/paper-journal-supabase.repository.ts');
 const paperJournalSmoke = read('api-server/src/routes/paper-journal.smoke.test.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
+const exitPlan = read('api-server/src/services/member-auto-trading-exit-plan.service.ts');
+const exitPlanTest = read('api-server/src/services/member-auto-trading-exit-plan.service.test.ts');
+const automaticLiveBudgetTest = read('api-server/src/services/automatic-live-budget.service.test.ts');
 const handoffContract = read('api-server/src/services/member-auto-trading-ai-review-evidence.service.ts');
 const liveEntryArm = read('api-server/src/services/member-auto-trading-live-arm.service.ts');
-const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
 const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
 const liveConnectionVerification = read('api-server/src/services/live-connection-verification.service.ts');
@@ -50,6 +53,38 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// Staged exits are part of the Production order-authority boundary. A restart
+// must rebuild target progress from durable fills, a partial child order may
+// never exceed the provider position, and same-symbol re-entry is allowed only
+// after a confirmed full canonical exit. Keep these checks in the protected
+// activation gate rather than relying on an unowned Research test path.
+for (const token of [
+  'automaticExitDecision',
+  'completedTargetIndexes?: readonly number[]',
+  "'TRAILING_TAKE_PROFIT'",
+  'A fill at a later rung also proves every earlier price rung was crossed.',
+  'quantity: input.remainingQuantity',
+]) requireText(exitPlan, token, 'AUTO_GATE_STAGED_EXIT_DECISION_CONTRACT_MISSING');
+for (const token of [
+  'completedTargetIndexes: [...new Set(exits.flatMap((row) => {',
+  'const initialDecision = decide(mark.price);',
+  "throw new Error('BACKGROUND_EXIT_QUANTITY_EXCEEDS_PROVIDER_POSITION')",
+  'confirmedDecision.targetIndex !== initialDecision.targetIndex',
+]) requireText(paperWorker, token, 'AUTO_GATE_STAGED_EXIT_WORKER_CONTRACT_MISSING');
+for (const token of [
+  'multiple targets take a venue-valid partial profit and leave the final target for the remainder',
+  'completed target progress ratchets a restart-safe trailing exit for long and short remainders',
+  'a persisted later target cumulatively completes earlier rungs after restart',
+  'target stage is persisted in exit identity and rejects malformed stage metadata',
+  'four-market reducing exits preserve broker, market, and LONG/SHORT direction without an order transport',
+]) requireText(exitPlanTest, token, 'AUTO_GATE_STAGED_EXIT_DECISION_REGRESSION_MISSING');
+requireText(paperWorkerTest,
+  'Paper target progress survives worker restarts, avoids duplicate exits, and trails the remainder',
+  'AUTO_GATE_STAGED_EXIT_RESTART_REGRESSION_MISSING');
+requireText(automaticLiveBudgetTest,
+  'a fresh signal may re-enter the same instrument only after a confirmed full canonical exit',
+  'AUTO_GATE_CONFIRMED_EXIT_REENTRY_REGRESSION_MISSING');
 
 // A migration proof must install under hosted non-superuser privileges without
 // replacing definition-drift verification with a caller-controlled parameter.
