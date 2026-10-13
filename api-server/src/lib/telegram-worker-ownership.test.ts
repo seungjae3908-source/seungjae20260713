@@ -63,9 +63,24 @@ test('isolated process refuses all known spot/futures manual LIVE and withdrawal
   ['SPOT_LIVE_MARKET_ALLOWLIST','BTC'],
   ['FUTURES_LIVE_CAPABILITY_ALLOWLIST','trade'],
   ['WITHDRAWAL_ENABLED','true'],
+  ['TRANSFER_ENABLED','true'],
+  ['TOSS_ORDER_ENABLED','true'],
+  ['UPBIT_ORDER_ENABLED','true'],
+  ['BITGET_ORDER_ENABLED','true'],
  ] as const){
   const env=valid(); env[name]=value;
   assert.throws(()=>assertIsolatedTelegramWorkerEnvironment(env),
     /TELEGRAM_ISOLATED_WORKER_TRADING_AUTHORITY_FORBIDDEN/,name);
+ }
+});
+
+test('isolated Telegram service cannot inherit live broker credential material',()=>{
+ for(const name of [
+  'TRADING_CREDENTIAL_MASTER_KEY','TOSS_ACCESS_TOKEN',
+  'KIWOOM_APP_SECRET','UPBIT_SECRET_KEY','BITGET_API_SECRET',
+ ]){
+  const env=valid(); env[name]='fake-inherited-secret';
+  assert.throws(()=>assertIsolatedTelegramWorkerEnvironment(env),
+   /TELEGRAM_ISOLATED_PRIVATE_BROKER_SECRETS_FORBIDDEN/,name);
  }
 });
