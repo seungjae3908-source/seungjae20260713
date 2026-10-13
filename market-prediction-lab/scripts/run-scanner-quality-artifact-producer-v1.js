@@ -38,7 +38,7 @@ const stockUniversePath = argument("stock-universe-bias");
 const stockUniverseBiasAudit = stockUniversePath ? await jsonFile(stockUniversePath) : null;
 const minimumRaw = argument("minimum-trade-count");
 const minimumTradeCount = minimumRaw ? Number(minimumRaw) : 40;
-if (!Number.isInteger(minimumTradeCount) || minimumTradeCount < 1) {
+if (!Number.isInteger(minimumTradeCount) || minimumTradeCount < 40) {
   throw new Error("SCANNER_QUALITY_MINIMUM_TRADE_COUNT_INVALID");
 }
 
