@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
 import { AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
+import { ONE_PASS_BASE_MAIN, ONE_PASS_SOURCE_ANCESTOR, ONE_PASS_NATIVE_PINS, ONE_PASS_RESEARCH_PINS, ONE_PASS_PROTECTED_MAIN_PINS, ONE_PASS_SUPPORT_PATHS } from '../../research-production/src/research-one-pass-source-pins-v1.mjs';
 const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
@@ -463,6 +464,28 @@ const allowed=new Set([
  ...researchPITReadOnlyReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+// Owner-approved single-pass release: no prefix exemption. Validate every
+// exact source blob and current-main LIVE guard before admitting any new path.
+const onePassRequested=changed.includes('research-production/src/research-one-pass-source-pins-v1.mjs');
+const onePassReviewedPaths=new Set([...ONE_PASS_NATIVE_PINS.map(x=>x[0]),
+  ...ONE_PASS_RESEARCH_PINS.map(x=>x[0]),...ONE_PASS_SUPPORT_PATHS]);
+if(onePassRequested){
+ if(MAIN!==ONE_PASS_BASE_MAIN||!isAncestor(ONE_PASS_SOURCE_ANCESTOR,'HEAD')
+    ||ONE_PASS_NATIVE_PINS.length!==49||ONE_PASS_RESEARCH_PINS.length!==62
+    ||ONE_PASS_SUPPORT_PATHS.length!==4||changed.length!==115)
+   throw new Error('RESEARCH_ONE_PASS_SOURCE_PROVENANCE_INVALID');
+ for(const path of changed)if(!onePassReviewedPaths.has(path))
+   throw new Error('RESEARCH_ONE_PASS_UNREVIEWED_PATH:'+path);
+ for(const path of onePassReviewedPaths)if(!changed.includes(path))
+   throw new Error('RESEARCH_ONE_PASS_REQUIRED_PATH_MISSING:'+path);
+ for(const [path,expected] of [...ONE_PASS_NATIVE_PINS,...ONE_PASS_RESEARCH_PINS])
+   if(git('rev-parse',`HEAD:${path}`)!==expected)
+     throw new Error('RESEARCH_ONE_PASS_IMMUTABLE_SOURCE_CHANGED:'+path);
+ for(const [path,expected] of ONE_PASS_PROTECTED_MAIN_PINS)
+   if(git('rev-parse',`HEAD:${path}`)!==expected||git('rev-parse',`${MAIN}:${path}`)!==expected)
+     throw new Error('RESEARCH_ONE_PASS_LIVE_PROTECTION_DRIFT:'+path);
+ for(const path of onePassReviewedPaths)allowed.add(path);
+}
 const pitReadOnlyChanged=changed.some((p)=>researchPITReadOnlyReviewed.includes(p));
 if(pitReadOnlyChanged){
  // Keep the unrelated Paper-triggering predeploy workflow byte-identical to main.
@@ -476,7 +499,7 @@ if(pitReadOnlyChanged){
   'stock-analyzer/src/pages/research-center.tsx'];
  for(const path of required)if(!changed.includes(path))
   throw new Error('PIT_READONLY_COMPLETE_GATE_REQUIRED:'+path);
- const permitted=new Set(required);
+ const permitted=new Set(onePassRequested?onePassReviewedPaths:required);
  for(const path of changed)if(!permitted.has(path))
   throw new Error('PIT_READONLY_UNRELATED_OWNER_SCOPE_FORBIDDEN:'+path);
  // The canonical auth/video/worker/orchestrator route graph must be
@@ -829,6 +852,10 @@ for(const p of protectedPaths){
   // restrictions remain unchanged; no directory-wide exception is introduced.
   if(['market-prediction-lab','research-production','research-dashboard','stock-analyzer/src/pages/research-center.tsx'].includes(p))
    for(const item of RESEARCH_CENTER_BATCH_PATHS)if(item===p||item.startsWith(p+'/'))exceptions.add(item);
+  // One-pass Research-owned file exceptions are individually Git-blob pinned.
+  // Never exempt member/auth/credentials, lockfile, Paper or LIVE paths.
+  if(onePassRequested&&['market-prediction-lab','research-production'].includes(p))
+   for(const path of onePassReviewedPaths)if(path.startsWith(p+'/'))exceptions.add(path);
   const unexpected=git('diff','--name-only',MAIN,'HEAD','--',p).split('\n').filter(Boolean).filter((item)=>!exceptions.has(item));
   if(unexpected.length>0)throw new Error('PROTECTED_PATH_CHANGED:'+p+':'+unexpected.join(','));
   continue;
