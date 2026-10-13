@@ -83,7 +83,7 @@ import {
 } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
-  automaticExitReason,
+  automaticExitDecision,
   buildAutomaticExitPlanInput
 } from './member-auto-trading-exit-plan.service';
 import {
@@ -838,6 +838,10 @@ function policyAllowsEntry(
 }
 
 const EXIT_PARENT_REASON_PREFIX = 'AUTO_EXIT_ENTRY_PLAN:';
+const EXIT_TARGET_INDEX_REASON_PREFIX = 'AUTO_EXIT_TARGET_INDEX:';
+const ENTRY_QUANTITY_STEP_REASON_PREFIX = 'AUTO_ENTRY_QUANTITY_STEP:';
+const ENTRY_MINIMUM_QUANTITY_REASON_PREFIX = 'AUTO_ENTRY_MINIMUM_QUANTITY:';
+const ENTRY_MINIMUM_NOTIONAL_REASON_PREFIX = 'AUTO_ENTRY_MINIMUM_NOTIONAL_QUOTE:';
 const POSITION_QUANTITY_TOLERANCE = 1e-8;
 
 function reasonValue(plan: TradingPlan, prefix: string) {
@@ -852,11 +856,61 @@ function backgroundAutomaticPlan(plan: TradingPlan) {
     || Boolean(reasonValue(plan, EXIT_PARENT_REASON_PREFIX));
 }
 
+function positiveReasonNumber(plan: TradingPlan, prefix: string) {
+  const raw = reasonValue(plan, prefix);
+  if (raw == null || !raw.trim()) return null;
+  const value = Number(raw);
+  return positive(value) ? value : null;
+}
+
+function automaticEntryExitSizing(plan: TradingPlan) {
+  if (plan.exchange === 'toss' || plan.exchange === 'kiwoom') {
+    return { quantityStep: 1, minimumQuantity: 1, minimumNotionalQuote: null };
+  }
+  if (plan.exchange === 'upbit') {
+    return {
+      quantityStep: positiveReasonNumber(plan, ENTRY_QUANTITY_STEP_REASON_PREFIX) ?? 1e-8,
+      minimumQuantity: positiveReasonNumber(plan, ENTRY_MINIMUM_QUANTITY_REASON_PREFIX) ?? 1e-8,
+      minimumNotionalQuote: positiveReasonNumber(plan, ENTRY_MINIMUM_NOTIONAL_REASON_PREFIX) ?? 5_000,
+    };
+  }
+  return {
+    quantityStep: positiveReasonNumber(plan, ENTRY_QUANTITY_STEP_REASON_PREFIX),
+    minimumQuantity: positiveReasonNumber(plan, ENTRY_MINIMUM_QUANTITY_REASON_PREFIX),
+    minimumNotionalQuote: positiveReasonNumber(plan, ENTRY_MINIMUM_NOTIONAL_REASON_PREFIX),
+  };
+}
+
+function automaticEntryExitSizingReasons(
+  exchange: TradingExchange, evidence: Record<string, unknown> | null,
+) {
+  if (exchange === 'toss' || exchange === 'kiwoom') {
+    return [`${ENTRY_QUANTITY_STEP_REASON_PREFIX}1`, `${ENTRY_MINIMUM_QUANTITY_REASON_PREFIX}1`];
+  }
+  if (exchange === 'upbit') {
+    const minimumNotional = Number(evidence?.minOrderNotional);
+    return [
+      `${ENTRY_QUANTITY_STEP_REASON_PREFIX}0.00000001`,
+      `${ENTRY_MINIMUM_QUANTITY_REASON_PREFIX}0.00000001`,
+      `${ENTRY_MINIMUM_NOTIONAL_REASON_PREFIX}${positive(minimumNotional) ? minimumNotional : 5_000}`,
+    ];
+  }
+  const quantityStep = Number(evidence?.qtyStep ?? evidence?.sizeMultiplier);
+  const minimumQuantity = Number(evidence?.minQty ?? evidence?.minTradeNum);
+  const minimumNotional = Number(evidence?.minNotionalUsdt ?? evidence?.minTradeUsdt);
+  return [
+    ...(positive(quantityStep) ? [`${ENTRY_QUANTITY_STEP_REASON_PREFIX}${quantityStep}`] : []),
+    ...(positive(minimumQuantity) ? [`${ENTRY_MINIMUM_QUANTITY_REASON_PREFIX}${minimumQuantity}`] : []),
+    ...(positive(minimumNotional) ? [`${ENTRY_MINIMUM_NOTIONAL_REASON_PREFIX}${minimumNotional}`] : []),
+  ];
+}
+
 type TrackedAutomaticPosition = Readonly<{
   plan: TradingPlan;
   order: TradingOrder;
   remainingQuantity: number;
   activeExit: boolean;
+  completedTargetIndexes: readonly number[];
 }>;
 
 function trackedAutomaticPositions(
@@ -865,7 +919,7 @@ function trackedAutomaticPositions(
   accountMode: 'paper' | 'live',
 ): TrackedAutomaticPosition[] {
   const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
-  const exitsByParent = new Map<string, TradingOrder[]>();
+  const exitsByParent = new Map<string, Array<{ plan: TradingPlan; order: TradingOrder }>>();
   for (const exitPlan of runtime.plans) {
     if (exitPlan.accountMode !== accountMode || exitPlan.reduceOnly !== true || !backgroundAutomaticPlan(exitPlan)) continue;
     const parentId = reasonValue(exitPlan, EXIT_PARENT_REASON_PREFIX);
@@ -876,7 +930,7 @@ function trackedAutomaticPositions(
       exitPlan, exitOrder, runtime.paperWalletOpenedAtMs,
       Math.max(runtime.snapshotObservedAtMs, Date.now()))) continue;
     const rows = exitsByParent.get(parentId) ?? [];
-    rows.push(exitOrder);
+    rows.push({ plan: exitPlan, order: exitOrder });
     exitsByParent.set(parentId, rows);
   }
   return runtime.plans.flatMap((plan) => {
@@ -888,8 +942,8 @@ function trackedAutomaticPositions(
       Math.max(runtime.snapshotObservedAtMs, Date.now()))) return [];
     const exits = exitsByParent.get(plan.id) ?? [];
     const exited = exits.reduce((sum, row) => (
-      ['PARTIALLY_FILLED', 'FILLED'].includes(row.state) && row.filledQuantity > 0
-        ? sum + row.filledQuantity
+      ['PARTIALLY_FILLED', 'FILLED'].includes(row.order.state) && row.order.filledQuantity > 0
+        ? sum + row.order.filledQuantity
         : sum
     ), 0);
     const remainingQuantity = Math.max(0, order.filledQuantity - exited);
@@ -898,7 +952,13 @@ function trackedAutomaticPositions(
       plan,
       order,
       remainingQuantity,
-      activeExit: exits.some((row) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(row.state)),
+      activeExit: exits.some((row) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(row.order.state)),
+      completedTargetIndexes: [...new Set(exits.flatMap((row) => {
+        if (row.order.state !== 'FILLED') return [];
+        const raw = reasonValue(row.plan, EXIT_TARGET_INDEX_REASON_PREFIX);
+        const value = raw == null ? Number.NaN : Number(raw);
+        return Number.isSafeInteger(value) && value >= 0 && value < plan.targetPrices.length ? [value] : [];
+      }))].sort((left, right) => left - right),
     }];
   });
 }
@@ -1460,6 +1520,7 @@ function buildPlanInput(
       `HANDOFF_ID:${entry.handoffId}`,
       `FX:${fx.source}`,
       ...(mapping.stockBroker ? [`STOCK_BROKER:${mapping.stockBroker.toUpperCase()}`] : []),
+      ...automaticEntryExitSizingReasons(mapping.exchange, evidence),
       'TOP_OF_BOOK_GAP_PROXY',
     ],
     marketSnapshot: {
@@ -1791,8 +1852,18 @@ async function processAutomaticExit(input: {
   }
   const market = tradeMarketForPlan(input.position.plan);
   const mark = await input.source.readMarketMark(market, input.position.plan.symbol);
-  const initialReason = automaticExitReason(input.position.plan, mark.price);
-  if (!initialReason) return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
+  const sizing = automaticEntryExitSizing(input.position.plan);
+  const decide = (currentPrice: number) => automaticExitDecision({
+    plan: input.position.plan,
+    currentPrice,
+    entryFilledQuantity: input.position.order.filledQuantity,
+    remainingQuantity: input.position.remainingQuantity,
+    completedTargetIndexes: input.position.completedTargetIndexes,
+    entryAveragePrice: input.position.order.averageFillPrice,
+    ...sizing,
+  });
+  const initialDecision = decide(mark.price);
+  if (!initialDecision) return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
 
   let fx = input.fxCache.get(market);
   if (!fx) {
@@ -1805,8 +1876,9 @@ async function processAutomaticExit(input: {
     entryOrder: input.position.order,
     mark,
     fx,
-    reason: initialReason,
-    remainingQuantity: input.position.remainingQuantity,
+    reason: initialDecision.reason,
+    targetIndex: initialDecision.targetIndex,
+    remainingQuantity: initialDecision.quantity,
     nowMs: input.now.getTime(),
   });
   let privateRequests = 0;
@@ -1819,7 +1891,10 @@ async function processAutomaticExit(input: {
     const accountSnapshot = await input.source.readLiveAccountSnapshot(input.member.userId, provider);
     privateRequests += 1;
     const providerQuantity = providerPositionQuantity(accountSnapshot, input.position);
-    exitInput = { ...exitInput, quantity: providerQuantity };
+    if (!positive(exitInput.quantity) || exitInput.quantity > providerQuantity
+      + Math.max(POSITION_QUANTITY_TOLERANCE, providerQuantity * 1e-8)) {
+      throw new Error('BACKGROUND_EXIT_QUANTITY_EXCEEDS_PROVIDER_POSITION');
+    }
     const preview = await new TradeExecutionService(input.repository).previewLiveRiskSnapshot(
       input.member.userId,
       exitInput,
@@ -1827,8 +1902,12 @@ async function processAutomaticExit(input: {
     );
     privateRequests += preview.providerRequests;
     const confirmedPrice = Number(preview.snapshot.currentPrice);
-    const confirmedReason = automaticExitReason(input.position.plan, confirmedPrice);
-    if (confirmedReason !== initialReason) {
+    const confirmedDecision = decide(confirmedPrice);
+    if (!confirmedDecision
+      || confirmedDecision.reason !== initialDecision.reason
+      || confirmedDecision.targetIndex !== initialDecision.targetIndex
+      || Math.abs(confirmedDecision.quantity - initialDecision.quantity)
+        > Math.max(POSITION_QUANTITY_TOLERANCE, initialDecision.quantity * 1e-8)) {
       return { status: 'BLOCKED_RECHECK' as const, privateRequests, orderCreated: false };
     }
     exitInput = {
