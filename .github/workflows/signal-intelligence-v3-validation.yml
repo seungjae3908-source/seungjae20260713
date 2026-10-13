@@ -1,9 +1,6 @@
 name: Signal Intelligence V3 Validation
 
 on:
-  push:
-    branches:
-      - fix/public-market-realdata-qa-20261013
   pull_request:
     paths:
       - 'signal-intelligence-v3/**'
@@ -16,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       bitget_history_probe_only:
-        description: 'Run only the bounded public Bitget Download Center UI probe'
+        description: 'Run only bounded public Bitget Download Center and BTCUSDT history readiness probes'
         required: true
         default: false
         type: boolean
@@ -30,7 +27,7 @@ concurrency:
 
 jobs:
   contract:
-    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) && (github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -96,7 +93,7 @@ jobs:
           echo 'AI leverage authority=false'
 
   producer-bundle:
-    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) && (github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -292,7 +289,7 @@ jobs:
           if-no-files-found: error
 
   bitget-history-probe:
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) }}
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -301,7 +298,7 @@ jobs:
       - name: Checkout exact revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -320,7 +317,7 @@ jobs:
       - name: Probe the intended Futures Depth download UI once
         working-directory: stock-analyzer
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           EVIDENCE_DIR: ${{ runner.temp }}/bitget-history-probe
         run: |
           set -Eeuo pipefail
@@ -475,7 +472,7 @@ jobs:
       - name: Collect BTCUSDT 730-day public REST evidence without imputing Depth or OI history
         working-directory: market-prediction-lab
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           EVIDENCE_DIR: ${{ runner.temp }}/bitget-history-probe
         run: |
           set -Eeuo pipefail
@@ -547,11 +544,15 @@ jobs:
             sha256: digest(funding.records),
             alignedCandleCoverage: fundingCoverage,
           };
-          const complete730Days = [marketSummary, markSummary, indexSummary]
+          const candlesComplete730Days = [marketSummary, markSummary, indexSummary]
             .every((row) => row.firstTimestamp <= startTime + HOUR_MS && row.lastTimestamp >= endTime - HOUR_MS);
+          const fundingComplete730Days = fundingSummary.firstTimestamp !== null
+            && fundingSummary.firstTimestamp <= startTime + 12 * HOUR_MS
+            && fundingSummary.lastTimestamp >= endTime - 12 * HOUR_MS;
           const blockers = [
             'BITGET_FUTURES_DEPTH_DOWNLOAD_GEO_DECLARATION_REQUIRED',
             'BITGET_HISTORICAL_TRADE_SERIES_NOT_ACQUIRED',
+            ...(!fundingComplete730Days ? ['BITGET_FUNDING_730D_INCOMPLETE'] : []),
             'BITGET_HISTORICAL_OPEN_INTEREST_SERIES_MISSING',
             'POINT_IN_TIME_POSITION_TIER_HISTORY_REQUIRED',
             ...(APPROVED_LIQUIDATION_RISK_MODEL_V1 === null ? ['APPROVED_LIQUIDATION_RISK_MODEL_MISSING'] : []),
@@ -565,7 +566,13 @@ jobs:
             providerTimeframe: '1h',
             symbol,
             productType: 'USDT-FUTURES',
-            requestedPeriod: { startTime, endTime, days: 730 },
+            requestedPeriod: {
+              startTime,
+              startTimeIso: new Date(startTime).toISOString(),
+              endTime,
+              endTimeIso: new Date(endTime).toISOString(),
+              days: 730,
+            },
             publicRest: {
               host: 'api.bitget.com',
               requestCount,
@@ -583,14 +590,25 @@ jobs:
                 value: context.fundingRate,
                 intervalHours: context.fundingIntervalHours,
               },
-              complete730Days,
+              candlesComplete730Days,
+              fundingComplete730Days,
             },
             downloadCenter: {
               host: 'www.bitget.com',
+              siteAdvertisesRecentYearsForFuturesDepth: true,
+              btcUsdt730DayDepthAvailabilityVerified: false,
+              freeDownloadVerified: false,
+              downloadSpecificUsePermissionVerified: false,
+              fileFormat: null,
+              samplingInterval: null,
+              missingRate: null,
+              bidAskTimestampIntegrity: null,
               historicalDepthRowsAcquired: 0,
               historicalTradesAcquired: 0,
               rawFilesPersistedOrUploaded: false,
               status: 'BLOCKED_GEO_DECLARATION_REQUIRED',
+              termsReviewStatus: 'OWNER_LEGAL_REVIEW_REQUIRED',
+              termsUrl: 'https://www.bitget.com/support/articles/360014944032-terms-of-use/',
             },
             evidenceContract: {
               required: CRYPTO_FUTURES_DERIVATIVES_REQUIRED_EVIDENCE,
@@ -625,14 +643,14 @@ jobs:
           NODE
       - name: Assert no execution authority
         run: |
-          test '${{ github.event_name }}' = workflow_dispatch || test '${{ github.event_name }}' = push
+          test '${{ github.event_name }}' = workflow_dispatch || test '${{ github.event_name }}' = pull_request
           echo 'executionAuthority=NONE'
           echo 'privateTradingApiAllowed=false'
           echo 'orderSubmitted=false'
       - name: Upload bounded discovery evidence
         uses: actions/upload-artifact@v4
         with:
-          name: bitget-history-probe-${{ github.sha }}
+          name: bitget-history-probe-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/bitget-history-probe
           retention-days: 30
           if-no-files-found: error
