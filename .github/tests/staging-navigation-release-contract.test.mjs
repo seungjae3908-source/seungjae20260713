@@ -38,6 +38,16 @@ test('Staging full navigation test targets exactly accessible four-menu technica
  assert.equal(menuLabels.filter(x=>x==='기술매매').length,1);
  assert.equal(menuLabels.filter(x=>x==='모의매매').length,0);
  assert.ok(!tech.includes('href: APP_ROUTES.paperTrading'));
+ const korean=fs.readFileSync('stock-analyzer/e2e/korean-user-facing-terminology.spec.ts','utf8');
+ // The Korean-first UI contract must agree with BOTH independent real
+ // Browser/Staging route contracts BEFORE the expensive Full CI is dispatched.
+ for(const marker of [
+  "openMenuRoute('technical', '기술매매', '/auto-trading')",
+  "['검색기', 'AI차트', '과거검증', '기술매매']",
+  "page.getByTestId('technical-mode-paper')",
+  "expectNavigationTransition(page, '/paper-trading'",
+ ]) assert.ok(korean.includes(marker),'stale Korean E2E route vocabulary: '+marker);
+ assert.ok(!korean.includes("openMenuRoute('technical', '모의매매'"));
 });
 test('Staging full journey information and settings menus stay present',()=>{
  const info=segment(navigation,"    id: 'information',","    id: 'settings',");
