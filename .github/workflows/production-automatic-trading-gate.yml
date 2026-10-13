@@ -380,6 +380,7 @@ jobs:
             const activateNotBeforeMs = Date.parse(String(value?.activateNotBeforeAt ?? ''));
             if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
               || value?.armed !== true || value?.targetSha !== target
+              || JSON.stringify(value?.admissionPaths) !== JSON.stringify(['RESEARCH_GENUINE_S'])
               || !Number.isFinite(armedAtMs)
               || !Number.isFinite(activateNotBeforeMs)
               || activateNotBeforeMs - armedAtMs !== liveEntryArmActivationDelayMs) {
@@ -401,11 +402,13 @@ jobs:
               armed: true,
               armedAt: armedAt.toISOString(),
               activateNotBeforeAt,
+              admissionPaths: ['RESEARCH_GENUINE_S'],
             }) + '\n', { mode: 0o600, flag: 'wx' });
             renameSync(temp, liveEntryArmPath);
             const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
             if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
-              || value?.armed !== true || value?.targetSha !== target) {
+              || value?.armed !== true || value?.targetSha !== target
+              || JSON.stringify(value?.admissionPaths) !== JSON.stringify(['RESEARCH_GENUINE_S'])) {
               throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
             }
             verifyLiveEntryArmReadable();

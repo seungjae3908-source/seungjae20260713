@@ -407,7 +407,7 @@ export function TradeAutomationSettings({
         ...current,
         policy: { ...current.policy, pilotStage: 'formula-ai-exception', automaticEnabled: false },
       } : current);
-      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+      setMessage('외부 공개전략 LIVE Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
       return;
     }
     try {
@@ -421,14 +421,14 @@ export function TradeAutomationSettings({
       });
       const payload = await response.json() as { policy?: Policy; error?: string };
       if (!response.ok || !payload.policy) {
-        throw new Error(payload.error ?? '수식+AI Pilot 준비에 실패했습니다.');
+        throw new Error(payload.error ?? '외부 공개전략 Pilot 준비에 실패했습니다.');
       }
       const normalized = normalizeUiPolicy(payload.policy);
       setDraft(normalized);
       setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
-      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+      setMessage('외부 공개전략 LIVE Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '수식+AI Pilot 준비에 실패했습니다.');
+      setMessage(error instanceof Error ? error.message : '외부 공개전략 Pilot 준비에 실패했습니다.');
     }
   }
 
@@ -708,9 +708,9 @@ export function TradeAutomationSettings({
     {canManagePilot ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="formula-ai-pilot-control">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="font-extrabold">수식+AI 자동 실거래 Pilot</p>
+          <p className="font-extrabold">외부 공개전략 LIVE Pilot</p>
           <p className="mt-1 text-muted-foreground">
-            현재 단계 · {draft.pilotStage === 'formula-ai-exception' ? '수식+AI 예외' : draft.pilotStage}
+            현재 단계 · {draft.pilotStage === 'formula-ai-exception' ? 'EXTERNAL_STRATEGY_PILOT' : draft.pilotStage}
           </p>
         </div>
         {draft.pilotStage !== 'formula-ai-exception' && draft.pilotStage !== 'validated'
@@ -732,7 +732,8 @@ export function TradeAutomationSettings({
       </div>
       <p className="mt-2 leading-5 text-muted-foreground">
         이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 활성화 후에는 주문별 수동 승인 없이
-        수식+AI·비용·위험검사를 통과한 신호만 자동 처리하며, 발견 단계 1회 주문은
+        allowlist 공개전략의 실제 지표·AI VETO·비용·위험검사를 통과한 신호만 자동 처리합니다.
+        Research Genuine S 통과를 주장하거나 재사용하지 않으며, 발견 단계 1회 주문은
         최대 {discoveryMaxOrderKrw.toLocaleString('ko-KR')}원으로 제한됩니다.
       </p>
     </div> : null}

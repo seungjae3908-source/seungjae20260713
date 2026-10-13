@@ -74,6 +74,21 @@ export type StrategyPilotProfile = Readonly<{
   automaticLiveExecutionAllowed: true;
 }>;
 
+export type ExternalStrategySource = Readonly<{
+  url: string;
+  author: string;
+  publishedAt: string | null;
+  evidenceKind: 'PEER_REVIEWED_PAPER' | 'WORKING_PAPER' | 'PUBLIC_IMPLEMENTATION' | 'PROVIDER_DOCUMENTATION';
+  supports: string;
+  performanceBasis: 'NOT_REPORTED' | 'BACKTEST' | 'LIVE_CASE_STUDY' | 'MIXED';
+  reportedReturn: number | null;
+  reportedWinRate: number | null;
+  reportedMaxDrawdown: number | null;
+  feesIncluded: boolean | null;
+  slippageIncluded: boolean | null;
+  adoptionCaveat: string;
+}>;
+
 export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   mode: 'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY',
   initialOperatingCapitalKrw: 500_000,
@@ -105,11 +120,158 @@ export type StrategyRulePackDefinition = Readonly<{
   summary: string;
   rules: readonly string[];
   requiredEvidence: readonly StrategyRuleEvidenceKey[];
+  externalStrategyPilotAllowed: boolean;
+  externalSources: readonly ExternalStrategySource[];
+  reproducibilityNotes: readonly string[];
   paperResearchAllowedWhenReady: true;
   pilotProfile: StrategyPilotProfile;
   automaticLivePromotionAllowed: false;
   promotionRequirements: readonly string[];
 }>;
+
+const source = (value: ExternalStrategySource): ExternalStrategySource => Object.freeze(value);
+
+const NO_EXTERNAL_PERFORMANCE = Object.freeze({
+  reportedReturn: null,
+  reportedWinRate: null,
+  reportedMaxDrawdown: null,
+});
+
+const TREND_SOURCES = Object.freeze([
+  source({
+    url: 'https://papers.ssrn.com/sol3/papers.cfm?abstract_id=962461',
+    author: 'Mebane T. Faber',
+    publishedAt: '2007-05-01',
+    evidenceKind: 'WORKING_PAPER',
+    supports: '장기 추세 필터와 규칙 기반 위험회피의 공개 원형',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '논문의 자산배분 결과를 이 앱의 종목별 실시간 매매 성과로 이전하지 않는다.',
+  }),
+  source({
+    url: 'https://doi.org/10.1016/j.jfineco.2011.11.003',
+    author: 'Tobias J. Moskowitz, Yao Hua Ooi, Lasse Heje Pedersen',
+    publishedAt: '2012-05-01',
+    evidenceKind: 'PEER_REVIEWED_PAPER',
+    supports: '시계열 모멘텀과 방향별 추세 정의',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '학술 표본과 현재 거래소·주문의 차이를 별도 실시간 비용 검증으로 보완해야 한다.',
+  }),
+]);
+
+const US_ORB_SOURCES = Object.freeze([
+  source({
+    url: 'https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2440866',
+    author: 'Lei Gao, Yufeng Han, Sophia Zhengzi Li, Guofu Zhou',
+    publishedAt: '2014-05-01',
+    evidenceKind: 'WORKING_PAPER',
+    supports: '미국 주식 장중 모멘텀과 시초·종가 정보의 공개 연구 근거',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '연구 결과는 ORB Retest 구현의 앱 수익성 증명이 아니며 PIT universe와 실비용 검증이 필요하다.',
+  }),
+  source({
+    url: 'https://concretumgroup.com/backtesting-the-opening-range-breakout-orb-strategy-using-polygon-io/',
+    author: 'Concretum Group',
+    publishedAt: null,
+    evidenceKind: 'PUBLIC_IMPLEMENTATION',
+    supports: 'Opening Range 산출과 공개 백테스트 구현 사례',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '블로그 성과 수치는 채택하지 않고 진입 규칙 재현 참고로만 사용한다.',
+  }),
+]);
+
+const KR_BREAKOUT_SOURCES = Object.freeze([
+  source({
+    url: 'https://doi.org/10.1111/j.1540-6261.1992.tb04681.x',
+    author: 'William Brock, Josef Lakonishok, Blake LeBaron',
+    publishedAt: '1992-12-01',
+    evidenceKind: 'PEER_REVIEWED_PAPER',
+    supports: '이동평균·거래범위 돌파 규칙의 공개 학술 근거',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '오래된 미국 표본 결과를 국내주식 성과로 간주하지 않는다.',
+  }),
+  source({
+    url: 'https://doi.org/10.1111/0022-1082.00265',
+    author: 'Andrew W. Lo, Harry Mamaysky, Jiang Wang',
+    publishedAt: '2000-08-01',
+    evidenceKind: 'PEER_REVIEWED_PAPER',
+    supports: '기술적 가격 패턴의 체계적·비미래참조 표현',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '압축·돌파의 구현 참고일 뿐 현재 KRX 체결 가능성은 브로커 실데이터로 따로 확인한다.',
+  }),
+  source({
+    url: 'https://data.krx.co.kr/',
+    author: '한국거래소',
+    publishedAt: null,
+    evidenceKind: 'PROVIDER_DOCUMENTATION',
+    supports: '국내 상장종목·시장 데이터의 공식 확인 경로',
+    performanceBasis: 'NOT_REPORTED',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '공식 시장정보 경로는 실시간 브로커 Candle·호가 권한을 대신하지 않는다.',
+  }),
+]);
+
+const SPOT_FLOW_SOURCES = Object.freeze([
+  source({
+    url: 'https://arxiv.org/abs/1808.03668',
+    author: 'Zihao Zhang, Stefan Zohren, Stephen Roberts',
+    publishedAt: '2018-08-11',
+    evidenceKind: 'WORKING_PAPER',
+    supports: '호가 잔량 기반 표현과 동결 모델 검증의 공개 연구 근거',
+    performanceBasis: 'BACKTEST',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: 'DeepLOB 분류 정확도는 거래 수익률이 아니며 이 앱에 검증된 현물 모델도 아니다.',
+  }),
+  source({
+    url: 'https://global-docs.upbit.com/reference/list-orderbooks',
+    author: 'Upbit',
+    publishedAt: null,
+    evidenceKind: 'PROVIDER_DOCUMENTATION',
+    supports: '공개 호가의 bid/ask 가격·수량 필드',
+    performanceBasis: 'NOT_REPORTED',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '현재 스냅샷만으로 과거 CVD·Taker·ML 증거를 만들 수 없다.',
+  }),
+]);
+
+const FUTURES_FLOW_SOURCES = Object.freeze([
+  TREND_SOURCES[1],
+  source({
+    url: 'https://www.bitget.com/api-doc/contract/market/Get-All-Symbol-Ticker',
+    author: 'Bitget',
+    publishedAt: null,
+    evidenceKind: 'PROVIDER_DOCUMENTATION',
+    supports: '선물 시장의 공개 ticker·funding·OI 필드 확인 경로',
+    performanceBasis: 'NOT_REPORTED',
+    ...NO_EXTERNAL_PERFORMANCE,
+    feesIncluded: null,
+    slippageIncluded: null,
+    adoptionCaveat: '현재 OI 한 점은 OI 증가 추세가 아니며 체결 CVD/Taker flow를 대체하지 않는다.',
+  }),
+]);
 
 const COMMON: readonly StrategyRuleEvidenceKey[] = Object.freeze([
   'dataReady',
@@ -151,6 +313,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       'AI는 방향결정이 아니라 VETO/ABSTAIN 보조만 수행',
     ]),
     requiredEvidence: req('trendRegimeReady', 'pullbackReady', 'reaccelerationReady', 'volumeAccelerationReady'),
+    externalStrategyPilotAllowed: true,
+    externalSources: TREND_SOURCES,
+    reproducibilityNotes: Object.freeze(['실시간 Candle·VWAP·비미래참조 확정 피벗이 모두 있어야 한다.', '공개 연구의 성과 수치는 앱 성과로 채택하지 않는다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -172,6 +337,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       '오래된 뉴스/루머/재료-가격 충돌 시 AI VETO',
     ]),
     requiredEvidence: req('eventCatalystReady', 'rvolReady', 'firstPullbackReady', 'vwapSupportReady', 'volumeReaccelerationReady'),
+    externalStrategyPilotAllowed: false,
+    externalSources: US_ORB_SOURCES,
+    reproducibilityNotes: Object.freeze(['이 전략은 요청된 LIVE Pilot allowlist 밖이며 Research/Paper 전용이다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -193,6 +361,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       'PIT universe/비용 증거가 없으면 fail-closed',
     ]),
     requiredEvidence: req('pitUniverseReady', 'first5mRvolReady', 'openingRangeReady', 'retestReady', 'microBreakoutReady'),
+    externalStrategyPilotAllowed: true,
+    externalSources: US_ORB_SOURCES,
+    reproducibilityNotes: Object.freeze(['승인된 5분봉·정규장 시각·PIT universe·실시간 호가 없으면 차단한다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -214,6 +385,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       '뉴스/공시 원인이 불명확하거나 충돌하면 AI VETO',
     ]),
     requiredEvidence: req('pressureReady', 'compressionReady', 'volumeExpansionReady', 'breakoutReady'),
+    externalStrategyPilotAllowed: true,
+    externalSources: KR_BREAKOUT_SOURCES,
+    reproducibilityNotes: Object.freeze(['승인된 국내 브로커 5분봉·거래대금·실시간 호가 payload가 없으면 차단한다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -235,6 +409,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       'Spread/Depth/BTC regime 충돌 시 NO_TRADE',
     ]),
     requiredEvidence: req('orderFlowReady', 'cvdReady', 'takerBuyReady', 'orderbookImbalanceReady', 'mlRankReady', 'modelFrozen'),
+    externalStrategyPilotAllowed: true,
+    externalSources: SPOT_FLOW_SOURCES,
+    reproducibilityNotes: Object.freeze(['실제 체결 방향 CVD·Taker·호가 수량·검증된 동결 현물 모델 중 하나라도 없으면 차단한다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -256,6 +433,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       'isolated margin, 2~7x 상한은 별도 Risk Engine이 강제',
     ]),
     requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
+    externalStrategyPilotAllowed: true,
+    externalSources: FUTURES_FLOW_SOURCES,
+    reproducibilityNotes: Object.freeze(['OI 변화열·실제 체결 방향 CVD/Taker flow·funding·호가가 시점 정합해야 한다.']),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
@@ -264,6 +444,23 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
 ]);
 
 const BY_ID = new Map(STRATEGY_RULE_PACKS.map((row) => [row.strategyId, row]));
+
+export const EXTERNAL_STRATEGY_PILOT_IDS = Object.freeze(
+  STRATEGY_RULE_PACKS.filter((row) => row.externalStrategyPilotAllowed).map((row) => row.strategyId),
+);
+
+export const EXTERNAL_STRATEGY_SOURCE_SET_DIGEST = createHash('sha256')
+  .update(JSON.stringify(STRATEGY_RULE_PACKS
+    .filter((row) => row.externalStrategyPilotAllowed)
+    .map((row) => ({
+      strategyId: row.strategyId,
+      markets: row.markets,
+      directions: row.directions,
+      rules: row.rules,
+      requiredEvidence: row.requiredEvidence,
+      sources: row.externalSources,
+    }))))
+  .digest('hex');
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)

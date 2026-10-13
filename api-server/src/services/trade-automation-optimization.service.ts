@@ -88,6 +88,7 @@ export function evaluateTradingOptimization(
 
   if (formulaAiException?.allowed) {
     warnings.push('FORMULA_AI_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+    warnings.push('EXTERNAL_STRATEGY_PILOT_V1:RESEARCH_GENUINE_S_NOT_CLAIMED');
   }
   if (paperFormulaException?.allowed) {
     warnings.push('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
