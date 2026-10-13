@@ -87,7 +87,7 @@ jobs:
 
   producer-bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
@@ -173,6 +173,70 @@ jobs:
             if (row.blockReason !== 'YAHOO_USAGE_TERMS_NOT_CONFIRMED' || row.pageExecution?.startedCount !== 0) process.exit(1);
           }
           NODE
+      - name: Run full Upbit and Bitget cursor rotations with restart evidence
+        working-directory: api-server
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-crypto-rotation
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-crypto-rotation/latest-snapshot.json
+          SIGNAL_INTELLIGENCE_CRYPTO_ROTATION_EVIDENCE_FILE: ${{ runner.temp }}/signal-intelligence-crypto-rotation/full-rotation-evidence.json
+          SIGNAL_INTELLIGENCE_CRYPTO_ROTATION_ONLY: 'true'
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$SIGNAL_INTELLIGENCE_STATE_DIR"
+          : > "$RUNNER_TEMP/signal-intelligence-crypto-rotation.log"
+          complete=false
+          for ((cycle=1; cycle<=90; cycle+=1)); do
+            node .signal-intelligence/public-cycle.mjs >> "$RUNNER_TEMP/signal-intelligence-crypto-rotation.log"
+            if node - <<'NODE' "$SIGNAL_INTELLIGENCE_CRYPTO_ROTATION_EVIDENCE_FILE" "$cycle"
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const compact = Object.fromEntries(Object.entries(report.markets).map(([market, row]) => [market, {
+            universe: row.totalUniverse,
+            attempted: row.minimumUniqueAttemptedAcrossLanes,
+            success: row.minimumUniqueSuccessAcrossLanes,
+            complete: row.fullCursorRotationComplete,
+          }]));
+          console.log(JSON.stringify({ cycle: Number(process.argv[3]), markets: compact,
+            retries: report.networkTelemetry.retryCount ?? 0 }));
+          process.exit(report.rotationComplete === true ? 0 : 1);
+          NODE
+            then
+              complete=true
+              break
+            fi
+          done
+          test "$complete" = true
+          node - <<'NODE' "$SIGNAL_INTELLIGENCE_CRYPTO_ROTATION_EVIDENCE_FILE"
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (report.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || report.rotationComplete !== true || report.publicDataOnly !== true
+            || report.executionAuthority !== 'NONE' || report.orderSubmitted !== false
+            || report.privateTradingApiAllowed !== false) process.exit(1);
+          if (report.processRestartTransitions !== report.runCount - 1 || report.processRestartTransitions < 1) process.exit(1);
+          const laneIds = [
+            'SPOT_SCALPING_15M','SPOT_SWING_4H','SPOT_MID_LONG_4H',
+            'FUTURES_SCALPING_5M','FUTURES_SWING_60M','FUTURES_MID_LONG_4H',
+          ];
+          for (const laneId of laneIds) {
+            const lane = report.lanes[laneId];
+            if (!lane || lane.fullCursorRotationComplete !== true || lane.totalUniverse <= 0
+              || lane.uniqueAttemptedCount !== lane.totalUniverse
+              || lane.cursorContinuityFailures !== 0
+              || !/^[a-f0-9]{64}$/.test(lane.rosterId)) process.exit(1);
+          }
+          for (const market of ['CRYPTO_SPOT','CRYPTO_FUTURES']) {
+            const row = report.markets[market];
+            if (!row || row.laneCount !== 3 || row.fullCursorRotationComplete !== true
+              || row.minimumUniqueAttemptedAcrossLanes !== row.totalUniverse) process.exit(1);
+          }
+          NODE
       - name: Build self-contained deploy artifact
         shell: bash
         run: |
@@ -191,6 +255,10 @@ jobs:
             ${{ runner.temp }}/signal-intelligence-live/cycle-state.json
             ${{ runner.temp }}/signal-intelligence-live-cycle.log
             ${{ runner.temp }}/signal-intelligence-provider-diagnostic.json
+            ${{ runner.temp }}/signal-intelligence-crypto-rotation/full-rotation-evidence.json
+            ${{ runner.temp }}/signal-intelligence-crypto-rotation/cycle-state.json
+            ${{ runner.temp }}/signal-intelligence-crypto-rotation/latest-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-crypto-rotation.log
           retention-days: 30
           if-no-files-found: error
       - name: Upload self-contained deploy artifact
