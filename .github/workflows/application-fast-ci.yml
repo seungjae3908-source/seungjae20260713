@@ -90,7 +90,7 @@ jobs:
           cat /tmp/connection-graph.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify bounded GitHub dispatcher read-only retry contract
-        run: node --test .github/tests/browser-adaptive-github-read.test.mjs
+        run: node --test .github/tests/browser-adaptive-github-read.test.mjs .github/tests/telegram-dispatch-scoped-qa.test.mjs
 
       - name: Run product integrity audit
         run: |
@@ -369,6 +369,42 @@ jobs:
             if (String(pr.base.ref || '') !== baseRef || String(pr.head.ref || '') !== headRef) {
               core.setFailed('[PREMERGE_REF_IDENTITY_CHANGED]');
               return;
+            }
+
+            // A Telegram Draft must pass its scoped mocks BEFORE spending the
+            // canonical Full CI budget. Fail on any same-SHA failure; never
+            // re-run a failed scoped QA unchanged to manufacture green proof.
+            const telegramScope = headRef.startsWith('drift/telegram-')
+              || String(pr.title || '').toLowerCase().includes('telegram');
+            if (telegramScope) {
+              const qaWorkflowId = 'telegram-only-staging-qa.yml';
+              let exactTelegramQa = [];
+              for (let attempt = 1; attempt <= 6; attempt++) {
+                const { data: qaPage } = await getMetadata(() => github.rest.actions.listWorkflowRuns({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: qaWorkflowId,
+                  event: 'pull_request',
+                  branch: headRef,
+                  per_page: 100,
+                }), 'telegram-scoped-qa');
+                exactTelegramQa = (qaPage.workflow_runs ?? []).filter(run =>
+                  String(run.head_sha || '').toLowerCase() === targetSha);
+                const unsafe = exactTelegramQa.some(run =>
+                  run.status === 'completed' && ['failure', 'cancelled', 'timed_out'].includes(run.conclusion));
+                if (unsafe) {
+                  core.setFailed('[TELEGRAM_SCOPED_QA_FAILED_EXACT_SHA]');
+                  return;
+                }
+                if (exactTelegramQa.some(run =>
+                  run.status === 'completed' && run.conclusion === 'success')) break;
+                if (attempt < 6) await new Promise(resolve => setTimeout(resolve, 10_000));
+              }
+              if (!exactTelegramQa.some(run =>
+                run.status === 'completed' && run.conclusion === 'success')) {
+                core.setFailed('[TELEGRAM_SCOPED_QA_NOT_SUCCESS_EXACT_SHA]');
+                return;
+              }
             }
 
             const workflowId = 'futures-public-network-smoke.yml';
