@@ -27,6 +27,7 @@ import { useAuth } from '@/lib/auth';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import { ResearchLightweightMarketWatchPanel } from '@/components/research-lightweight-market-watch-panel';
+import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -870,6 +871,7 @@ export default function ResearchCenterPage({ activeTab, onTabChange, embedded = 
           </section>
         ) : null}
 
+        {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}
         {overview && cards.length ? (
           <>
             {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} /> : null}
