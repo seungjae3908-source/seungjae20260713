@@ -31,6 +31,7 @@ test('standalone validates six rooms, lease, secrets and zero trading authority 
     'FUTURES_LIVE_EXECUTION_AUTHORITY','FUTURES_LIVE_CAPABILITY_ALLOWLIST',
     'SPOT_LIVE_CAPABILITY_ALLOWLIST','TELEGRAM_INTELLIGENCE_STATE_PATH',
     'SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH',
+    'SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH',
     'TELEGRAM_ISOLATED_SIX_ROOM_CONFIG_INVALID',
     'TELEGRAM_ISOLATED_PERSONAL_STORAGE_NOT_CONFIGURED',
   ])assert.ok(policy.includes(marker),marker);
@@ -52,6 +53,10 @@ test('standalone validates six rooms, lease, secrets and zero trading authority 
   assert.ok(!ai.includes('TELEGRAM_STOCK_CHAT_ID'));
   assert.ok(!ai.includes('TELEGRAM_CRYPTO_CHAT_ID'));
   assert.ok(ai.includes('readSignalIntelligenceAiWatchRuntimeHealth'));
+  assert.ok(ai.includes("process.env.TELEGRAM_AI_WATCH_DELIVERY_APPROVED === 'true'"));
+  assert.ok(ai.includes('validTelegramV3CurrentSource(envelope.snapshot, now.getTime())'));
+  assert.ok(ai.includes('sendAiWatchWithDurableReceipt('));
+  assert.ok(runner.includes('SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH='));
   assert.match(entry,/const keepAlive = setInterval/u);
   assert.match(entry,/clearInterval\(keepAlive\)/u);
   assert.match(build,/telegram-isolated-worker\.mjs/u);

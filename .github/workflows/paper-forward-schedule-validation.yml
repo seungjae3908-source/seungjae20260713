@@ -147,6 +147,10 @@ on:
       - ops/production-auto-live-signal-identity.cjs
       - ops/production-auto-live-signal-source-audit.mjs
       - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
+      # Frozen read-only automatic Paper holdings Staging repair, no new LIVE scope.
+      - stock-analyzer/src/pages/auto-trading.tsx
+      - stock-analyzer/src/components/trading-holdings-panel.tsx
+      - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - .github/scripts/research-center-batch-scope.mjs
       - .github/tests/research-center-batch-scope.test.mjs
       - market-prediction-lab/src/paper-public-provider-authority-v1.js
@@ -527,6 +531,59 @@ jobs:
           allowed+=("${research_batch[@]}")
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
+          # Precise staging-only automatic Paper holdings GET fix. The owner
+          # reviewed 50 AUTO + 19 supplemental safety scopes are unchanged.
+          # These three source/test blobs and BOTH Trading guards are pinned.
+          paper_holdings_readonly=(
+            stock-analyzer/src/pages/auto-trading.tsx
+            stock-analyzer/src/components/trading-holdings-panel.tsx
+            stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
+          )
+          scope_requested=false
+          for path in "${changed[@]}"; do
+            case "$path" in
+              stock-analyzer/src/pages/auto-trading.tsx|stock-analyzer/src/components/trading-holdings-panel.tsx|stock-analyzer/e2e/auto-trading-professional-ui.spec.ts)
+                scope_requested=true ;;
+            esac
+          done
+          if [[ "$scope_requested" == true ]]; then
+            [[ "$base" == "00dc3910d0d580837e2506e9f3d36f2faf43c380" ]] || {
+              echo 'PAPER_HOLDINGS_READONLY_BASE_DRIFT' >&2; exit 1;
+            }
+            paper_holdings_expected=(
+              ac2a1782e2837b59232c061aa896987771176b84
+              d0e788abd195586fc736df6c17c16d2f178ab146
+              a18dfd351f9d7925e8b2f6cf7be29fbe44049136
+            )
+            for i in "${!paper_holdings_readonly[@]}"; do
+              path="${paper_holdings_readonly[$i]}"
+              printf '%s\n' "${changed[@]}" | grep -Fx "$path" >/dev/null || {
+                echo "PAPER_HOLDINGS_READONLY_REQUIRED_PATH_MISSING:$path" >&2; exit 1;
+              }
+              [[ "$(git rev-parse "HEAD:$path")" == "${paper_holdings_expected[$i]}" ]] || {
+                echo "PAPER_HOLDINGS_READONLY_BLOB_DRIFT:$path" >&2; exit 1;
+              }
+            done
+            trading_guards=(
+              .github/workflows/production-automatic-trading-gate.yml
+              api-server/scripts/verify-production-automatic-trading-gate.mjs
+            )
+            guard_expected=(
+              39022a0ec56735afb087a185cf5167f6fa0887a2
+              c4f0ad9d1adcb409e99680033a4510d6bcd6db4c
+            )
+            for i in "${!trading_guards[@]}"; do
+              path="${trading_guards[$i]}"
+              printf '%s\n' "${changed[@]}" | grep -Fx "$path" >/dev/null || {
+                echo "PAPER_HOLDINGS_READONLY_TRADING_GUARD_REQUIRED:$path" >&2; exit 1;
+              }
+              [[ "$(git rev-parse "HEAD:$path")" == "${guard_expected[$i]}" ]] || {
+                echo "PAPER_HOLDINGS_READONLY_TRADING_GUARD_DRIFT:$path" >&2; exit 1;
+              }
+            done
+            node api-server/scripts/verify-production-automatic-trading-gate.mjs >/dev/null
+          fi
+          allowed+=("${paper_holdings_readonly[@]}")
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
           for path in "${changed[@]}"; do
@@ -545,7 +602,8 @@ jobs:
                 *)
                   if ! printf '%s\n' "${research_batch[@]}" "${scanner_repair[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \
-                    && ! printf '%s\n' "${auto_supplement[@]}" | grep -Fx "$path" >/dev/null; then
+                    && ! printf '%s\n' "${auto_supplement[@]}" | grep -Fx "$path" >/dev/null \
+                    && ! printf '%s\n' "${paper_holdings_readonly[@]}" | grep -Fx "$path" >/dev/null; then
                     echo "Unexpected Paper-facing UI change: $path" >&2
                     exit 1
                   fi

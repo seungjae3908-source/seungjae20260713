@@ -1,0 +1,182 @@
+name: Research Isolated Read-Only Preflight
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/research-isolated-release.yml'
+      - '.github/scripts/research-isolated-release.cjs'
+      - '.github/tests/research-isolated-release.test.cjs'
+      - 'api-server/scripts/release-candidate-provenance.cjs'
+      - 'api-server/scripts/production-ci-provenance.cjs'
+      - 'ops/research-activation-preflight.mjs'
+      - 'docs/research-isolated-release.md'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  statuses: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('research-isolated-qa-{0}', github.event.pull_request.number) || 'research-production-activation' }}
+  cancel-in-progress: false
+
+jobs:
+  source-qa:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test canonical CI reuse, stale/tampered proofs, authority and host isolation
+        run: |
+          set -Eeuo pipefail
+          node --check .github/scripts/research-isolated-release.cjs
+          node --test .github/tests/research-isolated-release.test.cjs
+      - name: Existing Research activation and read-only preflight regressions
+        run: |
+          set -Eeuo pipefail
+          npm --prefix research-production test
+          node --test .github/tests/research-production-readonly-contract.test.mjs
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created' &&
+      github.event.issue.number == 1102 && !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-research-isolated ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.proof.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        id: proof
+        with:
+          script: |
+            const {parseCommand, authorize} = require('./.github/scripts/research-isolated-release.cjs');
+            const request = parseCommand(context.payload.comment.body);
+            await authorize({ github, context, targetSha: request.targetSha });
+            core.setOutput('target_sha',request.targetSha);
+
+  protected-research:
+    name: Protected read-only Research host audit — no deployment or activation
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESEARCH_TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.target_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Revalidate actual current main and code proof after human approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const {authorize} = require('./.github/scripts/research-isolated-release.cjs');
+            const proof = await authorize({ github, context, targetSha: process.env.RESEARCH_TARGET_SHA });
+            fs.mkdirSync('research-isolated-evidence', {recursive:true,mode:0o700});
+            fs.writeFileSync('research-isolated-evidence/code-proof.json', JSON.stringify(proof), {mode:0o600});
+      - name: Observe unchanged public shared-app identity; never require its LIVE gates OFF
+        run: |
+          set -Eeuo pipefail
+          curl --proto '=https' --tlsv1.2 -fsS --max-time 15 https://lsj119.com/api/health |
+            node -e 'let s="";process.stdin.on("data",c=>{s+=c;if(s.length>65536)process.exit(1)});process.stdin.on("end",()=>{const v=JSON.parse(s);if(v.ok!==true||v.identityMatch!==true||!/^[a-f0-9]{40}$/.test(v.deploySha)||v.deployMarkerSha!==v.deploySha)process.exit(1);console.log(v.deploySha);});' > research-isolated-evidence/app-sha
+          echo "EXPECTED_DEPLOY_SHA=$(cat research-isolated-evidence/app-sha)" >> "$GITHUB_ENV"
+      - name: Configure pinned SSH only on the ephemeral runner
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$SSH_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ && "$SSH_PORT" =~ ^[0-9]{1,5}$ ]]
+          (( SSH_PORT >= 1 && SSH_PORT <= 65535 ))
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Read every actual host prerequisite, dependency and economic-input gap before any runtime mutation
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$RESEARCH_TARGET_SHA"
+          watch_digest="$(sha256sum research-production/deploy/research-production-market-watch.service | cut -d ' ' -f1)"
+          remote_env="$(printf 'RESEARCH_TARGET_SHA=%q EXPECTED_DEPLOY_SHA=%q WATCH_UNIT_DIGEST=%q' "$RESEARCH_TARGET_SHA" "$EXPECTED_DEPLOY_SHA" "$watch_digest")"
+          {
+            cat ops/research-activation-preflight.mjs
+            cat <<'NODE'
+          const report=collectResearchActivationPreflight({researchSha:process.env.RESEARCH_TARGET_SHA,appSha:process.env.EXPECTED_DEPLOY_SHA,watchUnitDigest:process.env.WATCH_UNIT_DIGEST});
+          const [major,minor]=process.versions.node.split('.').map(Number);
+          report.checks.push({id:'CORE_NODE_WEBSOCKET_RUNTIME',phase:'prerequisite',status:major>22||major===22&&minor>=4?'PASS':'BLOCKED'});
+          const units=['ai-review.timer','video-discovery.timer','approved-job-intake.timer','workspace-worker.service','market-watch.service','ai-review.service','video-discovery.service','approved-job-intake.service'];
+          const inactive=units.every(unit=>{
+            let value='';
+            try {value=execFileSync('systemctl',['show','research-production-'+unit,'-p','LoadState','-p','ActiveState'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','ignore'],maxBuffer:65536});}
+            catch(error){value=String(error.stdout??'');if(!value.split('\n').includes('LoadState=not-found'))return false;}
+            const rows=value.trim().split('\n');
+            return (rows.includes('ActiveState=inactive')||rows.includes('ActiveState=failed'))&&['loaded','masked','not-found'].some(s=>rows.includes('LoadState='+s));
+          });
+          report.checks.push({id:'CORE_CUTOVER_DEPENDENTS_INACTIVE',phase:'prerequisite',status:inactive?'PASS':'BLOCKED'});
+          report.prerequisiteBlockers=report.checks.filter(c=>c.phase==='prerequisite'&&c.status!=='PASS').map(c=>c.id);
+          report.prerequisitesReady=report.prerequisiteBlockers.length===0;
+          console.log(JSON.stringify(report));
+          NODE
+          } | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "sudo -n env $remote_env node --input-type=module" > research-isolated-evidence/host-preflight.json
+      - name: Record every blocker without turning audit success into operational readiness
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const {buildAuditEnvelope}=require('./.github/scripts/research-isolated-release.cjs');
+          const audit=require('./research-isolated-evidence/host-preflight.json');
+          const proof=require('./research-isolated-evidence/code-proof.json');
+          const envelope=buildAuditEnvelope({audit,proof,runId:process.env.GITHUB_RUN_ID});
+          fs.writeFileSync('research-isolated-evidence/research-audit.json',JSON.stringify(envelope,null,2),{mode:0o600});
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,['## Actual Research-only host audit','',
+            '| Check | Status | Phase |','|---|---|---|',...audit.checks.map(c=>`| ${c.id} | ${c.status} | ${c.phase} |`),'',
+            `Prerequisites ready: ${audit.prerequisitesReady}. Fully functional: false.`,
+            'Shared app/LIVE/PM2/Paper/Telegram were not changed. No new app UI or profitability claimed.',''].join('\n'));
+          NODE
+      - name: Recheck shared-app identity after the operation, including failed operations
+        if: always() && env.EXPECTED_DEPLOY_SHA != ''
+        run: |
+          set -Eeuo pipefail
+          curl --proto '=https' --tlsv1.2 -fsS --max-time 15 https://lsj119.com/api/health |
+            node -e 'let s="";process.stdin.on("data",c=>{s+=c;if(s.length>65536)process.exit(1)});process.stdin.on("end",()=>{const v=JSON.parse(s);if(v.ok!==true||v.identityMatch!==true||v.deploySha!==process.env.EXPECTED_DEPLOY_SHA||v.deployMarkerSha!==v.deploySha)process.exit(1);console.log(JSON.stringify({sharedAppIdentityUnchanged:true,appUiDeployed:false}));});' > research-isolated-evidence/shared-app-after.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-isolated-audit-${{ env.RESEARCH_TARGET_SHA }}-${{ github.run_id }}
+          path: |
+            research-isolated-evidence/research-audit.json
+            research-isolated-evidence/shared-app-after.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove runner SSH credentials on every exit
+        if: always()
+        run: rm -f -- ~/.ssh/id_ed25519 ~/.ssh/known_hosts

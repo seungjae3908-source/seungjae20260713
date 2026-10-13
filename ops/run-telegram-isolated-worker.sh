@@ -111,5 +111,6 @@ legacy_health_inactive
 export TELEGRAM_SINGLE_WRITER_LEASE=LOCK_HELD_V1
 export TELEGRAM_INTELLIGENCE_STATE_PATH="$LIVE_APP/.runtime/telegram-intelligence-delivery-state.json"
 export SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH="$LIVE_APP/.runtime/signal-intelligence-telegram-state.json"
+export SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH="$LIVE_APP/.runtime/signal-ai-watch-delivery-state.json"
 export NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"
 exec node --enable-source-maps "$RELEASE/api-server/dist/telegram-isolated-worker.mjs"
