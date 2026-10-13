@@ -291,7 +291,7 @@ jobs:
   bitget-history-probe:
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -468,6 +468,436 @@ jobs:
           }, null, 2));
           if (report.navigation.status !== 200 || downloadControlCount < 6
               || (restrictedIpDeclarationRequired && interaction.attempted)) process.exit(1);
+          NODE
+      - name: Capture official Tardis Bitget Futures sample and terms evidence
+        working-directory: stock-analyzer
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/bitget-history-probe
+        run: |
+          set -Eeuo pipefail
+          pnpm exec node --input-type=module - <<'NODE'
+          import { chromium } from '@playwright/test';
+          import { createHash } from 'node:crypto';
+          import { createReadStream } from 'node:fs';
+          import { open, unlink, writeFile } from 'node:fs/promises';
+          import { createGunzip } from 'node:zlib';
+          import readline from 'node:readline';
+          import path from 'node:path';
+
+          const serviceSha = process.env.EXPECTED_SHA;
+          const evidenceDir = process.env.EVIDENCE_DIR;
+          const exchange = 'bitget-futures';
+          const symbol = 'BTCUSDT';
+          const firstAvailableDate = '2024-11-08';
+          const sampleDate = '2024-12-01';
+          const maxFileBytes = 3 * 1024 ** 3;
+          const docsUrl = 'https://docs.tardis.dev/historical-data-details/bitget-futures';
+          const datasetRoot = 'https://datasets.tardis.dev/v1';
+          const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+          const parseDateParts = (value) => value.split('-');
+          const [year, month, day] = parseDateParts(sampleDate);
+          const dayStartMs = Date.parse(`${sampleDate}T00:00:00.000Z`);
+          const dayEndMs = dayStartMs + 24 * 60 * 60_000;
+          const toIso = (value) => Number.isFinite(value) ? new Date(value).toISOString() : null;
+          const timestampToMs = (value) => {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) return null;
+            if (numeric > 1e14) return numeric / 1_000;
+            if (numeric > 1e11) return numeric;
+            return numeric * 1_000;
+          };
+          const parseCsvLine = (line) => {
+            const values = [];
+            let value = '';
+            let quoted = false;
+            for (let index = 0; index < line.length; index += 1) {
+              const character = line[index];
+              if (character === '"') {
+                if (quoted && line[index + 1] === '"') {
+                  value += '"';
+                  index += 1;
+                } else {
+                  quoted = !quoted;
+                }
+              } else if (character === ',' && !quoted) {
+                values.push(value);
+                value = '';
+              } else {
+                value += character;
+              }
+            }
+            values.push(value);
+            return { values, unterminatedQuote: quoted };
+          };
+          const ratio = (count, total) => total === 0 ? null : count / total;
+
+          async function captureOfficialPages() {
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({ locale: 'en-US', timezoneId: 'UTC' });
+            const page = await context.newPage();
+            const targets = [docsUrl, 'https://tardis.dev'];
+            const pages = [];
+            const discovered = new Set();
+            for (const target of targets) {
+              try {
+                const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+                await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
+                const bodyText = (await page.locator('body').innerText()).replace(/\r/gu, '');
+                const links = await page.locator('a[href]').evaluateAll((nodes) => nodes.map((node) => ({
+                  text: (node.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 300),
+                  href: node.href,
+                })).filter((row) => row.href));
+                for (const link of links) {
+                  if (/tardis\.dev/iu.test(link.href) && /pricing|plan|term|license|subscription|download/iu.test(`${link.text} ${link.href}`)) {
+                    discovered.add(link.href.split('#')[0]);
+                  }
+                }
+                pages.push({
+                  requestedUrl: target,
+                  finalUrl: page.url(),
+                  status: response?.status() ?? null,
+                  title: await page.title(),
+                  bodySha256: sha256(bodyText),
+                  relevantText: bodyText.split('\n').map((line) => line.trim()).filter((line) =>
+                    /2024-11-08|first day|free|sample|pricing|month|year|license|commercial|personal|subscription|download/iu.test(line)
+                  ).slice(0, 250),
+                  relevantLinks: links.filter((link) => /pricing|plan|term|license|subscription|download/iu.test(`${link.text} ${link.href}`)).slice(0, 100),
+                });
+              } catch (error) {
+                pages.push({ requestedUrl: target, status: null, error: String(error?.message ?? error).slice(0, 1_000) });
+              }
+            }
+            for (const target of [...discovered].slice(0, 6)) {
+              if (targets.includes(target)) continue;
+              try {
+                const response = await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+                await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
+                const bodyText = (await page.locator('body').innerText()).replace(/\r/gu, '');
+                pages.push({
+                  requestedUrl: target,
+                  finalUrl: page.url(),
+                  status: response?.status() ?? null,
+                  title: await page.title(),
+                  bodySha256: sha256(bodyText),
+                  relevantText: bodyText.split('\n').map((line) => line.trim()).filter((line) =>
+                    /free|sample|pricing|\$|month|year|license|commercial|personal|subscription|cancel|refund/iu.test(line)
+                  ).slice(0, 250),
+                });
+              } catch (error) {
+                pages.push({ requestedUrl: target, status: null, error: String(error?.message ?? error).slice(0, 1_000) });
+              }
+            }
+            await browser.close();
+            return { pages, discoveredUrls: [...discovered].sort() };
+          }
+
+          async function downloadSample(dataType) {
+            const url = `${datasetRoot}/${exchange}/${dataType}/${year}/${month}/${day}/${symbol}.csv.gz`;
+            const response = await fetch(url, {
+              redirect: 'follow',
+              headers: { 'user-agent': 'investment-platform-public-evidence/1.0' },
+              signal: AbortSignal.timeout(20 * 60_000),
+            });
+            const headers = Object.fromEntries([...response.headers.entries()].filter(([name]) =>
+              ['content-length', 'content-type', 'etag', 'last-modified', 'accept-ranges', 'content-disposition'].includes(name)
+            ));
+            if (!response.ok || !response.body) {
+              await response.body?.cancel().catch(() => {});
+              return { dataType, url, finalUrl: response.url, status: response.status, headers, downloaded: false };
+            }
+            const declared = Number(headers['content-length']);
+            if (Number.isFinite(declared) && declared > maxFileBytes) {
+              await response.body.cancel();
+              return { dataType, url, finalUrl: response.url, status: response.status, headers, downloaded: false, reason: 'DECLARED_SIZE_EXCEEDS_BOUND' };
+            }
+            const filePath = path.join(evidenceDir, `tardis-${exchange}-${dataType}-${sampleDate}-${symbol}.csv.gz`);
+            const handle = await open(filePath, 'wx', 0o600);
+            const digest = createHash('sha256');
+            let bytes = 0;
+            let magic = Buffer.alloc(0);
+            let downloadError = null;
+            try {
+              for await (const raw of response.body) {
+                const chunk = Buffer.from(raw);
+                if (magic.length < 2) magic = Buffer.concat([magic, chunk]).subarray(0, 2);
+                bytes += chunk.length;
+                if (bytes > maxFileBytes) throw new Error('TARDIS_SAMPLE_SIZE_BOUND_EXCEEDED');
+                digest.update(chunk);
+                await handle.write(chunk);
+              }
+            } catch (error) {
+              downloadError = error;
+            } finally {
+              await handle.close();
+            }
+            if (downloadError) {
+              await unlink(filePath).catch(() => {});
+              throw downloadError;
+            }
+            return {
+              dataType, url, finalUrl: response.url, status: response.status, headers,
+              downloaded: true, filePath, compressedBytes: bytes,
+              compressedSha256: digest.digest('hex'), gzipMagicValid: magic.equals(Buffer.from([0x1f, 0x8b])),
+            };
+          }
+
+          function createNumericStats() {
+            return { present: 0, missing: 0, invalid: 0, zero: 0, min: null, max: null };
+          }
+          function observeNumeric(stats, value, { allowZero = true, allowNegative = true } = {}) {
+            if (value == null || value === '') { stats.missing += 1; return null; }
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric) || (!allowZero && numeric === 0) || (!allowNegative && numeric < 0)) {
+              stats.invalid += 1;
+              return null;
+            }
+            stats.present += 1;
+            if (numeric === 0) stats.zero += 1;
+            stats.min = stats.min === null ? numeric : Math.min(stats.min, numeric);
+            stats.max = stats.max === null ? numeric : Math.max(stats.max, numeric);
+            return numeric;
+          }
+
+          async function analyzeSample(download) {
+            if (!download.downloaded) return { ...download, csv: null };
+            const logicalDigest = createHash('sha256');
+            const input = createReadStream(download.filePath).pipe(createGunzip());
+            const lines = readline.createInterface({ input, crlfDelay: Infinity });
+            let headers = null;
+            let rowCount = 0;
+            let malformedRows = 0;
+            let blankRows = 0;
+            let firstTimestampMs = null;
+            let lastTimestampMs = null;
+            let previousTimestampMs = null;
+            let previousLocalTimestampMs = null;
+            let timestampMissing = 0;
+            let timestampInversions = 0;
+            let outsideRequestedDay = 0;
+            let exchangeAfterLocal = 0;
+            let localTimestampMissing = 0;
+            let localTimestampInversions = 0;
+            let maxGapMs = 0;
+            let gapsOver1s = 0;
+            let gapsOver60s = 0;
+            let gapsOver5m = 0;
+            let crossedQuotes = 0;
+            let invalidQuotes = 0;
+            const sideCounts = {};
+            const numeric = {};
+            const relevantFields = {
+              quotes: ['bid_price', 'ask_price', 'bid_amount', 'ask_amount'],
+              book_ticker: ['bid_price', 'ask_price', 'bid_amount', 'ask_amount'],
+              trades: ['price', 'amount'],
+              derivative_ticker: ['open_interest', 'funding_rate', 'mark_price', 'index_price'],
+              incremental_book_L2: ['price', 'amount'],
+            }[download.dataType] ?? [];
+            for (const field of relevantFields) numeric[field] = createNumericStats();
+
+            for await (const line of lines) {
+              if (headers === null) {
+                const parsed = parseCsvLine(line.replace(/^\uFEFF/u, ''));
+                if (parsed.unterminatedQuote || parsed.values.length < 4) throw new Error(`TARDIS_CSV_HEADER_INVALID:${download.dataType}`);
+                headers = parsed.values;
+                logicalDigest.update(`${line.replace(/^\uFEFF/u, '')}\n`);
+                continue;
+              }
+              if (!line) { blankRows += 1; continue; }
+              const parsed = parseCsvLine(line);
+              logicalDigest.update(`${line}\n`);
+              if (parsed.unterminatedQuote || parsed.values.length !== headers.length) {
+                malformedRows += 1;
+                continue;
+              }
+              rowCount += 1;
+              const row = Object.fromEntries(headers.map((header, index) => [header, parsed.values[index]]));
+              const timestampMs = timestampToMs(row.timestamp);
+              const localTimestampMs = timestampToMs(row.local_timestamp);
+              if (timestampMs === null) {
+                timestampMissing += 1;
+              } else {
+                if (firstTimestampMs === null) firstTimestampMs = timestampMs;
+                lastTimestampMs = timestampMs;
+                if (timestampMs < dayStartMs || timestampMs >= dayEndMs) outsideRequestedDay += 1;
+                if (previousTimestampMs !== null) {
+                  const gap = timestampMs - previousTimestampMs;
+                  if (gap < 0) timestampInversions += 1;
+                  else {
+                    maxGapMs = Math.max(maxGapMs, gap);
+                    if (gap > 1_000) gapsOver1s += 1;
+                    if (gap > 60_000) gapsOver60s += 1;
+                    if (gap > 5 * 60_000) gapsOver5m += 1;
+                  }
+                }
+                previousTimestampMs = timestampMs;
+              }
+              if (localTimestampMs === null) localTimestampMissing += 1;
+              else {
+                if (previousLocalTimestampMs !== null && localTimestampMs < previousLocalTimestampMs) localTimestampInversions += 1;
+                previousLocalTimestampMs = localTimestampMs;
+                if (timestampMs !== null && timestampMs > localTimestampMs) exchangeAfterLocal += 1;
+              }
+
+              for (const field of relevantFields) {
+                const options = field === 'funding_rate'
+                  ? { allowZero: true, allowNegative: true }
+                  : field === 'amount'
+                    ? { allowZero: download.dataType !== 'trades', allowNegative: false }
+                    : { allowZero: false, allowNegative: false };
+                observeNumeric(numeric[field], row[field], options);
+              }
+              const side = String(row.side ?? '').toLowerCase() || 'missing';
+              sideCounts[side] = (sideCounts[side] ?? 0) + 1;
+              if (download.dataType === 'quotes' || download.dataType === 'book_ticker') {
+                const bid = Number(row.bid_price);
+                const ask = Number(row.ask_price);
+                if (!(bid > 0) || !(ask > 0)) invalidQuotes += 1;
+                else if (bid > ask) crossedQuotes += 1;
+              }
+            }
+            if (!headers || rowCount === 0) throw new Error(`TARDIS_CSV_EMPTY:${download.dataType}`);
+            for (const stats of Object.values(numeric)) {
+              stats.missingRatio = ratio(stats.missing, rowCount);
+              stats.invalidRatio = ratio(stats.invalid, rowCount);
+            }
+            const validSides = download.dataType === 'trades'
+              ? new Set(['buy', 'sell'])
+              : download.dataType === 'incremental_book_L2'
+                ? new Set(['bid', 'ask'])
+                : null;
+            const invalidSideRows = validSides === null
+              ? null
+              : Object.entries(sideCounts).filter(([side]) => !validSides.has(side)).reduce((total, [, count]) => total + count, 0);
+            const csv = {
+              headers,
+              logicalCsvLfSha256: logicalDigest.digest('hex'),
+              rowCount, malformedRows, malformedRatio: ratio(malformedRows, rowCount + malformedRows), blankRows,
+              timestamp: {
+                firstTimestampMs, firstTimestampIso: toIso(firstTimestampMs),
+                lastTimestampMs, lastTimestampIso: toIso(lastTimestampMs),
+                leadingCoverageGapMs: firstTimestampMs === null ? null : Math.max(0, firstTimestampMs - dayStartMs),
+                trailingCoverageGapMs: lastTimestampMs === null ? null : Math.max(0, dayEndMs - lastTimestampMs),
+                missing: timestampMissing, inversions: timestampInversions, outsideRequestedDay,
+                maxEventGapMs: maxGapMs, gapsOver1s, gapsOver60s, gapsOver5m,
+                fixedCadenceMissingRate: null,
+                fixedCadenceMissingRateReason: 'EVENT_DRIVEN_STREAM_HAS_NO_FIXED_ROW_CADENCE',
+              },
+              receiveOrdering: {
+                localTimestampMissing,
+                localTimestampInversions,
+                exchangeTimestampAfterLocalTimestamp: exchangeAfterLocal,
+                chronologicalRowsOnlyForValidation: true,
+                futureRowsReferenced: 0,
+                strategyLeakageAssessment: 'NOT_RUN_SAMPLE_IS_STRUCTURE_ONLY',
+              },
+              numeric,
+              sideCounts,
+              sideIntegrity: validSides === null ? null : {
+                invalidSideRows,
+                invalidSideRatio: ratio(invalidSideRows, rowCount),
+              },
+              quoteIntegrity: (download.dataType === 'quotes' || download.dataType === 'book_ticker')
+                ? { invalidQuotes, invalidRatio: ratio(invalidQuotes, rowCount), crossedQuotes, crossedRatio: ratio(crossedQuotes, rowCount) }
+                : null,
+            };
+            await unlink(download.filePath);
+            return { ...download, filePath: null, rawFileDeletedAfterValidation: true, csv };
+          }
+
+          async function collectSample(dataType) {
+            let downloaded = null;
+            try {
+              downloaded = await downloadSample(dataType);
+              return await analyzeSample(downloaded);
+            } catch (error) {
+              if (downloaded?.filePath) await unlink(downloaded.filePath).catch(() => {});
+              return {
+                dataType,
+                url: `${datasetRoot}/${exchange}/${dataType}/${year}/${month}/${day}/${symbol}.csv.gz`,
+                finalUrl: downloaded?.finalUrl ?? null,
+                status: downloaded?.status ?? null,
+                headers: downloaded?.headers ?? {},
+                downloaded: downloaded?.downloaded ?? false,
+                compressedBytes: downloaded?.compressedBytes ?? null,
+                compressedSha256: downloaded?.compressedSha256 ?? null,
+                rawFileDeletedAfterValidation: Boolean(downloaded?.filePath),
+                csv: null,
+                validationError: String(error?.message ?? error).slice(0, 2_000),
+              };
+            }
+          }
+
+          const officialPages = await captureOfficialPages();
+          const requestedTypes = ['quotes', 'trades', 'derivative_ticker', 'incremental_book_L2'];
+          const files = [];
+          for (const dataType of requestedTypes) {
+            files.push(await collectSample(dataType));
+          }
+          if (!files[0].downloaded) {
+            const fallback = await collectSample('book_ticker');
+            files.push(fallback);
+          }
+          const quoteFile = files.find((row) => ['quotes', 'book_ticker'].includes(row.dataType) && row.downloaded);
+          const requiredFiles = ['trades', 'derivative_ticker', 'incremental_book_L2'].map((type) => files.find((row) => row.dataType === type));
+          const allRequestedStreamsDownloaded = Boolean(quoteFile) && requiredFiles.every((row) => row?.downloaded);
+          const csvIntegrityReady = allRequestedStreamsDownloaded && [quoteFile, ...requiredFiles].every((row) =>
+            row.csv?.rowCount > 0 && row.csv.malformedRows === 0 && row.csv.receiveOrdering.localTimestampInversions === 0
+          );
+          const derivative = files.find((row) => row.dataType === 'derivative_ticker')?.csv;
+          const trades = files.find((row) => row.dataType === 'trades')?.csv;
+          const depth = files.find((row) => row.dataType === 'incremental_book_L2')?.csv;
+          const swing60mInputAssessment = {
+            structuralSampleOnly: true,
+            historicalBidAskShapePresent: Boolean(quoteFile?.csv?.rowCount),
+            historicalTradeShapePresent: Boolean(trades?.rowCount && trades.sideIntegrity?.invalidSideRows === 0
+              && trades.numeric?.price?.invalid === 0 && trades.numeric?.amount?.invalid === 0),
+            historicalDepthShapePresent: Boolean(depth?.rowCount && depth.sideIntegrity?.invalidSideRows === 0
+              && depth.numeric?.price?.invalid === 0 && depth.numeric?.amount?.invalid === 0),
+            historicalOpenInterestShapePresent: Boolean(derivative?.numeric?.open_interest?.present),
+            historicalFundingShapePresent: Boolean(derivative?.numeric?.funding_rate?.present),
+            historicalMarkIndexShapePresent: Boolean(derivative?.numeric?.mark_price?.present && derivative?.numeric?.index_price?.present),
+            continuousOosWalkForwardReady: false,
+            requested730DayCoverageReady: false,
+            qualityGateChangeAuthorized: false,
+            genuineSGradeEligible: false,
+            reason: 'ONE_DISCONTINUOUS_FREE_SAMPLE_DAY_CANNOT_ESTABLISH_CONTINUOUS_OOS_WALK_FORWARD_OR_730_DAY_COST_EVIDENCE',
+          };
+          const report = {
+            schemaVersion: 'tardis-bitget-futures-free-sample-evidence-v1',
+            serviceSha,
+            generatedAt: new Date().toISOString(),
+            source: { provider: 'Tardis.dev', exchange, symbol, docsUrl, datasetRoot, firstAvailableDate, sampleDate },
+            officialPages,
+            files,
+            allRequestedStreamsDownloaded,
+            csvIntegrityReady,
+            swing60mInputAssessment,
+            qualityArtifactWritten: false,
+            genuineSGradeGranted: false,
+            profitabilityMetrics: null,
+            canonicalJoinCount: 0,
+            workerAdmissionCount: 0,
+            safety: {
+              publicGetOnly: true,
+              sampleStructureValidationOnly: true,
+              discontinuousSamplePresentedAsContinuous: false,
+              rawProviderFilesRedistributed: false,
+              rawFilesDeletedAfterValidation: files.filter((row) => row.downloaded).every((row) => row.rawFileDeletedAfterValidation),
+              privateApiUsed: false,
+              orderSubmitted: false,
+              executionAuthority: 'NONE',
+            },
+          };
+          await writeFile(path.join(evidenceDir, 'tardis-bitget-futures-free-sample-evidence.json'), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+          console.log(JSON.stringify({
+            serviceSha, sampleDate, officialPages,
+            files: files.map(({ filePath, ...row }) => row),
+            allRequestedStreamsDownloaded, csvIntegrityReady, swing60mInputAssessment,
+            safety: report.safety,
+          }, null, 2));
+          if (report.qualityArtifactWritten !== false || report.genuineSGradeGranted !== false
+              || report.safety.executionAuthority !== 'NONE') process.exit(1);
           NODE
       - name: Collect BTCUSDT 730-day public REST evidence without imputing Depth or OI history
         working-directory: market-prediction-lab
@@ -651,6 +1081,7 @@ jobs:
           echo 'privateTradingApiAllowed=false'
           echo 'orderSubmitted=false'
       - name: Upload bounded discovery evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bitget-history-probe-${{ github.event.pull_request.head.sha || github.sha }}
