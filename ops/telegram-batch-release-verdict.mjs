@@ -21,6 +21,33 @@ export function evaluateTelegramBatchRelease(receipt,{expectedSha,nowMs}={}) {
   }
   const recent=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))
     &&Date.parse(value)<=nowMs+5000&&nowMs-Date.parse(value)<=30*60_000;
+  const release=receipt.release;
+  if(!object(release)||release.candidateSha!==expectedSha
+    ||release.latestMainSha!==expectedSha||release.immutableSourceVerified!==true
+    ||release.independentTelegramOnlyScope!==true)
+    block('RELEASE_MAIN_DRIFT_OR_SCOPE_UNPROVEN');
+
+  const permissions=receipt.permissions;
+  if(!object(permissions)||permissions.ipv4TlsReliable!==true
+    ||permissions.botGetMeVerified!==true
+    ||permissions.allSixRoomPostingRightsVerified!==true
+    ||permissions.roomIdsUniqueVerified!==true
+    ||permissions.noCurrentForbidden403!==true
+    ||permissions.rateLimitBackoffVerified!==true
+    ||!recent(permissions.checkedAt))
+    block('TELEGRAM_RIGHTS_TLS_403_OR_RATE_LIMIT_BLOCKED');
+
+  const operations=receipt.operations;
+  if(!object(operations)||operations.aiWatchMigratedSafely!==true
+    ||operations.allFourSendersOwnedByOneProcess!==true
+    ||operations.noInFlightLegacyPosts!==true
+    ||operations.durableLedgerFsyncAndRollbackVerified!==true
+    ||operations.diskAndPermissionsAdequate!==true
+    ||operations.sharedDeploymentLockVerified!==true
+    ||operations.manualLivePreservedDuringCutover!==true
+    ||operations.restartAndRecoveryProbePassed!==true)
+    block('FOUR_WORKERS_STORAGE_AND_ROLLBACK_UNPROVEN');
+
   const ci=receipt.ci;
   if(!object(ci)||ci.sha!==expectedSha||ci.fullConclusion!=='success'
     ||ci.completed!==true||!Number.isSafeInteger(ci.runId)||ci.runId<=0
@@ -43,6 +70,7 @@ export function evaluateTelegramBatchRelease(receipt,{expectedSha,nowMs}={}) {
     ||delivery.botAcceptedAllRooms!==true||delivery.personalSentReceipt!==true
     ||delivery.memberOwnershipVerified!==true||delivery.dedupeVerified!==true
     ||delivery.fillToJournalToTelegramVerified!==true||delivery.uncertainSendNotReplayed!==true
+    ||delivery.aiWatchDurableDedupeVerified!==true||delivery.aiWatchMigrationApproved!==true
     ||!recent(delivery.observedAt))block('SIX_ROOM_PERSONAL_TRADE_EVENT_EVIDENCE_MISSING');
   const cutover=receipt.cutover;
   if(!object(cutover)||cutover.isolatedWorkerInstalled!==true

@@ -1,4 +1,8 @@
+import path from 'node:path';
 import { answerAiChat } from './ai-chat.service';
+import { FileTelegramIntelligenceStateStore, type TelegramIntelligenceStateStore } from './telegram-intelligence-worker.service';
+import { boundedTelegramV3Json, validTelegramV3CurrentSource } from './telegram-v3-current-source.service';
+import { aiWatchDurableKey, sendAiWatchWithDurableReceipt } from './telegram-ai-watch-delivery.service';
 import { sendTelegramAlert } from './telegram-notification.service';
 import { logger } from '../lib/logger';
 import { telegramMarketRoomForLane, telegramMarketRoomChatId } from './telegram-market-room.service';
@@ -26,6 +30,9 @@ type WatchEnvelope = {
   serviceSha: string;
   executionAuthority: 'NONE';
   snapshot: {
+    serviceSha: string;
+    generatedAt: string;
+    publicDataOnly: true;
     safety: { executionAuthority: 'NONE'; privateTradingApiAllowed: false; realOrderAllowed: false };
     events: WatchEvent[];
   };
@@ -111,14 +118,20 @@ export class SignalIntelligenceAiWatch {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly ai: typeof answerAiChat = answerAiChat,
     private readonly deliver: typeof sendTelegramAlert = sendTelegramAlert,
+    private readonly store: TelegramIntelligenceStateStore = new FileTelegramIntelligenceStateStore(
+      process.env.SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH?.trim()
+        || path.resolve(process.cwd(), '.runtime/signal-ai-watch-delivery-state.json'),
+    ),
   ) {}
 
   private prune(now: number): void {
     for (const [key, at] of this.reviewed) if (now - at > REVIEW_TTL_MS) this.reviewed.delete(key);
   }
 
-  async runOnce(now = new Date()): Promise<{ reviewed: number; material: number; rescans: number; aiUnavailable: number }> {
-    const result = { reviewed: 0, material: 0, rescans: 0, aiUnavailable: 0 };
+  async runOnce(now = new Date()) {
+    const result = { reviewed: 0, material: 0, rescans: 0, aiUnavailable: 0,
+      deliveryAccepted: 0, deliveryDeduped: 0, deliveryUnconfirmed: 0,
+      deliveryNotAttempted: 0 };
     if (this.running || !aiConfigured()) return result;
     this.running = true;
     this.prune(now.getTime());
@@ -128,8 +141,12 @@ export class SignalIntelligenceAiWatch {
       let response: Response;
       try { response = await this.fetchImpl(SIGNAL_URL, { signal: controller.signal }); } finally { clearTimeout(timeout); }
       if (!response.ok) return result;
-      const envelope = await response.json() as WatchEnvelope;
-      if (envelope.ok !== true || envelope.executionAuthority !== 'NONE'
+      // A JSON 200 alone does not establish a current, complete 12-lane
+      // public source. Bound response bytes and validate full V3 lineage.
+      const envelope = await boundedTelegramV3Json(response) as WatchEnvelope;
+      if (!envelope || envelope.ok !== true || envelope.executionAuthority !== 'NONE'
+        || !validTelegramV3CurrentSource(envelope.snapshot, now.getTime())
+        || envelope.snapshot.serviceSha !== envelope.serviceSha
         || envelope.snapshot?.safety?.executionAuthority !== 'NONE'
         || envelope.snapshot?.safety?.privateTradingApiAllowed !== false
         || envelope.snapshot?.safety?.realOrderAllowed !== false
@@ -166,13 +183,22 @@ export class SignalIntelligenceAiWatch {
         }
 
         const chatId = destination(event);
-        if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true' && chatId) {
-          await this.deliver({
+        // Existing AI watch had in-memory-only dedupe. Require separate
+        // reconciliation/approval before enabling its durable delivery lane.
+        if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'
+          && process.env.TELEGRAM_AI_WATCH_DELIVERY_APPROVED === 'true' && chatId) {
+          const durableKey = aiWatchDurableKey({
+            signalId: event.id, eventType: event.type,
+            sourceDay: envelope.snapshot.generatedAt.slice(0,10),
+            catalyst: reviewed.catalyst, technicalChange: reviewed.technicalChange,
+            contradiction: reviewed.contradiction,
+          });
+          const status = await sendAiWatchWithDurableReceipt(this.store, durableKey, {
             type: 'intelligence_report',
             symbol: event.symbol,
             market: event.market,
             destinationChatId: chatId,
-            dedupeKey: `signal-ai-watch:${key}:${reviewed.catalyst}:${reviewed.technicalChange}:${reviewed.contradiction}`,
+            dedupeKey: durableKey,
             duplicateWindowMs: REVIEW_TTL_MS,
             cooldownMs: 0,
             timestamp: now.toISOString(),
@@ -185,7 +211,13 @@ export class SignalIntelligenceAiWatch {
               reviewed.reason ? `근거: ${reviewed.reason}` : null,
               'AI는 주문/승격 권한 없음 · public Scanner 즉시 재계산만 요청',
             ].filter(Boolean).join('\n'),
-          });
+          }, now, this.deliver);
+          if (status === 'ACCEPTED') result.deliveryAccepted += 1;
+          else if (status === 'ALREADY_RESERVED') result.deliveryDeduped += 1;
+          else if (status === 'UNCONFIRMED') result.deliveryUnconfirmed += 1;
+          else result.deliveryNotAttempted += 1;
+        } else {
+          result.deliveryNotAttempted += 1;
         }
       }
       return result;

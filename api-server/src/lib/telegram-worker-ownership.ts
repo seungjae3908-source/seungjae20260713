@@ -63,8 +63,14 @@ export function assertIsolatedTelegramWorkerEnvironment(env: NodeJS.ProcessEnv =
     || !(env.SUPABASE_SECRET_KEY?.trim() || env.SUPABASE_SERVICE_ROLE_KEY?.trim())) {
     throw new Error('TELEGRAM_ISOLATED_PERSONAL_STORAGE_NOT_CONFIGURED');
   }
-  if (!env.TELEGRAM_INTELLIGENCE_STATE_PATH?.startsWith('/opt/stock-app/.runtime/')
-    || !env.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH?.startsWith('/opt/stock-app/.runtime/')) {
+  // Fixed durable paths are part of the single-writer identity. A prefix
+  // match can be bypassed by dot-dot or by writing to another ledger file.
+  if (env.TELEGRAM_INTELLIGENCE_STATE_PATH
+      !== '/opt/stock-app/.runtime/telegram-intelligence-delivery-state.json'
+    || env.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH
+      !== '/opt/stock-app/.runtime/signal-intelligence-telegram-state.json'
+    || env.SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH
+      !== '/opt/stock-app/.runtime/signal-ai-watch-delivery-state.json') {
     throw new Error('TELEGRAM_ISOLATED_LEDGER_PATH_UNVERIFIED');
   }
 }

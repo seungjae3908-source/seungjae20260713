@@ -106,3 +106,73 @@ outbox and must be delivered by the sole personal worker owner.
 Operator approval and a fresh protected immutable cutover remain mandatory.
 No change to running PM2 or real trading permissions is authorized by this
 Draft-only source change, and no real Bot/user receipt is claimed.
+
+### 2026-10-13 one-batch direct AI watch restart-safety
+
+The previous Signal V3 AI change-watch used only process memory for dedupe
+and called the Bot transport directly after an informational public rescan.
+It could repeat material-change notifications after a restart or ambiguous POST.
+A SHA-independent per-event/per-UTC-day AI watcher key is now pre-reserved and
+fsynced in its OWN standalone file ledger before any Bot POST. Confirmed Bot
+acceptance is recorded separately from a known no-send; any transport timeout,
+crash, duplicate or ambiguous response remains an unconfirmed no-replay tombstone.
+The V3 body reader now bounds response size and requires a current, safe,
+canonical 12-lane source envelope, not just HTTP 200.
+
+Existing in-memory sends cannot be reconstructed from the preexisting server.
+To avoid silently replaying older AI notifications, direct AI-change Bot
+delivery now requires an independent explicit migration approval:
+TELEGRAM_AI_WATCH_DELIVERY_APPROVED=true, after confirming historical state.
+The default is OFF. Public-only AI rescan calculations remain available, and
+this never grants trading/private API authority. The isolated runner provides
+a separate immutable /opt/stock-app/.runtime/signal-ai-watch-delivery-state.json
+path and does not modify the legacy market briefing or V3 signal subscriber
+dedupe files. Full-release preflight checks both durable idempotency and the
+explicit migration receipt before a GREEN release verdict.
+
+This is source-only Draft at this checkpoint: no Bot sends, PM2 restart, LIVE
+flag changes, DB migration, protected deployment or real-user delivery proof.
+
+### Aggregated preactivation failure matrix (2026-10-13)
+
+Before a final Full CI and protected staging:
+1. Identity: latest merged main lineage, immutable release SHA, only Telegram
+   independent scope, no moving-main acceptance by stale receipt
+2. Data: V3 current twelve source pages, successful actual cycle, age below
+   15 minutes and valid source/profit provenance (HTTP 200 alone insufficient)
+3. Routing: all six unique destinations with actual read-only Bot getMe/getChat
+   and posting rights; personal link active and 403 relink reconciled
+4. Network: independently repeated HTTPS/TLS IPv4 route and safe 429 backoff,
+   no expired/private tokens in console, logs or messages
+5. Delivery: real personal SENT, outbox producer-consumer integration,
+   source to event to journal to notification, confirmed/unconfirmed
+   outcomes separated; no automatic replay of ambiguous POST
+6. AI change-watch: explicit legacy notification migration, separately fsynced
+   durable reservation before POST, bounded 8 MiB V3 source and market routing
+7. Process: exactly one Telegram sender process across personal/brief/V3/AI,
+   exact actual PM2 runtime SHA, no in-flight old sender, separate owner+deploy
+   locks with immutable ledger paths and no automatic financial authority
+8. Packaging: isolated worker fully bundled from pinned workspace and loaded
+   in a clean temporary Node directory WITHOUT node_modules. Build-time
+   verification rejects missing dynamic dependencies before release
+9. Staging: scoped Telegram network/security and natural operational checks;
+   Full app staging Paper Holdings GET HTTP400 remains an independent full
+   application release blocker, NEVER silently relabeled as Telegram PASS
+10. Operations: protected environment owner review, persisted rollback copy,
+    safe after-crash resumption, disk space/permissions, real-sha drift
+    validation, preserve all existing LIVE/Paper accounts and zero orders.
+
+The pure ops/telegram-batch-release-verdict.mjs accumulates these conditions
+into distinct source, scoped rights/network, runtime/rollback, full CI,
+staging, Bot/personal, cutover and trade-preservation blockers. It is a
+defense-in-depth policy, not a trusted collector of Production proof. Fixture
+PASS must not bypass actual protected receipt provenance. CI failures do not
+authorize retry-to-pass, broad application PM2 restart, secrets modification or
+disable of manual SPOT/FUTURES LIVE capabilities.
+
+The existing old Telegram code-only workflow pins earlier fixed deployments
+and may reject newer isolated-worker files. That old allowlist must NOT be
+widened merely to force this release. A reviewed independent installer,
+staging and owner-controlled migration remain necessary before actual LIVE
+Telegram service can switch from embedded to isolated without disturbing
+manual LIVE trading. Code-only prepare ≠ installed worker ≠ received message.
