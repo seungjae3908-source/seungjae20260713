@@ -64,7 +64,7 @@ function quantReady(card) {
   if (card?.strongSignalEligible !== true) return false;
   if (card?.candidateRanking?.hardFilterPassed === false) return false;
   const grade = String(card?.signalGrade ?? '').toUpperCase();
-  return !grade || grade === 'S' || grade === 'A';
+  return grade === 'S';
 }
 
 function riskReady(card) {
