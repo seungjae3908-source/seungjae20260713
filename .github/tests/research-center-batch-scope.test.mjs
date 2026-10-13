@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { PAPER_FORWARD_REVIEWED_PATHS, AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+  AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
   PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi, isResearchOnlyNavigationDiff } from '../scripts/research-center-batch-scope.mjs';
 
@@ -164,28 +165,61 @@ test('owner-approved AUTO safety registration is exactly the 50 approved paths, 
     paths[0] + '.new', '../' + paths[0]]) assert.equal(paths.includes(path), false, path);
 });
 
+test('automatic signal pipeline scope is exact and receives full Trading review instead of Scanner repair status', () => {
+  const paths = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS;
+  assert.equal(paths.length, 28);
+  assert.equal(new Set(paths).size, 28);
+  assert.deepEqual(paths, [...paths].sort());
+  assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
+    '70a9ee80bca79e259ba81817c80898a39adbfcb6bd07bf049cfcdc66e1b13f4b');
+  assert.equal(Object.isFrozen(paths), true);
+  const generatedRuntimeOutputs = new Set([
+    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+  ]);
+  for (const path of paths) {
+    assert.ok(!path.includes('*') && !path.includes('..') && !path.startsWith('/'));
+    if (path.startsWith('market-prediction-lab/')) assert.ok(generatedRuntimeOutputs.has(path), path);
+    else assert.ok(!/^(?:research-production|packages\/external-research|ops\/deploy)/u.test(path));
+  }
+  for (const path of ['ops/deploy-production.sh', 'api-server/src/middleware/auth.ts',
+    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/unreviewed.mjs',
+    'stock-analyzer/src/pages/account.tsx', 'pnpm-lock.yaml', paths[0] + '.new', '../' + paths[0]]) {
+    assert.equal(paths.includes(path), false, path);
+  }
+});
+
 test('registered AUTO paths retain Trading, protected-main and Paper assertions with exact trigger coverage', () => {
   const source = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
   const block = source.split('const automaticTradingDriftReviewed=[')[1].split('];')[0];
   assert.ok(block.includes('...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS'));
+  assert.ok(block.includes('...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS'));
   assert.ok(source.includes("from './paper-forward-reviewed-paths.mjs'"));
   assert.ok(source.includes("if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p)"));
+  assert.ok(source.includes('automaticSignalGeneratedRuntimeOutputs=new Set(['));
+  assert.ok(source.includes('&&!automaticSignalGeneratedRuntimeOutputs.has(p)'));
+  assert.ok(source.includes('if(automaticTradingChanged.includes(path))exceptions.add(path)'));
   for (const guard of ['.github/workflows/production-automatic-trading-gate.yml',
     'api-server/scripts/verify-production-automatic-trading-gate.mjs']) assert.ok(source.includes(guard));
   const workflow = read('.github/workflows/paper-forward-schedule-validation.yml').replaceAll('\r\n', '\n');
   const pull = workflow.split('  pull_request:\n')[1].split('  push:\n')[0];
   const trigger = pull.split('\n').filter((line) => line.startsWith('      - ')).map((line) => line.slice(8));
   assert.equal(trigger.length, new Set(trigger).size);
-  for (const path of AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS) assert.ok(trigger.includes(path), path);
+  for (const path of [...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS, ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS]) {
+    assert.ok(trigger.includes(path), path);
+  }
   const research = read('.github/workflows/research-workspace-integration-v1.yml').replaceAll('\r\n', '\n');
   const researchPull = research.split('  pull_request:\n')[1].split('permissions:\n')[0];
   const researchTrigger = researchPull.split('\n').filter((line) => line.startsWith('      - ')).map((line) => line.slice(8));
   assert.equal(researchTrigger.length, new Set(researchTrigger).size);
-  for (const path of [...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS, '.github/scripts/paper-forward-reviewed-paths.mjs']) {
+  for (const path of [...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+    ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS, '.github/scripts/paper-forward-reviewed-paths.mjs']) {
     assert.ok(researchTrigger.includes(path), path);
   }
   for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 50',
-    'allowed+=("${auto_safety[@]}")', 'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
+    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 28',
+    'allowed+=("${auto_safety[@]}")', 'allowed+=("${auto_signal[@]}")',
+    'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
     assert.ok(workflow.includes(token), token);
   }
   // Scope registration is not an AUTO activation certificate.
