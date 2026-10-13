@@ -10,6 +10,8 @@ const tradingFlags = [
   'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
   'BITGET_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
   'KIWOOM_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED',
+  'TRANSFER_ENABLED','WITHDRAWAL_ENABLED',
+  'TOSS_ORDER_ENABLED','KIWOOM_ORDER_ENABLED','UPBIT_ORDER_ENABLED','BITGET_ORDER_ENABLED',
 ] as const;
 const tradingAuthorities = ['executionAuthority','FUTURES_LIVE_EXECUTION_AUTHORITY'] as const;
 const tradingAllowlists = [
@@ -48,6 +50,18 @@ export function assertIsolatedTelegramWorkerEnvironment(env: NodeJS.ProcessEnv =
     || tradingAllowlists.some(key => String(env[key] ?? '').trim().length > 0);
   if (hasTradingAuthority) {
     throw new Error('TELEGRAM_ISOLATED_WORKER_TRADING_AUTHORITY_FORBIDDEN');
+  }
+  // The Telegram worker must never inherit private broker signing material,
+  // even if an order-enable boolean is false. Service-role is separately
+  // required for the owner-bound personal notification outbox.
+  const brokerCredentialKeys = [
+    'TRADING_CREDENTIAL_MASTER_KEY','TOSS_APP_KEY','TOSS_API_KEY',
+    'TOSS_ACCESS_TOKEN','KIWOOM_APP_KEY','KIWOOM_APP_SECRET',
+    'UPBIT_ACCESS_KEY','UPBIT_SECRET_KEY','BITGET_API_KEY',
+    'BITGET_API_SECRET','BITGET_PASSPHRASE',
+  ] as const;
+  if (brokerCredentialKeys.some(key => Boolean(env[key]?.trim()))) {
+    throw new Error('TELEGRAM_ISOLATED_PRIVATE_BROKER_SECRETS_FORBIDDEN');
   }
   // All six destinations must be distinct before ANY worker can POST.
   const roomKeys = [
