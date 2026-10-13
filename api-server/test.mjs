@@ -90,6 +90,8 @@ const groups = {
     path.join(root, 'src/services/scanner-market-intelligence.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/lib/cache.test.ts'),
+    path.join(root, 'src/providers/yahoo.test.ts'),
+    path.join(root, 'src/providers/yahoo-governor.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(root, 'src/providers/krx-source-pair.test.ts'),
     path.join(root, 'src/providers/nasdaq-trader.test.ts'),
