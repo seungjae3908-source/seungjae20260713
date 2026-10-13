@@ -18,6 +18,7 @@ end $policies$;
 drop function if exists public.is_automatic_live_ledger_payload(jsonb);
 drop function if exists public.read_automatic_live_budget_guard();
 drop function if exists public.automatic_live_budget_schema_fingerprint();
+drop function if exists public.automatic_live_budget_expected_schema_fingerprint();
 drop function if exists public.reserve_automatic_live_entry_budget(uuid,uuid,uuid,jsonb,jsonb,boolean);
 drop function if exists public.read_automatic_live_budget_snapshot(uuid);
 drop table if exists public.trade_live_budget_reservations;
