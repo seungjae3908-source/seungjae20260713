@@ -38,3 +38,12 @@ This is **Draft CODE integration only**, not activation, user approval to
 make real orders or proof of profitability. Fail closed on any unknown.
 No Replit/Replit Agent, no DB/Secret/PM2/systemd/cron changes,
 no provider private API, no Telegram actual send or financial mutations.
+
+## Strict one-pass owner verifier
+For this 115-file release candidate only, the existing protected workspace
+verifier accepts 49 unchanged PIT/native source Git blobs and 62 unchanged
+collector/AI source Git blobs, plus the exact research-only validator, manifest,
+test and document paths. Its original PIT, Trading, protected-main and Paper
+guards remain operative; all unknown paths or SHA mismatches fail closed.
+Original #1832 source guard is explicitly reviewed as this release's one
+controlled scope expansion, not silently treated as the old blob.
