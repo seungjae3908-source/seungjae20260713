@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const rootDir = process.cwd();
 const outDir = path.resolve(rootDir, 'dist');
@@ -205,3 +206,49 @@ const require = __createRequire(import.meta.url);
 });
 
 console.log('[api-server] built Paper Canonical remote readiness tool');
+
+/* The isolated Telegram entry is built as a dormant artifact.
+ * Normal stock-app PM2 never executes it. */
+await build({
+  entryPoints: [path.resolve(rootDir, 'src/telegram-isolated-worker.ts')],
+  outfile: path.resolve(outDir, 'telegram-isolated-worker.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  sourcemap: true,
+  minify: false,
+  // A standalone immutable release has no access to /opt/stock-app/node_modules.
+  // Bundle all pinned third-party/workspace packages; only Node builtins remain
+  // external. The stock-app web/API build above is deliberately unchanged.
+  packages: 'bundle',
+  external: [...builtinModules, ...builtinModules.map(name => 'node:' + name)],
+  banner: {
+    js: "\nimport { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);\n",
+  },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+  },
+  logLevel: 'info',
+});
+console.log('[api-server] built dormant isolated Telegram worker bundle');
+
+// This binary is promoted to a separate sealed release without inheriting
+// the running stock-app's node_modules. Verify its actual startup in an empty
+// directory before expensive CI or an approved Production deploy.
+const standaloneCheck = spawnSync(
+  process.execPath,
+  ['--test', path.resolve(rootDir, '../.github/tests/telegram-isolated-bundle.test.mjs')],
+  {
+    cwd: path.resolve(rootDir, '..'),
+    encoding: 'utf8',
+    timeout: 15_000,
+    env: { PATH: process.env.PATH ?? '', NODE_ENV: 'production' },
+    maxBuffer: 65_536,
+  },
+);
+if (standaloneCheck.status !== 0) {
+  throw new Error('TELEGRAM_ISOLATED_BUNDLE_DEPENDENCIES_UNRESOLVED');
+}
+console.log('[api-server] isolated Telegram startup verified without node_modules');
+

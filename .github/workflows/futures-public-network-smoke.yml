@@ -327,6 +327,11 @@ jobs:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
           persist-credentials: false
 
+      # Internal GitHub metadata can temporarily return HTTP 502. Retry
+      # only the read-only lookup, never the browser tests or required CI.
+      - name: Validate bounded read-only GitHub API retry contract
+        run: node --test .github/tests/browser-adaptive-github-read.test.mjs
+
       - name: Find latest successful Application CI adaptive weights
         id: adaptive
         uses: actions/github-script@v8
@@ -335,15 +340,22 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const workflowId = 'futures-public-network-smoke.yml';
-            const { data: runPage } = await github.rest.actions.listWorkflowRuns({
-              owner, repo, workflow_id: workflowId, event: 'workflow_dispatch', status: 'success', per_page: 50,
-            });
+            const {pathToFileURL}=require('node:url');
+            const {readGitHubMetadataWithRetry}=await import(pathToFileURL(
+              process.env.GITHUB_WORKSPACE+'/.github/scripts/browser-adaptive-github-read.mjs').href);
+            const onRetry=(attempt) =>
+              core.warning('GITHUB_ADAPTIVE_READ_TRANSIENT; metadata-only retry '+attempt+'/2');
+            const { data: runPage } = await readGitHubMetadataWithRetry(
+              () => github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id: workflowId, event: 'workflow_dispatch', status: 'success', per_page: 50,
+              }),{onRetry});
             const runs = runPage.workflow_runs ?? [];
             for (const run of runs) {
               if (Number(run.id) === Number(context.runId)) continue;
-              const { data: artifactPage } = await github.rest.actions.listWorkflowRunArtifacts({
-                owner, repo, run_id: run.id, per_page: 100,
-              });
+              const { data: artifactPage } = await readGitHubMetadataWithRetry(
+                () => github.rest.actions.listWorkflowRunArtifacts({
+                  owner, repo, run_id: run.id, per_page: 100,
+                }),{onRetry});
               const artifacts = artifactPage.artifacts ?? [];
               const artifact = artifacts
                 .filter((item) => !item.expired && item.name.startsWith('browser-runtime-weights-next-'))
