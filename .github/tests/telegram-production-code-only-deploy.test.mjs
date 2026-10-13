@@ -133,3 +133,17 @@ test('pinned deployment script Git blob always matches reviewed branch bytes',()
     .update(deploy,'utf8').digest('hex');
   assert.equal(wf.split(actual).length-1,2);
 });
+
+test('futures-only live authority and allowlists block Telegram code-only deploy before any PM2 update',()=>{
+  const a=wf.indexOf('const tradingKeys=[',wf.indexOf('Read-only prior Production PM2 identity'));
+  const b=wf.indexOf('if(env.LIVE_TELEGRAM_ACTIVATION_APPROVED',a);
+  assert.ok(a>=0&&b>a);
+  const gate=wf.slice(a,b);
+  for(const required of [
+    'FUTURES_LIVE_EXECUTION_AUTHORITY','FUTURES_LIVE_CAPABILITY_ALLOWLIST',
+    'FUTURES_LIVE_MARKET_ALLOWLIST','SPOT_LIVE_CAPABILITY_ALLOWLIST',
+    'SPOT_LIVE_MARKET_ALLOWLIST','activeBoolean','activeAuthority',
+    'TELEGRAM_PRODUCTION_TRADING_AUTHORITY_ACTIVE',
+  ])assert.ok(gate.includes(required),required);
+  assert.ok(a<wf.indexOf('Deploy exact code using existing canary, PM2 and rollback script'));
+});

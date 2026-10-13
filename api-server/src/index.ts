@@ -19,8 +19,15 @@ import {
   readTelegramIntelligenceWorkerHealth,
   startTelegramIntelligenceWorker,
 } from './services/telegram-intelligence-worker.service';
-import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
-import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
+import {
+  readSignalIntelligenceTelegramSubscriberRuntimeHealth,
+  startSignalIntelligenceTelegramSubscriber,
+} from './services/signal-intelligence-telegram-subscriber.service';
+import {
+  readSignalIntelligenceAiWatchRuntimeHealth,
+  startSignalIntelligenceAiWatch,
+} from './services/signal-intelligence-ai-watch.service';
+import { embeddedTelegramWorkersAllowed } from './lib/telegram-worker-ownership';
 import {
   areBackgroundWorkersEnabled,
   resolveApiBindHost,
@@ -43,6 +50,7 @@ const port = Number(
     8080,
 );
 const backgroundWorkersEnabled = areBackgroundWorkersEnabled();
+const embeddedTelegramOwner = embeddedTelegramWorkersAllowed(process.env);
 const bindHost = resolveApiBindHost();
 
 const deployMarkerPath = process.env.DEPLOY_MARKER_PATH?.trim()
@@ -65,6 +73,9 @@ function healthPayload(route: '/health' | '/api/health') {
     tradeRecoveryWorker: readTradeRecoveryRuntimeHealth(),
     userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
     telegramIntelligenceWorker: readTelegramIntelligenceWorkerHealth(),
+    signalTelegramSubscriber: readSignalIntelligenceTelegramSubscriberRuntimeHealth(),
+    telegramAiWatch: readSignalIntelligenceAiWatchRuntimeHealth(),
+    telegramWorkerOwner: embeddedTelegramOwner ? 'embedded' : 'isolated',
     time: new Date().toISOString(),
   };
 }
@@ -276,10 +287,14 @@ app.listen(
       startPriceAlertMonitor();
       startTradeRecoveryWorker();
       startMemberAutoTradingBackgroundWorker();
-      startUserTelegramDeliveryWorker();
-      startTelegramIntelligenceWorker();
-      startSignalIntelligenceTelegramSubscriber();
-      startSignalIntelligenceAiWatch();
+      if (embeddedTelegramOwner) {
+        startUserTelegramDeliveryWorker();
+        startTelegramIntelligenceWorker();
+        startSignalIntelligenceTelegramSubscriber();
+        startSignalIntelligenceAiWatch();
+      } else {
+        console.log('[api-server] Telegram send-capable workers owned by separately approved isolated process');
+      }
     }
 
     if (frontendDist) {
