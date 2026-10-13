@@ -54,10 +54,13 @@ test('automatic signal pipeline overlap is routed to full Trading guards, never 
   const overlap = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.filter((path) =>
     SCANNER_REPAIR_PINNED_PATHS.includes(path));
   assert.deepEqual(overlap.sort(), [
+    'api-server/src/providers/yahoo-timeframe.test.ts',
+    'api-server/src/providers/yahoo.ts',
     'api-server/src/services/scanner-indicator-library.service.ts',
     'api-server/src/services/scanner-quant-strategy.service.test.ts',
     'api-server/src/services/scanner-quant-strategy.service.ts',
     'api-server/src/services/stock-signal-scanner.service.ts',
+    'api-server/test.mjs',
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
     'signal-intelligence-v3/README.md',
@@ -94,12 +97,22 @@ test('only exact audited merger and S-only scanner blobs are accepted on the pin
   assert.equal(Object.isFrozen(SCANNER_REPAIR_INTEGRATION_BLOBS), true);
   for (const [path, expected] of Object.entries(SCANNER_REPAIR_INTEGRATION_BLOBS)) {
     const legitimate = (ref, name) => ref === 'HEAD' && name === path ? expected : blob;
-    assert.deepEqual(verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, legitimate), [path]);
+    const automaticTradingOwned = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.includes(path);
+    const expectedClassification = automaticTradingOwned ? [] : [path];
+    assert.deepEqual(verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, legitimate), expectedClassification);
     const wrongBase = 'e'.repeat(40);
-    assert.throws(() => verifyPinnedScannerScope([path], wrongBase, legitimate), /SCANNER_SCOPE_BLOB_DRIFT/);
     const changed = (ref, name) => ref === 'HEAD' && name === path ? drift : blob;
-    assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, changed), /SCANNER_SCOPE_BLOB_DRIFT/);
-    assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA,
-      (ref, name) => ref === 'HEAD' && name === path ? expected : 'invalid'), /SCANNER_SCOPE_BLOB_DRIFT/);
+    const invalidBaseBlob = (ref, name) => ref === 'HEAD' && name === path ? expected : 'invalid';
+    if (automaticTradingOwned) {
+      // Full Trading review owns this path now; the historical pinned Scanner
+      // exemption must ignore it regardless of base/blob input.
+      assert.deepEqual(verifyPinnedScannerScope([path], wrongBase, legitimate), []);
+      assert.deepEqual(verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, changed), []);
+      assert.deepEqual(verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, invalidBaseBlob), []);
+    } else {
+      assert.throws(() => verifyPinnedScannerScope([path], wrongBase, legitimate), /SCANNER_SCOPE_BLOB_DRIFT/);
+      assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, changed), /SCANNER_SCOPE_BLOB_DRIFT/);
+      assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, invalidBaseBlob), /SCANNER_SCOPE_BLOB_DRIFT/);
+    }
   }
 });
