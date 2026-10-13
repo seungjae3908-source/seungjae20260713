@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURCE_SHA, SCANNER_REPAIR_WORKFLOW_BASE_SHA,
-  SCANNER_PROTECTED_AUTHORITY_PATHS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
+  SCANNER_PROTECTED_AUTHORITY_PATHS, SCANNER_REPAIR_INTEGRATION_BASE_SHA, SCANNER_REPAIR_INTEGRATION_BLOBS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
 
 const base = 'b'.repeat(40), blob = 'a'.repeat(40), drift = 'c'.repeat(40);
 const stock = 'api-server/src/services/stock-signal-scanner.service.ts';
@@ -62,5 +62,23 @@ test('all exact scanner paths are PR-trigger covered without dropping any Paper 
   for (const workflowPath of [path, '.github/workflows/research-workspace-integration-v1.yml']) {
     const original = git('show', SCANNER_REPAIR_WORKFLOW_BASE_SHA + ':' + workflowPath).replace(/\r\n/gu, '\n');
     assert.deepEqual(steps(read(workflowPath)), steps(original), workflowPath);
+  }
+});
+
+
+test('only the two exact audited merger blobs are accepted on the pinned current main', () => {
+  assert.equal(SCANNER_REPAIR_INTEGRATION_BASE_SHA, 'eacf9173fdc42d0e88aa3930a8e66d26cb3b024c');
+  assert.deepEqual(Object.keys(SCANNER_REPAIR_INTEGRATION_BLOBS).sort(),
+    ['api-server/package.json', 'api-server/test.mjs'].sort());
+  assert.equal(Object.isFrozen(SCANNER_REPAIR_INTEGRATION_BLOBS), true);
+  for (const [path, expected] of Object.entries(SCANNER_REPAIR_INTEGRATION_BLOBS)) {
+    const legitimate = (ref, name) => ref === 'HEAD' && name === path ? expected : blob;
+    assert.deepEqual(verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, legitimate), [path]);
+    const wrongBase = 'e'.repeat(40);
+    assert.throws(() => verifyPinnedScannerScope([path], wrongBase, legitimate), /SCANNER_SCOPE_BLOB_DRIFT/);
+    const changed = (ref, name) => ref === 'HEAD' && name === path ? drift : blob;
+    assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, changed), /SCANNER_SCOPE_BLOB_DRIFT/);
+    assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA,
+      (ref, name) => ref === 'HEAD' && name === path ? expected : 'invalid'), /SCANNER_SCOPE_BLOB_DRIFT/);
   }
 });
