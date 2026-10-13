@@ -176,8 +176,8 @@ This Draft addresses the **source-evidence bookkeeping**, NOT vendor quotas.
   fabricates candles or historical as-of evidence.
 - New `src/public-crypto-ws-restart-recovery-v1.mjs` reads only the
   existing SHA-verified private 0700/0600 gzip WS sidecar and rebuilds
-  source-only unknown-interval REST proposals from the latest provisional
-  minute of each expected symbol through the actual restart cutoff.
+  source-only unknown-interval REST proposals from the **start of the sealed
+  shard** (not the last observed candle) through the restart cutoff.
   Symbols with no sidecar observations stay marked missing/unknown. If
   the sidecar itself is absent, it returns a manual-REST hold rather than
   falsely reporting 100% market availability.
@@ -247,3 +247,26 @@ sidecar would fail even with successful socket connections.
 
 All traffic/net calls in this Draft are zero; no commercial data rights
 attested, no PIT/OOS/FullCost/Paper/LIVE/Telegram authority.
+
+## Draft v5 — recovery debt and stalled-ACK preflight (no deployment)
+
+- REST debt merger now collects **all** adjacent/overlapping intervals of a
+  market/symbol, including a new gap that bridges two existing records; keeps
+  the earliest unresolved start, full >180m requested tail and initial queue
+  position. No forged source/no-trade settlement or trade authority.
+- A subscribed socket that remains candle-quiet must still add an unverified
+  REST interval on CLOSE or ping/pong timeout. On reconnect, the disconnected
+  period is also unverified for every subscribed symbol. A lack of trades is
+  not proof of an empty finalized candle.
+- CONNECTING, SUBSCRIBING and Bitget AWAIT_ACK have the same bounded 30s
+  connection/setup timeout. An ACK that never arrives cannot leave a socket
+  permanently awaiting activation; retry is a bounded intent, not an actual
+  reconnect in this Draft.
+- Restart readback audits the **entire sealed 5m shard** rather than only
+  its last WS minute, because provisional presence never establishes REST
+  finality for earlier shard minutes. Original SHA and all PIT/OOS/Full Cost/
+  Paper/LIVE gates remain unchanged.
+- Added offline regressions for bridged debt, quiet disconnect/timeout,
+  reconnect unknown interval, missing Bitget ACK and full-shard restart.
+  Actual public sockets, disk WAL, real host trials, provider rights and
+  profitable paper/real fills remain unverified. Replit prohibited.

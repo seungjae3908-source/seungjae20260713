@@ -228,3 +228,67 @@ test('ACK spoofing, unknown symbols and stale clocks are blocked',()=>{
   assert.throws(()=>doPoll(s,NOW),/WS_SUPERVISOR_STATE_INVALID/);
   assert.equal(status(s).archiveFilesWritten,0);
 });
+
+test('bridged REST debt intervals coalesce ALL matching records without dropping tails',()=>{
+  let s=started();
+  s=doSee(s,0,'CANDLE',NOW+100,spotPacket(START,NOW+100)).state;
+  s=structuredClone(s);
+  const debt=(fromMs,toExclusiveMs,reason)=>({
+    market:'CRYPTO_SPOT',symbol:'BTC',fromMs,toExclusiveMs,
+    requestedEndExclusiveMs:toExclusiveMs,unverifiedBeyondCap:false,
+    reason,observedAtMs:NOW,lastObservedAtMs:NOW,
+    sourceVerified:false,restBackfillRequired:true,
+  });
+  s.pendingRestAudits=[
+    debt(START,START+60_000,'FIRST_UNKNOWN'),
+    debt(START+3*60_000,START+4*60_000,'SECOND_UNKNOWN'),
+  ];
+  const at=START+4*60_000+31_000;
+  s=doSee(s,0,'CANDLE',at,
+    spotPacket(START+4*60_000,at)).state;
+  assert.equal(s.pendingRestAudits.length,1);
+  assert.equal(s.pendingRestAudits[0].fromMs,START);
+  assert.equal(s.pendingRestAudits[0].requestedEndExclusiveMs,
+    START+4*60_000);
+  assert.equal(s.pendingRestAudits[0].reason,'MIXED_WS_REST_AUDIT_REQUIRED');
+  assert.equal(s.pendingRestAudits[0].sourceVerified,false);
+});
+test('quiet subscribed socket CLOSE and heartbeat failure create REST debt',()=>{
+  let s=started();
+  const closeAt=START+4*60_000+10_000;
+  s=doSee(s,0,'CLOSE',closeAt).state;
+  assert.equal(s.pendingRestAudits.length,1);
+  assert.equal(s.pendingRestAudits[0].fromMs,START);
+  assert.equal(s.pendingRestAudits[0].requestedEndExclusiveMs,
+    START+4*60_000);
+  assert.equal(s.pendingRestAudits[0].restBackfillRequired,true);
+  let quiet=started();
+  quiet=doPoll(quiet,NOW+31_000).state;
+  quiet=doPoll(quiet,NOW+47_000).state;
+  assert.equal(quiet.sockets[0].lastFailure,'PONG_TIMEOUT');
+  assert.equal(quiet.pendingRestAudits.length,1);
+  assert.equal(quiet.pendingRestAudits[0].sourceVerified,false);
+});
+test('reconnect retains the unknown offline interval for quiet symbols',()=>{
+  let s=started();
+  s=doSee(s,0,'CLOSE',START+2*60_000+10_000).state;
+  s=doPoll(s,START+6*60_000).state;
+  s=doSee(s,0,'OPEN',START+6*60_000+10).state;
+  s=doSee(s,0,'SUBSCRIPTION_SENT',START+6*60_000+20).state;
+  assert.equal(s.pendingRestAudits.length,1);
+  assert.equal(s.pendingRestAudits[0].fromMs,START);
+  assert.equal(s.pendingRestAudits[0].requestedEndExclusiveMs,
+    START+6*60_000);
+  assert.equal(s.pendingRestAudits[0].sourceVerified,false);
+});
+test('missing Bitget subscribe ACK times out rather than hanging indefinitely',()=>{
+  let s=oneFuture();
+  s=doPoll(s,NOW).state;
+  s=doSee(s,0,'OPEN',NOW+10).state;
+  s=doSee(s,0,'SUBSCRIPTION_SENT',NOW+20).state;
+  const r=doPoll(s,NOW+31_000);
+  assert.equal(r.intent.action,'CLOSE_AND_RETRY_PUBLIC_SOCKET');
+  assert.equal(r.state.sockets[0].lastFailure,'SUBSCRIPTION_TIMEOUT');
+  assert.equal(r.state.sockets[0].phase,'BACKOFF');
+  assert.equal(r.state.executionAuthority,'NONE');
+});
