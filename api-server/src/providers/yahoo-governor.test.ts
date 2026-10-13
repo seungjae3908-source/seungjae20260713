@@ -64,6 +64,25 @@ test('deduplicates concurrent Yahoo chart requests and reuses the fresh cache', 
   assert.equal(yahooProviderDiagnostics().cacheHits, 1);
 });
 
+test('does not reuse cache or cooldown state after the request transport changes', async () => {
+  let firstCalls = 0;
+  let secondCalls = 0;
+  globalThis.fetch = async () => {
+    firstCalls += 1;
+    return ok(chart(250));
+  };
+  assert.equal((await getQuote('AAPL')).price, 250);
+
+  globalThis.fetch = async () => {
+    secondCalls += 1;
+    return ok(chart(275));
+  };
+  assert.equal((await getQuote('AAPL')).price, 275);
+  assert.equal(firstCalls, 1);
+  assert.equal(secondCalls, 1);
+  assert.equal(yahooProviderDiagnostics().actualRequests, 2);
+});
+
 test('a Yahoo 429 opens one global cooldown across chart and screener consumers without query2 bypass', async () => {
   const urls: string[] = [];
   globalThis.fetch = async (input) => {

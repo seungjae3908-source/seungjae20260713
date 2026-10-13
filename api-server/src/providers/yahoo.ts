@@ -33,13 +33,10 @@ export interface YahooIndexQuote {
   updatedAt: string;
 }
 
-// The stock Scanner has a four-second per-symbol budget. Yahoo also applies
-// shared provider and egress-IP limits, so all calls use one process-wide
-// start gate. query2 is a bounded transport fallback, never a 429 bypass.
 // Yahoo's public chart endpoints share provider and egress-IP limits. Keep one
 // process-wide start gate for every Yahoo request: per-call hedging multiplies
 // traffic and turns one scanner batch into an avoidable query1/query2 burst.
-const YAHOO_REQUEST_TIMEOUT_MS = 2_800;
+const YAHOO_DEFAULT_REQUEST_TIMEOUT_MS = 1_650;
 const YAHOO_DEFAULT_MINIMUM_START_INTERVAL_MS = 1_000;
 const YAHOO_DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000;
 const YAHOO_TRANSPORT_FALLBACK_DELAY_MS = 150;
@@ -49,16 +46,24 @@ const YAHOO_HOSTS = Object.freeze([
   'query2.finance.yahoo.com',
 ] as const);
 
+export interface YahooChartRequestOptions {
+  signal?: AbortSignal;
+  purpose?: 'scanner';
+  exchange?: string | null;
+}
+
 type YahooRuntimeCacheEntry = { value: unknown; expiresAt: number };
 
 const yahooCache = new Map<string, YahooRuntimeCacheEntry>();
 const yahooInFlight = new Map<string, Promise<unknown>>();
+let yahooTransportIdentity: typeof globalThis.fetch = globalThis.fetch;
 let yahooScheduleTail: Promise<void> = Promise.resolve();
 let yahooNextStartAt = 0;
 let yahooRateLimitedUntil = 0;
 let yahooMinimumStartIntervalMs = YAHOO_DEFAULT_MINIMUM_START_INTERVAL_MS;
 let yahooRateLimitCooldownMs = YAHOO_DEFAULT_RATE_LIMIT_COOLDOWN_MS;
 let yahooTransportFallbackDelayMs = YAHOO_TRANSPORT_FALLBACK_DELAY_MS;
+let yahooRequestTimeoutMs = YAHOO_DEFAULT_REQUEST_TIMEOUT_MS;
 let yahooDiagnostics = {
   actualRequests: 0,
   successfulResponses: 0,
@@ -98,71 +103,113 @@ function yahooRetryAfterMs(response: Response): number | null {
   return Number.isFinite(date) ? Math.min(60_000, Math.max(0, date - Date.now())) : null;
 }
 
-async function scheduledYahooStart<T>(operation: () => Promise<T>): Promise<T> {
+function synchronizeYahooTransportIdentity(): void {
+  if (globalThis.fetch === yahooTransportIdentity) return;
+  // A replaced transport is a new request boundary (for example, a runtime
+  // instrumentation swap). Never return payloads or cooldown state that were
+  // produced by a different transport implementation.
+  yahooTransportIdentity = globalThis.fetch;
+  yahooCache.clear();
+  yahooInFlight.clear();
+  yahooScheduleTail = Promise.resolve();
+  yahooNextStartAt = 0;
+  yahooRateLimitedUntil = 0;
+}
+
+function yahooAbortReason(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error ? signal.reason : new Error('YAHOO_CHART_ABORTED');
+}
+
+async function waitForYahooStart(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  if (signal?.aborted) throw yahooAbortReason(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(yahooAbortReason(signal));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function scheduledYahooStart<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   let release!: () => void;
   const previous = yahooScheduleTail;
   yahooScheduleTail = new Promise<void>((resolve) => { release = resolve; });
   await previous;
-  const waitMs = Math.max(0, yahooNextStartAt - Date.now());
-  if (waitMs > 0) {
-    yahooDiagnostics.delayedStarts += 1;
-    await sleep(waitMs);
-  }
-  if (Date.now() < yahooRateLimitedUntil) {
-    release();
-    throw new YahooHttpError(429, yahooRateLimitedUntil - Date.now(), 'RATE_LIMIT_COOLDOWN_ACTIVE');
-  }
-  yahooNextStartAt = Date.now() + yahooMinimumStartIntervalMs;
-  let started: Promise<T>;
   try {
-    started = operation();
+    if (signal?.aborted) throw yahooAbortReason(signal);
+    const waitMs = Math.max(0, yahooNextStartAt - Date.now());
+    if (waitMs > 0) {
+      yahooDiagnostics.delayedStarts += 1;
+      await waitForYahooStart(waitMs, signal);
+    }
+    if (Date.now() < yahooRateLimitedUntil) {
+      throw new YahooHttpError(429, yahooRateLimitedUntil - Date.now(), 'RATE_LIMIT_COOLDOWN_ACTIVE');
+    }
+    yahooNextStartAt = Date.now() + yahooMinimumStartIntervalMs;
+    const started = operation();
+    release();
+    return await started;
   } catch (error) {
     release();
     throw error;
   }
-  release();
-  return await started;
 }
 
-async function fetchYahooJsonUrl<T>(url: string): Promise<T> {
+async function fetchYahooJsonUrl<T>(url: string, signal?: AbortSignal): Promise<T> {
   return scheduledYahooStart(async () => {
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED')),
-      YAHOO_REQUEST_TIMEOUT_MS,
-    );
+    let rejectDeadline: (reason: unknown) => void = () => {};
+    const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
+    const abort = (reason: Error) => {
+      controller.abort(reason);
+      rejectDeadline(reason);
+    };
+    const onAbort = () => abort(yahooAbortReason(signal));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timeoutError = new Error('YAHOO_CHART_BUDGET_EXCEEDED');
+    const timeout = setTimeout(() => abort(timeoutError), yahooRequestTimeoutMs);
     try {
-      yahooDiagnostics.actualRequests += 1;
-      const response = await fetch(url, {
-        redirect: 'follow',
-        signal: controller.signal,
-        headers: {
-          accept: 'application/json,text/plain,*/*',
-          'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-          'user-agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-        },
-      });
-      if (!response.ok) {
-        const body = (await response.text().catch(() => '')).trim().slice(0, 160);
-        const retryAfterMs = yahooRetryAfterMs(response);
-        if (response.status === 429) {
-          yahooDiagnostics.rateLimitResponses += 1;
-          yahooDiagnostics.lastRateLimitAt = new Date().toISOString();
-          yahooDiagnostics.lastRateLimitBody = body || null;
-          yahooRateLimitedUntil = Math.max(
-            yahooRateLimitedUntil,
-            Date.now() + Math.max(retryAfterMs ?? 0, yahooRateLimitCooldownMs),
-          );
+      const request = (async () => {
+        yahooDiagnostics.actualRequests += 1;
+        const response = await fetch(url, {
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            accept: 'application/json,text/plain,*/*',
+            'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            'user-agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+          },
+        });
+        if (!response.ok) {
+          const body = (await response.text().catch(() => '')).trim().slice(0, 160);
+          const retryAfterMs = yahooRetryAfterMs(response);
+          if (response.status === 429) {
+            yahooDiagnostics.rateLimitResponses += 1;
+            yahooDiagnostics.lastRateLimitAt = new Date().toISOString();
+            yahooDiagnostics.lastRateLimitBody = body || null;
+            yahooRateLimitedUntil = Math.max(
+              yahooRateLimitedUntil,
+              Date.now() + Math.max(retryAfterMs ?? 0, yahooRateLimitCooldownMs),
+            );
+          }
+          throw new YahooHttpError(response.status, retryAfterMs, body);
         }
-        throw new YahooHttpError(response.status, retryAfterMs, body);
-      }
-      yahooDiagnostics.successfulResponses += 1;
-      return await response.json() as T;
+        yahooDiagnostics.successfulResponses += 1;
+        return await response.json() as T;
+      })();
+      return await Promise.race([request, deadline]);
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
     }
-  });
+  }, signal);
 }
 
 function yahooHostsForRequest(): readonly string[] {
@@ -175,7 +222,9 @@ async function loadYahooJson<T>(
   cacheKey: string,
   pathAndQuery: string,
   ttlMs: number,
+  signal?: AbortSignal,
 ): Promise<T> {
+  synchronizeYahooTransportIdentity();
   const cached = yahooCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     yahooDiagnostics.cacheHits += 1;
@@ -184,7 +233,11 @@ async function loadYahooJson<T>(
     return cached.value as T;
   }
   if (cached) yahooCache.delete(cacheKey);
-  const running = yahooInFlight.get(cacheKey) as Promise<T> | undefined;
+  // A caller-owned abort signal must not cancel a shared request belonging to
+  // another caller. Signal-bound Scanner reads still use the global start gate
+  // and cache, but do not participate in cross-caller single-flight sharing.
+  const shareInFlight = signal == null;
+  const running = shareInFlight ? yahooInFlight.get(cacheKey) as Promise<T> | undefined : undefined;
   if (running) {
     yahooDiagnostics.deduplicatedRequests += 1;
     return running;
@@ -195,7 +248,7 @@ async function loadYahooJson<T>(
     const hosts = yahooHostsForRequest();
     for (let index = 0; index < hosts.length; index += 1) {
       try {
-        const value = await fetchYahooJsonUrl<T>(`https://${hosts[index]}${pathAndQuery}`);
+        const value = await fetchYahooJsonUrl<T>(`https://${hosts[index]}${pathAndQuery}`, signal);
         const now = Date.now();
         for (const [key, entry] of yahooCache) {
           if (entry.expiresAt <= now) yahooCache.delete(key);
@@ -209,6 +262,7 @@ async function loadYahooJson<T>(
         return value;
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
+        if (signal?.aborted) throw error;
         // A provider 429 applies to the shared Yahoo service/egress identity.
         // Trying the other hostname is not a legitimate rate-limit bypass.
         if (error instanceof YahooHttpError && (error.status === 429 || error.status < 500)) throw error;
@@ -219,9 +273,14 @@ async function loadYahooJson<T>(
       }
     }
     throw new Error(`YAHOO_BOUNDED_HOSTS_FAILED:${errors.join('|')}`);
-  })().finally(() => yahooInFlight.delete(cacheKey));
-  yahooInFlight.set(cacheKey, request as Promise<unknown>);
-  return request;
+  })();
+  if (!shareInFlight) return request;
+  let shared!: Promise<T>;
+  shared = request.finally(() => {
+    if (yahooInFlight.get(cacheKey) === shared) yahooInFlight.delete(cacheKey);
+  });
+  yahooInFlight.set(cacheKey, shared as Promise<unknown>);
+  return shared;
 }
 
 /**
@@ -242,6 +301,7 @@ export function yahooProviderDiagnostics() {
   return Object.freeze({
     ...snapshot,
     minimumStartIntervalMs: yahooMinimumStartIntervalMs,
+    requestTimeoutMs: yahooRequestTimeoutMs,
     rateLimitCooldownUntil: yahooRateLimitedUntil > Date.now()
       ? new Date(yahooRateLimitedUntil).toISOString()
       : null,
@@ -260,7 +320,9 @@ export function resetYahooProviderRuntimeForDiagnostics(options: {
   minimumStartIntervalMs?: number;
   rateLimitCooldownMs?: number;
   transportFallbackDelayMs?: number;
+  requestTimeoutMs?: number;
 } = {}): void {
+  yahooTransportIdentity = globalThis.fetch;
   yahooCache.clear();
   yahooInFlight.clear();
   yahooScheduleTail = Promise.resolve();
@@ -284,6 +346,12 @@ export function resetYahooProviderRuntimeForDiagnostics(options: {
     0,
     5_000,
   );
+  yahooRequestTimeoutMs = boundedInteger(
+    options.requestTimeoutMs,
+    YAHOO_DEFAULT_REQUEST_TIMEOUT_MS,
+    1,
+    10_000,
+  );
   yahooDiagnostics = {
     actualRequests: 0,
     successfulResponses: 0,
@@ -298,12 +366,6 @@ export function resetYahooProviderRuntimeForDiagnostics(options: {
 }
 
 export const resetYahooProviderRuntimeForTests = resetYahooProviderRuntimeForDiagnostics;
-
-export interface YahooChartRequestOptions {
-  signal?: AbortSignal;
-  purpose?: 'scanner';
-  exchange?: string | null;
-}
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -398,7 +460,7 @@ async function fetchYahooChart(
       ? 30_000
       : 5 * 60_000;
   try {
-    const data = await loadYahooJson<any>(`chart:${symbol}:${q}`, pathAndQuery, ttlMs);
+    const data = await loadYahooJson<any>(`chart:${symbol}:${q}`, pathAndQuery, ttlMs, signal);
     const result = validChart(data, pathAndQuery);
     if (result.meta?.symbol && cleanTicker(result.meta.symbol) !== cleanTicker(symbol)) {
       throw new Error('YAHOO_PROVIDER_SYMBOL_MISMATCH');
@@ -631,8 +693,8 @@ export async function getCandles(
       ? '60m'
       : requestedTimeframe;
   const params = yahooChartParams(sourceTimeframe);
-  // Scanning current signals does not need ten years of daily or two years of
-  // hourly history per symbol. Long-history chart/research callers are unchanged.
+  // Current-signal scanning needs recent evidence, not multi-year payloads.
+  // Long-history chart and research callers keep the original ranges.
   if (options.purpose === 'scanner') {
     if (sourceTimeframe === '1D') params.range = '1y';
     if (sourceTimeframe === '60m' || sourceTimeframe === '1H') params.range = '6mo';
