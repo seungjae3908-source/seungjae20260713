@@ -9,6 +9,8 @@ on:
       - docs/telegram-isolated-dormant-package.md
       - api-server/src/telegram-isolated-worker.ts
       - api-server/build.mjs
+      - ops/install-telegram-isolated-dormant-package.mjs
+      - .github/tests/install-telegram-isolated-dormant-package.test.mjs
   push:
     branches: [main]
     paths:
@@ -18,6 +20,8 @@ on:
       - docs/telegram-isolated-dormant-package.md
       - api-server/src/telegram-isolated-worker.ts
       - api-server/build.mjs
+      - ops/install-telegram-isolated-dormant-package.mjs
+      - .github/tests/install-telegram-isolated-dormant-package.test.mjs
 
 permissions:
   contents: read
@@ -50,7 +54,8 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           node --check ops/prepare-telegram-isolated-release.mjs
-          node --test .github/tests/prepare-telegram-isolated-release.test.mjs
+          node --check ops/install-telegram-isolated-dormant-package.mjs
+          node --test .github/tests/prepare-telegram-isolated-release.test.mjs .github/tests/install-telegram-isolated-dormant-package.test.mjs
       - name: Install pinned workspace and build standalone worker
         run: |
           set -Eeuo pipefail
