@@ -59,3 +59,28 @@ pinned offline CI job. Any tampered support script fails closed before a
 release directory is created. An exception after writing the last marker also
 removes that marker and quarantines the incomplete release, never marking an
 incomplete release ready. None of these checks installs or starts a service.
+
+
+## Follow-up: inert create-only installation contract
+
+The new \`ops/install-telegram-isolated-dormant-package.mjs\` materializes
+a **non-running** candidate under
+\`/opt/stock-app-data/telegram-isolated-v1/release/current\` (CLI target fixed).
+It verifies the exact SHA marker, all three manifest digests, preparation
+receipt, regular-file/anti-symlink/anti-hardlink properties, and uses an
+exclusive directory creation with the final SHA marker written **last**.
+An incomplete release is quarantined rather than automatically retried.
+Offline regression tests use disposable local directories only.
+
+This is source code and local CI verification, **not an executed Production
+installation**. A local SHA+manifest does not authenticate artifact origin:
+a future owner-approved protected workflow must verify the exact GitHub
+Actions run, its successful immutable current-main provenance, and artifact
+digest before copying anything to a server. This PR neither installs a unit
+nor starts a process, restarts PM2, sends Bot messages, changes broker flags,
+or modifies LIVE/Paper/DB/credential state.
+
+No migration of the old embedded sender is possible merely by preparing or
+installing a dormant bundle. The existing running app lacks the ownership
+switch. A separately reviewed LIVE-preserving rollout and two independent
+same-process quiescence proofs must come **before any isolated worker start**.
