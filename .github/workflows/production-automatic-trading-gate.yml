@@ -1110,12 +1110,14 @@ jobs:
           # Only GitHub-main tracked public source is packaged. Never copy
           # the running app, Paper ledger, credentials or server environment.
           bundle_dir="$(mktemp -d "$RUNNER_TEMP/auto-live-public-bundle.XXXXXXXX")"
-          mkdir -p "$bundle_dir/ops" "$bundle_dir/packages"
-          for rel in market-prediction-lab packages/strategy-hypothesis packages/external-research; do
-            test -d "$rel"
-            cp -a "$rel" "$bundle_dir/$rel"
-          done
-          cp ops/production-auto-live-signal-identity.cjs "$bundle_dir/ops/"
+          # Archive only Git-tracked bytes from the immutably verified HEAD.
+          # cp -a would pull pnpm node_modules symlinks and untracked env files
+          # from the Actions workspace; NEVER package those.
+          git archive --format=tar "$TARGET_SHA" \
+            ops/production-auto-live-signal-identity.cjs \
+            market-prediction-lab \
+            packages/strategy-hypothesis packages/external-research \
+            | tar -xf - -C "$bundle_dir"
           if find "$bundle_dir" -type l -print -quit | grep -q .; then
             echo 'AUTO_LIVE_PUBLIC_INSTALL_SOURCE_SYMLINK_FORBIDDEN' >&2
             exit 1
