@@ -325,6 +325,40 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/production-auto-live-signal-source-audit.mjs",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
 ]);
+// Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
+// admission bridge. Paths that previously belonged to the immutable Scanner
+// repair are deliberately routed through the full automatic-trading guards;
+// this list grants neither deployment nor order authority.
+export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
+  ".github/scripts/paper-forward-reviewed-paths.mjs",
+  ".github/scripts/scanner-readonly-repair-scope.mjs",
+  ".github/scripts/verify-research-workspace-sync-v3.mjs",
+  ".github/tests/research-center-batch-scope.test.mjs",
+  ".github/tests/scanner-readonly-repair-scope.test.mjs",
+  ".github/workflows/paper-forward-schedule-validation.yml",
+  ".github/workflows/production-automatic-trading-gate.yml",
+  ".github/workflows/research-workspace-integration-v1.yml",
+  "api-server/scripts/verify-production-automatic-trading-gate.mjs",
+  "api-server/src/services/member-auto-trading-background-worker.service.test.ts",
+  "api-server/src/services/member-auto-trading-background-worker.service.ts",
+  "api-server/src/services/scanner-indicator-library.service.ts",
+  "api-server/src/services/scanner-quant-strategy.service.test.ts",
+  "api-server/src/services/scanner-quant-strategy.service.ts",
+  "api-server/src/services/trade-automation-integration.test.ts",
+  "api-server/src/services/trade-automation.service.ts",
+  "api-server/src/services/trade-automation.types.ts",
+  "market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json",
+  "market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs",
+  "signal-intelligence-v3/ARCHITECTURE.md",
+  "signal-intelligence-v3/README.md",
+  "signal-intelligence-v3/scripts/diagnose-public-providers.ts",
+  "signal-intelligence-v3/scripts/run-public-scanner-cycle.ts",
+  "signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts",
+  "signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs",
+  "signal-intelligence-v3/src/public-provider-diagnostics.mjs",
+  "signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs",
+  "signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs",
+]);
 // Separately owner-approved on 2026-10-12: these 19 paths were already
 // Research-reviewed but missing from Paper's independent bounded scope.
 // Neither this list nor the original 50 grants deployment/trading authority.
@@ -351,7 +385,8 @@ export const PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS = Object.freeze([
 ]);
 if (process.argv[1]?.replaceAll('\\', '/').endsWith('/paper-forward-reviewed-paths.mjs')) {
   const paths = process.argv.includes('--list-auto-live-safety')
-    ? AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS : process.argv.includes('--list-auto-live-supplement')
-      ? PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS : PAPER_FORWARD_REVIEWED_PATHS;
+    ? AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS : process.argv.includes('--list-auto-signal-pipeline')
+      ? AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS : process.argv.includes('--list-auto-live-supplement')
+        ? PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS : PAPER_FORWARD_REVIEWED_PATHS;
   console.log(paths.join('\n'));
 }

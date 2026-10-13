@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "939973d44508bf78556193c4c1de9d02cdb9a9a6dbbc41b02903cb9bf665e49f",
+  "sourceGraphSha256": "d0486a26ca809f0382af436b50fd71c8db22a2737c478b9b7016af23277fc163",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -79,13 +79,13 @@
     "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c",
     "api-server/src/services/scanner-crypto-price-precision.service.ts": "4cd040019834e14c4436d1adfd0a43f98acf2b473c510fa485f236d2a85a757b",
     "api-server/src/services/scanner-data-quality.service.ts": "f62d7cc1e6ee5e5506c569950cefd4e9ab1f1a066ced201273021b2ccfcd2c6b",
-    "api-server/src/services/scanner-indicator-library.service.ts": "4aee238e4a43f3bf399f9b20676c1a89fcbc4a67a96c31f4e02c4e0f2f304415",
+    "api-server/src/services/scanner-indicator-library.service.ts": "ed0367432ec7ebbd6240aba5fb95de474b5ba80386c117269e88a698b453a980",
     "api-server/src/services/scanner-market-action.service.ts": "694b3b2727d5ee0f4a05201120bec229c1bb1f42e56bba26ef40ce7b788147ae",
     "api-server/src/services/scanner-market-profile-overlay.service.ts": "1af203ce2933e21068bb164a2237b41309c2116a7308ea9e2f20bddd7ae0cdec",
     "api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts": "9ca6210d929f5e4fe2b1c556bbe10bbce1f01bb775fab20f242693411c409874",
     "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts": "df190fd98173c7f272cb309933d877a8f73a099d900c19159e083b36097d29e0",
     "api-server/src/services/scanner-quant-hardening.service.ts": "50007366e9f05e4276594e11f973f8474e831130c2b37a1de3ead8b54b6f15b7",
-    "api-server/src/services/scanner-quant-strategy.service.ts": "4eb7970561346370e0ad688cea75fb6e4d9b2c34adff1d12c683951e73f279b4",
+    "api-server/src/services/scanner-quant-strategy.service.ts": "38615529c9d52cb5e6fed3f1221651b060efae938c7a1ff907d8263db5a31d06",
     "api-server/src/services/scanner-signal-lifecycle.service.ts": "a7046f20276fca3f70a6044fff4ffdd8d523d2473a64eef0a433cbe93d1c13be",
     "api-server/src/services/scanner-strategy-profile.service.ts": "90a4406ca4b536ed863082840d39c932816418063f3941f6ec6a3465c10ae792",
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
@@ -95,7 +95,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "fbced54df085ee38151b8eeaf3e3e529bd72def54cc21ac999f5ec469e0c8431",
+  "bundleSha256": "b7d367dce8cd843625e15dfb39da5f257351353a385726ab84c3a26232f97699",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",

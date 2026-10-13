@@ -69,6 +69,30 @@ on:
       - ops/deploy-production.sh
       - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
+      # Public-data Scanner -> Signal V3 -> automatic-entry admission is a
+      # veto-only Production boundary even before deployment activation.
+      - .github/scripts/paper-forward-reviewed-paths.mjs
+      - .github/scripts/scanner-readonly-repair-scope.mjs
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
+      - .github/tests/research-center-batch-scope.test.mjs
+      - .github/tests/scanner-readonly-repair-scope.test.mjs
+      - .github/workflows/paper-forward-schedule-validation.yml
+      - .github/workflows/research-workspace-integration-v1.yml
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.test.ts
+      - api-server/src/services/trade-automation-integration.test.ts
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+      - signal-intelligence-v3/ARCHITECTURE.md
+      - signal-intelligence-v3/README.md
+      - signal-intelligence-v3/scripts/diagnose-public-providers.ts
+      - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/public-provider-diagnostics.mjs
+      - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
   issue_comment:
     types: [created]
 
