@@ -38,6 +38,7 @@ const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts
 const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
 const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
+const strategyCatalog = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
 const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts');
 const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
 const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
@@ -695,7 +696,11 @@ requireText(tradeService, 'input.signalOccurrenceId.trim()', 'AUTO_GATE_SIGNAL_O
 requireText(tradeIntegrationTest,
   'validated signal occurrences are idempotent within one event and allow a later repeat opportunity',
   'AUTO_GATE_REPEAT_OPPORTUNITY_REGRESSION_MISSING');
-requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
+for (const token of [
+  'this.liveCycleAllFourPolicyReadySeen || this.liveCycleMarketScopedPolicyReadySeen',
+  "member.policy.pilotStage === 'formula-ai-exception'",
+  'automaticPolicyHasAllFourMarkets(member.policy)',
+]) requireText(paperWorker, token, 'AUTO_GATE_WORKER_SCOPED_OR_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
@@ -793,12 +798,50 @@ requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exac
 requireText(tradeTypes, "'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_STAGE_TYPE_MISSING');
 requireText(tradeRisk, "input.pilotStage === 'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_NORMALIZATION_MISSING');
 requireText(tradeOptimization, "'PILOT_FORMULA_AI_EXCEPTION_REQUIRED'", 'AUTO_FORMULA_AI_PILOT_RISK_BINDING_MISSING');
+requireText(tradeOptimization, "'EXTERNAL_STRATEGY_PILOT_V1:RESEARCH_GENUINE_S_NOT_CLAIMED'", 'AUTO_EXTERNAL_PILOT_RESEARCH_DISCLAIMER_MISSING');
 requireText(tradeAutomationRoute, "router.post('/admin/pilot-stage'", 'AUTO_FORMULA_AI_PILOT_ROUTE_MISSING');
 requireText(tradeAutomationRoute, "'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT'", 'AUTO_FORMULA_AI_PILOT_CONFIRMATION_MISSING');
 requireText(tradeAutomationRoute, "'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF'", 'AUTO_FORMULA_AI_PILOT_AUTO_OFF_GUARD_MISSING');
+for (const token of [
+  'admissionPath: EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH',
+  'admissionPolicyVersion: EXTERNAL_STRATEGY_PILOT_POLICY_VERSION',
+  'researchGenuineSClaimed: false',
+]) requireText(tradeAutomationRoute, token, 'AUTO_EXTERNAL_PILOT_PREPARATION_RESPONSE_MISSING');
 requireText(tradeAutomationSmoke, 'formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', 'AUTO_FORMULA_AI_PILOT_SMOKE_MISSING');
 requireText(formulaAiException, "'AI_REVIEW_DECISION:PASS'", 'AUTO_FORMULA_AI_PASS_EVIDENCE_MISSING');
 requireText(formulaAiException, "'CANONICAL_PAPER_HANDOFF'", 'AUTO_FORMULA_AI_CANONICAL_HANDOFF_REQUIRED');
+for (const token of [
+  "EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH = 'EXTERNAL_STRATEGY_PILOT'",
+  "'EXTERNAL_STRATEGY_PILOT_SOURCE_SET_MISMATCH'",
+  'researchGenuineSClaimed: false',
+]) requireText(formulaAiException, token, 'AUTO_EXTERNAL_PILOT_ADMISSION_SEPARATION_MISSING');
+for (const token of [
+  'externalStrategyPilotAllowed: true',
+  'EXTERNAL_STRATEGY_SOURCE_SET_DIGEST',
+  'reportedReturn: null',
+  '현재 스냅샷만으로 과거 CVD·Taker·ML 증거를 만들 수 없다.',
+  '현재 OI 한 점은 OI 증가 추세가 아니며 체결 CVD/Taker flow를 대체하지 않는다.',
+]) requireText(strategyCatalog, token, 'AUTO_EXTERNAL_PILOT_SOURCE_CONTRACT_MISSING');
+for (const token of [
+  'evaluateStrategyRulePackDeterministicGate(gateInput)',
+  'strategyRulePackAiEvidenceDigest(gateInput)',
+  "'BACKGROUND_EXTERNAL_STRATEGY_RULE_PROOF_REQUIRED'",
+  "'BACKGROUND_EXTERNAL_STRATEGY_AI_EVIDENCE_MISMATCH'",
+  "liveEntryArmPresent(Date.now(), 'EXTERNAL_STRATEGY_PILOT')",
+  'liveEnabledMarketConnectionVerificationReady(',
+  'revalidateLiveEnabledMarketReadiness',
+  'MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH',
+  'validateExternalStrategyPilotHandoffEnvelope(',
+  "if (this.externalPilotHandoffPath) return handoff.entries",
+]) requireText(paperWorker, token, 'AUTO_EXTERNAL_PILOT_WORKER_BINDING_MISSING');
+for (const token of [
+  'external Pilot catalog is an explicit sourced allowlist and adopts no public performance claim',
+  'external Pilot readiness is market-scoped and a blocked stock provider cannot poison Upbit',
+  'ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT',
+]) requireText(formulaAiExceptionTest + paperWorkerTest, token, 'AUTO_EXTERNAL_PILOT_REGRESSION_MISSING');
+requireText(liveEntryArm, 'requiredAdmissionPath?: LiveAutomaticAdmissionPath', 'AUTO_EXTERNAL_PILOT_SCOPED_ARM_MISSING');
+requireText(liveExecution, "'ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT'", 'AUTO_EXTERNAL_PILOT_PRESUBMIT_ARM_MISSING');
+requireText(workflow, "admissionPaths: ['RESEARCH_GENUINE_S']", 'AUTO_RESEARCH_ARM_PATH_SCOPE_MISSING');
 requireText(formulaAiExceptionTest, 'dedicated formula-ai pilot stage allows only a valid formula+AI live exception', 'AUTO_FORMULA_AI_PILOT_TEST_MISSING');
 requireText(paperWorker, 'readRulePackPilotCapitalState', 'AUTO_PILOT_CAPITAL_WORKER_BINDING_MISSING');
 requireText(paperWorker, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_GUARD_WORKER_MISSING');

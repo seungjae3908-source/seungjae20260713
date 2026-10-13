@@ -2309,11 +2309,17 @@ test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off wi
     assert.equal(prepared.status, 200);
     const body = await prepared.json() as {
       pilotStage: string;
+      admissionPath: string;
+      admissionPolicyVersion: string;
+      researchGenuineSClaimed: boolean;
       automaticTradingEnabledByThisRequest: boolean;
       liveTradingEnabledByThisRequest: boolean;
       policy: { pilotStage: string; automaticEnabled: boolean };
     };
     assert.equal(body.pilotStage, 'formula-ai-exception');
+    assert.equal(body.admissionPath, 'EXTERNAL_STRATEGY_PILOT');
+    assert.equal(body.admissionPolicyVersion, 'EXTERNAL_STRATEGY_PILOT_V1');
+    assert.equal(body.researchGenuineSClaimed, false);
     assert.equal(body.policy.pilotStage, 'formula-ai-exception');
     assert.equal(body.policy.automaticEnabled, false);
     assert.equal(body.automaticTradingEnabledByThisRequest, false);

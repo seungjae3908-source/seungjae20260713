@@ -1381,7 +1381,12 @@ export class TradeExecutionService {
       )) {
       throw new Error('AUTOMATIC_ENTRY_POLICY_CAP_REVOKED');
     }
-    if (!await liveEntryArmPresent()) {
+    const externalStrategyPilot = plan.signalReasons.includes(
+      'ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT',
+    );
+    if (!await liveEntryArmPresent()
+      || (externalStrategyPilot
+        && !await liveEntryArmPresent(Date.now(), 'EXTERNAL_STRATEGY_PILOT'))) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
     if (!this.repository.assertAutomaticLiveEntryBudget) throw new Error('AUTOMATIC_LIVE_ATOMIC_BUDGET_CLAIM_REQUIRED');

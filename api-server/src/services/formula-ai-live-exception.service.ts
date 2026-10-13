@@ -1,23 +1,33 @@
 import type { TradingPlanInput } from './trade-automation.types';
 import {
+  EXTERNAL_STRATEGY_SOURCE_SET_DIGEST,
   STRATEGY_RULE_PACKS,
   type StrategyRulePackId,
   type StrategyRulePackMarket,
 } from './evidence-backed-auto-strategy-catalog.service';
 
 export const FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION = 'FORMULA_AI_LIVE_EXCEPTION_V1' as const;
+export const EXTERNAL_STRATEGY_PILOT_POLICY_VERSION = 'EXTERNAL_STRATEGY_PILOT_V1' as const;
+export const EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH = 'EXTERNAL_STRATEGY_PILOT' as const;
+export type AutomaticStrategyAdmissionPath = 'RESEARCH_GENUINE_S' | typeof EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH;
 
 const DEFINITIONS = new Map(STRATEGY_RULE_PACKS.map((row) => [row.strategyId, row] as const));
+// Compatibility predicate used by the protected owner-policy projection. It
+// recognizes legacy catalog IDs but does not grant Pilot admission; the
+// evaluator below separately requires `externalStrategyPilotAllowed`.
 const EXCEPTION_IDS = new Set<StrategyRulePackId>(STRATEGY_RULE_PACKS.map((row) => row.strategyId));
 
 export type FormulaAiLiveExceptionDecision = Readonly<{
   policyVersion: typeof FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION;
+  admissionPolicyVersion: typeof EXTERNAL_STRATEGY_PILOT_POLICY_VERSION;
+  admissionPath: typeof EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH;
   recognized: boolean;
   allowed: boolean;
   strategyId: string;
   market: StrategyRulePackMarket | null;
   direction: 'BUY' | 'LONG' | 'SHORT' | null;
   researchPromotionBypassed: boolean;
+  researchGenuineSClaimed: false;
   bypassedResearchGates: readonly string[];
   preservedOperationalGates: readonly string[];
   blockers: readonly string[];
@@ -61,17 +71,29 @@ export function evaluateFormulaAiLiveException(
   const market = marketForPlan(plan);
   const direction = directionForPlan(plan);
 
-  if (!definition) blockers.push('FORMULA_AI_EXCEPTION_STRATEGY_NOT_ALLOWED');
+  if (!definition || definition.externalStrategyPilotAllowed !== true) {
+    blockers.push('FORMULA_AI_EXCEPTION_STRATEGY_NOT_ALLOWED');
+  }
   if (plan.accountMode !== 'live') blockers.push('FORMULA_AI_EXCEPTION_LIVE_ACCOUNT_REQUIRED');
   if (!market || !definition?.markets.includes(market)) blockers.push('FORMULA_AI_EXCEPTION_MARKET_MISMATCH');
   if (!direction || !definition?.directions.includes(direction)) blockers.push('FORMULA_AI_EXCEPTION_DIRECTION_MISMATCH');
 
   const reasons = reasonSet(plan);
   if (!reasons.has('CANONICAL_PAPER_HANDOFF')) blockers.push('FORMULA_AI_EXCEPTION_CANONICAL_HANDOFF_REQUIRED');
+  if (!reasons.has('ADMISSION_PATH:' + EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH)) {
+    blockers.push('EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH_REQUIRED');
+  }
   if (!reasons.has('STRATEGY_RULE_PACK:' + plan.strategyId)) blockers.push('FORMULA_AI_EXCEPTION_STRATEGY_IDENTITY_REQUIRED');
   if (!reasons.has('STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE')) blockers.push('FORMULA_AI_EXCEPTION_RULE_GATE_REQUIRED');
   if (!reasons.has('AI_REVIEW_DECISION:PASS')) blockers.push('FORMULA_AI_EXCEPTION_AI_PASS_REQUIRED');
   if (!reasons.has('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE')) blockers.push('FORMULA_AI_EXCEPTION_AI_LIVE_ELIGIBLE_REQUIRED');
+
+  const sourceSetReason = reasonWithPrefix(plan, 'EXTERNAL_STRATEGY_SOURCE_SET:');
+  const sourceSetDigest = sourceSetReason
+    ? sourceSetReason.slice('EXTERNAL_STRATEGY_SOURCE_SET:'.length).trim().toLowerCase() : '';
+  if (sourceSetDigest !== EXTERNAL_STRATEGY_SOURCE_SET_DIGEST) {
+    blockers.push('EXTERNAL_STRATEGY_PILOT_SOURCE_SET_MISMATCH');
+  }
 
   const digestReason = reasonWithPrefix(plan, 'AI_REVIEW_EVIDENCE:');
   const digest = digestReason ? digestReason.slice('AI_REVIEW_EVIDENCE:'.length).trim().toLowerCase() : '';
@@ -91,12 +113,15 @@ export function evaluateFormulaAiLiveException(
   const unique = [...new Set(blockers)].sort();
   return Object.freeze({
     policyVersion: FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION,
-    recognized: definition != null,
+    admissionPolicyVersion: EXTERNAL_STRATEGY_PILOT_POLICY_VERSION,
+    admissionPath: EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH,
+    recognized: definition?.externalStrategyPilotAllowed === true,
     allowed: unique.length === 0,
     strategyId: plan.strategyId,
     market,
     direction,
     researchPromotionBypassed: unique.length === 0,
+    researchGenuineSClaimed: false,
     bypassedResearchGates: Object.freeze([
       'OOS',
       'WALK_FORWARD',

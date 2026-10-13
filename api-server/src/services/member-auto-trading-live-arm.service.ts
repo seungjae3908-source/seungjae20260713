@@ -14,8 +14,13 @@ export function liveAutoAuthorityRequested() {
     && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
 }
 
+export type LiveAutomaticAdmissionPath = 'RESEARCH_GENUINE_S' | 'EXTERNAL_STRATEGY_PILOT';
+
 // Reusable exact-deployed-SHA arm guard. Keep worker and execution in sync.
-export async function liveEntryArmPresent(nowMs = Date.now()) {
+export async function liveEntryArmPresent(
+  nowMs = Date.now(),
+  requiredAdmissionPath?: LiveAutomaticAdmissionPath,
+) {
   if (!liveAutoAuthorityRequested()) return false;
   const targetSha = String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase();
   if (!/^[a-f0-9]{40}$/u.test(targetSha)) return false;
@@ -36,13 +41,16 @@ export async function liveEntryArmPresent(nowMs = Date.now()) {
     const value = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
     const armedAtMs = Date.parse(String(value.armedAt ?? ''));
     const activateNotBeforeMs = Date.parse(String(value.activateNotBeforeAt ?? ''));
+    const admissionPaths = Array.isArray(value.admissionPaths)
+      ? value.admissionPaths.filter((entry): entry is string => typeof entry === 'string') : [];
     return value.schemaVersion === 'member-auto-trading-live-entry-arm-v1'
       && value.armed === true
       && String(value.targetSha ?? '').toLowerCase() === targetSha
       && Number.isFinite(armedAtMs)
       && Number.isFinite(activateNotBeforeMs)
       && activateNotBeforeMs >= armedAtMs
-      && nowMs >= activateNotBeforeMs;
+      && nowMs >= activateNotBeforeMs
+      && (!requiredAdmissionPath || admissionPaths.includes(requiredAdmissionPath));
   } catch {
     return false;
   } finally {

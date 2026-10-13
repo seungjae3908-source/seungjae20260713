@@ -58,7 +58,11 @@ import {
   FORMULA_AI_REHEARSAL_POLICY_VERSION,
   runFormulaAiPaperRehearsalProbe,
 } from '../services/formula-ai-auto-rehearsal.service';
-import { FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION } from '../services/formula-ai-live-exception.service';
+import {
+  EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH,
+  EXTERNAL_STRATEGY_PILOT_POLICY_VERSION,
+  FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION,
+} from '../services/formula-ai-live-exception.service';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
@@ -1699,6 +1703,9 @@ router.post('/admin/pilot-stage', requireAdmin, async (req: AuthenticatedRequest
       ok: true,
       policy,
       pilotStage: policy.pilotStage,
+      admissionPath: EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH,
+      admissionPolicyVersion: EXTERNAL_STRATEGY_PILOT_POLICY_VERSION,
+      researchGenuineSClaimed: false,
       automaticTradingEnabledByThisRequest: false,
       liveTradingEnabledByThisRequest: false,
     });
