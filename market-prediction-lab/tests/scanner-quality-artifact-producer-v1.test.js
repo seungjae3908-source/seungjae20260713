@@ -3,6 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import {
   buildScannerQualityEntryV1,
+  buildScannerQualityBatchV1,
   materializeForwardObserverScannerQualityArtifactV1,
 } from "../src/scanner-quality-artifact-producer-v1.js";
 import { TRANSACTION_COST_COMPONENTS } from "../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs";
@@ -416,6 +417,68 @@ test("materializer produces consumer-compatible immutable quality and manifest d
   assert.equal(materialized.profitabilityClaimAllowed, false);
 });
 
+
+test("batch producer seals two separately evidenced symbols and forbids partial publication", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const first = {
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(),
+  };
+  const secondManifest = scannerSnapshot({
+    profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M",
+    timeframe: "60m", symbols: ["ETHUSDT"],
+  });
+  const secondIdentity = {
+    ...identity, symbol: "ETHUSDT",
+    datasetSnapshotHash: secondManifest.datasetSnapshotHash,
+  };
+  const secondPackets = folds.map((f) => {
+    const p = packet(f);
+    const withEth = (result) => ({
+      ...result, symbol: "ETHUSDT",
+      trades: result.trades.map((trade) => ({ ...trade, symbol: "ETHUSDT" })),
+    });
+    return {
+      ...p, binding: secondIdentity,
+      outOfSampleResult: withEth(p.outOfSampleResult),
+      walkForwardResult: withEth(p.walkForwardResult),
+    };
+  });
+  const second = {
+    identity: secondIdentity, folds, foldResults: secondPackets,
+    datasetAudit: { ...datasetAudit, snapshotManifest: secondManifest },
+    transactionCostEvidence: costEvidence(),
+  };
+  const sealed = buildScannerQualityBatchV1({
+    researchCodeSha: SHA, jobs: [first, second],
+  });
+  assert.equal(sealed.status, "READY");
+  assert.equal(sealed.artifact.entries.length, 2);
+  assert.deepEqual(sealed.artifact.entries.map((row) => row.identity.symbol), ["BTCUSDT", "ETHUSDT"]);
+  assert.equal(sealed.diagnostics.markets.CRYPTO_FUTURES, 2);
+  assert.equal(
+    createHash("sha256").update(sealed.qualityText).digest("hex"),
+    sealed.manifest.qualitySha256,
+  );
+  assert.equal(sealed.executionAuthority, "NONE");
+
+  const blockedBatch = buildScannerQualityBatchV1({
+    researchCodeSha: SHA,
+    jobs: [first, { ...second, transactionCostEvidence: costEvidence({
+      components: {},
+    }) }],
+  });
+  assert.equal(blockedBatch.status, "BLOCKED_DATA");
+  assert.equal(blockedBatch.reason, "QUALITY_BATCH_ENTRY_BLOCKED");
+  assert.equal(blockedBatch.details.index, 1);
+  assert.equal(blockedBatch.entry, null);
+
+  const duplicate = buildScannerQualityBatchV1({
+    researchCodeSha: SHA, jobs: [first, first],
+  });
+  assert.equal(duplicate.status, "BLOCKED_DATA");
+  assert.equal(duplicate.reason, "QUALITY_BATCH_MATERIALIZATION_BLOCKED");
+});
 
 test("operator cannot lower the minimum trade count below forty", () => {
   const folds = [fold(1, START), fold(2, START + 100_000)];
