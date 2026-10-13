@@ -31,6 +31,8 @@ import {
 
 const RECENT_KEY = 'unified-asset-search:recent:v1';
 const DEFAULT_SEARCH_DEBOUNCE_MS = 200;
+// Fixed-market rooms already scope the provider; keep global searches throttled.
+const SCOPED_SEARCH_DEBOUNCE_MS = 100;
 
 function exactIdentitySearchDelayMs(
   market: UnifiedMarketFilter | null,
@@ -42,7 +44,7 @@ function exactIdentitySearchDelayMs(
   if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;
   if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;
   if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;
-  return DEFAULT_SEARCH_DEBOUNCE_MS;
+  return SCOPED_SEARCH_DEBOUNCE_MS;
 }
 const GROUP_ORDER: UnifiedMarketFilter[] = ['KR', 'US', 'spot', 'futures'];
 const GROUP_LABEL: Record<UnifiedMarketFilter, string> = {
