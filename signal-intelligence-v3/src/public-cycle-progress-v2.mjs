@@ -31,6 +31,68 @@ export function publicExecutionEvidence(execution, failures = []) {
   };
 }
 
+// Preserve the reason a completed public-data page was rejected before the
+// ranking layer removes untrusted cards. This is diagnostic evidence only; it
+// never grants candidate, quality, Paper, or order authority.
+export function publicDataQualityDiagnostic(cards = [], message = '') {
+  const rows = Array.isArray(cards) ? cards : [];
+  const issueCounts = {};
+  let trustedCards = 0;
+  let degradedCards = 0;
+  let untrustedCards = 0;
+  for (const card of rows) {
+    const state = card?.dataQuality?.state;
+    if (state === 'TRUSTED') trustedCards += 1;
+    else if (state === 'DEGRADED') degradedCards += 1;
+    else if (state === 'DATA_UNTRUSTED') untrustedCards += 1;
+    for (const issue of card?.dataQuality?.issues ?? []) {
+      const code = typeof issue?.code === 'string' && issue.code ? issue.code : 'UNKNOWN';
+      issueCounts[code] = (issueCounts[code] ?? 0) + 1;
+    }
+  }
+  return {
+    evaluatedCards: rows.length,
+    trustedCards,
+    degradedCards,
+    untrustedCards,
+    issueCounts,
+    message: typeof message === 'string' ? message.slice(0, 240) : '',
+  };
+}
+
+// Counts are unique-page maxima because every lane for a market starts at the
+// same cursor. A market whose every lane is provider-gated has zero requests,
+// so the full roster (not a misleading zero) is reported as provider-gated.
+export function publicMarketSummary(pages = [], selected = []) {
+  const rows = Array.isArray(pages) ? pages : [];
+  const admitted = Array.isArray(selected) ? selected : [];
+  const maximum = selector => Math.max(0, ...rows.map(row => Number(selector(row) ?? 0)));
+  const totalUniverse = maximum(row => row.totalUniverse);
+  const queriedCount = maximum(row => row.pageExecution?.requestedCount);
+  const dataSuccessCount = maximum(row => row.pageExecution?.dataSuccessCount);
+  const allProviderGated = rows.length > 0 && rows.every(row => row.status === 'BLOCKED_PROVIDER');
+  const providerGatedCount = allProviderGated ? totalUniverse : 0;
+  const qualityBlockedCount = maximum(row => row.status === 'BLOCKED_DATA'
+    ? row.pageExecution?.dataSuccessCount ?? row.pageExecution?.requestedCount : 0);
+  return {
+    totalUniverse,
+    queriedCount,
+    dataSuccessCount,
+    dataBlockedCount: Math.max(providerGatedCount, qualityBlockedCount, queriedCount - dataSuccessCount),
+    providerGatedCount,
+    qualityBlockedCount,
+    sGradeCandidateCount: rows.reduce((sum, row) => sum + Number(row.sGradeCards ?? 0), 0),
+    rawCandidateCount: rows.reduce((sum, row) => sum + Number(row.scannedCards ?? 0), 0),
+    canonicalJoinCount: rows.reduce((sum, row) => sum + Number(row.canonicalHandoffJoin?.joinedSGrade ?? 0), 0),
+    workerAdmissionCount: admitted.length,
+    normalNoSignalLaneCount: rows.filter(row => row.status === 'VALID_NO_TRADE').length,
+    blockedLaneCount: rows.filter(row => row.status === 'BLOCKED_DATA' || row.status === 'BLOCKED_PROVIDER').length,
+    errorCount: rows.reduce((sum, row) => sum + Number(row.providerErrors ?? 0)
+      + Number(row.timeouts ?? 0) + Number(row.pageExecution?.failuresObserved ?? 0)
+      + (row.error ? 1 : 0), 0),
+  };
+}
+
 export function publicCyclePageDecision(response, market, cursor, expectedRosterId) {
   const hold = (status, reason) => ({ status, nextCursor: cursor, blockedObservationOnly: false, reason });
   const u = response?.universe, e = response?.execution;
