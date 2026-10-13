@@ -236,21 +236,20 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
   const blockers: Array<{ code: string; symbol: string | null; details?: Readonly<Record<string, unknown>> }> = [];
   const backtests: Record<string, ScannerBacktestQualitySummary> = {};
   const matchedSymbols: string[] = [];
-  const cardsBySymbol = new Map<string, ScannerSignalCard[]>();
+  const cardsByIdentity = new Map<string, { symbol: string; direction: Exclude<ScannerTradeAction, 'NONE'> }>();
   for (const card of input.cards) {
     const symbol = card.symbol.trim().toUpperCase();
-    const rows = cardsBySymbol.get(symbol) ?? [];
-    rows.push(card);
-    cardsBySymbol.set(symbol, rows);
-  }
-
-  for (const [symbol, cards] of cardsBySymbol.entries()) {
-    const directions = [...new Set(cards.map((card) => normalizeDirection(card.action, input.lane)).filter(Boolean))] as Array<Exclude<ScannerTradeAction, 'NONE'>>;
-    if (directions.length !== 1) {
-      blockers.push({ code: 'SCANNER_QUALITY_SYMBOL_DIRECTION_AMBIGUOUS', symbol, details: Object.freeze({ directions }) });
+    const direction = normalizeDirection(card.action ?? (card.direction === 'LONG' || card.direction === 'SHORT'
+      ? card.direction
+      : undefined), input.lane);
+    if (!direction) {
+      blockers.push({ code: 'SCANNER_QUALITY_DIRECTION_REQUIRED', symbol });
       continue;
     }
-    const direction = directions[0]!;
+    cardsByIdentity.set(`${symbol}|${direction}`, { symbol, direction });
+  }
+
+  for (const [rankingKey, { symbol, direction }] of cardsByIdentity.entries()) {
     const promotion = expectedPromotionIdentity(input.lane, direction, researchCodeSha);
     if (!promotion) {
       blockers.push({ code: 'SCANNER_QUALITY_PROMOTION_IDENTITY_REQUIRED', symbol });
@@ -278,7 +277,7 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
       blockers.push({ code: 'SCANNER_QUALITY_MINIMUM_GATE_FAILED', symbol });
       continue;
     }
-    backtests[symbol] = quality;
+    backtests[input.lane.market === 'CRYPTO_FUTURES' ? rankingKey : symbol] = quality;
     matchedSymbols.push(symbol);
   }
 
@@ -289,7 +288,7 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
     schemaVersion: 'forward-observer-scanner-quality-selection-v1',
     status,
     backtests: Object.freeze({ ...backtests }),
-    matchedSymbols: Object.freeze([...matchedSymbols].sort()),
+    matchedSymbols: Object.freeze([...new Set(matchedSymbols)].sort()),
     blockers: Object.freeze(blockers.map((blocker) => Object.freeze(blocker))),
     executionAuthority: 'NONE',
     automaticPromotionAuthority: false,

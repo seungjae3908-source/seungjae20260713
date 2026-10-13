@@ -50,6 +50,8 @@ on:
       - api-server/src/services/scanner-universe.service.ts
       - api-server/src/services/stock-signal-scanner-aggregation.test.ts
       - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/telegram-v3-current-source.service.test.ts
+      - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/unified-asset-search-fallback.test.ts
       - api-server/src/services/unified-asset-search.service.ts
       - api-server/test.mjs
@@ -59,11 +61,13 @@ on:
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/canonical-adapter.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
       - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
       - signal-intelligence-v3/src/public-stock-provider-adapter.mjs
       - signal-intelligence-v3/src/server.mjs
       - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/canonical-adapter.test.mjs
       - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
       - signal-intelligence-v3/tests/public-stock-provider-adapter.test.mjs

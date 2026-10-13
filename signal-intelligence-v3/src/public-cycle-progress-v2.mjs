@@ -6,7 +6,7 @@ const sources = {
 };
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const lanes = ['KR', 'US', 'SPOT', 'FUTURES'].flatMap(m =>
-  ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
+  ['SCALPING_15M', m === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
 const marketForLane = lane => ({ KR: 'KR_STOCK', US: 'US_STOCK', SPOT: 'CRYPTO_SPOT', FUTURES: 'CRYPTO_FUTURES' })[lane?.split('_')[0]];
 
 export function publicCyclePageDecision(response, market, cursor, expectedRosterId) {
