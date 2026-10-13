@@ -7,6 +7,9 @@ on:
       - '.github/scripts/research-isolated-release.cjs'
       - '.github/tests/research-isolated-release.test.cjs'
       - '.github/scripts/research-audit-approval-lifecycle.cjs'
+      - '.github/scripts/research-financial-base-preservation.cjs'
+      - '.github/tests/research-financial-base-preservation.test.cjs'
+      - 'research-production/test/research-one-pass-source-integration.test.mjs'
       - '.github/tests/research-audit-approval-lifecycle.test.cjs'
       - '.github/workflows/research-audit-approval-lifecycle.yml'
       - 'api-server/scripts/release-candidate-provenance.cjs'
@@ -39,11 +42,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify actual PR base preserves all five financial files
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {execFileSync}=require('node:child_process');
+            const {authorizeResearchFinancialPreservation}=require('./.github/scripts/research-financial-base-preservation.cjs');
+            const checkedOutSha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
+            const proof=await authorizeResearchFinancialPreservation({github,context,checkedOutSha});
+            core.info(JSON.stringify(proof));
       - name: Test canonical CI reuse, stale/tampered proofs, authority and host isolation
         run: |
           set -Eeuo pipefail
           node --check .github/scripts/research-isolated-release.cjs
-          node --test .github/tests/research-isolated-release.test.cjs .github/tests/research-audit-approval-lifecycle.test.cjs
+          node --test .github/tests/research-isolated-release.test.cjs .github/tests/research-audit-approval-lifecycle.test.cjs .github/tests/research-financial-base-preservation.test.cjs
       - name: Existing Research activation and read-only preflight regressions
         run: |
           set -Eeuo pipefail
