@@ -148,6 +148,19 @@ test('hard data-quality failure is never relaxed to fill top ten', () => {
   assert.equal(result.diagnostics.hardFilterRejectedCount, 1);
 });
 
+test('futures quality is selected by symbol and direction without cross-credit', () => {
+  const long = card('BTCUSDT', 90);
+  long.assetClass = 'coin_futures'; long.action = 'LONG'; long.direction = 'LONG';
+  const short = { ...long, signalId: 'btc-short', action: 'SHORT' as const, direction: 'SHORT' as const };
+  const result = rankScannerCandidates({
+    cards: [long, short], market: 'futures', strategy: 'swing',
+    backtests: { 'BTCUSDT|LONG': verified() },
+  });
+  assert.equal(result.cards.find((item) => item.direction === 'LONG')?.signalGrade, 'S');
+  assert.equal(result.cards.find((item) => item.direction === 'SHORT')?.signalGrade, 'B');
+  assert.equal(result.diagnostics.backtestMissingCount, 1);
+});
+
 test('top ten is a maximum and does not synthesize extra candidates', () => {
   const cards = Array.from({ length: 13 }, (_, index) => card(`S${index}`, 70 + index));
   const result = rankScannerCandidates({ cards, market: 'KR', strategy: 'swing', limit: 10 });

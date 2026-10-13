@@ -32,24 +32,24 @@ async function install(page:Page,payload:unknown){
   await page.goto('/research-center');
   await expect(page.getByRole('button',{name:'요약',exact:true})).toHaveAttribute('aria-pressed','true');
   await page.getByRole('button',{name:'영상',exact:true}).click();
-  await page.getByText('기술 상태 자세히 보기',{exact:true}).click();
   const panel=page.getByTestId('research-video-panel');await expect(panel).toBeVisible();
   return {panel,calls,external,errors};
 }
 for(const width of [320,1440]){
   test(`source reader preserves measured provenance at ${width}px`,async({page})=>{
     await page.setViewportSize({width,height:900});const h=await install(page,evidence);
-    await expect(h.panel).toContainText('MEASURED · sanitized reader connected · 1 source');
-    for(const id of ['video-discovery-state','video-transcript-state','video-strategy-state','video-evidence-state','video-validation-state'])await expect(page.getByTestId(id)).toBeVisible();
+    await expect(page.getByTestId('video-source-count')).toContainText('1개');
+    for(const id of ['video-source-count','video-discovery-state','video-validation-state','video-review-count'])await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('video-detail-record-0')).toContainText('TEST_ONLY source');
-    await expect(page.getByTestId('video-strategy-state')).toContainText('BLOCKED_TRANSCRIPT_NOT_PROVIDED');
-    await expect(page.getByTestId('video-evidence-state')).toContainText('aaaaaaaaaaaa');
-    for(const word of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(word);
-    await expect(page.getByTestId('video-discovery-state')).toContainText('TIMER-MODE 실행 확인');
-    await expect(h.panel).toContainText('AI review');
-    await expect(page.getByTestId('video-validation-state')).toContainText('TIMER 실행 확인');
-    await expect(page.getByTestId('video-validation-state')).toContainText('0 / 1');
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('timer evidence proven from systemd trigger correlation');
+    await expect(page.getByTestId('video-detail-record-0')).toContainText('전사본 없음');
+    await expect(page.getByTestId('video-detail-record-0')).toContainText('사용 가능한 전사본 필요');
+    await expect(page.getByTestId('video-discovery-state')).toContainText('자동 실행 확인');
+    await expect(page.getByTestId('video-validation-state')).toContainText('검토 기록 있음');
+    await expect(page.getByTestId('video-review-count')).toContainText('1건');
+    await page.getByText('수집·분석 기록',{exact:true}).click();
+    await expect(h.panel).toContainText('aaaaaaaaaaaa');
+    await expect(h.panel).toContainText('0 / 1');
+    await expect(h.panel).toContainText('수익성 증거로 사용하지 않음');
     expect(h.calls.length).toBeGreaterThan(0);expect(h.calls.every(x=>x.method==='GET'&&x.auth)).toBe(true);
     expect(h.external).toEqual([]);expect(h.errors).toEqual([]);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(2);
@@ -59,26 +59,34 @@ for(const width of [320,1440]){
     const records=['NOT_AUTHORIZED','UNAVAILABLE','NOT_PROVIDED'].map((status,i)=>({...row,videoId:`TEST_${i}`,canonicalUrl:`https://www.youtube.com/watch?v=TEST_${i}`,title:`TEST source ${i}`,transcriptStatus:status}));
     await install(page,{...evidence,sourceCount:3,records});
     for(let i=0;i<3;i++)await expect(page.getByTestId(`video-detail-record-${i}`)).toContainText(records[i].transcriptStatus);
-    await expect(page.getByTestId('video-transcript-state')).toContainText('MULTI_SOURCE');
+    await expect(page.getByTestId('video-source-count')).toContainText('3개');
+    await expect(page.getByTestId('video-detail-record-0')).toContainText('전사본 사용 권한 필요');
   });
 }
 test('missing source stays unknown while safe AI status remains visible',async({page})=>{
   const waitingAutomation={...automation,status:'WAITING_CONFIGURATION',query:null,sourceCount:null,snapshotDigest:null,providerNetworkCalls:0,scheduledInvocationObserved:false,reason:'YOUTUBE_PROVIDER_NOT_CONFIGURED',nextRequiredStep:'CONFIGURE_APPROVED_READ_ONLY_YOUTUBE_DISCOVERY',snapshotBound:false};
   const {panel}=await install(page,{available:false,dataState:'UNKNOWN',reason:'VIDEO_RESEARCH_SNAPSHOT_MISSING',automation:waitingAutomation,aiReview});
-  await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
-  await expect(panel).toContainText('설정 대기');
-  await expect(panel).toContainText('TIMER 실행 확인');
-  await expect(page.getByTestId('video-evidence-state')).toContainText('UNKNOWN — missing runtime snapshot != 0');
-  await expect(page.getByTestId('video-cluster-empty-state')).toContainText('missing을 0으로 만들지 않습니다');
+  await expect(page.getByTestId('video-source-count')).toContainText('미확인');
+  await expect(page.getByTestId('video-source-count')).not.toContainText('0개');
+  await expect(panel).toContainText('설정·자료 확인 필요');
+  await expect(page.getByTestId('video-review-count')).toContainText('1건');
+  await expect(panel).toContainText('영상 수집 결과를 아직 확인하지 못했습니다');
 });
 test('automation from a different snapshot lineage never proves current timer execution',async({page})=>{
   const unbound={...evidence,automation:{...automation,snapshotBound:false}};
   await install(page,unbound);
-  await expect(page.getByTestId('video-discovery-state')).toContainText('lineage 미결합');
-  await expect(page.getByTestId('video-discovery-state')).not.toContainText('TIMER-MODE 실행 확인');
+  await expect(page.getByTestId('video-discovery-state')).toContainText('기록 연결 확인 필요');
+  await expect(page.getByTestId('video-discovery-state')).not.toContainText('자동 실행 확인');
 });
 test('malformed provenance cannot become measured',async({page})=>{
   const {panel}=await install(page,{...evidence,snapshotProvenance:{...evidence.snapshotProvenance,sourceHeadSha:'invalid'}});
-  await expect(panel).not.toContainText('MEASURED · sanitized reader connected');
-  await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+  await expect(page.getByTestId('video-source-count')).toContainText('미확인');
+  await expect(page.getByTestId('video-detail-record-0')).toHaveCount(0);
+  await expect(panel).toContainText('영상 수집 결과를 아직 확인하지 못했습니다');
+});
+
+test('a successful empty AI scan never becomes a completed source analysis',async({page})=>{
+  await install(page,{...evidence,aiReview:{...aiReview,reviewCount:0,criticReviewCount:0,providerNetworkCalls:0}});
+  await expect(page.getByTestId('video-validation-state')).toContainText('분석기 실행 · 검토 0건');
+  await expect(page.getByTestId('video-validation-state')).not.toContainText('검토 기록 있음');
 });

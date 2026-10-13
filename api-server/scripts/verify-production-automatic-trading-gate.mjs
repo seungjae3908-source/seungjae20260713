@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const manualReceipts = read('.github/scripts/production-manual-live-receipts.cjs');
 const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
 const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
 const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
@@ -14,15 +15,20 @@ const paperJournalRoute = read('api-server/src/routes/paper-journal.ts');
 const paperJournalRepo = read('api-server/src/services/paper-journal-supabase.repository.ts');
 const paperJournalSmoke = read('api-server/src/routes/paper-journal.smoke.test.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
+const exitPlan = read('api-server/src/services/member-auto-trading-exit-plan.service.ts');
+const exitPlanTest = read('api-server/src/services/member-auto-trading-exit-plan.service.test.ts');
+const automaticLiveBudgetTest = read('api-server/src/services/automatic-live-budget.service.test.ts');
 const handoffContract = read('api-server/src/services/member-auto-trading-ai-review-evidence.service.ts');
 const liveEntryArm = read('api-server/src/services/member-auto-trading-live-arm.service.ts');
-const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
 const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
 const liveConnectionVerification = read('api-server/src/services/live-connection-verification.service.ts');
 const liveExecution = read('api-server/src/services/trade-execution.service.ts');
+const positionIsolation = read('api-server/src/services/automatic-live-position-isolation.service.ts');
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
+const holdingsPanel = read('stock-analyzer/src/components/trading-holdings-panel.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
 const tradeAutomationPolicyGuard = read('api-server/src/services/trade-automation-policy-guard.service.ts');
 const tradeAutomationPolicyGuardTest = read('api-server/src/services/trade-automation-policy-guard.service.test.ts');
@@ -38,7 +44,8 @@ const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-p
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
-const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
+const budgetMigration = read('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql');
+const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -46,6 +53,66 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// Staged exits are part of the Production order-authority boundary. A restart
+// must rebuild target progress from durable fills, a partial child order may
+// never exceed the provider position, and same-symbol re-entry is allowed only
+// after a confirmed full canonical exit. Keep these checks in the protected
+// activation gate rather than relying on an unowned Research test path.
+for (const token of [
+  'automaticExitDecision',
+  'completedTargetIndexes?: readonly number[]',
+  "'TRAILING_TAKE_PROFIT'",
+  'A fill at a later rung also proves every earlier price rung was crossed.',
+  'quantity: input.remainingQuantity',
+]) requireText(exitPlan, token, 'AUTO_GATE_STAGED_EXIT_DECISION_CONTRACT_MISSING');
+for (const token of [
+  'completedTargetIndexes: [...new Set(exits.flatMap((row) => {',
+  'const initialDecision = decide(mark.price);',
+  "throw new Error('BACKGROUND_EXIT_QUANTITY_EXCEEDS_PROVIDER_POSITION')",
+  'confirmedDecision.targetIndex !== initialDecision.targetIndex',
+]) requireText(paperWorker, token, 'AUTO_GATE_STAGED_EXIT_WORKER_CONTRACT_MISSING');
+for (const token of [
+  'multiple targets take a venue-valid partial profit and leave the final target for the remainder',
+  'completed target progress ratchets a restart-safe trailing exit for long and short remainders',
+  'a persisted later target cumulatively completes earlier rungs after restart',
+  'target stage is persisted in exit identity and rejects malformed stage metadata',
+  'four-market reducing exits preserve broker, market, and LONG/SHORT direction without an order transport',
+]) requireText(exitPlanTest, token, 'AUTO_GATE_STAGED_EXIT_DECISION_REGRESSION_MISSING');
+requireText(paperWorkerTest,
+  'Paper target progress survives worker restarts, avoids duplicate exits, and trails the remainder',
+  'AUTO_GATE_STAGED_EXIT_RESTART_REGRESSION_MISSING');
+requireText(automaticLiveBudgetTest,
+  'a fresh signal may re-enter the same instrument only after a confirmed full canonical exit',
+  'AUTO_GATE_CONFIRMED_EXIT_REENTRY_REGRESSION_MISSING');
+
+// A migration proof must install under hosted non-superuser privileges without
+// replacing definition-drift verification with a caller-controlled parameter.
+requireText(budgetMigration, 'automatic_live_budget_expected_schema_fingerprint()', 'AUTO_GATE_OWNER_BOUND_BUDGET_PROOF_MISSING');
+requireText(budgetMigration, "substring(p.prosrc from '^select ''([0-9a-f]{32})''::text;$')", 'AUTO_GATE_SEALED_BUDGET_LITERAL_CHECK_MISSING');
+requireText(budgetMigration, "not pg_has_role('service_role',p.proowner,'MEMBER')", 'AUTO_GATE_RUNTIME_BUDGET_PROOF_OWNERSHIP_FORBIDDEN');
+forbid(budgetMigration, /automatic_live_guard\.expected_schema_fingerprint/u, 'AUTO_GATE_CUSTOM_PARAMETER_AUTHORITY_FORBIDDEN');
+requireText(workflow, 'node --test .github/tests/production-auto-live-budget-contract.test.mjs', 'AUTO_GATE_BUDGET_PROOF_REGRESSION_WIRING_MISSING');
+
+// Account connectivity uses read-only vault keys; execution reuse has a distinct
+// Kiwoom key name. The shared worker/pre-submit/holdings reader must bridge it
+// only after decryption, without writing the vault or accepting conflicting keys.
+for (const token of [
+  'automaticExecutionReadonlyCredentials(provider, decryptTradingCredentials(envelope))',
+  "if (provider !== 'kiwoom') return raw",
+  "if (appSecret && secretKey && appSecret !== secretKey) throw new Error('CREDENTIALS_UNAVAILABLE')",
+  'appSecret: appSecret || secretKey',
+  "async save() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+  "async remove() { throw new Error('READONLY_REQUEST_REJECTED'); }",
+]) requireText(positionIsolation, token, 'AUTO_GATE_EXECUTION_READONLY_CREDENTIAL_CONTRACT_MISSING');
+for (const token of [
+  'execution read-only credential adaptation preserves other providers and rejects ambiguous Kiwoom keys',
+  'Kiwoom execution-vault keys drive only authenticated read-only snapshots for isolation and holdings',
+  'encryptTradingCredentials(source)',
+  "'/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom'",
+  'assert.equal(calls, 0)',
+]) requireText(tradeAutomationSmoke, token, 'AUTO_GATE_ENCRYPTED_READONLY_CREDENTIAL_REGRESSION_MISSING');
+requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUTO_GATE_ENCRYPTED_CREDENTIAL_CHECK_WIRING_MISSING');
 
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
@@ -56,11 +123,28 @@ requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_G
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
 
-// A fresh 500k automatic Paper wallet is a separate virtual ledger. Existing
+// A previously unverified 4-market Paper wallet can raise HTTP 400 on the
+// holdings GET. The UI must refuse the request until the SAME authenticated
+// account's wallet epoch and RLS guard are both proven. The strict backend
+// rejection stays unchanged; manual Paper and manual LIVE are unaffected.
+for (const [input, token, code] of [
+  [autoTradingPage, 'const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync', 'AUTO_PAPER_HOLDINGS_MEMBER_AUTH_REQUIRED'],
+  [autoTradingPage, 'autoPaperRuntimeReadiness?.paperWalletReady === true', 'AUTO_PAPER_HOLDINGS_WALLET_PROOF_REQUIRED'],
+  [autoTradingPage, 'autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true', 'AUTO_PAPER_HOLDINGS_DB_PROOF_REQUIRED'],
+  [autoTradingPage, "paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable", 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
+  [autoTradingPage, "enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}", 'AUTO_PAPER_HOLDINGS_READ_GATE_REQUIRED'],
+  [holdingsPanel, 'const snapshots = enabled ? query.data?.snapshots : undefined;', 'AUTO_PAPER_HOLDINGS_CACHED_SCOPE_GUARD_REQUIRED'],
+  [holdingsPanel, 'enabled: enabled && fixture == null', 'AUTO_PAPER_HOLDINGS_QUERY_DISABLED_REQUIRED'],
+  [workflow, 'stock-analyzer/src/components/trading-holdings-panel.tsx', 'AUTO_PAPER_HOLDINGS_CI_SCOPE_REQUIRED'],
+]) requireText(input, token, code);
+
+// A fresh 1M automatic Paper wallet is a separate virtual ledger. Existing
 // automatic Paper fills, manual wallets and incomplete history must never be
 // replaced or interpreted as proof of an empty account.
 for (const [input, token, code] of [
-  [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'", 'AUTO_PAPER_WALLET_ID_MISSING'],
+  [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m'", 'AUTO_PAPER_WALLET_ID_MISSING'],
+  [paperWorker, "'automatic-paper-account-v1'", 'AUTO_PAPER_LEGACY_WALLET_ID_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const', 'AUTO_PAPER_1M_BASELINE_MISSING'],
   [paperWorker, 'selectAutomaticPaperAccountEquity(records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
   [paperWorker, 'inspectAdminFourMarketPaperWallets(records, nowMs)', 'ADMIN_FOUR_MARKET_PAPER_WALLET_INTEGRITY_MISSING'],
   [paperWorker, 'adminMarketPaperRiskBudget(marketBudgetInput)', 'ADMIN_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
@@ -133,11 +217,16 @@ for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) 
   requireText(workflow, market, 'AUTO_GATE_MARKET_MISSING');
 }
 
-requireText(workflow, 'providers: kiwoom,toss,upbit', 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
-requireText(workflow, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
-requireText(workflow, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_SPOT_MANUAL_GATE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_FUTURES_MANUAL_GATE_MISSING');
+requireText(workflow, 'await inspectManualLiveReceipts({', 'AUTO_GATE_MANUAL_RECEIPT_VERIFIER_WIRING_MISSING');
+requireText(manualReceipts, "field(body, 'providers') !== 'kiwoom,toss,upbit'", 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
+requireText(manualReceipts, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
+requireText(manualReceipts, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
+requireText(manualReceipts, 'AUTOMATIC_TRADING_EXACT_${kind.toUpperCase()}_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_BOTH_MANUAL_RECEIPTS_REQUIRED');
+for (const proof of ["comment?.user?.login !== 'github-actions[bot]'", 'at < deploymentAt',
+  "field(body, 'target_sha') !== targetSha", '/^[2-7]$/u', 'run.head_sha === targetSha',
+  "run.status === 'completed' && run.conclusion === 'success'", 'run.path === expectedPath']) {
+  requireText(manualReceipts, proof, 'AUTO_GATE_MANUAL_RECEIPT_PROVENANCE_MISSING');
+}
 requireText(workflow, 'const ciRunId = release.requiredCiRunId;', 'AUTO_GATE_REQUIRED_CI_HELPER_WIRING_MISSING');
 requireText(workflow, 'Date.parse(release.productionDeployCompletedAt)', 'AUTO_GATE_DEPLOYMENT_BOUNDARY_HELPER_WIRING_MISSING');
 requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_6_OF_6', 'AUTO_GATE_REQUIRED_CI_6_OF_6_HELPER_MISSING');
@@ -156,21 +245,41 @@ requireText(preactivationEvidence, 'PREACTIVATION_PROVIDER_NOT_READY:', 'AUTO_GA
 requireText(postdeployEvidence, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
 requireText(postdeployEvidence, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
 requireText(postdeployEvidence, 'assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });', 'AUTO_GATE_POSTDEPLOY_ACCOUNT_RECEIPT_REQUIRED');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED', 'AUTO_GATE_PAPER_RUNTIME_RECEIPT_MISSING');
-requireText(workflow, 'paper-forward-no-deploy-', 'AUTO_GATE_PAPER_RUNTIME_ARTIFACT_MISSING');
-requireText(workflow, '--activation-artifact', 'AUTO_GATE_PAPER_ACTIVATION_VERIFY_MISSING');
-requireText(workflow, '--runtime-artifact', 'AUTO_GATE_PAPER_RUNTIME_VERIFY_MISSING');
-requireText(workflow, 'validateMemberAutoTradingPaperHandoff', 'AUTO_GATE_CANONICAL_HANDOFF_VALIDATION_MISSING');
-requireText(workflow, 'PAPER_FORWARD_LAST_INVOCATION_STALE', 'AUTO_GATE_PAPER_RUNTIME_FRESHNESS_MISSING');
-requireText(workflow, "validated.status !== 'READY'", 'AUTO_GATE_PAPER_HANDOFF_READY_MISSING');
-requireText(paperReadiness, 'production-paper-forward-runtime-readiness-v1', 'AUTO_GATE_PAPER_READINESS_SCHEMA_MISSING');
-requireText(paperReadiness, 'RUNTIME_HANDOFF_CANONICAL_VALIDATION_MISSING', 'AUTO_GATE_PAPER_CANONICAL_EVIDENCE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED', 'AUTO_GATE_TELEGRAM_RELEASE_RECEIPT_MISSING');
-requireText(workflow, 'telegram-production-runtime-verification-', 'AUTO_GATE_TELEGRAM_RUNTIME_ARTIFACT_MISSING');
-requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'AUTO_GATE_TELEGRAM_RUNTIME_VERIFIER_MISSING');
-requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
+forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
+  'AUTO_GATE_OPTIONAL_FEATURE_COUPLING_FORBIDDEN');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
+requireText(workflow, 'await requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'const automaticLiveHandoffPath =', 'AUTO_GATE_ISOLATED_SOURCE_CONSTANT_MISSING');
+requireText(workflow, '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json',
+  'AUTO_GATE_ISOLATED_SOURCE_PATH_MISSING');
+requireText(workflow, 'const handoffPath = automaticLiveHandoffPath;', 'AUTO_GATE_PREARM_ISOLATED_PATH_NOT_USED');
+requireText(workflow, 'published.default?.readProductionAutoLiveSignalHandoff', 'AUTO_GATE_NOFOLLOW_READER_MISSING');
+requireText(workflow, 'h = readTrustedHandoff(handoffPath);', 'AUTO_GATE_HANDOFF_READER_NOT_CALLED');
+requireText(workflow, 'MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath',
+  'AUTO_GATE_PM2_ISOLATED_BINDING_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID',
+  'AUTO_GATE_ACTIVE_PM2_SOURCE_RECHECK_MISSING');
+requireText(workflow, "MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')",
+  'AUTO_GATE_DISABLE_SOURCE_PRESERVATION_MISSING');
+forbid(workflow, /\/opt\/stock-app-data\/paper-forward-v1\/runtime-state\/handoff\/member-auto-trading-latest\.json/u,
+  'AUTO_GATE_PAPER_SIGNAL_FALLBACK_FORBIDDEN');
+requireText(workflow, 'ops/production-auto-live-signal-identity.cjs', 'AUTO_GATE_PREARM_CANONICAL_SOURCE_NOT_IMPORTED');
+requireText(workflow, 'verifyProductionAutoLivePrearmHandoff', 'AUTO_GATE_PREARM_CANONICAL_CHECK_NOT_CALLED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE', 'AUTO_GATE_PREARM_MODULE_MISSING_BLOCK');
+requireText(workflow, "signal.producerInvocationVerified !== false", 'AUTO_GATE_PREARM_NO_FAKE_ISSUER_MISSING');
+requireText(workflow, 'node --test .github/scripts/production-auto-live-signal-identity.test.cjs', 'AUTO_GATE_PREARM_TEST_WIRING_MISSING');
+requireText(signalIdentity, 'validateMemberAutoTradingPaperHandoff(value, nowMs)', 'AUTO_GATE_PREARM_CANONICAL_DIGEST_VALIDATION_MISSING');
+requireText(signalIdentity, 'sourceTransportOnly', 'AUTO_GATE_PREARM_TRANSPORT_ONLY_PROOF_MISSING');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID', 'AUTO_GATE_PREARM_DIGEST_FAILURE_NOT_BLOCKED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID', 'AUTO_GATE_PREARM_HANDOFF_MISSING_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE', 'AUTO_GATE_PREARM_HANDOFF_FRESHNESS_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH', 'AUTO_GATE_PREARM_HANDOFF_SHA_BLOCK');
+const preArmCall = workflow.indexOf('requireFreshPublishedHandoff(before);');
+const pm2Enable = workflow.indexOf('restartAutomatic(true, before);', preArmCall);
+if (preArmCall < 0 || pm2Enable < 0 || preArmCall >= pm2Enable) {
+  throw new Error('AUTO_GATE_PREARM_GUARD_MUST_PRECEDE_ANY_MUTATION');
+}
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
@@ -189,17 +298,8 @@ requireText(workflow, 'health?.liveCyclePolicyReady === true', 'AUTO_GATE_LIVE_C
 requireText(workflow, 'health?.liveCycleAllFourPolicyReady === true', 'AUTO_GATE_LIVE_CYCLE_ALL4_POLICY_READY_MISSING');
 requireText(workflow, 'attempt < 360', 'AUTO_GATE_ROTATING_MEMBER_POLL_WINDOW_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
-requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
-requireText(workflow, 'last?.userTelegramDelivery?.deliveryConfirmed === true', 'AUTO_GATE_TELEGRAM_DELIVERY_PROOF_MISSING');
-requireText(workflow, '&& telegramProofFresh', 'AUTO_GATE_RECENT_DELIVERY_PROOF_REQUIRED');
-requireText(telegramWorker, 'recentConfirmedDelivery(nowMs = Date.now())', 'AUTO_GATE_DURABLE_TELEGRAM_RECEIPT_REQUIRED');
-requireText(telegramWorker, 'const restoreProof = deliverySource.recentConfirmedDelivery()', 'AUTO_GATE_TELEGRAM_RESTART_PROOF_RESTORE_MISSING');
-requireText(paperWorker, "memberTelegramConnected?.(member.userId)", 'AUTO_GATE_MEMBER_TELEGRAM_BINDING_CHECK_MISSING');
 requireText(workflow, "const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''))", 'AUTO_GATE_AUTO_HEALTH_TIMESTAMP_MISSING');
-requireText(workflow, "const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''))", 'AUTO_GATE_TELEGRAM_HEALTH_TIMESTAMP_MISSING');
 requireText(workflow, 'nowMs - autoLastTickMs <= 360_000', 'AUTO_GATE_AUTO_HEALTH_FRESHNESS_MISSING');
-requireText(workflow, 'nowMs - telegramLastTickMs <= 360_000', 'AUTO_GATE_TELEGRAM_HEALTH_FRESHNESS_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE', 'AUTO_GATE_TELEGRAM_PM2_FLAGS_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false', 'AUTO_GATE_FIRST_TICK_ENTRY_BLOCK_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_ORDER_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_EXIT_PROOF_MISSING');
@@ -218,7 +318,7 @@ requireText(workflow, "'live_cycle_order_eligible=true'", 'AUTO_GATE_CYCLE_ORDER
 requireText(workflow, "'live_cycle_policy_ready=true'", 'AUTO_GATE_CYCLE_POLICY_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_cycle_all_four_policy_ready=true'", 'AUTO_GATE_CYCLE_ALL4_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
-requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
+requireText(workflow, "'optional_telegram_state_preserved=true'", 'AUTO_GATE_OPTIONAL_TELEGRAM_PRESERVATION_RECEIPT_MISSING');
 requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS', 'AUTO_GATE_DISABLE_OPEN_POSITION_BLOCK_MISSING');
 requireText(workflow, 'autoHealth?.liveTrackedPositions', 'AUTO_GATE_DISABLE_POSITION_HEALTH_MISSING');
@@ -254,6 +354,44 @@ requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOL
 requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
 
 forbid(paperWorker, /signalReasons\.filter\(\(reason\) => reason !== 'CANONICAL_PAPER_HANDOFF'\)/u, 'AUTO_GATE_PAPER_LINEAGE_REMOVAL_FORBIDDEN');
+
+const installJobStart = workflow.indexOf('  install-public-signal:');
+if (installJobStart < 0) throw new Error('AUTO_PUBLIC_COLLECTOR_SEPARATE_OWNER_INSTALL_JOB_MISSING');
+const sourceOnlyJob = workflow.slice(installJobStart);
+for (const part of [
+  "startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  "environment: production",
+  "ref: main",
+  "AUTO_LIVE_PUBLIC_INSTALL_REQUIRES_EXACT_CURRENT_MAIN",
+  "AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED",
+  "run.event === 'workflow_dispatch'",
+  "AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT",
+  "AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH",
+  "AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH",
+  "AUTO_LIVE_PUBLIC_INSTALL_CRON_READBACK_UNAVAILABLE",
+  "AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID",
+  "status:'CONFIGURATION_VERIFIED_ONLY'",
+  "inspectManagedPaperForwardSchedule(",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true",
+  "AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true",
+  "ops/production-auto-live-signal-identity.cjs",
+  "AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID",
+  "private_provider_calls: 0",
+  "live_auto_authority_granted: false",
+  "24_hour_uninterrupted_collection_verified: false",
+]) requireText(sourceOnlyJob, part, 'AUTO_PUBLIC_COLLECTOR_SOURCE_ONLY_CONTRACT_DRIFT');
+requireText(workflow, "|| startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  'AUTO_PUBLIC_COLLECTOR_CONCURRENCY_MISSING');
+forbid(sourceOnlyJob, /\bpm2\s+(?:start|restart|delete|save|set)\b/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_PM2');
+forbid(sourceOnlyJob, /ops\/(?:disable|install)-paper-forward-schedule\.sh/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_TOUCH_PAPER_SCHEDULE');
+forbid(sourceOnlyJob, /(?:psql|supabase)\s+(?:db|migration|run|sql|execute)/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_DB');
+forbid(sourceOnlyJob, /AUTO_TRADING[ \t]*[:=][ \t]*['"]?true|LIVE_TRADING[ \t]*[:=][ \t]*['"]?true/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_ARM_LIVE');
+
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /if:\s*\$\{\{\s*false\s*\}\}/u, 'AUTO_GATE_YAML_DEAD_VALIDATION_BLOCK_FORBIDDEN');
@@ -320,21 +458,16 @@ for (const token of [
   'liveExitsSuppressedByWarmupOrArm',
   "if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders'))",
   "const liveEntriesArmedThisTick = liveExitsArmedThisTick",
-  "&& liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;",
-  "this.source.telegramDeliveryHealthy?.(Date.now()) !== true",
-  "result.liveEntriesSuppressedByTelegram += 1;",
-  "telegramDeliveryHealthy(nowMs: number)",
+  "&& !this.liveCycleHardWarmupBlocked;",
   'liveAllFourConnectionVerificationReady',
   "const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];",
   'liveAllFourConnectionVerificationReady(policy, connections, nowMs)',
   'liveProviderSnapshotReadyForAutomaticWarmup',
-  "snapshot.openOrders.length > 0",
-  "snapshot.positionMode !== 'one_way_mode'",
-  "String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated'",
-  "leverage < 2 || leverage > 7",
+  'assertAutomaticLiveSnapshotIsolation(snapshot, owned, maximumLeverage)',
   "this.readLiveAccountSnapshot(userId, provider)",
   '&& liveSnapshotsReady',
-  'runtime.paperAccountReady',
+  'paperReadEnabled = true',
+  'hasCapability(member.profile, \'canManageMembers\'), !liveModeRequested)',
   'executionSyncBlocks',
   'executionSyncMissingReferences',
   'if (synced.missingReferences > 0)',
@@ -374,10 +507,8 @@ for (const token of [
   'this.memberBatchCursor = hasMore && lastUserId ? lastUserId : null;',
   'const refreshRuntime = async () =>',
   'Always re-read canonical exposure at the entry boundary',
-  // A canonical projection is not enough: admin Paper entry must also
-  // have an attested database-side write barrier (RLS) before we trust fills.
-  'let entryProjectionHealthy = adminWalletDbGuardReady',
-  '&& await syncExecutionProjection();',
+  'let entryProjectionHealthy = liveModeRequested',
+  '? true',
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
@@ -391,30 +522,150 @@ requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_
 requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
 requireText(paperWorker, 'if (!await liveEntryArmPresent())', 'AUTO_GATE_WORKER_REARM_MISSING');
 requireText(paperWorker, "liveExitsSuppressedByPolicy", 'AUTO_GATE_STOPPED_LIVE_POSITION_VISIBILITY_MISSING');
-requireText(paperWorker, 'memberTelegramProofMatchesCurrentBinding', 'AUTO_GATE_MEMBER_CHAT_REBIND_PROOF_MISSING');
-requireText(paperWorker, "'BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED'", 'AUTO_GATE_PROVIDER_UNTRACKED_POSITION_BLOCK_MISSING');
-requireText(paperWorker, "'BACKGROUND_MEMBER_TELEGRAM_SENT_RECEIPT_REQUIRED'", 'AUTO_GATE_MEMBER_SCOPED_TELEGRAM_RECEIPT_MISSING');
+requireText(paperWorker, 'canonicalAutomaticLivePositions(runtime.plans, runtime.orders)', 'AUTO_GATE_CANONICAL_POSITION_OWNERSHIP_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_MANUAL_ASSET_PROTECTED'", 'AUTO_GATE_MANUAL_ASSET_PROTECTION_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT'", 'AUTO_GATE_MIXED_POSITION_BLOCK_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_CANONICAL_EXIT_OWNERSHIP_REQUIRED'", 'AUTO_GATE_CANONICAL_EXIT_PROOF_MISSING');
+for (const token of ["snapshot.openOrders.length !== 0", "snapshot.positionMode !== 'one_way_mode'",
+  "position.marginMode !== 'isolated'", 'position.leverage! < 2 || position.leverage! > maximumLeverage']) {
+  requireText(positionIsolation, token, 'AUTO_GATE_ISOLATION_PROVIDER_SAFETY_MISSING');
+}
+requireText(liveExecution, 'await this.assertAutomaticLivePositionIsolation(userId, plan);', 'AUTO_GATE_SUBMISSION_POSITION_RECHECK_MISSING');
+requireText(workflow, '--require-automatic-position-isolation', 'AUTO_GATE_POSITION_ISOLATION_RECEIPT_MISSING');
+requireText(preactivationEvidence, 'assertAutomaticPositionIsolationReceipt(account)', 'AUTO_GATE_POSITION_ISOLATION_VERIFIER_MISSING');
 requireText(liveExecution, "throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY')", 'AUTO_GATE_PROVIDER_ARM_MISSING');
 requireText(liveExecution, 'await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);', 'AUTO_GATE_BITGET_MUTATION_ARM_GUARD_MISSING');
 requireText(liveExecution, "'AUTOMATIC_ENTRY_POLICY_REVOKED'", 'AUTO_GATE_AUTO_ORIGIN_POLICY_REVOCATION_GUARD_MISSING');
 requireText(liveExecution, "const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;", 'AUTO_GATE_STRICT_CURRENT_AUTO_AUTHORITY_MISSING');
 requireText(paperWorker, "result.handoffStatus = 'BLOCKED_DATA';", 'AUTO_GATE_BAD_HANDOFF_QUARANTINE_MISSING');
 requireText(paperWorker, 'selectRotatingHandoffEntries(', 'AUTO_GATE_FAIR_ENTRY_PAGING_MISSING');
-requireText(paperWorker, '&& await this.memberTelegramConnected(userId);', 'AUTO_GATE_READINESS_WITNESS_TELEGRAM_REQUIRED');
+requireText(paperWorker, "buildPlanInput(member, entry, runtime, fx, nowMs, 'live')", 'AUTO_GATE_LIVE_CANDIDATE_INDEPENDENCE_MISSING');
+requireText(paperWorker, 'if (!paperLaneReady && !liveModeRequested)', 'AUTO_GATE_PAPER_LANE_INDEPENDENCE_MISSING');
+forbid(paperWorker, /liveEntriesArmedThisTick[^;]+telegramDeliveryHealthy/us,
+  'AUTO_GATE_TELEGRAM_ENTRY_COUPLING_FORBIDDEN');
 requireText(paperWorker, 'formulaAiReviewReasonsForLive(input.entry, input.nowMs)', 'AUTO_GATE_FORMULA_AI_PROOF_FORWARDING_MISSING');
 requireText(paperWorker, "if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_BLOCKED_RUNTIME_STATUS_MISSING');
 requireText(paperWorker, "throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_MISSING_PROOF_BLOCK_MISSING');
 requireText(handoffContract, 'canonicalAiReviewEvidenceValid(', 'AUTO_GATE_CANONICAL_AI_REVIEW_VALIDATION_MISSING');
+const { createHash } = await import('node:crypto');
+const { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } = await import(
+  '../../.github/scripts/paper-forward-reviewed-paths.mjs'
+);
+const signalHandoffBridge = read('signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs');
+const signalHandoffBridgeTest = read('signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs');
+const signalPublicRunner = read('signal-intelligence-v3/scripts/run-public-scanner-cycle.ts');
+const signalCanonicalAdapter = read('signal-intelligence-v3/src/canonical-adapter.mjs');
+const signalCanonicalAdapterTest = read('signal-intelligence-v3/tests/canonical-adapter.test.mjs');
+const signalPublicProgress = read('signal-intelligence-v3/src/public-cycle-progress-v2.mjs');
+const publicProviderDiagnostics = read('signal-intelligence-v3/src/public-provider-diagnostics.mjs');
+const publicProviderDiagnosticsTest = read('signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs');
+const stockSignalScanner = read('api-server/src/services/stock-signal-scanner.service.ts');
+const telegramV3CurrentSource = read('api-server/src/services/telegram-v3-current-source.service.ts');
+const scannerCandidateRanking = read('api-server/src/services/scanner-candidate-ranking.service.ts');
+const scannerCandidateRankingTest = read('api-server/src/services/scanner-candidate-ranking.service.test.ts');
+const scannerQualityConsumer = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.ts');
+const scannerQualityConsumerTest = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts');
+const scannerIndicators = read('api-server/src/services/scanner-indicator-library.service.ts');
+const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.service.test.ts');
+const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
+const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
+const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 39
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 39
+  || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
+    !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
+  || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
+    !== '413c463c6c11d762643d558d778bd3d1ba635a213ef83fa44448898ee3f8cbdc') {
+  throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
+}
+for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
+  requireText(workflow, `      - ${path}`, 'AUTO_GATE_SIGNAL_PIPELINE_TRIGGER_MISSING');
+}
+requireText(scannerScope, '!fullAutomaticReview.has(path)', 'AUTO_GATE_SIGNAL_PIPELINE_SCANNER_PRECEDENCE_MISSING');
+requireText(workspaceScope, '...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS', 'AUTO_GATE_SIGNAL_PIPELINE_WORKSPACE_SCOPE_MISSING');
+requireText(paperScopeWorkflow, '--list-auto-signal-pipeline', 'AUTO_GATE_SIGNAL_PIPELINE_PAPER_SCOPE_MISSING');
+for (const token of [
+  'selectSignalAdmittedHandoffEntries',
+  "snapshot?.publicDataOnly !== true || snapshot?.rosterBindingVersion !== 1",
+  "snapshot?.safety?.executionAuthority !== 'NONE'",
+  "snapshot?.serviceSha !== expectedServiceSha",
+  "row?.state === 'CANDIDATE'",
+  'identity?.signalId === entry?.identity?.signalId',
+  'identity.parameterHash === entry.identity.parameterHash',
+]) requireText(signalHandoffBridge, token, 'AUTO_GATE_SIGNAL_V3_HANDOFF_CONTRACT_MISSING');
+for (const token of [
+  'four-market candidates are admitted only when Signal V3 keeps the exact canonical identity',
+  'no-order E2E publishes four-market scanner candidates and gates the same handoff for the worker',
+  'stale snapshots and identity mutations fail closed',
+  'assert.equal(published.safety.realOrderAllowed, false)',
+]) requireText(signalHandoffBridgeTest, token, 'AUTO_GATE_SIGNAL_V3_HANDOFF_REGRESSION_MISSING');
+for (const token of [
+  'enforceVetoOnlyHandoffSelection(',
+  "throw new Error('BACKGROUND_SIGNAL_SELECTION_NOT_VETO_ONLY')",
+  'MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_PATH',
+  'MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_SHA',
+  'expectedServiceSha: this.signalIntelligenceSha',
+  'signalOccurrenceId: `${entry.identity.signalId}@${String(entry.signal.timestampMs ?? entry.evaluatedAtMs)}`',
+]) requireText(paperWorker, token, 'AUTO_GATE_SIGNAL_V3_WORKER_ADMISSION_MISSING');
+for (const token of [
+  'SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE',
+  'SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT',
+  'validateMemberAutoTradingPaperHandoff(value, nowMs)',
+  'readForwardObserverScannerQualityArtifact',
+  "const STOCK_MEMBER_ID = 'signal-intelligence-forward-observer-public-only'",
+  "const CRYPTO_MEMBER_ID = 'forward-observer-public-only'",
+  "input.paperIdentity && input.card?.signalGrade === 'S'",
+  "market.prefix === 'SPOT' && profile.label === 'SWING'",
+  'selectSignalAdmittedHandoffEntries({',
+  'canonicalWorkerHandoff',
+  'handoffState = await canonicalHandoff(laneNowMs)',
+  'handoffState = await canonicalHandoff(publicationNowMs)',
+  'rosterBindingVersion: 1',
+  'publicDataOnly: true',
+]) requireText(signalPublicRunner, token, 'AUTO_GATE_SIGNAL_V3_PUBLIC_RUNNER_BINDING_MISSING');
+requireText(signalCanonicalAdapter, "return grade === 'S';", 'AUTO_GATE_SIGNAL_V3_EXACT_S_GRADE_MISSING');
+requireText(signalCanonicalAdapterTest,
+  'only an explicit S grade can cross the automatic-trading quant gate',
+  'AUTO_GATE_SIGNAL_V3_EXACT_S_GRADE_REGRESSION_MISSING');
+requireText(stockSignalScanner, 'backtests: request.backtests', 'AUTO_GATE_SCANNER_QUALITY_BINDING_MISSING');
+requireText(scannerCandidateRanking,
+  'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
+requireText(scannerCandidateRankingTest,
+  'futures quality is selected by symbol and direction without cross-credit',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_RANKING_REGRESSION_MISSING');
+requireText(scannerQualityConsumer, "input.lane.market === 'CRYPTO_FUTURES' ? rankingKey : symbol",
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_MISSING');
+requireText(scannerQualityConsumerTest,
+  'same-symbol mixed LONG and SHORT keep direction-isolated quality keys',
+  'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_REGRESSION_MISSING');
+requireText(signalPublicProgress, "m === 'SPOT' ? 'SWING_4H' : 'SWING_60M'",
+  'AUTO_GATE_SPOT_CANONICAL_TIMEFRAME_MISSING');
+requireText(telegramV3CurrentSource, "event.timeframe==='4H'?'SWING_4H'",
+  'AUTO_GATE_TELEGRAM_SPOT_CANONICAL_TIMEFRAME_MISSING');
+for (const token of [
+  'data.krx.co.kr', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
+  'api.upbit.com', 'api.bitget.com', 'MANAGED_PROXY_CONNECT_403', 'PROVIDER_HTTP_403',
+]) requireText(publicProviderDiagnostics, token, 'AUTO_GATE_PUBLIC_PROVIDER_DIAGNOSTIC_MISSING');
+requireText(publicProviderDiagnosticsTest,
+  'CONNECT 403 is distinguished from a provider HTTP 403 response',
+  'AUTO_GATE_PUBLIC_PROVIDER_CLASSIFICATION_REGRESSION_MISSING');
+for (const token of [
+  'index < candles.length - rightBars',
+  "ScannerWaveStructure = 'BULLISH' | 'BEARISH' | 'MIXED' | 'INSUFFICIENT'",
+]) requireText(scannerIndicators, token, 'AUTO_GATE_CONFIRMED_WAVE_CONTRACT_MISSING');
+requireText(scannerQuantTest,
+  'wave structure uses confirmed pivots and ignores an unconfirmed final-bar spike',
+  'AUTO_GATE_CONFIRMED_WAVE_REGRESSION_MISSING');
+requireText(tradeTypes, 'maxDailyOrders: 0', 'AUTO_GATE_UNLIMITED_DAILY_OPPORTUNITY_POLICY_MISSING');
+requireText(tradeTypes, 'signalOccurrenceId?: string | null', 'AUTO_GATE_SIGNAL_OCCURRENCE_ID_MISSING');
+requireText(tradeService, 'input.signalOccurrenceId.trim()', 'AUTO_GATE_SIGNAL_OCCURRENCE_IDEMPOTENCY_MISSING');
+requireText(tradeIntegrationTest,
+  'validated signal occurrences are idempotent within one event and allow a later repeat opportunity',
+  'AUTO_GATE_REPEAT_OPPORTUNITY_REGRESSION_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
-requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
-requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
-requireText(telegramWorker, "tickOk: deliveryConfirmed", 'AUTO_GATE_TELEGRAM_CONFIRMED_HEALTH_MISSING');
-requireText(telegramWorker, "telegramDeliveryTickConfirmed(deliveryConfirmed, result)", 'AUTO_GATE_TELEGRAM_DELIVERY_FAILURE_INTEGRATION_MISSING');
-requireText(telegramWorker, "if (result.overlapSkipped) return;", 'AUTO_GATE_TELEGRAM_OVERLAP_HEALTH_GUARD_MISSING');
-requireText(telegramWorker, "export function userTelegramDeliveryWorkerHealthy(", 'AUTO_GATE_TELEGRAM_FRESH_HEALTH_HELPER_MISSING');
-requireText(telegramWorkerTest, "Telegram delivery failure stays unhealthy through idle ticks until confirmed success", 'AUTO_GATE_TELEGRAM_FAILURE_REGRESSION_TEST_MISSING');
-requireText(paperWorkerTest, "Telegram outage blocks armed live entry while preserving independent exit warmup", 'AUTO_GATE_TELEGRAM_LIVE_ENTRY_REGRESSION_TEST_MISSING');
+requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
 requireText(liveExecution, "liveConnectionVerificationFresh(connection)", 'AUTO_GATE_ORDER_TIME_CREDENTIAL_RECHECK_MISSING');
 requireText(liveExecution, "isRiskReducingExitPlan(plan)", 'AUTO_GATE_RISK_REDUCING_EXIT_EXCEPTION_MISSING');
@@ -449,21 +700,19 @@ requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);'
 
 requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'runtimeStatus?.autoTradingBackground', 'AUTO_UI_WORKER_RUNTIME_HEALTH_MISSING');
-requireText(autoTradingPage, 'runtimeStatus?.userTelegramDelivery', 'AUTO_UI_TELEGRAM_RUNTIME_HEALTH_MISSING');
 requireText(autoTradingPage, 'autoWorker.liveEntriesArmed === true', 'AUTO_UI_ARMED_STATE_MISSING');
 requireText(autoTradingPage, '안전대기 · Arm 준비 중', 'AUTO_UI_ARM_WAIT_LABEL_MISSING');
 requireText(autoTradingPage, '자동 실거래 작동 준비됨', 'AUTO_UI_RUNTIME_READY_LABEL_MISSING');
 requireText(autoTradingPage, 'runtimeHealthFresh', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_HELPER_MISSING');
 requireText(autoTradingPage, 'nowMs - tickMs <= 360_000', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_BOUND_MISSING');
 requireText(autoTradingPage, '자동 워커 상태 지연', 'AUTO_UI_STALE_WORKER_LABEL_MISSING');
-requireText(autoTradingPage, 'Telegram 상태 지연', 'AUTO_UI_STALE_TELEGRAM_LABEL_MISSING');
 requireText(autoTradingPage, 'runtimeRefreshInFlight', 'AUTO_UI_STATUS_POLLING_DEDUP_MISSING');
 requireText(autoTradingPage, 'setRuntimeClockMs(Date.now())', 'AUTO_UI_STATUS_FRESHNESS_CLOCK_MISSING');
 requireText(autoTradingPage, 'setRuntimeReadError(true)', 'AUTO_UI_STATUS_READ_FAILURE_STATE_MISSING');
 requireText(autoTradingPage, '상태 조회 실패', 'AUTO_UI_STATUS_READ_FAILURE_LABEL_MISSING');
 requireText(autoTradingPage, "tone={providerVerified ? 'ok' : 'warn'}", 'AUTO_UI_PROVIDER_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={effectiveEntryStopped ? 'warn' : 'ok'}", 'AUTO_UI_STOP_STATUS_TONE_MISSING');
-requireText(autoTradingPage, "tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
+requireText(autoTradingPage, "tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
 requireText(autoTradingPage, 'AlertTriangle', 'AUTO_UI_WARNING_ICON_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
@@ -525,7 +774,7 @@ requireText(pilotCapital, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_G
 for (const token of [
   'BACKGROUND_PILOT_ENTRY_LIMIT',
   'BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT',
-  'BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT',
+  'BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT',
   'BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT',
   'BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT',
   'BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED',
@@ -536,7 +785,7 @@ for (const token of [
 requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, 'administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
-requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -25_000", 'AUTO_PILOT_DAILY_LOSS_KRW_TEST_MISSING');
+requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -15_000", 'AUTO_PILOT_DAILY_LOSS_PERCENT_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
 requireText(pilotCapitalTest, "openLivePositions: 2", 'AUTO_PILOT_CONCURRENT_POSITION_TEST_MISSING');
 requireText(autoTradingPage, "auth.can('canManageMembers')", 'AUTO_FORMULA_AI_PILOT_ADMIN_UI_CAPABILITY_MISSING');
@@ -586,11 +835,12 @@ console.log(JSON.stringify({
   oneAutomaticGate: true,
   accountQaRunsRequiredPerRelease: 1,
   disablePreservesSpotAndFuturesManualAuthority: true,
-  paperBackgroundWorkerCoupled: true,
+  paperBackgroundWorkerCoupled: false,
   liveBackgroundWorkerCoupled: true,
   liveEntryTwoPhaseArm: true,
   startupWarmupProofRequired: true,
   sameTickRiskRefreshRequired: true,
+  manualAssetIsolationRequired: true,
   executionProjectionFailClosed: true,
   zeroMutationActivationRehearsal: true,
   postArmExactShaReadbackRequired: true,
@@ -607,7 +857,9 @@ console.log(JSON.stringify({
   rotationFailureClearsPartialReadiness: true,
   activationWaitsForCompletedMemberReadinessCycle: true,
   globalEmergencyStopMustBeClear: true,
-  telegramDeliveryHealthRequiredAfterRestart: true,
+  telegramDeliveryHealthRequiredAfterRestart: false,
+  optionalTelegramStatePreserved: true,
+  liveEntryIndependentFromPaperWallet: true,
   activationWorkerHealthFreshnessRequired: true,
   manualGatesPreservePersonalTelegramDelivery: true,
   automaticRestartPreservesManualRuntime: true,

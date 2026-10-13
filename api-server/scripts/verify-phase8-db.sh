@@ -49,9 +49,36 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
+run_budget_owner_sql() {
+  # Only the disposable budget install changes its effective role. No hosted
+  # database/parameter privilege is granted, and the migration gets no superuser.
+  [[ "${CI:-}" == "true" && "$PGDATABASE" == "phase8" && "$PGUSER" == "phase8"
+    && ( "$PGHOST" == "127.0.0.1" || "$PGHOST" == "localhost" ) ]] || {
+    echo '[phase8-db] budget owner test requires disposable loopback CI' >&2; exit 1;
+  }
+  local label="$1" path="$2"
+  # Absolute paths are reserved for generated disposable CI SQL; repository
+  # migrations continue to resolve relative to the immutable checkout.
+  local source_file="$path"
+  if [[ "$path" != /* ]]; then source_file="${ROOT_DIR}/${path}"; fi
+  [[ -f "$source_file" ]] || { echo '[phase8-db] budget SQL source missing' >&2; exit 1; }
+  echo "[phase8-db] ${label}"
+  {
+    printf 'set role phase8_budget_owner;\n'
+    printf "%s\n" "do \$owner\$ begin
+      if (select rolsuper or rolcreatedb or rolcreaterole or rolbypassrls from pg_roles where rolname=current_user)
+        or has_parameter_privilege(current_user,'automatic_live_guard.expected_schema_fingerprint','SET')
+      then raise exception 'BUDGET_INSTALL_ROLE_MUST_HAVE_NO_SUPERUSER_OR_PARAMETER_AUTHORITY'; end if;
+    end \$owner\$;"
+    cat "$source_file"
+    printf '\nreset role;\n'
+  } | "${PSQL[@]}"
+}
+
 run_production_paper_gate() {
   local label="$1"
   local expected_tables_before="$2"
+  local expected_policies_before="${3:-}"
   local artifact="$BOOTSTRAP_ARTIFACT_DIR/production-paper-journal-${label}.json"
   echo "[phase8-db] verify protected Production paper gate: ${label}"
   CI=true \
@@ -62,15 +89,21 @@ run_production_paper_gate() {
   CI=true \
   PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
   node "${ROOT_DIR}/ops/verify-production-paper-journal-privileges.mjs" --artifact "$artifact"
-  node - "$artifact" "$expected_tables_before" <<'NODE'
+  node - "$artifact" "$expected_tables_before" "$expected_policies_before" <<'NODE'
 const fs = require('node:fs');
-const [file, expectedRaw] = process.argv.slice(2);
+const [file, expectedRaw, expectedPoliciesRaw] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
 const expected = Number(expectedRaw);
 if (value.tables_before !== expected) throw new Error(`tables_before ${value.tables_before} != ${expected}`);
 if (value.tables_created !== 6 - expected) throw new Error('tables_created mismatch');
 if (value.database_changed !== (expected === 0)) throw new Error('database_changed mismatch');
 if (value.journal_rows_mutated !== false) throw new Error('journal rows were mutated');
+if (expectedPoliciesRaw && value.policies_before !== Number(expectedPoliciesRaw)) {
+  throw new Error('predeploy gate did not encounter the expected V2 policy state');
+}
+if (expectedPoliciesRaw && value.policies_repaired !== false) {
+  throw new Error('canonical V2 protection policies must not be rewritten');
+}
 if (value.policy_contract_verified !== true || value.table_contract_verified !== true) {
   throw new Error('Production paper contract verification missing');
 }
@@ -145,6 +178,64 @@ run_sql "verify legacy personal Telegram policy cleanup" "api-server/supabase/te
 run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
 
+# Regression: a successful rollout installed member V2 guards after the old
+# privilege check. The NEXT deployment then rejected its valid 30-policy DB.
+# Exercise that exact post-rollout state with a nonempty journal and prove
+# repeat deployments preserve every row and policy, not just their counts.
+run_sql "apply member V2 protections for post-rollout redeploy regression" \
+  "api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql"
+"${PSQL[@]}" --command "insert into public.paper_journal_entries(user_id,id,payload) values ('11111111-1111-1111-1111-111111111111','redeploy-contract-probe','{\"retained\":true}');"
+paper_redeploy_fingerprint() {
+  "${PSQL[@]}" --tuples-only --no-align --command "select md5(coalesce((select string_agg(row_to_json(j)::text, '|' order by user_id,id) from public.paper_journal_entries j),'')), md5((select string_agg(row_to_json(p)::text, '|' order by tablename,policyname) from pg_catalog.pg_policies p where schemaname='public' and tablename in ('paper_accounts','paper_orders','paper_positions','paper_fills','paper_journal_entries','paper_sync_state')));"
+}
+redeploy_before="$(paper_redeploy_fingerprint)"
+run_production_paper_gate "admin-member-v2-noop" 6 30
+run_production_paper_gate "admin-member-v2-repeat-noop" 6 30
+[[ "$(paper_redeploy_fingerprint)" == "$redeploy_before" ]] || {
+  echo '[phase8-db] V2 redeploy changed journal rows or RLS policies' >&2; exit 1;
+}
+
+assert_production_member_v2_contract_fails() {
+  local label="$1"
+  local mutation_sql="$2"
+  local stdout_file="$BOOTSTRAP_ARTIFACT_DIR/member-v2-${label}.stdout"
+  local stderr_file="$BOOTSTRAP_ARTIFACT_DIR/member-v2-${label}.stderr"
+  echo "[phase8-db] verify protected member V2 contract rejects ${label}"
+  "${PSQL[@]}" --command "$mutation_sql"
+  if CI=true \
+    PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
+    APPROVED_TARGET_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    PROD_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" \
+    node "${ROOT_DIR}/ops/apply-production-paper-journal-privileges.mjs" \
+      > "$stdout_file" 2> "$stderr_file"; then
+    echo '[phase8-db] unsafe member V2 contract unexpectedly passed' >&2; exit 1;
+  fi
+  grep -Fx '[production-paper-journal-privileges] paper_journal_policy_contract_invalid' "$stderr_file"
+  run_sql "restore member V2 protection contract" \
+    "api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql"
+}
+assert_production_paper_v2_tamper_fails
+assert_production_member_v2_contract_fails "insert-tamper" \
+  "alter policy member_v2_paper_wallet_insert_guard on public.paper_accounts with check (true);"
+assert_production_member_v2_contract_fails "update-tamper" \
+  "alter policy member_v2_paper_wallet_update_guard on public.paper_accounts using (true) with check (true);"
+assert_production_member_v2_contract_fails "delete-tamper" \
+  "alter policy member_v2_paper_wallet_delete_guard on public.paper_accounts using (true);"
+assert_production_member_v2_contract_fails "missing-wallet-guard" \
+  "drop policy member_v2_paper_wallet_insert_guard on public.paper_accounts;"
+assert_production_member_v2_contract_fails "wrong-role" \
+  "alter policy member_v2_paper_wallet_insert_guard on public.paper_accounts to anon;"
+assert_production_member_v2_contract_fails "missing-canonical-order-guard" \
+  "drop policy member_v2_auto_paper_insert_guard on public.trade_orders;"
+assert_production_member_v2_contract_fails "unexpected-extra-policy" \
+  "create policy unexpected_redeploy_policy on public.paper_accounts for select to authenticated using (true);"
+"${PSQL[@]}" --command "drop policy unexpected_redeploy_policy on public.paper_accounts;"
+run_production_paper_gate "restored-admin-member-v2-noop" 6 30
+[[ "$(paper_redeploy_fingerprint)" == "$redeploy_before" ]] || {
+  echo '[phase8-db] V2 rejection/restore changed journal rows or RLS policies' >&2; exit 1;
+}
+"${PSQL[@]}" --command "delete from public.paper_journal_entries where user_id='11111111-1111-1111-1111-111111111111' and id='redeploy-contract-probe';"
+
 # Reproduce the exact pre-fix privilege states on the disposable CI database,
 # then prove the new migrations alone restore the intended API-role access.
 run_sql "remove paper API-role privileges for pre-migration reproduction" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
@@ -179,6 +270,54 @@ run_sql "execute real membership-tier RLS integration queries" "api-server/supab
 run_sql "apply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS idempotently" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
+# Match the hosted migration's owner privileges without changing other suites.
+# These are empty/synthetic CI tables, never a Production ownership change.
+[[ "${CI:-}" == "true" && "$PGDATABASE" == "phase8" && "$PGUSER" == "phase8"
+  && ( "$PGHOST" == "127.0.0.1" || "$PGHOST" == "localhost" ) ]] || {
+  echo '[phase8-db] budget owner fixture requires disposable loopback CI' >&2; exit 1;
+}
+"${PSQL[@]}" <<'SQL'
+do $owner_fixture$ declare relation text; routine text; begin
+  if not exists(select 1 from pg_roles where rolname='phase8_budget_owner') then
+    create role phase8_budget_owner nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls;
+  end if;
+  foreach relation in array array['trade_automation_profiles','trade_system_controls','trade_order_plans',
+    'trade_orders','trade_order_events','trade_order_legs','trade_protection_orders','trade_live_budget_reservations'] loop
+    if to_regclass('public.'||relation) is null then continue; end if;
+    execute format('alter table public.%I owner to phase8_budget_owner',relation);
+  end loop;
+  -- The bootstrap can already have installed the budget once as the CI admin.
+  -- Transfer every canonical routine too, so the restricted-owner reapply is
+  -- a real ownership-compatible upgrade, not only an empty-schema install.
+  for routine in select p.oid::regprocedure::text from pg_proc p
+    join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in (
+      'claim_trade_order_execution','read_automatic_live_budget_snapshot','reserve_automatic_live_entry_budget',
+      'is_automatic_live_ledger_payload','automatic_live_budget_schema_fingerprint','read_automatic_live_budget_guard',
+      'automatic_live_budget_expected_schema_fingerprint') loop
+    execute format('alter function %s owner to phase8_budget_owner',routine);
+  end loop;
+end $owner_fixture$;
+grant usage, create on schema public to phase8_budget_owner;
+grant usage on schema auth to phase8_budget_owner;
+SQL
+run_budget_owner_sql "apply AUTO LIVE atomic budget guard as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+run_budget_owner_sql "reapply AUTO LIVE atomic budget guard idempotently as non-superuser owner" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+# Exercise the *same complete SQL transaction as the human-gated Production
+# installer* in a disposable Phase8 database. The previous isolated migration
+# tests could miss privileges used only by the install wrapper.
+GENERATED_BUDGET_INSTALL_SQL="$BOOTSTRAP_ARTIFACT_DIR/production-budget-install-transaction.sql"
+(
+  cd "$ROOT_DIR"
+  node --input-type=module <<'NODE'
+import { readFileSync } from 'node:fs';
+import { productionBudgetInstallationSql } from './ops/apply-production-auto-live-budget.mjs';
+const source = readFileSync('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql','utf8');
+process.stdout.write(productionBudgetInstallationSql(source, 'a'.repeat(40)));
+NODE
+) > "$GENERATED_BUDGET_INSTALL_SQL"
+run_budget_owner_sql "verify exact Production installer transaction under non-superuser role" "$GENERATED_BUDGET_INSTALL_SQL"
+run_sql "verify AUTO LIVE budget, claim atomicity and ACL" "api-server/supabase/test/automatic_live_atomic_budget_integration.sql"
+bash "${ROOT_DIR}/api-server/scripts/verify-automatic-live-budget-concurrency.sh"
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation idempotently" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "verify risk envelope invariant and fast-move split cancellation" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
@@ -200,6 +339,7 @@ run_sql "rollback canonical member investment schema" "api-server/supabase/migra
 run_sql "assert canonical member investment rollback cleanup" "api-server/supabase/test/member_investment_canonical_rollback_assert.sql"
 run_sql "assert risk envelope rollback cleanup" "api-server/supabase/test/trade_risk_envelope_kill_switch_rollback_assert.sql"
 run_sql "rollback final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.down.sql"
+run_sql "rollback empty AUTO LIVE atomic budget guard" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql"
 run_sql "rollback authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
 run_sql "rollback authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.down.sql"
 run_sql "rollback split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.down.sql"
@@ -223,6 +363,9 @@ run_sql "reapply provider submission intent fence" "api-server/supabase/migratio
 run_sql "reapply split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
 run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
+run_sql "reapply AUTO LIVE atomic budget guard" "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql"
+run_sql "recheck AUTO LIVE budget, claim atomicity and ACL" "api-server/supabase/test/automatic_live_atomic_budget_integration.sql"
+bash "${ROOT_DIR}/api-server/scripts/verify-automatic-live-budget-concurrency.sh"
 run_sql "reapply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "reapply canonical member investment schema" "api-server/supabase/migrations/2026082705_member_investment_canonical.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"

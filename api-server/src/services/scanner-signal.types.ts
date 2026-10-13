@@ -67,6 +67,8 @@ export interface ScannerDataQualitySummary {
   issues: Array<{
     code:
       | 'STALE_TIMESTAMP'
+      | 'FUTURE_TIMESTAMP'
+      | 'OUT_OF_ORDER_CANDLE'
       | 'MISSING_CANDLE'
       | 'DUPLICATE_CANDLE'
       | 'INVALID_OHLC'
@@ -306,6 +308,7 @@ export interface ScannerResponse {
   failures: ScannerFailure[];
   execution: ScannerExecutionSummary;
   universe: {
+    rosterId?: string;
     totalCount: number;
     cursor: number;
     nextCursor: number | null;
@@ -349,6 +352,14 @@ export function deriveScannerOutcome(input: ScannerOutcomeInput): ScannerOutcome
   const dataRejectCount = input.execution.insufficientDataCount
     ?? input.failures.filter((failure) => failure.reason === 'invalid_data').length;
   if (dataRejectCount > 0 && dataSuccessCount === 0) return 'DATA_QUALITY_REJECT';
+
+  // An empty blocked/unfinished page is not evidence that no signal exists.
+  // Keep provider/timeout/mapping reasons above, then distinguish missing
+  // evidence from a fully verified zero-signal search.
+  if (input.dataState !== 'complete' || input.universe.partial || input.universe.stale
+    || input.execution.partial || input.execution.cancelled
+    || input.execution.startedCount !== input.execution.requestedCount
+    || input.execution.completedCount !== input.execution.requestedCount) return 'DATA_QUALITY_REJECT';
 
   const filterRejectCount = (input.execution.hardFilterRejectedCount ?? 0)
     + (input.execution.filteredByStrategyCount ?? 0);

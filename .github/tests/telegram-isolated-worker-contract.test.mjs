@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import test from 'node:test';
+
+const policy = fs.readFileSync('api-server/src/lib/telegram-worker-ownership.ts','utf8');
+const entry = fs.readFileSync('api-server/src/telegram-isolated-worker.ts','utf8');
+const embedded = fs.readFileSync('api-server/src/index.ts','utf8');
+const build = fs.readFileSync('api-server/build.mjs','utf8');
+const runner = fs.readFileSync('ops/run-telegram-isolated-worker.sh','utf8');
+const qa = fs.readFileSync('.github/workflows/telegram-only-staging-qa.yml','utf8');
+
+test('embedded API is default and existing financial workers are unchanged',()=>{
+  assert.match(policy,/owner === 'embedded'/u);
+  assert.match(policy,/owner === 'isolated'/u);
+  assert.match(policy,/TELEGRAM_WORKER_OWNER_INVALID/u);
+  assert.match(embedded,/const embeddedTelegramOwner = embeddedTelegramWorkersAllowed\(process\.env\)/u);
+  assert.match(embedded,/if \(embeddedTelegramOwner\)/u);
+  for(const lane of [
+    'startUserTelegramDeliveryWorker();',
+    'startTelegramIntelligenceWorker();',
+    'startSignalIntelligenceTelegramSubscriber();',
+  ]) assert.ok(embedded.includes(lane));
+  for(const other of ['startTradeRecoveryWorker()','startMemberAutoTradingBackgroundWorker()'])
+    assert.ok(embedded.includes(other));
+});
+
+test('standalone validates six rooms, lease, secrets and zero trading authority before starting',()=>{
+  for(const marker of [
+    'TELEGRAM_SINGLE_WRITER_LEASE','TELEGRAM_ISOLATED_CUTOVER_APPROVED',
+    'TELEGRAM_ISOLATED_WORKER_TRADING_AUTHORITY_FORBIDDEN',
+    'FUTURES_LIVE_EXECUTION_AUTHORITY','FUTURES_LIVE_CAPABILITY_ALLOWLIST',
+    'SPOT_LIVE_CAPABILITY_ALLOWLIST','TELEGRAM_INTELLIGENCE_STATE_PATH',
+    'SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH',
+    'SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH',
+    'TELEGRAM_ISOLATED_SIX_ROOM_CONFIG_INVALID',
+    'TELEGRAM_ISOLATED_PERSONAL_STORAGE_NOT_CONFIGURED',
+  ])assert.ok(policy.includes(marker),marker);
+  assert.ok(entry.indexOf('assertIsolatedTelegramWorkerEnvironment()') <
+    entry.indexOf('startUserTelegramDeliveryWorker()'));
+  for(const forbidden of [
+    'startMemberAutoTradingBackgroundWorker','startTradeRecoveryWorker',
+    'startPriceAlertMonitor','app.listen','createServer','placeOrder',
+  ])assert.ok(!entry.includes(forbidden),forbidden);
+  const ownerStart = embedded.indexOf('if (embeddedTelegramOwner) {');
+  const ownerEnd = embedded.indexOf("      } else {", ownerStart);
+  assert.ok(ownerStart > 0 && ownerEnd > ownerStart);
+  assert.ok(embedded.slice(ownerStart, ownerEnd).includes('startSignalIntelligenceAiWatch();'));
+  assert.ok(entry.includes('const aiWatch = startSignalIntelligenceAiWatch();'));
+  assert.ok(entry.includes('aiWatch?.stop();'));
+  const ai = fs.readFileSync('api-server/src/services/signal-intelligence-ai-watch.service.ts','utf8');
+  assert.ok(ai.includes('telegramMarketRoomForLane(event.market)'));
+  assert.ok(ai.includes('telegramMarketRoomChatId('));
+  assert.ok(!ai.includes('TELEGRAM_STOCK_CHAT_ID'));
+  assert.ok(!ai.includes('TELEGRAM_CRYPTO_CHAT_ID'));
+  assert.ok(ai.includes('readSignalIntelligenceAiWatchRuntimeHealth'));
+  assert.ok(ai.includes("process.env.TELEGRAM_AI_WATCH_DELIVERY_APPROVED === 'true'"));
+  assert.ok(ai.includes('validTelegramV3CurrentSource(envelope.snapshot, now.getTime())'));
+  assert.ok(ai.includes('sendAiWatchWithDurableReceipt('));
+  assert.ok(runner.includes('SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH='));
+  assert.match(entry,/const keepAlive = setInterval/u);
+  assert.match(entry,/clearInterval\(keepAlive\)/u);
+  assert.match(build,/telegram-isolated-worker\.mjs/u);
+});
+
+test('runner requires old PM2 disabled twice and holds exclusive persistent flock',()=>{
+  for(const marker of [
+    'set -Eeuo pipefail','umask 077','TELEGRAM_TARGET_SHA',
+    'TELEGRAM_LEGACY_WRITER_NOT_QUIESCED',
+    'TELEGRAM_WORKER_OWNER',
+    'TELEGRAM_LEGACY_RUNTIME_HEALTH_UNPROVEN',
+    'DEPLOY_SHA',
+    'flock -n 9',
+    'TELEGRAM_SINGLE_WRITER_LEASE=LOCK_HELD_V1',
+    'TELEGRAM_ISOLATED_RELEASE_IDENTITY_MISMATCH',
+    'TELEGRAM_ISOLATED_OWNER_APPROVAL_REQUIRED',
+    'sha256sum --check --quiet',
+  ]) assert.ok(runner.includes(marker),marker);
+  assert.equal(runner.split('legacy_inactive\n').length-1,2,'two real owner probes');
+  assert.ok(runner.includes('telegram-legacy-owner-runtime-proof.mjs'));
+  assert.match(runner,/flock -n 8/u);
+  assert.ok(runner.includes('http://127.0.0.1:'));
+  assert.match(runner,/--max-time 6/u);
+  for(const forbidden of [
+    'pm2 restart','pm2 reload','pm2 stop','pm2 delete',
+    'psql ','sendMessage','LIVE_TRADING=true','AUTO_TRADING=true',
+  ])assert.ok(!runner.includes(forbidden),forbidden);
+  assert.ok(qa.includes('telegram-isolated-worker-contract.test.mjs'));
+});

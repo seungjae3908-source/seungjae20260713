@@ -1,3 +1,4 @@
+import { isProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
@@ -81,9 +82,16 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 }
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
-  return createHash('sha256').update([
-    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
-  ].join(':')).digest('hex');
+  const parts = [
+    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId,
+    input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+  ];
+  // Preserve the historical key byte-for-byte when no occurrence is supplied,
+  // so manual and pre-release plans cannot be duplicated by this rollout.
+  if (typeof input.signalOccurrenceId === 'string' && input.signalOccurrenceId.trim()) {
+    parts.splice(5, 0, input.signalOccurrenceId.trim());
+  }
+  return createHash('sha256').update(parts.join(':')).digest('hex');
 }
 
 export { liveExecutionAuthority, type LiveExecutionAuthority };
@@ -333,7 +341,8 @@ export class TradeAutomationService {
       stockBroker: plan.stockBroker ?? null,
       clientOrderId: `sj-${plan.exchange}-${plan.idempotencyKey.slice(0, 20)}`,
       exchangeOrderId: null, state: 'SUBMITTED', version: 0,
-      requestedQuantity: plan.quantity ?? null,
+      requestedQuantity: plan.exchange === 'upbit' && plan.orderType === 'market' && plan.side === 'buy'
+        ? null : plan.quantity ?? null,
       currentLimitPrice: plan.limitPrice ?? null,
       filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
       approvedPlanVersion: planVersion(plan),
@@ -364,6 +373,96 @@ export class TradeAutomationService {
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
     if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
     if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
+    // Synthetic cost/FX evidence is accepted only on the server's actual
+    // Paper FILLED transition. Ordinary Live, manual and mock executions
+    // cannot use this metadata to make an unverified Paper profit.
+    if (toState === 'FILLED' && reason === 'PAPER_BROKER_FILLED') {
+      // A caller may supply an old/corrupted serialized order. Never inherit
+      // a stored funding certificate on a new simulated fill. It must be
+      // reissued in-process, bound to this exact terminal exit.
+      next.paperFundingSettlementEvidence = null;
+      const paperPlan = await this.repository.getPlan(order.userId, order.planId);
+      if (paperPlan?.accountMode === 'paper' && paperPlan.exchange === order.exchange) {
+        const usMarket = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
+          String(paperPlan.market).toUpperCase(),
+        ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(paperPlan.stockExchange ?? '').toUpperCase());
+        const nativeCurrency = paperPlan.exchange === 'bitget' ? 'USDT'
+          : paperPlan.exchange === 'upbit' || !usMarket ? 'KRW' : 'USD';
+        const expectedFx = nativeCurrency === 'KRW' ? 'NATIVE_KRW'
+          : nativeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+        const receivedPolicy = metadata.trustedPaperCostPolicyId;
+        if (typeof receivedPolicy === 'string'
+          && /^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(receivedPolicy)
+          && metadata.taxCurrency === nativeCurrency
+          && typeof metadata.taxAmount === 'number'
+          && Number.isFinite(metadata.taxAmount) && metadata.taxAmount >= 0
+          && metadata.taxAmount <= (next.averageFillPrice ?? 0) * next.filledQuantity
+          && next.feeCurrency === nativeCurrency
+          && typeof next.feeAmount === 'number' && Number.isFinite(next.feeAmount)
+          && next.feeAmount >= 0) {
+          next.taxAmount = metadata.taxAmount;
+          next.taxCurrency = nativeCurrency;
+        }
+        // A JSON payload cannot create a funding certificate. Only a server
+        // in-process issuer bound to a real simulated reducing close can do so.
+        const funding = metadata.paperFundingSettlementEvidence;
+        const fillAtMs = typeof metadata.paperFillObservedAt === 'string'
+          ? Date.parse(metadata.paperFillObservedAt) : Number.NaN;
+        const persistedAtMs = Date.parse(next.updatedAt);
+        if (paperPlan.exchange === 'bitget'
+          && paperPlan.executionMode === 'automatic'
+          && paperPlan.reduceOnly === true
+          && isProtectedPaperFundingCertificate(funding)
+          && funding.exitBrokerOrderId === next.exchangeOrderId
+          && Number.isSafeInteger(funding.eventCount)
+          && funding.eventCount >= 0
+          && /^[0-9a-f]{64}$/u.test(funding.eventDigest)
+          // The server captured the economic fill timestamp BEFORE reading public history.
+          // Slow-but-bounded proof collection must not forge a different holding interval.
+          && Number.isFinite(fillAtMs) && Number.isFinite(persistedAtMs)
+          && new Date(fillAtMs).toISOString() === metadata.paperFillObservedAt
+          && fillAtMs >= Date.parse(order.updatedAt)
+          && fillAtMs <= persistedAtMs
+          && persistedAtMs - fillAtMs <= 120_000
+          && Math.abs(Date.parse(funding.coveredThroughAt) - fillAtMs) <= 1_000
+          && Date.parse(funding.attestedAt) >= fillAtMs
+          && Date.parse(funding.attestedAt) <= persistedAtMs + 5_000) {
+          const references = paperPlan.signalReasons.filter(
+            reason => reason.startsWith('AUTO_EXIT_ENTRY_ORDER:'));
+          if (references.length === 1) {
+            const entry = await this.repository.getOrder(
+              order.userId, references[0]!.slice('AUTO_EXIT_ENTRY_ORDER:'.length));
+            if (entry?.state === 'FILLED' && entry.exchange === 'bitget'
+              && entry.exchangeOrderId === funding.entryBrokerOrderId
+              && entry.userId === order.userId) {
+              next.updatedAt = new Date(fillAtMs).toISOString();
+              next.paperFundingSettlementEvidence = Object.freeze({ ...funding });
+            }
+          }
+        }
+        const quote = metadata.settlementFxEvidence;
+        if (quote && typeof quote === 'object' && !Array.isArray(quote)) {
+          const value = quote as Record<string, unknown>;
+          const rate = value.krwPerQuoteCurrency;
+          const quoteMs = typeof value.observedAt === 'string'
+            ? Date.parse(value.observedAt) : Number.NaN;
+          const nowMs = Date.parse(next.updatedAt);
+          const ageMax = nativeCurrency === 'USD' ? 86_400_000
+            : nativeCurrency === 'USDT' ? 600_000 : 300_000;
+          if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+            && (nativeCurrency !== 'KRW' || rate === 1)
+            && value.source === expectedFx
+            && Number.isFinite(quoteMs) && Number.isFinite(nowMs)
+            && quoteMs <= nowMs + 5_000 && nowMs - quoteMs <= ageMax) {
+            next.settlementFxEvidence = Object.freeze({
+              krwPerQuoteCurrency: rate,
+              source: expectedFx,
+              observedAt: new Date(quoteMs).toISOString(),
+            });
+          }
+        }
+      }
+    }
     // A state of FILLED is not evidence of an execution. Never persist the
     // terminal state with zero/missing quantity or price in any market.
     // A provider acknowledgement alone cannot reconstruct an actual fill.

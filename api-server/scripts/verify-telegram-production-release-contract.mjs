@@ -237,6 +237,69 @@ const storageMigrationIndex = source.indexOf('Apply and verify Production person
 if (runtimePreflightIndex < 0 || storageMigrationIndex <= runtimePreflightIndex) {
   throw new Error('Complete Telegram runtime/external read-only preflight must run before any Production storage mutation');
 }
+const preDbReceiptIndex = source.indexOf('Preflight successful exact-SHA Production Deploy before any Telegram storage write');
+const preDbTlsIndex = source.indexOf('Preflight two protected and independently timed Telegram Staging TLS receipts');
+if (!(runtimePreflightIndex >= 0 && preDbReceiptIndex > runtimePreflightIndex
+  && preDbTlsIndex > preDbReceiptIndex && storageMigrationIndex > preDbTlsIndex)) {
+  throw new Error('TELEGRAM_PREDB_PROTECTED_RELEASE_PREFLIGHT_ORDER_INVALID');
+}
+const preDbReceipt = source.slice(preDbReceiptIndex, preDbTlsIndex);
+const preDbTls = source.slice(preDbTlsIndex, storageMigrationIndex);
+for (const required of [
+  "TELEGRAM_PREDB_PRODUCTION_DEPLOY_RECEIPT_MISSING",
+  "Approved canary, production deploy, verify, and rollback",
+  "TELEGRAM_PREDB_PRODUCTION_RUNTIME_NOT_APPROVED_SHA",
+]) if (!preDbReceipt.includes(required)) {
+  throw new Error('TELEGRAM_PREDB_DEPLOY_EVIDENCE_NOT_ENFORCED:'+required);
+}
+for (const required of [
+  "workflow_id:'telegram-only-staging-qa.yml'",
+  "event:'issue_comment'",
+  "Staging Telegram-only network and exact-SHA evidence, no send/deploy",
+  "now - Date.parse(r.created_at) <= 30*60_000",
+  "latest - earliest < 5*60_000",
+  "now - latest > 10*60_000",
+  "TELEGRAM_PREDB_STAGING_TLS_PROTECTED_PROBE_NOT_PROVEN",
+]) if (!preDbTls.includes(required)) {
+  throw new Error('TELEGRAM_PREDB_STAGING_TLS_NOT_ENFORCED:'+required);
+}
+for (const forbidden of [
+  'sendMessage','sendPhoto','editMessageText','pm2 restart','pm2 reload',
+  'ops/apply-production-personal-telegram-storage.mjs',
+  'ops/deploy-production.sh'
+]) if (preDbReceipt.includes(forbidden) || preDbTls.includes(forbidden)) {
+  throw new Error('TELEGRAM_PREDB_PROTECTED_READONLY_BOUNDARY_VIOLATION:'+forbidden);
+}
+const runtimeTradingBlock = source.slice(runtimePreflightIndex,storageMigrationIndex);
+if (!runtimeTradingBlock.includes('TELEGRAM_PREFLIGHT_TRADING_RUNTIME_ACTIVE')
+  || !runtimeTradingBlock.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')
+  || !runtimeTradingBlock.includes('LIVE_TRADING_ACTIVATION_APPROVED')
+  || !runtimeTradingBlock.includes('executionAuthority')
+  || !runtimeTradingBlock.includes('BITGET_LIVE_ORDER_ENABLED')
+  || !runtimeTradingBlock.includes('SPOT_LIVE_CAPABILITY_ALLOWLIST')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_EXECUTION_AUTHORITY')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_CAPABILITY_ALLOWLIST')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_MARKET_ALLOWLIST')) {
+  throw new Error('TELEGRAM_PREFLIGHT_ACTIVE_TRADING_RUNTIME_NOT_BLOCKED');
+}
+const tradingActivationStart = source.indexOf('function activateApprovedTelegram(');
+const tradingActivationEnd = source.indexOf('const requiredTelegramConfigKeys',tradingActivationStart);
+const tradingActivationBlock = source.slice(tradingActivationStart,tradingActivationEnd);
+if (tradingActivationStart<0 || tradingActivationEnd<tradingActivationStart
+  || !tradingActivationBlock.includes('TELEGRAM_ACTIVATION_TRADING_RUNTIME_ACTIVE')
+  || !tradingActivationBlock.includes("execFileSync('pm2',['jlist']")
+  || !tradingActivationBlock.includes('activeTrading(fresh)')
+  || !tradingActivationBlock.includes('UPBIT_LIVE_ORDER_ENABLED')
+  || !tradingActivationBlock.includes('SPOT_LIVE_MARKET_ALLOWLIST')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_EXECUTION_AUTHORITY')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_CAPABILITY_ALLOWLIST')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_MARKET_ALLOWLIST')
+  || !tradingActivationBlock.includes("key === 'executionAuthority'")
+  || tradingActivationBlock.includes("LIVE_TRADING: 'false'")
+  || tradingActivationBlock.includes("AUTO_TRADING: 'false'")
+  || tradingActivationBlock.includes("executionAuthority: 'NONE'")) {
+  throw new Error('TELEGRAM_ACTIVATION_MUST_PRESERVE_NON_TELEGRAM_RUNTIME_AUTHORITY');
+}
 const remoteNodeOptionsValue = '--dns-result-order=ipv4first --no-network-family-autoselection';
 const remoteNodeOptionsDeclaration = `TELEGRAM_REMOTE_NODE_OPTIONS: ${remoteNodeOptionsValue}`;
 if (!source.includes(remoteNodeOptionsDeclaration)) {

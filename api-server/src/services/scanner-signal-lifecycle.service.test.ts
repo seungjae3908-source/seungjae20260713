@@ -70,7 +70,7 @@ test('scanner lifecycle reaches approval pending once and never submits an order
   const expected = ['CANDIDATE', 'CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING'] as const;
   let approvalAlert = '';
   for (let index = 0; index < expected.length; index += 1) {
-    const result = applyScannerSignalLifecycle('member-1', [card()], now + index * 1_000);
+    const result = applyScannerSignalLifecycle('member-1', [card({ observedAt: new Date(now + index * 1_000).toISOString() })], now + index * 1_000);
     assert.equal(result.cards[0].signalState, expected[index]);
     if (expected[index] === 'APPROVAL_PENDING') {
       assert.equal(result.alerts.length, 1);
@@ -83,11 +83,11 @@ test('scanner lifecycle reaches approval pending once and never submits an order
     }
   }
 
-  const repeated = applyScannerSignalLifecycle('member-1', [card()], now + 6_000);
+  const repeated = applyScannerSignalLifecycle('member-1', [card({ observedAt: new Date(now + 4_000).toISOString() })], now + 6_000);
   assert.equal(repeated.cards[0].signalState, 'APPROVAL_PENDING');
   assert.equal(repeated.alerts.length, 0);
   assert.ok(approvalAlert);
-  assert.equal(getScannerSignalLifecycleSnapshot('member-1', repeated.cards[0].signalId)?.state, 'READY_FOR_APPROVAL');
+  assert.equal(getScannerSignalLifecycleSnapshot('member-1', repeated.cards[0].signalId, now + 6_000)?.state, 'READY_FOR_APPROVAL');
 });
 
 test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can continue', () => {
@@ -95,7 +95,7 @@ test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can contin
   const now = Date.parse('2026-08-05T01:00:00.000Z');
   let current = card();
   for (let index = 0; index < 3; index += 1) {
-    current = applyScannerSignalLifecycle('member-untrusted', [current], now + index * 1_000).cards[0];
+    current = applyScannerSignalLifecycle('member-untrusted', [{ ...current, observedAt: new Date(now + index * 1_000).toISOString() }], now + index * 1_000).cards[0];
   }
   assert.equal(current.signalState, 'ARMED');
 
@@ -112,7 +112,7 @@ test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can contin
   })], now + 4_000);
   assert.equal(invalidated.cards[0].signalState, 'INVALIDATED');
   assert.equal(invalidated.alerts.length, 0);
-  assert.equal(getScannerSignalLifecycleSnapshot('member-untrusted', invalidated.cards[0].signalId)?.state, 'INVALIDATED');
+  assert.equal(getScannerSignalLifecycleSnapshot('member-untrusted', invalidated.cards[0].signalId, now + 4_000)?.state, 'INVALIDATED');
 });
 
 test('untrusted or weakened signal invalidates and re-entry starts a new cycle', () => {
@@ -126,7 +126,7 @@ test('untrusted or weakened signal invalidates and re-entry starts a new cycle',
   );
   assert.equal(invalidated.cards[0].signalState, 'INVALIDATED');
 
-  const reentry = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
+  const reentry = applyScannerSignalLifecycle('member-1', [card({ observedAt: new Date(now + 2_000).toISOString() })], now + 2_000);
   assert.match(reentry.cards[0].signalId, /:cycle:2$/);
   assert.equal(reentry.cards[0].signalState, 'CANDIDATE');
 });
@@ -148,11 +148,11 @@ test('order-owned states are synchronized externally and scanner does not advanc
   const now = Date.parse('2026-08-05T01:00:00.000Z');
   let current = card();
   for (let index = 0; index < 5; index += 1) {
-    current = applyScannerSignalLifecycle('member-3', [current], now + index * 1_000).cards[0];
+    current = applyScannerSignalLifecycle('member-3', [{ ...current, observedAt: new Date(now + index * 1_000).toISOString() }], now + index * 1_000).cards[0];
   }
   assert.equal(current.signalState, 'APPROVAL_PENDING');
-  assert.equal(getScannerLifecycleSnapshot('member-3', current.signalId)?.state, 'APPROVAL_PENDING');
-  assert.equal(getScannerSignalLifecycleSnapshot('member-3', current.signalId)?.state, 'READY_FOR_APPROVAL');
+  assert.equal(getScannerLifecycleSnapshot('member-3', current.signalId, now + 4_000)?.state, 'APPROVAL_PENDING');
+  assert.equal(getScannerSignalLifecycleSnapshot('member-3', current.signalId, now + 4_000)?.state, 'READY_FOR_APPROVAL');
   assert.equal(setScannerExternalLifecycleState('member-3', current.signalId, 'APPROVED', now + 6_000), true);
   const afterApproval = applyScannerSignalLifecycle('member-3', [card({ signalId: current.signalId })], now + 7_000);
   assert.equal(afterApproval.cards[0].signalState, 'APPROVED');
@@ -201,7 +201,7 @@ test('external bridge rejects unknown state at runtime', () => {
     'FUTURE_SCANNER_STATE' as never,
     now + 1_000,
   ), false);
-  assert.equal(getScannerLifecycleSnapshot('member-external', current.signalId)?.state, 'CANDIDATE');
+  assert.equal(getScannerLifecycleSnapshot('member-external', current.signalId, now)?.state, 'CANDIDATE');
 });
 
 test('expired signal never produces an approval alert', () => {
@@ -214,4 +214,42 @@ test('expired signal never produces an approval alert', () => {
   assert.equal(result.cards[0].signalState, 'EXPIRED');
   assert.equal(result.alerts.length, 0);
   assert.equal(getScannerSignalLifecycleSnapshot('member-2', result.cards[0].signalId)?.state, 'EXPIRED');
+});
+
+test('polling the same completed-candle evidence never confirms a signal or rearms an invalidated cycle', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00Z');
+  const same = card({ evidence: [{ key: 'data-quality', label: 'quality', source: 'quality', status: 'matched',
+    observedAt: '2026-08-05T00:55:00Z', reasons: [] }] });
+  for (let index = 0; index < 10; index++) {
+    const result = applyScannerSignalLifecycle('poll', [{ ...same, observedAt: new Date(now + index * 1_000).toISOString() }], now + index * 1_000);
+    assert.equal(result.cards[0].signalState, 'CANDIDATE');
+    assert.equal(result.alerts.length, 0);
+  }
+  applyScannerSignalLifecycle('poll', [{ ...same, strongSignalEligible: false, dataState: 'untrusted' }], now + 11_000);
+  const repeated = applyScannerSignalLifecycle('poll', [same], now + 12_000);
+  assert.equal(repeated.cards[0].signalState, 'INVALIDATED');
+  assert.equal(repeated.cards[0].signalId, same.signalId);
+});
+
+test('one cycle freezes expiry and plan; changing expiry cannot duplicate its alert or hide expiration', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00Z');
+  const original = card();
+  let result = applyScannerSignalLifecycle('freeze', [original], now);
+  for (let index = 1; index < 5; index++) {
+    result = applyScannerSignalLifecycle('freeze', [card({
+      observedAt: new Date(now + index * 1_000).toISOString(),
+      expiresAt: '2026-08-07T00:00:00Z', pricePlan: { ...original.pricePlan, stopLoss: 80 },
+    })], now + index * 1_000);
+  }
+  assert.equal(result.cards[0].signalState, 'APPROVAL_PENDING');
+  assert.equal(result.alerts.length, 1);
+  assert.equal(result.cards[0].expiresAt, original.expiresAt);
+  assert.deepEqual(result.cards[0].pricePlan, original.pricePlan);
+  const repeated = applyScannerSignalLifecycle('freeze', [card({
+    observedAt: new Date(now + 5_000).toISOString(), expiresAt: '2026-08-08T00:00:00Z',
+  })], now + 5_000);
+  assert.equal(repeated.alerts.length, 0);
+  assert.equal(getScannerLifecycleSnapshot('freeze', original.signalId, Date.parse(original.expiresAt))?.state, 'EXPIRED');
 });
