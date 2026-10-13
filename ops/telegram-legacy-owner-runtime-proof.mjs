@@ -13,7 +13,9 @@ export function inspectLegacyTelegramQuiescence(health, expectedSha, nowMs = Dat
     || !validObject(health) || health.ok !== true || health.service !== 'api-server'
     || health.identityMatch !== true || health.identityStatus !== 'match'
     || health.deploySha !== expectedSha
-    || health.processDeploySha !== expectedSha || health.deployMarkerSha !== expectedSha)
+    || health.processDeploySha !== expectedSha || health.deployMarkerSha !== expectedSha
+    || health.telegramWorkerOwner !== 'isolated'
+    || health.backgroundWorkersEnabled !== true)
     return fail();
   const at = Date.parse(health.time ?? '');
   if (!Number.isFinite(at) || at > nowMs + 5_000 || nowMs - at > 15_000)
@@ -21,10 +23,16 @@ export function inspectLegacyTelegramQuiescence(health, expectedSha, nowMs = Dat
   const personal = health.userTelegramDelivery;
   const briefing = health.telegramIntelligenceWorker;
   const subscriber = health.signalTelegramSubscriber;
+  const aiWatch = health.telegramAiWatch;
   if (!validObject(personal) || !validObject(briefing) || !validObject(subscriber)
+    || !validObject(aiWatch)
     || personal.enabled !== false || personal.lastTickAt !== null
-    || briefing.enabled !== false || briefing.state !== 'DISABLED'
-    || subscriber.state !== 'DISABLED' || subscriber.inFlight !== 0)
+    || personal.deliveryConfirmed !== false || personal.tickOk !== null
+    || briefing.enabled !== false || briefing.state !== 'NOT_STARTED'
+    || briefing.lastTickAt !== null
+    || subscriber.state !== 'NOT_STARTED' || subscriber.inFlight !== 0
+    || subscriber.lastSourceStatus !== null
+    || aiWatch.state !== 'NOT_STARTED' || aiWatch.inFlight !== 0)
     return fail();
   // This proof is strictly about three Telegram-only lanes; unrelated
   // trading, Paper and recovery workers need not be disabled.

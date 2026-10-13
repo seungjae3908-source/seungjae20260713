@@ -13,7 +13,8 @@ test('embedded API is default and existing financial workers are unchanged',()=>
   assert.match(policy,/owner === 'embedded'/u);
   assert.match(policy,/owner === 'isolated'/u);
   assert.match(policy,/TELEGRAM_WORKER_OWNER_INVALID/u);
-  assert.match(embedded,/if \(embeddedTelegramWorkersAllowed\(process\.env\)\)/u);
+  assert.match(embedded,/const embeddedTelegramOwner = embeddedTelegramWorkersAllowed\(process\.env\)/u);
+  assert.match(embedded,/if \(embeddedTelegramOwner\)/u);
   for(const lane of [
     'startUserTelegramDeliveryWorker();',
     'startTelegramIntelligenceWorker();',
@@ -39,6 +40,15 @@ test('standalone validates six rooms, lease, secrets and zero trading authority 
     'startMemberAutoTradingBackgroundWorker','startTradeRecoveryWorker',
     'startPriceAlertMonitor','app.listen','createServer','placeOrder',
   ])assert.ok(!entry.includes(forbidden),forbidden);
+  assert.ok(embedded.indexOf('startSignalIntelligenceAiWatch();') < embedded.indexOf('} else {'));
+  assert.ok(entry.includes('const aiWatch = startSignalIntelligenceAiWatch();'));
+  assert.ok(entry.includes('aiWatch?.stop();'));
+  const ai = fs.readFileSync('api-server/src/services/signal-intelligence-ai-watch.service.ts','utf8');
+  assert.ok(ai.includes('telegramMarketRoomForLane(event.market)'));
+  assert.ok(ai.includes('telegramMarketRoomChatId('));
+  assert.ok(!ai.includes('TELEGRAM_STOCK_CHAT_ID'));
+  assert.ok(!ai.includes('TELEGRAM_CRYPTO_CHAT_ID'));
+  assert.ok(ai.includes('readSignalIntelligenceAiWatchRuntimeHealth'));
   assert.match(entry,/const keepAlive = setInterval/u);
   assert.match(entry,/clearInterval\(keepAlive\)/u);
   assert.match(build,/telegram-isolated-worker\.mjs/u);
