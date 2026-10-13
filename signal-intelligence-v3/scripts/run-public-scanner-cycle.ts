@@ -2,7 +2,11 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { publicCyclePageDecision, currentPublicCyclePublication } from '../src/public-cycle-progress-v2.mjs';
+import {
+  publicCyclePageDecision,
+  currentPublicCyclePublication,
+  publicExecutionEvidence,
+} from '../src/public-cycle-progress-v2.mjs';
 import { withPublicStockProvider } from '../src/public-stock-provider-adapter.mjs';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
@@ -379,6 +383,7 @@ async function main() {
         state.rosterIds[lane.id] = rosterId;
       }
       const status = decision.status;
+      const executionEvidence = publicExecutionEvidence(response.execution, response.failures);
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       let bridgeDiagnostics = { scanned: response.cards.length, joined: 0,
@@ -432,11 +437,11 @@ async function main() {
           completedCount: response.execution.completedCount, partial: response.execution.partial,
           timedOut: response.execution.timedOut, cancelled: response.execution.cancelled,
           failuresObserved: response.failures.length,
-          providerAcceptedCount: Number(response.execution.providerAcceptedCount ?? 0),
-          dataSuccessCount: Number(response.execution.dataSuccessCount ?? 0),
-          insufficientDataCount: Number(response.execution.insufficientDataCount ?? 0),
-          filteredByStrategyCount: Number(response.execution.filteredByStrategyCount ?? 0),
-          staleCount: Number(response.execution.staleCount ?? 0) },
+          providerAcceptedCount: executionEvidence.providerAcceptedCount,
+          dataSuccessCount: executionEvidence.dataSuccessCount,
+          insufficientDataCount: executionEvidence.insufficientDataCount,
+          filteredByStrategyCount: executionEvidence.filteredByStrategyCount,
+          staleCount: executionEvidence.staleCount },
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
