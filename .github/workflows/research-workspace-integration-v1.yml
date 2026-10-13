@@ -129,6 +129,7 @@ on:
       # run the full automatic-trading guards, not the pinned Scanner repair.
       - .github/workflows/paper-forward-schedule-validation.yml
       - .github/workflows/signal-intelligence-v3-validation.yml
+      - api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
       - api-server/src/providers/yahoo-governor.test.ts
       - api-server/src/providers/yahoo-timeframe.test.ts
       - api-server/src/providers/yahoo.test.ts

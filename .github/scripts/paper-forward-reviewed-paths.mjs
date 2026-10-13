@@ -339,6 +339,7 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   ".github/workflows/production-automatic-trading-gate.yml",
   ".github/workflows/research-workspace-integration-v1.yml",
   ".github/workflows/signal-intelligence-v3-validation.yml",
+  "api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs",
   "api-server/scripts/verify-production-automatic-trading-gate.mjs",
   "api-server/src/providers/yahoo-governor.test.ts",
   "api-server/src/providers/yahoo-timeframe.test.ts",
