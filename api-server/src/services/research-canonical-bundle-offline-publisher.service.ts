@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, link, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -80,28 +81,72 @@ async function syncDirectory(path: string) {
   const handle = await open(path, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
-async function publishWriteOnce(directoryPath: string, fileName: string, value: unknown) {
+/** Read only the exact bounded file; do not follow a replacement symlink or
+ * accept a changed inode/length. Temporary hard links during atomic publication
+ * are allowed: they do not change the published bytes or receipt identity. */
+async function readPublication(pathValue: string): Promise<unknown> {
+  const info = await lstat(pathValue);
+  if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > MAX_INPUT_BYTES
+    || resolve(await realpath(pathValue)) !== pathValue) {
+    throw new Error('PUBLICATION_RECEIPT_PATH_UNSAFE');
+  }
+  const handle = await open(pathValue, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.dev !== info.dev || before.ino !== info.ino
+      || before.size !== info.size) throw new Error('PUBLICATION_RECEIPT_PATH_UNSAFE');
+    const buffer = Buffer.alloc(before.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    const after = await handle.stat(), current = await lstat(pathValue);
+    if (length !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs
+      || !current.isFile() || current.isSymbolicLink()
+      || current.dev !== before.dev || current.ino !== before.ino) {
+      throw new Error('PUBLICATION_RECEIPT_PATH_UNSAFE');
+    }
+    return JSON.parse(buffer.subarray(0, length).toString('utf8'));
+  } finally { await handle.close(); }
+}
+async function readPublicationOptional(pathValue: string): Promise<unknown | null> {
+  try { return await readPublication(pathValue); }
+  catch (error) { if (row(error).code === 'ENOENT') return null; throw error; }
+}
+async function publishWriteOnce<T>(
+  directoryPath: string,
+  fileName: string,
+  value: T,
+  acceptExisting?: (existing: unknown) => T,
+) {
   await mkdir(directoryPath, { recursive: true, mode: 0o700 });
+  await safeDirectory(directoryPath, 'PUBLICATION_DIRECTORY');
   const finalPath = join(directoryPath, basename(fileName));
   const bytes = JSON.stringify(value) + '\n';
   if (Buffer.byteLength(bytes) > MAX_INPUT_BYTES) throw new Error('PUBLICATION_RECORD_TOO_LARGE');
   const temporary = join(directoryPath, `.pending-${randomUUID()}`);
-  const handle = await open(temporary, 'wx', 0o600);
-  try { await handle.writeFile(bytes, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+  // Enclose file writing too: write/fsync errors must not leak pending files.
   try {
-    await link(temporary, finalPath);
-    await syncDirectory(directoryPath);
-    return Object.freeze({ status: 'created' as const, path: finalPath });
-  } catch (error) {
-    const code = row(error).code;
-    if (code !== 'EEXIST') throw error;
-    const info = await lstat(finalPath);
-    if (!info.isFile() || info.isSymbolicLink() || resolve(await realpath(finalPath)) !== finalPath) {
-      throw new Error('PUBLICATION_RECEIPT_PATH_UNSAFE');
+    const handle = await open(temporary, 'wx', 0o600);
+    try { await handle.writeFile(bytes, 'utf8'); await handle.sync(); }
+    finally { await handle.close(); }
+    try {
+      await link(temporary, finalPath);
+    } catch (error) {
+      if (row(error).code !== 'EEXIST') throw error;
+      const existing = await readPublication(finalPath);
+      const accepted = acceptExisting ? acceptExisting(existing) : value;
+      if (!acceptExisting && digest(existing) !== digest(value)) {
+        throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+      }
+      // A competing publisher may have linked but not yet fsynced this name.
+      await syncDirectory(directoryPath);
+      return Object.freeze({ status: 'already_present' as const, path: finalPath, value: accepted });
     }
-    const existing = JSON.parse(await readFile(finalPath, 'utf8'));
-    if (digest(existing) !== digest(value)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
-    return Object.freeze({ status: 'already_present' as const, path: finalPath });
+    await syncDirectory(directoryPath);
+    return Object.freeze({ status: 'created' as const, path: finalPath, value });
   } finally {
     try { await unlink(temporary); } catch {}
   }
@@ -178,14 +223,45 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
   }
   if (!rawPublicationValid(rawPublication)) throw new Error('CANONICAL_BUNDLE_PUBLICATION_INVALID');
   const publishedAt = new Date(input.validationNow?.() ?? Date.now()).toISOString();
-  const publication = createCanonicalBundleOfflinePublicationReceiptV1({
+  const proposedPublication = createCanonicalBundleOfflinePublicationReceiptV1({
     researchCodeSha,
     publication: rawPublication,
     publishedAt,
   });
-  if (!validateCanonicalBundlePublicationV1(publication, researchCodeSha)) {
+  if (!validateCanonicalBundlePublicationV1(proposedPublication, researchCodeSha)) {
     throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
   }
+
+  const receiptDirectory = join(stateRoot, 'publication-receipts');
+  const recordDirectory = join(stateRoot, 'publication-records');
+  for (const directoryPath of [receiptDirectory, recordDirectory]) {
+    await mkdir(directoryPath, { recursive: true, mode: 0o700 });
+    await safeDirectory(directoryPath, 'PUBLICATION_DIRECTORY');
+  }
+  const fileName = `${rawPublication.dslDigest}.json`;
+  const receiptPath = join(receiptDirectory, fileName);
+  // A record alone contains only the publication hash, not its original time.
+  // Re-read the receipt after checking the record to avoid a writer race.
+  if (await readPublicationOptional(receiptPath) === null
+    && await readPublicationOptional(join(recordDirectory, fileName)) !== null
+    && await readPublicationOptional(receiptPath) === null) {
+    throw new Error('PUBLICATION_RECEIPT_MISSING');
+  }
+  const receiptWrite = await publishWriteOnce(receiptDirectory, fileName, proposedPublication, (existing) => {
+    if (!validateCanonicalBundlePublicationV1(existing, researchCodeSha)) {
+      throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+    }
+    // Preserve the FIRST durable timestamp, never relabel old evidence as new.
+    // Reconstruct every other field from this invocation's revalidated catalog.
+    const expected = createCanonicalBundleOfflinePublicationReceiptV1({
+      researchCodeSha, publication: rawPublication, publishedAt: row(existing).publishedAt,
+    });
+    if (digest(existing) !== digest(expected)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+    return expected;
+  });
+  // The atomic first writer wins, even when concurrent callers have different
+  // clocks. Build the companion record only from that winning stored receipt.
+  const publication = receiptWrite.value;
 
   const inputDigest = digest({ dsl, bundle, researchCodeSha });
   const publicationDigest = digest(publication);
@@ -204,16 +280,11 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
   });
   const record = Object.freeze({ ...recordCore, recordDigest: digest(recordCore) });
 
-  const receiptWrite = await publishWriteOnce(
-    join(stateRoot, 'publication-receipts'),
-    `${publication.dslDigest}.json`,
-    publication,
-  );
-  const recordWrite = await publishWriteOnce(
-    join(stateRoot, 'publication-records'),
-    `${publication.dslDigest}.json`,
-    record,
-  );
+  const recordWrite = await publishWriteOnce(recordDirectory, fileName, record);
+  if (digest(await readPublication(receiptWrite.path)) !== publicationDigest
+    || digest(await readPublication(recordWrite.path)) !== digest(record)) {
+    throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+  }
 
   return Object.freeze({
     schemaVersion: 1,

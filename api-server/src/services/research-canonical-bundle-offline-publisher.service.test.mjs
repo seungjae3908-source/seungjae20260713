@@ -131,7 +131,7 @@ test('offline publisher publishes genuine CANONICAL bundle and durable READBACK_
     assert.equal(result.publication.researchCodeSha, env.researchCodeSha);
     assert.equal(result.publication.publisherMode, 'OFFLINE_OWNER_CONTROLLED');
     assert.equal(result.publication.catalogReadbackVerified, true);
-    assert.match(result.publication.receiptDigest, /^[0-9a-f]{64}$/);
+    assert.match(result.publication.receiptDigest, /^[a-f0-9]{64}$/);
     assert.equal(result.publication.publicationStatus, 'READBACK_VERIFIED');
     assert.equal(result.publication.evidenceCredit, 0);
     assert.equal(result.publication.profitabilityProven, false);
@@ -314,3 +314,135 @@ test('production CLI does not import test fixtures or expose validation clock/te
   assert.match(source, /RESEARCH_CODE_SHA/);
   assert.doesNotMatch(source, /test-fixtures|allowTestEvidence|validationNow|--now|TEST_ONLY/);
 });
+
+// Regression fixtures exercise real source admission, catalog, publication and
+// filesystem code. They are synthetic test inputs, never operating evidence.
+async function withPublicationEnvironment(task) {
+  const env = await environment();
+  try { await task(env); }
+  finally {
+    await rm(env.stateRoot, { recursive: true, force: true });
+    await rm(env.inputRoot, { recursive: true, force: true });
+  }
+}
+function retryInput(env, elapsedMs = 0) {
+  return {
+    stateRoot: env.stateRoot, inputRoot: env.inputRoot,
+    dslPath: env.dslPath, bundlePath: env.bundlePath,
+    researchCodeSha: env.researchCodeSha, validationNow: () => NOW + elapsedMs,
+  };
+}
+
+test('later identical retry preserves the first publication time, digest and durable bytes', () =>
+  withPublicationEnvironment(async (env) => {
+    const first = await publishResearchCanonicalBundleOfflineV1(retryInput(env));
+    const originalReceipt = await readFile(first.receiptPath);
+    const originalRecord = await readFile(first.recordPath);
+    const second = await publishResearchCanonicalBundleOfflineV1(retryInput(env, 1));
+    assert.equal(second.status, 'verified_existing_catalog');
+    assert.equal(second.receiptStatus, 'already_present');
+    assert.equal(second.recordStatus, 'already_present');
+    assert.deepEqual(second.publication, first.publication);
+    assert.equal(second.publication.publishedAt, new Date(NOW).toISOString());
+    assert.equal(second.publicationDigest, first.publicationDigest);
+    assert.equal(second.recordDigest, first.recordDigest);
+    assert.deepEqual(await readFile(first.receiptPath), originalReceipt);
+    assert.deepEqual(await readFile(first.recordPath), originalRecord);
+    assert.equal(second.safety.runtimeActivationAllowed, false);
+    assert.equal(second.publication.evidenceCredit, 0);
+    assert.equal(second.publication.profitabilityProven, false);
+  }));
+
+test('interruption after receipt persistence repairs only its missing companion record', () =>
+  withPublicationEnvironment(async (env) => {
+    const { unlink } = await import('node:fs/promises');
+    const first = await publishResearchCanonicalBundleOfflineV1(retryInput(env));
+    const originalReceipt = await readFile(first.receiptPath);
+    const originalRecord = await readFile(first.recordPath);
+    await unlink(first.recordPath);
+    const recovered = await publishResearchCanonicalBundleOfflineV1(retryInput(env, 1));
+    assert.equal(recovered.receiptStatus, 'already_present');
+    assert.equal(recovered.recordStatus, 'created');
+    assert.equal(recovered.recordDigest, first.recordDigest);
+    assert.deepEqual(await readFile(first.receiptPath), originalReceipt);
+    assert.deepEqual(await readFile(first.recordPath), originalRecord);
+  }));
+
+test('concurrent different-clock publishers converge on one immutable receipt and companion', () =>
+  withPublicationEnvironment(async (env) => {
+    await publishResearchCanonicalBundleSource({
+      stateRoot: env.stateRoot, dsl: env.f.dsl, bundle: env.f.bundle, now: () => NOW,
+    });
+    const outputs = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      publishResearchCanonicalBundleOfflineV1(retryInput(env, index))));
+    const winner = outputs.find(output => output.receiptStatus === 'created');
+    assert.ok(winner);
+    assert.equal(outputs.filter(output => output.receiptStatus === 'created').length, 1);
+    assert.equal(outputs.filter(output => output.recordStatus === 'created').length, 1);
+    for (const output of outputs) {
+      assert.deepEqual(output.publication, winner.publication);
+      assert.equal(output.publicationDigest, winner.publicationDigest);
+      assert.equal(output.recordDigest, winner.recordDigest);
+    }
+    const { readdir } = await import('node:fs/promises');
+    for (const directory of ['publication-receipts', 'publication-records']) {
+      assert.deepEqual(await readdir(join(env.stateRoot, directory)), [winner.publication.dslDigest + '.json']);
+    }
+  }));
+
+for (const [field, value] of [
+  ['dslDigest', 'e'.repeat(64)],
+  ['bundleDigest', 'f'.repeat(64)],
+  ['researchCodeSha', 'f'.repeat(40)],
+  ['evidenceCredit', 1],
+  ['executionAuthority', 'LIVE'],
+  ['unexpectedApproval', true],
+]) {
+  test(`rehashed existing receipt cannot alter ${field} on retry`, () =>
+    withPublicationEnvironment(async (env) => {
+      const first = await publishResearchCanonicalBundleOfflineV1(retryInput(env));
+      const { receiptDigest, ...core } = first.publication;
+      const changed = { ...core, [field]: value };
+      const forged = JSON.stringify({ ...changed, receiptDigest: hash(changed) });
+      await writeFile(first.receiptPath, forged);
+      const originalRecord = await readFile(first.recordPath);
+      await assert.rejects(publishResearchCanonicalBundleOfflineV1(retryInput(env, 1)),
+        /PUBLICATION_RECEIPT_CONFLICT/);
+      assert.equal(await readFile(first.receiptPath, 'utf8'), forged);
+      assert.deepEqual(await readFile(first.recordPath), originalRecord);
+    }));
+}
+
+test('orphan companion record does not permit inventing a new original publication time', () =>
+  withPublicationEnvironment(async (env) => {
+    const { unlink } = await import('node:fs/promises');
+    const first = await publishResearchCanonicalBundleOfflineV1(retryInput(env));
+    const originalRecord = await readFile(first.recordPath);
+    await unlink(first.receiptPath);
+    await assert.rejects(publishResearchCanonicalBundleOfflineV1(retryInput(env, 1)),
+      /PUBLICATION_RECEIPT_MISSING/);
+    await assert.rejects(readFile(first.receiptPath), /ENOENT/);
+    assert.deepEqual(await readFile(first.recordPath), originalRecord);
+  }));
+
+for (const directory of ['publication-receipts', 'publication-records']) {
+  test(`publisher refuses symlink ${directory} without writing through it`, () =>
+    withPublicationEnvironment(async (env) => {
+      const { readdir, symlink } = await import('node:fs/promises');
+      const outside = await mkdtemp(join(tmpdir(), 'canonical-publication-outside-'));
+      try {
+        await symlink(outside, join(env.stateRoot, directory), 'junction');
+        await assert.rejects(publishResearchCanonicalBundleOfflineV1(retryInput(env)), /UNSAFE/);
+        assert.deepEqual(await readdir(outside), []);
+      } finally { await rm(outside, { recursive: true, force: true }); }
+    }));
+}
+
+test('malformed saved publication is never silently repaired or replaced', () =>
+  withPublicationEnvironment(async (env) => {
+    const first = await publishResearchCanonicalBundleOfflineV1(retryInput(env));
+    const broken = '{"interrupted":';
+    await writeFile(first.receiptPath, broken);
+    await assert.rejects(publishResearchCanonicalBundleOfflineV1(retryInput(env, 1)), SyntaxError);
+    assert.equal(await readFile(first.receiptPath, 'utf8'), broken);
+  }));
