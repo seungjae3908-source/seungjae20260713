@@ -367,7 +367,15 @@ jobs:
 
           const downloadControls = page.locator('a,button,[role="button"]').filter({ hasText: /^\s*Download\s*$/i });
           const downloadControlCount = await downloadControls.count();
-          let interaction = { attempted: false, selectedIndex: null, download: null, popup: null, error: null };
+          const overlaysBefore = await page.locator('.mcr-modal-wrap,[role="dialog"]').evaluateAll((nodes) => nodes.map((node) => ({
+            text: (node.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 2_000),
+            controls: [...node.querySelectorAll('a,button,[role="button"]')].map((control) => ({
+              tag: control.tagName,
+              text: (control.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 300),
+              href: control instanceof HTMLAnchorElement ? control.href : null,
+            })).filter((row) => row.text || row.href),
+          })));
+          let interaction = { attempted: false, selectedIndex: null, overlaysBefore, download: null, popup: null, error: null };
           if (downloadControlCount > 0) {
             const selectedIndex = downloadControlCount - 1;
             interaction = { ...interaction, attempted: true, selectedIndex };
@@ -417,6 +425,7 @@ jobs:
           const responseIdentity = createHash('sha256')
             .update(JSON.stringify(dedupedResponses))
             .digest('hex');
+          const relevantResponses = dedupedResponses.filter((row) => /download|depth|history/iu.test(row.url));
           const report = {
             schemaVersion: 'bitget-public-history-ui-probe-v1',
             serviceSha: process.env.EXPECTED_SHA,
@@ -448,6 +457,8 @@ jobs:
             downloadControlCount,
             interaction,
             observedResponseCount: dedupedResponses.length,
+            relevantResponses,
+            pageBodyExcerpt: after.bodyText.slice(0, 4_000),
             responseIdentity,
           }, null, 2));
           if (report.navigation.status !== 200 || downloadControlCount < 6) process.exit(1);
