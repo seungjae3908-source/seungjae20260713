@@ -19,16 +19,21 @@ on:
       - api-server/src/providers/nasdaq-trader.test.ts
       - api-server/src/providers/nasdaq-trader.ts
       - api-server/src/providers/us-universe.ts
+      - api-server/src/providers/yahoo-governor.test.ts
       - api-server/src/providers/yahoo-timeframe.test.ts
+      - api-server/src/providers/yahoo.test.ts
       - api-server/src/providers/yahoo.ts
       - api-server/src/routes/bounded-market-scan.ts
       - api-server/src/routes/crypto-signal-scan.ts
+      - api-server/src/routes/stocks.ts
       - api-server/src/routes/scanner-ai-evidence-review.smoke.test.ts
       - api-server/src/services/bounded-scanner.service.test.ts
       - api-server/src/services/bounded-scanner.service.ts
       - api-server/src/services/market-data.service.ts
       - api-server/src/services/market-intelligence-ai-analysis.service.test.ts
       - api-server/src/services/market-intelligence-ai-analysis.service.ts
+      - api-server/src/services/public-fx.service.ts
+      - api-server/src/services/ranking-movers.service.ts
       - api-server/src/services/scanner-ai-evidence-review.service.test.ts
       - api-server/src/services/scanner-ai-evidence-review.service.ts
       - api-server/src/services/scanner-ai-provider.service.test.ts
@@ -59,20 +64,30 @@ on:
       - api-server/test.mjs
       - signal-intelligence-v3/README.md
       - signal-intelligence-v3/ARCHITECTURE.md
+      - signal-intelligence-v3/scripts/diagnose-kr-yahoo-provider.ts
       - signal-intelligence-v3/scripts/diagnose-public-providers.ts
+      - signal-intelligence-v3/scripts/run-four-market-live-qa.ts
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/scripts/run-representative-search-matrix.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
       - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/canonical-handoff-diagnostics.mjs
+      - signal-intelligence-v3/src/four-market-qa-upbit-candles.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
       - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
+      - signal-intelligence-v3/src/public-stock-prefetch.mjs
       - signal-intelligence-v3/src/public-stock-provider-adapter.mjs
+      - signal-intelligence-v3/src/stock-provider-qualification.mjs
       - signal-intelligence-v3/src/server.mjs
       - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
       - signal-intelligence-v3/tests/canonical-adapter.test.mjs
+      - signal-intelligence-v3/tests/canonical-handoff-diagnostics.test.mjs
+      - signal-intelligence-v3/tests/four-market-qa-upbit-candles.test.mjs
       - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
       - signal-intelligence-v3/tests/public-stock-provider-adapter.test.mjs
+      - signal-intelligence-v3/tests/stock-provider-qualification.test.mjs
       - signal-intelligence-v3/tests/server.test.mjs
       - stock-analyzer/e2e/expanded-gap-closure.spec.ts
       - stock-analyzer/e2e/final-expanded-targeted-evidence.spec.ts
@@ -90,6 +105,7 @@ on:
       - .github/tests/scanner-readonly-repair-scope.test.mjs
       - .github/scripts/verify-research-workspace-sync-v3.mjs
       - .github/workflows/research-workspace-integration-v1.yml
+      - .github/workflows/signal-intelligence-v3-validation.yml
       - .github/scripts/paper-forward-reviewed-paths.mjs
       # Separately approved Paper scope supplement: exactly 19 paths.
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -542,7 +558,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 39
+          test "${#auto_signal[@]}" -eq 64
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
