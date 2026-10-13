@@ -79,9 +79,11 @@ test('keeps a provider error explicit when no last-good rows exist', async () =>
   }
 });
 
-test('uses the repository US catalog when Finnhub credentials are absent', async () => {
+test('uses the repository US catalog only when credentials AND public sources are unavailable', async () => {
   const keys = ['FINNHUB_API_KEY', 'VITE_FINNHUB_API_KEY', 'FINNHUB_KEY'] as const;
   const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('OFFLINE_PUBLIC_DIRECTORY_UNAVAILABLE'); };
   for (const key of keys) delete process.env[key];
   clearUsUniverseCacheForTests();
   try {
@@ -94,6 +96,7 @@ test('uses the repository US catalog when Finnhub credentials are absent', async
     assert.equal(aapl?.source, 'static-catalog');
     assert.equal(nvda?.source, 'static-catalog');
   } finally {
+    globalThis.fetch = originalFetch;
     clearUsUniverseCacheForTests();
     for (const key of keys) {
       const value = previous.get(key);
