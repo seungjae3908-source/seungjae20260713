@@ -3150,6 +3150,29 @@ function scannerTradeIntensityProxy(candles, lookback = 20) {
   const pressure = Math.max(-1, Math.min(1, (latest.close - latest.open) / range));
   return pressure * relativeVolume;
 }
+function scannerWaveStructure(candles, leftBars = 2, rightBars = 2) {
+  if (!Number.isInteger(leftBars) || !Number.isInteger(rightBars) || leftBars < 1 || rightBars < 1 || candles.length < leftBars + rightBars + 5) {
+    return Object.freeze({ structure: "INSUFFICIENT", confirmedHighs: 0, confirmedLows: 0 });
+  }
+  const highs = [];
+  const lows = [];
+  for (let index = leftBars; index < candles.length - rightBars; index += 1) {
+    const row = candles[index];
+    const left = candles.slice(index - leftBars, index);
+    const right = candles.slice(index + 1, index + rightBars + 1);
+    if (left.every((item) => row.high > item.high) && right.every((item) => row.high >= item.high)) highs.push(row.high);
+    if (left.every((item) => row.low < item.low) && right.every((item) => row.low <= item.low)) lows.push(row.low);
+  }
+  if (highs.length < 2 || lows.length < 2) {
+    return Object.freeze({ structure: "INSUFFICIENT", confirmedHighs: highs.length, confirmedLows: lows.length });
+  }
+  const higherHigh = highs.at(-1) > highs.at(-2);
+  const higherLow = lows.at(-1) > lows.at(-2);
+  const lowerHigh = highs.at(-1) < highs.at(-2);
+  const lowerLow = lows.at(-1) < lows.at(-2);
+  const structure = higherHigh && higherLow ? "BULLISH" : lowerHigh && lowerLow ? "BEARISH" : "MIXED";
+  return Object.freeze({ structure, confirmedHighs: highs.length, confirmedLows: lows.length });
+}
 function buildScannerIndicatorSnapshot(candles, sessionTimeZone) {
   const closes = candles.map((row) => row.close).filter(Number.isFinite);
   const recent20 = candles.slice(-21, -1);
@@ -3160,6 +3183,7 @@ function buildScannerIndicatorSnapshot(candles, sessionTimeZone) {
   const lateVolume = average(lastVolumeWindow);
   const volumeTrend20 = earlyVolume != null && earlyVolume > 0 && lateVolume != null ? lateVolume / earlyVolume - 1 : null;
   const momentum5 = closes.length >= 6 && closes.at(-6) > 0 ? closes.at(-1) / closes.at(-6) - 1 : null;
+  const wave = scannerWaveStructure(candles);
   return {
     close: latest?.close ?? null,
     ema12: scannerEma(closes, 12),
@@ -3179,7 +3203,10 @@ function buildScannerIndicatorSnapshot(candles, sessionTimeZone) {
     support20: recent20.length === 20 ? Math.min(...recent20.map((row) => row.low)) : null,
     resistance20: recent20.length === 20 ? Math.max(...recent20.map((row) => row.high)) : null,
     volumeTrend20,
-    momentum5
+    momentum5,
+    waveStructure: wave.structure,
+    confirmedPivotHighs: wave.confirmedHighs,
+    confirmedPivotLows: wave.confirmedLows
   };
 }
 
@@ -3538,6 +3565,11 @@ function trendDirection(snapshot) {
   if (fast == null || slow == null || fast === slow) return 0;
   return fast > slow ? 1 : -1;
 }
+function waveDirection(snapshot) {
+  if (snapshot.waveStructure === "BULLISH") return 1;
+  if (snapshot.waveStructure === "BEARISH") return -1;
+  return 0;
+}
 function scalpingFactors(primary, context, input) {
   const close = primary.close ?? input.price;
   let technical = 45;
@@ -3549,6 +3581,9 @@ function scalpingFactors(primary, context, input) {
   const contextTrend = trendDirection(context);
   if (contextTrend > 0) trend += 20;
   if (contextTrend < 0) trend -= 20;
+  const primaryWave = waveDirection(primary);
+  if (primaryWave > 0) trend += 8;
+  if (primaryWave < 0) trend -= 8;
   let momentum = 45;
   if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 20 : -18;
   if (primary.rsi14 != null) {
@@ -3566,6 +3601,9 @@ function scalpingFactors(primary, context, input) {
   let marketRegime = 50;
   if (contextTrend > 0) marketRegime += 30;
   if (contextTrend < 0) marketRegime -= 30;
+  const contextWave = waveDirection(context);
+  if (contextWave > 0) marketRegime += 8;
+  if (contextWave < 0) marketRegime -= 8;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 12;
   return { technical: clamp3(technical), trend: clamp3(trend), momentum: clamp3(momentum), volume: clamp3(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreScalpingVolatility(primary, input.price), marketRegime: clamp3(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -3576,10 +3614,15 @@ function swingFactors(primary, context, input) {
   if (primary.sma20 != null && primary.sma60 != null) trend += primary.sma20 > primary.sma60 ? 14 : -12;
   if (primary.sma60 != null && primary.sma120 != null) trend += primary.sma60 > primary.sma120 ? 12 : -10;
   if (primary.adx14 != null) trend += primary.adx14 >= 25 ? 12 : primary.adx14 < 15 ? -8 : 0;
+  const primaryWave = waveDirection(primary);
+  if (primaryWave > 0) trend += 12;
+  if (primaryWave < 0) trend -= 12;
   let technical = 45;
   if (primary.resistance20 != null && close > primary.resistance20) technical += 28;
   if (primary.ema20 != null && close >= primary.ema20 * 0.98 && close <= primary.ema20 * 1.04) technical += 14;
   if (primary.support20 != null && close < primary.support20) technical -= 28;
+  if (primaryWave > 0) technical += 8;
+  if (primaryWave < 0) technical -= 8;
   let momentum = 45;
   if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 22 : -18;
   if (primary.rsi14 != null) {
@@ -3593,6 +3636,9 @@ function swingFactors(primary, context, input) {
   const contextTrend = trendDirection(context);
   if (contextTrend > 0) marketRegime += 28;
   if (contextTrend < 0) marketRegime -= 28;
+  const contextWave = waveDirection(context);
+  if (contextWave > 0) marketRegime += 10;
+  if (contextWave < 0) marketRegime -= 10;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 15;
   return { technical: clamp3(technical), trend: clamp3(trend), momentum: clamp3(momentum), volume: clamp3(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreSwingVolatility(primary, input.price), marketRegime: clamp3(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -3685,6 +3731,7 @@ function runScannerQuantStrategy(input) {
     `변동성 ${Math.round(factors.volatility)}`,
     `시장국면 ${Math.round(factors.marketRegime)}`,
     `리스크 ${Math.round(factors.risk)}`,
+    `확정파동 ${primary.waveStructure}(${primary.confirmedPivotHighs}H/${primary.confirmedPivotLows}L)`,
     `독립근거 ${independentSignalEvidence ? "충족" : "부족"}`,
     ...input.mode === "scalping" && primary.tradeIntensityProxy != null ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`] : []
   ];
