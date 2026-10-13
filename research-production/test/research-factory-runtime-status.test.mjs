@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -304,6 +304,51 @@ test('Factory status CLI rejects symlinked default diagnostics and runtime bindi
       },
     );
   }
+});
+
+test('concurrent Factory status processes publish one complete durable JSON and leave no temp files',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'research-factory-parallel-'));
+  try{
+    const env={...process.env,RESEARCH_CODE_SHA:SHA,RESEARCH_STATE_ROOT:root,
+      RESEARCH_ADAPTIVE_POLICY_RECORD_PATH:'',RESEARCH_DATA_FACTORY_EVIDENCE_PATH:'',
+      RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH:''};
+    const results=await Promise.all(Array.from({length:8},()=>
+      execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{env,timeout:15000})));
+    for(const result of results){
+      assert.equal(JSON.parse(result.stdout).status,'BLOCKED_POLICY_MISSING');
+    }
+    const latest=join(root,'latest');
+    const saved=JSON.parse(await readFile(join(latest,'research-factory.json'),'utf8'));
+    assert.equal(saved.status,'BLOCKED_POLICY_MISSING');
+    assert.match(saved.statusDigest,/^[a-f0-9]{64}$/u);
+    assert.equal(saved.safety.runtimeExecutionAttempted,false);
+    assert.equal(saved.safety.executionAuthority,'NONE');
+    assert.deepEqual(await readdir(latest),['research-factory.json']);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('malformed policy input keeps a fail-closed durable Factory status without temporary artifacts',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'research-factory-failclosed-'));
+  try{
+    const policy=join(root,'invalid-policy.json');
+    await writeFile(policy,'{');
+    await assert.rejects(
+      execFileAsync(process.execPath,[FACTORY_STATUS_CLI],{
+        env:{...process.env,RESEARCH_CODE_SHA:SHA,RESEARCH_STATE_ROOT:root,
+          RESEARCH_ADAPTIVE_POLICY_RECORD_PATH:policy},timeout:15000,
+      }),
+      error=>{
+        assert.match(String(error.stderr??''),/FACTORY_RUNTIME_STATUS_INPUT_INVALID/u);
+        return true;
+      },
+    );
+    const latest=join(root,'latest');
+    const saved=JSON.parse(await readFile(join(latest,'research-factory.json'),'utf8'));
+    assert.equal(saved.status,'FAILED_CLOSED');
+    assert.equal(saved.safety.executionAuthority,'NONE');
+    assert.equal(saved.safety.runtimeExecutionAttempted,false);
+    assert.deepEqual(await readdir(latest),['research-factory.json']);
+  }finally{await rm(root,{recursive:true,force:true});}
 });
 
 test('adaptive policy record accepts whole-second UTC and rejects impossible approval dates',()=>{
