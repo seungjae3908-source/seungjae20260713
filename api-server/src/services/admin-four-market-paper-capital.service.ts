@@ -125,7 +125,7 @@ function inspectFourMarketPaperWallets(
   const blockers: string[] = [];
   const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
   const legacy = records.filter((row) => row.kind === 'account'
-    && row.id === 'automatic-paper-account-v1');
+    && ['automatic-paper-account-v1', 'automatic-paper-account-v2-1m'].includes(row.id));
   // A regular member's V1 wallet is preserved as immutable legacy history
   // while the V2 market wallets start a new server-owned epoch. Admin V2
   // retains its stricter historical blocker for backwards compatibility.

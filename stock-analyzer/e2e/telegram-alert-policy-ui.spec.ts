@@ -23,7 +23,7 @@ function fulfill(routeHandler: Route, body: unknown, status = 200) {
   });
 }
 
-function userIntegrationsResponse(connected: boolean, deliveries: unknown[] = []) {
+function userIntegrationsResponse(connected: boolean, deliveries: unknown[] = [], recoveryRequired = false) {
   return {
     ok: true,
     brokerConnections: [],
@@ -31,9 +31,12 @@ function userIntegrationsResponse(connected: boolean, deliveries: unknown[] = []
     brokerConnectionsErrorCode: null,
     brokerMetadataRead: true,
     telegram: {
-      connected,
-      status: connected ? 'ACTIVE' : 'DISCONNECTED',
+      connected: connected && !recoveryRequired,
+      status: recoveryRequired ? 'RECOVERY_REQUIRED' : connected ? 'ACTIVE' : 'DISCONNECTED',
       connectedAt: connected ? E2E_NOW : null,
+      recoveryRequired,
+      recoveryErrorCode: recoveryRequired ? 'TELEGRAM_HTTP_403' : null,
+      recoveryFailedAt: recoveryRequired ? '2026-08-30T00:01:00.000Z' : null,
     },
     preferences: {
       ORDER_SUBMITTED: false,
@@ -82,6 +85,11 @@ function userIntegrationsResponse(connected: boolean, deliveries: unknown[] = []
       memberHoldingsEnabled: false,
       backgroundWorkersEnabled: true,
       personalWorkerEnabled: true,
+      personalWorkerStarted: true,
+      personalWorkerHealthy: true,
+      personalWorkerErrorCode: null,
+      personalWorkerLastTickAt: E2E_NOW,
+      personalWorkerLastConfirmedDeliveryAt: E2E_NOW,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -305,8 +313,8 @@ test('personal Telegram test endpoint preserves the route transport boundary and
   expect(panel).toContain("'/api/user-integrations/telegram/test'");
   expect(panel).toContain("'테스트 메시지'");
   expect(panel).toContain("'전송 중…'");
-    expect(panel).toContain('disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}');
-  expect(panel).toContain('if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;');
+  expect(panel).toContain('disabled={!state.telegram.connected || state.telegram.recoveryRequired || !state.telegramRuntime.deliveryReady || testSending}');
+  expect(panel).toContain('if (!state?.telegram.connected || state.telegram.recoveryRequired');
 });
 
 test('actual Account UI clicks Telegram link on mobile and test-message on desktop through the exact safe endpoints', async ({ page }) => {
@@ -362,6 +370,26 @@ test('Telegram delivery health summarizes durable outbox states without creating
   await expect(page.getByTestId('user-broker-telegram-panel')).toContainText('전송 오류');
 });
 
+test('Telegram 403 shows an actionable reconnect state instead of a false connected status', async ({ page }) => {
+  await installTelegramButtonRuntime(page);
+  await page.route('**/api/user-integrations', (routeHandler) => fulfill(
+    routeHandler,
+    userIntegrationsResponse(true, [{
+      id: 'forbidden-delivery',
+      state: 'DEAD_LETTER',
+      attempts: 1,
+      updatedAt: '2026-08-30T00:01:00.000Z',
+      lastErrorCode: 'TELEGRAM_HTTP_403',
+    }], true),
+  ));
+  await page.goto('/account');
+
+  await expect(page.getByTestId('telegram-recovery-required')).toContainText('차단을 해제');
+  await expect(page.getByTestId('user-broker-telegram-panel')).toContainText('재연결 필요');
+  await expect(page.getByRole('button', { name: '텔레그램 재연결' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '테스트 메시지' })).toBeDisabled();
+});
+
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
   expect(panel).toContain('telegram-simple-settings');
   expect(panel).toContain('min-h-11');
@@ -376,6 +404,8 @@ test('Telegram settings remain responsive and do not add Telegram-side trade exe
 test('healthy status requires the actual personal delivery workers instead of bot-token presence alone', () => {
   expect(panel).toContain('state.telegramRuntime.backgroundWorkersEnabled');
   expect(panel).toContain('state.telegramRuntime.personalWorkerEnabled');
+  expect(panel).toContain('state.telegramRuntime.personalWorkerStarted');
+  expect(panel).toContain('state.telegramRuntime.personalWorkerHealthy');
   expect(panel).toContain("? '정상'");
   expect(panel).toContain("? '확인 필요'");
 });

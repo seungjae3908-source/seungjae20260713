@@ -56,6 +56,9 @@ function scannerSuccess(label: string): Response {
     timeframe: '5m',
     cards: [{
       signalId: `signal-${label}`,
+      symbol: '005930', name: 'fixture', price: 100, score: 85,
+      matched: [], notMatched: [], unverified: [], evidence: [],
+      pricePlan: { entryZone: null, stopLoss: null, invalidation: null, targets: [], riskReward: null },
       dataState: 'complete',
       strongSignalEligible: true,
       warnings: [],
@@ -258,6 +261,44 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
   assert.doesNotMatch(scannerPage, forbidden);
 });
 
+test('four-market scanner transport enforces S-only server filtering before alerts or Paper capture', async () => {
+  const base = scannerRequest(77_001);
+  const requests: SignalScannerRequest[] = [
+    base,
+    { ...base, market: 'US', cursor: 77_002 },
+    { ...base, assetClass: 'coin_spot', market: 'UPBIT', cursor: 77_003 },
+    { ...base, assetClass: 'coin_futures', market: 'BITGET', cursor: 77_004 },
+  ];
+  const requestedUrls: string[] = [];
+  let call = 0;
+  await withMockFetch(async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    const expected = requests[call++];
+    const body = await scannerSuccess('s-only').json() as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      ...body, market: expected.market, assetClass: expected.assetClass,
+      timeframe: expected.timeframe, requestId: `s-only-${call}`,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }, async () => {
+    for (const request of requests) {
+      const response = await fetchSignalScanner(request, new AbortController().signal);
+      assert.equal(response.ok, true);
+    }
+  });
+  assert.equal(requestedUrls.length, 4);
+  for (let i = 0; i < requests.length; i++) {
+    const url = new URL(requestedUrls[i], 'https://scanner.test');
+    assert.equal(url.searchParams.get('grade'), 'S', 'no A-grade candidate may be requested');
+    assert.equal(url.searchParams.getAll('grade').length, 1);
+    assert.ok(SIGNAL_SCANNER_READ_PATHS.includes(url.pathname as typeof SIGNAL_SCANNER_READ_PATHS[number]));
+  }
+  const scanner = source('stock-analyzer/src/lib/signal-scanner.ts');
+  assert.match(scanner, /authorizedFetch\(scannerSGradeOnlyUrl\(request\)/);
+  assert.match(scanner, /request\.cacheOwner \?\? 'unscoped', scannerSGradeOnlyUrl\(request\)/);
+  assert.doesNotMatch(scanner, /\/api\/orders|\/api\/execute/);
+});
+
 test('same scanner request key reuses one in-flight upstream request', async () => {
   const request = scannerRequest(101);
   let upstreamCalls = 0;
@@ -362,6 +403,40 @@ test('502 provider failure keeps last-good as stale degraded evidence without st
     assert.match(fallback.refreshIssue?.message ?? '', /공급자 응답이 불안정/);
     assert.equal(fallback.alerts.length, 0);
   });
+});
+
+test('a missing Retry-After header uses body backoff rather than silently coercing null to zero', async () => {
+  await withMockFetch(async () => new Response(JSON.stringify({ error: 'RATE_LIMIT', retryAfterSeconds: 9 }), { status: 429 }), async () => {
+    await assert.rejects(fetchSignalScanner(scannerRequest(901), new AbortController().signal),
+      (error: unknown) => typeof error === 'object' && error !== null && 'retryAfterSeconds' in error && error.retryAfterSeconds === 9);
+  });
+});
+
+test('malformed success and wrong-market responses cannot become scanner data', async () => {
+  for (const patch of [{ execution: null }, { market: 'US' }, { timeframe: '1D' }, { cards: [{}] }]) {
+    await withMockFetch(async () => {
+      const valid = await scannerSuccess('malformed').json();
+      return new Response(JSON.stringify({ ...valid, ...patch }), { status: 200 });
+    }, async () => {
+      await assert.rejects(fetchSignalScanner(scannerRequest(902), new AbortController().signal), /SCANNER_RESPONSE_INVALID/);
+    });
+  }
+});
+
+test('last-good cache is bounded by age and never reused across member identities', async () => {
+  const originalNow = Date.now;
+  let now = originalNow();
+  Date.now = () => now;
+  try {
+    let calls = 0;
+    await withMockFetch(async () => ++calls === 1 ? scannerSuccess('owner') : new Response('{}', { status: 502 }), async () => {
+      const request = { ...scannerRequest(903), cacheOwner: 'member-A' };
+      await fetchSignalScanner(request, new AbortController().signal);
+      await assert.rejects(fetchSignalScanner({ ...request, cacheOwner: 'member-B' }, new AbortController().signal));
+      now += 5 * 60_000 + 1;
+      await assert.rejects(fetchSignalScanner(request, new AbortController().signal));
+    });
+  } finally { Date.now = originalNow; }
 });
 
 test('QueryClient wraps only scanner queries with the TanStack AbortSignal', () => {

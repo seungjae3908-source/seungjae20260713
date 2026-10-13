@@ -35,6 +35,9 @@ test('six formula+AI strategy packs reach ACTIVE_REHEARSAL without OOS/promotion
   assert.equal(RULE_PACK_PILOT_PROFILE.profitCompoundShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.profitReserveShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.futuresMaxLeverage, 7);
+  assert.equal(RULE_PACK_PILOT_PROFILE.mode, 'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY');
+  assert.equal(RULE_PACK_PILOT_PROFILE.liveOrderRequiresExplicitConfirmation, false);
+  assert.equal(RULE_PACK_PILOT_PROFILE.automaticLiveExecutionAllowed, true);
 
   for (const [strategyId, market, direction] of cases) {
     const result = evaluateFormulaAiAutoRehearsal({

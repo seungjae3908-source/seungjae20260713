@@ -1,8 +1,15 @@
+import './paper-futures-funding-certificate.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import {
+  paperSimulatedCostAmount, serverPaperFillCostEvidence,
+  protectedAutomaticPaperCostPolicyV1,
+  TradeExecutionService,
+} from './trade-execution.service';
+import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
+import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -25,6 +32,136 @@ import {
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
+
+test('stopped worker generation cannot execute any provider, inspect credentials or claim a real order', async () => {
+  const repository = new InMemoryTradingRepository();
+  let calls = 0;
+  repository.getPlan = async () => { calls += 1; throw new Error('NO_DATABASE_EXECUTION'); };
+  const service = new TradeExecutionService(repository, undefined, undefined, undefined, () => false);
+  for (const exchange of ['bitget', 'upbit', 'kiwoom', 'toss'] as const) {
+    await assert.rejects(service.execute(USER_ID, { exchange, accountMode: 'live', executionMode: 'automatic' } as TradingPlan,
+      { userId: USER_ID, exchange } as TradingOrder), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+  }
+  assert.equal(calls, 0);
+});
+
+test('late successful ownership reads cannot restore a stopped worker generation', async () => {
+  let active = true;
+  const service = new TradeExecutionService(new InMemoryTradingRepository(), undefined, undefined, undefined, () => active);
+  Object.assign(service, { async assertAutomaticLiveEntryControls() {},
+    async assertAutomaticLivePositionIsolation() { active = false; } });
+  const boundary = service as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    accountMode: 'live', executionMode: 'automatic', reduceOnly: false } as TradingPlan), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+});
+
+test('current membership revocation or an unknown DB read blocks every AUTO provider before credentials or claims', async () => {
+  for (const exchange of ['bitget', 'upbit', 'kiwoom', 'toss'] as const) {
+    for (const unavailable of [false, true]) {
+      const repository = new InMemoryTradingRepository();
+      const now = new Date();
+      const plan: TradingPlan = { ...planInput(now), id: 'revoked-plan', userId: USER_ID, exchange,
+        executionMode: 'automatic', signalReasons: [], reduceOnly: false, state: 'SUBMITTED', version: 0,
+        idempotencyKey: 'revoked-plan', approvedAt: now.toISOString(), approvalExpiresAt: null,
+        createdAt: now.toISOString(), updatedAt: now.toISOString() };
+      const order = { id: 'revoked-order', userId: USER_ID, planId: plan.id, exchange,
+        state: 'SUBMITTED', submissionStartedAt: null } as TradingOrder;
+      repository.getOrder = async () => order;
+      let credentialReads = 0;
+      repository.getConnection = async () => { credentialReads += 1; throw new Error('UNEXPECTED_CREDENTIAL_READ'); };
+      const service = new TradeExecutionService(repository, undefined, undefined, undefined, () => true,
+        async (userId) => { assert.equal(userId, USER_ID);
+          if (unavailable) throw new Error('RAW_DB_ACCOUNT_SECRET'); return false; });
+      await assert.rejects(service.execute(USER_ID, plan, order),
+        (error: unknown) => error instanceof Error && error.message === 'AUTOMATIC_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
+      assert.equal(credentialReads, 0);
+      assert.equal((await repository.listOrders(USER_ID)).length, 0);
+    }
+  }
+});
+
+test('membership revoked during private account reads is rechecked before any financial mutation', async () => {
+  let allowed = true; let checks = 0;
+  const service = new TradeExecutionService(new InMemoryTradingRepository(), undefined, undefined, undefined, () => true,
+    async () => { checks += 1; return allowed; });
+  Object.assign(service, { async assertAutomaticLiveEntryControls() {},
+    async assertAutomaticLivePositionIsolation() { allowed = false; } });
+  const boundary = service as unknown as { assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void> };
+  const now = new Date();
+  const plan: TradingPlan = { ...planInput(now), id: 'late-revoked-plan', userId: USER_ID,
+    executionMode: 'automatic', signalReasons: [], reduceOnly: false, state: 'SUBMITTED', version: 0,
+    idempotencyKey: 'late-revoked-plan', approvedAt: now.toISOString(), approvalExpiresAt: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString() };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID,
+    plan),
+  /MEMBER_ACCESS_REVOKED_OR_UNVERIFIED/);
+  assert.equal(checks, 2);
+});
+
+test('AUTO authority revoked during the ownership read blocks at the final provider boundary', async () => {
+  const execution = new TradeExecutionService(new InMemoryTradingRepository());
+  const events: string[] = [];
+  Object.assign(execution, {
+    async assertAutomaticLiveEntryControls() {
+      events.push('controls');
+      if (events.length > 1) throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    },
+    async assertAutomaticLivePositionIsolation() { events.push('isolation'); },
+  });
+  const boundary = execution as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    ...planInput(new Date()), executionMode: 'automatic', reduceOnly: false,
+  } as TradingPlan), /AUTOMATIC_ENTRY_POLICY_REVOKED/);
+  assert.deepEqual(events, ['controls', 'isolation', 'controls']);
+});
+
+test('provider mutation boundary re-reads manual ownership with execution vault and never mutates protected assets', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
+  process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  const repository = new InMemoryTradingRepository();
+  await repository.saveConnection({ userId: USER_ID, exchange: 'upbit', accountMode: 'live',
+    configured: true, encryptedCredentials: encryptTradingCredentials({ accessKey: 'test', secretKey: 'test' }),
+    lastVerifiedAt: new Date().toISOString(), lastErrorCode: null, updatedAt: new Date().toISOString() });
+  const execution = new TradeExecutionService(repository) as unknown as {
+    assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  const plan = { ...planInput(new Date()), symbol: 'KRW-SOL', executionMode: 'automatic',
+    userId: USER_ID, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlan;
+  let acquiredSolManually = false;
+  let reads = 0;
+  let mutations = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    if (String(init?.method ?? 'GET') !== 'GET') { mutations += 1; throw new Error('MUTATION_FORBIDDEN'); }
+    reads += 1;
+    if (url.pathname === '/v1/accounts') return Response.json([
+      { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      { currency: 'BTC', balance: '0.2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+      ...(acquiredSolManually ? [{ currency: 'SOL', balance: '1', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' }] : []),
+    ]);
+    if (url.pathname === '/v1/orders/open') return Response.json([]);
+    throw new Error('UNEXPECTED_READ_PATH');
+  }) as typeof fetch;
+  try {
+    await execution.assertAutomaticLivePositionIsolation(USER_ID, plan);
+    acquiredSolManually = true;
+    await assert.rejects(execution.assertAutomaticLivePositionIsolation(USER_ID, plan), /MANUAL_ASSET_PROTECTED/);
+    await assert.rejects(execution.assertAutomaticLivePositionIsolation(USER_ID,
+      { ...plan, side: 'sell', reduceOnly: true, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:unproven'] }), /MANUAL_ASSET_PROTECTED/);
+    assert.ok(reads >= 3, 'each boundary performed a fresh private read');
+    assert.equal(mutations, 0);
+    assert.equal((await repository.listOrders(USER_ID)).length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+    else process.env.TRADING_CREDENTIAL_MASTER_KEY = previousKey;
+  }
+});
 
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {
@@ -408,6 +545,10 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
     exchange: 'bitget' as const,
     symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long' as const,
     quantity: 1, quoteAmount: null, leverage: 2, marginMode: 'isolated' as const,
+    // Valid Futures protection reaches the Arm boundary instead of using the
+    // unrelated Upbit KRW protection inherited from planInput.
+    entryPrice: 100, stopPrice: 95, targetPrices: [110],
+    marketSnapshot: { ...marketSnapshot(now), currentPrice: 100, plannedPrice: 100 },
     reduceOnly: false, executionMode: 'automatic' as const,
     id: 'bitget-pre-arm-plan', userId: USER_ID, idempotencyKey: 'bitget-pre-arm-plan-key',
     state: 'SUBMITTED' as const, version: 1, approvedAt: now.toISOString(),
@@ -532,4 +673,243 @@ test('member cap tightening after preflight is enforced again before provider mu
     if (previousStop == null) delete process.env.TRADING_EMERGENCY_STOP;
     else process.env.TRADING_EMERGENCY_STOP = previousStop;
   }
+});
+
+test('Paper simulated costs require explicit finite fee policy; missing never becomes zero', () => {
+  assert.equal(paperSimulatedCostAmount(100, 2, 0), 0);
+  assert.equal(paperSimulatedCostAmount(100, 2, 0.05), 0.1);
+  for (const missing of [null, undefined, NaN, Infinity, -0.01, 100.01]) {
+    assert.equal(paperSimulatedCostAmount(100, 2, missing), null);
+  }
+  assert.equal(paperSimulatedCostAmount(100, 0, 0), null);
+  assert.equal(paperSimulatedCostAmount(0, 2, 0), null);
+  assert.equal(paperSimulatedCostAmount(Number.MAX_VALUE, 2, 100), null);
+});
+
+test('server native Paper quote is recorded while unissued tax and missing fees remain unknown', async () => {
+  const nowMs=Date.parse('2026-10-11T00:00:00.000Z');
+  const p:TradingPlan={...planInput(new Date(nowMs)), accountMode:'paper',
+    id:'native-paper-1',userId:USER_ID,idempotencyKey:'native-paper',
+    state:'SUBMITTED',version:1,approvalExpiresAt:null,
+    approvedAt:new Date(nowMs).toISOString(),createdAt:new Date(nowMs).toISOString(),
+    updatedAt:new Date(nowMs).toISOString()};
+  const result=await serverPaperFillCostEvidence(p,100,2,null,{},nowMs);
+  assert.equal(result.feeAmount,null);
+  assert.equal(result.taxAmount,null);
+  assert.equal(result.taxCurrency,null);
+  assert.equal(result.trustedPaperCostPolicyId,null);
+  assert.equal(result.feeCurrency,'KRW');
+  assert.deepEqual(result.settlementFxEvidence,{
+    krwPerQuoteCurrency:1,source:'NATIVE_KRW',observedAt:new Date(nowMs).toISOString(),
+  });
+});
+
+test('server-owned versioned tax cost policy and fresh FX can be issued for an actual Paper fill', async () => {
+  const nowMs=Date.parse('2026-10-11T00:00:00.000Z');
+  const p:TradingPlan={...planInput(new Date(nowMs)),
+    exchange:'bitget',market:'USDT-FUTURES',accountMode:'paper',
+    id:'bitget-cost-policy',userId:USER_ID,idempotencyKey:'bitget-paper',
+    state:'SUBMITTED',version:1,approvalExpiresAt:null,
+    approvedAt:new Date(nowMs).toISOString(),createdAt:new Date(nowMs).toISOString(),
+    updatedAt:new Date(nowMs).toISOString()};
+  const sources={
+    async fxQuote(){
+      return {market:'CRYPTO_FUTURES' as const,source:'UPBIT:KRW-USDT',
+        krwPerQuoteCurrency:1375,observedAt:new Date(nowMs-1_000).toISOString(),
+        stale:false as const};
+    },
+    async costPolicy(){
+      return {source:'SERVER_PAPER_COST_POLICY_V1' as const,
+        policyId:'server-paper-cost-v1:unit-commission-tax',
+        market:'CRYPTO_FUTURES' as const,exchange:'bitget' as const,
+        feeRatePercent:0.1,taxRatePercent:0.2,
+        effectiveAt:new Date(nowMs-86_400_000).toISOString(),
+        expiresAt:new Date(nowMs+86_400_000).toISOString()};
+    },
+  };
+  const receipt=await serverPaperFillCostEvidence(p,100,2,90,sources,nowMs);
+  assert.equal(receipt.feeAmount,0.2);
+  assert.equal(receipt.taxAmount,0.4);
+  assert.equal(receipt.taxCurrency,'USDT');
+  assert.equal(receipt.trustedPaperCostPolicyId,'server-paper-cost-v1:unit-commission-tax');
+  assert.equal(receipt.settlementFxEvidence?.krwPerQuoteCurrency,1375);
+  assert.equal(receipt.settlementFxEvidence?.source,'UPBIT:KRW-USDT');
+});
+
+test('wrong-source or stale server quotes and invalid cost policies cannot mint settlement receipts', async () => {
+  const nowMs=Date.parse('2026-10-11T00:00:00.000Z');
+  const p:TradingPlan={...planInput(new Date(nowMs)),accountMode:'paper',
+    exchange:'kiwoom',market:'US',stockExchange:'NASDAQ',
+    id:'us-equity-policy',userId:USER_ID,idempotencyKey:'us-paper',
+    state:'SUBMITTED',version:1,approvalExpiresAt:null,
+    approvedAt:new Date(nowMs).toISOString(),createdAt:new Date(nowMs).toISOString(),
+    updatedAt:new Date(nowMs).toISOString()};
+  const invalidPolicy={
+    source:'SERVER_PAPER_COST_POLICY_V1' as const,
+    policyId:'server-paper-cost-v1:unit-us',
+    market:'US_STOCK' as const,exchange:'kiwoom' as const,
+    feeRatePercent:0.1,taxRatePercent:0.1,
+    effectiveAt:new Date(nowMs-1000).toISOString(),
+    expiresAt:new Date(nowMs-1).toISOString(),
+  };
+  const result=await serverPaperFillCostEvidence(p,100,1,0.15,{
+    async fxQuote() {return {
+      market:'US_STOCK' as const,source:'UPBIT:KRW-USDT',
+      krwPerQuoteCurrency:1400,observedAt:new Date(nowMs-1_000).toISOString(),
+      stale:false as const};},
+    async costPolicy() {return invalidPolicy;},
+  },nowMs);
+  assert.equal(result.taxAmount,null);
+  assert.equal(result.trustedPaperCostPolicyId,null);
+  assert.equal(result.feeCurrency,'USD');
+  assert.equal(result.feeAmount,0.15);
+  assert.equal(result.settlementFxEvidence,null);
+  const stale=await serverPaperFillCostEvidence(p,100,1,0.15,{
+    async fxQuote() {return {
+      market:'US_STOCK' as const,source:'YAHOO:USDKRW=X',
+      krwPerQuoteCurrency:1400,observedAt:new Date(nowMs-86_400_001).toISOString(),
+      stale:false as const};},
+  },nowMs);
+  assert.equal(stale.settlementFxEvidence,null);
+  assert.equal(stale.taxAmount,null);
+  // A generic US Paper API request is not allowed to make any unsolicited
+  // external FX requests. Only the server's previously verified worker quote
+  // may be used for a foreign-currency Paper settlement.
+  const noImplicitPublicFx=await serverPaperFillCostEvidence(p,100,1,0.15,{},nowMs);
+  assert.equal(noImplicitPublicFx.settlementFxEvidence,null);
+});
+
+test('Paper fill transition persists server-issued tax and FX in canonical order and Journal; other modes cannot', async () => {
+  const repository=new InMemoryTradingRepository();
+  const now=new Date();
+  const plan:TradingPlan={...planInput(now),accountMode:'paper',
+    executionMode:'automatic',id:'persist-paper-plan',userId:USER_ID,
+    idempotencyKey:'persist-paper-idempotency',state:'SUBMITTED',version:1,
+    approvalExpiresAt:null,approvedAt:now.toISOString(),
+    createdAt:now.toISOString(),updatedAt:now.toISOString()};
+  const order:TradingOrder={
+    id:'persist-paper-fill',userId:USER_ID,planId:plan.id,exchange:'upbit',
+    clientOrderId:'persist-client',exchangeOrderId:null,state:'ACCEPTED',
+    version:1,requestedQuantity:2,remainingQuantity:2,filledQuantity:0,
+    averageFillPrice:null,retryCount:0,lastErrorCode:null,
+    createdAt:now.toISOString(),updatedAt:now.toISOString(),
+  };
+  await repository.savePlan(plan);await repository.saveOrder(order);
+  const canonical=new TradeAutomationService(repository);
+  const verified={
+    taxAmount:0,taxCurrency:'KRW',
+    trustedPaperCostPolicyId:'server-paper-cost-v1:unit',
+    settlementFxEvidence:{
+      source:'NATIVE_KRW',krwPerQuoteCurrency:1,observedAt:now.toISOString()},
+  };
+  await canonical.transition(order,'FILLED','PAPER_BROKER_FILLED',{
+    filledQuantity:2,averageFillPrice:100,feeAmount:0.1,feeCurrency:'KRW',...verified,
+  });
+  const stored=await repository.getOrder(USER_ID,order.id);
+  assert.equal(stored?.taxAmount,0);
+  assert.equal(stored?.taxCurrency,'KRW');
+  assert.equal(stored?.settlementFxEvidence?.source,'NATIVE_KRW');
+  const rows=tradeAutomationJournalPayloadsFromSnapshot(USER_ID,[stored!],[plan]);
+  assert.equal(rows[0]?.tax,0);
+  assert.equal(rows[0]?.fees,0.1);
+  const otherRepository=new InMemoryTradingRepository();
+  const livePlan={...plan,id:'persist-live-plan',accountMode:'live' as const};
+  const liveOrder={...order,id:'persist-live-fill',planId:livePlan.id,state:'ACCEPTED' as const,
+    filledQuantity:0,averageFillPrice:null,taxAmount:null,settlementFxEvidence:null};
+  await otherRepository.savePlan(livePlan);await otherRepository.saveOrder(liveOrder);
+  await new TradeAutomationService(otherRepository).transition(
+    liveOrder,'FILLED','PAPER_BROKER_FILLED',{
+      filledQuantity:2,averageFillPrice:100,feeAmount:0.1,feeCurrency:'KRW',...verified,
+    });
+  const ignored=await otherRepository.getOrder(USER_ID,liveOrder.id);
+  assert.equal(ignored?.taxAmount??null,null);
+  assert.equal(ignored?.settlementFxEvidence??null,null);
+});
+
+test('untrusted Paper tax or mismatched FX denomination is never certified on transition', async () => {
+  const now=new Date();
+  const p:TradingPlan={...planInput(now),accountMode:'paper',
+    id:'paper-invalid-cost',userId:USER_ID,idempotencyKey:'paper-invalid',
+    state:'SUBMITTED',version:1,approvalExpiresAt:null,approvedAt:now.toISOString(),
+    createdAt:now.toISOString(),updatedAt:now.toISOString()};
+  const order:TradingOrder={id:'invalid-cost-fill',userId:USER_ID,planId:p.id,
+    exchange:'upbit',clientOrderId:'invalid-cost-client',exchangeOrderId:null,
+    state:'ACCEPTED',version:1,requestedQuantity:1,filledQuantity:0,
+    averageFillPrice:null,retryCount:0,lastErrorCode:null,
+    createdAt:now.toISOString(),updatedAt:now.toISOString()};
+  const repo=new InMemoryTradingRepository();
+  await repo.savePlan(p);await repo.saveOrder(order);
+  await new TradeAutomationService(repo).transition(order,'FILLED','PAPER_BROKER_FILLED',{
+    filledQuantity:1,averageFillPrice:100,
+    feeAmount:0.1,feeCurrency:'KRW',
+    taxAmount:0,taxCurrency:'KRW',
+    settlementFxEvidence:{source:'YAHOO:USDKRW=X',krwPerQuoteCurrency:1400,
+      observedAt:now.toISOString()},
+  });
+  const stored=await repo.getOrder(USER_ID,order.id);
+  assert.equal(stored?.taxAmount??null,null,'missing trusted issuer is never a zero tax receipt');
+  assert.equal(stored?.settlementFxEvidence??null,null,'wrong market FX source cannot be signed');
+});
+
+
+test('protected 4-market automatic Paper cost rules are exact, expiring, and never inherited by Live/manual', async () => {
+  const nowMs = Date.parse('2026-10-11T03:00:00.000Z');
+  const paper: TradingPlan = {
+    ...planInput(new Date(nowMs)), accountMode: 'paper',
+    executionMode: 'automatic', id: 'cost-server-issuer',
+    userId: USER_ID, idempotencyKey: 'cost-server-issuer',
+    state: 'SUBMITTED', version: 1, approvalExpiresAt: null,
+    approvedAt: new Date(nowMs).toISOString(),
+    createdAt: new Date(nowMs).toISOString(),
+    updatedAt: new Date(nowMs).toISOString(),
+  };
+  const rule = (market: string, exchange: string, fee = 0.05, tax = 0) => ({
+    market, exchange, policyId: 'server-paper-cost-v1:validated-' + market + '-' + exchange,
+    feeRatePercent: fee, taxRatePercent: tax,
+    effectiveAt: '2026-10-10T00:00:00.000Z',
+    expiresAt: '2026-10-12T00:00:00.000Z',
+  });
+  const rules = [
+    rule('KR_STOCK', 'toss'), rule('KR_STOCK', 'kiwoom'),
+    rule('US_STOCK', 'kiwoom'), rule('CRYPTO_SPOT', 'upbit'),
+    rule('CRYPTO_FUTURES', 'bitget'),
+  ];
+  const encode = (rows: unknown[]) => JSON.stringify({
+    contract: 'member-auto-paper-cost-rules/v1', rules: rows,
+  });
+  const valid = encode(rules);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, ''), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, 'not-json'), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1({...paper, accountMode:'live'}, nowMs, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1({...paper, executionMode:'manual'}, nowMs, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs + 172_800_000, valid), null);
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([...rules, rules[3]])),
+    null, 'duplicate market/exchange must fail closed');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), rule('CRYPTO_SPOT', 'upbit', 0.05, NaN), rules[4],
+  ])), null, 'missing tax cannot become zero');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), rule('CRYPTO_SPOT', 'bitget'), rules[4],
+  ])), null, 'wrong exchange cannot issue spot tax');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), {...rules[3], policyId: rules[2].policyId}, rules[4],
+  ])), null, 'one policy ID cannot certify two different market rules');
+  const issuer = protectedAutomaticPaperCostPolicyV1(paper, nowMs, valid);
+  assert.ok(issuer);
+  assert.equal(issuer.market, 'CRYPTO_SPOT');
+  assert.equal(issuer.exchange, 'upbit');
+  assert.equal(issuer.taxRatePercent, 0, 'explicit zero is allowed, never a default');
+  const result = await serverPaperFillCostEvidence(paper, 100, 2, null, {
+    costPolicy: async (plan, at) => protectedAutomaticPaperCostPolicyV1(plan, at, valid),
+  }, nowMs);
+  assert.equal(result.feeAmount, 0.1);
+  assert.equal(result.taxAmount, 0);
+  assert.equal(result.trustedPaperCostPolicyId, issuer.policyId);
+  assert.equal(result.settlementFxEvidence?.source, 'NATIVE_KRW');
+  const missing = await serverPaperFillCostEvidence(paper, 100, 2, null, {
+    costPolicy: async (plan, at) => protectedAutomaticPaperCostPolicyV1(plan, at, ''),
+  }, nowMs);
+  assert.equal(missing.feeAmount, null);
+  assert.equal(missing.taxAmount, null);
+  assert.equal(missing.trustedPaperCostPolicyId, null);
 });

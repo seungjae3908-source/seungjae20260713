@@ -17,7 +17,7 @@ function card(overrides = {}) {
     strategyMode: 'swing',
     price: 100,
     strongSignalEligible: true,
-    signalGrade: 'A',
+    signalGrade: 'S',
     riskLevel: 'LOW',
     dataState: 'complete',
     dataQuality: { state: 'TRUSTED', strongSignalAllowed: true },
@@ -111,6 +111,15 @@ test('verified backtest alone cannot make a V3 candidate without canonical Profi
   const snapshot = runSignalIntelligenceV3([adapted]);
   assert.equal(snapshot.rows[0].state, 'NO_TRADE');
   assert.equal(snapshot.lists.krBuy.length, 0);
+});
+
+test('only an explicit S grade can cross the automatic-trading quant gate', () => {
+  for (const signalGrade of [undefined, 'A', 'B']) {
+    const adapted = adaptCanonicalScannerCard(canonicalInput(card({ signalGrade })), { nowMs: NOW });
+    assert.equal(adapted.quantEligible, false, String(signalGrade));
+    assert.equal(runSignalIntelligenceV3([adapted]).rows[0].state, 'NO_TRADE', String(signalGrade));
+  }
+  assert.equal(adaptCanonicalScannerCard(canonicalInput(card({ signalGrade: 'S' })), { nowMs: NOW }).quantEligible, true);
 });
 
 test('canonical READY ProfitEvidence plus exact Paper Identity and explicit runtime cost policy can become candidate input', () => {

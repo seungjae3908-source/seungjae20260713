@@ -4,13 +4,16 @@ import type {
   TradingAssetClass, TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy,
 } from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import { tradingHistoryComplete } from './trade-history-completeness.service';
 import {
   isEvidenceBackedAutoStrategyId,
   RULE_PACK_PILOT_PROFILE,
@@ -64,6 +67,12 @@ function supportedPilotInitialCapital(value: unknown) {
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
 }
 
+export function rulePackPilotDiscoveryEntryCap(initialOperatingCapitalKrw: number) {
+  return initialOperatingCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW;
+}
+
 export function rulePackPilotInitialCapitalForPolicy(
   policy: Pick<TradingPolicy, 'totalCapitalKrw' | 'maxOrderKrw'>,
 ) {
@@ -84,9 +93,9 @@ function normalizedSymbol(value: string) {
   return value.trim().toUpperCase().replace(/^KRW-/u, '');
 }
 
-// Canonical TradingRepository.listOrders/listPlans are presently bounded to
-// 500/200 newest rows. A truncated history must never reset the high-water
-// mark and re-credit old profits as new compoundable gains.
+// Legacy/unattested arrays remain fail-closed at the former 500/200 bounds.
+// The repository's cursor-paged history uses an internal completeness proof;
+// counts alone must never let partial history reset HWM or credit gains twice.
 export function rulePackPilotLedgerHistoryComplete(orderCount: number, planCount: number): boolean {
   return Number.isSafeInteger(orderCount) && Number.isSafeInteger(planCount)
     && orderCount >= 0 && planCount >= 0 && orderCount < 500 && planCount < 200;
@@ -224,6 +233,7 @@ export type RulePackPilotEntryGuardInput = Readonly<{
   policyTotalCapitalKrw: number;
   openLivePositions: number;
   nowMs: number;
+  discoveryEntryCapRequired?: boolean;
 }>;
 
 export type RulePackPilotEntryGuardDecision = Readonly<{
@@ -254,7 +264,12 @@ export function evaluateRulePackPilotEntryGuard(
   if (input.pilot.initialOperatingCapitalKrw !== initial) add('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
   const growth = Math.max(0, operatingCapital - initial);
   const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
-  const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, dynamicPolicyCap);
+  const discoveryEntryCap = input.discoveryEntryCapRequired === true
+    ? rulePackPilotDiscoveryEntryCap(initial)
+    : Number.POSITIVE_INFINITY;
+  const effectiveMaxEntryKrw = Math.min(
+    operatingCapital, pilotMaxEntry, dynamicPolicyCap, discoveryEntryCap,
+  );
 
   if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
     add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
@@ -271,8 +286,10 @@ export function evaluateRulePackPilotEntryGuard(
   if (input.pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
     add('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT');
   }
-  if (input.pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
-    add('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT');
+  const dailyLossStopKrw = operatingCapital
+    * RULE_PACK_PILOT_PROFILE.dailyLossStopPercent / 100;
+  if (input.pilot.dailyRealizedPnlKrw <= -dailyLossStopKrw) {
+    add('BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT');
   }
   if (input.pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
     add('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT');
@@ -309,6 +326,7 @@ export function deriveRulePackPilotExecutionPolicy(
   policy: TradingPolicy,
   pilot: RulePackPilotCapitalState,
   targetMarket?: TradingAssetClass,
+  discoveryEntryCapRequired = false,
 ): TradingPolicy {
   const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw);
   if (pilot.initialOperatingCapitalKrw !== initial) {
@@ -330,6 +348,9 @@ export function deriveRulePackPilotExecutionPolicy(
     ? PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW
     : PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW;
   const portfolioCapitalKrw = roundKrw(portfolioInitialCapitalKrw + growth);
+  const discoveryEntryCap = discoveryEntryCapRequired
+    ? rulePackPilotDiscoveryEntryCap(initial)
+    : Number.POSITIVE_INFINITY;
   const growingCap = (original: number) => roundKrw(Math.min(
     laneCapital,
     original >= initial ? original + growth : original,
@@ -337,7 +358,7 @@ export function deriveRulePackPilotExecutionPolicy(
   return {
     ...policy,
     totalCapitalKrw: portfolioCapitalKrw,
-    maxOrderKrw: growingCap(policy.maxOrderKrw),
+    maxOrderKrw: Math.min(growingCap(policy.maxOrderKrw), discoveryEntryCap),
     maxInstrumentKrw: growingCap(policy.maxInstrumentKrw),
     maxAssetClassKrw: {
       domestic_stock: targetMarket == null || targetMarket === 'domestic_stock'
@@ -488,7 +509,7 @@ export function verifyRulePackPilotDynamicCapReceipt(
  * A missing/expired/forged token never falls back to manual order authority.
  */
 export async function resolveRulePackPilotDynamicCapPolicy(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   plan: TradingPlan,
   policy: TradingPolicy,
@@ -526,11 +547,14 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     openLivePositions: Number.isSafeInteger(openLivePositions) && openLivePositions >= 0
       ? openLivePositions : Number.POSITIVE_INFINITY,
     nowMs: now.getTime(),
+    discoveryEntryCapRequired: true,
   });
   if (!decision.allowed) {
     throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_DYNAMIC_CAP_RISK_BLOCKED');
   }
-  return deriveRulePackPilotExecutionPolicy(policy, pilot, rulePackPilotMarketForPlan(plan));
+  return deriveRulePackPilotExecutionPolicy(
+    policy, pilot, rulePackPilotMarketForPlan(plan), true,
+  );
 }
 
 // A numeric fee is not a KRW/quote-currency cost unless the broker recorded
@@ -571,7 +595,7 @@ function planForBrokerOrder(
 }
 
 export async function readRulePackPilotCapitalState(
-  repository: TradingRepository,
+  repository: Pick<TradingRepository, 'listPlans' | 'listOrders'>,
   userId: string,
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
@@ -621,7 +645,7 @@ export async function readRulePackPilotCapitalState(
   if (journal.integrityIssues.length > 0) {
     blockers.push('PILOT_CAPITAL_AUTO_LIVE_JOURNAL_INTEGRITY_REQUIRED');
   }
-  if (!rulePackPilotLedgerHistoryComplete(allOrders.length, allPlans.length)) {
+  if (!tradingHistoryComplete(allOrders, 500) || !tradingHistoryComplete(allPlans, 200)) {
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.

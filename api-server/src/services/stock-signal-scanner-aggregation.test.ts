@@ -8,7 +8,27 @@ import {
   requiresPublicOnlyKrUniverse,
   type ScannerUniverseEntry,
 } from './scanner-universe.service';
-import { aggregateUsSessionCandles } from './stock-signal-scanner.service';
+import { aggregateUsSessionCandles, completedStockScannerCandles } from './stock-signal-scanner.service';
+
+test('stock scanner uses completed intraday bars and preserves invalid/future facts for explicit quality rejection', () => {
+  const now = Date.parse('2026-10-12T15:30:00Z');
+  const closed = row('2026-10-12T15:15:00Z', 100, 102, 99, 101, 10);
+  const pending = { ...closed, time: '2026-10-12T15:29:00Z' };
+  const future = { ...closed, time: '2026-10-12T15:31:00Z' };
+  const invalid = { ...closed, time: 'invalid-time' };
+  assert.deepEqual(completedStockScannerCandles('US', '15m', [closed, pending, future, invalid], now), [closed, future, invalid]);
+  assert.equal(completedStockScannerCandles('KR', '15m', [{ ...closed, time: '20261012122900' }],
+    Date.parse('2026-10-12T03:30:00Z')).length, 0, 'Kiwoom compact KST bars follow the same completion gate');
+});
+
+test('daily scanner bars become complete at the exchange local close, including New York DST', () => {
+  const us = row('2026-10-12T13:30:00Z', 100, 102, 99, 101, 10);
+  assert.equal(completedStockScannerCandles('US', '1D', [us], Date.parse('2026-10-12T19:59:00Z')).length, 0);
+  assert.equal(completedStockScannerCandles('US', '1D', [us], Date.parse('2026-10-12T20:00:00Z')).length, 1);
+  const kr = { ...us, time: '2026-10-12T00:00:00Z' };
+  assert.equal(completedStockScannerCandles('KR', '1D', [kr], Date.parse('2026-10-12T06:29:00Z')).length, 0);
+  assert.equal(completedStockScannerCandles('KR', '1D', [kr], Date.parse('2026-10-12T06:30:00Z')).length, 1);
+});
 
 function row(
   time: string,

@@ -77,7 +77,9 @@ test('canonical receipts become readable only with exact identity, provenance an
 test('free entitlement, isolated route and allowed model are required without changing environment', () => {
   assert.equal(researchProviderPolicy({ AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture' }).provider, null);
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'openai-compatible', AI_CHAT_API_KEY: 'fixture' }).provider, null);
-  assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: 'fixture', GROQ_API_KEY: 'fixture' }).provider, null);
+  assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: 'fixture', GROQ_API_KEY: 'fixture' }).provider, 'gemini');
+  assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: 'fixture', AI_CHAT_API_KEY: 'conflicting-key' }).provider, null);
+  assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture', AI_CHAT_MODEL: 'paid-model' }).provider, null);
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture', GROQ_MODEL: 'paid-model' }).provider, null);
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture' }).provider, 'groq');
 });

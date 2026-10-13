@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { kiwoomReadonlyRecoverySecurityFailures } from './kiwoom-readonly-recovery-security-contract.mjs';
 
 const repositoryRoot = path.resolve(process.cwd(), '..');
 const failures = [];
@@ -66,8 +67,8 @@ assert(recoveryWorker.includes('ordersSubmitted: 0')
   && recoveryWorker.includes('ordersCancelled: 0')
   && recoveryWorker.includes('privateMutationRequests: 0'),
   'trade recovery worker does not expose zero mutation counters');
-assert(orderRecovery.includes('KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT'),
-  'Kiwoom recovery is not fail-closed while the official status contract is unverified');
+failures.push(...kiwoomReadonlyRecoverySecurityFailures(orderRecovery,
+  await text('api-server/src/services/kiwoom-readonly-order-recovery.service.ts')));
 assert(automationRoute.includes('encryptTradingCredentials'), 'member exchange credentials are not encrypted before storage');
 assert(automationRepository.includes('hasSupabaseServerKey') && automationRepository.includes('secureClient()'),
   'encrypted exchange credentials are not restricted to the server Supabase client');
@@ -108,6 +109,7 @@ const phase8SensitiveFiles = [
   'api-server/src/services/spot-live-limited-capability.service.ts',
   'api-server/src/services/trade-execution.service.ts',
   'api-server/src/services/trade-order-recovery.service.ts',
+  'api-server/src/services/kiwoom-readonly-order-recovery.service.ts',
   'api-server/src/services/trade-recovery-worker.service.ts',
   'api-server/src/services/trade-automation.repository.ts',
   'api-server/src/routes/trade-automation.ts',

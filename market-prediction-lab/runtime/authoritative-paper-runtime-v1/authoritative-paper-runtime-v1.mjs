@@ -397,8 +397,8 @@ var finite2 = (value) => typeof value === "number" && Number.isFinite(value);
 var positive = (value) => finite2(value) && value > 0;
 var nonNegative = (value) => finite2(value) && value >= 0;
 function isFresh(updatedAt, now, limitMs) {
-  const timestamp4 = Date.parse(updatedAt);
-  return Number.isFinite(timestamp4) && now.getTime() >= timestamp4 && now.getTime() - timestamp4 <= limitMs;
+  const timestamp3 = Date.parse(updatedAt);
+  return Number.isFinite(timestamp3) && now.getTime() >= timestamp3 && now.getTime() - timestamp3 <= limitMs;
 }
 function validateState(state) {
   if (!state || state.schemaVersion !== 1 || !state.account) {
@@ -2636,134 +2636,6 @@ async function runBoundedWorkPool(items, worker, options) {
 
 // src/services/scanner-signal-lifecycle.service.ts
 import { createHash as createHash3 } from "node:crypto";
-var records = /* @__PURE__ */ new Map();
-var RECORD_TTL_MS = 7 * 24 * 60 * 6e4;
-var SCANNER_TERMINAL_STATES = /* @__PURE__ */ new Set([
-  "INVALIDATED",
-  "EXPIRED",
-  "REJECTED",
-  "CANCELLED",
-  "CLOSED"
-]);
-var ORDER_OWNED_STATES = /* @__PURE__ */ new Set([
-  "APPROVED",
-  "EXECUTING",
-  "PARTIALLY_FILLED",
-  "FILLED",
-  "MANAGING",
-  "CLOSED",
-  "REJECTED",
-  "CANCELLED"
-]);
-function alertKey(signalId2, expiresAt) {
-  return `scanner-alert:${createHash3("sha256").update(`${signalId2}:APPROVAL_PENDING:${expiresAt}`).digest("hex").slice(0, 32)}`;
-}
-function lifecycleKey(memberId, baseSignalId) {
-  return `${memberId}:${baseSignalId}`;
-}
-function invalid(card) {
-  return card.dataState === "unavailable" || card.dataState === "untrusted" || card.dataQuality?.state === "DATA_UNTRUSTED" || card.dataQuality?.strongSignalAllowed === false || card.riskScore != null && card.riskScore >= 80 || card.listingStatus === "UNKNOWN" && card.dataState !== "complete";
-}
-function insideEntryZone(card) {
-  const zone = card.pricePlan.entryZone;
-  if (!zone || !Number.isFinite(card.price)) return false;
-  const low = Math.min(zone.from, zone.to);
-  const high = Math.max(zone.from, zone.to);
-  return card.price >= low && card.price <= high;
-}
-function normalizedPrevious(previous) {
-  if (previous === "DETECTED") return "CANDIDATE";
-  if (previous === "WATCHING") return "CONFIRMED";
-  if (previous === "READY_FOR_APPROVAL") return "APPROVAL_PENDING";
-  if (previous === "WEAKENED") return "INVALIDATED";
-  return previous;
-}
-function nextState(previousState, card, now) {
-  const previous = normalizedPrevious(previousState);
-  if (Date.parse(card.expiresAt) <= now) return "EXPIRED";
-  if (previous && ORDER_OWNED_STATES.has(previous)) return previous;
-  if (invalid(card)) return "INVALIDATED";
-  if (!card.strongSignalEligible) {
-    return previous && ["CONFIRMED", "ARMED", "ENTRY_ZONE", "APPROVAL_PENDING"].includes(previous) ? "INVALIDATED" : "CANDIDATE";
-  }
-  if (previous == null || previous === "INVALIDATED" || previous === "EXPIRED") return "CANDIDATE";
-  if (previous === "CANDIDATE") return "CONFIRMED";
-  if (previous === "CONFIRMED") return "ARMED";
-  if (previous === "ARMED") return insideEntryZone(card) ? "ENTRY_ZONE" : "ARMED";
-  if (previous === "ENTRY_ZONE") return insideEntryZone(card) ? "APPROVAL_PENDING" : "ARMED";
-  if (previous === "APPROVAL_PENDING") return insideEntryZone(card) ? "APPROVAL_PENDING" : "ARMED";
-  return "CANDIDATE";
-}
-function alertFrom(card, idempotencyKey) {
-  return {
-    idempotencyKey,
-    signalId: card.signalId,
-    assetClass: card.assetClass,
-    market: card.market,
-    symbol: card.symbol,
-    direction: card.direction,
-    state: "APPROVAL_PENDING",
-    entryZone: card.pricePlan.entryZone,
-    stopLoss: card.pricePlan.stopLoss,
-    targets: card.pricePlan.targets,
-    expiresAt: card.expiresAt,
-    evidence: card.evidence.filter((item) => item.status === "matched").flatMap((item) => item.reasons).slice(0, 8),
-    orderSubmitted: false,
-    exchangeRequestSent: false
-  };
-}
-function splitSignalId(signalId2) {
-  const cycleMarker = ":cycle:";
-  const markerIndex = signalId2.lastIndexOf(cycleMarker);
-  return {
-    baseSignalId: markerIndex >= 0 ? signalId2.slice(0, markerIndex) : signalId2,
-    cycle: markerIndex >= 0 ? Number(signalId2.slice(markerIndex + cycleMarker.length)) : 1
-  };
-}
-function strategyScopedBaseSignalId(card) {
-  const baseSignalId = splitSignalId(card.signalId).baseSignalId;
-  if (!card.strategyMode || baseSignalId.includes(":strategy:")) return baseSignalId;
-  return `${baseSignalId}:strategy:${card.strategyMode}`;
-}
-function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
-  for (const [key, record7] of records) {
-    if (now - record7.lastSeenAt > RECORD_TTL_MS) records.delete(key);
-  }
-  const alerts = [];
-  const updated = cards.map((card) => {
-    const baseSignalId = strategyScopedBaseSignalId(card);
-    const key = lifecycleKey(memberId, baseSignalId);
-    const existing = records.get(key);
-    let cycle = existing?.cycle ?? 1;
-    const existingState = normalizedPrevious(existing?.state ?? null);
-    if (existing && existingState != null && SCANNER_TERMINAL_STATES.has(existingState) && card.strongSignalEligible && !["APPROVED", "EXECUTING", "PARTIALLY_FILLED", "FILLED", "MANAGING"].includes(existingState)) {
-      cycle += 1;
-    }
-    const resetCycle = !existing || cycle !== existing.cycle;
-    const previous = resetCycle ? null : existingState;
-    const state = nextState(previous, card, now);
-    const confirmationStreak = card.strongSignalEligible ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + 1 : 0;
-    const signalId2 = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
-    const nextCard = { ...card, signalId: signalId2, signalState: state };
-    const idempotencyKey = alertKey(signalId2, card.expiresAt);
-    let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
-    if (state === "APPROVAL_PENDING" && lastAlertKey !== idempotencyKey) {
-      alerts.push(alertFrom(nextCard, idempotencyKey));
-      lastAlertKey = idempotencyKey;
-    }
-    records.set(key, {
-      baseSignalId,
-      cycle,
-      state,
-      confirmationStreak,
-      firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
-      lastSeenAt: now,
-      lastAlertKey
-    });
-    return nextCard;
-  });
-  return { cards: updated, alerts };
-}
 
 // src/services/scanner-data-quality.service.ts
 var TIMEFRAME_MS = {
@@ -2780,8 +2652,8 @@ var TIMEFRAME_MS = {
 };
 var SESSION_AWARE_RECENT_STALE_MS = 4 * 24 * 60 * 6e4;
 function compactKoreaTimestamp(value) {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length !== 8 && digits.length !== 14) return null;
+  if (!/^(?:\d{8}|\d{14})$/.test(value)) return null;
+  const digits = value;
   const year = digits.slice(0, 4);
   const month = digits.slice(4, 6);
   const day = digits.slice(6, 8);
@@ -2791,7 +2663,7 @@ function compactKoreaTimestamp(value) {
   const parsed = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}+09:00`);
   return Number.isFinite(parsed) ? parsed : null;
 }
-function timestamp2(value) {
+function scannerTimestampMs(value) {
   if (typeof value === "number") {
     const parsed2 = value < 1e10 ? value * 1e3 : value;
     return Number.isFinite(parsed2) && parsed2 > 0 ? parsed2 : null;
@@ -2814,18 +2686,22 @@ function median(values) {
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
-function shouldInspectGap(gap, expectedIntervalMs, timeframe, sessionAware) {
+function shouldInspectGap(gap, expectedIntervalMs, timeframe, sessionAware, previousAt, currentAt, sessionTimeZone) {
   if (gap <= expectedIntervalMs * 1.8) return false;
   if (!sessionAware) return true;
   if (timeframe === "1D" || timeframe === "1W") return false;
-  if (gap >= 6 * 60 * 6e4) return false;
+  if (gap >= 6 * 60 * 6e4) {
+    const dates = new Intl.DateTimeFormat("en-CA", { timeZone: sessionTimeZone });
+    if (dates.format(new Date(previousAt)) !== dates.format(new Date(currentAt))) return false;
+  }
   return true;
 }
 function inspectCandles(input, issues, expectedIntervalMs, now) {
   const seen = /* @__PURE__ */ new Set();
   const ordered = [];
+  let previousInputAt = null;
   for (const candle of input.candles) {
-    const at = timestamp2(candle.time);
+    const at = scannerTimestampMs(candle.time);
     if (at == null) {
       pushIssue(issues, "INVALID_OHLC", "blocking", "캔들 timestamp가 유효하지 않습니다.");
       continue;
@@ -2833,6 +2709,13 @@ function inspectCandles(input, issues, expectedIntervalMs, now) {
     if (seen.has(at)) {
       pushIssue(issues, "DUPLICATE_CANDLE", "blocking", "동일 timestamp 캔들이 중복되었습니다.");
     }
+    if (at > now) {
+      pushIssue(issues, "FUTURE_TIMESTAMP", "blocking", "현재 시각 이후의 캔들은 신호 근거로 사용할 수 없습니다.");
+    }
+    if (previousInputAt != null && at < previousInputAt) {
+      pushIssue(issues, "OUT_OF_ORDER_CANDLE", "blocking", "입력 캔들의 시간 순서가 지표 계산 순서와 일치하지 않습니다.");
+    }
+    previousInputAt = at;
     seen.add(at);
     ordered.push({ at, candle });
     const { open, high, low, close, volume } = candle;
@@ -2855,15 +2738,22 @@ function inspectCandles(input, issues, expectedIntervalMs, now) {
       row.at - ordered[index].at,
       expectedIntervalMs,
       input.timeframe,
-      input.sessionAware === true
+      input.sessionAware === true,
+      ordered[index].at,
+      row.at,
+      input.sessionTimeZone ?? "UTC"
     ));
     if (largeGaps.length) {
-      const ratio = largeGaps.length / Math.max(1, ordered.length - 1);
+      const missingCount = largeGaps.reduce((sum, row) => {
+        const index = ordered.indexOf(row);
+        return sum + Math.max(1, Math.round((row.at - ordered[index - 1].at) / expectedIntervalMs) - 1);
+      }, 0);
+      const ratio = missingCount / (ordered.length + missingCount);
       pushIssue(
         issues,
         "MISSING_CANDLE",
         ratio >= 0.08 ? "blocking" : "warning",
-        `예상 간격보다 큰 거래 구간 내 캔들 공백 ${largeGaps.length}개가 발견되었습니다.`
+        `거래 구간 내 공백 ${largeGaps.length}개에서 예상 캔들 ${missingCount}개가 누락되었습니다.`
       );
     }
   }
@@ -2958,6 +2848,152 @@ function evaluateScannerDataQuality(input) {
   };
 }
 
+// src/services/scanner-signal-lifecycle.service.ts
+var records = /* @__PURE__ */ new Map();
+var RECORD_TTL_MS = 7 * 24 * 60 * 6e4;
+var SCANNER_TERMINAL_STATES = /* @__PURE__ */ new Set([
+  "INVALIDATED",
+  "EXPIRED",
+  "REJECTED",
+  "CANCELLED",
+  "CLOSED"
+]);
+var ORDER_OWNED_STATES = /* @__PURE__ */ new Set([
+  "APPROVED",
+  "EXECUTING",
+  "PARTIALLY_FILLED",
+  "FILLED",
+  "MANAGING",
+  "CLOSED",
+  "REJECTED",
+  "CANCELLED"
+]);
+function alertKey(signalId2) {
+  return `scanner-alert:${createHash3("sha256").update(`${signalId2}:APPROVAL_PENDING`).digest("hex").slice(0, 32)}`;
+}
+function lifecycleKey(memberId, baseSignalId) {
+  return `${memberId}:${baseSignalId}`;
+}
+function invalid(card) {
+  return card.dataState === "unavailable" || card.dataState === "untrusted" || card.dataQuality?.state === "DATA_UNTRUSTED" || card.dataQuality?.strongSignalAllowed === false || card.riskScore != null && card.riskScore >= 80 || card.listingStatus === "UNKNOWN" && card.dataState !== "complete";
+}
+function insideEntryZone(card) {
+  const zone = card.pricePlan.entryZone;
+  if (!zone || !Number.isFinite(card.price)) return false;
+  const low = Math.min(zone.from, zone.to);
+  const high = Math.max(zone.from, zone.to);
+  return card.price >= low && card.price <= high;
+}
+function normalizedPrevious(previous) {
+  if (previous === "DETECTED") return "CANDIDATE";
+  if (previous === "WATCHING") return "CONFIRMED";
+  if (previous === "READY_FOR_APPROVAL") return "APPROVAL_PENDING";
+  if (previous === "WEAKENED") return "INVALIDATED";
+  return previous;
+}
+function nextState(previousState, card, now, freshEvidence) {
+  const previous = normalizedPrevious(previousState);
+  if (previous && ORDER_OWNED_STATES.has(previous)) return previous;
+  if (!Number.isFinite(Date.parse(card.expiresAt)) || Date.parse(card.expiresAt) <= now) return "EXPIRED";
+  if (invalid(card)) return "INVALIDATED";
+  if (!card.strongSignalEligible) {
+    return previous && ["CONFIRMED", "ARMED", "ENTRY_ZONE", "APPROVAL_PENDING"].includes(previous) ? "INVALIDATED" : "CANDIDATE";
+  }
+  if (!freshEvidence) return previous ?? "CANDIDATE";
+  if (previous == null || previous === "INVALIDATED" || previous === "EXPIRED") return "CANDIDATE";
+  if (previous === "CANDIDATE") return "CONFIRMED";
+  if (previous === "CONFIRMED") return "ARMED";
+  if (previous === "ARMED") return insideEntryZone(card) ? "ENTRY_ZONE" : "ARMED";
+  if (previous === "ENTRY_ZONE") return insideEntryZone(card) ? "APPROVAL_PENDING" : "ARMED";
+  if (previous === "APPROVAL_PENDING") return insideEntryZone(card) ? "APPROVAL_PENDING" : "ARMED";
+  return "CANDIDATE";
+}
+function alertFrom(card, idempotencyKey) {
+  return {
+    idempotencyKey,
+    signalId: card.signalId,
+    assetClass: card.assetClass,
+    market: card.market,
+    symbol: card.symbol,
+    direction: card.direction,
+    state: "APPROVAL_PENDING",
+    entryZone: card.pricePlan.entryZone,
+    stopLoss: card.pricePlan.stopLoss,
+    targets: card.pricePlan.targets,
+    expiresAt: card.expiresAt,
+    evidence: card.evidence.filter((item) => item.status === "matched").flatMap((item) => item.reasons).slice(0, 8),
+    orderSubmitted: false,
+    exchangeRequestSent: false
+  };
+}
+function splitSignalId(signalId2) {
+  const cycleMarker = ":cycle:";
+  const markerIndex = signalId2.lastIndexOf(cycleMarker);
+  return {
+    baseSignalId: markerIndex >= 0 ? signalId2.slice(0, markerIndex) : signalId2,
+    cycle: markerIndex >= 0 ? Number(signalId2.slice(markerIndex + cycleMarker.length)) : 1
+  };
+}
+function strategyScopedBaseSignalId(card) {
+  const baseSignalId = splitSignalId(card.signalId).baseSignalId;
+  if (!card.strategyMode || baseSignalId.includes(":strategy:")) return baseSignalId;
+  return `${baseSignalId}:strategy:${card.strategyMode}`;
+}
+function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
+  for (const [key, record7] of records) {
+    if (now - record7.lastSeenAt > RECORD_TTL_MS) records.delete(key);
+  }
+  const alerts = [];
+  const updated = cards.map((card) => {
+    const baseSignalId = strategyScopedBaseSignalId(card);
+    const key = lifecycleKey(memberId, baseSignalId);
+    const existing = records.get(key);
+    const observed = card.evidence.find((item) => item.key === "data-quality")?.observedAt ?? card.observedAt;
+    const evidenceAt = scannerTimestampMs(observed);
+    const validEvidence = evidenceAt != null && evidenceAt <= now;
+    const freshEvidence = validEvidence && (!existing || evidenceAt > existing.lastEvidenceAt);
+    let cycle = existing?.cycle ?? 1;
+    const existingState = normalizedPrevious(existing?.state ?? null);
+    if (existing && existingState != null && SCANNER_TERMINAL_STATES.has(existingState) && card.strongSignalEligible && freshEvidence && !["APPROVED", "EXECUTING", "PARTIALLY_FILLED", "FILLED", "MANAGING"].includes(existingState)) {
+      cycle += 1;
+    }
+    const resetCycle = !existing || cycle !== existing.cycle;
+    const previous = resetCycle ? null : existingState;
+    const expiresAt = resetCycle ? Date.parse(card.expiresAt) : existing.expiresAt;
+    const pricePlan2 = structuredClone(resetCycle ? card.pricePlan : existing.pricePlan);
+    const stableCard = { ...card, expiresAt: Number.isFinite(expiresAt) ? new Date(expiresAt).toISOString() : "", pricePlan: pricePlan2 };
+    const state = nextState(previous, validEvidence ? stableCard : { ...stableCard, dataState: "untrusted" }, now, freshEvidence);
+    const confirmationStreak = card.strongSignalEligible ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + (freshEvidence ? 1 : 0) : 0;
+    const signalId2 = cycle === 1 ? baseSignalId : `${baseSignalId}:cycle:${cycle}`;
+    const nextCard = {
+      ...stableCard,
+      signalId: signalId2,
+      signalState: state,
+      strongSignalEligible: card.strongSignalEligible && !SCANNER_TERMINAL_STATES.has(state)
+    };
+    const idempotencyKey = alertKey(signalId2);
+    let lastAlertKey = resetCycle ? null : existing?.lastAlertKey ?? null;
+    if (state === "APPROVAL_PENDING" && lastAlertKey !== idempotencyKey) {
+      alerts.push(alertFrom(nextCard, idempotencyKey));
+      lastAlertKey = idempotencyKey;
+    }
+    records.set(key, {
+      baseSignalId,
+      cycle,
+      state,
+      confirmationStreak,
+      firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
+      lastSeenAt: now,
+      lastEvidenceAt: validEvidence ? Math.max(evidenceAt, resetCycle ? 0 : existing.lastEvidenceAt) : resetCycle ? now : existing.lastEvidenceAt,
+      expiresAt,
+      pricePlan: structuredClone(pricePlan2),
+      lastAlertKey
+    });
+    return nextCard;
+  });
+  return { cards: updated, alerts };
+}
+
 // src/services/scanner-indicator-library.service.ts
 function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
@@ -2984,22 +3020,29 @@ function scannerEma(values, period) {
   return emaSeries(values, period).at(-1) ?? null;
 }
 function scannerRsi(values, period = 14) {
-  if (values.length <= period) return null;
+  if (!Number.isInteger(period) || period < 1 || values.length <= period) return null;
   let gains = 0;
   let losses = 0;
-  const start = values.length - period;
-  for (let index = start; index < values.length; index += 1) {
+  for (let index = 1; index <= period; index += 1) {
     const delta = values[index] - values[index - 1];
     if (delta >= 0) gains += delta;
     else losses += Math.abs(delta);
   }
+  gains /= period;
+  losses /= period;
+  for (let index = period + 1; index < values.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    gains = (gains * (period - 1) + Math.max(0, delta)) / period;
+    losses = (losses * (period - 1) + Math.max(0, -delta)) / period;
+  }
+  if (gains === 0 && losses === 0) return 50;
   if (losses === 0) return 100;
   const relativeStrength = gains / losses;
   return 100 - 100 / (1 + relativeStrength);
 }
 function scannerAtr(candles, period = 14) {
-  if (candles.length < 2) return null;
-  const rows = candles.slice(-Math.min(candles.length, period + 1));
+  if (!Number.isInteger(period) || period < 1 || candles.length <= period) return null;
+  const rows = candles;
   const ranges = [];
   for (let index = 1; index < rows.length; index += 1) {
     const current = rows[index];
@@ -3010,7 +3053,9 @@ function scannerAtr(candles, period = 14) {
       Math.abs(current.low - previous.close)
     ));
   }
-  return average(ranges);
+  let atr2 = average(ranges.slice(0, period));
+  for (const range of ranges.slice(period)) atr2 = (atr2 * (period - 1) + range) / period;
+  return atr2;
 }
 function scannerMacd(values) {
   if (values.length < 26) return { macd: null, signal: null, histogram: null };
@@ -3031,11 +3076,12 @@ function scannerMacd(values) {
   };
 }
 function scannerAdx(candles, period = 14) {
-  if (candles.length < period + 1) return null;
-  const rows = candles.slice(-(period + 1));
+  if (!Number.isInteger(period) || period < 2 || candles.length < 2 * period) return null;
+  const rows = candles;
   let trTotal = 0;
   let plusTotal = 0;
   let minusTotal = 0;
+  const dxValues = [];
   for (let index = 1; index < rows.length; index += 1) {
     const current = rows[index];
     const previous = rows[index - 1];
@@ -3046,21 +3092,41 @@ function scannerAdx(candles, period = 14) {
       Math.abs(current.high - previous.close),
       Math.abs(current.low - previous.close)
     );
-    trTotal += trueRange;
-    if (upMove > downMove && upMove > 0) plusTotal += upMove;
-    if (downMove > upMove && downMove > 0) minusTotal += downMove;
+    const plus = upMove > downMove && upMove > 0 ? upMove : 0;
+    const minus = downMove > upMove && downMove > 0 ? downMove : 0;
+    if (index < period) {
+      trTotal += trueRange;
+      plusTotal += plus;
+      minusTotal += minus;
+      continue;
+    }
+    trTotal = trTotal - trTotal / period + trueRange;
+    plusTotal = plusTotal - plusTotal / period + plus;
+    minusTotal = minusTotal - minusTotal / period + minus;
+    const denominator = plusTotal + minusTotal;
+    dxValues.push(trTotal > 0 && denominator > 0 ? Math.abs(plusTotal - minusTotal) / denominator * 100 : 0);
   }
-  if (!(trTotal > 0)) return null;
-  const plusDi = plusTotal / trTotal * 100;
-  const minusDi = minusTotal / trTotal * 100;
-  const denominator = plusDi + minusDi;
-  if (!(denominator > 0)) return 0;
-  return Math.abs(plusDi - minusDi) / denominator * 100;
+  let adx = average(dxValues.slice(0, period));
+  for (const dx of dxValues.slice(period)) adx = (adx * (period - 1) + dx) / period;
+  return adx;
 }
-function scannerVwap(candles) {
+function scannerVwap(candles, sessionTimeZone) {
+  const latestAt = candles.length ? scannerTimestampMs(candles.at(-1).time) : null;
+  const formatter = sessionTimeZone ? new Intl.DateTimeFormat("en-CA", {
+    timeZone: sessionTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }) : null;
+  if (formatter && latestAt == null) return null;
+  const sessionDate = formatter ? formatter.format(new Date(latestAt)) : null;
   let weighted = 0;
   let volume = 0;
   for (const candle of candles) {
+    if (formatter) {
+      const at = scannerTimestampMs(candle.time);
+      if (at == null || formatter.format(new Date(at)) !== sessionDate) continue;
+    }
     if (!(candle.volume >= 0) || !Number.isFinite(candle.volume)) continue;
     const typical = (candle.high + candle.low + candle.close) / 3;
     weighted += typical * candle.volume;
@@ -3084,9 +3150,32 @@ function scannerTradeIntensityProxy(candles, lookback = 20) {
   const pressure = Math.max(-1, Math.min(1, (latest.close - latest.open) / range));
   return pressure * relativeVolume;
 }
-function buildScannerIndicatorSnapshot(candles) {
+function scannerWaveStructure(candles, leftBars = 2, rightBars = 2) {
+  if (!Number.isInteger(leftBars) || !Number.isInteger(rightBars) || leftBars < 1 || rightBars < 1 || candles.length < leftBars + rightBars + 5) {
+    return Object.freeze({ structure: "INSUFFICIENT", confirmedHighs: 0, confirmedLows: 0 });
+  }
+  const highs = [];
+  const lows = [];
+  for (let index = leftBars; index < candles.length - rightBars; index += 1) {
+    const row = candles[index];
+    const left = candles.slice(index - leftBars, index);
+    const right = candles.slice(index + 1, index + rightBars + 1);
+    if (left.every((item) => row.high > item.high) && right.every((item) => row.high >= item.high)) highs.push(row.high);
+    if (left.every((item) => row.low < item.low) && right.every((item) => row.low <= item.low)) lows.push(row.low);
+  }
+  if (highs.length < 2 || lows.length < 2) {
+    return Object.freeze({ structure: "INSUFFICIENT", confirmedHighs: highs.length, confirmedLows: lows.length });
+  }
+  const higherHigh = highs.at(-1) > highs.at(-2);
+  const higherLow = lows.at(-1) > lows.at(-2);
+  const lowerHigh = highs.at(-1) < highs.at(-2);
+  const lowerLow = lows.at(-1) < lows.at(-2);
+  const structure = higherHigh && higherLow ? "BULLISH" : lowerHigh && lowerLow ? "BEARISH" : "MIXED";
+  return Object.freeze({ structure, confirmedHighs: highs.length, confirmedLows: lows.length });
+}
+function buildScannerIndicatorSnapshot(candles, sessionTimeZone) {
   const closes = candles.map((row) => row.close).filter(Number.isFinite);
-  const recent20 = candles.slice(-20);
+  const recent20 = candles.slice(-21, -1);
   const latest = candles.at(-1) ?? null;
   const firstVolumeWindow = candles.slice(-20, -10).map((row) => row.volume).filter(Number.isFinite);
   const lastVolumeWindow = candles.slice(-10).map((row) => row.volume).filter(Number.isFinite);
@@ -3094,6 +3183,7 @@ function buildScannerIndicatorSnapshot(candles) {
   const lateVolume = average(lastVolumeWindow);
   const volumeTrend20 = earlyVolume != null && earlyVolume > 0 && lateVolume != null ? lateVolume / earlyVolume - 1 : null;
   const momentum5 = closes.length >= 6 && closes.at(-6) > 0 ? closes.at(-1) / closes.at(-6) - 1 : null;
+  const wave = scannerWaveStructure(candles);
   return {
     close: latest?.close ?? null,
     ema12: scannerEma(closes, 12),
@@ -3106,14 +3196,17 @@ function buildScannerIndicatorSnapshot(candles) {
     rsi14: scannerRsi(closes, 14),
     atr14: scannerAtr(candles, 14),
     adx14: scannerAdx(candles, 14),
-    vwap: scannerVwap(candles),
+    vwap: scannerVwap(candles, sessionTimeZone),
     relativeVolume20: scannerRelativeVolume(candles, 20),
     tradeIntensityProxy: scannerTradeIntensityProxy(candles, 20),
     macd: scannerMacd(closes),
-    support20: recent20.length ? Math.min(...recent20.map((row) => row.low)) : null,
-    resistance20: recent20.length ? Math.max(...recent20.map((row) => row.high)) : null,
+    support20: recent20.length === 20 ? Math.min(...recent20.map((row) => row.low)) : null,
+    resistance20: recent20.length === 20 ? Math.max(...recent20.map((row) => row.high)) : null,
     volumeTrend20,
-    momentum5
+    momentum5,
+    waveStructure: wave.structure,
+    confirmedPivotHighs: wave.confirmedHighs,
+    confirmedPivotLows: wave.confirmedLows
   };
 }
 
@@ -3129,16 +3222,11 @@ function clamp2(value, minimum = 0, maximum = 100) {
 function demoteStrongGrade(grade) {
   return grade === "S" || grade === "A" ? "B" : grade;
 }
-function timestamp3(value) {
-  if (typeof value === "number") {
-    const normalized = value < 1e10 ? value * 1e3 : value;
-    return Number.isFinite(normalized) ? normalized : null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function timestamp2(value) {
+  return scannerTimestampMs(value);
 }
 function wallClock(value, timeZone) {
-  const at = timestamp3(value);
+  const at = timestamp2(value);
   if (at == null) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -3477,6 +3565,11 @@ function trendDirection(snapshot) {
   if (fast == null || slow == null || fast === slow) return 0;
   return fast > slow ? 1 : -1;
 }
+function waveDirection(snapshot) {
+  if (snapshot.waveStructure === "BULLISH") return 1;
+  if (snapshot.waveStructure === "BEARISH") return -1;
+  return 0;
+}
 function scalpingFactors(primary, context, input) {
   const close = primary.close ?? input.price;
   let technical = 45;
@@ -3488,6 +3581,9 @@ function scalpingFactors(primary, context, input) {
   const contextTrend = trendDirection(context);
   if (contextTrend > 0) trend += 20;
   if (contextTrend < 0) trend -= 20;
+  const primaryWave = waveDirection(primary);
+  if (primaryWave > 0) trend += 8;
+  if (primaryWave < 0) trend -= 8;
   let momentum = 45;
   if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 20 : -18;
   if (primary.rsi14 != null) {
@@ -3505,6 +3601,9 @@ function scalpingFactors(primary, context, input) {
   let marketRegime = 50;
   if (contextTrend > 0) marketRegime += 30;
   if (contextTrend < 0) marketRegime -= 30;
+  const contextWave = waveDirection(context);
+  if (contextWave > 0) marketRegime += 8;
+  if (contextWave < 0) marketRegime -= 8;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 12;
   return { technical: clamp3(technical), trend: clamp3(trend), momentum: clamp3(momentum), volume: clamp3(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreScalpingVolatility(primary, input.price), marketRegime: clamp3(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -3515,10 +3614,15 @@ function swingFactors(primary, context, input) {
   if (primary.sma20 != null && primary.sma60 != null) trend += primary.sma20 > primary.sma60 ? 14 : -12;
   if (primary.sma60 != null && primary.sma120 != null) trend += primary.sma60 > primary.sma120 ? 12 : -10;
   if (primary.adx14 != null) trend += primary.adx14 >= 25 ? 12 : primary.adx14 < 15 ? -8 : 0;
+  const primaryWave = waveDirection(primary);
+  if (primaryWave > 0) trend += 12;
+  if (primaryWave < 0) trend -= 12;
   let technical = 45;
   if (primary.resistance20 != null && close > primary.resistance20) technical += 28;
   if (primary.ema20 != null && close >= primary.ema20 * 0.98 && close <= primary.ema20 * 1.04) technical += 14;
   if (primary.support20 != null && close < primary.support20) technical -= 28;
+  if (primaryWave > 0) technical += 8;
+  if (primaryWave < 0) technical -= 8;
   let momentum = 45;
   if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 22 : -18;
   if (primary.rsi14 != null) {
@@ -3532,6 +3636,9 @@ function swingFactors(primary, context, input) {
   const contextTrend = trendDirection(context);
   if (contextTrend > 0) marketRegime += 28;
   if (contextTrend < 0) marketRegime -= 28;
+  const contextWave = waveDirection(context);
+  if (contextWave > 0) marketRegime += 10;
+  if (contextWave < 0) marketRegime -= 10;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 15;
   return { technical: clamp3(technical), trend: clamp3(trend), momentum: clamp3(momentum), volume: clamp3(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreSwingVolatility(primary, input.price), marketRegime: clamp3(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -3550,8 +3657,15 @@ function positionFactors(primary, context, input) {
     marketRegime: clamp3(marketRegime)
   };
 }
-function weightedScore(factors, weights) {
-  return Math.round(clamp3(Object.keys(weights).reduce((sum, key) => sum + factors[key] * weights[key] / 100, 0)));
+function alignedDirectionalScore(value, direction) {
+  return direction === "SHORT" ? 100 - value : value;
+}
+function weightedScore(factors, weights, direction) {
+  const directional = /* @__PURE__ */ new Set(["technical", "trend", "momentum", "marketRegime"]);
+  return Math.round(clamp3(Object.keys(weights).reduce((sum, key) => {
+    const value = directional.has(key) ? alignedDirectionalScore(factors[key], direction) : factors[key];
+    return sum + value * weights[key] / 100;
+  }, 0)));
 }
 function inferDirection(factors, primary, context, allowShort) {
   const longBias = (factors.trend + factors.momentum + factors.marketRegime + factors.technical) / 4;
@@ -3582,7 +3696,7 @@ function hasIndependentSignalEvidence(factors, direction) {
 }
 function gradeFor(score, factors, input, aiValidation, direction) {
   const limits = limitsFor(input.mode);
-  const sEligible = score >= limits.sGradeScore && hasIndependentSignalEvidence(factors, direction) && input.dataQuality.state === "TRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= 90 && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore && factors.liquidity >= 70 && factors.volatility >= 60 && factors.marketRegime >= 70 && aiValidation.status === "PASS";
+  const sEligible = score >= limits.sGradeScore && hasIndependentSignalEvidence(factors, direction) && input.dataQuality.state === "TRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= 90 && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore && factors.liquidity >= 70 && factors.volatility >= 60 && alignedDirectionalScore(factors.marketRegime, direction) >= 70 && aiValidation.status === "PASS";
   if (sEligible) return "S";
   if (score >= 78) return "A";
   if (score >= 68) return "B";
@@ -3590,19 +3704,22 @@ function gradeFor(score, factors, input, aiValidation, direction) {
   return "D";
 }
 function runScannerQuantStrategy(input) {
-  const primary = buildScannerIndicatorSnapshot(input.candles);
-  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles);
+  const primary = buildScannerIndicatorSnapshot(input.candles, input.sessionTimeZone ?? "UTC");
+  const context = buildScannerIndicatorSnapshot(input.contextCandles, input.sessionTimeZone ?? "UTC");
+  const contextMissing = input.contextCandles.length === 0;
+  const contextInsufficient = input.contextCandles.length < 60;
   const aiValidation = input.aiValidation ?? DEFAULT_AI_VALIDATION;
   const factors = input.mode === "scalping" ? scalpingFactors(primary, context, input) : input.mode === "position" ? positionFactors(primary, context, input) : swingFactors(primary, context, input);
   const limits = limitsFor(input.mode);
-  let score = weightedScore(factors, weightsFor(input.mode));
+  const direction = inferDirection(factors, primary, context, input.allowShort);
+  let score = weightedScore(factors, weightsFor(input.mode), direction);
   if (input.dataQuality.state === "DEGRADED") score = Math.min(score, 74);
   if (input.dataQuality.state === "DATA_UNTRUSTED") score = Math.min(score, 49);
   if (aiValidation.status === "VETO") score = Math.min(score, 49);
   if (aiValidation.status === "PARTIAL") score = Math.min(score, 79);
-  const direction = inferDirection(factors, primary, context, input.allowShort);
+  if (contextInsufficient) score = Math.min(score, 74);
   const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
-  const strongSignalEligible = direction !== "NEUTRAL" && independentSignalEvidence && score >= limits.strongScore && input.dataQuality.state !== "DATA_UNTRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== "VETO";
+  const strongSignalEligible = !contextInsufficient && direction !== "NEUTRAL" && independentSignalEvidence && score >= limits.strongScore && input.dataQuality.state !== "DATA_UNTRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== "VETO";
   const grade = gradeFor(score, factors, input, aiValidation, direction);
   const reasons = [
     `전략 ${input.mode}`,
@@ -3614,6 +3731,7 @@ function runScannerQuantStrategy(input) {
     `변동성 ${Math.round(factors.volatility)}`,
     `시장국면 ${Math.round(factors.marketRegime)}`,
     `리스크 ${Math.round(factors.risk)}`,
+    `확정파동 ${primary.waveStructure}(${primary.confirmedPivotHighs}H/${primary.confirmedPivotLows}L)`,
     `독립근거 ${independentSignalEvidence ? "충족" : "부족"}`,
     ...input.mode === "scalping" && primary.tradeIntensityProxy != null ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`] : []
   ];
@@ -3621,7 +3739,9 @@ function runScannerQuantStrategy(input) {
     ...input.dataQuality.issues.map((issue) => `${issue.code}: ${issue.message}`),
     ...aiValidation.counterEvidence.map((reason) => `AI 반대근거: ${reason}`),
     ...aiValidation.missingData.map((reason) => `AI 데이터부족: ${reason}`),
-    ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`)
+    ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`),
+    ...contextMissing ? ["CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE"] : [],
+    ...!contextMissing && contextInsufficient ? ["CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT"] : []
   ];
   return { mode: input.mode, score, grade, direction, factors, primary, context, strongSignalEligible, reasons, warnings, aiValidation };
 }
@@ -3709,7 +3829,7 @@ function futuresPublicContext(card) {
 function applyScannerQuantHardening(input) {
   const strategyMode = input.strategyMode ?? scannerStrategyForTimeframe(input.timeframe);
   const qualityCandles = recentQualityCandles(input.candles, strategyMode);
-  const quality = evaluateScannerDataQuality({
+  const primaryQuality = evaluateScannerDataQuality({
     symbol: input.card.symbol,
     timeframe: input.timeframe,
     candles: qualityCandles,
@@ -3717,14 +3837,54 @@ function applyScannerQuantHardening(input) {
     providerObservations: futuresPriceObservations(input, qualityCandles),
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
-    sessionAware: input.sessionAware
+    sessionAware: input.sessionAware,
+    sessionTimeZone: input.card.market === "US" ? "America/New_York" : "Asia/Seoul"
   });
-  const contextCandles = input.contextCandles?.length ? input.contextCandles : input.candles;
+  const contextMissing = input.contextCandles !== void 0 && input.contextCandles.length === 0;
+  const contextCandles = input.contextCandles ?? input.candles;
+  const contextTimeframe = input.contextTimeframe ?? scannerContextTimeframe(strategyMode);
+  const contextQuality = !contextMissing && input.contextCandles !== void 0 && input.contextCandles !== input.candles ? evaluateScannerDataQuality({
+    symbol: input.card.symbol,
+    timeframe: contextTimeframe,
+    candles: recentQualityCandles(contextCandles, strategyMode),
+    now: input.now,
+    sessionAware: input.sessionAware,
+    sessionTimeZone: input.card.market === "US" ? "America/New_York" : "Asia/Seoul"
+  }) : null;
+  const contextInsufficient = input.contextCandles !== void 0 && !contextMissing && contextCandles.length < 60;
+  const contextRestricted = contextMissing || contextInsufficient || contextQuality != null && !contextQuality.strongSignalAllowed;
+  const contextInvalid = contextQuality?.state === "DATA_UNTRUSTED";
+  const quality = {
+    ...primaryQuality,
+    state: contextInvalid ? "DATA_UNTRUSTED" : contextRestricted && primaryQuality.state === "TRUSTED" ? "DEGRADED" : primaryQuality.state,
+    score: Math.min(primaryQuality.score, contextQuality?.score ?? primaryQuality.score),
+    strongSignalAllowed: !contextRestricted && primaryQuality.strongSignalAllowed,
+    issues: [
+      ...primaryQuality.issues,
+      ...contextQuality?.issues.map((issue) => ({
+        ...issue,
+        message: `상위 시간봉 ${contextTimeframe}: ${issue.message}`
+      })) ?? [],
+      ...contextMissing ? [{
+        code: "MISSING_CANDLE",
+        severity: "warning",
+        message: "상위 시간봉 자료가 없어 강신호와 진입 계획을 차단했습니다."
+      }] : [],
+      ...contextInsufficient ? [{
+        code: "MISSING_CANDLE",
+        severity: "warning",
+        message: "상위 시간봉 EMA60 확인에 필요한 60개 봉이 없어 강신호와 진입 계획을 차단했습니다."
+      }] : []
+    ]
+  };
   const quant = runScannerQuantStrategy({
+    sessionTimeZone: input.card.assetClass === "stock" ? input.card.market === "US" ? "America/New_York" : "Asia/Seoul" : "UTC",
     mode: strategyMode,
     timeframe: input.timeframe,
     candles: input.candles,
-    contextCandles,
+    // Invalid higher-timeframe facts must not affect technical direction or
+    // rank as if they were valid. The quant core never substitutes primary bars.
+    contextCandles: contextInvalid ? [] : contextCandles,
     price: input.card.price,
     tradingValue: input.card.tradingValue,
     spreadPercent: input.card.spreadPercent,
@@ -3734,11 +3894,11 @@ function applyScannerQuantHardening(input) {
   });
   const dataCompleteness = completenessFromMarketData(input.card, qualityCandles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
-  const dataTrustedForPlan = quality.state !== "DATA_UNTRUSTED" && quality.strongSignalAllowed;
+  const dataTrustedForPlan = !contextRestricted && quality.state !== "DATA_UNTRUSTED" && quality.strongSignalAllowed;
   const pricePlan2 = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
   const planEligible = dataTrustedForPlan && !directionChanged && pricePlan2.riskReward != null && pricePlan2.riskReward >= 1.5;
   const strongSignalEligible = quality.state !== "DATA_UNTRUSTED" && quant.strongSignalEligible && planEligible && input.card.listingStatus === "LISTED" && dataCompleteness >= 75;
-  const dataState = quality.state === "DATA_UNTRUSTED" ? "untrusted" : quality.state === "DEGRADED" ? input.card.dataState === "complete" ? "partial" : input.card.dataState : input.card.dataState;
+  const dataState = quality.state === "DATA_UNTRUSTED" ? "untrusted" : quality.state === "DEGRADED" || contextRestricted ? input.card.dataState === "complete" ? "partial" : input.card.dataState : input.card.dataState;
   const confidence = Math.round(Math.min(
     100,
     Math.max(0, quant.score),
@@ -3748,6 +3908,9 @@ function applyScannerQuantHardening(input) {
   const warnings = [
     ...input.card.warnings,
     ...quant.warnings,
+    ...contextMissing ? ["CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE"] : [],
+    ...contextInsufficient ? ["CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT"] : [],
+    ...contextQuality?.issues.length ? ["CONTEXT_TIMEFRAME_EVIDENCE_REJECTED"] : [],
     ...directionChanged ? ["Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다."] : [],
     ...quality.state === "DATA_UNTRUSTED" ? ["DATA_UNTRUSTED: 승인·실행 호환 가격정보를 폐기했습니다."] : []
   ];
@@ -3768,7 +3931,15 @@ function applyScannerQuantHardening(input) {
       source: "scanner-data-quality-gate",
       observedAt: quality.lastTimestamp,
       reasons: quality.issues.length ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`) : [`최근 ${qualityCandles.length}개 전략 관련 캔들의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`]
-    }
+    },
+    ...input.contextCandles !== void 0 ? [{
+      key: "context-timeframe",
+      label: "상위 시간봉 근거",
+      status: contextRestricted ? "unverified" : "matched",
+      source: "scanner-context-timeframe",
+      observedAt: contextQuality?.lastTimestamp ?? (contextMissing ? null : primaryQuality.lastTimestamp),
+      reasons: contextMissing ? ["상위 시간봉 자료를 확보하지 못했습니다. 기본 시간봉으로 대신 검증하지 않습니다."] : contextInsufficient ? ["EMA60 확인에 필요한 상위 시간봉 60개를 확보하지 못했습니다."] : contextQuality?.issues.length ? contextQuality.issues.map((issue) => `${issue.code}: ${issue.message}`) : [`${contextTimeframe} 실제 근거의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`]
+    }] : []
   ];
   const hardened = {
     ...input.card,
@@ -3780,7 +3951,7 @@ function applyScannerQuantHardening(input) {
     dataState,
     strongSignalEligible,
     strategyMode,
-    signalGrade: quant.grade,
+    signalGrade: contextRestricted && (quant.grade === "S" || quant.grade === "A") ? "B" : quant.grade,
     dataQuality: {
       state: quality.state,
       score: quality.score,
@@ -3815,6 +3986,42 @@ var ITEM_TIMEOUT_MS = 3500;
 var CONCURRENCY = 5;
 var MAX_BATCH_SIZE = 40;
 var CACHE_TTL_MS = 5 * 6e4;
+var CryptoPublicRequestGate = class {
+  constructor(spacingMs) {
+    this.spacingMs = spacingMs;
+  }
+  nextAt = 0;
+  blockedUntil = 0;
+  backoff(milliseconds) {
+    this.blockedUntil = Math.max(this.blockedUntil, performance.now() + Math.max(0, milliseconds));
+  }
+  async run(signal, operation) {
+    for (; ; ) {
+      if (signal.aborted) throw signal.reason ?? new Error("CRYPTO_PROVIDER_ABORTED");
+      const now = performance.now();
+      const delay = Math.max(this.nextAt, this.blockedUntil) - now;
+      if (delay <= 0) {
+        this.nextAt = now + this.spacingMs;
+        return operation(now);
+      }
+      await new Promise((resolve, reject) => {
+        const cleanup = () => signal.removeEventListener("abort", abort);
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, delay);
+        const abort = () => {
+          clearTimeout(timer);
+          cleanup();
+          reject(signal.reason ?? new Error("CRYPTO_PROVIDER_ABORTED"));
+        };
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    }
+  }
+};
+var upbitRequestGate = new CryptoPublicRequestGate(150);
+var bitgetRequestGate = new CryptoPublicRequestGate(100);
 var CryptoScannerProviderError = class extends Error {
   code = "CRYPTO_SCAN_PROVIDER_ERROR";
   constructor(message) {
@@ -3846,7 +4053,8 @@ function linkedSignal(parent, timeoutMs) {
     timeoutMs
   );
   const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener("abort", abort, { once: true });
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
   return {
     signal: controller.signal,
     clear() {
@@ -3857,32 +4065,31 @@ function linkedSignal(parent, timeoutMs) {
 }
 async function fetchJson(url, signal, timeoutMs = ITEM_TIMEOUT_MS) {
   const linked = linkedSignal(signal, timeoutMs);
+  const gate = new URL(url).origin === UPBIT_BASE ? upbitRequestGate : bitgetRequestGate;
   try {
-    const response = await fetch(url, {
+    const response = await gate.run(linked.signal, () => fetch(url, {
       headers: { Accept: "application/json", "User-Agent": "seungjae-signal-scanner/1.0" },
       signal: linked.signal
-    });
+    }));
+    if (response.status === 429) {
+      const rawRetry = response.headers.get("Retry-After");
+      const retry = rawRetry == null ? Number.NaN : Number(rawRetry);
+      gate.backoff(Number.isFinite(retry) && retry >= 0 ? retry * 1e3 : 2e3);
+    }
     if (!response.ok) throw new Error(`HTTP_${response.status}`);
     return await response.json();
   } finally {
     linked.clear();
   }
 }
-function normalizeCandles(rows, now) {
-  const futureLimit = now + 6e4;
-  const map = /* @__PURE__ */ new Map();
-  for (const row of rows) {
-    if (!Number.isFinite(row.time) || row.time <= 0 || row.time > futureLimit) continue;
-    if (![row.open, row.high, row.low, row.close].every((value) => Number.isFinite(value) && value > 0)) continue;
-    if (!Number.isFinite(row.volume) || row.volume < 0) continue;
-    map.set(row.time, {
-      ...row,
-      high: Math.max(row.high, row.open, row.close),
-      low: Math.min(row.low, row.open, row.close),
-      quoteVolume: row.quoteVolume != null && Number.isFinite(row.quoteVolume) && row.quoteVolume >= 0 ? row.quoteVolume : null
-    });
-  }
-  return [...map.values()].sort((left, right) => left.time - right.time);
+function normalizeCryptoScannerCandles(rows, now, timeframe) {
+  const interval = timeframe === "1D" ? 864e5 : timeframe === "4H" ? 144e5 : timeframe === "60m" ? 36e5 : Number.parseInt(timeframe, 10) * 6e4;
+  return rows.filter((row) => !Number.isFinite(row.time) || row.time <= 0 || row.time > now || row.time + interval <= now).map((row) => ({ ...row })).sort((left, right) => left.time - right.time);
+}
+function upbitScannerCandleTimestamp(value) {
+  const utc = text(value);
+  if (!utc) return Number.NaN;
+  return Date.parse(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(utc) ? utc : `${utc}Z`);
 }
 function spotCandlePath(symbol, timeframe) {
   const market = encodeURIComponent(`KRW-${symbol}`);
@@ -3955,7 +4162,7 @@ async function defaultFuturesUniverse(signal) {
     const symbol = text(row.symbol).toUpperCase();
     const price = finite8(row.markPrice ?? row.lastPr);
     if (!symbol || price == null || price <= 0) continue;
-    const timestamp4 = finite8(row.ts);
+    const timestamp3 = finite8(row.ts);
     const item = {
       symbol,
       name: symbol,
@@ -3967,11 +4174,11 @@ async function defaultFuturesUniverse(signal) {
       ask: finite8(row.askPr),
       fundingRate: finite8(row.fundingRate),
       openInterest: finite8(row.holdingAmount),
-      timestamp: timestamp4,
+      timestamp: timestamp3,
       warning: false
     };
     const previous = newest.get(symbol);
-    if (!previous || (timestamp4 ?? 0) >= (previous.timestamp ?? 0)) newest.set(symbol, item);
+    if (!previous || (timestamp3 ?? 0) >= (previous.timestamp ?? 0)) newest.set(symbol, item);
   }
   const rows = [...newest.values()].sort((left, right) => right.tradingValue - left.tradingValue || left.symbol.localeCompare(right.symbol));
   if (!rows.length) throw new CryptoScannerProviderError("BITGET_TICKERS_UNAVAILABLE");
@@ -3984,15 +4191,16 @@ var defaultProviders = {
   async getCandles(market, symbol, timeframe, signal) {
     if (market === "spot") {
       const rows = await fetchJson(`${UPBIT_BASE}${spotCandlePath(symbol, timeframe)}`, signal);
-      return normalizeCandles(rows.map((row) => ({
-        time: finite8(row.timestamp) ?? Date.parse(text(row.candle_date_time_utc)),
+      return normalizeCryptoScannerCandles(rows.map((row) => ({
+        // timestamp is the last trade time; the UTC field is the bar's start.
+        time: upbitScannerCandleTimestamp(row.candle_date_time_utc),
         open: finite8(row.opening_price) ?? Number.NaN,
         high: finite8(row.high_price) ?? Number.NaN,
         low: finite8(row.low_price) ?? Number.NaN,
         close: finite8(row.trade_price) ?? Number.NaN,
         volume: finite8(row.candle_acc_trade_volume) ?? Number.NaN,
         quoteVolume: finite8(row.candle_acc_trade_price)
-      })), Date.now());
+      })), Date.now(), timeframe);
     }
     const payload = await fetchJson(
       `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(bitgetGranularity(timeframe))}&limit=200`,
@@ -4014,7 +4222,7 @@ var defaultProviders = {
         quoteVolume: finite8(raw[6])
       });
     }
-    return normalizeCandles(candles, Date.now());
+    return normalizeCryptoScannerCandles(candles, Date.now(), timeframe);
   },
   async getSpread(market, ticker, signal) {
     if (market === "futures") return { bid: ticker.bid, ask: ticker.ask };
@@ -4456,8 +4664,14 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
       const forwardPublicSpot = request.market === "spot" && request.memberId === "forward-observer-public-only";
       const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
       const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
-      const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
-      const batch = universe.rows.slice(cursor, cursor + batchSize);
+      const orderedRows = [...universe.rows].sort((left, right) => left.symbol.localeCompare(right.symbol));
+      const rosterId = createHash4("sha256").update(JSON.stringify([
+        request.market,
+        universe.source,
+        orderedRows.map((row) => row.symbol)
+      ])).digest("hex");
+      const cursor = Math.max(0, Math.min(orderedRows.length, Math.floor(request.cursor) || 0));
+      const batch = orderedRows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
       const work = await runBoundedWorkPool(
         batch,
@@ -4480,6 +4694,7 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
             timeframe: request.timeframe,
             candles,
             contextCandles: contextCandles ?? candles,
+            contextTimeframe,
             strategyMode,
             allowShort: request.market === "futures",
             now: providers.now()
@@ -4544,6 +4759,7 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
           maxConcurrency: work.maxConcurrency
         },
         universe: {
+          rosterId,
           totalCount: universe.rows.length,
           cursor,
           nextCursor,
@@ -4918,7 +5134,8 @@ function rankScannerCandidates(input) {
       hardFilterRejectedCount += 1;
       return [];
     }
-    const backtest = input.backtests?.[card.symbol];
+    const direction = String(card.action ?? card.direction ?? "").toUpperCase();
+    const backtest = input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol];
     if (!backtest || backtest.status !== "verified") backtestMissingCount += 1;
     const relative = {
       tradingValuePercentile: percentile(tradingValues, card.tradingValue),
@@ -5236,9 +5453,9 @@ function createImmutableSignalSnapshot(input) {
   if (input.stopLoss != null && !validPrice(input.stopLoss)) throw new Error("stopLoss must be positive");
   if (input.target1 != null && !validPrice(input.target1)) throw new Error("target1 must be positive");
   if (input.target2 != null && !validPrice(input.target2)) throw new Error("target2 must be positive");
-  const timestamp4 = parseTime(input.timestamp);
+  const timestamp3 = parseTime(input.timestamp);
   const dataTimestamp = parseTime(input.dataTimestamp);
-  if (dataTimestamp > timestamp4) throw new Error("dataTimestamp cannot be later than signal timestamp (look-ahead guard)");
+  if (dataTimestamp > timestamp3) throw new Error("dataTimestamp cannot be later than signal timestamp (look-ahead guard)");
   const snapshot = {
     ...cloneJson2(input),
     immutable: true,

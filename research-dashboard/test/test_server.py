@@ -571,6 +571,89 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertFalse(overview['profitability']['proven'])
 
 
+
+    def test_formula_queue_missing_is_not_zero_or_pass(self):
+        root = self.fixture()
+        q = build_research_overview(root)['research']['formulaBacktest']
+        self.assertFalse(q['present'])
+        self.assertEqual(q['status'], 'MISSING')
+        self.assertIsNone(q['scanned'])
+        self.assertIsNone(q['paperRegisteredCount'])
+        self.assertFalse(q['producerBound'])
+        self.assertFalse(q['paperConsumerBound'])
+
+    def test_formula_queue_readback_exposes_diagnostic_train_only_counts_without_paper_credit(self):
+        root = self.fixture()
+        write_json(root / 'latest' / 'formula-backtest-queue.json', {
+            'schemaVersion': 1, 'contract': 'research-formula-auto-backtest-summary/v1',
+            'scanned': 2, 'inboxCount': 5, 'paperRegisteredCount': 0,
+            'counts': {'PASS': 0, 'HOLD': 2, 'RESERVE': 0, 'EXCLUDE': 0},
+            'rows': [
+                {'state': 'HOLD', 'formulaId': 'sensitive-owner-input', 'privateComment': 'do not leak'},
+                {'state': 'HOLD', 'formulaId': 'other'},
+            ],
+            'executionAuthority': 'NONE', 'liveTrading': False,
+            'autoTrading': False, 'realOrder': False,
+        })
+        write_json(root / 'latest' / 'formula-paper-strategy-registry.json', {
+            'schemaVersion': 1, 'contract': 'research-formula-paper-strategy-registry/v1',
+            'entryCount': 0, 'entries': [], 'executionAuthority': 'NONE',
+            'liveTrading': False, 'autoTrading': False, 'realOrder': False,
+            'privateTradingApi': False, 'directTradeOnBacktestPass': False,
+            'futureSignalRequired': True, 'canonicalPaperAdmissionRequired': True,
+        })
+        overview = build_research_overview(root)
+        q = overview['research']['formulaBacktest']
+        self.assertEqual(q['status'], 'TRAIN_ONLY')
+        self.assertEqual(q['scanned'], 2)
+        self.assertEqual(q['inboxCount'], 5)
+        self.assertEqual(q['counts']['HOLD'], 2)
+        self.assertEqual(q['paperRegisteredCount'], 0)
+        self.assertFalse(q['oosComplete'])
+        self.assertFalse(q['fullCostReady'])
+        self.assertFalse(q['producerBound'])
+        self.assertFalse(q['paperConsumerBound'])
+        self.assertFalse(overview['profitability']['proven'])
+        self.assertNotIn('sensitive-owner-input', json.dumps(overview))
+        self.assertNotIn('do not leak', json.dumps(overview))
+
+    def test_formula_queue_forged_pass_registry_and_symlink_fail_closed(self):
+        root = self.fixture()
+        base = root / 'latest'
+        summary = {
+            'schemaVersion': 1, 'contract': 'research-formula-auto-backtest-summary/v1',
+            'scanned': 1, 'inboxCount': 1, 'paperRegisteredCount': 0,
+            'counts': {'PASS': 1, 'HOLD': 0, 'RESERVE': 0, 'EXCLUDE': 0},
+            'rows': [{'state': 'PASS', 'privateToken': 'never-expose'}],
+            'executionAuthority': 'NONE', 'liveTrading': False,
+            'autoTrading': False, 'realOrder': False,
+        }
+        registry = {
+            'schemaVersion': 1, 'contract': 'research-formula-paper-strategy-registry/v1',
+            'entryCount': 0, 'entries': [], 'executionAuthority': 'NONE',
+            'liveTrading': False, 'autoTrading': False, 'realOrder': False,
+            'privateTradingApi': False, 'directTradeOnBacktestPass': False,
+            'futureSignalRequired': True, 'canonicalPaperAdmissionRequired': True,
+        }
+        write_json(base / 'formula-backtest-queue.json', summary)
+        write_json(base / 'formula-paper-strategy-registry.json', registry)
+        bad = build_research_overview(root)
+        self.assertEqual(bad['research']['formulaBacktest']['status'], 'INVALID')
+        self.assertEqual(bad['research']['status'], 'attention')
+        self.assertIsNone(bad['research']['formulaBacktest']['counts']['PASS'])
+        self.assertNotIn('never-expose', json.dumps(bad))
+        summary['counts'] = {'PASS': 0, 'HOLD': 1, 'RESERVE': 0, 'EXCLUDE': 0}
+        summary['rows'] = [{'state': 'HOLD'}]
+        write_json(base / 'formula-backtest-queue.json', summary)
+        (base / 'formula-paper-strategy-registry.json').unlink()
+        (base / 'formula-paper-strategy-registry.json').symlink_to(
+            base / 'formula-backtest-queue.json',
+        )
+        unsafe = build_research_overview(root)['research']['formulaBacktest']
+        self.assertEqual(unsafe['status'], 'INVALID')
+        self.assertIsNone(unsafe['inboxCount'])
+
+
 if __name__ == '__main__':
     unittest.main()
 

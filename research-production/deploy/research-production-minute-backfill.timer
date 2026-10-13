@@ -1,0 +1,11 @@
+[Unit]
+Description=Bounded 1m research-only data catchup (DORMANT until human approval)
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00 UTC
+RandomizedDelaySec=25s
+Persistent=true
+Unit=research-production-minute-backfill.service
+
+[Install]
+WantedBy=timers.target
