@@ -29,7 +29,25 @@ test('scope contains exactly Telegram service test targets and an explicit test 
   assert.equal(pkg.scripts['test:telegram'], 'node ./test.mjs telegram');
   assert.ok(runner.includes('telegram: ['));
   const group = runner.slice(runner.indexOf('  telegram: ['), runner.indexOf('  search: ['));
-  assert.equal((group.match(/\.test\.ts/g) || []).length, 11);
+  const declared=[...group.matchAll(/path[.]join[(]root, '([^']+[.]test[.]ts)'[)]/gu)]
+    .map(match=>match[1]);
+  const exactExpected=[
+    'src/lib/telegram-worker-ownership.test.ts',
+    'src/services/telegram-ai-watch-delivery.service.test.ts',
+    'src/services/telegram-notification.service.test.ts',
+    'src/services/telegram-test-message.service.test.ts',
+    'src/services/telegram-market-brief.service.test.ts',
+    'src/services/telegram-readable-format.service.test.ts',
+    'src/services/telegram-investment-intelligence.service.test.ts',
+    'src/services/scanner-telegram-plan-format.service.test.ts',
+    'src/services/member-holdings-telegram-alert.contract.test.ts',
+    'src/services/member-holdings-telegram-producer.service.test.ts',
+    'src/features/user-broker-telegram/user-broker-telegram.service.test.ts',
+    'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts',
+    'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts',
+  ];
+  assert.equal(new Set(declared).size,declared.length,'no duplicate Telegram test registration');
+  assert.deepEqual(declared.sort(),exactExpected.sort());
   assert.ok(group.includes('src/services/telegram-notification.service.test.ts'));
   assert.ok(group.includes('src/services/telegram-market-brief.service.test.ts'));
   assert.ok(group.includes('user-broker-telegram/user-broker-telegram.service.test.ts'));
