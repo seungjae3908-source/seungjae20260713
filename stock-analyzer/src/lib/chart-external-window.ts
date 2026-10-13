@@ -213,7 +213,10 @@ export function chartSelectionFromSearch(search: string, selectedAt = new Date()
   const symbolParam = optionalSingleParam(params, 'symbol');
   const nameParam = optionalSingleParam(params, 'name');
   const searchRunId = optionalSingleParam(params, 'searchRunId');
-  if (!assetType || !market || !timeframe || tickerParam === null || symbolParam === null || nameParam === null || searchRunId === null) return null;
+  const signalIdParam = optionalSingleParam(params, 'signalId');
+  const signalId = signalIdParam ? exactText(signalIdParam, 120) : '';
+  if (!assetType || !market || !timeframe || tickerParam === null || symbolParam === null || nameParam === null || searchRunId === null || signalIdParam === null) return null;
+  if (signalIdParam && (!signalId || SCRIPT_LIKE_TEXT.test(signalId))) return null;
   if ((params.has('ticker') && !tickerParam) || (params.has('symbol') && !symbolParam)) return null;
   const ticker = tickerParam || symbolParam;
   const symbol = symbolParam || tickerParam;
@@ -226,6 +229,7 @@ export function chartSelectionFromSearch(search: string, selectedAt = new Date()
     displayName: nameParam || ticker,
     timeframe,
     searchRunId: searchRunId || undefined,
+    signalId: signalId || undefined,
     selectedAt,
   });
 }
@@ -241,9 +245,15 @@ export function mergeChartRouteSelection(
     stored
     && stored.assetType === route.assetType
     && stored.market === route.market
-    && stored.ticker === route.ticker,
+    && stored.ticker === route.ticker
+    && stored.timeframe === route.timeframe,
   );
-  const previous = sameInstrument ? stored : null;
+  // A new scan run or a different signal on the same candle timeframe does
+  // not inherit an old entry/stop/target plan from local storage.
+  const sameEvidence = sameInstrument
+    && (!route.searchRunId || route.searchRunId === stored?.searchRunId)
+    && (!route.signalId || route.signalId === stored?.signalId);
+  const previous = sameEvidence ? stored : null;
   return normalizeChartWindowSelection({
     ...(previous ?? {}),
     assetType: route.assetType,
@@ -253,6 +263,7 @@ export function mergeChartRouteSelection(
     displayName: route.displayName || previous?.displayName,
     timeframe: route.timeframe,
     searchRunId: route.searchRunId || previous?.searchRunId,
+    signalId: route.signalId || previous?.signalId,
     selectedAt: previous?.selectedAt || route.selectedAt,
   });
 }
