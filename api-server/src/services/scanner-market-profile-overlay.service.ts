@@ -1,5 +1,6 @@
 import type { Candle } from '../sample/types';
 import { buildScannerIndicatorSnapshot } from './scanner-indicator-library.service';
+import { scannerTimestampMs } from './scanner-data-quality.service';
 import type { ScannerEvidence, ScannerSignalCard, ScannerSignalGrade } from './scanner-signal.types';
 import type { ScannerStrategyMode } from './scanner-quant-strategy.service';
 
@@ -30,12 +31,7 @@ function demoteStrongGrade(grade: ScannerSignalGrade | undefined): ScannerSignal
 }
 
 function timestamp(value: Candle['time']): number | null {
-  if (typeof value === 'number') {
-    const normalized = value < 10_000_000_000 ? value * 1_000 : value;
-    return Number.isFinite(normalized) ? normalized : null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return scannerTimestampMs(value);
 }
 
 function wallClock(value: Candle['time'], timeZone: string): { minuteOfDay: number; weekday: string } | null {
