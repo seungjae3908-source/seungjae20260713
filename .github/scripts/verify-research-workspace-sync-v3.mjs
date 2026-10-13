@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_SOURCE_SHA, verifyPinnedScannerScope, createScannerBlobReader } from './scanner-readonly-repair-scope.mjs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
+import { AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
 const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
 const BASE='9057c4a3767db0f81e595fc481f5066bda6c9e43';
@@ -320,6 +321,9 @@ const formulaAiDriftReviewed=[
  'api-server/test.mjs',
 ];
 const automaticTradingDriftReviewed=[
+ // Exact owner-approved AUTO safety paths still require both Trading guards
+ // below; protected Research prefixes, main ancestry and route bytes stay gated.
+ ...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
  // Read-only holdings UI and entry evidence, with no new database or financial scope.
  'stock-analyzer/src/components/bottom-nav.tsx',
  'stock-analyzer/e2e/app-navigation.spec.ts',

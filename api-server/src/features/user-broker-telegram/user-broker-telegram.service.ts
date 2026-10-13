@@ -20,6 +20,15 @@ export function telegramDeliveryRequiresReconnect(errorCode: string | null | und
   return code === 'TELEGRAM_HTTP_403' || code.startsWith('TELEGRAM_FORBIDDEN_');
 }
 
+/** A timed out/crashed Telegram POST can already be accepted remotely.
+ * Keep it in the durable outbox as unresolved DEAD_LETTER, not RETRY_SCHEDULED.
+ */
+export function telegramDeliveryOutcomeUnknown(errorCode: string | null | undefined): boolean {
+  return ['TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+    'TELEGRAM_NETWORK_ERROR','TELEGRAM_TRANSPORT_ERROR']
+    .includes(String(errorCode ?? '').trim().toUpperCase());
+}
+
 export function telegramConnectionRecovery(
   connection: { status: string; connectedAt: string } | null | undefined,
   deliveries: ReadonlyArray<Pick<NotificationDelivery, 'state' | 'lastErrorCode' | 'updatedAt'>>,
@@ -492,7 +501,8 @@ export class UserBrokerTelegramService {
           cooldownMs: 0,
         });
       } catch {
-        alertResult = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
+        alertResult = { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
       }
       if (alertResult.ok) {
         await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
@@ -502,6 +512,12 @@ export class UserBrokerTelegramService {
         await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
           alertResult.errorCode ?? 'TELEGRAM_HTTP_403', timestamp);
         await this.repository.revokeTelegramConnection(userId, timestamp);
+        return { processed: true, state: 'DEAD_LETTER' as const };
+      }
+      if (alertResult.skipped === 'OUTCOME_UNCONFIRMED'
+        || telegramDeliveryOutcomeUnknown(alertResult.errorCode)) {
+        await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER',
+          attempt, null, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED', timestamp);
         return { processed: true, state: 'DEAD_LETTER' as const };
       }
       const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
@@ -526,7 +542,7 @@ export class UserBrokerTelegramService {
     const rendered = renderUserExecutionTelegramMessage(event);
     let transportResult: Awaited<ReturnType<TelegramTransport['send']>>;
     try { transportResult = await this.transport.send(connection.telegramChatId, rendered); }
-    catch { transportResult = { ok: false, errorCode: 'TELEGRAM_TRANSPORT_ERROR' }; }
+    catch { transportResult = { ok: false, errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' }; }
     if (transportResult.ok) {
       if (
         event.executionMethod === 'AUTO_POLICY'
@@ -552,6 +568,11 @@ export class UserBrokerTelegramService {
       await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
         transportResult.errorCode?.slice(0, 120) || 'TELEGRAM_HTTP_403', timestamp);
       await this.repository.revokeTelegramConnection(userId, timestamp);
+      return { processed: true, state: 'DEAD_LETTER' as const };
+    }
+    if (telegramDeliveryOutcomeUnknown(transportResult.errorCode)) {
+      await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER',
+        attempt, null, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED', timestamp);
       return { processed: true, state: 'DEAD_LETTER' as const };
     }
     const dead = attempt >= MAX_DELIVERY_ATTEMPTS;

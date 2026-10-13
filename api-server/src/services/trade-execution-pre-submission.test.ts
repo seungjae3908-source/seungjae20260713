@@ -33,6 +33,73 @@ const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
 
+test('stopped worker generation cannot execute any provider, inspect credentials or claim a real order', async () => {
+  const repository = new InMemoryTradingRepository();
+  let calls = 0;
+  repository.getPlan = async () => { calls += 1; throw new Error('NO_DATABASE_EXECUTION'); };
+  const service = new TradeExecutionService(repository, undefined, undefined, undefined, () => false);
+  for (const exchange of ['bitget', 'upbit', 'kiwoom', 'toss'] as const) {
+    await assert.rejects(service.execute(USER_ID, { exchange, accountMode: 'live', executionMode: 'automatic' } as TradingPlan,
+      { userId: USER_ID, exchange } as TradingOrder), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+  }
+  assert.equal(calls, 0);
+});
+
+test('late successful ownership reads cannot restore a stopped worker generation', async () => {
+  let active = true;
+  const service = new TradeExecutionService(new InMemoryTradingRepository(), undefined, undefined, undefined, () => active);
+  Object.assign(service, { async assertAutomaticLiveEntryControls() {},
+    async assertAutomaticLivePositionIsolation() { active = false; } });
+  const boundary = service as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    accountMode: 'live', executionMode: 'automatic', reduceOnly: false } as TradingPlan), /AUTOMATIC_WORKER_GENERATION_STOPPED/u);
+});
+
+test('current membership revocation or an unknown DB read blocks every AUTO provider before credentials or claims', async () => {
+  for (const exchange of ['bitget', 'upbit', 'kiwoom', 'toss'] as const) {
+    for (const unavailable of [false, true]) {
+      const repository = new InMemoryTradingRepository();
+      const now = new Date();
+      const plan: TradingPlan = { ...planInput(now), id: 'revoked-plan', userId: USER_ID, exchange,
+        executionMode: 'automatic', signalReasons: [], reduceOnly: false, state: 'SUBMITTED', version: 0,
+        idempotencyKey: 'revoked-plan', approvedAt: now.toISOString(), approvalExpiresAt: null,
+        createdAt: now.toISOString(), updatedAt: now.toISOString() };
+      const order = { id: 'revoked-order', userId: USER_ID, planId: plan.id, exchange,
+        state: 'SUBMITTED', submissionStartedAt: null } as TradingOrder;
+      repository.getOrder = async () => order;
+      let credentialReads = 0;
+      repository.getConnection = async () => { credentialReads += 1; throw new Error('UNEXPECTED_CREDENTIAL_READ'); };
+      const service = new TradeExecutionService(repository, undefined, undefined, undefined, () => true,
+        async (userId) => { assert.equal(userId, USER_ID);
+          if (unavailable) throw new Error('RAW_DB_ACCOUNT_SECRET'); return false; });
+      await assert.rejects(service.execute(USER_ID, plan, order),
+        (error: unknown) => error instanceof Error && error.message === 'AUTOMATIC_LIVE_MEMBER_ACCESS_REVOKED_OR_UNVERIFIED');
+      assert.equal(credentialReads, 0);
+      assert.equal((await repository.listOrders(USER_ID)).length, 0);
+    }
+  }
+});
+
+test('membership revoked during private account reads is rechecked before any financial mutation', async () => {
+  let allowed = true; let checks = 0;
+  const service = new TradeExecutionService(new InMemoryTradingRepository(), undefined, undefined, undefined, () => true,
+    async () => { checks += 1; return allowed; });
+  Object.assign(service, { async assertAutomaticLiveEntryControls() {},
+    async assertAutomaticLivePositionIsolation() { allowed = false; } });
+  const boundary = service as unknown as { assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void> };
+  const now = new Date();
+  const plan: TradingPlan = { ...planInput(now), id: 'late-revoked-plan', userId: USER_ID,
+    executionMode: 'automatic', signalReasons: [], reduceOnly: false, state: 'SUBMITTED', version: 0,
+    idempotencyKey: 'late-revoked-plan', approvedAt: now.toISOString(), approvalExpiresAt: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString() };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID,
+    plan),
+  /MEMBER_ACCESS_REVOKED_OR_UNVERIFIED/);
+  assert.equal(checks, 2);
+});
+
 test('AUTO authority revoked during the ownership read blocks at the final provider boundary', async () => {
   const execution = new TradeExecutionService(new InMemoryTradingRepository());
   const events: string[] = [];
@@ -478,6 +545,10 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
     exchange: 'bitget' as const,
     symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long' as const,
     quantity: 1, quoteAmount: null, leverage: 2, marginMode: 'isolated' as const,
+    // Valid Futures protection reaches the Arm boundary instead of using the
+    // unrelated Upbit KRW protection inherited from planInput.
+    entryPrice: 100, stopPrice: 95, targetPrices: [110],
+    marketSnapshot: { ...marketSnapshot(now), currentPrice: 100, plannedPrice: 100 },
     reduceOnly: false, executionMode: 'automatic' as const,
     id: 'bitget-pre-arm-plan', userId: USER_ID, idempotencyKey: 'bitget-pre-arm-plan-key',
     state: 'SUBMITTED' as const, version: 1, approvedAt: now.toISOString(),
