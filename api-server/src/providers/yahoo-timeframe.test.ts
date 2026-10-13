@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateYahooDerivedTimeframe, yahooChartParams, getCandles, getQuote } from './yahoo';
+import {
+  aggregateYahooDerivedTimeframe,
+  yahooChartParams,
+  getCandles,
+  getQuote,
+  resetYahooProviderRuntimeForTests,
+} from './yahoo';
+
+test.beforeEach(() => resetYahooProviderRuntimeForTests({
+  minimumStartIntervalMs: 0,
+  transportFallbackDelayMs: 150,
+}));
+test.afterEach(() => resetYahooProviderRuntimeForTests());
 
 function publicChart(symbol = 'AAPL') {
   return new Response(JSON.stringify({ chart: { result: [{ meta: { symbol, regularMarketTime: 1_700_000_000 }, timestamp: [1_700_000_000],
@@ -44,26 +56,34 @@ test('Yahoo rejects cross-symbol evidence and never invents missing prices', asy
 
 test('pre-abort makes zero public calls and active abort terminates non-cooperative fetch', async t => {
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', () => { calls++; return new Promise(() => {}); });
+  let markStarted: () => void = () => {};
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  t.mock.method(globalThis, 'fetch', () => {
+    calls++;
+    markStarted();
+    return new Promise(() => {});
+  });
   const early = new AbortController(); early.abort(new Error('EARLY_ABORT'));
   await assert.rejects(getCandles('AAPL', '1D', { signal: early.signal }), /EARLY_ABORT/);
   assert.equal(calls, 0);
   const active = new AbortController();
   const pending = getCandles('AAPL', '1D', { signal: active.signal });
+  await started;
   active.abort(new Error('ACTIVE_ABORT'));
   await assert.rejects(pending, /ACTIVE_ABORT/);
   assert.equal(calls, 1);
 });
 
-test('hard public deadline settles even if both transports ignore abort', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('bounded sequential transports settle even when both fetches ignore abort', async t => {
+  resetYahooProviderRuntimeForTests({
+    minimumStartIntervalMs: 0,
+    transportFallbackDelayMs: 0,
+    requestTimeoutMs: 10,
+  });
   const signals: AbortSignal[] = [];
   t.mock.method(globalThis, 'fetch', (_input: unknown, init?: RequestInit) => { signals.push(init!.signal as AbortSignal); return new Promise(() => {}); });
   const pending = getCandles('AAPL', '1D');
-  const rejection = assert.rejects(pending, /YAHOO_CHART_BUDGET_EXCEEDED/);
-  t.mock.timers.tick(180);
-  t.mock.timers.tick(2_620);
-  await rejection;
+  await assert.rejects(pending, /YAHOO_CHART_BUDGET_EXCEEDED/);
   assert.equal(signals.length, 2);
   assert.ok(signals.every(signal => signal.aborted));
 });
