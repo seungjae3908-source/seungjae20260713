@@ -228,7 +228,7 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     publication: rawPublication,
     publishedAt,
   });
-  if (!validateCanonicalBundlePublicationV1(proposedPublication, researchCodeSha)) {
+  if (!proposedPublication || !validateCanonicalBundlePublicationV1(proposedPublication, researchCodeSha)) {
     throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
   }
 
@@ -256,12 +256,15 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     const expected = createCanonicalBundleOfflinePublicationReceiptV1({
       researchCodeSha, publication: rawPublication, publishedAt: row(existing).publishedAt,
     });
-    if (digest(existing) !== digest(expected)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+    if (!expected || digest(existing) !== digest(expected)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
     return expected;
   });
   // The atomic first writer wins, even when concurrent callers have different
   // clocks. Build the companion record only from that winning stored receipt.
   const publication = receiptWrite.value;
+  if (!publication || !validateCanonicalBundlePublicationV1(publication, researchCodeSha)) {
+    throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
+  }
 
   const inputDigest = digest({ dsl, bundle, researchCodeSha });
   const publicationDigest = digest(publication);
