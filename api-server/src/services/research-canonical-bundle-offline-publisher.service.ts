@@ -23,6 +23,32 @@ const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 const DIGEST = /^[0-9a-f]{64}$/u;
 const SHA40 = /^[0-9a-f]{40}$/u;
 
+// Both frontend and backend consume this return value. Keep the boundary
+// explicitly typed even when the shared JavaScript factory is typed as Row.
+// Narrow only AFTER validating the canonical receipt and its string fields.
+type VerifiedOfflinePublication = Readonly<{
+  schemaVersion: 1;
+  contract: 'research-canonical-bundle-offline-publication-receipt/v1';
+  researchCodeSha: string;
+  publishedAt: string;
+  publisherMode: 'OFFLINE_OWNER_CONTROLLED';
+  catalogReadbackVerified: true;
+  dslDigest: string;
+  bundleDigest: string;
+  publicationStatus: 'READBACK_VERIFIED';
+  evidenceCredit: 0;
+  profitabilityProven: false;
+  executionAuthority: 'NONE';
+  receiptDigest: string;
+}>;
+function offlinePublicationValid(value: unknown, sha: string): value is VerifiedOfflinePublication {
+  const r = row(value);
+  return typeof r.researchCodeSha === 'string' && typeof r.publishedAt === 'string'
+    && typeof r.dslDigest === 'string' && typeof r.bundleDigest === 'string'
+    && typeof r.receiptDigest === 'string'
+    && validateCanonicalBundlePublicationV1(value, sha);
+}
+
 function row(value: unknown): Row {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
 }
@@ -228,7 +254,7 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     publication: rawPublication,
     publishedAt,
   });
-  if (!proposedPublication || !validateCanonicalBundlePublicationV1(proposedPublication, researchCodeSha)) {
+  if (!offlinePublicationValid(proposedPublication, researchCodeSha)) {
     throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
   }
 
@@ -248,21 +274,23 @@ export async function publishResearchCanonicalBundleOfflineV1(input: {
     throw new Error('PUBLICATION_RECEIPT_MISSING');
   }
   const receiptWrite = await publishWriteOnce(receiptDirectory, fileName, proposedPublication, (existing) => {
-    if (!validateCanonicalBundlePublicationV1(existing, researchCodeSha)) {
+    if (!offlinePublicationValid(existing, researchCodeSha)) {
       throw new Error('PUBLICATION_RECEIPT_CONFLICT');
     }
     // Preserve the FIRST durable timestamp, never relabel old evidence as new.
     // Reconstruct every other field from this invocation's revalidated catalog.
     const expected = createCanonicalBundleOfflinePublicationReceiptV1({
-      researchCodeSha, publication: rawPublication, publishedAt: row(existing).publishedAt,
+      researchCodeSha, publication: rawPublication, publishedAt: existing.publishedAt,
     });
-    if (!expected || digest(existing) !== digest(expected)) throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+    if (!offlinePublicationValid(expected, researchCodeSha) || digest(existing) !== digest(expected)) {
+      throw new Error('PUBLICATION_RECEIPT_CONFLICT');
+    }
     return expected;
   });
   // The atomic first writer wins, even when concurrent callers have different
   // clocks. Build the companion record only from that winning stored receipt.
   const publication = receiptWrite.value;
-  if (!publication || !validateCanonicalBundlePublicationV1(publication, researchCodeSha)) {
+  if (!offlinePublicationValid(publication, researchCodeSha)) {
     throw new Error('CANONICAL_BUNDLE_OFFLINE_PUBLICATION_RECEIPT_INVALID');
   }
 
