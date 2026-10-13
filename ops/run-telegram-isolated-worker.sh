@@ -58,12 +58,9 @@ if(!Array.isArray(list)) fail();
 const rows=list.filter(x=>x.name==="stock-app");
 if(rows.length!==1 || rows[0].pm2_env?.status!=="online") fail();
 const env=rows[0].pm2_env;
-for(const key of [
-  "LIVE_TELEGRAM_ACTIVATION_APPROVED",
-  "TELEGRAM_INTELLIGENCE_WORKER_ENABLED",
-  "PERSONAL_TELEGRAM_WORKER_ENABLED",
-]) if(String(env[key]??"").toLowerCase()!=="false") fail();
-console.log("TELEGRAM_LEGACY_WRITER_DISABLED_PROVEN");
+if(env.TELEGRAM_WORKER_OWNER!=="isolated") fail();
+if(!/^[0-9a-f]{40}$/.test(String(env.DEPLOY_SHA ?? ""))) fail();
+console.log("TELEGRAM_LEGACY_PROCESS_OWNER_ISOLATED");
 '
 }
 legacy_health_inactive() {

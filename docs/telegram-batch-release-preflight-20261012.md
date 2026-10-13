@@ -82,3 +82,27 @@ are still pending and cannot be inferred from green mocks.
 The existing real Production app lacks proof it is quiesced and is not
 assumed to support this new health schema until separately deployed.
 Therefore manual LIVE preservation still keeps cutover NO_GO. No Replit.
+
+### 2026-10-13 complete periodic send-owner inventory and operating proof
+
+The standalone owner originally covered three send-capable workers but missed
+Signal V3 AI watch. That component both requests public-only rescans and directly
+sends Telegram AI change alerts. Its startup is now owned by the same
+embedded/isolated switch, and the isolated entry optionally starts it when
+AI access is configured. The old application exports its state in its existing
+health readback. The market routing uses the dedicated four market rooms
+instead of collapsing them into two legacy stock/crypto destinations.
+
+Production quiescence is verified only when the old process declares
+telegramWorkerOwner=isolated, backgroundWorkersEnabled=true, and all four
+send-capable workers have never started in that isolated-owner API process:
+personal enabled=false; briefing state NOT_STARTED; V3 subscriber state
+NOT_STARTED/inFlight=0; AI watcher state NOT_STARTED/inFlight=0. The exact
+new-code process/marker SHA and live PM2 owner flag must match. This does not
+turn off unrelated price monitoring, trading or Paper background activity;
+price alerts and trade events continue writing into the durable personal
+outbox and must be delivered by the sole personal worker owner.
+
+Operator approval and a fresh protected immutable cutover remain mandatory.
+No change to running PM2 or real trading permissions is authorized by this
+Draft-only source change, and no real Bot/user receipt is claimed.

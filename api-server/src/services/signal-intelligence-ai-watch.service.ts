@@ -1,6 +1,7 @@
 import { answerAiChat } from './ai-chat.service';
 import { sendTelegramAlert } from './telegram-notification.service';
 import { logger } from '../lib/logger';
+import { telegramMarketRoomForLane, telegramMarketRoomChatId } from './telegram-market-room.service';
 
 const SIGNAL_URL = 'http://127.0.0.1:8790/v1/signals';
 const RESCAN_URL = 'http://127.0.0.1:8790/internal/rescan';
@@ -88,8 +89,8 @@ function materialChange(result: AiWatchResult): boolean {
 }
 
 function destination(event: WatchEvent): string | null {
-  if (event.market === 'KR_STOCK' || event.market === 'US_STOCK') return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-  return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  // Never collapse distinct four-market signals into legacy stock/crypto rooms.
+  return telegramMarketRoomChatId(telegramMarketRoomForLane(event.market));
 }
 
 function watchPrompt(event: WatchEvent): string {
@@ -194,20 +195,48 @@ export class SignalIntelligenceAiWatch {
   }
 }
 
+export type SignalIntelligenceAiWatchRuntimeHealth = Readonly<{
+  state: 'NOT_STARTED' | 'DISABLED' | 'RUNNING' | 'STOPPING' | 'STOPPED';
+  inFlight: number;
+}>;
+let aiWatchRuntimeHealth: SignalIntelligenceAiWatchRuntimeHealth =
+  Object.freeze({state:'NOT_STARTED',inFlight:0});
+export function readSignalIntelligenceAiWatchRuntimeHealth(): SignalIntelligenceAiWatchRuntimeHealth {
+  return aiWatchRuntimeHealth;
+}
+function updateAiWatchRuntimeHealth(patch:Partial<SignalIntelligenceAiWatchRuntimeHealth>) {
+  aiWatchRuntimeHealth = Object.freeze({...aiWatchRuntimeHealth,...patch});
+}
+
 export function startSignalIntelligenceAiWatch(): { stop(): void } | null {
-  if (!aiConfigured()) return null;
+  if (aiWatchRuntimeHealth.state === 'RUNNING' || aiWatchRuntimeHealth.state === 'STOPPING')
+    return null;
+  if (!aiConfigured()) {
+    aiWatchRuntimeHealth = Object.freeze({state:'DISABLED',inFlight:0});
+    return null;
+  }
   const watch = new SignalIntelligenceAiWatch();
+  aiWatchRuntimeHealth = Object.freeze({state:'RUNNING',inFlight:0});
   const tick = async () => {
+    updateAiWatchRuntimeHealth({inFlight:aiWatchRuntimeHealth.inFlight+1});
     try {
       const result = await watch.runOnce(new Date());
       if (result.material > 0 || result.aiUnavailable > 0) logger.info({ result }, 'signal intelligence AI watch tick');
     } catch {
       logger.debug('signal intelligence AI watch unavailable');
+    } finally {
+      const remaining = Math.max(0,aiWatchRuntimeHealth.inFlight-1);
+      updateAiWatchRuntimeHealth({inFlight:remaining,...(
+        remaining===0 && aiWatchRuntimeHealth.state==='STOPPING' ? {state:'STOPPED' as const} : {}
+      )});
     }
   };
   void tick();
   const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.SIGNAL_INTELLIGENCE_AI_WATCH_INTERVAL_MS));
   timer.unref?.();
   console.log('[signal-intelligence-ai-watch] started');
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => {
+    clearInterval(timer);
+    updateAiWatchRuntimeHealth({state:aiWatchRuntimeHealth.inFlight===0?'STOPPED':'STOPPING'});
+  } };
 }

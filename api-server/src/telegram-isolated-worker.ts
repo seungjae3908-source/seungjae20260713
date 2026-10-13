@@ -17,23 +17,29 @@ async function main() {
   // No worker import or side effect before checking lease and financial boundary.
   const [{ startUserTelegramDeliveryWorker },
     { startTelegramIntelligenceWorker },
-    { startSignalIntelligenceTelegramSubscriber }] = await Promise.all([
+    { startSignalIntelligenceTelegramSubscriber },
+    { startSignalIntelligenceAiWatch }] = await Promise.all([
     import('./features/user-broker-telegram/user-broker-telegram.worker'),
     import('./services/telegram-intelligence-worker.service'),
     import('./services/signal-intelligence-telegram-subscriber.service'),
+    import('./services/signal-intelligence-ai-watch.service'),
   ]);
   const personal = startUserTelegramDeliveryWorker();
   const briefing = startTelegramIntelligenceWorker();
   const signal = startSignalIntelligenceTelegramSubscriber();
+  // Optional public-only AI change watch is also Telegram-send-capable.
+  // Keep it in the same exclusive owner, not in stock-app.
+  const aiWatch = startSignalIntelligenceAiWatch();
   if (!personal || !briefing || !signal) {
     personal?.stop();
     briefing?.stop();
     signal?.stop();
+    aiWatch?.stop();
     console.error('[telegram-isolated] required lane unavailable; send readiness not proven');
     process.exitCode = 15;
     return;
   }
-  console.log('[telegram-isolated] three lanes started; no Bot acceptance implied');
+  console.log('[telegram-isolated] Telegram delivery lanes started; no Bot acceptance implied');
   // Existing worker timers are deliberately unref'd for the embedded server.
   // Standalone must retain one referenced handle for its entire lifetime.
   const keepAlive = setInterval(() => {}, 60_000);
@@ -45,6 +51,7 @@ async function main() {
     personal.stop();
     briefing.stop();
     signal.stop();
+    aiWatch?.stop();
     console.log('[telegram-isolated] no new ticks scheduled', { signalName });
     // Give in-flight sends time to finish. Ambiguous outcomes stay reserved in
     // the shared durable ledgers rather than automatically re-sending.
