@@ -276,7 +276,10 @@ if (!runtimeTradingBlock.includes('TELEGRAM_PREFLIGHT_TRADING_RUNTIME_ACTIVE')
   || !runtimeTradingBlock.includes('LIVE_TRADING_ACTIVATION_APPROVED')
   || !runtimeTradingBlock.includes('executionAuthority')
   || !runtimeTradingBlock.includes('BITGET_LIVE_ORDER_ENABLED')
-  || !runtimeTradingBlock.includes('SPOT_LIVE_CAPABILITY_ALLOWLIST')) {
+  || !runtimeTradingBlock.includes('SPOT_LIVE_CAPABILITY_ALLOWLIST')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_EXECUTION_AUTHORITY')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_CAPABILITY_ALLOWLIST')
+  || !runtimeTradingBlock.includes('FUTURES_LIVE_MARKET_ALLOWLIST')) {
   throw new Error('TELEGRAM_PREFLIGHT_ACTIVE_TRADING_RUNTIME_NOT_BLOCKED');
 }
 const tradingActivationStart = source.indexOf('function activateApprovedTelegram(');
@@ -288,6 +291,9 @@ if (tradingActivationStart<0 || tradingActivationEnd<tradingActivationStart
   || !tradingActivationBlock.includes('activeTrading(fresh)')
   || !tradingActivationBlock.includes('UPBIT_LIVE_ORDER_ENABLED')
   || !tradingActivationBlock.includes('SPOT_LIVE_MARKET_ALLOWLIST')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_EXECUTION_AUTHORITY')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_CAPABILITY_ALLOWLIST')
+  || !tradingActivationBlock.includes('FUTURES_LIVE_MARKET_ALLOWLIST')
   || !tradingActivationBlock.includes("key === 'executionAuthority'")
   || tradingActivationBlock.includes("LIVE_TRADING: 'false'")
   || tradingActivationBlock.includes("AUTO_TRADING: 'false'")
