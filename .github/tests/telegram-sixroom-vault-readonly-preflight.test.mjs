@@ -149,6 +149,13 @@ test('a non-ready Production preflight cannot end as a green workflow',()=>{
   assert.ok(workflow.includes('VAULT_PREFLIGHT_OPERATIONAL_NOT_READY'));
   assert.ok(workflow.includes("r.classification === 'READY_FOR_PROTECTED_BINDING_REVIEW'"));
   assert.ok(workflow.includes('git rev-parse origin/main'));
+  // Protected approval may outlive main's tip. Read-only collection should
+  // complete, but stale evidence may never be marked release ready.
+  assert.ok(!workflow.includes('test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"'));
+  assert.ok(workflow.includes('VAULT_PREFLIGHT_MAIN_ADVANCED_READ_ONLY_OBSERVATION'));
+  assert.ok(workflow.includes("process.env.PINNED_MAIN_IS_CURRENT === 'true'"));
+  assert.ok(workflow.includes('VAULT_PREFLIGHT_MAIN_MOVED_NOT_RELEASE_READY'));
+  assert.ok(workflow.includes('git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main'));
   assert.ok(workflow.includes('test "$GITHUB_SHA" = "$EXPECTED_MAIN_SHA"'));
   assert.ok(workflow.includes('Failure stage:'));
   assert.ok(workflow.includes('Bot API GET diagnostic:'));
