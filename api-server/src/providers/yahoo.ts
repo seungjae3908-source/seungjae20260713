@@ -33,11 +33,271 @@ export interface YahooIndexQuote {
   updatedAt: string;
 }
 
-// The stock Scanner has a four-second per-symbol budget. Keep each Yahoo
-// public chart attempt below that budget, including the delayed hedge. The
-// deadline also terminates non-cooperative transports; abort alone is not enough.
-const YAHOO_CHART_BUDGET_MS = 2_800;
-const YAHOO_HEDGE_DELAY_MS = 180;
+// The stock Scanner has a four-second per-symbol budget. Yahoo also applies
+// shared provider and egress-IP limits, so all calls use one process-wide
+// start gate. query2 is a bounded transport fallback, never a 429 bypass.
+// Yahoo's public chart endpoints share provider and egress-IP limits. Keep one
+// process-wide start gate for every Yahoo request: per-call hedging multiplies
+// traffic and turns one scanner batch into an avoidable query1/query2 burst.
+const YAHOO_REQUEST_TIMEOUT_MS = 2_800;
+const YAHOO_DEFAULT_MINIMUM_START_INTERVAL_MS = 1_000;
+const YAHOO_DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000;
+const YAHOO_TRANSPORT_FALLBACK_DELAY_MS = 150;
+const YAHOO_MAX_CACHE_ENTRIES = 1_000;
+const YAHOO_HOSTS = Object.freeze([
+  'query1.finance.yahoo.com',
+  'query2.finance.yahoo.com',
+] as const);
+
+type YahooRuntimeCacheEntry = { value: unknown; expiresAt: number };
+
+const yahooCache = new Map<string, YahooRuntimeCacheEntry>();
+const yahooInFlight = new Map<string, Promise<unknown>>();
+let yahooScheduleTail: Promise<void> = Promise.resolve();
+let yahooNextStartAt = 0;
+let yahooRateLimitedUntil = 0;
+let yahooMinimumStartIntervalMs = YAHOO_DEFAULT_MINIMUM_START_INTERVAL_MS;
+let yahooRateLimitCooldownMs = YAHOO_DEFAULT_RATE_LIMIT_COOLDOWN_MS;
+let yahooTransportFallbackDelayMs = YAHOO_TRANSPORT_FALLBACK_DELAY_MS;
+let yahooDiagnostics = {
+  actualRequests: 0,
+  successfulResponses: 0,
+  cacheHits: 0,
+  deduplicatedRequests: 0,
+  delayedStarts: 0,
+  transportFallbacks: 0,
+  rateLimitResponses: 0,
+  lastRateLimitAt: null as string | null,
+  lastRateLimitBody: null as string | null,
+};
+
+class YahooHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null,
+    readonly responseBody: string,
+  ) {
+    super(`YAHOO_CHART_HTTP_${status}`);
+    this.name = 'YahooHttpError';
+  }
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(minimum, Math.min(maximum, Math.floor(parsed)))
+    : fallback;
+}
+
+function yahooRetryAfterMs(response: Response): number | null {
+  const raw = response.headers.get('retry-after')?.trim();
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, seconds * 1_000);
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.min(60_000, Math.max(0, date - Date.now())) : null;
+}
+
+async function scheduledYahooStart<T>(operation: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const previous = yahooScheduleTail;
+  yahooScheduleTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  const waitMs = Math.max(0, yahooNextStartAt - Date.now());
+  if (waitMs > 0) {
+    yahooDiagnostics.delayedStarts += 1;
+    await sleep(waitMs);
+  }
+  if (Date.now() < yahooRateLimitedUntil) {
+    release();
+    throw new YahooHttpError(429, yahooRateLimitedUntil - Date.now(), 'RATE_LIMIT_COOLDOWN_ACTIVE');
+  }
+  yahooNextStartAt = Date.now() + yahooMinimumStartIntervalMs;
+  let started: Promise<T>;
+  try {
+    started = operation();
+  } catch (error) {
+    release();
+    throw error;
+  }
+  release();
+  return await started;
+}
+
+async function fetchYahooJsonUrl<T>(url: string): Promise<T> {
+  return scheduledYahooStart(async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED')),
+      YAHOO_REQUEST_TIMEOUT_MS,
+    );
+    try {
+      yahooDiagnostics.actualRequests += 1;
+      const response = await fetch(url, {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          accept: 'application/json,text/plain,*/*',
+          'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        },
+      });
+      if (!response.ok) {
+        const body = (await response.text().catch(() => '')).trim().slice(0, 160);
+        const retryAfterMs = yahooRetryAfterMs(response);
+        if (response.status === 429) {
+          yahooDiagnostics.rateLimitResponses += 1;
+          yahooDiagnostics.lastRateLimitAt = new Date().toISOString();
+          yahooDiagnostics.lastRateLimitBody = body || null;
+          yahooRateLimitedUntil = Math.max(
+            yahooRateLimitedUntil,
+            Date.now() + Math.max(retryAfterMs ?? 0, yahooRateLimitCooldownMs),
+          );
+        }
+        throw new YahooHttpError(response.status, retryAfterMs, body);
+      }
+      yahooDiagnostics.successfulResponses += 1;
+      return await response.json() as T;
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+}
+
+function yahooHostsForRequest(): readonly string[] {
+  // query1 is the stable primary. query2 is only a bounded transport/5xx
+  // fallback; it is never rotated into use as a rate-limit workaround.
+  return YAHOO_HOSTS;
+}
+
+async function loadYahooJson<T>(
+  cacheKey: string,
+  pathAndQuery: string,
+  ttlMs: number,
+): Promise<T> {
+  const cached = yahooCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    yahooDiagnostics.cacheHits += 1;
+    yahooCache.delete(cacheKey);
+    yahooCache.set(cacheKey, cached);
+    return cached.value as T;
+  }
+  if (cached) yahooCache.delete(cacheKey);
+  const running = yahooInFlight.get(cacheKey) as Promise<T> | undefined;
+  if (running) {
+    yahooDiagnostics.deduplicatedRequests += 1;
+    return running;
+  }
+
+  const request = (async () => {
+    const errors: string[] = [];
+    const hosts = yahooHostsForRequest();
+    for (let index = 0; index < hosts.length; index += 1) {
+      try {
+        const value = await fetchYahooJsonUrl<T>(`https://${hosts[index]}${pathAndQuery}`);
+        const now = Date.now();
+        for (const [key, entry] of yahooCache) {
+          if (entry.expiresAt <= now) yahooCache.delete(key);
+        }
+        while (yahooCache.size >= YAHOO_MAX_CACHE_ENTRIES) {
+          const oldest = yahooCache.keys().next().value;
+          if (typeof oldest !== 'string') break;
+          yahooCache.delete(oldest);
+        }
+        yahooCache.set(cacheKey, { value, expiresAt: Date.now() + ttlMs });
+        return value;
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+        // A provider 429 applies to the shared Yahoo service/egress identity.
+        // Trying the other hostname is not a legitimate rate-limit bypass.
+        if (error instanceof YahooHttpError && (error.status === 429 || error.status < 500)) throw error;
+        if (index + 1 < hosts.length) {
+          yahooDiagnostics.transportFallbacks += 1;
+          if (yahooTransportFallbackDelayMs > 0) await sleep(yahooTransportFallbackDelayMs);
+        }
+      }
+    }
+    throw new Error(`YAHOO_BOUNDED_HOSTS_FAILED:${errors.join('|')}`);
+  })().finally(() => yahooInFlight.delete(cacheKey));
+  yahooInFlight.set(cacheKey, request as Promise<unknown>);
+  return request;
+}
+
+/**
+ * Shared entry point for Yahoo endpoints that are not chart helpers. Keeping
+ * them here prevents screeners/profile/FX reads from bypassing the same
+ * process-wide rate gate and 429 cooldown used by the Scanner.
+ */
+export function getGovernedYahooJson<T>(pathAndQuery: string, ttlMs = 30_000): Promise<T> {
+  if (!pathAndQuery.startsWith('/') || pathAndQuery.includes('://')) {
+    return Promise.reject(new Error('YAHOO_PATH_AND_QUERY_REQUIRED'));
+  }
+  const boundedTtlMs = boundedInteger(ttlMs, 30_000, 1_000, 24 * 60 * 60_000);
+  return loadYahooJson<T>(`raw:${pathAndQuery}`, pathAndQuery, boundedTtlMs);
+}
+
+export function yahooProviderDiagnostics() {
+  const snapshot = { ...yahooDiagnostics };
+  return Object.freeze({
+    ...snapshot,
+    minimumStartIntervalMs: yahooMinimumStartIntervalMs,
+    rateLimitCooldownUntil: yahooRateLimitedUntil > Date.now()
+      ? new Date(yahooRateLimitedUntil).toISOString()
+      : null,
+    causeAssessment: Object.freeze({
+      callFrequencyControlled: yahooMinimumStartIntervalMs > 0,
+      localBurstPrevented: snapshot.delayedStarts > 0 || snapshot.deduplicatedRequests > 0,
+      providerLimitConfirmed: snapshot.rateLimitResponses > 0,
+      sharedEgressIpSuspected: snapshot.rateLimitResponses > 0
+        && snapshot.successfulResponses === 0
+        && snapshot.actualRequests <= 2,
+    }),
+  });
+}
+
+export function resetYahooProviderRuntimeForDiagnostics(options: {
+  minimumStartIntervalMs?: number;
+  rateLimitCooldownMs?: number;
+  transportFallbackDelayMs?: number;
+} = {}): void {
+  yahooCache.clear();
+  yahooInFlight.clear();
+  yahooScheduleTail = Promise.resolve();
+  yahooNextStartAt = 0;
+  yahooRateLimitedUntil = 0;
+  yahooMinimumStartIntervalMs = boundedInteger(
+    options.minimumStartIntervalMs,
+    YAHOO_DEFAULT_MINIMUM_START_INTERVAL_MS,
+    0,
+    10_000,
+  );
+  yahooRateLimitCooldownMs = boundedInteger(
+    options.rateLimitCooldownMs,
+    YAHOO_DEFAULT_RATE_LIMIT_COOLDOWN_MS,
+    0,
+    300_000,
+  );
+  yahooTransportFallbackDelayMs = boundedInteger(
+    options.transportFallbackDelayMs,
+    YAHOO_TRANSPORT_FALLBACK_DELAY_MS,
+    0,
+    5_000,
+  );
+  yahooDiagnostics = {
+    actualRequests: 0,
+    successfulResponses: 0,
+    cacheHits: 0,
+    deduplicatedRequests: 0,
+    delayedStarts: 0,
+    transportFallbacks: 0,
+    rateLimitResponses: 0,
+    lastRateLimitAt: null,
+    lastRateLimitBody: null,
+  };
+}
+
+export const resetYahooProviderRuntimeForTests = resetYahooProviderRuntimeForDiagnostics;
 
 export interface YahooChartRequestOptions {
   signal?: AbortSignal;
@@ -101,70 +361,14 @@ function yahooSymbol(ticker: string, options: YahooChartRequestOptions = {}) {
   return clean;
 }
 
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    redirect: 'follow',
-    signal,
-    headers: {
-      accept: 'application/json,text/plain,*/*',
-      'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-      'user-agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(`YAHOO_CHART_HTTP_${res.status}`);
-  }
-
-  return (await res.json()) as T;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function validChart(url: string, signal: AbortSignal): Promise<YahooChartResult> {
-  const data = await fetchJson<any>(url, signal);
+function validChart(data: any, resource: string): YahooChartResult {
   const result = data?.chart?.result?.[0];
-  if (!result?.indicators?.quote?.[0]) throw new Error(`YAHOO_CHART_EMPTY_RESULT:${url}`);
+  if (!result?.indicators?.quote?.[0]) throw new Error(`YAHOO_CHART_EMPTY_RESULT:${resource}`);
   return result as YahooChartResult;
-}
-
-async function hedgedYahooChart(urls: [string, string], signal?: AbortSignal): Promise<YahooChartResult> {
-  if (signal?.aborted) throw signal.reason ?? new Error('YAHOO_CHART_ABORTED');
-  const controllers = [new AbortController(), new AbortController()];
-  let finished = false;
-  let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
-  let rejectDeadline: (reason: unknown) => void = () => {};
-  const deadline = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
-  const abort = (reason: unknown) => {
-    controllers.forEach(controller => controller.abort(reason));
-    rejectDeadline(reason);
-  };
-  const onAbort = () => abort(signal?.reason ?? new Error('YAHOO_CHART_ABORTED'));
-  signal?.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED')), YAHOO_CHART_BUDGET_MS);
-  const first = validChart(urls[0], controllers[0].signal);
-  const second = new Promise<YahooChartResult>((resolve, reject) => {
-    hedgeTimer = setTimeout(() => {
-      if (finished || signal?.aborted) return;
-      validChart(urls[1], controllers[1].signal).then(resolve, reject);
-    }, YAHOO_HEDGE_DELAY_MS);
-  });
-
-  try {
-    return await Promise.race([Promise.any([first, second]), deadline]);
-  } catch (error) {
-    if (error instanceof AggregateError) {
-      const details = error.errors.map((item) => item instanceof Error ? item.message : String(item)).join('|');
-      throw new Error(`YAHOO_HEDGED_PAIR_FAILED:${details}`);
-    }
-    throw error;
-  } finally {
-    finished = true;
-    clearTimeout(timer);
-    clearTimeout(hedgeTimer);
-    signal?.removeEventListener('abort', onAbort);
-    controllers[0].abort();
-    controllers[1].abort();
-  }
 }
 
 async function fetchYahooChart(
@@ -185,24 +389,25 @@ async function fetchYahooChart(
       ]
     : ['range=1mo&interval=1d'];
 
-  const errors: string[] = [];
-  for (const q of query) {
-    try {
-      return await hedgedYahooChart([
-        `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-        `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-      ], signal).then(result => {
-        if (result.meta?.symbol && cleanTicker(result.meta.symbol) !== cleanTicker(symbol)) {
-          throw new Error('YAHOO_PROVIDER_SYMBOL_MISMATCH');
-        }
-        return result;
-      });
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+  const q = query[0];
+  const pathAndQuery = `/v8/finance/chart/${encoded}?${q}`;
+  const interval = params?.interval ?? '1d';
+  const ttlMs = params == null
+    ? 10_000
+    : /m|h/iu.test(interval)
+      ? 30_000
+      : 5 * 60_000;
+  try {
+    const data = await loadYahooJson<any>(`chart:${symbol}:${q}`, pathAndQuery, ttlMs);
+    const result = validChart(data, pathAndQuery);
+    if (result.meta?.symbol && cleanTicker(result.meta.symbol) !== cleanTicker(symbol)) {
+      throw new Error('YAHOO_PROVIDER_SYMBOL_MISMATCH');
     }
+    return result;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`YAHOO_PROVIDER_MARKER_20260711_FAILED:${symbol}:${detail}`);
   }
-
-  throw new Error(`YAHOO_PROVIDER_MARKER_20260711_FAILED:${symbol}:${errors.join('|')}`);
 }
 
 function lastValidIndex(values: Array<number | null | undefined>) {
@@ -511,21 +716,13 @@ export async function getYahooSector(ticker: string): Promise<string | null> {
   if (!clean || isKrTicker(clean) || isQualifiedKrTicker(clean)) return null;
 
   const encoded = encodeURIComponent(yahooSymbol(clean));
-  const urls = [
-    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
-    `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
-  ];
-
-  for (const url of urls) {
-    try {
-      const data = await fetchJson<any>(url);
-      const sector = data?.quoteSummary?.result?.[0]?.assetProfile?.sector;
-      const value = String(sector ?? '').trim();
-      if (value) return value;
-    } catch {
-      // best-effort — try next host / give up silently
-    }
+  const pathAndQuery = `/v10/finance/quoteSummary/${encoded}?modules=assetProfile`;
+  try {
+    const data = await loadYahooJson<any>(`sector:${clean}`, pathAndQuery, 6 * 60 * 60_000);
+    const sector = data?.quoteSummary?.result?.[0]?.assetProfile?.sector;
+    const value = String(sector ?? '').trim();
+    return value || null;
+  } catch {
+    return null;
   }
-
-  return null;
 }

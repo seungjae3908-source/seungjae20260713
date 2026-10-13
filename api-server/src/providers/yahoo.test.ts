@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getIndexQuote, getQuote } from './yahoo';
+import {
+  getIndexQuote,
+  getQuote,
+  resetYahooProviderRuntimeForTests,
+} from './yahoo';
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
@@ -54,6 +58,11 @@ function chartResult(options: {
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
+  resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
+});
+
+test.beforeEach(() => {
+  resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
 });
 
 test('preserves Yahoo regularMarketTime instead of request wall clock', async () => {
