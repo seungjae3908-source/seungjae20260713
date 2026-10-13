@@ -9,6 +9,7 @@ on:
       - api-server/scripts/contract-source-text.mjs
       - api-server/scripts/contract-source-text.test.mjs
       - api-server/scripts/staging-detail-canonical-route-contract.mjs
+      - api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
       - api-server/scripts/verify-ai-preview-diagnostic-contract.mjs
       - api-server/scripts/verify-ai-preview-diagnostic-contract.test.mjs
       - api-server/scripts/verify-staging-detail-canonical-route-contract.mjs
@@ -521,8 +522,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 39 or len(set(auto_signal)) != 39:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_39')
+          if len(auto_signal) != 65 or len(set(auto_signal)) != 65:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_65')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -558,7 +559,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 64
+          test "${#auto_signal[@]}" -eq 65
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
