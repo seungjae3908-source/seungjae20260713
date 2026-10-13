@@ -19,7 +19,10 @@ import {
   readTelegramIntelligenceWorkerHealth,
   startTelegramIntelligenceWorker,
 } from './services/telegram-intelligence-worker.service';
-import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
+import {
+  readSignalIntelligenceTelegramSubscriberRuntimeHealth,
+  startSignalIntelligenceTelegramSubscriber,
+} from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
 import { embeddedTelegramWorkersAllowed } from './lib/telegram-worker-ownership';
 import {
@@ -66,6 +69,7 @@ function healthPayload(route: '/health' | '/api/health') {
     tradeRecoveryWorker: readTradeRecoveryRuntimeHealth(),
     userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
     telegramIntelligenceWorker: readTelegramIntelligenceWorkerHealth(),
+    signalTelegramSubscriber: readSignalIntelligenceTelegramSubscriberRuntimeHealth(),
     time: new Date().toISOString(),
   };
 }
