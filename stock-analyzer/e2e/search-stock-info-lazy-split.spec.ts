@@ -10,9 +10,14 @@ test('search keeps StockInfo outside the static App bootstrap graph until coin m
     'utf8',
   );
 
-  // SearchPage is still part of the App bootstrap graph, so it must not pull
-  // the much larger stock-info page into that graph through a static import.
-  expect(appSource).toContain("import SearchPage from '@/pages/search';");
+  // SearchPage itself is now also route-lazy: an AI Chart cold document
+  // cannot fetch it or transitively load the larger stock-info page.
+  // Keep the route identity exact, while retaining the deeper CoinInfo
+  // lazy/Suspense boundary checked below.
+  expect(appSource).toContain("const loadMarketRankingsPage = () => import('@/pages/search');");
+  expect(appSource).toContain("const MarketRankingsPage = lazy(loadMarketRankingsPage);");
+  expect(appSource).toContain('<Route path="/market-rankings" component={MarketRankingsPage} />');
+  expect(appSource).not.toContain("import SearchPage from '@/pages/search';");
   expect(searchSource).toContain('import { CoinInfo } from "@/components/lazy-coin-info";');
   expect(searchSource).not.toContain('@/pages/stock-info');
 
