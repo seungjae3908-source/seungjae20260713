@@ -303,6 +303,13 @@ export async function fetchUnifiedChartData(input: {
       })()
     : null;
   let alternateStarted = false;
+  let alternateUsed = false;
+  let abandonedPrimaryDrain: Promise<void> | null = null;
+  // Never cancel a speculative request that has already reached the server.
+  // Unused responses are drained without fabricating successful candles.
+  const drainUnusedResponse = (request: Promise<Response>): Promise<void> => request
+    .then(async (response) => { await response.arrayBuffer(); })
+    .then(() => undefined, () => undefined);
   const alternateResponse = alternateHedge && alternateGate
     ? Promise.race([
         waitForSignalAwareDelay(STOCK_ALTERNATE_HEDGE_DELAY_MS, alternateHedge.signal),
@@ -333,6 +340,10 @@ export async function fetchUnifiedChartData(input: {
             ).then(() => ({ kind: 'deadline' as const })),
           ]);
           if (selected.kind === 'deadline') {
+            // The original network request is not intentionally aborted at
+            // selection time. Preserve the outer hard timeout until this
+            // unused response actually finishes or aborts.
+            abandonedPrimaryDrain = drainUnusedResponse(primaryRequest);
             lastError = new UnifiedChartDataError(
               '기본 차트 데이터 경로가 지연되어 대체 경로를 확인합니다.',
               'timeout',
@@ -344,9 +355,12 @@ export async function fetchUnifiedChartData(input: {
           }
           response = selected.value;
         } else {
-          response = index === 1 && alternateResponse
-            ? await alternateResponse
-            : await fetcher(url, requestInit(linked.signal));
+          if (index === 1 && alternateResponse) {
+            alternateUsed = true;
+            response = await alternateResponse;
+          } else {
+            response = await fetcher(url, requestInit(linked.signal));
+          }
         }
         let payload = await parsePayload(response);
         if (!response.ok) {
@@ -382,8 +396,6 @@ export async function fetchUnifiedChartData(input: {
           alternateGate?.release();
           continue;
         }
-        if (!alternateStarted) alternateHedge?.abort();
-        alternateHedge?.cleanup();
         return {
           market: input.market,
           symbol,
@@ -404,8 +416,6 @@ export async function fetchUnifiedChartData(input: {
             alternateGate?.release();
             continue;
           }
-          if (!alternateStarted) alternateHedge?.abort();
-          alternateHedge?.cleanup();
           throw error;
         }
 
@@ -444,9 +454,25 @@ export async function fetchUnifiedChartData(input: {
       true,
     );
   } finally {
+    // If the primary or hedge is still on the wire after the other endpoint
+    // wins, allow it to finish naturally. Retain BOTH original total-deadline
+    // signals until the orphaned response has fully drained. A genuinely
+    // hanging fetch will still be aborted at the strict total timeout.
     if (!alternateStarted) alternateHedge?.abort();
-    alternateHedge?.cleanup();
-    linked.cleanup();
+    const outstanding: Promise<void>[] = [];
+    if (abandonedPrimaryDrain) outstanding.push(abandonedPrimaryDrain);
+    if (alternateStarted && !alternateUsed && alternateResponse) {
+      outstanding.push(drainUnusedResponse(alternateResponse));
+    }
+    if (outstanding.length === 0) {
+      alternateHedge?.cleanup();
+      linked.cleanup();
+    } else {
+      void Promise.allSettled(outstanding).then(() => {
+        alternateHedge?.cleanup();
+        linked.cleanup();
+      });
+    }
   }
 }
 

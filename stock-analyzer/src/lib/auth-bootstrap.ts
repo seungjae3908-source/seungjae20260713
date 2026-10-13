@@ -110,6 +110,10 @@ export async function reconcileInitialSessionProfile(input: {
 }
 
 export function authBootstrapErrorMessage(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : '';
+  if (message.includes('MEMBER_SCHEMA_NOT_READY')) {
+    return '회원 권한 데이터 적용이 완료되지 않았습니다. 관리자에게 회원 데이터 점검을 요청해 주세요.';
+  }
   const code = cause instanceof FiniteDeadlineError ? cause.code : '';
   if (code === 'AUTH_SESSION_TIMEOUT') {
     return '로그인 세션 확인이 지연되고 있습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';

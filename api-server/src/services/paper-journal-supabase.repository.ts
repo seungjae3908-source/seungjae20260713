@@ -77,11 +77,33 @@ function createScopedPaperJournalRepository(
 
     async upsertRecord(userId, record, serverTime) {
       assertOwner(userId);
-      const { data, error } = await client.from(TABLES[record.kind]).upsert({
+      const row = {
         user_id: authenticatedUserId, id: record.id, payload: record.payload,
         version: record.version, deleted_at: record.deletedAt, updated_at: serverTime,
-      }, { onConflict: 'user_id,id' })
+      };
+      if (record.kind === 'account'
+        && (record.id.startsWith('automatic-paper-admin-v2:')
+          || record.id.startsWith('automatic-paper-member-v2:'))) {
+        throw new PaperJournalError('PAPER_FOUR_MARKET_WALLET_SERVER_ONLY',
+          '시장별 자동모의계좌는 일반 동기화로 변경할 수 없습니다.', 403);
+      }
+      const isAutoWallet = record.kind === 'account'
+        && record.id === 'automatic-paper-account-v1';
+      if (isAutoWallet && (record.version !== 1 || record.deletedAt !== null)) {
+        throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_REWRITE_FORBIDDEN',
+          '자동모의매매 기준자본 재설정은 허용되지 않습니다.', 409);
+      }
+      // The DB unique (user_id,id) constraint makes wallet initialization
+      // insert-once, not an upsert that silently overwrites a concurrent epoch.
+      const query = isAutoWallet
+        ? client.from(TABLES[record.kind]).insert(row)
+        : client.from(TABLES[record.kind]).upsert(row, { onConflict: 'user_id,id' });
+      const { data, error } = await query
         .select('id,payload,version,deleted_at,created_at,updated_at').single();
+      if (isAutoWallet && error?.code === '23505') {
+        throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS',
+          '자동모의매매 가상계좌가 이미 존재합니다.', 409);
+      }
       if (error || !data) throw databaseFailure();
       return toRecord(record.kind, data as StorageRow);
     },
@@ -150,6 +172,15 @@ function createScopedPaperJournalRepository(
 
     async deleteAll(userId) {
       assertOwner(userId);
+      const { data: reserved, error: checkError } = await client.from('paper_accounts')
+        .select('id').eq('user_id', authenticatedUserId)
+        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%')
+        .limit(1);
+      if (checkError) throw databaseFailure();
+      if (reserved?.length) {
+        throw new PaperJournalError('PAPER_FOUR_MARKET_CAMPAIGN_DELETE_FORBIDDEN',
+          '시장별 독립 모의계좌와 보존 이력을 일괄 삭제할 수 없습니다.', 409);
+      }
       return {
         account: await deleteRows(client, TABLES.account, authenticatedUserId),
         order: await deleteRows(client, TABLES.order, authenticatedUserId),

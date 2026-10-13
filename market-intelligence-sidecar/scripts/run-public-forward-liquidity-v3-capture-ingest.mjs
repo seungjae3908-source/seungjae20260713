@@ -14,6 +14,13 @@ async function jsonFile(path) {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
+async function optionalJsonFile(args, flag) {
+  const index = args.indexOf(flag);
+  if (index < 0) return null;
+  if (index + 1 >= args.length) throw new Error(`MISSING_ARGUMENT:${flag}`);
+  return jsonFile(args[index + 1]);
+}
+
 function receiptOutputInsideStateRoot(stateRoot, receiptOutput) {
   if (!isAbsolute(stateRoot) || !isAbsolute(receiptOutput)) throw new Error('RECEIPT_OUTPUT_MUST_BE_ABSOLUTE');
   const root = resolve(stateRoot);
@@ -39,6 +46,8 @@ async function main() {
       '  --raw-batch <raw-batch.json>',
       '  --capture-receipt <capture-receipt.json>',
       '  --artifact-receipt <artifact-receipt.json>',
+      '  [--server-canonical-receipt <server-canonical-receipt.json>]',
+      '  [--server-canonical-ingest-authorization <authorization.json>]',
       '  --receipt-output <absolute path inside state root>',
       'No network request or persistent Research mutation is performed by this runner.',
       '',
@@ -71,6 +80,14 @@ async function main() {
       rawBatch: await jsonFile(value(args, '--raw-batch')),
       captureReceipt: await jsonFile(value(args, '--capture-receipt')),
       artifactReceipt: await jsonFile(value(args, '--artifact-receipt')),
+      serverCanonicalReceipt: await optionalJsonFile(
+        args,
+        '--server-canonical-receipt',
+      ),
+      serverCanonicalIngestAuthorization: await optionalJsonFile(
+        args,
+        '--server-canonical-ingest-authorization',
+      ),
     });
     await receiptHandle.writeFile(`${canonicalJson(result)}\n`, 'utf8');
     await receiptHandle.sync();
@@ -83,6 +100,7 @@ async function main() {
       collectorCodeSha: result.collectorCodeSha,
       slotIndex: result.sourceV3Lineage.slotIndex,
       split: result.sourceV3Lineage.split,
+      canonicalSource: result.sourceV3Lineage.canonicalSource,
       insertedObservationCount: result.insertedObservationCount,
       duplicateObservationCount: result.duplicateObservationCount,
       independentSampleCredit: 0,

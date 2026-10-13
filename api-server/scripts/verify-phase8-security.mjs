@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { kiwoomReadonlyRecoverySecurityFailures } from './kiwoom-readonly-recovery-security-contract.mjs';
 
 const repositoryRoot = path.resolve(process.cwd(), '..');
 const failures = [];
@@ -28,7 +29,7 @@ const cryptoAuto = await text('api-server/src/routes/crypto-auto.ts');
 const normalizedCryptoAuto = cryptoAuto.replace(/\r\n/g, '\n');
 const cryptoAutoBlob = createHash('sha1')
   .update(`blob ${Buffer.byteLength(normalizedCryptoAuto)}\0${normalizedCryptoAuto}`).digest('hex');
-assert(cryptoAutoBlob === '4b964ddf329c58da3a43cd6024c1130fd3527b61', 'crypto-auto.ts changed from the verified baseline');
+assert(cryptoAutoBlob === '0f5ade3143235ff7112c455ee5ab517ccdf425d4', 'crypto-auto.ts changed from the safety-hardened verified baseline');
 
 const routes = await text('api-server/src/routes/index.ts');
 const disabledIndex = routes.indexOf("router.use('/crypto/futures/auto', privateExchangeDisabled)");
@@ -43,6 +44,7 @@ assert(legacyStockBlockIndex >= 0 && stocksMountIndex > legacyStockBlockIndex, '
 
 const automationRoute = await text('api-server/src/routes/trade-automation.ts');
 const automationService = await text('api-server/src/services/trade-automation.service.ts');
+const spotLiveCapabilityService = await text('api-server/src/services/spot-live-limited-capability.service.ts');
 const automationRepository = await text('api-server/src/services/trade-automation.repository.ts');
 const orderRecovery = await text('api-server/src/services/trade-order-recovery.service.ts');
 const recoveryWorker = await text('api-server/src/services/trade-recovery-worker.service.ts');
@@ -51,8 +53,11 @@ const aiChatRoute = await text('api-server/src/routes/ai-chat.ts');
 const aiChatService = await text('api-server/src/services/ai-chat.service.ts');
 const automationUi = await text('stock-analyzer/src/components/trade-automation-settings.tsx');
 const unifiedJournalService = await text('api-server/src/services/unified-trade-journal.service.ts');
-assert(automationService.includes("process.env.ORDER_EXECUTION_ENABLED === 'true'")
-  && automationService.includes("process.env.LIVE_TRADING_ACTIVATION_APPROVED === 'true'"), 'live execution does not require both server and explicit activation gates');
+assert(automationService.includes("spotLiveCapabilityEnabled(exchange, 'ORDER_CREATE')")
+  && spotLiveCapabilityService.includes("'ORDER_EXECUTION_ENABLED'")
+  && spotLiveCapabilityService.includes("'LIVE_TRADING_ACTIVATION_APPROVED'")
+  && spotLiveCapabilityService.includes("'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'"),
+  'live execution does not require server, explicit, and spot-limited activation gates');
 assert(recoveryWorker.includes("process.env.TRADE_RECOVERY_WORKER_ENABLED === 'true'")
   && recoveryWorker.includes("process.env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED === 'true'"),
   'trade recovery worker is not guarded by both explicit read-only lookup gates');
@@ -62,8 +67,8 @@ assert(recoveryWorker.includes('ordersSubmitted: 0')
   && recoveryWorker.includes('ordersCancelled: 0')
   && recoveryWorker.includes('privateMutationRequests: 0'),
   'trade recovery worker does not expose zero mutation counters');
-assert(orderRecovery.includes('KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT'),
-  'Kiwoom recovery is not fail-closed while the official status contract is unverified');
+failures.push(...kiwoomReadonlyRecoverySecurityFailures(orderRecovery,
+  await text('api-server/src/services/kiwoom-readonly-order-recovery.service.ts')));
 assert(automationRoute.includes('encryptTradingCredentials'), 'member exchange credentials are not encrypted before storage');
 assert(automationRepository.includes('hasSupabaseServerKey') && automationRepository.includes('secureClient()'),
   'encrypted exchange credentials are not restricted to the server Supabase client');
@@ -101,8 +106,10 @@ const phase8SensitiveFiles = [
   'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
   'stock-analyzer/src/pages/phase8-release-candidate-e2e.tsx',
   'api-server/src/services/trade-automation.service.ts',
+  'api-server/src/services/spot-live-limited-capability.service.ts',
   'api-server/src/services/trade-execution.service.ts',
   'api-server/src/services/trade-order-recovery.service.ts',
+  'api-server/src/services/kiwoom-readonly-order-recovery.service.ts',
   'api-server/src/services/trade-recovery-worker.service.ts',
   'api-server/src/services/trade-automation.repository.ts',
   'api-server/src/routes/trade-automation.ts',

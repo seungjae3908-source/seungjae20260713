@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { parseBitgetReadonlyDiagnosticHeader } from './production-account-readonly-live-qa-diagnostic';
 import {
   INVALID_ACCOUNT_READONLY_RESPONSE,
   isAccountReadonlySnapshotPath,
@@ -56,7 +57,14 @@ function canonicalUserIntegrations() {
     brokerConnectionsAvailable: true,
     brokerConnectionsErrorCode: null,
     brokerMetadataRead: true,
-    telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
+    telegram: {
+      connected: false,
+      status: 'DISCONNECTED',
+      connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
     preferences: {
       ORDER_SUBMITTED: false,
       ORDER_PARTIALLY_FILLED: false,
@@ -102,6 +110,13 @@ function canonicalUserIntegrations() {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: false,
+      personalWorkerEnabled: false,
+      personalWorkerStarted: false,
+      personalWorkerHealthy: false,
+      personalWorkerErrorCode: null,
+      personalWorkerLastTickAt: null,
+      personalWorkerLastConfirmedDeliveryAt: null,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -206,8 +221,104 @@ async function installMalformedAccountSnapshot(page: Page) {
   return financialMutations;
 }
 
+test('Production account QA artifact whitelists Bitget diagnostics and removes credentials and account values', () => {
+  const header = JSON.stringify({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v3/account/settings',
+    endpointFamily: 'UTA_V3',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 400,
+    applicationCode: '40006',
+    sanitizedClassification: 'BITGET_AUTH_FAILED',
+    fallbackAttempted: false,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+    apiKey: 'BITGET_ARTIFACT_KEY_MUST_NOT_LEAK',
+    secretKey: 'BITGET_ARTIFACT_SECRET_MUST_NOT_LEAK',
+    passphrase: 'BITGET_ARTIFACT_PASSPHRASE_MUST_NOT_LEAK',
+    signature: 'BITGET_ARTIFACT_SIGNATURE_MUST_NOT_LEAK',
+    prehash: 'BITGET_ARTIFACT_PREHASH_MUST_NOT_LEAK',
+    accountUid: 'BITGET_ARTIFACT_ACCOUNT_UID_MUST_NOT_LEAK',
+    user_id: 'BITGET_ARTIFACT_USER_ID_MUST_NOT_LEAK',
+    balance: 'BITGET_ARTIFACT_BALANCE_MUST_NOT_LEAK',
+    vaultRowId: 'BITGET_ARTIFACT_VAULT_ROW_MUST_NOT_LEAK',
+  });
+
+  const diagnostic = parseBitgetReadonlyDiagnosticHeader(header);
+  expect(diagnostic).toEqual({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v3/account/settings',
+    endpointFamily: 'UTA_V3',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 400,
+    applicationCode: '40006',
+    sanitizedClassification: 'BITGET_AUTH_FAILED',
+    fallbackAttempted: false,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+  });
+
+  const artifact = JSON.stringify({ providers: [{ provider: 'bitget', bitgetDiagnostic: diagnostic }] });
+  for (const prohibited of [
+    'BITGET_ARTIFACT_KEY_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_SECRET_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_PASSPHRASE_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_SIGNATURE_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_PREHASH_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_ACCOUNT_UID_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_USER_ID_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_BALANCE_MUST_NOT_LEAK',
+    'BITGET_ARTIFACT_VAULT_ROW_MUST_NOT_LEAK',
+    'apiKey',
+    'secretKey',
+    'signature',
+    'prehash',
+    'accountUid',
+    'user_id',
+    'balance',
+    'vaultRowId',
+  ]) {
+    expect(artifact).not.toContain(prohibited);
+  }
+});
+
+test('Production account QA accepts only the sanitized Classic single-account position-mode diagnostic', () => {
+  expect(parseBitgetReadonlyDiagnosticHeader(JSON.stringify({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v2/mix/account/account',
+    endpointFamily: 'CLASSIC',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 200,
+    applicationCode: '00000',
+    sanitizedClassification: 'BITGET_RESPONSE_SHAPE_INVALID',
+    fallbackAttempted: true,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+  }))).toEqual({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v2/mix/account/account',
+    endpointFamily: 'CLASSIC',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 200,
+    applicationCode: '00000',
+    sanitizedClassification: 'BITGET_RESPONSE_SHAPE_INVALID',
+    fallbackAttempted: true,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+  });
+});
+
 test('recognizes only canonical provider snapshot GET routes', () => {
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/toss', 'GET')).toBe(true);
+  expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/kiwoom', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/upbit', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/bitget', 'GET')).toBe(true);
   expect(isAccountReadonlySnapshotPath('/api/accounts/read-only/credentials/toss', 'GET')).toBe(false);
@@ -318,7 +429,8 @@ test('central authenticated transport guards every read-only provider snapshot',
   expect(authFetch).toContain('throw new Error(INVALID_ACCOUNT_READONLY_RESPONSE)');
 
   expect(component).toContain("if (snapshot.connected) return snapshot.stale ? '이전 정상값' : '연결됨';");
-  expect(component).toContain('jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`');
+  expect(component).toContain('const result = await accountSnapshotRequest(provider, controller.signal);');
+  expect(component).toContain('authorizedFetch(`/api/accounts/read-only/${provider}`');
 
   expect(backendContract).toContain('provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;');
   expect(backendContract).toContain('orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;');

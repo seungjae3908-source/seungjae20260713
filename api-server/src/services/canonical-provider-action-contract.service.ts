@@ -21,6 +21,14 @@ export type CanonicalProviderActionContract = {
 export const CANONICAL_PROVIDER_ACTIONS: Readonly<Record<CanonicalTradingProvider, CanonicalProviderActionContract>> = Object.freeze({
   toss: Object.freeze({
     provider: 'toss',
+    markets: ['KR_STOCK'] as const,
+    actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'] as const,
+    directions: ['BUY', 'SELL'] as const,
+    sellRequiresExistingPosition: true,
+    futuresOnly: false,
+  }),
+  kiwoom: Object.freeze({
+    provider: 'kiwoom',
     markets: ['KR_STOCK', 'US_STOCK'] as const,
     actions: ['ACCOUNT_READ', 'HOLDINGS_OR_POSITIONS_READ', 'ORDER_CREATE', 'ORDER_QUERY', 'ORDER_CANCEL', 'ORDER_MODIFY'] as const,
     directions: ['BUY', 'SELL'] as const,

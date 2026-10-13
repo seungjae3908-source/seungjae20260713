@@ -12,7 +12,11 @@ const groups = {
     path.join(root, 'src/services/futures-market-data.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/futures-market-format.test.ts'),
   ],
-  risk: [path.join(root, 'src/services/trading-risk-engine.service.test.ts')],
+  risk: [
+    path.join(root, 'src/services/trading-risk-engine.service.test.ts'),
+    path.join(root, 'src/services/formula-ai-live-exception.service.test.ts'),
+    path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
+  ],
   phase4: [
     path.join(root, 'src/services/futures-contract-rules.service.test.ts'),
     path.join(root, 'src/services/trading-risk-contract-rules.test.ts'),
@@ -47,6 +51,8 @@ const groups = {
   phase9: [
     path.join(root, 'src/services/research-copilot.service.test.ts'),
     path.join(root, 'src/services/research-dual-free-ai.service.test.ts'),
+    path.join(root, 'src/services/research-groq-one-shot-transport.service.test.ts'),
+    path.join(root, 'src/tools/research-workspace-one-shot-v12.test.ts'),
     path.join(root, 'src/services/research-canonical-bundle-offline-publisher.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-bundle-assembler.service.test.mjs'),
     path.join(root, 'src/services/research-canonical-component-registry.service.test.mjs'),
@@ -71,6 +77,8 @@ const groups = {
     path.join(root, 'src/services/scanner-quant-hardening.service.test.ts'),
     path.join(root, 'src/services/scanner-market-profile-overlay.service.test.ts'),
     path.join(root, 'src/services/scanner-ai-provider.service.test.ts'),
+    path.join(root, 'src/services/scanner-ai-evidence-review.service.test.ts'),
+    path.join(root, 'src/services/market-intelligence-ai-analysis.service.test.ts'),
     path.join(root, 'src/services/scanner-backtest-metrics.service.test.ts'),
     path.join(root, 'src/services/scanner-candidate-ranking.service.test.ts'),
     path.join(root, 'src/services/stock-signal-scanner-aggregation.test.ts'),
@@ -83,6 +91,9 @@ const groups = {
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/lib/cache.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
+    path.join(root, 'src/providers/krx-source-pair.test.ts'),
+    path.join(root, 'src/providers/nasdaq-trader.test.ts'),
+    path.join(root, 'src/services/scanner-outcome.test.ts'),
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
@@ -106,8 +117,23 @@ const groups = {
     path.join(root, 'src/services/three-provider-predeploy-readiness.service.test.ts'),
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
+    path.join(root, 'src/services/trade-kiwoom-readonly-contract.test.ts'),
+    path.join(root, 'src/services/kiwoom-readonly-order-recovery.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-ai-review-evidence.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-readiness.service.test.ts'),
+    path.join(root, 'src/services/admin-four-market-paper-capital.service.test.ts'),
+    path.join(root, 'src/services/admin-four-market-paper-readback.service.test.ts'),
+    path.join(root, 'src/services/member-four-market-paper-wallet-migration.test.ts'),
+    // 500k high-water compound/reserve, settled KRW, page-completeness and
+    // daily-loss gates are live-order safety contracts, not optional tests.
+    path.join(root, 'src/services/trade-rule-pack-pilot-capital.service.test.ts'),
+    path.join(root, 'src/services/automatic-live-budget.service.test.ts'),
+    path.join(root, 'src/services/automatic-live-position-isolation.service.test.ts'),
+    path.join(root, 'src/services/public-live-plan-origin.service.test.ts'),
+    path.join(root, 'src/services/automatic-live-preactivation-audit.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-paper-position-bridge.service.test.ts'),
     path.join(root, 'src/services/trade-market-intelligence-integration.test.ts'),
     path.join(root, 'src/services/trade-automation-repository-compatibility.test.ts'),
@@ -117,11 +143,18 @@ const groups = {
     path.join(root, 'src/services/trade-recovery-worker.test.ts'),
     path.join(root, 'src/services/trade-pre-submission-risk.test.ts'),
     path.join(root, 'src/services/trade-execution-pre-submission.test.ts'),
+    path.join(root, 'src/services/trade-execution-toss-verification.test.ts'),
+    path.join(root, 'src/services/trade-order-amendment.service.test.ts'),
+    path.join(root, 'src/services/trade-provider-http-error.service.test.ts'),
+    path.join(root, 'src/services/trading-provider-response.service.test.ts'),
+    path.join(root, 'src/services/bitget-native-protection-readonly.service.test.ts'),
     path.join(root, 'src/services/trade-risk-envelope.test.ts'),
     path.join(root, 'src/services/trade-split-order-planner.test.ts'),
     path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
     path.join(root, 'src/services/trade-split-order-execution.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
+    path.join(root, 'src/routes/stocks-legacy-auto-trade-guard.test.ts'),
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-cancel-race.smoke.test.ts'),
@@ -146,6 +179,23 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
+  // Scope-only Telegram QA. Keep full app, market, chart and provider tests
+  // in their existing required CI; never use this lane as a CI bypass.
+  telegram: [
+    path.join(root, 'src/lib/telegram-worker-ownership.test.ts'),
+    path.join(root, 'src/services/telegram-ai-watch-delivery.service.test.ts'),
+    path.join(root, 'src/services/telegram-notification.service.test.ts'),
+    path.join(root, 'src/services/telegram-test-message.service.test.ts'),
+    path.join(root, 'src/services/telegram-market-brief.service.test.ts'),
+    path.join(root, 'src/services/telegram-readable-format.service.test.ts'),
+    path.join(root, 'src/services/telegram-investment-intelligence.service.test.ts'),
+    path.join(root, 'src/services/scanner-telegram-plan-format.service.test.ts'),
+    path.join(root, 'src/services/member-holdings-telegram-alert.contract.test.ts'),
+    path.join(root, 'src/services/member-holdings-telegram-producer.service.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
+  ],
   search: [
     path.join(root, 'src/services/unified-asset-search.service.test.ts'),
     path.join(root, 'src/services/unified-asset-search-fallback.test.ts'),
@@ -165,6 +215,7 @@ const groups = {
     path.join(root, 'src/routes/portfolio-advisor-canonical.route.test.ts'),
     path.join(root, 'src/routes/bounded-market-scan.smoke.test.ts'),
     path.join(root, 'src/routes/signal-scanner-auth.smoke.test.ts'),
+    path.join(root, 'src/routes/scanner-ai-evidence-review.smoke.test.ts'),
     path.join(root, 'src/routes/kiwoom-rankings-safe.smoke.test.ts'),
     path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
@@ -188,7 +239,7 @@ groups.unit = [
   groups.search[1],
   groups.search[2],
 ];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke', 'telegram'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
@@ -198,11 +249,14 @@ const outputFiles = [];
 try {
   for (const [index, entryPoint] of entries.entries()) {
     const outputFile = path.join(temporaryDirectory, `application-${index}.test.cjs`);
+    const buildStartedAt = performance.now();
+    console.log(`TEST_BUILD_START ${index + 1}/${entries.length} ${path.relative(repositoryRoot, entryPoint)}`);
     await build({
       entryPoints: [entryPoint], outfile: outputFile, bundle: true, platform: 'node',
       format: 'cjs', target: 'node20', sourcemap: 'inline', logLevel: 'warning',
       define: { 'import.meta.env': '{}' },
     });
+    console.log(`TEST_BUILD_PASS ${index + 1}/${entries.length} ${Math.round(performance.now() - buildStartedAt)}ms`);
     outputFiles.push(outputFile);
   }
 

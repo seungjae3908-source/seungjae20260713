@@ -98,11 +98,16 @@ async function buildAtomicSql(projectRef) {
     'api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql',
     'api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql',
     'api-server/supabase/migrations/2026080301_trade_automation_integration.sql',
+    'api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql',
     'api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql',
     'api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql',
     'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
     'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
     'api-server/supabase/migrations/2026082704_member_watchlist_items.sql',
+    'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+    'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
+    'api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql',
+    'api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql',
   ];
   const assertionPaths = [
     'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
@@ -183,6 +188,9 @@ try {
     schema_version: SCHEMA_VERSION,
     atomic_transaction: true,
     idempotency_passes: 2,
+    // Both atomic passes include the administrator V2 canonical-write guard,
+    // and the final SQL assertion requires its authenticated RPC to return TRUE.
+    admin_v2_rls_verified: true,
     production_export_used: false,
     auth_users_copied: 0,
     profile_rows_copied: 0,

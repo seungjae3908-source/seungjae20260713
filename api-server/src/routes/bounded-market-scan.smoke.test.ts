@@ -20,6 +20,7 @@ interface ScanResponseBody {
   partial?: boolean;
   elapsedMs?: number;
   dataState?: string;
+  outcome?: string;
   error?: string;
   cards?: unknown[];
   orderSubmitted?: boolean;
@@ -38,6 +39,7 @@ interface ScanResponseBody {
     partial?: boolean;
     timedOut?: boolean;
     timeoutCount?: number;
+    providerErrorCount?: number;
     elapsedMs?: number;
     deadlineMs?: number;
   };
@@ -327,7 +329,7 @@ test('route deadline returns explicit unavailable partial HTTP 200 and aborts sc
   assert.equal(scannerAborted, true);
 });
 
-test('unreliable provider scan remains strict HTTP 502 and exposes provider health', async () => {
+test('unreliable provider scan returns explicit fail-closed HTTP 200 degradation and exposes provider health', async () => {
   await withServer(
     {
       scan: async () => {
@@ -349,17 +351,46 @@ test('unreliable provider scan remains strict HTTP 502 and exposes provider heal
     },
     async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
-      assert.equal(response.status, 502);
+      assert.equal(response.status, 200);
       const body = await response.json() as ScanResponseBody;
-      assert.equal(body.ok, false);
-      assert.equal(body.error, 'SCAN_PROVIDER_ERROR');
+      assert.equal(body.ok, true);
+      assert.equal(body.error, undefined);
       assert.equal(body.dataState, 'unavailable');
       assert.deepEqual(body.cards, []);
+      assert.equal(body.partial, true);
+      assert.equal(body.outcome, 'REQUEST_TIMEOUT');
+      assert.equal(body.execution?.partial, true);
+      assert.equal(body.execution?.providerErrorCount, 1);
+      assert.equal(body.execution?.timedOut, true);
+      assert.equal(body.elapsedMs, body.execution?.elapsedMs);
+      assert.ok((body.elapsedMs ?? STOCK_SCANNER_ROUTE_DEADLINE_MS) < STOCK_SCANNER_ROUTE_DEADLINE_MS);
       assert.equal(body.providerHealth?.[0]?.provider, 'yahoo');
       assert.equal(body.providerHealth?.[0]?.state, 'TIMEOUT');
       assert.equal(body.providerHealth?.[0]?.timeout, true);
       assert.equal(body.providerHealth?.[0]?.latencyMs, 1_650);
       assert.equal(body.providerHealth?.[0]?.failureReason, 'YAHOO_CHART_BUDGET_EXCEEDED');
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.exchangeRequestSent, false);
+    },
+  );
+});
+
+test('unexpected scanner faults remain HTTP 500 and never gain mutation authority', async () => {
+  await withServer(
+    {
+      scan: async () => {
+        throw new Error('UNEXPECTED_SCANNER_FAULT: invariant failed');
+      },
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/market/scan?market=KR`);
+      assert.equal(response.status, 500);
+      const body = await response.json() as ScanResponseBody;
+      assert.equal(body.ok, false);
+      assert.equal(body.error, 'UNEXPECTED_SCANNER_FAULT');
+      assert.deepEqual(body.cards, []);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.exchangeRequestSent, false);
     },
   );
 });

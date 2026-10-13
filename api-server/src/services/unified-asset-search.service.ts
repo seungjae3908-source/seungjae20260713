@@ -192,9 +192,10 @@ async function loadUsDocuments(): Promise<UnifiedAssetDocument[]> {
     aliases: [],
     baseSymbol: row.ticker,
     quoteCurrency: row.currency || 'USD',
-    active: true,
-    provider: row.source === 'static-catalog' ? 'CATALOG' : 'FINNHUB',
-    dataAsOf,
+    active: row.listingStatus === 'LISTED',
+    provider: row.source === 'static-catalog' ? 'CATALOG' : row.source === 'nasdaq-trader-public-directory' ? 'NASDAQ_TRADER'
+      : row.source === 'last-good-cache' ? 'LAST_GOOD_CACHE' : 'FINNHUB',
+    dataAsOf: row.sourceAsOf ?? dataAsOf,
     liquidityRank: index + 1,
   }));
 }
@@ -289,7 +290,7 @@ const PROVIDER_LOADERS: Record<ProviderKey, () => Promise<UnifiedAssetDocument[]
 function providerForDocument(document: UnifiedAssetDocument): ProviderKey | null {
   const value = document.provider.toUpperCase();
   if (value === 'KRX') return 'krx';
-  if (value === 'FINNHUB' || value === 'CATALOG') return 'finnhub';
+  if (['FINNHUB', 'CATALOG', 'NASDAQ_TRADER', 'LAST_GOOD_CACHE'].includes(value)) return 'finnhub';
   if (value === 'UPBIT') return 'upbit';
   if (value === 'BITGET') return 'bitget';
   return null;
@@ -347,15 +348,15 @@ export async function refreshUnifiedAssetSearchIndex(): Promise<UnifiedAssetSear
       const provider = providerKeys[index];
       if (result.status === 'fulfilled' && result.value.rows.length > 0) {
         const staticUsFallback = provider === 'finnhub'
-          && result.value.rows.every((row) => row.provider.toUpperCase() === 'CATALOG');
+          && result.value.rows.some((row) => ['CATALOG', 'LAST_GOOD_CACHE'].includes(row.provider.toUpperCase()));
         documents.push(...result.value.rows);
         providers.push({
           provider,
           status: staticUsFallback ? 'stale' : 'ok',
           count: result.value.rows.length,
-          dataAsOf: result.value.rows[0]?.dataAsOf ?? nowIso(),
+          dataAsOf: new Date(Math.min(...result.value.rows.map(row => validTimestamp(row.dataAsOf) ?? Date.now()))).toISOString(),
           message: staticUsFallback
-            ? 'Finnhub 심볼 마스터를 사용할 수 없어 저장소 정적 US 카탈로그로 제한된 검색을 제공합니다.'
+            ? '현재 US 종목 목록을 확인하지 못해 정적·과거 목록으로 제한된 검색을 제공합니다. 상장·거래 가능 상태는 미확인입니다.'
             : undefined,
         });
         return;

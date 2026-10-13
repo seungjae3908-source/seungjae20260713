@@ -1,4 +1,7 @@
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
+import {
+  evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
+} from './formula-ai-live-exception.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -64,14 +67,31 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
-  const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
-    now,
-    maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
-  });
+  const formulaAiException = plan.accountMode === 'live'
+    ? evaluateFormulaAiLiveException(plan, now)
+    : null;
+  const paperFormulaException = plan.accountMode === 'paper'
+    && policy.mode === 'automatic' && policy.pilotStage === 'formula-ai-exception'
+    ? evaluateFormulaAiPaperException(plan, now) : null;
+  const profitabilityAttestation = formulaAiException?.allowed
+    ? null
+    : attestLiveTradingProfitability(plan, undefined, {
+      now,
+      maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
+    });
   const economics = plan.accountMode === 'live'
-    ? profitabilityAttestation.serverEconomics
+    ? formulaAiException?.allowed
+      ? plan.economics
+      : profitabilityAttestation?.serverEconomics ?? null
     : plan.economics;
   const economicsPlan = economics === plan.economics ? plan : { ...plan, economics };
+
+  if (formulaAiException?.allowed) {
+    warnings.push('FORMULA_AI_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  }
+  if (paperFormulaException?.allowed) {
+    warnings.push('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  }
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
     add(blockCodes, 'ENTRY_ZONE_INVALID');
@@ -81,32 +101,49 @@ export function evaluateTradingOptimization(
     add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
   }
 
-  if (plan.accountMode === 'live' && !profitabilityAttestation.allowed) {
+  if (plan.accountMode === 'live' && profitabilityAttestation && !profitabilityAttestation.allowed) {
     add(blockCodes, 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
     for (const code of profitabilityAttestation.blockCodes) add(blockCodes, code);
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
+  // Automatic Paper research may rehearse a strategy before historical
+  // profitability exists. A Paper-only simulation does not grant Live
+  // execution authority, and its actual fees, spread, stop and liquidity
+  // guards are still mandatory. Formula AI stage stays stricter: it only
+  // bypasses historical research gates with signed canonical AI evidence.
+  const exploratoryPaperOnly = plan.accountMode === 'paper'
+    && policy.mode === 'automatic' && policy.pilotStage !== 'formula-ai-exception'
+    && plan.economics == null;
+  const historicalEconomicsBypassed =
+    (plan.accountMode === 'live' && formulaAiException?.allowed === true)
+    || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true)
+    || exploratoryPaperOnly;
+  if (exploratoryPaperOnly) {
+    warnings.push('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE');
+  }
   if (liveOrAutomatic) {
-    if (!economics) {
-      add(blockCodes, 'ECONOMICS_REQUIRED');
-    } else {
-      const calibratedAt = Date.parse(economics.calibratedAt);
-      if (!Number.isFinite(calibratedAt) || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
-        add(blockCodes, 'ECONOMICS_STALE');
+    if (!historicalEconomicsBypassed) {
+      if (!economics) {
+        add(blockCodes, 'ECONOMICS_REQUIRED');
+      } else {
+        const calibratedAt = Date.parse(economics.calibratedAt);
+        if (!Number.isFinite(calibratedAt) || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
+          add(blockCodes, 'ECONOMICS_STALE');
+        }
+        if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
+        if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
+        else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
+        if (!positive(economics.profitFactor)) add(blockCodes, 'PROFIT_FACTOR_REQUIRED');
+        else if (economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
+        if (!finite(economics.maxDrawdownPercent) || economics.maxDrawdownPercent < 0) {
+          add(blockCodes, 'STRATEGY_DRAWDOWN_REQUIRED');
+        } else if (economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
+          add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
+        }
+        if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
+        else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
       }
-      if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
-      if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
-      else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
-      if (!positive(economics.profitFactor)) add(blockCodes, 'PROFIT_FACTOR_REQUIRED');
-      else if (economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
-      if (!finite(economics.maxDrawdownPercent) || economics.maxDrawdownPercent < 0) {
-        add(blockCodes, 'STRATEGY_DRAWDOWN_REQUIRED');
-      } else if (economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
-        add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
-      }
-      if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
-      else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
     }
     if (!finite(plan.estimatedSlippagePercent)) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
     else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
@@ -132,10 +169,19 @@ export function evaluateTradingOptimization(
   if (dailyLossKrw >= totalDailyLossBudgetKrw) add(blockCodes, 'TOTAL_DAILY_LOSS_BUDGET');
 
   const stageMaximum = policy.pilotStage === 'approval-20'
-    ? 0 : policy.pilotStage === 'limited-50' ? 50_000 : policy.maxOrderKrw;
+    ? 0
+    : policy.pilotStage === 'limited-50'
+      ? 50_000
+      : policy.pilotStage === 'formula-ai-exception'
+        ? (formulaAiException?.allowed ? policy.maxOrderKrw : 0)
+        : policy.maxOrderKrw;
   if (plan.accountMode === 'live') {
     if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
-    else if (plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
+    else if (policy.pilotStage === 'formula-ai-exception' && !formulaAiException?.allowed) {
+      add(blockCodes, 'PILOT_FORMULA_AI_EXCEPTION_REQUIRED');
+    } else if (plan.estimatedKrw > stageMaximum) {
+      add(blockCodes, 'PILOT_ORDER_LIMIT');
+    }
   }
   if (!policy.riskOptimizationEnabled) add(blockCodes, 'RISK_OPTIMIZATION_DISABLED');
 

@@ -1,6 +1,11 @@
 import { evaluateTradingOptimization } from './trade-automation-optimization.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingAssetClass,
   type TradingMarketSnapshot,
   type TradingPlanInput,
@@ -67,13 +72,34 @@ function plannedOpenRiskKrw(plan: TradingPlanInput) {
   return plan.estimatedKrw * Math.abs(reference - plan.stopPrice) / reference;
 }
 
-export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
+export function normalizeTradingPolicy(
+  value: Partial<TradingPolicy> | null | undefined,
+  requestedMaximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+): TradingPolicy {
   const input = value ?? {};
-  const leverage = Number(input.bitgetLeverage);
-  const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
+  const maximumSingleEntryKrw = requestedMaximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const maximumBitgetLeverage = maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+  const leverage = input.bitgetLeverage == null
+    ? DEFAULT_TRADING_POLICY.bitgetLeverage
+    : Number(input.bitgetLeverage);
+  if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+    throw new Error('BITGET_LEVERAGE_POLICY_INVALID');
+  }
+  const pilotStage = input.pilotStage === 'limited-50'
+    || input.pilotStage === 'validated'
+    || input.pilotStage === 'formula-ai-exception'
     ? input.pilotStage : 'approval-20';
   const totalCapitalKrw = clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw);
-  const maxOrderKrw = clampNumber(input.maxOrderKrw, 5_000, Math.min(1_000_000, totalCapitalKrw), Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw));
+  const maxOrderKrw = clampNumber(
+    input.maxOrderKrw,
+    5_000,
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+  );
   const maxInstrumentKrw = clampNumber(input.maxInstrumentKrw, 5_000, totalCapitalKrw, Math.min(maxOrderKrw, totalCapitalKrw));
   const classLimits = input.maxAssetClassKrw;
   const maxAssetClassKrw: Record<TradingAssetClass, number> = {
@@ -90,7 +116,10 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
   };
   const stockBrokerByMarket = {
     domestic_stock: input.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
-    us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+    // Production execution policy is fixed: US stock orders are Kiwoom-only.
+    // Normalize legacy/user-supplied Toss selections closed instead of carrying
+    // an unsupported route into the automatic worker.
+    us_stock: 'kiwoom' as const,
   };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
@@ -103,11 +132,13 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
       kiwoom: input.exchangeEnabled?.kiwoom ?? DEFAULT_TRADING_POLICY.exchangeEnabled.kiwoom,
+      toss: input.exchangeEnabled?.toss ?? DEFAULT_TRADING_POLICY.exchangeEnabled.toss,
     },
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
       upbit: normalizedList(input.enabledAssets?.upbit, 100).map((item) => item.toUpperCase().replace(/^KRW-/, '')),
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
+      toss: normalizedList(input.enabledAssets?.toss, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
     totalCapitalKrw,
@@ -118,15 +149,21 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     weeklyLossLimitPercent: clampNumber(input.weeklyLossLimitPercent, 0.1, 25, DEFAULT_TRADING_POLICY.weeklyLossLimitPercent),
     maxAssetPercent: clampNumber(input.maxAssetPercent, 1, 30, DEFAULT_TRADING_POLICY.maxAssetPercent),
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
-    maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
+    maxDailyOrders: Number(input.maxDailyOrders) === 0
+      ? 0
+      : Math.round(clampNumber(input.maxDailyOrders, 1, 100, 0)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
-    bitgetLeverage: leverage === 3 ? 3 : 2,
+    // Stored policies from before role-scoped leverage are read fail-closed.
+    // Administrator 4x-7x values remain exact; member values above 3x are
+    // reduced to the member ceiling before any Paper or Live worker sees them.
+    bitgetLeverage: Math.min(leverage, maximumBitgetLeverage) as 2 | 3 | 4 | 5 | 6 | 7,
     riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
     pilotStage,
     riskPerTradePercent: {
       bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
       upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
       kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      toss: clampNumber(input.riskPerTradePercent?.toss, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
     },
     totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
     minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
@@ -171,35 +208,38 @@ export function evaluateTradingPlan(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
+  const riskReducing = isRiskReducingExitPlan(plan);
+  if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
-  if (options.emergencyStopped) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
-  if (policy.newEntriesStopped && plan.reduceOnly !== true) add(blockCodes, 'NEW_ENTRIES_STOPPED');
-  if (!finitePositive(plan.estimatedKrw) || plan.estimatedKrw > policy.maxOrderKrw) add(blockCodes, 'MAX_ORDER_AMOUNT');
-  if (snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
-  if (Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
-  if (snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
+  if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
+  if (policy.newEntriesStopped && !riskReducing) add(blockCodes, 'NEW_ENTRIES_STOPPED');
+  if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
+  if (!riskReducing && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
+  if (!riskReducing && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
+  if (!riskReducing && snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
-  if (snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100 > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
+  if (!riskReducing && snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100 > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
 
   const accountExposureKrw = finiteNonNegative(snapshot.accountExposureKrw) ? snapshot.accountExposureKrw : null;
-  if (accountExposureKrw != null && accountExposureKrw + plan.estimatedKrw > capitalBase) add(blockCodes, 'ACCOUNT_EXPOSURE_LIMIT');
+  if (!riskReducing && accountExposureKrw != null && accountExposureKrw + plan.estimatedKrw > capitalBase) add(blockCodes, 'ACCOUNT_EXPOSURE_LIMIT');
   const instrumentExposureKrw = finiteNonNegative(snapshot.instrumentExposureKrw) ? snapshot.instrumentExposureKrw : 0;
-  if (instrumentExposureKrw + plan.estimatedKrw > policy.maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
+  if (!riskReducing && instrumentExposureKrw + plan.estimatedKrw > policy.maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
   const strategyExposureKrw = finiteNonNegative(snapshot.strategyExposureKrw) ? snapshot.strategyExposureKrw : null;
   const strategyLimitKrw = capitalBase * policy.maxAssetPercent / 100;
-  if (strategyExposureKrw != null && strategyExposureKrw + plan.estimatedKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
+  if (!riskReducing && strategyExposureKrw != null && strategyExposureKrw + plan.estimatedKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
   const assetClass = assetClassForPlan(plan);
   const classExposure = finiteNonNegative(snapshot.assetClassExposureKrw) ? snapshot.assetClassExposureKrw : 0;
-  if (classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+  if (!riskReducing && classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
 
   const openRiskKrw = finiteNonNegative(snapshot.openRiskKrw) ? snapshot.openRiskKrw : null;
   const thisPlanRiskKrw = plannedOpenRiskKrw(plan);
   const openRiskLimitKrw = capitalBase * policy.totalDailyLossLimitPercent / 100;
-  if (openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
+  if (!riskReducing && openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
 
-  if (snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
-  if (snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
-  if (snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
+  if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
+  if (!riskReducing && policy.maxDailyOrders > 0
+    && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
+  if (!riskReducing && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
 
   const nowMs = Date.now();
@@ -222,48 +262,55 @@ export function evaluateTradingPlan(
       if (!Number.isFinite(declaredDelayMs) || declaredDelayMs < 0 || declaredDelayMs > MAX_DATA_DELAY_MS) add(blockCodes, 'MARKET_DATA_DELAYED');
     }
   }
-  if (Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) {
+  if (!riskReducing && Math.abs(snapshot.oneMinuteMovePercent) >= MAX_ONE_MINUTE_MOVE_PERCENT) {
     add(blockCodes, 'FAST_MOVE_DETECTED');
     add(blockCodes, 'ONE_MINUTE_VOLATILITY');
   }
-  if (snapshot.spreadPercent > MAX_SPREAD_PERCENT) add(blockCodes, 'SPREAD_TOO_WIDE');
-  if (snapshot.orderbookGapPercent > MAX_ORDERBOOK_GAP_PERCENT) add(blockCodes, 'ORDERBOOK_GAP');
-  if (finiteNonNegative(snapshot.estimatedSlippagePercent)
+  if (!riskReducing && snapshot.spreadPercent > MAX_SPREAD_PERCENT) add(blockCodes, 'SPREAD_TOO_WIDE');
+  if (!riskReducing && snapshot.orderbookGapPercent > MAX_ORDERBOOK_GAP_PERCENT) add(blockCodes, 'ORDERBOOK_GAP');
+  if (!riskReducing && finiteNonNegative(snapshot.estimatedSlippagePercent)
     && snapshot.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'ESTIMATED_SLIPPAGE_LIMIT');
-  if (finiteNonNegative(plan.averageSpreadPercent)
+  if (!riskReducing && finiteNonNegative(plan.averageSpreadPercent)
     && plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_LIMIT');
-  if (finiteNonNegative(snapshot.correlatedExposurePercent)
+  if (!riskReducing && finiteNonNegative(snapshot.correlatedExposurePercent)
     && snapshot.correlatedExposurePercent > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
-  if (finiteNonNegative(snapshot.availableLiquidityKrw)
+  if (!riskReducing && finiteNonNegative(snapshot.availableLiquidityKrw)
     && snapshot.availableLiquidityKrw < plan.estimatedKrw) add(blockCodes, 'LIQUIDITY_LIMIT');
   if (!plan.strategyId.trim() || !plan.signalId.trim()) add(blockCodes, 'SIGNAL_ID_REQUIRED');
 
-  if (policy.mode === 'automatic' && policy.automaticEnabled) {
+  if (policy.mode === 'automatic' && policy.automaticEnabled && !riskReducing) {
     const assetClass = assetClassForPlan(plan);
     if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
     if (assetClass === 'domestic_stock' || assetClass === 'us_stock') {
       const selectedBroker = policy.stockBrokerByMarket?.[assetClass] ?? 'kiwoom';
-      const planBroker = plan.stockBroker ?? 'kiwoom';
+      const planBroker = plan.stockBroker ?? (plan.exchange === 'toss' ? 'toss' : 'kiwoom');
       if (planBroker !== selectedBroker) add(blockCodes, 'STOCK_BROKER_MISMATCH');
+      if (plan.exchange !== planBroker) add(blockCodes, 'STOCK_EXECUTION_PROVIDER_MISMATCH');
     } else if (plan.stockBroker != null) {
       add(blockCodes, 'STOCK_BROKER_NOT_APPLICABLE');
     }
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
     if (policy.enabledAssets[plan.exchange].length > 0 && !policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
-    if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
-    if (plan.accountMode !== 'paper' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
+    // A blank list is NOT a wildcard for automatic Paper or Live plans.
+    // Require an explicit server-stored allowlist even when a caller bypasses
+    // the member background Worker and invokes the canonical order API.
+    if (policy.enabledStrategies.length === 0 || !policy.enabledStrategies.includes(plan.strategyId)) {
+      add(blockCodes, 'STRATEGY_NOT_ENABLED');
+    }
+    if (plan.accountMode !== 'paper' && plan.accountMode !== 'live' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
-    if (plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
-    if (plan.marginMode !== 'crossed' && plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_MARGIN_MODE_REQUIRED');
-    if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
+    if (!Number.isInteger(plan.leverage) || (plan.leverage ?? 0) < 2 || (plan.leverage ?? 0) > 7) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
+    if (Number.isInteger(plan.leverage) && (plan.leverage ?? 0) > policy.bitgetLeverage) add(blockCodes, 'BITGET_LEVERAGE_POLICY_LIMIT');
+    if (plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_ISOLATED_MARGIN_REQUIRED');
+    if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !riskReducing) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
     const requiredMargin = plan.estimatedKrw / Math.max(1, plan.leverage ?? 1);
-    if (snapshot.availableBalance < requiredMargin) add(blockCodes, 'INSUFFICIENT_MARGIN');
-    if (finitePositive(snapshot.liquidationDistancePercent) && snapshot.liquidationDistancePercent <= MIN_LIQUIDATION_DISTANCE_PERCENT) add(blockCodes, 'BITGET_LIQUIDATION_RISK');
+    if (!riskReducing && snapshot.availableBalance < requiredMargin) add(blockCodes, 'INSUFFICIENT_MARGIN');
+    if (!riskReducing && finitePositive(snapshot.liquidationDistancePercent) && snapshot.liquidationDistancePercent <= MIN_LIQUIDATION_DISTANCE_PERCENT) add(blockCodes, 'BITGET_LIQUIDATION_RISK');
   }
   if (plan.exchange === 'upbit') {
     if (plan.market !== 'KRW' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'UPBIT_SPOT_ONLY');
@@ -274,25 +321,39 @@ export function evaluateTradingPlan(
     if (plan.orderType === 'limit' && finitePositive(plan.limitPrice) && !isAlignedToStep(plan.limitPrice, upbitKrwPriceStep(plan.limitPrice))) add(blockCodes, 'UPBIT_PRICE_TICK');
   }
   if (plan.exchange === 'kiwoom') {
-    const stockMarketAllowed = plan.accountMode === 'paper'
-      ? plan.market === 'KR' || plan.market === 'US'
-      : plan.market === 'KR';
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
     if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
+    if (plan.market === 'US' && !['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? ''))) {
+      add(blockCodes, 'KIWOOM_US_EXCHANGE_REQUIRED');
+    }
   }
-  if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
+  if (plan.exchange === 'toss') {
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
+    if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
+    if (plan.market === 'KR' && (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0)) {
+      add(blockCodes, 'TOSS_KR_QUANTITY_INVALID');
+    }
+    if (plan.market === 'US' && plan.quantity != null && !finitePositive(plan.quantity)) add(blockCodes, 'TOSS_US_QUANTITY_INVALID');
+    if (plan.quoteAmount != null && (plan.market !== 'US' || plan.side !== 'buy' || plan.orderType !== 'market')) {
+      add(blockCodes, 'TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+    }
+    if (plan.quantity == null && plan.quoteAmount == null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+    if (plan.quantity != null && plan.quoteAmount != null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_EXCLUSIVE');
+  }
+  if (!riskReducing && snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
   try {
     normalizeSplitRatios(plan.splitRatios);
   } catch (error) {
     if (error instanceof TradeSplitOrderPlanError) add(blockCodes, error.code);
     else add(blockCodes, 'TRADE_SPLIT_RATIO_INVALID');
   }
-  if (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice)) add(blockCodes, 'EXIT_PLAN_REQUIRED');
+  if (!riskReducing && (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice))) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');
 
-  const hasOptimizationContext = plan.accountMode === 'live'
+  const hasOptimizationContext = !riskReducing && (plan.accountMode === 'live'
     || plan.economics != null || plan.entryPrice != null || plan.entryZoneLow != null
-    || plan.entryZoneHigh != null || plan.estimatedSlippagePercent != null || plan.averageSpreadPercent != null;
+    || plan.entryZoneHigh != null || plan.estimatedSlippagePercent != null || plan.averageSpreadPercent != null);
   const optimization = hasOptimizationContext ? evaluateTradingOptimization(plan, policy) : undefined;
   if (optimization) {
     for (const code of optimization.blockCodes) add(blockCodes, code);

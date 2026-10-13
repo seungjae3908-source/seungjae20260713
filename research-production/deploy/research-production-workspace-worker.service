@@ -1,0 +1,35 @@
+[Unit]
+Description=Investment Research approved video durable worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-production.env
+EnvironmentFile=-/etc/investment-research/research-providers.env
+ExecStart=/usr/bin/env node packages/external-research/scripts/run-research-worker-v9.mjs --root /var/lib/investment-research-production/workspace-worker --worker-id production-video-v9 --loop --poll-ms 5000
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

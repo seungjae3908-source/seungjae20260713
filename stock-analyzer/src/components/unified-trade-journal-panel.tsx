@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, BarChart3, BookOpenCheck, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
+import { AlertTriangle, BarChart3, BookOpenCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { JournalPaperLinkageSummary } from '@/components/journal-paper-linkage-summary';
 import {
   getUnifiedTradeJournal,
+  importAccountHistory,
   type UnifiedJournalFilters,
   type UnifiedTradeCycle,
   type UnifiedTradeJournal,
+  type UnifiedTradeMarket,
+  type UnifiedTradeSource,
 } from '@/lib/paper-journal-sync';
 import {
   USER_CONTEXT_SOURCE_KO,
@@ -19,14 +23,87 @@ import {
 
 type Props = {
   loadApi?: typeof getUnifiedTradeJournal;
+  forcedMarket?: UnifiedJournalFilters['market'] & UnifiedTradeMarket;
+  forcedSource?: UnifiedJournalFilters['source'] & UnifiedTradeSource;
+  title?: string;
+  description?: string;
 };
 
 const controlClass = 'min-h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm';
 const buttonClass = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-border px-3 text-sm font-semibold disabled:opacity-50';
 const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
+type JournalBook = 'ALL' | 'MANUAL' | 'AUTO_REAL' | 'AUTO_PAPER';
+
+function journalBookForTrade(trade: UnifiedTradeCycle): Exclude<JournalBook, 'ALL'> {
+  if (trade.source === 'APP_AUTO') return 'AUTO_REAL';
+  if (trade.source === 'APP_PAPER' || trade.source === 'APP_SHADOW') return 'AUTO_PAPER';
+  return 'MANUAL';
+}
+
+function dateInside(trade: UnifiedTradeCycle, start: string, end: string) {
+  const at = Date.parse(trade.closedAt ?? trade.openedAt);
+  if (!Number.isFinite(at)) return false;
+  const startMs = start ? Date.parse(`${start}T00:00:00+09:00`) : Number.NEGATIVE_INFINITY;
+  const endMs = end ? Date.parse(`${end}T23:59:59.999+09:00`) : Number.POSITIVE_INFINITY;
+  return at >= startMs && at <= endMs;
+}
+
+function excelEscape(value: unknown) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function downloadExcelJournal(trades: UnifiedTradeCycle[], book: JournalBook, periodStart: string, periodEnd: string) {
+  const headers = ['구분','시장','종목','방향','상태','진입시각','청산시각','진입평균가','청산평균가','수량','순손익','순수익률(%)','수수료','세금','전략','중개사'];
+  const rows = trades.map((trade) => [
+    journalBookForTrade(trade) === 'MANUAL' ? '직접매매' : journalBookForTrade(trade) === 'AUTO_REAL' ? '자동매매' : '자동모의매매',
+    userFacingCodeLabel(trade.market, USER_MARKET_KO),
+    trade.symbol,
+    userFacingCodeLabel(trade.positionSide, USER_DIRECTION_KO),
+    userFacingCodeLabel(trade.status, USER_STATUS_KO),
+    trade.openedAt,
+    trade.closedAt ?? '',
+    trade.entryPrice,
+    trade.exitPrice ?? '',
+    trade.totalQuantity,
+    trade.netPnl ?? '',
+    trade.netReturnPercent ?? '',
+    trade.fees ?? '',
+    trade.tax ?? '',
+    trade.strategy ?? '',
+    trade.broker,
+  ]);
+  const table = [headers, ...rows].map((row) => `<tr>${row.map((cell) => `<td>${excelEscape(cell)}</td>`).join('')}</tr>`).join('');
+  const html = `<html><head><meta charset="utf-8"></head><body><table>${table}</table></body></html>`;
+  const blob = new Blob(['\ufeff', html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  const date = new Date().toISOString().slice(0, 10);
+  link.download = `매매일지_${book}_${periodStart || '전체'}_${periodEnd || date}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+}
 
 function metric(value: number | null, suffix = '') {
   return value == null ? 'N/A' : `${number.format(value)}${suffix}`;
+}
+
+function evidenceTime(value: string | null | undefined) {
+  if (!value) return 'N/A';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return 'N/A';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(time));
 }
 
 function money(value: number | null | undefined, currency: string) {
@@ -72,11 +149,32 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <Metric label="청산 평균가" value={trade.exitPrice == null ? '진행 중' : money(trade.exitPrice, trade.currency)} />
       <Metric label="순손익" value={money(trade.netPnl, trade.currency)} />
       <Metric label="순수익률" value={metric(trade.netReturnPercent, '%')} />
+      {trade.providerReportedNetPnl != null ? <Metric label="공급자 보고 순손익" value={money(trade.providerReportedNetPnl, trade.currency)} /> : null}
       <Metric label="비용" value={costMoney(trade)} />
       <Metric label="성과 점수" value={String(trade.review.performanceScore)} />
       <Metric label="매매 품질" value={`${trade.review.qualityScore} / 100`} />
       <Metric label="보유 시간" value={trade.holdingTimeMs == null ? '진행 중' : `${number.format(trade.holdingTimeMs / 60_000)}분`} />
     </div>
+
+    <section className="min-w-0 rounded-xl border border-primary/20 bg-primary/5 p-3" data-testid="unified-journal-canonical-lineage">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-bold">Canonical 거래 연결</h4>
+          <p className="mt-1 text-[10px] text-muted-foreground">신호 → 분석 스냅샷 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
+        </div>
+        <span className="rounded-full border border-primary/20 bg-background px-2 py-1 text-[10px] font-extrabold text-primary">
+          {trade.canonicalLineage ? '연결됨' : '미확인'}
+        </span>
+      </div>
+      <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+        <Metric label="signalId" value={trade.canonicalLineage?.signalIds.join(' · ') || 'N/A'} />
+        <Metric label="snapshotId" value={trade.technicalSnapshot.snapshotId || 'N/A'} />
+        <Metric label="planId" value={trade.canonicalLineage?.planIds.join(' · ') || 'N/A'} />
+        <Metric label="orderId" value={trade.canonicalLineage?.orderIds.join(' · ') || 'N/A'} />
+        <Metric label="fillId" value={trade.canonicalLineage?.fillIds.join(' · ') || 'N/A'} />
+        <Metric label="journalId" value={trade.id} />
+      </div>
+    </section>
 
     <div className="grid min-w-0 gap-3 lg:grid-cols-3">
       <section className="min-w-0 rounded-xl border border-border p-3">
@@ -146,6 +244,8 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       {snapshot.contextSource === 'NO_PRE_TRADE_CONTEXT'
         ? <p className="mt-2 text-xs text-muted-foreground">진입 전 저장된 분석 정보가 없습니다. 현재 데이터로 과거 지표를 꾸며내지 않았습니다.</p>
         : <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Metric label="스냅샷 ID" value={snapshot.snapshotId || 'N/A'} />
+          <Metric label="증거 기준시각" value={evidenceTime(snapshot.capturedAt)} />
           <Metric label="시간봉" value={snapshot.timeframe ?? 'N/A'} />
           <Metric label="RSI" value={metric(snapshot.rsi)} />
           <Metric label="신호 점수" value={metric(snapshot.signalScore)} />
@@ -168,17 +268,44 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
   </article>;
 }
 
-export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: Props) {
-  const [filters, setFilters] = useState<UnifiedJournalFilters>({ range: '30D', market: 'ALL', source: 'ALL', grade: 'ALL' });
+export function UnifiedTradeJournalPanel({
+  loadApi = getUnifiedTradeJournal,
+  forcedMarket,
+  forcedSource,
+  title = '통합 매매일지·매매 품질 복기',
+  description = '수익 성과와 매매 과정의 품질을 분리해 결정론적으로 평가합니다.',
+}: Props) {
+  const [filters, setFilters] = useState<UnifiedJournalFilters>({
+    range: '30D',
+    market: forcedMarket ?? 'ALL',
+    source: forcedSource ?? 'ALL',
+    grade: 'ALL',
+  });
   const [bindingFilter, setBindingFilter] = useState<'ALL'|'VERIFIED'|'MISMATCH'|'NOT_AVAILABLE'>('ALL');
   const [triggerFilter, setTriggerFilter] = useState<'ALL'|'VERIFIED'|'UNVERIFIED'>('ALL');
   const [searchText, setSearchText] = useState('');
+  const [journalBook, setJournalBook] = useState<JournalBook>('ALL');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const auth = useAuth();
+  const canSyncJournal = auth.can('canAccessJournalSync');
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMessage, setImportMessage] = useState('');
   const [data, setData] = useState<UnifiedTradeJournal | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [refreshVersion, setRefreshVersion] = useState(0);
   const requestKey = JSON.stringify(filters);
+
+  useEffect(() => {
+    setFilters((current) => {
+      const nextMarket = forcedMarket ?? current.market ?? 'ALL';
+      const nextSource = forcedSource ?? current.source ?? 'ALL';
+      if (current.market === nextMarket && current.source === nextSource) return current;
+      return { ...current, market: nextMarket, source: nextSource };
+    });
+  }, [forcedMarket, forcedSource]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -198,6 +325,8 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     if (!data) return [];
     const query = searchText.trim().toLowerCase();
     return data.trades.filter((trade) => {
+      if (journalBook !== 'ALL' && journalBookForTrade(trade) !== journalBook) return false;
+      if (!dateInside(trade, periodStart, periodEnd)) return false;
       const bindingStatus = trade.canonicalResearchBinding?.status ?? 'NOT_AVAILABLE';
       if (bindingFilter !== 'ALL') {
         if (trade.source !== 'APP_PAPER') return false;
@@ -223,7 +352,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
       ].join(' ').toLowerCase();
       return searchable.includes(query);
     });
-  }, [bindingFilter, data, searchText, triggerFilter]);
+  }, [bindingFilter, data, journalBook, periodEnd, periodStart, searchText, triggerFilter]);
   const bindingIssues = useMemo(() => {
     if (!data) return [];
     const groups = new Map<string, {
@@ -251,6 +380,21 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     [selectedId, visibleTrades],
   );
 
+  async function importExistingHistory() {
+    setImportBusy(true);
+    setImportMessage('');
+    try {
+      const result = await importAccountHistory(filters.range ?? '30D');
+      const capped = result.providerHistory?.rangeCapped ? ' · Provider 제공범위 상한 적용' : '';
+      setImportMessage(`가져오기 완료 · 신규 ${result.imported}건 · 기존 ${result.unchanged}건 · 실패 ${result.failed}건${capped}`);
+      setRefreshVersion((value) => value + 1);
+    } catch (cause) {
+      setImportMessage(cause instanceof Error ? cause.message : '기존 거래내역을 가져오지 못했습니다.');
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   function change(name: keyof UnifiedJournalFilters, value: string) {
     setFilters((current) => ({ ...current, [name]: value }));
   }
@@ -259,12 +403,20 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
     <div className="min-w-0 rounded-2xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="flex items-center gap-2 font-extrabold"><BookOpenCheck className="h-4 w-4" />통합 매매일지·매매 품질 복기</h2>
-          <p className="mt-1 text-xs text-muted-foreground">수익 성과와 매매 과정의 품질을 분리해 결정론적으로 평가합니다.</p>
+          <h2 className="flex items-center gap-2 font-extrabold"><BookOpenCheck className="h-4 w-4" />{title}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
         </div>
-        <button type="button" className={buttonClass} disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)} data-testid="unified-journal-refresh">
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}새로고침
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={buttonClass} disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)} data-testid="unified-journal-refresh">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}새로고침
+          </button>
+          {canSyncJournal ? <button type="button" className={buttonClass} disabled={busy || importBusy} onClick={() => void importExistingHistory()} data-testid="unified-journal-import-history">
+            {importBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookOpenCheck className="h-4 w-4" />}기존 거래 가져오기
+          </button> : null}
+          <button type="button" className={buttonClass} disabled={!visibleTrades.length} onClick={() => downloadExcelJournal(visibleTrades, journalBook, periodStart, periodEnd)} data-testid="unified-journal-excel">
+            <FileSpreadsheet className="h-4 w-4" />엑셀 다운로드
+          </button>
+        </div>
       </div>
 
       <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
@@ -272,14 +424,57 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
           <AlertTriangle className="mr-2 inline h-4 w-4" />Toss 실조회: {data?.toss.liveReadIntegration ?? '확인 중'} · 비용 상태 미확인으로 실 API 호출 0건
         </p>
         <p className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 font-semibold" data-testid="journal-zero-cost-status">
-          <ShieldCheck className="mr-2 inline h-4 w-4" />외부 AI 비활성 · 신규 비용 {data?.safety.finalCostDelta ?? '0_KRW'} · 주문/취소/정정 0건
+          <ShieldCheck className="mr-2 inline h-4 w-4" />외부 AI 비활성 · 신규 비용 {data?.safety.finalCostDelta ?? '0_KRW'} · 주문/취소/정정 0건 · 실계좌 조회 {data?.safety.privateBrokerRequests ?? 0}회
         </p>
+      </div>
+
+      {data?.liveAccountHistory ? <section className="mt-3 rounded-xl border border-border bg-muted/20 p-3 text-xs" data-testid="live-account-history-status">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-extrabold">실계좌 거래이력 · READ-ONLY</p>
+          <p className="font-semibold text-muted-foreground">최근 {data.liveAccountHistory.effectiveDays}일 · 저장 안 함</p>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {data.liveAccountHistory.providers.map((provider) => <span key={provider.provider} className="rounded-full border border-border bg-background px-2 py-1 font-semibold">
+            {provider.provider.toUpperCase()} {provider.status} · {provider.records}건 · 요청 {provider.privateProviderRequests}회
+          </span>)}
+        </div>
+        {data.liveAccountHistory.rangeCapped ? <p className="mt-2 font-semibold text-warning">90일/1년/전체 선택 시 실계좌 API 이력은 최근 30일까지만 합칩니다. 기존 저장 일지는 선택 기간 전체를 유지합니다.</p> : null}
+        {data.liveAccountHistory.truncated ? <p className="mt-1 font-semibold text-warning">Provider 요청 상한 또는 일부 정규화 실패로 실계좌 이력이 부분 수집 상태입니다.</p> : null}
+        {Array.isArray(data.liveAccountHistory.realizedEvidence) && data.liveAccountHistory.realizedEvidence.length ? <div className="mt-3 rounded-lg border border-border bg-background p-3" data-testid="kiwoom-realized-evidence">
+          <p className="font-extrabold">Kiwoom 국내 현금 실현손익 증거 · {data.liveAccountHistory.realizedEvidence.length}건</p>
+          <p className="mt-1 text-[10px] font-semibold text-muted-foreground">일별·종목별 공급자 aggregate입니다. 개별 체결시간을 만들지 않으며 canonical 승률·Profit Factor·평균수익률 통계에는 넣지 않습니다.</p>
+          <div className="mt-2 grid gap-1">
+            {data.liveAccountHistory.realizedEvidence.slice(0, 5).map((row) => <div key={`${row.date}:${row.symbol}`} className="flex flex-wrap justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5">
+              <span className="font-semibold">{row.date.slice(0,4)}-{row.date.slice(4,6)}-{row.date.slice(6,8)} · {row.symbol}</span>
+              <span className="tabular-nums">공급자 손익 {row.providerReportedPnl == null ? '미확인' : `${number.format(row.providerReportedPnl)} KRW`}</span>
+            </div>)}
+          </div>
+        </div> : null}
+      </section> : null}
+
+      {importMessage ? <p role="status" className="mt-3 rounded-xl border border-border bg-muted/30 p-3 text-xs font-semibold" data-testid="unified-journal-import-message">{importMessage}</p> : null}
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="unified-journal-book-tabs">
+        {([
+          ['ALL', '전체'],
+          ['MANUAL', '직접매매'],
+          ['AUTO_REAL', '자동매매'],
+          ['AUTO_PAPER', '자동모의매매'],
+        ] as const).map(([key, label]) => (
+          <button key={key} type="button" onClick={() => setJournalBook(key)} aria-pressed={journalBook === key}
+            className={`${buttonClass} ${journalBook === key ? 'border-primary bg-primary/10 text-primary' : ''}`}
+            data-testid={`journal-book-${key.toLowerCase()}`}>{label}</button>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" data-testid="unified-journal-custom-period">
+        <label className="grid gap-1 text-xs">시작일<input type="date" className={controlClass} value={periodStart} onChange={(event) => { setPeriodStart(event.target.value); if (event.target.value) setFilters((current) => ({ ...current, range: 'ALL' })); }} /></label>
+        <label className="grid gap-1 text-xs">종료일<input type="date" className={controlClass} value={periodEnd} onChange={(event) => { setPeriodEnd(event.target.value); if (event.target.value) setFilters((current) => ({ ...current, range: 'ALL' })); }} /></label>
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="grid min-w-0 gap-1 text-xs">기간<select className={controlClass} value={filters.range} onChange={(event) => change('range', event.target.value)}><option value="TODAY">오늘</option><option value="7D">7일</option><option value="30D">30일</option><option value="90D">90일</option><option value="1Y">1년</option><option value="ALL">전체</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
-        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">시장<select className={controlClass} value={filters.market} disabled={Boolean(forcedMarket)} onChange={(event) => change('market', event.target.value)}><option value="ALL">전체 시장</option><option value="KR_STOCK">{USER_MARKET_KO.KR_STOCK}</option><option value="US_STOCK">{USER_MARKET_KO.US_STOCK}</option><option value="CRYPTO_SPOT">{USER_MARKET_KO.CRYPTO_SPOT}</option><option value="CRYPTO_FUTURES">{USER_MARKET_KO.CRYPTO_FUTURES}</option></select></label>
+        <label className="grid min-w-0 gap-1 text-xs">출처<select className={controlClass} value={filters.source} disabled={Boolean(forcedSource)} onChange={(event) => change('source', event.target.value)}><option value="ALL">전체</option><option value="TOSS_MANUAL">{USER_TRADE_SOURCE_KO.TOSS_MANUAL}</option><option value="TOSS_API">{USER_TRADE_SOURCE_KO.TOSS_API}</option><option value="UPBIT_API">{USER_TRADE_SOURCE_KO.UPBIT_API}</option><option value="BITGET_API">{USER_TRADE_SOURCE_KO.BITGET_API}</option><option value="KIWOOM_API">{USER_TRADE_SOURCE_KO.KIWOOM_API}</option><option value="APP_MANUAL">{USER_TRADE_SOURCE_KO.APP_MANUAL}</option><option value="APP_PAPER">{USER_TRADE_SOURCE_KO.APP_PAPER}</option><option value="APP_SHADOW">{USER_TRADE_SOURCE_KO.APP_SHADOW}</option><option value="APP_AUTO">{USER_TRADE_SOURCE_KO.APP_AUTO}</option></select></label>
         <label className="grid min-w-0 gap-1 text-xs">품질 등급<select className={controlClass} value={filters.grade} onChange={(event) => change('grade', event.target.value)}><option value="ALL">전체 등급</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></label>
       </div>
 
@@ -450,7 +645,7 @@ export function UnifiedTradeJournalPanel({ loadApi = getUnifiedTradeJournal }: P
             onClick={() => setSelectedId(trade.id)}
           >
             <div className="flex min-w-0 items-start justify-between gap-2"><span className="min-w-0 break-words text-sm font-bold">{trade.symbol}</span><Grade trade={trade} /></div>
-            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{money(trade.netPnl, trade.currency)}</span></div>
+            <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground"><span>{userFacingCodeLabel(trade.source, USER_TRADE_SOURCE_KO)} · {userFacingCodeLabel(trade.status, USER_STATUS_KO)}</span><span>{trade.netPnl == null && trade.providerReportedNetPnl != null ? `공급자 ${money(trade.providerReportedNetPnl, trade.currency)}` : money(trade.netPnl, trade.currency)}</span></div>
             <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-extrabold">
               {trade.source === 'APP_PAPER' ? (
                 <>

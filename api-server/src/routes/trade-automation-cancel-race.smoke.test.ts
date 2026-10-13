@@ -72,7 +72,7 @@ async function close(server: import('node:http').Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test('concurrent HTTP cancel requests submit one provider cancel and reconcile the fill', async () => {
+test('concurrent HTTP cancel requests submit one provider cancel and reconcile the fill', { timeout: 15_000 }, async () => {
   const repository = new InMemoryTradingRepository();
   const { plan, order } = fixtures();
   await repository.savePlan(plan);
@@ -85,7 +85,14 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'OPEN_ORDER_READ,ORDER_CANCEL';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
 
   const { server, baseUrl } = await startServer(repository);
   const nativeFetch = globalThis.fetch;
@@ -121,9 +128,23 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
 
   try {
     const endpoint = `${baseUrl}/api/trade-automation/orders/${order.id}/cancel`;
-    const firstRequest = globalThis.fetch(endpoint, { method: 'POST' });
+    const denied = await globalThis.fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: false }),
+    });
+    assert.equal(denied.status, 409);
+    assert.equal((await denied.json() as { error: string }).error, 'EXPLICIT_CANCEL_CONFIRMATION_REQUIRED');
+    assert.equal(cancelCalls, 0);
+
+    const confirmedRequest = () => globalThis.fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    const firstRequest = confirmedRequest();
     await cancelStarted;
-    const secondResponse = await globalThis.fetch(endpoint, { method: 'POST' });
+    const secondResponse = await confirmedRequest();
     assert.equal(secondResponse.status, 200);
     const secondBody = await secondResponse.json() as {
       order: TradingOrder;
@@ -148,7 +169,14 @@ test('concurrent HTTP cancel requests submit one provider cancel and reconcile t
     delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     delete process.env.ORDER_EXECUTION_ENABLED;
     delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
+    delete process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED;
+    delete process.env.REAL_ORDER_ENABLED;
+    delete process.env.PRIVATE_TRADING_API_ALLOWED;
     delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+    delete process.env.LIVE_TRADING;
+    delete process.env.executionAuthority;
+    delete process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST;
+    delete process.env.SPOT_LIVE_MARKET_ALLOWLIST;
     setTradeAutomationRepositoryFactoryForTests(null);
     await close(server);
   }

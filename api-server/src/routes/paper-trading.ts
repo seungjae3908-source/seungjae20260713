@@ -76,7 +76,7 @@ function acceptedBacktestCandidate(source: BacktestResolvedSource): PaperBacktes
     market: handoff.market as string,
     symbol: handoff.symbol as string,
     timeframe: handoff.timeframe as string,
-    side: handoff.side as 'LONG' | 'SHORT',
+    side: handoff.side as 'BUY' | 'LONG' | 'SHORT',
     leverage: handoff.leverage as number,
     riskPolicyRef: handoff.riskPolicyRef as string,
     costPolicyRef: handoff.costPolicyRef as string,
@@ -189,8 +189,9 @@ export function createPaperTradingRouter(
         }, researchCodeSha()) as BacktestResolvedSource;
         backtestCandidate = acceptedBacktestCandidate(source);
         const requestedSide = action.request.side === 'short' ? 'SHORT' : action.request.side === 'long' ? 'LONG' : null;
+        const expectedSide = backtestCandidate.side === 'BUY' ? 'LONG' : backtestCandidate.side;
         if (String(action.request.symbol ?? '').trim().toUpperCase() !== backtestCandidate.symbol
-          || requestedSide !== backtestCandidate.side || action.request.leverage !== backtestCandidate.leverage) {
+          || requestedSide !== expectedSide || action.request.leverage !== backtestCandidate.leverage) {
           throw new ProductPaperSourceError('BACKTEST_PAPER_ACTION_IDENTITY_MISMATCH', 409);
         }
         action = {

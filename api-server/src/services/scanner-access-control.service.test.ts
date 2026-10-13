@@ -75,31 +75,24 @@ function response(): ScannerResponse {
   };
 }
 
-test('associate and regular receive A-D while S payload and S alert are removed', () => {
-  for (const tier of ['associate', 'regular'] as const) {
-    const filtered = filterScannerResponseForTier(response(), tier);
-    assert.deepEqual(filtered.cards.map((item) => item.signalGrade), ['A', 'D']);
-    assert.deepEqual(filtered.cards.map((item) => item.symbol), ['VISIBLE-A', 'VISIBLE-D']);
-    assert.deepEqual(filtered.alerts.map((item) => item.symbol), ['VISIBLE-A']);
-    assert.equal(filtered.failures.some((item) => item.symbol === 'SECRET-S'), false);
+test('associate, regular and admin receive S payloads and may explicitly request only S', () => {
+  for (const tier of ['associate', 'regular', 'admin'] as const) {
+    const all = filterScannerResponseForTier(response(), tier);
+    assert.deepEqual(all.cards.map((item) => item.signalGrade), ['S', 'A', 'D']);
+    const onlyS = filterScannerResponseForTier(response(), tier, 'S');
+    assert.deepEqual(onlyS.cards.map((item) => item.symbol), ['SECRET-S']);
+    assert.deepEqual(onlyS.alerts.map((item) => item.symbol), ['SECRET-S']);
   }
 });
 
-test('admin receives S and may explicitly request only S', () => {
-  const all = filterScannerResponseForTier(response(), 'admin');
-  assert.deepEqual(all.cards.map((item) => item.signalGrade), ['S', 'A', 'D']);
-  const onlyS = filterScannerResponseForTier(response(), 'admin', 'S');
-  assert.deepEqual(onlyS.cards.map((item) => item.symbol), ['SECRET-S']);
-  assert.deepEqual(onlyS.alerts.map((item) => item.symbol), ['SECRET-S']);
-});
-
-test('grade parser and policy fail closed for S on non-admin roles', () => {
+test('grade parser and policy allow S only for approved member tiers', () => {
   assert.equal(parseScannerGradeQuery(undefined), undefined);
   assert.equal(parseScannerGradeQuery('s'), 'S');
   assert.equal(parseScannerGradeQuery('A'), 'A');
   assert.equal(parseScannerGradeQuery('unknown'), null);
-  assert.equal(canReadScannerGrade('associate', 'S'), false);
-  assert.equal(canReadScannerGrade('regular', 'S'), false);
+  assert.equal(canReadScannerGrade('pending', 'S'), false);
+  assert.equal(canReadScannerGrade('associate', 'S'), true);
+  assert.equal(canReadScannerGrade('regular', 'S'), true);
   assert.equal(canReadScannerGrade('admin', 'S'), true);
   assert.equal(canReadScannerGrade('associate', 'D'), true);
 });

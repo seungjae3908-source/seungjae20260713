@@ -52,6 +52,7 @@ function memberProfile(overrides = {}) {
     status: 'approved',
     membership_level: 'associate',
     is_active: true,
+    permissions_updated_at: '2026-10-08T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -180,6 +181,72 @@ test('browser profile bootstrap overlaps remote identity and RLS profile reads w
   assert.equal(req.member.id, 'member-1');
 });
 
+test('authenticated API requests overlap remote identity and fresh RLS profile reads without weakening either gate', async () => {
+  const auth = deferred();
+  const profile = deferred();
+  const started = [];
+  const req = authRequest(jwtForSubject('member-1'));
+  const { response, state } = responseRecorder();
+  let nextCalls = 0;
+  const work = requireAuthenticated(req, response, () => {
+    nextCalls += 1;
+  }, {
+    isSupabaseConfigured: () => true,
+    getSupabase: () => ({ auth: { getUser: () => {
+      started.push('auth');
+      return auth.promise;
+    } } }),
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-1');
+      return { maybeSingle: () => {
+        started.push('profile');
+        return profile.promise;
+      } };
+    } }) }) }),
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(started.sort(), ['auth', 'profile']);
+  profile.resolve({ data: memberProfile(), error: null });
+  await Promise.resolve();
+  assert.equal(nextCalls, 0, 'profile success alone must not grant access');
+  auth.resolve({ data: { user: { id: 'member-1' } }, error: null });
+  await work;
+  assert.equal(state.statusCode, 200);
+  assert.equal(nextCalls, 1);
+  assert.equal(req.member.id, 'member-1');
+});
+
+test('authenticated API requests reject a concurrent profile whose ID differs from the verified user', async () => {
+  const req = authRequest(jwtForSubject('member-2'));
+  const { response, state } = responseRecorder();
+  let nextCalls = 0;
+  await requireAuthenticated(req, response, () => {
+    nextCalls += 1;
+  }, {
+    isSupabaseConfigured: () => true,
+    getSupabase: () => ({ auth: { getUser: async () => ({
+      data: { user: { id: 'member-1' } },
+      error: null,
+    }) } }),
+    getUserSupabase: () => ({ from: () => ({ select: () => ({ eq: (column, value) => {
+      assert.equal(column, 'id');
+      assert.equal(value, 'member-2');
+      return { maybeSingle: async () => ({
+        data: memberProfile({ id: 'member-2' }),
+        error: null,
+      }) };
+    } }) }) }),
+  });
+
+  assert.equal(nextCalls, 0);
+  assert.equal(state.statusCode, 403);
+  assert.deepEqual(state.body, { error: 'PROFILE_NOT_FOUND' });
+  assert.equal(req.member, undefined);
+  assert.equal(req.accessToken, undefined);
+});
+
 test('browser profile bootstrap rejects a profile identity that differs from the verified user', async () => {
   const req = authRequest(jwtForSubject('member-2'));
   const { response, state } = responseRecorder();
@@ -217,6 +284,36 @@ test('requireAuthenticated accepts an approved active member after valid Supabas
   assert.equal(result.req.member.status, 'approved');
   assert.equal(result.req.member.is_active, true);
   assert.equal(result.req.accessToken, 'valid-token');
+});
+
+test('requireAuthenticated fails closed explicitly when approved profile uses legacy membership schema', async () => {
+  const result = await runRequireAuthenticated({
+    profile: memberProfile({
+      membership_level: undefined,
+      is_active: undefined,
+      permissions_updated_at: undefined,
+    }),
+  });
+  assert.equal(result.nextCalls, 0);
+  assert.equal(result.state.statusCode, 503);
+  assert.deepEqual(result.state.body, { error: 'MEMBER_SCHEMA_NOT_READY' });
+  assert.equal(result.req.member, undefined);
+  assert.equal(result.req.accessToken, undefined);
+});
+
+test('pending onboarding remains readable even before canonical membership columns are populated', async () => {
+  const result = await runRequireAuthenticated({
+    profile: memberProfile({
+      status: 'pending',
+      role: 'associate',
+      membership_level: undefined,
+      is_active: undefined,
+      permissions_updated_at: undefined,
+    }),
+  });
+  assert.equal(result.nextCalls, 1);
+  assert.equal(result.req.membershipLevel, 'pending');
+  assert.equal(result.req.member.status, 'pending');
 });
 
 test('requireAuthenticated denies approved inactive member after valid Supabase identity and fresh profile reload', async () => {

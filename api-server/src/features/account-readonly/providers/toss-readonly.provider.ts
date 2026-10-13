@@ -7,6 +7,7 @@ import {
   type CanonicalAccount,
   type CanonicalAccountSnapshot,
   type CanonicalPosition,
+  type CanonicalReadonlyOrder,
 } from '../account-readonly.contract';
 
 export type TossCredentials = { clientId: string; clientSecret: string; accountSeq?: string };
@@ -15,12 +16,44 @@ export type ReadonlyTransport = (request: {
   path: string;
   headers: Record<string, string>;
   body: string | null;
+  query?: string;
   signal?: AbortSignal;
 }) => Promise<{ status: number; headers?: Record<string, string>; body: unknown }>;
 
-const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings']);
+const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings', '/api/v1/orders']);
 const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
 const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
+const TOSS_RATE_LIMIT_FALLBACK_DELAY_MS = 1_000;
+const TOSS_RATE_LIMIT_MAX_DELAY_MS = 3_000;
+
+function tossRetryDelayMs(headers: Record<string, string>) {
+  const raw = headers['retry-after'] ?? headers['x-ratelimit-reset'];
+  const seconds = nullableNumber(raw);
+  if (seconds === null || seconds < 0) return TOSS_RATE_LIMIT_FALLBACK_DELAY_MS;
+  return Math.min(
+    TOSS_RATE_LIMIT_MAX_DELAY_MS,
+    Math.max(250, Math.ceil(seconds * 1_000)),
+  );
+}
+
+async function waitForTossRetry(delayMs: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+  if (!signal) {
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new AccountReadonlyError('PROVIDER_TIMEOUT', true));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function credentialKey(credentials: TossCredentials) {
   return createHash('sha256')
@@ -49,20 +82,30 @@ export function createTossReadonlyTransport(
       throw new AccountReadonlyError('READONLY_REQUEST_REJECTED');
     }
     const url = new URL(request.path, origin);
-    if (url.origin !== origin) throw new AccountReadonlyError('READONLY_REQUEST_REJECTED');
-    const response = await fetchImpl(url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body,
-      signal: request.signal,
-      redirect: 'error',
-      cache: 'no-store',
-    });
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
-    let body: unknown = null;
-    try { body = await response.json(); } catch { body = null; }
-    return { status: response.status, headers, body };
+    if (request.query) url.search = request.query;
+    if (url.origin !== origin || url.pathname !== request.path) throw new AccountReadonlyError('READONLY_REQUEST_REJECTED');
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetchImpl(url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        signal: request.signal,
+        redirect: 'error',
+        cache: 'no-store',
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
+      let body: unknown = null;
+      try { body = await response.json(); } catch { body = null; }
+
+      if (response.status !== 429 || attempt === 1) {
+        return { status: response.status, headers, body };
+      }
+
+      await waitForTossRetry(tossRetryDelayMs(headers), request.signal);
+    }
+
+    throw new AccountReadonlyError('PROVIDER_UNAVAILABLE', true);
   };
 }
 
@@ -83,6 +126,12 @@ export class TossTokenManager {
     return issued;
   }
 
+  invalidate(credentials: TossCredentials, rejectedToken?: string) {
+    const key = credentialKey(credentials);
+    const cached = this.cached.get(key);
+    if (!rejectedToken || cached?.token === rejectedToken) this.cached.delete(key);
+  }
+
   private async issue(key: string, credentials: TossCredentials, signal?: AbortSignal) {
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
@@ -96,7 +145,8 @@ export class TossTokenManager {
       body,
       signal,
     });
-    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_TOKEN_AUTH_FAILED');
+    if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
     if (response.status >= 400) throw new AccountReadonlyError(`TOSS_HTTP_${response.status}`, response.status >= 500);
     const row = record(response.body);
@@ -106,6 +156,21 @@ export class TossTokenManager {
     this.cached.set(key, { token, expiresAt: this.now() + expires * 1000 });
     return token;
   }
+}
+
+let processTokenManager: TossTokenManager | null = null;
+
+/**
+ * Toss allows only one active access token per client. Issuing another token
+ * immediately revokes the previous one, so every Production read/execution
+ * path in this Node process must share the same token manager.
+ */
+export function processTossTokenManager() {
+  if (!processTokenManager) {
+    const dynamicFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+    processTokenManager = new TossTokenManager(createTossReadonlyTransport(dynamicFetch));
+  }
+  return processTokenManager;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -151,6 +216,45 @@ function officialHoldingsItems(value: unknown) {
   return requiredRecords(result.items, 'TOSS_HOLDINGS_RESPONSE_INVALID');
 }
 
+function officialOpenOrders(value: unknown) {
+  const root = requiredRecord(value, 'TOSS_OPEN_ORDERS_RESPONSE_INVALID');
+  const result = requiredRecord(root.result, 'TOSS_OPEN_ORDERS_RESPONSE_INVALID');
+  return requiredRecords(result.orders, 'TOSS_OPEN_ORDERS_RESPONSE_INVALID');
+}
+
+function optionalNonNegative(value: unknown, code: string) {
+  if (value == null || value === '') return null;
+  const number = nullableNumber(value);
+  if (number === null || number < 0) throw new AccountReadonlyError(code);
+  return number;
+}
+
+function tossRemainingQuantity(quantity: number | null, filled: number | null) {
+  if (quantity === null || filled === null) return null;
+  if (filled > quantity) throw new AccountReadonlyError('TOSS_OPEN_ORDER_FILLED_EXCEEDS_QUANTITY');
+  return quantity - filled;
+}
+
+function canonicalTossOpenOrder(row: Record<string, unknown>): CanonicalReadonlyOrder {
+  const orderId = String(row.orderId ?? '').trim();
+  const symbol = String(row.symbol ?? '').trim().toUpperCase();
+  if (!orderId || !symbol) throw new AccountReadonlyError('TOSS_OPEN_ORDER_IDENTITY_INVALID');
+  const execution = record(row.execution);
+  const quantity = optionalNonNegative(row.quantity, 'TOSS_OPEN_ORDER_QUANTITY_INVALID');
+  const filled = optionalNonNegative(execution?.filledQuantity, 'TOSS_OPEN_ORDER_FILLED_INVALID');
+  const currency = String(row.currency ?? '').trim().toUpperCase();
+  return {
+    id: orderId,
+    market: currency === 'KRW' ? 'KR' : currency === 'USD' ? 'US' : null,
+    symbol,
+    side: row.side === 'BUY' ? 'BUY' : row.side === 'SELL' ? 'SELL' : null,
+    price: optionalNonNegative(row.price, 'TOSS_OPEN_ORDER_PRICE_INVALID'),
+    quantity,
+    remainingQuantity: tossRemainingQuantity(quantity, filled),
+    status: typeof row.status === 'string' && row.status.trim() ? row.status.trim() : null,
+  };
+}
+
 function normalizeTossMarket(row: Record<string, unknown>) {
   const marketCountry = String(row.marketCountry ?? '').trim().toUpperCase();
   if (marketCountry === 'KR' || marketCountry === 'US') return marketCountry;
@@ -181,17 +285,27 @@ export class TossReadonlyProvider {
     private readonly now = () => new Date(),
   ) {}
 
-  async request(path: string, credentials: TossCredentials, signal?: AbortSignal, accountSeq?: string) {
+  async request(path: string, credentials: TossCredentials, signal?: AbortSignal, accountSeq?: string, query = '') {
     if (!PRIVATE_GETS.has(path)) throw new AccountReadonlyError('READONLY_PATH_REJECTED');
-    const token = await this.tokens.token(credentials, signal);
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
-    if (path !== '/api/v1/accounts') {
-      const selected = String(accountSeq ?? credentials.accountSeq ?? '').trim();
-      if (!selected) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_CONFIGURED');
-      headers['X-Tossinvest-Account'] = selected;
+    const read = async (token: string) => {
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+      if (path !== '/api/v1/accounts') {
+        const selected = String(accountSeq ?? credentials.accountSeq ?? '').trim();
+        if (!selected) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_CONFIGURED');
+        headers['X-Tossinvest-Account'] = selected;
+      }
+      return this.transport({ method: 'GET', path, headers, body: null, query, signal });
+    };
+
+    let token = await this.tokens.token(credentials, signal);
+    let response = await read(token);
+    if (response.status === 401) {
+      this.tokens.invalidate(credentials, token);
+      token = await this.tokens.token(credentials, signal);
+      response = await read(token);
     }
-    const response = await this.transport({ method: 'GET', path, headers, body: null, signal });
-    if (response.status === 401 || response.status === 403) throw new AccountReadonlyError('AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_ACCOUNT_API_AUTH_FAILED');
+    if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) {
       const retryAfter = nullableNumber(response.headers?.['retry-after']);
       throw new AccountReadonlyError('RATE_LIMITED', true, retryAfter === null ? null : retryAfter * 1000);
@@ -205,7 +319,16 @@ export class TossReadonlyProvider {
     const accountsRaw = await this.request('/api/v1/accounts', credentials, signal);
     const accountRows = records(accountsRaw, 'accounts');
     const accountSeq = selectAccountSeq(accountRows, credentials.accountSeq);
-    const holdingsRaw = await this.request('/api/v1/holdings', credentials, signal, accountSeq);
+    const openOrdersPromise = this.request('/api/v1/orders', credentials, signal, accountSeq, 'status=OPEN')
+      .then((value) => ({ value, error: null as AccountReadonlyError | null }))
+      .catch((error: unknown) => {
+        if (error instanceof AccountReadonlyError) return { value: null, error };
+        throw error;
+      });
+    const [holdingsRaw, openOrdersResult] = await Promise.all([
+      this.request('/api/v1/holdings', credentials, signal, accountSeq),
+      openOrdersPromise,
+    ]);
     const items = officialHoldingsItems(holdingsRaw);
 
     const positions: CanonicalPosition[] = items.map((row) => {
@@ -217,6 +340,7 @@ export class TossReadonlyProvider {
       return {
         market: normalizeTossMarket(row),
         symbol,
+        displayName: typeof row.name === 'string' ? row.name.trim().slice(0, 120) : null,
         quantity: requiredNumber(row.quantity, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
         availableQuantity: null,
         averageEntryPrice: requiredNumber(row.averagePurchasePrice, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
@@ -243,11 +367,22 @@ export class TossReadonlyProvider {
       buyingPower: null,
     }));
 
+    let openOrders: CanonicalReadonlyOrder[] | null = null;
+    let openOrderError: string | null = null;
+    if (openOrdersResult.error) {
+      openOrderError = `TOSS_OPEN_ORDERS_${openOrdersResult.error.code}`;
+    } else {
+      openOrders = officialOpenOrders(openOrdersResult.value).map(canonicalTossOpenOrder);
+      const ids = openOrders.map((row) => row.id).filter((value): value is string => Boolean(value));
+      if (new Set(ids).size !== ids.length) throw new AccountReadonlyError('TOSS_OPEN_ORDER_IDENTITY_DUPLICATE');
+    }
+
     return {
-      ...emptySnapshot('toss', 'CONNECTED', checkedAt),
+      ...emptySnapshot('toss', 'CONNECTED', checkedAt, openOrderError),
       connected: true,
       accounts,
       positions,
+      openOrders,
       lastGoodAt: checkedAt,
     };
   }

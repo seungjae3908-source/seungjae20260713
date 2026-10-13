@@ -10,6 +10,7 @@ on:
       - 'api-server/src/scripts/run-fast-profitability-preactivation-watch.ts'
       - 'api-server/src/scripts/run-forward-recommendation-observer-cycle.ts'
       - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
+      - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
       - 'api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs'
   schedule:
     - cron: '7,22,37,52 * * * *'
@@ -76,7 +77,9 @@ jobs:
       - name: Verify public-data observer contract
         run: node api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
       - name: Verify preactivation watch contract
-        run: node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
+        run: |
+          node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
+          node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
       - name: Verify repository remained clean
         run: |
           git diff --exit-code
@@ -133,17 +136,101 @@ jobs:
               return;
             }
 
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+            const HUB_ISSUE = 1102;
+            const MAX_HUB_COMMENTS = 2500;
+            const RECEIPT_MARKER = '[FAST_PROFITABILITY_V1_ACTIVATED]';
+            
+            const parseReceipt = (comment) => {
+              const body = String(comment?.body ?? '').trim();
+              const lines = body.split(/\r?\n/u);
+              if (lines[0] !== RECEIPT_MARKER) return null;
+              const fields = new Map();
+              for (const line of lines.slice(1)) {
+                const index = line.indexOf('=');
+                if (index <= 0) continue;
+                fields.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+              }
+              const targetSha = String(fields.get('target_sha') ?? '').toLowerCase();
+              const activationDigest = String(fields.get('activation_digest') ?? '').toLowerCase();
+              const runText = String(fields.get('activation_run_id') ?? '');
+              if (!/^[0-9a-f]{40}$/.test(targetSha)
+                || !/^[0-9a-f]{64}$/.test(activationDigest)
+                || !/^[1-9][0-9]*$/.test(runText)) {
+                throw new Error('FAST_ACTIVATION_RECEIPT_MALFORMED:' + String(comment?.id ?? 'unknown'));
+              }
+              return { targetSha, activationDigest, runId: Number(runText), commentId: Number(comment.id) };
+            };
+            
+            const hub = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              per_page: 100,
+              issue_number: HUB_ISSUE,
             });
-            const active = artifacts.filter((artifact) =>
-              !artifact.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(artifact.name));
+            const commentCount = Number(hub.data.comments ?? 0);
+            if (!Number.isSafeInteger(commentCount) || commentCount < 0 || commentCount > MAX_HUB_COMMENTS) {
+              core.setFailed('FAST_ACTIVATION_HUB_COMMENT_COUNT_INVALID:' + commentCount);
+              return;
+            }
+            
+            const activeByRun = new Map();
+            for (let page = Math.max(1, Math.ceil(commentCount / 100)); page >= 1; page -= 1) {
+              const response = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: HUB_ISSUE,
+                per_page: 100,
+                page,
+              });
+              const rows = response.data ?? [];
+              for (const comment of [...rows].reverse()) {
+                if (comment.user?.login !== 'github-actions[bot]') continue;
+                const receipt = parseReceipt(comment);
+                if (!receipt || activeByRun.has(receipt.runId)) continue;
+            
+                const run = (await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: receipt.runId,
+                })).data;
+                if (run.path !== '.github/workflows/fast-profitability-v1-activation.yml'
+                  || run.event !== 'issue_comment'
+                  || run.status !== 'completed'
+                  || run.conclusion !== 'success'
+                  || String(run.head_sha ?? '').toLowerCase() !== receipt.targetSha) {
+                  core.setFailed('FAST_ACTIVATION_RECEIPT_PROVENANCE_INVALID:' + receipt.runId);
+                  return;
+                }
+            
+                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: receipt.runId,
+                  per_page: 100,
+                });
+                const artifacts = artifactsResponse.data.artifacts ?? [];
+                const activationName = 'fast-profitability-v1-activation-' + receipt.targetSha;
+                const keyName = 'fast-profitability-v1-key-' + receipt.activationDigest;
+                const activationMatches = artifacts.filter((artifact) => !artifact.expired && artifact.name === activationName);
+                const keyMatches = artifacts.filter((artifact) => !artifact.expired && artifact.name === keyName);
+                if (activationMatches.length > 1 || keyMatches.length > 1) {
+                  core.setFailed('FAST_ACTIVATION_RECEIPT_ARTIFACT_AMBIGUOUS:' + receipt.runId);
+                  return;
+                }
+                if (activationMatches.length === 1 && keyMatches.length === 1) {
+                  activeByRun.set(receipt.runId, {
+                    receipt,
+                    artifact: activationMatches[0],
+                    keyArtifact: keyMatches[0],
+                    run,
+                  });
+                }
+              }
+            }
+            const active = [...activeByRun.values()];
             if (active.length > 0) {
-              core.notice('Active Fast binding exists; preactivation watch clean no-op.');
+              core.notice('Active Fast binding receipt with exact non-expired artifacts exists; preactivation watch clean no-op.');
               core.setOutput('eligible', 'false');
-              core.setOutput('reason', 'ACTIVE_BINDING_PRESENT');
+              core.setOutput('reason', active.length === 1 ? 'ACTIVE_BINDING_PRESENT' : 'AMBIGUOUS_ACTIVE_BINDING_PRESENT');
               return;
             }
 
@@ -163,30 +250,34 @@ jobs:
         with:
           script: |
             const name = 'fast-profitability-v1-preactivation-watch-state-' + process.env.TARGET_SHA;
-            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+            const targetSha = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const response = await github.rest.actions.listArtifactsForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
+              name,
               per_page: 100,
             });
-            const rows = artifacts
-              .filter((artifact) => !artifact.expired && artifact.name === name)
-              .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
-            for (const artifact of rows) {
-              const run = await github.rest.actions.getWorkflowRun({
+            const artifacts = (response.data.artifacts ?? [])
+              .filter((artifact) => artifact.expired !== true && artifact.name === name)
+              .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''));
+            for (const artifact of artifacts) {
+              const runId = Number(artifact.workflow_run?.id);
+              if (!Number.isSafeInteger(runId) || runId <= 0) continue;
+              const run = (await github.rest.actions.getWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                run_id: artifact.workflow_run.id,
-              });
-              if (run.data.conclusion !== 'success') continue;
-              if (run.data.event !== 'schedule') continue;
-              if (!String(run.data.path).endsWith('fast-profitability-v1-preactivation-watch.yml')) continue;
+                run_id: runId,
+              })).data;
+              if (run.conclusion !== 'success'
+                || run.event !== 'schedule'
+                || String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
+                || String(run.head_sha ?? '').toLowerCase() !== targetSha) continue;
               core.setOutput('found', 'true');
               core.setOutput('name', artifact.name);
-              core.setOutput('run_id', String(artifact.workflow_run.id));
+              core.setOutput('run_id', String(runId));
               return;
             }
             core.setOutput('found', 'false');
-
       - name: Download prior exact-SHA watch state
         if: steps.gate.outputs.eligible == 'true' && steps.previous.outputs.found == 'true'
         uses: actions/download-artifact@v4

@@ -1,4 +1,3 @@
-import { authorizedFetch } from './auth-fetch';
 export type AutoTradeMarket = "KR" | "US";
 export type AutoTradeCurrency = "KRW" | "USD";
 export type AutoTradeExchange = "NASDAQ" | "NYSE" | "AMEX";
@@ -177,6 +176,9 @@ export function loadAutoTradeSettings(): AutoTradeSettings {
 		return {
 			...DEFAULT_SETTINGS,
 			...parsed,
+			// Legacy browser-scoped real-order authority is retired. Live execution
+			// belongs only to the canonical /api/trade-automation engine.
+			liveTrading: false,
 			// 현재 정책은 후보 전체를 비교한 뒤 확률 1위 한 종목만 주문한다.
 			maxRanks: 1,
 			investmentPerTrade: Math.max(
@@ -255,9 +257,7 @@ export function loadAutoTradeSettings(): AutoTradeSettings {
 				0,
 				200,
 			),
-			executionKey: sessionStorageAvailable()
-				? String(window.sessionStorage.getItem(EXECUTION_SESSION_KEY) ?? "")
-				: "",
+			executionKey: "",
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };
@@ -269,6 +269,7 @@ export function saveAutoTradeSettings(
 ): AutoTradeSettings {
 	const normalized: AutoTradeSettings = {
 		...settings,
+		liveTrading: false,
 		maxRanks: 1,
 		investmentPerTrade: Math.max(0, Math.round(settings.investmentPerTrade)),
 		accountValue: Math.max(1, Math.round(settings.accountValue)),
@@ -284,7 +285,7 @@ export function saveAutoTradeSettings(
 		minProbability: clamp(Math.round(settings.minProbability), 0, 99),
 		stopLossPercent: clamp(settings.stopLossPercent, 0, 50),
 		takeProfitPercent: clamp(settings.takeProfitPercent, 0, 200),
-		executionKey: settings.executionKey.trim(),
+		executionKey: "",
 	};
 
 	if (storageAvailable()) {
@@ -655,219 +656,26 @@ export async function executeAutoTradeCandidates(
 	candidates: AutoTradeCandidate[],
 	settings: AutoTradeSettings,
 ): Promise<AutoTradeRunResult> {
-	if (settings.investmentPerTrade <= 0) {
-		throw new Error("1회 최대 주문금액을 직접 입력해 주세요.");
-	}
-	if (settings.accountValue <= 0) {
-		throw new Error("계좌 평가금액을 직접 입력해 주세요.");
-	}
-	if (settings.riskPerTradePercent <= 0) {
-		throw new Error("1회 허용손실률을 직접 입력해 주세요.");
-	}
-	if (settings.dailyLossLimitPercent <= 0) {
-		throw new Error("일일 최대손실률을 직접 입력해 주세요.");
-	}
-	if (settings.minProbability <= 0) {
-		throw new Error("최소 모델점수를 직접 입력해 주세요.");
-	}
-	if (settings.stopLossPercent <= 0) {
-		throw new Error("손절 기준을 직접 입력해 주세요.");
-	}
-	if (settings.takeProfitPercent <= 0) {
-		throw new Error("목표 수익을 직접 입력해 주세요.");
-	}
-
-	const targets = pendingAutoTradeCandidates(candidates, settings);
-
-	if (!settings.enabled || !settings.liveTrading) {
-		return {
-			ok: false,
-			message: "실제 주문 기능이 활성화되어 있지 않습니다.",
-			results: [],
-		};
-	}
-	if (!settings.executionKey.trim()) {
-		return {
-			ok: false,
-			message: "자동매매 실행키를 입력해 주세요.",
-			results: [],
-		};
-	}
-	if (targets.length === 0) {
-		return {
-			ok: true,
-			message: "오늘 이미 주문했거나 기준을 충족한 신규 후보가 없습니다.",
-			results: [],
-		};
-	}
-
-	const journalResponse = await authorizedFetch("/api/stocks/auto-trade/journal");
-	const journalPayload = (await journalResponse.json().catch(() => ({}))) as {
-		message?: string;
-		entries?: AutoTradeSafetyJournalEntry[];
+	void candidates;
+	void settings;
+	return {
+		ok: false,
+		message: "기존 Scanner 실주문 경로는 종료되었습니다. 새 자동매매 화면의 실주문 연결을 사용해 주세요.",
+		results: [],
 	};
-	if (!journalResponse.ok) {
-		throw new Error(
-			journalPayload.message ||
-				`주문 전 안전상태 확인 실패 (HTTP ${journalResponse.status})`,
-		);
-	}
-
-	const safety = calculateAutoTradeSafetySnapshot(
-		Array.isArray(journalPayload.entries) ? journalPayload.entries : [],
-		settings,
-		targets[0].market,
-	);
-	if (!safety.allowed) {
-		return {
-			ok: false,
-			message: `신규 주문 정지 · ${safety.blockedReason ?? "안전한도 확인 필요"}`,
-			results: [],
-		};
-	}
-
-	const riskBudget =
-		settings.accountValue * (settings.riskPerTradePercent / 100);
-	const riskLimitedInvestment =
-		riskBudget / (settings.stopLossPercent / 100);
-	const effectiveInvestmentPerTrade = Math.max(
-		0,
-		Math.floor(
-			Math.min(settings.investmentPerTrade, riskLimitedInvestment),
-		),
-	);
-	if (effectiveInvestmentPerTrade <= 0) {
-		throw new Error("현재 위험 설정으로 주문 가능한 금액이 없습니다.");
-	}
-
-	type ApprovalPlan = {
-		ok: boolean;
-		approvalToken?: string;
-		expiresAt?: string;
-		message?: string;
-		order?: {
-			ticker: string;
-			name: string;
-			market: AutoTradeMarket;
-			currency: AutoTradeCurrency;
-			quantity: number;
-			currentPrice: number;
-			estimatedAmount: number;
-			stopPrice: number;
-			targetPrice: number;
-		};
-	};
-
-	const planResponse = await authorizedFetch("/api/stocks/auto-trade/plan", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"X-Auto-Trade-Key": settings.executionKey.trim(),
-		},
-		body: JSON.stringify({
-			candidates: targets,
-			investmentPerTrade: effectiveInvestmentPerTrade,
-			stopLossPercent: settings.stopLossPercent,
-			takeProfitPercent: settings.takeProfitPercent,
-		}),
-	});
-	const plan = (await planResponse.json().catch(() => ({}))) as ApprovalPlan;
-	if (!planResponse.ok || !plan.approvalToken || !plan.order) {
-		throw new Error(
-			plan.message || `주문계획 생성 실패 (HTTP ${planResponse.status})`,
-		);
-	}
-
-	const order = plan.order;
-	const preview = calculateAutoTradeRiskPreview(settings, order.currentPrice);
-	const expectedLoss =
-		order.quantity *
-		order.currentPrice *
-		(settings.stopLossPercent / 100);
-	const number = new Intl.NumberFormat(
-		order.currency === "USD" ? "en-US" : "ko-KR",
-		{
-			maximumFractionDigits: order.currency === "USD" ? 2 : 0,
-		},
-	);
-	const approved = window.confirm(
-		[
-			"실제 주문을 1회 승인하시겠습니까?",
-			"",
-			`${order.name} (${order.ticker}) · ${order.market}`,
-			`현재가: ${number.format(order.currentPrice)} ${order.currency}`,
-			`수량: ${order.quantity}주`,
-			`예상금액: ${number.format(order.estimatedAmount)} ${order.currency}`,
-			`1회 허용손실금액: ${number.format(preview.riskBudget)} ${order.currency}`,
-			`이번 주문 예상손실한도: ${number.format(expectedLoss)} ${order.currency}`,
-			`손절가: ${number.format(order.stopPrice)} ${order.currency}`,
-			`목표가: ${number.format(order.targetPrice)} ${order.currency}`,
-			`안전상태: 보유 ${safety.openPositions}/${settings.maxOpenPositions} · 오늘 주문 ${safety.dailyOrders}/${settings.maxDailyOrders} · 연속손실 ${safety.consecutiveLosses}/${settings.maxConsecutiveLosses}`,
-			`오늘 확정 손실: ${number.format(safety.dailyLossAmount)} ${order.currency} (${safety.dailyLossPercent.toFixed(2)}%)`,
-			`승인 만료: ${
-				plan.expiresAt
-					? new Date(plan.expiresAt).toLocaleString("ko-KR")
-					: "10분 이내"
-			}`,
-			"",
-			"확인을 누른 경우에만 주문이 전송됩니다.",
-		].join("\n"),
-	);
-	if (!approved) {
-		return {
-			ok: false,
-			message: "주문 승인을 취소했습니다.",
-			results: [],
-		};
-	}
-
-	const response = await authorizedFetch("/api/stocks/auto-trade/execute", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"X-Auto-Trade-Key": settings.executionKey.trim(),
-		},
-		body: JSON.stringify({ approvalToken: plan.approvalToken }),
-	});
-	const payload = (await response.json().catch(() => ({}))) as AutoTradeRunResult;
-	if (!response.ok) {
-		throw new Error(
-			payload.message || `자동매매 주문 실패 (HTTP ${response.status})`,
-		);
-	}
-
-	const completed = (payload.results ?? [])
-		.filter((item) => item.ok && !item.skipped)
-		.map((item) => item.ticker);
-	markAutoTradeExecuted(completed);
-	return payload;
 }
 
 
 export async function monitorAutoTradePositions(
 	settings: AutoTradeSettings,
 ): Promise<AutoTradeRunResult & { activePositions?: number }> {
-	if (!settings.enabled || !settings.liveTrading || !settings.executionKey.trim()) {
-		return { ok: false, results: [] };
-	}
-
-	const response = await authorizedFetch("/api/stocks/auto-trade/monitor", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"X-Auto-Trade-Key": settings.executionKey.trim(),
-		},
-		body: "{}",
-	});
-	const payload = (await response.json().catch(() => ({}))) as AutoTradeRunResult & {
-		activePositions?: number;
+	void settings;
+	return {
+		ok: false,
+		message: "레거시 자동청산 경로는 비활성화되었습니다. 새 실주문 엔진의 주문 상태/청산 경로를 사용해 주세요.",
+		results: [],
+		activePositions: 0,
 	};
-
-	if (!response.ok) {
-		throw new Error(payload.message || `자동청산 확인 실패 (HTTP ${response.status})`);
-	}
-
-	return payload;
 }
 
 
@@ -893,80 +701,10 @@ export async function closeAutoTradePosition(
 	profitPercent?: number;
 	reason?: string;
 }> {
-	if (!settings.enabled || !settings.liveTrading || !settings.executionKey.trim()) {
-		return { ok: false, message: '실제 주문 승인모드와 실행키를 먼저 확인해 주세요.' };
-	}
-
-	const planResponse = await authorizedFetch('/api/stocks/auto-trade/close-plan', {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			'X-Auto-Trade-Key': settings.executionKey.trim(),
-		},
-		body: JSON.stringify({ ticker: signal.ticker, market: signal.market }),
-	});
-	const plan = (await planResponse.json().catch(() => ({}))) as {
-		ok?: boolean;
-		message?: string;
-		approvalToken?: string;
-		expiresAt?: string;
-		order?: {
-			ticker: string;
-			name: string;
-			market: AutoTradeMarket;
-			currency: AutoTradeCurrency;
-			quantity: number;
-			currentPrice: number;
-			estimatedAmount: number;
-			stopPrice: number;
-			targetPrice: number;
-			reason: string;
-		};
+	void settings;
+	void signal;
+	return {
+		ok: false,
+		message: "레거시 실매도 경로는 비활성화되었습니다. 새 실주문 엔진을 사용해 주세요.",
 	};
-	if (!planResponse.ok || !plan.approvalToken || !plan.order) {
-		throw new Error(plan.message || `매도계획 생성 실패 (HTTP ${planResponse.status})`);
-	}
-
-	const order = plan.order;
-	const number = new Intl.NumberFormat(order.currency === 'USD' ? 'en-US' : 'ko-KR', {
-		maximumFractionDigits: order.currency === 'USD' ? 2 : 0,
-	});
-	const approved = window.confirm([
-		'실제 매도 주문을 1회 승인하시겠습니까?',
-		'',
-		`${order.name} (${order.ticker}) · ${order.market}`,
-		`사유: ${order.reason}`,
-		`현재가: ${number.format(order.currentPrice)} ${order.currency}`,
-		`수량: ${order.quantity}주 전량`,
-		`예상금액: ${number.format(order.estimatedAmount)} ${order.currency}`,
-		`손절가: ${number.format(order.stopPrice)} ${order.currency}`,
-		`목표가: ${number.format(order.targetPrice)} ${order.currency}`,
-		`승인 만료: ${plan.expiresAt ? new Date(plan.expiresAt).toLocaleString('ko-KR') : '10분 이내'}`,
-		'',
-		'확인을 누른 경우에만 시장가 매도 주문이 전송됩니다.',
-	].join('\n'));
-	if (!approved) return { ok: false, message: '매도 승인을 취소했습니다.' };
-
-	const executeResponse = await authorizedFetch('/api/stocks/auto-trade/close-execute', {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			'X-Auto-Trade-Key': settings.executionKey.trim(),
-		},
-		body: JSON.stringify({ approvalToken: plan.approvalToken }),
-	});
-	const result = (await executeResponse.json().catch(() => ({}))) as {
-		ok: boolean;
-		message?: string;
-		ticker?: string;
-		market?: AutoTradeMarket;
-		quantity?: number;
-		currentPrice?: number;
-		profitPercent?: number;
-		reason?: string;
-	};
-	if (!executeResponse.ok) {
-		throw new Error(result.message || `매도 주문 실패 (HTTP ${executeResponse.status})`);
-	}
-	return result;
 }

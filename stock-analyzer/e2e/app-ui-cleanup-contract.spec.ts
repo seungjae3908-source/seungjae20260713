@@ -24,7 +24,7 @@ test('종목 화면은 하나의 통합 검색창과 하나의 시장 선택 흐
 
 test('기술 워크스페이스는 네 기능을 지연 로딩하고 모바일 종목 하단 메뉴를 유지한다', () => {
   const workspace = source('src/pages/technical-workspace.tsx');
-  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '자동매매']) {
+  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '기술매매']) {
     expect(workspace).toContain(`label: '${label}'`);
   }
   expect(workspace).toContain("lazy(() => import('@/pages/signal-scanner'))");
@@ -40,10 +40,10 @@ test('기술 라우트는 공통 개선 UI를 유지하면서 권한 없는 고�
 
   expect(app).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(app).not.toContain('scanner-workspace-basic');
-  expect(workspace).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(workspace).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessAiChart')");
   expect(workspace).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(workspace).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
-  expect(workspace).toContain('if (!canAccessRiskPreview)');
+  expect(workspace).toContain('if (!canAccessAiChart)');
   expect(tabs).toContain('aria-disabled={option.disabled || undefined}');
   expect(tabs).toContain('disabled={option.disabled}');
   expect(tabs).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");

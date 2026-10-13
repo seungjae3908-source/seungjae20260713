@@ -116,7 +116,20 @@ assert(
 );
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
-assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
+assert(spec.includes('if (response.status() < 400) {'), 'successful browser responses must remain separated from 4xx/5xx diagnostics');
+assert(spec.includes('const successfulPrimaryStockChartReads = new WeakMap<Page, Map<string, number>>()'), 'stock chart hedge proof must be scoped to the active page');
+assert(spec.includes('const stockChartHedgeAbortProofWindowMs = 2_000;'), 'stock chart hedge proof window must remain narrowly bounded');
+assert(spec.includes("endpoint: 'candles'"), 'only a successful primary candle request may establish hedge-abort proof');
+assert(spec.includes("endpoint: 'chart'"), 'only the alternate chart request may consume hedge-abort proof');
+assert(spec.includes("input.errorText !== 'net::ERR_ABORTED'"), 'stock chart hedge exemption must require the exact Chromium abort reason');
+assert(spec.includes("parsed.origin !== frame.origin"), 'stock chart hedge exemption must remain same-origin');
+assert(spec.includes("parsed.searchParams.size !== 1"), 'stock chart hedge exemption must reject extra query parameters');
+assert(spec.includes("chartIdentity === input.successfulPrimaryIdentity"), 'stock chart hedge exemption must require exact symbol and timeframe identity');
+assert(spec.includes('ageMs <= stockChartHedgeAbortProofWindowMs'), 'stock chart hedge exemption must require recent primary success');
+assert(spec.includes('diagnostics.expected_stock_chart_hedge_aborts.push(diagnostic);'), 'proven stock chart hedge aborts must use a dedicated diagnostics bucket');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/MSFT/chart?tf=5m\` })).toBe(false);"), 'stock chart hedge proof must reject symbol mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, rawUrl: \`\${origin}/api/stocks/AAPL/chart?tf=1D\` })).toBe(false);"), 'stock chart hedge proof must reject timeframe mismatch');
+assert(spec.includes("expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);"), 'stock chart hedge proof must reject non-abort failures');
 
 const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
 const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
@@ -201,6 +214,36 @@ assert(
 );
 assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
 
+const aiCertificationStart = spec.indexOf('async function runAuthenticatedAiChartCertification(');
+const aiCertificationEnd = spec.indexOf('\nasync function auditAuthenticatedViewport(', aiCertificationStart);
+assert(
+  aiCertificationStart >= 0 && aiCertificationEnd > aiCertificationStart,
+  'authenticated AI chart certification helper boundaries are missing',
+);
+const aiCertificationBlock = spec.slice(aiCertificationStart, aiCertificationEnd);
+const aiCertificationQuiescenceIndex = aiCertificationBlock.indexOf('await waitForBrowserNetworkQuiescence(page);');
+const aiCertificationCloseIndex = aiCertificationBlock.indexOf('await context.close();');
+assert(
+  aiCertificationQuiescenceIndex >= 0 && aiCertificationCloseIndex > aiCertificationQuiescenceIndex,
+  'authenticated AI chart contexts must prove browser network quiescence before context teardown',
+);
+const networkQuiescenceStart = spec.indexOf('async function waitForBrowserNetworkQuiescence(page: Page)');
+const networkQuiescenceEnd = spec.indexOf('\nasync function waitForPendingPersonalIntegrationReads(', networkQuiescenceStart);
+assert(
+  networkQuiescenceStart >= 0 && networkQuiescenceEnd > networkQuiescenceStart,
+  'browser network quiescence helper boundaries are missing',
+);
+const networkQuiescenceBlock = spec.slice(networkQuiescenceStart, networkQuiescenceEnd);
+for (const marker of [
+  'pendingMutatingRequests.get(page)?.size',
+  'pendingSameOriginReadRequests.get(page)?.size',
+  "? 'quiescent' : 'quiet'",
+  "timeout: 15_000",
+]) {
+  assert(networkQuiescenceBlock.includes(marker), `browser network quiescence contract is missing ${marker}`);
+}
+assert(!aiCertificationBlock.includes('await logout(page);'), 'AI chart certification contexts must not globally revoke the shared authenticated session');
+
 const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
 const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
 assert(
@@ -282,8 +325,10 @@ assert(
   'retry recovery must not use the polling-heavy home route as its bootstrap fixture',
 );
 assert(
-  retryRecoveryTestBlock.includes("await page.getByRole('button', { name: '다시 시도', exact: true }).click();"),
-  'retry recovery must exercise the explicit retry action',
+  retryRecoveryTestBlock.includes("const retryAlert = page.getByTestId('account-bootstrap-error');")
+    && retryRecoveryTestBlock.includes("await retryAlert.getByRole('button', { name: '다시 확인', exact: true }).click();")
+    && retryRecoveryTestBlock.includes("await expect(page.getByTestId('account-bootstrap-error')).toHaveCount(0);"),
+  'retry recovery must exercise and clear the current account-scoped retry action',
 );
 assert(
   retryRecoveryTestBlock.includes("expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);"),

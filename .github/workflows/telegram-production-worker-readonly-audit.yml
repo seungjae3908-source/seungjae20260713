@@ -1,0 +1,335 @@
+name: Telegram Production Worker Read-Only QA
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-production-worker-readonly-audit.mjs
+      - .github/workflows/telegram-production-worker-readonly-audit.yml
+      - .github/tests/telegram-production-worker-readonly-audit.test.mjs
+      - docs/telegram-production-worker-readonly-audit.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-worker-readonly-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-production-worker-readonly-audit.mjs
+          node --test .github/tests/telegram-production-worker-readonly-audit.test.mjs
+
+  production-observe:
+    name: Observe Production Telegram ticks and persisted state, zero sends
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-worker-readonly ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const m=/^\/run-telegram-worker-readonly ([0-9a-f]{40}) ([0-9a-f]{40})$/u.exec(
+            String(process.env.COMMAND||'').trim());
+          if(!m){console.error('EXACT_MAIN_AND_DEPLOYED_SHA_REQUIRED');process.exit(1);}
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'main='+m[1]+'\ndeployed='+m[2]+'\n');
+          NODE
+      - name: Require immutable exact current main and deployed ancestor
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$TARGET_SHA" = "$(git rev-parse origin/main)"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          git cat-file -e "$DEPLOYED_SHA^{commit}"
+          git merge-base --is-ancestor "$DEPLOYED_SHA" origin/main
+
+      - name: Pin Production SSH host without printing credentials
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          [[ -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Read only PM2, loopback health, and existing dedupe ledgers
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          report="$RUNNER_TEMP/telegram-production-worker-readonly.json"
+          echo "AUDIT_REPORT=$report" >> "$GITHUB_ENV"
+          remote_command="$(printf 'TELEGRAM_AUDIT_EXECUTE=true TELEGRAM_AUDIT_MAIN_SHA=%q TELEGRAM_AUDIT_DEPLOYED_SHA=%q node --input-type=module -' "$TARGET_SHA" "$DEPLOYED_SHA")"
+          ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/telegram-production-worker-readonly-audit.mjs > "$report" \
+            2> "$RUNNER_TEMP/telegram-worker-readonly-stderr-redacted.txt"
+
+          node - "$report" "$TARGET_SHA" "$DEPLOYED_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
+            'pm2Sha','markerSha','pm2Online','exactDeployedIdentity','pm2StartedAt',
+            'morningWindowCoverage',
+            'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
+            'roomBindingsValid','personal','briefWorker','marketBrief','signalSubscriber','signalSource',
+            'signalHealth','signalUnits','signalCycle','signalFile','staleCause',
+            'proofLevel','classification','telegramSends','databaseWrites',
+            'pm2Restarts','financialMutations','secretValuesRecorded'];
+          const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
+          const safeIso=x=>x===null||(typeof x==='string'
+            && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(x)
+            && Number.isFinite(Date.parse(x)) && new Date(x).toISOString()===x);
+          const states=new Set(['NOT_CHECKED','ABSENT','EMPTY','PRESENT','UNCONFIRMED_ONLY',
+            'NO_VALID_RECEIPTS','UNREADABLE','UNSAFE_FILE','UNSAFE_PATH','INVALID']);
+          const kindKeys=['MORNING','KR_CLOSING','US_PREMARKET','WEEKLY'];
+          const validState=v=>v && states.has(v.status)
+            && Number.isInteger(v.recordCount) && v.recordCount>=0 && v.recordCount<=10000
+            && Number.isInteger(v.recent24hCount) && v.recent24hCount>=0
+            && v.recent24hCount<=v.recordCount
+            && safeIso(v.lastEvidenceAt)
+            && Number.isInteger(v.unconfirmedCount) && v.unconfirmedCount>=0 && v.unconfirmedCount<=10000
+            && Number.isInteger(v.unconfirmedRecent24hCount) && v.unconfirmedRecent24hCount>=0
+            && v.unconfirmedRecent24hCount<=v.unconfirmedCount
+            && safeIso(v.lastUnconfirmedAt)
+            && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
+            && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
+          const briefKeys=['status','enabled','state','startErrorCode','lastTickAt',
+            'tickOk','tickFresh','lastDueTickAt','lastDuePlans','lastDueAttempted',
+            'lastDueDelivered','lastDueDeduped','lastDueNotConfigured',
+            'lastDueFailed','lastDueCode'];
+          const briefCodes=['NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY',
+            'NOT_CONFIGURED','DELIVERY_FAILED','NO_ATTEMPTS',
+            'LEDGER_UNREADABLE','TICK_FAILED'];
+          const briefValid=b=>b&&Object.keys(b).sort().join()===briefKeys.sort().join()
+            &&['NOT_CHECKED','NOT_AVAILABLE','PRESENT','INVALID'].includes(b.status)
+            &&typeof b.enabled==='boolean'
+            &&(b.state===null||['NOT_STARTED','DISABLED','RUNNING','STOPPED'].includes(b.state))
+            &&(b.startErrorCode===null||['FLAG_DISABLED','ACTIVATION_REQUIRED',
+              'TOKEN_MISSING','ROOMS_MISSING'].includes(b.startErrorCode))
+            &&(b.tickOk===null||typeof b.tickOk==='boolean')
+            &&typeof b.tickFresh==='boolean'
+            &&safeIso(b.lastTickAt)&&safeIso(b.lastDueTickAt)
+            &&[b.lastDuePlans,b.lastDueAttempted,b.lastDueDelivered,
+              b.lastDueDeduped,b.lastDueNotConfigured,b.lastDueFailed]
+               .every(n=>Number.isSafeInteger(n)&&n>=0&&n<=10000)
+            &&(b.lastDueCode===null||briefCodes.includes(b.lastDueCode))
+            &&(b.status!=='PRESENT'||(b.state!==null&&b.lastDueCode!==null));
+          if(Object.keys(r).sort().join()!==keys.sort().join()
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v6'
+            ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
+            ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
+            ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
+            ||!['UNKNOWN','NOT_ELAPSED','FULL_WINDOW','PARTIAL_WINDOW','MISSED_WINDOW'].includes(r.morningWindowCoverage)
+            ||!briefValid(r.briefWorker)
+            ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
+            ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE','HTTP_503',
+              'HTTP_ERROR','INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
+            ||!Number.isInteger(r.signalSource.eventCount) ||r.signalSource.eventCount<0
+            ||r.signalSource.eventCount>10000
+            ||typeof r.signalSource.safetyValidated!=='boolean'
+            ||!r.signalHealth ||!['NOT_CHECKED','READY','SNAPSHOT_MISSING',
+              'SNAPSHOT_SHA_MISMATCH','SNAPSHOT_STALE','SOURCE_DATA_BLOCKED',
+              'HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
+              'UNREACHABLE','TIMEOUT','UNSAFE_ENDPOINT'].includes(r.signalHealth.status)
+            ||!safeSha(r.signalHealth.serviceSha)
+            ||typeof r.signalHealth.snapshotReady!=='boolean'
+            ||typeof r.signalHealth.snapshotFresh!=='boolean'
+            ||Object.keys(r.signalHealth).sort().join()!==
+              ['status','serviceSha','snapshotReady','snapshotFresh','snapshotAgeBand'].sort().join()
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalHealth.snapshotAgeBand)
+            ||!r.signalUnits
+            ||Object.keys(r.signalUnits).sort().join()!=='cycle,server,timer'
+            ||!Object.values(r.signalUnits).every(v=>
+              ['NOT_CHECKED','ACTIVE','INACTIVE','FAILED','NOT_FOUND',
+               'UNKNOWN','UNAVAILABLE'].includes(v))
+            ||!r.signalCycle
+            ||Object.keys(r.signalCycle).sort().join()!=='exitCode,hasStarted,lastResult,startedAgeBand,unitState'
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalCycle.startedAgeBand)
+            ||!['NOT_CHECKED','ACTIVE','INACTIVE','FAILED','NOT_FOUND','UNKNOWN','UNAVAILABLE']
+              .includes(r.signalCycle.unitState)
+            ||!['NOT_OBSERVED','UNKNOWN','RUNNING','SUCCEEDED','FAILED']
+              .includes(r.signalCycle.lastResult)
+            ||typeof r.signalCycle.hasStarted!=='boolean'
+            ||!(r.signalCycle.exitCode===null ||
+              (Number.isInteger(r.signalCycle.exitCode)&&r.signalCycle.exitCode>=0
+                &&r.signalCycle.exitCode<=255))
+            ||!r.signalFile
+            ||Object.keys(r.signalFile).sort().join()!=='fileAgeBand,generatedAgeBand,serviceSha,status'
+            ||!['NOT_CHECKED','ABSENT','UNSAFE_PATH','INVALID_CLOCK','UNSAFE_FILE',
+              'INVALID_SIZE','UNREADABLE','INVALID_JSON','INVALID_ENVELOPE',
+              'INVALID_TIMESTAMP','FUTURE_TIMESTAMP','STALE_PUBLICATION',
+              'RECENT_PUBLICATION'].includes(r.signalFile.status)
+            ||!safeSha(r.signalFile.serviceSha)
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalFile.generatedAgeBand)
+            ||!['UNKNOWN','UNDER_5M','UNDER_15M','UNDER_60M','OVER_60M']
+              .includes(r.signalFile.fileAgeBand)
+            ||!['NOT_CHECKED','DEFAULT_FILE_ABSENT','FILE_NOT_VERIFIABLE',
+              'SHA_OR_READ_PATH_MISMATCH_SUSPECT','RECENT_HTTP_AND_FILE',
+              'HTTP_FILE_AGE_DISAGREE','CYCLE_FAILED_SUSPECT',
+              'TIMER_NOT_RECENT_SUSPECT','RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT',
+              'CYCLE_RUNNING_OVER_60M_SUSPECT','CYCLE_RUNNING_WITH_STALE_SNAPSHOT',
+               'STALE_PUBLICATION_UNEXPLAINED','CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED',
+              'UNRESOLVED'].includes(r.staleCause)
+            ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
+            ||!/^[A-Z_]+$/u.test(String(r.classification))
+            ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
+            ||r.secretValuesRecorded!==false
+            ||!['pm2Online','exactDeployedIdentity','activationEnabled','marketWorkerConfigured',
+              'personalWorkerConfigured','roomBindingsValid'].every(k=>typeof r[k]==='boolean')
+            ||!r.personal ||!['healthAvailable','enabled','tickFresh','tickOk','deliveryConfirmed']
+                .every(k=>typeof r.personal[k]==='boolean')
+            ||!safeIso(r.personal.lastTickAt) ||!safeIso(r.personal.lastConfirmedDeliveryAt)
+            ||(r.personal.errorCode!==null && !/^[A-Z0-9_]{1,64}$/u.test(r.personal.errorCode))
+          ){
+            console.error('TELEGRAM_WORKER_UNSAFE_OR_INVALID_RECEIPT');
+            process.exit(1);
+          }
+          console.log('TELEGRAM_WORKER_READ_ONLY_EVIDENCE_SAFE');
+          NODE
+
+      - name: Report sanitized observations, not private room IDs or user rows
+        env:
+          REPORT: ${{ env.AUDIT_REPORT }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const r=JSON.parse(fs.readFileSync(process.env.REPORT,'utf8'));
+            const b=r.marketBrief, s=r.signalSubscriber, p=r.personal;
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'PRODUCTION TELEGRAM WORKER READ-ONLY OBSERVABILITY',
+                '- Exact main: '+r.mainSha,
+                '- Production PM2/marker: '+r.pm2Sha+' / '+r.markerSha,
+                '- PM2 online and exact identity: '+r.pm2Online+' / '+r.exactDeployedIdentity,
+                '- PM2 started at (UTC): '+(r.pm2StartedAt||'unknown'),
+                '- 07:50-08:10 KST process coverage (NOT a send receipt): '+r.morningWindowCoverage,
+                '- Telegram activation/market/personal/6 rooms: '+
+                    [r.activationEnabled,r.marketWorkerConfigured,r.personalWorkerConfigured,
+                     r.roomBindingsValid].join(' / '),
+                '- Personal tick fresh/confirmed: '+p.tickFresh+' / '+p.deliveryConfirmed,
+                '- Personal worker error code: '+(p.errorCode||'none'),
+                '- Personal last tick: '+(p.lastTickAt||'none'),
+                '- Personal last confirmed delivery: '+(p.lastConfirmedDeliveryAt||'none'),
+                '- Brief worker status/state/tick fresh/due code: '+
+                  [r.briefWorker.status,r.briefWorker.state||'none',
+                   r.briefWorker.tickFresh,r.briefWorker.lastDueCode||'none'].join(' / '),
+                '- Brief last tick/due: '+
+                  [r.briefWorker.lastTickAt||'none',r.briefWorker.lastDueTickAt||'none'].join(' / '),
+                '- Brief plans/attempted/accepted/deduped/unconfigured/failed: '+
+                  [r.briefWorker.lastDuePlans,r.briefWorker.lastDueAttempted,
+                   r.briefWorker.lastDueDelivered,r.briefWorker.lastDueDeduped,
+                   r.briefWorker.lastDueNotConfigured,r.briefWorker.lastDueFailed].join(' / '),
+                '- Worker Bot API acceptance does not establish actual human receipt.',
+                '- Market brief ledger: '+b.status+' / '+b.recordCount+
+                    ' recorded / '+b.recent24hCount+' last 24h',
+                '- Market brief latest ledger evidence: '+(b.lastEvidenceAt||'none'),
+                '- Market brief uncertain outcomes (NOT SENT): '+b.unconfirmedCount+
+                  ' / 24h '+b.unconfirmedRecent24hCount+' / latest '+(b.lastUnconfirmedAt||'none'),
+                '- Market kinds recorded: '+JSON.stringify(b.briefKinds),
+                '- Signal subscriber ledger: '+s.status+' / '+s.recordCount+
+                    ' recorded / '+s.recent24hCount+' last 24h',
+                '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
+                '- Signal subscriber uncertain outcomes (NOT SENT): '+s.unconfirmedCount+
+                  ' / 24h '+s.unconfirmedRecent24hCount+' / latest '+(s.lastUnconfirmedAt||'none'),
+                '- Local signal source GET status/count/safety: '+
+                  [r.signalSource.status,r.signalSource.eventCount,r.signalSource.safetyValidated].join(' / '),
+                '- Signal V3 systemd server/timer/cycle: '+
+                  [r.signalUnits.server,r.signalUnits.timer,r.signalUnits.cycle].join(' / '),
+                '- Signal V3 local health/status/snapshot ready/fresh/SHA: '+
+                  [r.signalHealth.status,r.signalHealth.snapshotReady,
+                   r.signalHealth.snapshotFresh,r.signalHealth.serviceSha||'none'].join(' / '),
+                '- Signal V3 snapshot age band: '+r.signalHealth.snapshotAgeBand,
+                '- Signal V3 last cycle started age band: '+r.signalCycle.startedAgeBand,
+                '- Signal V3 default file publication/ages: '+
+                  [r.signalFile.status,r.signalFile.generatedAgeBand,
+                    r.signalFile.fileAgeBand].join(' / '),
+                '- Signal V3 stale cause hypothesis: '+r.staleCause,
+                '- Signal V3 fixed oneshot cycle unit/result/exit/started: '+
+                  [r.signalCycle.unitState,r.signalCycle.lastResult,
+                    r.signalCycle.exitCode===null?'unknown':r.signalCycle.exitCode,
+                    r.signalCycle.hasStarted].join(' / '),
+                '- INACTIVE after successful oneshot is normal; status alone never proves fresh data.',
+                '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
+                '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
+                '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',
+                '- Chat IDs, user identities, tokens and secret values disclosed: false',
+                '- GitHub Run: '+context.runId,
+              ].join('\n')
+            });
+
+      - name: Fail closed on runtime identity, flags, or health mismatch
+        env:
+          REPORT: ${{ env.AUDIT_REPORT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(r.classification!=='READ_ONLY_OBSERVATION_COMPLETE'
+            ||r.pm2Online!==true ||r.exactDeployedIdentity!==true
+            ||r.roomBindingsValid!==true ||r.personal.healthAvailable!==true){
+            console.error('TELEGRAM_WORKER_OBSERVABILITY_NOT_READY: '+r.classification);
+            process.exit(1);
+          }
+          console.log('TELEGRAM_WORKER_READ_ONLY_OBSERVATION_COMPLETE');
+          NODE
