@@ -655,32 +655,73 @@ export class SignalIntelligenceTelegramSubscriber {
   }
 }
 
+export type SignalTelegramSubscriberRuntimeHealth = Readonly<{
+  state: 'NOT_STARTED' | 'DISABLED' | 'RUNNING' | 'STOPPING' | 'STOPPED';
+  inFlight: number;
+  lastSourceStatus: SignalTelegramSourceStatus | null;
+}>;
+
+let subscriberRuntimeHealth: SignalTelegramSubscriberRuntimeHealth =
+  Object.freeze({ state: 'NOT_STARTED', inFlight: 0, lastSourceStatus: null });
+export function readSignalIntelligenceTelegramSubscriberRuntimeHealth():
+ SignalTelegramSubscriberRuntimeHealth {
+  return subscriberRuntimeHealth;
+}
+function setSubscriberRuntimeHealth(patch: Partial<SignalTelegramSubscriberRuntimeHealth>) {
+  subscriberRuntimeHealth = Object.freeze({ ...subscriberRuntimeHealth, ...patch });
+}
+
 export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | null {
-  if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true') return null;
-  if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) return null;
+  // Refuse two subscriber instances inside the same API process.
+  if (subscriberRuntimeHealth.state === 'RUNNING'
+    || subscriberRuntimeHealth.state === 'STOPPING') return null;
+  if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true'
+    || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+    subscriberRuntimeHealth = Object.freeze({
+      state: 'DISABLED', inFlight: 0, lastSourceStatus: null,
+    });
+    return null;
+  }
   const statePath = process.env.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH?.trim()
     || path.resolve(process.cwd(), '.runtime/signal-intelligence-telegram-state.json');
   const subscriber = new SignalIntelligenceTelegramSubscriber(new SignalIntelligenceTelegramDeliveryState(statePath));
+  subscriberRuntimeHealth = Object.freeze({state:'RUNNING', inFlight:0, lastSourceStatus:null});
   let previousStatus: SignalTelegramSourceStatus | null = null;
   const tick = async () => {
-    const result = await subscriber.runOnce(new Date());
-    if (result.sourceStatus !== 'OVERLAP'
-      && (result.sourceStatus !== previousStatus || result.delivered > 0
-        || result.queued > 0 || result.failed > 0)) {
-      logger.info({
-        status: result.sourceStatus, attempted: result.attempted,
-        delivered: result.delivered, publicDelivered: result.publicDelivered,
-        personalDelivered: result.personalDelivered,
-        queued: result.queued, personalQueued: result.personalQueued,
-        deduped: result.deduped, skipped: result.skipped,
-        failed: result.failed,
-      }, 'signal intelligence Telegram subscriber tick');
+    setSubscriberRuntimeHealth({inFlight: subscriberRuntimeHealth.inFlight + 1});
+    try {
+      const result = await subscriber.runOnce(new Date());
+      setSubscriberRuntimeHealth({lastSourceStatus:result.sourceStatus});
+      if (result.sourceStatus !== 'OVERLAP'
+        && (result.sourceStatus !== previousStatus || result.delivered > 0
+          || result.queued > 0 || result.failed > 0)) {
+        logger.info({
+          status: result.sourceStatus, attempted: result.attempted,
+          delivered: result.delivered, publicDelivered: result.publicDelivered,
+          personalDelivered: result.personalDelivered,
+          queued: result.queued, personalQueued: result.personalQueued,
+          deduped: result.deduped, skipped: result.skipped,
+          failed: result.failed,
+        }, 'signal intelligence Telegram subscriber tick');
+      }
+      if (result.sourceStatus !== 'OVERLAP') previousStatus = result.sourceStatus;
+    } finally {
+      const remaining = Math.max(0, subscriberRuntimeHealth.inFlight - 1);
+      setSubscriberRuntimeHealth({
+        inFlight: remaining,
+        ...(subscriberRuntimeHealth.state === 'STOPPING' && remaining === 0
+          ? {state:'STOPPED' as const} : {}),
+      });
     }
-    if (result.sourceStatus !== 'OVERLAP') previousStatus = result.sourceStatus;
   };
   void tick();
   const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.SIGNAL_INTELLIGENCE_TELEGRAM_INTERVAL_MS));
   timer.unref?.();
   console.log('[signal-intelligence-telegram] subscriber started');
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => {
+    clearInterval(timer);
+    setSubscriberRuntimeHealth({
+      state: subscriberRuntimeHealth.inFlight === 0 ? 'STOPPED' : 'STOPPING',
+    });
+  } };
 }
