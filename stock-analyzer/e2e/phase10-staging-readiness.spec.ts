@@ -2578,8 +2578,16 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의매매', '/paper-trading');
-    await expect(page.locator('body')).toContainText(/모의|paper/i);
+    // Paper is a mode of the consolidated 기술매매 shell, not a separate
+    // technical menu item. Validate the actual menu → mode-tab user journey.
+    await openMenuRoute('technical', '기술매매', '/auto-trading');
+    await expect(page.getByTestId('technical-mode-paper')).toBeVisible();
+    await expectNavigationTransition(page, '/paper-trading', async () => {
+      await page.getByTestId('technical-mode-paper').click();
+    });
+    await expect(page.getByTestId('paper-trading-shell')).toBeVisible();
+    await expect(page.getByTestId('technical-mode-paper')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
 
     await openMenuRoute('information', '연구센터', '/research-center');
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
