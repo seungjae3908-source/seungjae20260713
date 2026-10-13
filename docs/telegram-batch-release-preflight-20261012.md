@@ -176,3 +176,20 @@ widened merely to force this release. A reviewed independent installer,
 staging and owner-controlled migration remain necessary before actual LIVE
 Telegram service can switch from embedded to isolated without disturbing
 manual LIVE trading. Code-only prepare ≠ installed worker ≠ received message.
+
+### Source preflight uncovered an additional isolated-worker authority gap
+
+The initial isolated-owner matrix mirrored an older Telegram release check,
+but had omitted independent TRANSFER_ENABLED, WITHDRAWAL_ENABLED and the four
+provider ORDER_ENABLED flags. A new offline failure test caught this BEFORE
+Full CI. The isolated process now rejects all those flags and rejects inherited
+private broker signing credentials (master encryption key, Toss, Kiwoom, Upbit
+and Bitget keys) even when their enable booleans say false. The personal
+Telegram bot token, Supabase service-role storage key and optional public AI
+credentials remain the only separately approved notification data scope.
+
+A failed scoped QA is not a reason to repeat Full CI: exact-head Fast dispatch
+correctly blocks the expensive Full run until the whole Telegram QA passes.
+The prior verified Full 26/26 is historical source evidence and cannot be
+borrowed for this modified candidate. Protected server diagnostics and the
+Staging Paper GET400 remain truthful NO_GO until independently resolved.
