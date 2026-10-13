@@ -714,8 +714,13 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
       });
     }
   };
-  void tick();
-  const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.SIGNAL_INTELLIGENCE_TELEGRAM_INTERVAL_MS));
+  const safeTick = () => { void tick().catch(() => {
+    setSubscriberRuntimeHealth({lastSourceStatus:'PROCESSING_FAILED'});
+    logger.warn({code:'TELEGRAM_SUBSCRIBER_TICK_FAILED'},
+      'signal Telegram subscriber tick rejected; no delivery proof');
+  }); };
+  safeTick();
+  const timer = setInterval(safeTick, boundedInterval(process.env.SIGNAL_INTELLIGENCE_TELEGRAM_INTERVAL_MS));
   timer.unref?.();
   console.log('[signal-intelligence-telegram] subscriber started');
   return { stop: () => {

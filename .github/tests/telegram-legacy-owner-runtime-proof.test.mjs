@@ -10,9 +10,11 @@ const make=()=>({
  ok:true, service:'api-server', identityMatch:true, identityStatus:'match',
  deploySha:sha, processDeploySha:sha, deployMarkerSha:sha,
  time: timestamp.toISOString(), backgroundWorkersEnabled:true,
- userTelegramDelivery:{enabled:false,lastTickAt:null},
- telegramIntelligenceWorker:{enabled:false,state:'DISABLED'},
- signalTelegramSubscriber:{state:'DISABLED',inFlight:0},
+ telegramWorkerOwner:'isolated',
+ userTelegramDelivery:{enabled:false,lastTickAt:null,tickOk:null,deliveryConfirmed:false},
+ telegramIntelligenceWorker:{enabled:false,state:'NOT_STARTED',lastTickAt:null},
+ signalTelegramSubscriber:{state:'NOT_STARTED',inFlight:0,lastSourceStatus:null},
+ telegramAiWatch:{state:'NOT_STARTED',inFlight:0},
  autoTradingBackground:{enabled:true},
 });
 test('only actual same-process current three-lane shutdown passes',()=>{
@@ -26,8 +28,16 @@ test('old runtime, missing subscriber status, in-flight sends and stale readback
   x=>{x.signalTelegramSubscriber=undefined},
   x=>{x.signalTelegramSubscriber.inFlight=1},
   x=>{x.signalTelegramSubscriber.state='STOPPING'},
+  x=>{x.telegramWorkerOwner='embedded'},
+  x=>{x.telegramAiWatch=undefined},
+  x=>{x.telegramAiWatch.inFlight=1},
+  x=>{x.telegramAiWatch.state='RUNNING'},
+  x=>{x.backgroundWorkersEnabled=false},
+  x=>{x.telegramIntelligenceWorker.state='DISABLED'},
   x=>{x.telegramIntelligenceWorker.state='RUNNING'},
   x=>{x.userTelegramDelivery.lastTickAt=timestamp.toISOString()},
+  x=>{x.userTelegramDelivery.deliveryConfirmed=true},
+  x=>{x.userTelegramDelivery.tickOk=true},
   x=>{x.processDeploySha='b'.repeat(40)},
   x=>{x.deployMarkerSha='b'.repeat(40)},
   x=>{x.identityMatch=false},
@@ -55,6 +65,7 @@ test('standalone runner only accepts bounded loopback GET and shared production 
  assert.match(source,/telegram-legacy-owner-runtime-proof\.mjs/u);
  assert.equal((source.match(/legacy_health_inactive/g)??[]).length,3);
  assert.match(source,/127\.0\.0\.1/u);
+ assert.match(source,/TELEGRAM_WORKER_OWNER/u);
  assert.doesNotMatch(source,/pm2 (?:restart|reload|stop|delete)/u);
  assert.doesNotMatch(source,/curl[^\n]+(?:-X|--data|--request)\s*(?:POST|PUT|PATCH|DELETE)/iu);
 });
