@@ -8,6 +8,41 @@ import type { AiChatResult } from './ai-chat.service';
 
 const KEY = 'a'.repeat(64);
 
+test('changed facts cannot reuse a caller key and returned values cannot mutate cached evidence', async () => {
+  let calls = 0;
+  const analyzer = new MarketIntelligenceAiAnalyzer({ answerAiChatImpl: async () => {
+    calls += 1;
+    return aiResult(analysisAnswer());
+  } });
+  const first = await analyzer.analyze(input());
+  first.analysis!.summaryShort = 'caller mutation';
+  assert.notEqual((await analyzer.analyze(input())).analysis!.summaryShort, 'caller mutation');
+  await analyzer.analyze(input({ evidenceFacts: ['다른 공개 공시 사실'] }));
+  assert.equal(calls, 2);
+});
+
+test('pre-aborted or future-dated evidence never starts a provider call', async () => {
+  let calls = 0;
+  const analyzer = new MarketIntelligenceAiAnalyzer({ answerAiChatImpl: async () => { calls += 1; return aiResult(analysisAnswer()); } });
+  const controller = new AbortController(); controller.abort(new Error('cancel-first'));
+  await assert.rejects(analyzer.analyze(input(), controller.signal), /cancel-first/);
+  const future = await analyzer.analyze(input({ publishedAt: new Date(Date.now() + 60_000).toISOString() }));
+  assert.equal(future.reason, 'PUBLIC_EVIDENCE_TIMESTAMP_INVALID');
+  assert.equal(calls, 0);
+});
+
+test('non-cooperative AI provider times out and capacity is released without fabricated analysis', async () => {
+  const analyzer = new MarketIntelligenceAiAnalyzer({ timeoutMs: 1_000, maxInFlight: 1,
+    answerAiChatImpl: async () => new Promise(() => {}) });
+  const first = analyzer.analyze(input());
+  const busy = await analyzer.analyze(input({ symbol: 'AAPL' }));
+  assert.equal(busy.reason, 'AI_CAPACITY_EXHAUSTED');
+  const timedOut = await first;
+  assert.equal(timedOut.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(timedOut.reason, 'AI_PROVIDER_DEADLINE');
+  assert.equal(analyzer.stats.inFlight, 0);
+});
+
 function input(overrides: Partial<MarketIntelligencePublicEvidenceInput> = {}): MarketIntelligencePublicEvidenceInput {
   return {
     analysisKey: KEY,
@@ -51,6 +86,9 @@ function aiResult(answer: string, model = 'gemini-test'): AiChatResult {
     answer,
     kind: 'answer',
     model,
+    provider: 'google-gemini',
+    fallbackUsed: false,
+    providerLatencyMs: 12,
     generatedAt: '2026-08-27T01:00:00.000Z',
     data: { status: 'not_requested', asOf: null, basis: 'server_collection_time', sources: [], missing: [] },
   };
@@ -214,7 +252,7 @@ test('unsafe trade instruction in model output is rejected instead of becoming i
 
 test('same analysisKey reuses completed cache and makes one provider call', async () => {
   let calls = 0;
-  let now = 1_000;
+  let now = Date.parse('2026-08-27T01:00:00Z');
   const analyzer = new MarketIntelligenceAiAnalyzer({
     now: () => now,
     cacheTtlMs: 60_000,

@@ -1,0 +1,356 @@
+name: Research Workspace Integration V3
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/external-research/**
+      - api-server/src/routes/research-workspace.ts
+      - api-server/src/services/research-workspace-authorization-v5*.ts
+      - api-server/src/services/research-workspace-transcript-v6*.ts
+      - api-server/src/services/ai-chat.service.ts
+      - api-server/src/services/research-groq-one-shot-transport.service.test.ts
+      - api-server/src/services/research-groq-json-transport.service.ts
+      - api-server/src/tools/research-workspace-one-shot-v12*.ts
+      - api-server/scripts/run-research-workspace-one-shot-v12.ts
+      - api-server/test.mjs
+      - api-server/scripts/run-research-workspace-canonical-evaluation-preflight-v17.ts
+      - .github/workflows/research-workspace-canonical-evaluation-preflight-v17.yml
+      - .github/workflows/research-workspace-canonical-evaluation-contract-v18.yml
+      - api-server/scripts/research-workspace-one-shot-preflight-v13.cjs
+      - api-server/scripts/research-workspace-one-shot-preflight-v13.test.cjs
+      - .github/workflows/research-workspace-one-shot-preflight-v13.yml
+      - .github/workflows/research-workspace-one-shot-execution-v14.yml
+      - .github/workflows/research-workspace-human-rule-digest-binding-v16.yml
+      - api-server/scripts/run-research-workspace-one-shot-bind-v16.ts
+      - api-server/src/routes/video-research*.ts
+      - api-server/src/services/research-center-readonly-contract.service.ts
+      - api-server/src/services/fast-profitability-activation.service.ts
+      - api-server/src/services/fast-profitability-evidence-runtime.service.ts
+      - api-server/src/services/forward-recommendation-observer.service.ts
+      - api-server/src/services/unified-trade-journal-canonical-binding.service.ts
+      - api-server/src/scripts/run-fast-profitability-collector.ts
+      - market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js
+      - market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js
+      - research-dashboard/**
+      - api-server/src/routes/index.ts
+      - stock-analyzer/src/components/research-workspace-panel.tsx
+      - stock-analyzer/src/pages/research-center.tsx
+      - stock-analyzer/src/lib/research-center.ts
+      - stock-analyzer/src/components/research-workspace-providers.tsx
+      - stock-analyzer/src/components/research-workspace-worker.tsx
+      - stock-analyzer/src/components/research-workspace-orchestrator.tsx
+      - stock-analyzer/src/components/research-workspace-one-shot-review.tsx
+      - stock-analyzer/src/lib/research-worker-status.*
+      - stock-analyzer/src/lib/research-orchestrator-status.*
+      - stock-analyzer/src/lib/research-one-shot-review.*
+      - stock-analyzer/src/lib/research-provider-status.*
+      - stock-analyzer/src/components/research-video*.tsx
+      - stock-analyzer/src/lib/research-workspace-response.*
+      - stock-analyzer/e2e/research-workspace-v2.spec.ts
+      - stock-analyzer/e2e/research-video-intelligence.spec.ts
+      - stock-analyzer/*research-workspace.config.ts
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
+      - .github/scripts/paper-forward-reviewed-paths.mjs
+      # Additional Paper-reviewed paths still run the Research preservation gate.
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.test.cjs
+      - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/tests/production-auto-live-only-release-contract.test.mjs
+      - .github/workflows/production-automatic-trading-gate.yml
+      - api-server/scripts/apply-staging-supabase-bootstrap.mjs
+      - api-server/scripts/verify-phase8-db.sh
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/index.ts
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/automatic-live-position-isolation.service.ts
+      - api-server/src/services/member-auto-trading-ai-review-evidence.service.ts
+      - api-server/src/services/trade-automation-integration.test.ts
+      - api-server/src/services/trade-exchange-adapters.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
+      - api-server/supabase/bootstrap/staging-bootstrap.sql
+      - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
+      # The exact owner-approved AUTO safety scope still runs preservation.
+      - .github/config/automatic-live-preactivation-checklist.json
+      - .github/scripts/automatic-live-preactivation-audit.cjs
+      - .github/scripts/automatic-live-preactivation-audit.test.cjs
+      - .github/scripts/production-auto-live-signal-identity.test.cjs
+      - .github/scripts/production-manual-live-receipts.cjs
+      - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/tests/kiwoom-readonly-recovery-security-contract.test.mjs
+      - .github/tests/production-auto-live-budget-contract.test.mjs
+      - .github/workflows/application-fast-ci.yml
+      - api-server/package.json
+      - api-server/scripts/automatic-live-preflight-stages.mjs
+      - api-server/scripts/automatic-live-preflight-stages.test.mjs
+      - api-server/scripts/kiwoom-readonly-recovery-security-contract.mjs
+      - api-server/scripts/run-automatic-live-preflight-tests.mjs
+      - api-server/scripts/verify-automatic-live-budget-concurrency.sh
+      - api-server/scripts/verify-phase8-security.mjs
+      - api-server/src/services/automatic-live-budget.service.test.ts
+      - api-server/src/services/automatic-live-budget.service.ts
+      - api-server/src/services/automatic-live-owner-policy.service.test.ts
+      - api-server/src/services/automatic-live-owner-policy.service.ts
+      - api-server/src/services/automatic-live-position-isolation.service.test.ts
+      - api-server/src/services/automatic-live-preactivation-audit.service.test.ts
+      - api-server/src/services/automatic-live-preactivation-audit.service.ts
+      - api-server/src/services/automatic-live-unrealized-risk.service.test.ts
+      - api-server/src/services/automatic-live-unrealized-risk.service.ts
+      - api-server/src/services/bitget-native-protection-readonly.service.test.ts
+      - api-server/src/services/bitget-native-protection-readonly.service.ts
+      - api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts
+      - api-server/src/services/kiwoom-readonly-order-recovery.service.ts
+      - api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts
+      - api-server/src/services/public-live-plan-origin.service.test.ts
+      - api-server/src/services/public-live-plan-origin.service.ts
+      - api-server/src/services/trade-automation-repository-compatibility.test.ts
+      - api-server/src/services/trade-execution-snapshot.service.ts
+      - api-server/src/services/trade-history-completeness.service.test.ts
+      - api-server/src/services/trade-history-completeness.service.ts
+      - api-server/src/services/trade-kiwoom-readonly-contract.test.ts
+      - api-server/src/services/trade-order-recovery.service.ts
+      - api-server/src/services/trade-order-recovery.test.ts
+      - api-server/src/services/trade-recovery-worker.service.ts
+      - api-server/src/services/trade-recovery-worker.test.ts
+      - api-server/src/services/trading-provider-response.service.test.ts
+      - api-server/src/services/trading-provider-response.service.ts
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql
+      - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
+      - ops/apply-production-auto-live-budget.mjs
+      - ops/production-auto-live-signal-identity.cjs
+      - ops/production-auto-live-signal-source-audit.mjs
+      - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
+      - .github/scripts/research-center-batch-scope.mjs
+      - .github/tests/research-center-batch-scope.test.mjs
+      - .github/scripts/scanner-readonly-repair-scope.mjs
+      - .github/tests/scanner-readonly-repair-scope.test.mjs
+      # Exact Scanner -> Signal V3 -> automatic admission scope. These paths
+      # run the full automatic-trading guards, not the pinned Scanner repair.
+      - .github/workflows/paper-forward-schedule-validation.yml
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/scanner-candidate-ranking.service.test.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.test.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/telegram-v3-current-source.service.test.ts
+      - api-server/src/services/telegram-v3-current-source.service.ts
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-automation.types.ts
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+      - signal-intelligence-v3/ARCHITECTURE.md
+      - signal-intelligence-v3/README.md
+      - signal-intelligence-v3/scripts/diagnose-public-providers.ts
+      - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
+      - signal-intelligence-v3/src/public-provider-diagnostics.mjs
+      - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/canonical-adapter.test.mjs
+      - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
+      - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
+      - .github/workflows/research-workspace-integration-v1.yml
+permissions:
+  contents: read
+concurrency:
+  group: research-workspace-v1-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+  EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+  ENABLE_REPLIT_EDITOR_PLUGINS: 'false'
+jobs:
+  contract-and-preservation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify owner ancestry and protected main paths
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node --test .github/tests/research-center-batch-scope.test.mjs
+          node --test .github/tests/scanner-readonly-repair-scope.test.mjs
+          node .github/scripts/verify-research-workspace-sync-v3.mjs "$RUNNER_TEMP/workspace-preservation.json"
+      - name: Offline contract, storage and anti-hang regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test packages/external-research/test/research-workspace*.test.js | tee "$RUNNER_TEMP/workspace-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-workspace-v3-contract-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/workspace-preservation.json
+            ${{ runner.temp }}/workspace-tests.log
+          if-no-files-found: error
+          retention-days: 30
+  application-integration:
+    needs: contract-and-preservation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.11.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install pinned workspace dependencies
+        id: install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Frontend semantic typecheck
+        if: steps.install.outcome == 'success'
+        run: pnpm --dir stock-analyzer typecheck
+      - name: Backend semantic typecheck
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm --dir api-server exec tsc -p tsconfig.json --noEmit
+      - name: Phase12 provider one-shot synthetic contract
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm exec esbuild src/services/research-groq-one-shot-transport.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-groq-v12.test.cjs"
+          pnpm exec esbuild src/tools/research-workspace-one-shot-v12.test.ts             --bundle --platform=node --format=cjs --target=node22             --define:import.meta.env='{}' --outfile="$RUNNER_TEMP/research-one-shot-v12.test.cjs"
+          node --test "$RUNNER_TEMP/research-groq-v12.test.cjs" "$RUNNER_TEMP/research-one-shot-v12.test.cjs"             | tee "$RUNNER_TEMP/research-one-shot-v12-tests.log"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-v12.ts             --bundle --platform=node --format=esm --target=node22             --outfile="$RUNNER_TEMP/run-research-one-shot-v12.mjs"
+          node "$RUNNER_TEMP/run-research-one-shot-v12.mjs" --help             | tee "$RUNNER_TEMP/research-one-shot-v12-help.log"
+          grep -Fq 'at most one Gemini call and one Groq call' "$RUNNER_TEMP/research-one-shot-v12-help.log"
+          grep -Fq 'No compiler/backtest, schedule, deployment, trading or paid fallback' "$RUNNER_TEMP/research-one-shot-v12-help.log"
+      - name: Phase16 human rule-digest binding synthetic contract
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --test ../packages/external-research/test/research-workspace-one-shot-bind-v16.test.js \
+            | tee "$RUNNER_TEMP/research-human-bind-v16-tests.log"
+          pnpm exec esbuild scripts/run-research-workspace-one-shot-bind-v16.ts \
+            --bundle --platform=node --format=esm --target=node22 \
+            --outfile="$RUNNER_TEMP/run-research-human-bind-v16.mjs"
+          node "$RUNNER_TEMP/run-research-human-bind-v16.mjs" --help \
+            | tee "$RUNNER_TEMP/research-human-bind-v16-help.log"
+          grep -Fq 'one canonical research evaluation only' "$RUNNER_TEMP/research-human-bind-v16-help.log"
+          grep -Fq 'Provider calls, compiler runs and backtests remain zero' "$RUNNER_TEMP/research-human-bind-v16-help.log"
+      - name: Existing source-reader HTTP regressions
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' | tee "$RUNNER_TEMP/workspace-http-tests.log"
+          import { build } from 'esbuild';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const directory = await mkdtemp(path.join(tmpdir(), 'workspace-http-'));
+          try {
+            const output = path.join(directory, 'source-reader.test.cjs');
+            // Match api-server/test.mjs; use the existing lockfile-pinned compiler.
+            await build({
+              entryPoints: ['src/routes/market-summary-availability.smoke.test.ts'],
+              outfile: output, bundle: true, platform: 'node', format: 'cjs',
+              target: 'node20', sourcemap: 'inline', logLevel: 'warning',
+              define: { 'import.meta.env': '{}' },
+            });
+            const result = spawnSync(process.execPath, ['--test', output], {
+              cwd: path.resolve('..'), stdio: 'inherit',
+            });
+            if (result.error) throw result.error;
+            process.exitCode = result.status ?? 1;
+          } finally { await rm(directory, { recursive: true, force: true }); }
+          NODE
+      - name: Canonical current-admin publication authorization regressions
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' | tee "$RUNNER_TEMP/workspace-admin-tests.log"
+          import { build } from 'esbuild';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const directory=await mkdtemp(path.join(tmpdir(),'workspace-admin-'));
+          try {
+            const output=path.join(directory,'authorization.test.cjs');
+            await build({entryPoints:['src/services/research-workspace-authorization-v5.test.ts'],
+              outfile:output,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'warning',
+              define:{'import.meta.env':'{}'}});
+            const result=spawnSync(process.execPath,['--test',output],{cwd:path.resolve('..'),stdio:'inherit'});
+            if(result.error)throw result.error;
+            process.exitCode=result.status??1;
+          } finally {await rm(directory,{recursive:true,force:true});}
+          NODE
+      - name: Canonical transcript extraction adapter (synthetic transports)
+        if: always() && steps.install.outcome == 'success'
+        working-directory: api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' | tee "$RUNNER_TEMP/workspace-transcript-tests.log"
+          import { build } from 'esbuild';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import path from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const directory=await mkdtemp(path.join(tmpdir(),'workspace-transcript-'));
+          try {
+            const output=path.join(directory,'transcript.test.cjs');
+            await build({entryPoints:['src/services/research-workspace-transcript-v6.test.ts'],
+              outfile:output,bundle:true,platform:'node',format:'cjs',target:'node22',logLevel:'warning',
+              define:{'import.meta.env':'{}'}});
+            const result=spawnSync(process.execPath,['--test',output],{cwd:path.resolve('..'),stdio:'inherit'});
+            if(result.error)throw result.error;
+            process.exitCode=result.status??1;
+          } finally {await rm(directory,{recursive:true,force:true});}
+          NODE
+      - name: Install Chromium
+        id: browser
+        if: always() && steps.install.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Actual React application and Tailwind browser suite (synthetic API fixtures)
+        if: always() && steps.browser.outcome == 'success'
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-workspace-v3-application-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            ${{ runner.temp }}/workspace-http-tests.log
+            ${{ runner.temp }}/workspace-admin-tests.log
+            ${{ runner.temp }}/workspace-transcript-tests.log
+            ${{ runner.temp }}/research-one-shot-v12-tests.log
+            ${{ runner.temp }}/research-one-shot-v12-help.log
+            ${{ runner.temp }}/research-human-bind-v16-tests.log
+            ${{ runner.temp }}/research-human-bind-v16-help.log
+          if-no-files-found: error
+          retention-days: 30

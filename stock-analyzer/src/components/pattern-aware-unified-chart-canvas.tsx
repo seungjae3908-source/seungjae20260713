@@ -24,7 +24,7 @@ import {
   type AiChartPositionOverlay,
 } from '@/components/ai-chart-position-panel';
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
-import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
+import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
@@ -110,6 +110,7 @@ export type PatternAwareUnifiedChartCanvasHandle = {
 };
 
 type Props = {
+  selection: AnalysisSelection;
   candles: NormalizedChartCandle[];
   indicators: ChartIndicatorResult;
   levels: PriceLevels;
@@ -282,6 +283,7 @@ function chartSymbolFromResetKey(
 }
 
 export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChartCanvasHandle, Props>(function PatternAwareUnifiedChartCanvas({
+  selection,
   candles,
   indicators,
   levels,
@@ -788,6 +790,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       {chartSymbol ? (
         <div className="px-3 sm:px-4">
           <AiChartPositionPanel
+            selection={selection}
             market={market}
             symbol={chartSymbol}
             chartPrice={latestChartPrice}

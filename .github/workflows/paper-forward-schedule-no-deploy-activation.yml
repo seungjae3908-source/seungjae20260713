@@ -5,7 +5,10 @@ on:
     branches: [main]
     paths:
       - .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+      - .github/scripts/current-main-ci-provenance.cjs
       - ops/install-paper-forward-schedule.sh
+      - ops/verify-paper-forward-genuine-cost-window.mjs
+      - .github/tests/paper-forward-genuine-cost-window.test.mjs
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
@@ -60,6 +63,7 @@ jobs:
           grep -F 'paper-forward-no-deploy-certification-' "$operational_contract" >/dev/null
           grep -F 'Required CI 6/6' "$operational_contract" >/dev/null
           grep -F 'PostgreSQL Auth evidence' "$operational_contract" >/dev/null
+          grep -F 'node ops/verify-paper-forward-genuine-cost-window.mjs' "$operational_contract" >/dev/null
           grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$operational_contract" >/dev/null
           ! grep -F 'staging-verdict-' "$operational_contract" >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" "$active_contract" >/dev/null
@@ -122,6 +126,9 @@ jobs:
 
       - name: Run Paper scheduler core regression
         run: npm --prefix market-prediction-lab run paper:scheduler:verify
+
+      - name: Verify genuine-cost eligibility fails before protected approval
+        run: node --test .github/tests/paper-forward-genuine-cost-window.test.mjs
 
       - name: Run authoritative Natural Paper focused regression
         run: >-
@@ -197,53 +204,21 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Require exact current main and Required CI 6/6
+      - name: Require exact current main and verified CI provenance
         id: required
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ env.TARGET_SHA }}
         with:
           script: |
-            const target = process.env.TARGET_SHA;
-            if (!/^[0-9a-f]{40}$/.test(target)) {
-              core.setFailed('Exact lowercase 40-character target SHA required.');
-              return;
-            }
-            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
-            if (main.data.commit.sha !== target) {
-              core.setFailed(`Certification target is stale: target=${target} main=${main.data.commit.sha}`);
-              return;
-            }
-            const required = new Set([
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ]);
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            const { inspectCurrentMainCiProvenance } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/current-main-ci-provenance.cjs`
+            );
+            const result = await inspectCurrentMainCiProvenance({
+              github, context, targetSha: process.env.TARGET_SHA,
             });
-            const latest = new Map();
-            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
-            const evidence = [...required].map((contextName) => latest.get(contextName));
-            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
-              core.setFailed('Exact current main does not have Required CI 6/6 SUCCESS.');
-              return;
-            }
-            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
-            if (runIds.size !== 1 || runIds.has(null)) {
-              core.setFailed('Required CI 6/6 does not share one coherent provenance run.');
-              return;
-            }
-            const runId = Number([...runIds][0]);
-            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId });
-            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
-              core.setFailed('Required CI provenance is not an exact successful target run.');
-              return;
-            }
-            core.setOutput('run_id', String(runId));
+            core.setOutput('run_id', String(result.runId));
+            core.setOutput('mode', result.mode);
 
       - name: Locate successful exact-SHA PostgreSQL Auth evidence
         id: postgres
@@ -321,8 +296,10 @@ jobs:
   gate:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.state == 'open' &&
+      !github.event.issue.pull_request &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -493,6 +470,9 @@ jobs:
             && checks.executionAuthority === 'NONE';
           if (!valid) process.exit(1);
           NODE
+
+      - name: Fail before protected approval until genuine OOS cost evidence can exist
+        run: node ops/verify-paper-forward-genuine-cost-window.mjs
 
   activate:
     if: github.event_name == 'issue_comment'
@@ -799,7 +779,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: context.payload.issue.number,
               body: [
                 '[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]',
                 `TARGET_SHA=${process.env.TARGET_SHA}`,

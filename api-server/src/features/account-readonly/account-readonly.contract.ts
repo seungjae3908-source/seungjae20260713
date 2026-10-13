@@ -1,14 +1,15 @@
-export type AccountProvider = 'toss' | 'upbit' | 'bitget';
+export type AccountProvider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 export type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED' | 'STALE' | 'AUTH_FAILED' | 'RATE_LIMITED' | 'UNAVAILABLE';
 
 export type CanonicalBalance = { currency: string; available: number | null; locked: number | null; total: number | null; estimatedKrwValue: number | null };
-export type CanonicalPosition = { market: string; symbol: string; quantity: number | null; availableQuantity: number | null; averageEntryPrice: number | null; currentPrice: number | null; marketValue: number | null; unrealizedPnl: number | null; unrealizedPnlPercent: number | null; leverage: number | null; liquidationPrice: number | null; marginMode: string | null; side: string | null };
+export type CanonicalPosition = { market: string; symbol: string; displayName?: string | null; quantity: number | null; availableQuantity: number | null; averageEntryPrice: number | null; currentPrice: number | null; marketValue: number | null; unrealizedPnl: number | null; unrealizedPnlPercent: number | null; leverage: number | null; liquidationPrice: number | null; marginMode: string | null; side: string | null };
 export type CanonicalReadonlyOrder = { id: string | null; market: string | null; symbol: string | null; side: string | null; price: number | null; quantity: number | null; remainingQuantity: number | null; status: string | null };
 export type CanonicalAccount = { market: 'KR' | 'US' | 'UPBIT' | 'BITGET'; accountRef: string | null; currency: string | null; buyingPower: number | null };
 
 export type CanonicalAccountSnapshot = {
   provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;
   accounts: CanonicalAccount[] | null; balances: CanonicalBalance[] | null; positions: CanonicalPosition[] | null; openOrders: CanonicalReadonlyOrder[] | null;
+  positionMode?: 'one_way_mode' | 'hedge_mode' | null;
   checkedAt: string; lastGoodAt: string | null; stale: boolean; errorCode: string | null;
   orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;
   credentialsReturned: false; liveTradingEnabled: false; autoTradingEnabled: false;

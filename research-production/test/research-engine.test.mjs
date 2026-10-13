@@ -76,10 +76,22 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
     activationAtMs: 12345,
     env: { RUNTIME_DIRECTORY: runtimeDirectory },
   });
+  const formulaQueue = plan.find((task) => task.id === 'formula-backtest-queue');
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
-  assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
+  assert.deepEqual(plan.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, resolve(stateRoot));
+  assert.deepEqual(formulaQueue.acceptedExitCodes, [0, 2]);
+  assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
+  assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
+  assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
+  assert.deepEqual(formulaQueue.sharedPackages, ['strategy-hypothesis', 'external-research']);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
+  assert.equal(paper.env.PAPER_FORWARD_INITIAL_CAPITAL_KRW, '1000000');
+  assert.equal(
+    paper.env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH,
+    join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json'),
+  );
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
   assert.equal(
@@ -113,7 +125,11 @@ test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evi
     'EXISTING_TEMPORAL_EVIDENCE_ONLY',
     'defaultFeatureFallbackAllowed: false',
     'syntheticFeatureFallbackAllowed: false',
-    'if (inferenceBlocker) throw inferenceBlocker',
+    'inferenceBlocker.partialState = Object.freeze',
+    'prospectiveEvidenceAppended',
+    'modelObservationCreditAdded: false',
+    'policyCreditAdded: false',
+    'throw inferenceBlocker',
     'if (nextSummary.status === "blocked_data") process.exitCode = 2',
   ]) {
     assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
@@ -189,6 +205,33 @@ test('Paper Forward shared-package validation fails closed when a required packa
   assert.deepEqual(historical.requestedPackages, []);
 });
 
+test('isolated Formula TRAIN queue has both transitive dependencies it imports at runtime', async () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const formula = plan[0];
+  assert.equal(formula.id, 'formula-backtest-queue');
+  assert.deepEqual(formula.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  const generator = await readFile(new URL('../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js', import.meta.url), 'utf8');
+  const contract = await readFile(new URL('../../packages/strategy-hypothesis/src/contract.js', import.meta.url), 'utf8');
+  assert.ok(generator.includes('../../packages/strategy-hypothesis/src/index.js'));
+  assert.ok(contract.includes('../../external-research/src/index.js'));
+  const repoRoot = await fakeRepo();
+  const validation = await validateResearchTaskSharedPackages({ repoRoot, plan });
+  assert.deepEqual(validation.requestedPackages, ['strategy-hypothesis', 'external-research']);
+  const work = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir: join(repoRoot, 'research-state', 'runs', 'formula-module-probe'),
+    sharedPackages: formula.sharedPackages,
+  });
+  await access(join(work.workspaceRoot, '..', 'packages', 'strategy-hypothesis', 'src', 'index.js'));
+  await access(join(work.workspaceRoot, '..', 'packages', 'external-research', 'src', 'index.js'));
+});
+
 test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
   const repoRoot = await fakeRepo();
   const taskDir = join(repoRoot, 'research-state', 'runs', 'cycle-1', 'paper-forward');
@@ -242,7 +285,7 @@ test('Paper activation timestamp is persisted and forward execution is serialize
   });
   assert.equal(first.status, 'complete');
   assert.equal(first.concurrency, 1);
-  assert.deepEqual(first.results.map((row) => row.id), ['shadow-forward', 'paper-forward']);
+  assert.deepEqual(first.results.map((row) => row.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
   const activation = JSON.parse(await readFile(join(stateRoot, 'forward', 'activation.json'), 'utf8'));
   assert.equal(activation.activationAtMs, 123456789);
   await new Promise((resolve) => setTimeout(resolve, 3));

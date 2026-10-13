@@ -1,0 +1,1293 @@
+name: Production Automatic Trading Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/production-automatic-trading-gate.yml
+      - .github/scripts/production-trading-gate-conflicts.cjs
+      - .github/scripts/production-trading-gate-conflicts.test.cjs
+      - .github/scripts/production-manual-live-receipts.cjs
+      - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/scripts/production-auto-live-signal-identity.test.cjs
+      - ops/production-auto-live-signal-identity.cjs
+      - .github/scripts/production-preactivation-prerequisites.cjs
+      - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/scripts/production-preactivation-evidence-paths.cjs
+      - .github/scripts/production-preactivation-evidence-paths.test.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/tests/production-paper-forward-readiness.test.mjs
+      - .github/tests/production-telegram-runtime-readiness.test.mjs
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/scripts/verify-phase8-db.sh
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql
+      - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
+      - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
+      - .github/tests/production-auto-live-budget-contract.test.mjs
+      - api-server/src/services/automatic-live-budget.service.test.ts
+      - ops/verify-production-paper-forward-readiness.mjs
+      - ops/verify-production-telegram-runtime-readiness.mjs
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.test.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.ts
+      - api-server/src/services/member-auto-trading-exit-plan.service.test.ts
+      - api-server/src/services/member-auto-trading-readiness.service.ts
+      - api-server/src/services/member-auto-trading-readiness.service.test.ts
+      - api-server/src/services/admin-four-market-paper-capital.service.ts
+      - api-server/src/services/admin-four-market-paper-capital.service.test.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.test.ts
+      - api-server/src/services/member-four-market-paper-wallet-migration.test.ts
+      - api-server/src/services/paper-journal-supabase.repository.ts
+      - api-server/src/routes/paper-journal.ts
+      - api-server/src/routes/paper-journal.smoke.test.ts
+      - api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
+      - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
+      - api-server/src/index.ts
+      - api-server/src/services/spot-live-limited-capability.service.ts
+      - stock-analyzer/src/pages/auto-trading.tsx
+      # Holdings query restrictions are reviewed in the existing Trading safety gate.
+      - stock-analyzer/src/components/trading-holdings-panel.tsx
+      - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
+      - api-server/src/services/futures-live-limited-capability.service.ts
+      - .github/workflows/production-live-trading-gate.yml
+      - .github/workflows/production-futures-live-trading-gate.yml
+      - .github/workflows/telegram-production-release.yml
+      - ops/deploy-production.sh
+      - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - stock-analyzer/e2e/production-trading-core-qa.spec.ts
+      # Public-data Scanner -> Signal V3 -> automatic-entry admission is a
+      # veto-only Production boundary even before deployment activation.
+      - .github/scripts/paper-forward-reviewed-paths.mjs
+      - .github/scripts/scanner-readonly-repair-scope.mjs
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
+      - .github/tests/research-center-batch-scope.test.mjs
+      - .github/tests/scanner-readonly-repair-scope.test.mjs
+      - .github/workflows/paper-forward-schedule-validation.yml
+      - .github/workflows/research-workspace-integration-v1.yml
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts
+      - api-server/src/services/forward-observer-scanner-quality-consumer.service.ts
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-candidate-ranking.service.test.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.test.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/telegram-v3-current-source.service.test.ts
+      - api-server/src/services/telegram-v3-current-source.service.ts
+      - api-server/src/services/trade-automation-integration.test.ts
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+      - signal-intelligence-v3/ARCHITECTURE.md
+      - signal-intelligence-v3/README.md
+      - signal-intelligence-v3/scripts/diagnose-public-providers.ts
+      - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
+      - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
+      - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
+      - signal-intelligence-v3/src/public-provider-diagnostics.mjs
+      - signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs
+      - signal-intelligence-v3/tests/canonical-adapter.test.mjs
+      - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
+      - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issue_comment'
+        && github.event.issue.number == 1555
+        && github.event.comment.user.login == 'seungjae3908-source'
+        && github.event.comment.author_association == 'OWNER'
+        && (startsWith(github.event.comment.body, '/activate-production-auto-trading ')
+            || startsWith(github.event.comment.body, '/disable-production-auto-trading ')
+            || startsWith(github.event.comment.body, '/install-auto-live-public-signal '))
+        && 'production-automatic-trading-gate'
+        || format('production-automatic-trading-validation-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate Production automatic-trading gate contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate Production gate, restart-safe staged exits, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
+        run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - name: Validate non-superuser owner-bound budget proof contracts offline
+        run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
+      - name: Validate canonical public-handoff prearm receipt offline
+        run: node --test .github/scripts/production-auto-live-signal-identity.test.cjs
+      - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
+      - run: node --test .github/scripts/production-manual-live-receipts.test.cjs
+
+  activate:
+    name: Owner-approved four-market Production automatic-trading activation
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      statuses: read
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-production-auto-trading ([0-9a-f]{40}) all4$/u.exec(body);
+          if (!match) throw new Error('Expected /activate-production-auto-trading <40-char-current-main-sha> all4');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Require exact release, all-provider QA, and both manual live receipts
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA || '');
+            const { inspectProductionPreactivationPrerequisites } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-preactivation-prerequisites.cjs`
+            );
+            const release = await inspectProductionPreactivationPrerequisites({
+              github, context, targetSha: target,
+            });
+            const ciRunId = release.requiredCiRunId;
+            const production = { id: release.productionDeployRunId };
+            const comprehensive = production;
+            const account = production;
+            const productionCompletedAt = Date.parse(release.productionDeployCompletedAt);
+            if (!Number.isFinite(productionCompletedAt)) {
+              core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
+            });
+            const { inspectManualLiveReceipts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-manual-live-receipts.cjs`
+            );
+            const { spot: spotReceipt, futures: futuresReceipt } = await inspectManualLiveReceipts({
+              github, context, comments, targetSha: target,
+              deploymentCompletedAt: release.productionDeployCompletedAt,
+            });
+            const leverage = futuresReceipt.leverage;
+
+            core.setOutput('ci_run_id', String(ciRunId));
+            core.setOutput('production_run_id', String(production.id));
+            core.setOutput('comprehensive_run_id', String(comprehensive.id));
+            core.setOutput('account_run_id', String(account.id));
+            core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
+            core.setOutput('qa_scope', release.qaScope);
+            core.setOutput('spot_receipt_comment_id', String(spotReceipt.commentId));
+            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.commentId));
+            core.setOutput('futures_max_leverage', leverage);
+
+      - name: Download exact Production post-deploy evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: production-*
+          path: ${{ runner.temp }}/production-preactivation-evidence
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.gate.outputs.production_run_id }}
+
+      - name: Verify exact Production post-deploy evidence
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
+          DEPLOYMENT_COMPLETED_AT: ${{ steps.gate.outputs.deployment_completed_at }}
+        run: |
+          set -Eeuo pipefail
+          root="${{ runner.temp }}/production-preactivation-evidence"
+          test -d "$root"
+          node .github/scripts/verify-production-preactivation-evidence.cjs \
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root" \
+            --require-automatic-position-isolation
+
+      - name: Require no conflicting active Production trading gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { inspectProductionTradingGateConflicts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-trading-gate-conflicts.cjs`
+            );
+            const workflowIds = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+            ];
+            const gateState = await inspectProductionTradingGateConflicts({
+              github,
+              context,
+              currentWorkflowId: 'production-automatic-trading-gate.yml',
+              workflowIds,
+            });
+            if (!gateState.ok) {
+              const detail = gateState.conflicts
+                .map((item) => item.workflowId + ':' + item.runId + ':' + item.status)
+                .join(',');
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + detail);
+              return;
+            }
+            if (gateState.ignoredNewerSameWorkflow.length > 0) {
+              core.info('Ignored newer serialized duplicate run(s): '
+                + gateState.ignoredNewerSameWorkflow.map((item) => item.runId).join(','));
+            }
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Activate automatic execution across all four markets
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
+
+          const target = String(process.env.TARGET_SHA || '');
+          const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
+          const pm2Name = 'stock-app';
+          // The automatic LIVE worker must consume ONLY the isolated public
+          // observer. Paper Forward accounts and research are independent.
+          const automaticLiveHandoffPath =
+            '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
+          const liveEntryArmActivationDelayMs = 120_000;
+          const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
+          const productionWorkerUid = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1 || !Number.isInteger(Number(matches[0]?.pid)) || Number(matches[0].pid) <= 1) {
+              throw new Error('AUTOMATIC_TRADING_PM2_PID_INVALID');
+            }
+            return statSync('/proc/' + Number(matches[0].pid)).uid;
+          };
+          const verifyLiveEntryArmReadable = () => {
+            const stat = lstatSync(liveEntryArmPath);
+            if (!stat.isFile() || stat.isSymbolicLink()
+              || stat.size <= 0 || stat.size > 16 * 1024
+              || (stat.mode & 0o077) !== 0
+              || stat.uid !== productionWorkerUid()) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID');
+            }
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            const armedAtMs = Date.parse(String(value?.armedAt ?? ''));
+            const activateNotBeforeMs = Date.parse(String(value?.activateNotBeforeAt ?? ''));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target
+              || !Number.isFinite(armedAtMs)
+              || !Number.isFinite(activateNotBeforeMs)
+              || activateNotBeforeMs - armedAtMs !== liveEntryArmActivationDelayMs) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READBACK_FAILED');
+            }
+            return true;
+          };
+          const armLiveEntries = () => {
+            mkdirSync(dirname(liveEntryArmPath), { recursive: true });
+            const temp = liveEntryArmPath + '.tmp-' + process.pid;
+            rmSync(temp, { force: true });
+            const armedAt = new Date();
+            const activateNotBeforeAt = new Date(
+              armedAt.getTime() + liveEntryArmActivationDelayMs,
+            ).toISOString();
+            writeFileSync(temp, JSON.stringify({
+              schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+              targetSha: target,
+              armed: true,
+              armedAt: armedAt.toISOString(),
+              activateNotBeforeAt,
+            }) + '\n', { mode: 0o600, flag: 'wx' });
+            renameSync(temp, liveEntryArmPath);
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
+            }
+            verifyLiveEntryArmReadable();
+            return activateNotBeforeAt;
+          };
+          if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
+          const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
+          if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
+
+          const bool = (env, key) => {
+            const value = env[key];
+            if (value === true || value === 'true') return true;
+            if (value === false || value === 'false' || value === undefined) return false;
+            throw new Error('AUTOMATIC_TRADING_FLAG_MALFORMED:' + key);
+          };
+          const csv = (value) => new Set(String(value || '').split(',').map((v) => v.trim().toUpperCase()).filter(Boolean));
+          const snapshot = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1) throw new Error('AUTOMATIC_TRADING_PM2_AMBIGUOUS');
+            const env = matches[0]?.pm2_env;
+            if (!env || env.status !== 'online' || String(env.DEPLOY_SHA || '') !== target) {
+              throw new Error('AUTOMATIC_TRADING_PM2_IDENTITY_INVALID');
+            }
+            return env;
+          };
+          const requireWorkerWarmup = (env, { requireCurrentArm }) => {
+            const port = String(env.PORT || env.API_PORT || '8080');
+            let last = null;
+            for (let attempt = 0; attempt < 360; attempt += 1) {
+              try {
+                last = JSON.parse(execFileSync('curl', [
+                  '--fail', '--silent', '--show-error', '--max-time', '3',
+                  'http://127.0.0.1:' + port + '/api/health',
+                ], { encoding: 'utf8' }));
+                const health = last?.autoTradingBackground;
+                const recovery = last?.tradeRecoveryWorker;
+                const nowMs = Date.now();
+                const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
+                const autoHealthFresh = Number.isFinite(autoLastTickMs)
+                  && autoLastTickMs <= nowMs
+                  && nowMs - autoLastTickMs <= 360_000;
+                if (health?.enabled === true
+                  && recovery?.enabled === true
+                  && recovery?.privateLookupEnabled === true
+                  && recovery?.tickOk === true
+                  && recovery?.financialMutationCount === 0
+                  && Number.isFinite(Date.parse(String(recovery?.lastTickAt ?? '')))
+                  && nowMs - Date.parse(recovery.lastTickAt) >= 0
+                  && nowMs - Date.parse(recovery.lastTickAt) <= 360_000
+                  && health?.liveModeRequested === true
+                  && autoHealthFresh
+                  && health?.tickOk === true
+                  && health?.handoffReady === true
+                  && health?.newEntriesFailClosed === false
+                  && health?.liveEntryWarmupComplete === true
+                  && health?.startupWarmupObserved === true
+                  && health?.firstWarmupTickLiveEntriesArmed === false
+                  && health?.firstWarmupTickLiveOrders === 0
+                  && health?.firstWarmupTickLiveExitOrders === 0
+                  && health?.executionSyncFailures === 0
+                  && health?.executionSyncMissingReferences === 0
+                  && health?.liveReadinessCycleComplete === true
+                  && health?.liveCycleOrderEligible === true
+                  && health?.liveCyclePolicyReady === true
+                  && health?.liveCycleAllFourPolicyReady === true
+                  && health?.globalEmergencyStopActive === false
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true && health?.liveEntriesArmed === true)) {
+                  return health;
+                }
+              } catch {}
+              execFileSync('sleep', ['1']);
+            }
+            throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify({
+              autoTradingBackground: last?.autoTradingBackground ?? null,
+              tradeRecoveryWorker: last?.tradeRecoveryWorker ?? null,
+            }));
+          };
+          const manualState = (env) => ({
+            live: bool(env, 'LIVE_TRADING'),
+            real: bool(env, 'REAL_ORDER_ENABLED'),
+            privateApi: bool(env, 'PRIVATE_TRADING_API_ALLOWED'),
+            orderExecution: bool(env, 'ORDER_EXECUTION_ENABLED'),
+            liveApproved: bool(env, 'LIVE_TRADING_ACTIVATION_APPROVED'),
+            spotApproved: bool(env, 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            toss: bool(env, 'TOSS_LIVE_ORDER_ENABLED'),
+            kiwoom: bool(env, 'KIWOOM_LIVE_ORDER_ENABLED'),
+            upbit: bool(env, 'UPBIT_LIVE_ORDER_ENABLED'),
+            spotAuthority: String(env.executionAuthority || 'NONE').toUpperCase(),
+            spotCapabilities: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST || ''),
+            spotMarkets: String(env.SPOT_LIVE_MARKET_ALLOWLIST || ''),
+            futuresApproved: bool(env, 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            bitgetFutures: bool(env, 'BITGET_FUTURES_LIVE_ORDER_ENABLED'),
+            futuresAuthority: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY || 'NONE').toUpperCase(),
+            futuresCapabilities: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST || ''),
+            futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
+            futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
+            futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+            telegramApproved: bool(env, 'LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+            telegramIntelligenceWorker: bool(env, 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+            telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
+          });
+          const assertAllFourManual = (env, expectedAuto) => {
+            if (expectedAuto && String(env.MEMBER_AUTO_TRADING_HANDOFF_PATH || '') !== automaticLiveHandoffPath) {
+              throw new Error('AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID');
+            }
+            const manual = manualState(env);
+            if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
+              throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
+              || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
+              throw new Error('AUTOMATIC_TRADING_SPOT_THREE_MARKETS_NOT_READY');
+            }
+            const spotCaps = csv(manual.spotCapabilities);
+            const spotMarkets = csv(manual.spotMarkets);
+            for (const capability of ['BALANCE_READ','POSITION_READ','OPEN_ORDER_READ','ORDER_CREATE','ORDER_CANCEL','ORDER_AMEND']) {
+              if (!spotCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_SPOT_CAPABILITY_MISSING:' + capability);
+            }
+            for (const market of ['KR_STOCK','US_STOCK','CRYPTO_SPOT']) {
+              if (!spotMarkets.has(market)) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_MISSING:' + market);
+            }
+            if (spotMarkets.size !== 3) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_SCOPE_TOO_WIDE');
+
+            if (!manual.futuresApproved || !manual.bitgetFutures
+              || manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'
+              || manual.futuresMarkets !== 'CRYPTO_FUTURES'
+              || manual.futuresMarginMode !== 'isolated'
+              || manual.futuresMaxLeverage !== expectedLeverage) {
+              throw new Error('AUTOMATIC_TRADING_FUTURES_MARKET_NOT_READY');
+            }
+            const futuresCaps = csv(manual.futuresCapabilities);
+            for (const capability of ['BALANCE_READ','POSITION_READ','OPEN_ORDER_READ','ORDER_CREATE','ORDER_CANCEL','ORDER_AMEND']) {
+              if (!futuresCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_FUTURES_CAPABILITY_MISSING:' + capability);
+            }
+            if (bool(env, 'AUTO_TRADING') !== expectedAuto
+              || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED') !== false
+              || bool(env, 'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED') !== false
+              || bool(env, 'CRYPTO_AUTO_TRADE_ENABLED') !== false
+              || bool(env, 'BITGET_AUTO_TRADE_ENABLED') !== false) {
+              throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
+            }
+          };
+          const preservedManualRuntimeEnv = (env) => ({
+            LIVE_TRADING: String(env.LIVE_TRADING ?? 'false'),
+            REAL_ORDER_ENABLED: String(env.REAL_ORDER_ENABLED ?? 'false'),
+            PRIVATE_TRADING_API_ALLOWED: String(env.PRIVATE_TRADING_API_ALLOWED ?? 'false'),
+            ORDER_EXECUTION_ENABLED: String(env.ORDER_EXECUTION_ENABLED ?? 'false'),
+            LIVE_TRADING_ACTIVATION_APPROVED: String(env.LIVE_TRADING_ACTIVATION_APPROVED ?? 'false'),
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            TOSS_LIVE_ORDER_ENABLED: String(env.TOSS_LIVE_ORDER_ENABLED ?? 'false'),
+            KIWOOM_LIVE_ORDER_ENABLED: String(env.KIWOOM_LIVE_ORDER_ENABLED ?? 'false'),
+            UPBIT_LIVE_ORDER_ENABLED: String(env.UPBIT_LIVE_ORDER_ENABLED ?? 'false'),
+            executionAuthority: String(env.executionAuthority ?? 'NONE'),
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            SPOT_LIVE_MARKET_ALLOWLIST: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: String(env.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false'),
+            FUTURES_LIVE_EXECUTION_AUTHORITY: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE'),
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MARKET_ALLOWLIST: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MAX_LEVERAGE: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+            FUTURES_LIVE_MARGIN_MODE: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
+            TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
+            PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+            TRADE_RECOVERY_WORKER_ENABLED: String(env.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+            TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: String(env.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
+          });
+          const restartAutomatic = (enabled, baselineEnv) => {
+            execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
+              stdio: 'inherit',
+              env: {
+                ...process.env,
+                ...preservedManualRuntimeEnv(baselineEnv),
+                AUTO_TRADING: enabled ? 'true' : 'false',
+                LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath
+                  : String(baselineEnv.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? ''),
+                TRADE_RECOVERY_WORKER_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
+                TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
+                MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
+                CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
+                CRYPTO_AUTO_TRADE_ENABLED: 'false',
+                BITGET_AUTO_TRADE_ENABLED: 'false',
+                DEPLOY_SHA: target,
+              },
+            });
+            execFileSync('pm2', ['save'], { stdio: 'inherit' });
+          };
+
+          // A missing/stale publisher is a known deterministic failure. Refuse
+          // to change any PM2 flags or arm files until a fresh public handoff
+          // exists; the worker still performs the full digest/evidence check.
+          const requireFreshPublishedHandoff = async (_env) => {
+            // Never accept the legacy Paper fallback even if old PM2 settings
+            // still contain it. Check the new collector before PM2 mutation.
+            const handoffPath = automaticLiveHandoffPath;
+            let prearm;
+            let readTrustedHandoff;
+            try {
+              const published = await import('file:///opt/stock-app/ops/production-auto-live-signal-identity.cjs');
+              prearm = published.default?.verifyProductionAutoLivePrearmHandoff;
+              readTrustedHandoff = published.default?.readProductionAutoLiveSignalHandoff;
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
+            }
+            if (typeof prearm !== 'function' || typeof readTrustedHandoff !== 'function') {
+              throw new Error('AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE');
+            }
+            let h;
+            try {
+              h = readTrustedHandoff(handoffPath);
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID');
+            }
+            const signal = await prearm(h, target, Date.now());
+            if (signal.producerInvocationVerified !== false || signal.sourceTransportOnly !== true) {
+              throw new Error('AUTOMATIC_TRADING_PREARM_PRODUCER_PROOF_FORBIDDEN');
+            }
+            // Valid source transport is not proof that the real scanner or AI
+            // issuer ran; later 26-control gates remain mandatory.
+          };
+
+          const before = snapshot();
+          let alreadyDesired = false;
+          try {
+            assertAllFourManual(before, true);
+            alreadyDesired = true;
+          } catch {}
+          if (alreadyDesired) {
+            execFileSync('sleep', ['2']);
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
+            requireWorkerWarmup(persisted, { requireCurrentArm: true });
+            console.log(JSON.stringify({
+              status: 'ALREADY_ACTIVATED_ALL4',
+              targetSha: target,
+              idempotent: true,
+              persistenceReadback: 'PASS',
+              WORKER_WARMUP_PROVEN: true,
+              LIVE_ENTRY_ARM_PRESENT: true,
+              REAL_ORDER_SUBMITTED_BY_GATE: false,
+            }));
+            process.exit(0);
+          }
+          assertAllFourManual(before, false);
+          await requireFreshPublishedHandoff(before);
+          const preserved = manualState(before);
+          let mutated = false;
+          try {
+            // Restart may mutate PM2 successfully before `pm2 save` fails.
+            // Record rollback intent BEFORE either operation, not afterwards.
+            mutated = true;
+            disarmLiveEntries();
+            restartAutomatic(true, before);
+            const after = snapshot();
+            assertAllFourManual(after, true);
+            const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
+            const activateNotBeforeAt = armLiveEntries();
+            if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
+              throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
+            }
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
+            if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
+              throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
+            }
+            // Observe the actual post-delay worker transition. The mock
+            // zero-mutation rehearsal alone is not Production activation.
+            const armedHealth = requireWorkerWarmup(persisted, { requireCurrentArm: true });
+            console.log(JSON.stringify({
+              status: 'ACTIVATED_ALL4',
+              targetSha: target,
+              markets: ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'],
+              providers: ['toss','kiwoom','upbit','bitget'],
+              AUTO_TRADING: true,
+              LIVE_AUTOMATIC_TRADING_ENABLED: true,
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: true,
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: true,
+              PAPER_AUTOMATIC_EXECUTION: false,
+              LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
+              persistenceReadback: 'PASS',
+              WORKER_WARMUP_PROVEN: true,
+              FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
+              FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
+              FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0,
+              LIVE_ENTRY_ARM_WRITTEN: true,
+              LIVE_ENTRY_ARM_READBACK_PROVEN: true,
+              LIVE_ENTRY_ARM_ACTIVATE_NOT_BEFORE: activateNotBeforeAt,
+              LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs,
+              NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
+              POST_ARM_RUNTIME_HEALTH_PROVEN: armedHealth.liveEntriesArmed === true,
+              LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
+              LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
+              LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
+              LIVE_CYCLE_ALL_FOUR_POLICY_READY: warmupHealth.liveCycleAllFourPolicyReady,
+              GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
+              OPTIONAL_TELEGRAM_STATE_PRESERVED: true,
+              REAL_ORDER_SUBMITTED: false,
+            }));
+          } catch (cause) {
+            if (mutated) {
+              try {
+                disarmLiveEntries();
+                restartAutomatic(false, before);
+                const rolledBack = snapshot();
+                assertAllFourManual(rolledBack, false);
+                if (JSON.stringify(manualState(rolledBack)) !== JSON.stringify(preserved)) {
+                  throw new Error('AUTOMATIC_TRADING_ROLLBACK_CHANGED_MANUAL_AUTHORITY');
+                }
+                console.error('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK');
+              } catch {
+                console.error('AUTOMATIC_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED');
+              }
+            }
+            throw cause;
+          }
+          NODE
+
+      - name: Record sanitized four-market automatic activation receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
+          PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
+          COMPREHENSIVE_RUN_ID: ${{ steps.gate.outputs.comprehensive_run_id }}
+          ACCOUNT_RUN_ID: ${{ steps.gate.outputs.account_run_id }}
+          SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
+          FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
+          FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+                'status: ACTIVATED_ALL4_AUTO',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'markets: KR_STOCK,US_STOCK,CRYPTO_SPOT,CRYPTO_FUTURES',
+                'providers: toss,kiwoom,upbit,bitget',
+                'required_ci_run: ' + process.env.CI_RUN_ID,
+                'production_deploy_run: ' + process.env.PRODUCTION_RUN_ID,
+                'qa_scope: ' + process.env.QA_SCOPE,
+                'production_qa_run: ' + process.env.PRODUCTION_RUN_ID,
+                'production_comprehensive_qa_run: ' + (process.env.QA_SCOPE === 'full' ? process.env.COMPREHENSIVE_RUN_ID : 'NOT_RUN'),
+                'production_trading_core_qa_run: ' + (process.env.QA_SCOPE === 'trading_core' ? process.env.PRODUCTION_RUN_ID : 'NOT_RUN'),
+                'production_account_qa_run: ' + process.env.ACCOUNT_RUN_ID,
+                'spot_manual_receipt_comment: ' + process.env.SPOT_RECEIPT_ID,
+                'futures_manual_receipt_comment: ' + process.env.FUTURES_RECEIPT_ID,
+                'futures_max_leverage: ' + process.env.FUTURES_MAX_LEVERAGE,
+                'futures_margin_mode: isolated',
+                'AUTO_TRADING=true',
+                'LIVE_AUTOMATIC_TRADING_ENABLED=true',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=true',
+                'paper_automatic_execution=false',
+                'live_automatic_background_execution=true',
+                'persistence_readback=PASS',
+                'worker_warmup_proven=true',
+                'first_warmup_tick_live_entries_armed=false',
+                'first_warmup_tick_live_orders=0',
+                'first_warmup_tick_live_exit_orders=0',
+                'live_entry_arm_written=true',
+                'live_entry_arm_readback_proven=true',
+                'live_entry_arm_activation_delay_ms=120000',
+                'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
+                'post_arm_runtime_health_proven=true',
+                'live_readiness_cycle_complete=true',
+                'live_cycle_order_eligible=true',
+                'live_cycle_policy_ready=true',
+                'live_cycle_all_four_policy_ready=true',
+                'global_emergency_stop=false',
+                'optional_telegram_state_preserved=true',
+                'spot_executionAuthority=SPOT_LIVE_LIMITED',
+                'futures_executionAuthority=FUTURES_LIVE_LIMITED',
+                'transfer_withdrawal_authority=false',
+                'REAL_ORDER_SUBMITTED=false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
+
+  disable:
+    name: Owner-approved four-market automatic disable preserving manual live authority
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/disable-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Parse exact disable command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY || '').trim();
+          const match = /^\/disable-production-auto-trading ([0-9a-f]{40})$/u.exec(body);
+          if (!match) throw new Error('Expected /disable-production-auto-trading <40-char-deployed-sha>');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Disable only automatic flags and preserve all four manual market gates
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
+
+          const target = String(process.env.TARGET_SHA || '');
+          const pm2Name = 'stock-app';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
+          if (readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim() !== target) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_DEPLOY_SHA_MISMATCH');
+          }
+          const bool = (env, key) => {
+            const value = env[key];
+            if (value === true || value === 'true') return true;
+            if (value === false || value === 'false' || value === undefined) return false;
+            throw new Error('AUTOMATIC_TRADING_DISABLE_FLAG_MALFORMED:' + key);
+          };
+          const readEnv = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1 || matches[0]?.pm2_env?.status !== 'online'
+              || String(matches[0].pm2_env.DEPLOY_SHA || '') !== target) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_PM2_INVALID');
+            }
+            return matches[0].pm2_env;
+          };
+          const manual = (env) => ({
+            live: bool(env, 'LIVE_TRADING'),
+            real: bool(env, 'REAL_ORDER_ENABLED'),
+            privateApi: bool(env, 'PRIVATE_TRADING_API_ALLOWED'),
+            orderExecution: bool(env, 'ORDER_EXECUTION_ENABLED'),
+            liveApproved: bool(env, 'LIVE_TRADING_ACTIVATION_APPROVED'),
+            spotApproved: bool(env, 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            toss: bool(env, 'TOSS_LIVE_ORDER_ENABLED'),
+            kiwoom: bool(env, 'KIWOOM_LIVE_ORDER_ENABLED'),
+            upbit: bool(env, 'UPBIT_LIVE_ORDER_ENABLED'),
+            spotAuthority: String(env.executionAuthority || 'NONE'),
+            spotCaps: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST || ''),
+            spotMarkets: String(env.SPOT_LIVE_MARKET_ALLOWLIST || ''),
+            futuresApproved: bool(env, 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            bitgetFutures: bool(env, 'BITGET_FUTURES_LIVE_ORDER_ENABLED'),
+            futuresAuthority: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY || ''),
+            futuresCaps: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST || ''),
+            futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
+            futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
+            futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || ''),
+            telegramApproved: bool(env, 'LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+            telegramIntelligenceWorker: bool(env, 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+            telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
+          });
+          const preservedDisableRuntimeEnv = (env) => ({
+            LIVE_TRADING: String(env.LIVE_TRADING ?? 'false'),
+            REAL_ORDER_ENABLED: String(env.REAL_ORDER_ENABLED ?? 'false'),
+            PRIVATE_TRADING_API_ALLOWED: String(env.PRIVATE_TRADING_API_ALLOWED ?? 'false'),
+            ORDER_EXECUTION_ENABLED: String(env.ORDER_EXECUTION_ENABLED ?? 'false'),
+            LIVE_TRADING_ACTIVATION_APPROVED: String(env.LIVE_TRADING_ACTIVATION_APPROVED ?? 'false'),
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            TOSS_LIVE_ORDER_ENABLED: String(env.TOSS_LIVE_ORDER_ENABLED ?? 'false'),
+            KIWOOM_LIVE_ORDER_ENABLED: String(env.KIWOOM_LIVE_ORDER_ENABLED ?? 'false'),
+            UPBIT_LIVE_ORDER_ENABLED: String(env.UPBIT_LIVE_ORDER_ENABLED ?? 'false'),
+            executionAuthority: String(env.executionAuthority ?? 'NONE'),
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            SPOT_LIVE_MARKET_ALLOWLIST: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: String(env.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false'),
+            FUTURES_LIVE_EXECUTION_AUTHORITY: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE'),
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MARKET_ALLOWLIST: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MAX_LEVERAGE: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+            FUTURES_LIVE_MARGIN_MODE: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
+            TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
+            PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+          });
+
+          const before = readEnv();
+          const preserved = manual(before);
+          const automaticWasEnabled = bool(before, 'AUTO_TRADING')
+            || bool(before, 'LIVE_AUTOMATIC_TRADING_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED');
+          if (automaticWasEnabled) {
+            const port = String(before.PORT || before.API_PORT || '8080');
+            let health;
+            try {
+              health = JSON.parse(execFileSync('curl', [
+                '--fail', '--silent', '--show-error', '--max-time', '3',
+                'http://127.0.0.1:' + port + '/api/health',
+              ], { encoding: 'utf8' }));
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_UNAVAILABLE');
+            }
+            const autoHealth = health?.autoTradingBackground;
+            const lastTickMs = Date.parse(String(autoHealth?.lastTickAt || ''));
+            const nowMs = Date.now();
+            if (autoHealth?.enabled !== true
+              || autoHealth?.liveModeRequested !== true
+              || autoHealth?.tickOk !== true
+              || !Number.isFinite(lastTickMs)
+              || lastTickMs > nowMs
+              || nowMs - lastTickMs > 360_000) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_STALE_OR_INVALID');
+            }
+            const openLivePositions = Number(autoHealth?.liveTrackedPositions);
+            if (!Number.isInteger(openLivePositions) || openLivePositions < 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_LIVE_POSITION_COUNT_INVALID');
+            }
+            if (openLivePositions > 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS:' + openLivePositions);
+            }
+          }
+          rmSync(liveEntryArmPath, { force: true });
+          execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
+            stdio: 'inherit',
+            env: {
+              ...process.env,
+              ...preservedDisableRuntimeEnv(before),
+              // Disable is not permission to redirect Paper or AUTO sources.
+              MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? ''),
+              AUTO_TRADING: 'false',
+              LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
+              CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
+              CRYPTO_AUTO_TRADE_ENABLED: 'false',
+              BITGET_AUTO_TRADE_ENABLED: 'false',
+              DEPLOY_SHA: target,
+            },
+          });
+          execFileSync('pm2', ['save'], { stdio: 'inherit' });
+
+          const after = readEnv();
+          if (bool(after, 'AUTO_TRADING')
+            || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
+          }
+          if (JSON.stringify(manual(after)) !== JSON.stringify(preserved)) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_CHANGED_MANUAL_LIVE_AUTHORITY');
+          }
+          console.log('AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED');
+          console.log('REAL_ORDER_SUBMITTED=false');
+          NODE
+
+      - name: Record sanitized disable receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+                'status: DISABLED_ALL4_MANUAL_LIVE_PRESERVED',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'AUTO_TRADING=false',
+                'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
+                'paper_automatic_execution=false',
+                'live_automatic_background_execution=false',
+                'manual_spot_and_futures_authority_preserved=true',
+                'REAL_ORDER_SUBMITTED=false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
+
+  install-public-signal:
+    name: Owner-approved independent PUBLIC data collector only (no automatic trading)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/install-auto-live-public-signal ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Parse owner-only independent source install command
+        id: source_command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY || '').trim();
+          const match = /^\/install-auto-live-public-signal ([0-9a-f]{40})$/u.exec(body);
+          if (!match) throw new Error('AUTO_LIVE_PUBLIC_INSTALL_EXACT_SHA_COMMAND_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Require exact protected main, successful current-main Full CI, and no active operations
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source_command.outputs.sha }}
+        with:
+          script: |
+            const sha = String(process.env.SOURCE_SHA ?? '');
+            const {owner,repo} = context.repo;
+            const main = await github.rest.repos.getBranch({owner,repo,branch:'main'});
+            if (sha !== String(main.data.commit.sha).toLowerCase()) {
+              core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_REQUIRES_EXACT_CURRENT_MAIN');
+              return;
+            }
+            // PR contract runs, stale HEADs, old deploy receipts and skipped
+            // checks are not a live-host installation certificate.
+            const full = await github.rest.actions.listWorkflowRuns({
+              owner,repo,workflow_id:'futures-public-network-smoke.yml',
+              branch:'main',per_page:100,
+            });
+            const passed = full.data.workflow_runs.some((run) =>
+              run.name === 'Application CI' &&
+              run.head_sha === sha &&
+              run.event === 'workflow_dispatch' &&
+              run.status === 'completed' &&
+              run.conclusion === 'success');
+            if (!passed) {
+              core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED');
+              return;
+            }
+            for (const workflowId of [
+              'production-deploy.yml',
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-postdeploy-qa.yml',
+              'production-automatic-trading-gate.yml',
+            ]) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner,repo,workflow_id:workflowId,per_page:100,
+              });
+              const conflict = runs.data.workflow_runs.some((run) =>
+                run.id !== context.runId &&
+                run.status !== 'completed' &&
+                ['workflow_dispatch','issue_comment'].includes(run.event));
+              if (conflict) {
+                core.setFailed('AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT');
+                return;
+              }
+            }
+            core.info('Exact main Full CI and zero conflicting active operation runs verified.');
+
+      - name: Configure protected pinned SSH for public source only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Verify exact deployed revision and independent-root-only preflight
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          # The checked-out source must itself be the authorized exact main.
+          # A main update between checkout and approval cannot supply mixed code.
+          [[ "$(git rev-parse --verify HEAD)" == "$TARGET_SHA" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_CHECKOUT_SHA_MISMATCH' >&2
+            exit 1
+          }
+          remote_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'tr -d "[:space:]" < /opt/stock-app/.deploy/current-sha')"
+          [[ "$remote_sha" == "$TARGET_SHA" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH' >&2
+            exit 1
+          }
+          # An exact current-sha marker alone cannot prove that the installed
+          # installer file has not drifted from the approved main source.
+          expected_source_hash="$(sha256sum ops/production-auto-live-signal-identity.cjs | awk '{print $1}')"
+          remote_source_hash="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'test -f /opt/stock-app/ops/production-auto-live-signal-identity.cjs && test ! -L /opt/stock-app/ops/production-auto-live-signal-identity.cjs && sha256sum /opt/stock-app/ops/production-auto-live-signal-identity.cjs' | awk '{print $1}')"
+          [[ "$remote_source_hash" == "$expected_source_hash" ]] || {
+            echo 'AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH' >&2
+            exit 1
+          }
+          env_args="$(printf 'AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_DEPLOYED_SHA=%q' "$TARGET_SHA" "$TARGET_SHA")"
+          # Source comes from immutable current main; preflight is READ ONLY.
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$env_args node -" \
+            < ops/production-auto-live-signal-identity.cjs > "$RUNNER_TEMP/public-source-preflight.json"
+          node - "$RUNNER_TEMP/public-source-preflight.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const proof = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (proof.status !== 'DRAFT_PLAN_NOT_INSTALLED'
+            || proof.targetSha !== process.argv[3]
+            || proof.ownerInstallApprovalRequired !== true
+            || proof.paperRootMutated !== false
+            || proof.paperCronReplaced !== false
+            || proof.autoTradingActivationReady !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_PREFLIGHT_RECEIPT_INVALID');
+          }
+          NODE
+
+      - name: Install only isolated public data collection schedule with zero order authority
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          # This is NOT the Application deployment pipeline: no DB/RLS,
+          # PM2, provider credentials, Paper-state mutation or live-order calls.
+          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /opt/stock-app && $remote_env node ops/production-auto-live-signal-identity.cjs" \
+            > "$RUNNER_TEMP/public-source-install.json"
+          node - "$RUNNER_TEMP/public-source-install.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const receipt = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (receipt.status !== 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+            || receipt.targetSha !== process.argv[3]
+            || receipt.scheduleActive !== true
+            || receipt.canonicalCycleIntervalMs !== 900000
+            || receipt.independentPaperRoot !== true
+            || receipt.paperRootMutated !== false
+            || receipt.paperCronReplaced !== false
+            || receipt.producerInvocationVerified !== false
+            || receipt.aiIssuerVerified !== false
+            || receipt.autoTradingActivationReady !== false
+            || receipt.liveTrading !== false
+            || receipt.externalFinancialMutationAllowed !== false
+            || receipt.financialMutationCount !== 0
+            || receipt.privateRequestCount !== 0) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID');
+          }
+          NODE
+
+
+      - name: Read back exact scheduled public source without scanner or trading claims
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.source_command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$RUNNER_TEMP/public-source-schedule-readback.json" <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          const {
+            inspectManagedPaperForwardSchedule,
+            readProductionAutoLiveScheduleActivation,
+            assertAutoLiveSignalNotDisabled,
+          } = require('/opt/stock-app/ops/production-auto-live-signal-identity.cjs');
+          const sha = String(process.env.TARGET_SHA || '');
+          const root = '/opt/stock-app-data/auto-live-signal-v1';
+          const activation = readProductionAutoLiveScheduleActivation(root + '/activation.json');
+          const cron = spawnSync('crontab',['-l'],{
+            encoding:'utf8',timeout:5000,maxBuffer:1024*1024,
+            env:{...process.env,LC_ALL:'C'},
+          });
+          if (cron.error || cron.signal || cron.status !== 0) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_CRON_READBACK_UNAVAILABLE');
+          }
+          const observed = inspectManagedPaperForwardSchedule(
+            cron.stdout, activation, sha, activation.activationAtMs);
+          assertAutoLiveSignalNotDisabled(root);
+          if (observed.entryCount !== 1 || observed.activationBound !== true
+            || observed.publicOnly !== true || observed.refreshIntervalMs !== 900000
+            || activation.independentPaperRoot !== true
+            || activation.paperRootMutated !== false
+            || activation.paperCronReplaced !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_PROOF_INVALID');
+          }
+          // The readback attests installation CONFIGURATION only. Cron still
+          // needs observed genuine ticks and independent scanner/AI evidence.
+          process.stdout.write(JSON.stringify({
+            schemaVersion:'auto-live-independent-public-schedule-readback-v1',
+            targetSha:sha,status:'CONFIGURATION_VERIFIED_ONLY',
+            exactActiveCommand:true,activationBound:true,
+            independentPaperRoot:true,paperRootMutated:false,
+            paperCronReplaced:false,realOrderSubmitted:false,
+            producerInvocationVerified:false,aiIssuerVerified:false,
+            uninterrupted24hVerified:false,
+          })+'\n');
+          NODE
+          node - "$RUNNER_TEMP/public-source-schedule-readback.json" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.targetSha !== process.argv[3] ||
+            p.status !== 'CONFIGURATION_VERIFIED_ONLY' ||
+            p.exactActiveCommand !== true || p.activationBound !== true ||
+            p.independentPaperRoot !== true || p.paperRootMutated !== false ||
+            p.paperCronReplaced !== false || p.producerInvocationVerified !== false ||
+            p.aiIssuerVerified !== false || p.uninterrupted24hVerified !== false ||
+            p.realOrderSubmitted !== false) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID');
+          }
+          NODE
+
+      - name: Record source-only installation without asserting scanner, AI, or LIVE readiness
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.source_command.outputs.sha }}
+        with:
+          script: |
+            const receipt = [
+              '[AUTO_LIVE_INDEPENDENT_PUBLIC_SOURCE_INSTALL]',
+              'status: INSTALLED_WAITING_FOR_GENUINE_PUBLIC_CYCLE',
+              'sha: ' + process.env.SOURCE_SHA,
+              'root: /opt/stock-app-data/auto-live-signal-v1',
+              'cron: every 15 minutes, independent Paper tag and lock',
+              'paper_root_mutated: false',
+              'paper_cron_replaced: false',
+              'private_provider_calls: 0',
+              'financial_mutations: 0',
+              'live_auto_authority_granted: false',
+              'producer_invocation_verified: false',
+              'ai_issuer_verified: false',
+              '24_hour_uninterrupted_collection_verified: false',
+              'real_order_submitted_by_install: false',
+              'workflow_run: ' + context.runId,
+            ].join('\n');
+            for (const issue_number of [1555,1102]) {
+              await github.rest.issues.createComment({
+                owner:context.repo.owner,repo:context.repo.repo,issue_number,body:receipt,
+              });
+            }

@@ -1,5 +1,9 @@
 type RecommendationMarket = 'KR' | 'US';
 
+export function recommendationQueryKey(market: RecommendationMarket) {
+  return ['recommendations', market] as const;
+}
+
 const CATEGORY_VALUES = new Set(['undervalued', 'breakout']);
 const CATEGORY_LABELS = {
   undervalued: '저평가 후보',

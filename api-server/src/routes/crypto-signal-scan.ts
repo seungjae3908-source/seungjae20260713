@@ -44,6 +44,7 @@ import {
   type ScannerMarketIntelligenceRunner,
 } from '../services/scanner-market-intelligence.service';
 import { enrichCryptoScannerCardsWithPublicEventContext } from '../services/scanner-crypto-public-event-intelligence.service';
+import { scannerAiEvidenceReviewer, type ScannerAiEvidenceReviewer } from '../services/scanner-ai-evidence-review.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
@@ -57,6 +58,7 @@ export interface CryptoSignalScanRouteDependencies {
   precision?: CryptoPricePrecisionServiceContract;
   williamsOverlay?: CryptoWilliamsOverlayRunner;
   marketIntelligence?: ScannerMarketIntelligenceRunner;
+  aiReviewer?: ScannerAiEvidenceReviewer;
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -277,7 +279,8 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         message: `${baseMessage} · 검색 후보 ${discovery.candidateCount}개 · 매매 검토 ${rankedCards.length}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
-      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      const visibleResult = (dependencies.aiReviewer ?? scannerAiEvidenceReviewer).capture(req.member!.id,
+        withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined)));
       productPaperSourceRegistry.captureScanner(req.member!.id, visibleResult, String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
       void deliverScannerTelegramAlerts(
         visibleResult.alerts,

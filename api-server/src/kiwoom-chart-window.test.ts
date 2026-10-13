@@ -462,8 +462,11 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
   assert.doesNotMatch(source, /fallbackFrom:[\s\S]*reason:\s*'0'/);
   assert.match(
     source,
-    /if \(isBoundedKrInteractiveRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe\);\s*\}/,
+    /if \(isBoundedKrInteractiveRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe, options\);\s*\}/,
   );
+  assert.match(source, /options\.signal\?\.addEventListener\('abort', onParentAbort, \{ once: true \}\)/);
+  assert.match(source, /options\.signal\?\.removeEventListener\('abort', onParentAbort\)/);
+  assert.match(source, /getYahooCandles\(String\(ticker\)\.trim\(\), String\(timeframe\), \{ \.\.\.options, signal: controller\.signal \}\)/);
   assert.match(source, /KR_INTERACTIVE_TIMEFRAMES[\s\S]*'1D'/);
   assert.match(source, /const providerAttempts:[\s\S]*kiwoomAttempt,[\s\S]*yahooAttempt,[\s\S]*tossAttempt/);
   assert.match(source, /Promise\.race\(\[\s*Promise\.any\(providerAttempts\),\s*terminalDeadline,\s*\]\)/);

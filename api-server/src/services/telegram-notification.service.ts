@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { logger } from '../lib/logger';
+import { normalizeTelegramReadableText } from './telegram-readable-format.service';
 
 const TELEGRAM_API_BASE_URL = 'https://api.telegram.org';
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -59,7 +60,8 @@ export type TelegramAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
+      errorCode?: string | null;
     };
 
 export type TelegramMessageKind = 'TEXT' | 'PHOTO';
@@ -75,7 +77,8 @@ export type TelegramTrackedAlertResult =
   | {
       ok: false;
       attempts: number;
-      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED' | 'OUTCOME_UNCONFIRMED';
+      errorCode?: string | null;
     };
 
 type TelegramSendResponse = {
@@ -88,6 +91,8 @@ type TelegramSendResponse = {
 const deliveredAtByHash = new Map<string, number>();
 const deliveredAtByCooldownKey = new Map<string, number>();
 const inFlightHashes = new Set<string>();
+// A possibly accepted POST must not be retransmitted during this process.
+const unconfirmedAtByHash = new Map<string, number>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -126,11 +131,11 @@ function formatNumber(value: number | undefined): string | null {
 function titleForType(type: TelegramAlertType): string {
   switch (type) {
     case 'strong_buy':
-      return '🟢 강한매수 신호';
+      return '🟢 매수 신호';
     case 'strong_sell':
       return '🔴 강한매도 신호';
     case 'crypto_spot_buy':
-      return '🟢 코인현물 매수 신호';
+      return '🟢 매수 신호';
     case 'crypto_futures_long':
       return '🟦 코인선물 LONG 신호';
     case 'crypto_futures_short':
@@ -146,23 +151,65 @@ function titleForType(type: TelegramAlertType): string {
   }
 }
 
+function escapedPrefix(text: string, budget: number): string {
+  let result = '';
+  for (const codePoint of text) {
+    const piece = escapeTelegramHtml(codePoint);
+    if (result.length + piece.length > budget) break;
+    result += piece;
+  }
+  return result;
+}
+
+/** Respect the 4096-char Telegram HTML limit without cutting entities or tags. */
+function boundedTelegramHtmlLines(lines: readonly { text: string; bold?: boolean }[]): string {
+  let result = '';
+  for (const line of lines) {
+    const separator = result ? '\n' : '';
+    const escaped = escapeTelegramHtml(line.text);
+    const formatted = line.bold ? '<b>' + escaped + '</b>' : escaped;
+    if (result.length + separator.length + formatted.length <= TELEGRAM_TEXT_LIMIT) {
+      result += separator + formatted;
+      continue;
+    }
+    const budget = TELEGRAM_TEXT_LIMIT - result.length - separator.length - (line.bold ? 7 : 0) - 1;
+    if (budget > 0) {
+      const shortened = escapedPrefix(line.text, budget);
+      if (shortened) result += separator + (line.bold ? '<b>' + shortened + '…</b>' : shortened + '…');
+    }
+    break;
+  }
+  return result.trimEnd();
+}
+
 export function renderTelegramAlert(input: TelegramAlertInput): string {
   const customTitle = typeof input.title === 'string' && input.title.trim()
     ? input.title.trim().slice(0, 180)
     : null;
-  const lines = [`<b>${escapeTelegramHtml(customTitle || titleForType(input.type))}</b>`];
-
-  if (!customTitle && input.symbol) lines.push(`<code>${escapeTelegramHtml(input.symbol)}</code>${input.market ? ` · ${escapeTelegramHtml(input.market)}` : ''}`);
-  if (input.provider) lines.push(`${escapeTelegramHtml(input.provider)}`);
-
+  const lines: Array<{ text: string; bold?: boolean }> = [
+    { text: customTitle || titleForType(input.type), bold: true },
+    { text: '' },
+  ];
+  if (!customTitle && input.symbol) {
+    lines.push({ text: input.symbol + (input.market ? ' · ' + input.market : '') });
+  }
+  if (input.provider) lines.push({ text: input.provider });
   const currentPrice = formatNumber(input.currentPrice);
-  if (currentPrice) lines.push(`현재가 ${escapeTelegramHtml(currentPrice)}`);
+  if (currentPrice) lines.push({ text: '현재가 ' + currentPrice });
   const targetPrice = formatNumber(input.targetPrice);
-  if (targetPrice) lines.push(`기준가 ${escapeTelegramHtml(targetPrice)}`);
+  if (targetPrice) lines.push({ text: '기준가 ' + targetPrice });
 
-  if (input.details) lines.push(escapeTelegramHtml(input.details));
-  if (input.timestamp && !customTitle) lines.push(escapeTelegramHtml(input.timestamp));
-  return lines.join('\n').slice(0, TELEGRAM_TEXT_LIMIT);
+  const details = normalizeTelegramReadableText(input.details);
+  if (details) {
+    if (lines.at(-1)?.text !== '') lines.push({ text: '' });
+    for (const line of details.split('\n')) {
+      lines.push({ text: line, bold: /^\[[^\]\n]{1,72}\]/u.test(line) });
+    }
+  }
+  if (input.timestamp && !customTitle) {
+    lines.push({ text: '' }, { text: input.timestamp });
+  }
+  return boundedTelegramHtmlLines(lines);
 }
 
 export function normalizeTelegramHttpUrl(value: unknown): string | null {
@@ -217,21 +264,57 @@ function prune(now: number): void {
   for (const [key, value] of deliveredAtByCooldownKey) {
     if (value < oldest) deliveredAtByCooldownKey.delete(key);
   }
+  const uncertainOldest = now - 14 * 24 * 60 * 60_000;
+  for (const [key, value] of unconfirmedAtByHash) {
+    if (value < uncertainOldest) unconfirmedAtByHash.delete(key);
+  }
 }
 
 export function clearTelegramAlertState(): void {
   deliveredAtByHash.clear();
   deliveredAtByCooldownKey.clear();
   inFlightHashes.clear();
+  unconfirmedAtByHash.clear();
 }
 
-function retryDelay(response: Response, attempt: number): number {
-  const retryAfter = response.headers.get('retry-after');
-  const seconds = retryAfter == null ? Number.NaN : Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(MAX_RETRY_DELAY_MS, Math.round(seconds * 1000));
+/** A Telegram HTTP 429 is an explicit rejection. Respect BOTH the HTTP
+ * Retry-After header and Bot API ResponseParameters.retry_after. If the
+ * server requires longer than the bounded retry budget, return control to
+ * the caller without an early replay or a long-held worker slot.
+ */
+async function retryDelay(response: Response, attempt: number): Promise<number | null> {
+  const hints: number[] = [];
+  const rawHeader = response.headers.get('retry-after');
+  if (rawHeader !== null) {
+    const header = rawHeader.trim();
+    const seconds = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(header)
+      ? Number(header) : Number.NaN;
+    const fromDate = /GMT$/iu.test(header) ? Date.parse(header) : Number.NaN;
+    hints.push(Number.isFinite(seconds) && seconds >= 0
+      ? Math.ceil(seconds * 1000)
+      : Number.isFinite(fromDate) ? Math.max(0, fromDate - Date.now()) : Number.POSITIVE_INFINITY);
   }
-  return Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  const length = response.headers.get('content-length');
+  // An oversized/untrusted error body cannot authorize an immediate retry.
+  const bounded = length === null || (/^\d+$/u.test(length) && Number(length) <= 4096);
+  if (bounded) {
+    try {
+      const payload: unknown = await response.clone().json();
+      const params = payload && typeof payload === 'object'
+        ? (payload as { parameters?: { retry_after?: unknown } }).parameters : undefined;
+      if (params && typeof params === 'object' && 'retry_after' in params) {
+        const seconds = params.retry_after;
+        hints.push(typeof seconds === 'number' && Number.isSafeInteger(seconds) && seconds >= 0
+          ? seconds * 1000 : Number.POSITIVE_INFINITY);
+      }
+    } catch { /* Absent/unreadable optional error JSON is not a success signal. */ }
+  } else {
+    hints.push(Number.POSITIVE_INFINITY);
+  }
+  const delay = hints.length > 0
+    ? Math.max(...hints) : Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  return Number.isFinite(delay) && delay >= 0 && delay <= MAX_RETRY_DELAY_MS
+    ? Math.ceil(delay) : null;
 }
 
 function safePhoto(input: TelegramPhotoAttachment | undefined): TelegramPhotoAttachment | null {
@@ -255,14 +338,17 @@ async function sendOnce(
   messageId: number | null;
   messageKind: TelegramMessageKind;
   renderedText: string;
+  errorCode: string | null;
 }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const keyboard = telegramInlineKeyboard(input.buttons);
-    const photo = safePhoto(input.photo);
+    // Preserve full plans and news. A long rich alert becomes TEXT instead
+    // of silently losing everything after Telegram's 1024-char photo caption.
+    const photo = text.length <= TELEGRAM_CAPTION_LIMIT ? safePhoto(input.photo) : null;
     const messageKind: TelegramMessageKind = photo ? 'PHOTO' : 'TEXT';
-    const renderedText = text.slice(0, photo ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT);
+    const renderedText = text;
     const endpoint = photo ? 'sendPhoto' : 'sendMessage';
     let body: BodyInit;
     let headers: HeadersInit;
@@ -305,12 +391,15 @@ async function sendOnce(
       { method: 'POST', headers, body, signal: controller.signal },
     );
 
-    const retryable = response.status === 429 || response.status >= 500;
-    if (retryable && attempt < MAX_RETRIES) {
-      const delay = retryDelay(response, attempt);
-      clearTimeout(timeout);
-      await sleep(delay);
-      return sendOnce(botToken, destination, text, input, attempt + 1);
+    // HTTP 429 means rejected; a 5xx can occur after Telegram accepts a POST.
+    // Never retry a possibly accepted non-idempotent sendMessage.
+    if (response.status === 429 && attempt < MAX_RETRIES) {
+      const delay = await retryDelay(response, attempt);
+      if (delay !== null) {
+        clearTimeout(timeout);
+        await sleep(delay);
+        return sendOnce(botToken, destination, text, input, attempt + 1);
+      }
     }
     if (!response.ok) {
       return {
@@ -319,6 +408,8 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
+        errorCode: response.status >= 500
+          ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : `TELEGRAM_HTTP_${response.status}`, 
       };
     }
 
@@ -332,6 +423,7 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
       };
     }
     const rawMessageId = result.result?.message_id;
@@ -339,24 +431,24 @@ async function sendOnce(
       ? rawMessageId
       : null;
     return {
-      delivered: result.ok === true,
+      delivered: result.ok === true && messageId !== null,
       attempts: attempt + 1,
       messageId,
       messageKind,
       renderedText,
+      errorCode: result.ok === true
+        ? (messageId === null ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : null)
+        : 'TELEGRAM_API_REJECTED',
     };
   } catch {
-    if (attempt < MAX_RETRIES) {
-      clearTimeout(timeout);
-      await sleep(300 * (attempt + 1));
-      return sendOnce(botToken, destination, text, input, attempt + 1);
-    }
+    // A network abort can occur AFTER the remote Bot API has accepted POST.
     return {
       delivered: false,
       attempts: attempt + 1,
       messageId: null,
-      messageKind: safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
-      renderedText: text.slice(0, safePhoto(input.photo) ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT),
+      messageKind: text.length <= TELEGRAM_CAPTION_LIMIT && safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
+      renderedText: text,
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
     };
   } finally {
     clearTimeout(timeout);
@@ -383,6 +475,11 @@ export async function sendTelegramAlertWithReceipt(
     DEFAULT_DUPLICATE_WINDOW_MS,
   );
   const cooldownMs = normalizeWindow(input.cooldownMs, DEFAULT_COOLDOWN_MS);
+  const uncertainAt = unconfirmedAtByHash.get(hash);
+  if (uncertainAt != null && now - uncertainAt <= 14 * 24 * 60 * 60_000) {
+    return { ok: false, attempts: 0, skipped: 'OUTCOME_UNCONFIRMED',
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+  }
   const lastDuplicate = deliveredAtByHash.get(hash);
   if (
     inFlightHashes.has(hash)
@@ -400,14 +497,18 @@ export async function sendTelegramAlertWithReceipt(
   try {
     const result = await sendOnce(botToken, destination, rendered, input, 0);
     if (!result.delivered) {
+      const uncertain = result.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+      if (uncertain) unconfirmedAtByHash.set(hash, Date.now());
       logger.warn(
-        { alertType: input.type, attempts: result.attempts },
+        { alertType: input.type, attempts: result.attempts,
+          code: uncertain ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : 'TELEGRAM_DELIVERY_REJECTED' },
         'telegram alert delivery failed',
       );
       return {
         ok: false,
         attempts: result.attempts,
-        skipped: 'DELIVERY_FAILED',
+        skipped: uncertain ? 'OUTCOME_UNCONFIRMED' : 'DELIVERY_FAILED',
+        errorCode: result.errorCode,
       };
     }
 
@@ -440,11 +541,40 @@ export async function sendTelegramAlert(
     : result;
 }
 
+/**
+ * Keep Telegram HTML entities and formatting tags whole when editing a long
+ * signal. A raw slice can end inside <b>, </b>, or &amp; and reject the edit,
+ * leaving obsolete order buttons on the old Telegram message.
+ */
+function boundedTelegramEditHtml(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const tokens = text.match(/<[^<>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);|[\s\S]/giu) ?? [];
+  const openTags: string[] = [];
+  let result = '';
+
+  for (const token of tokens) {
+    const opening = /^<(b|strong|i|em|u|s|strike|code|pre|a)(?:\s[^<>]*)?>$/iu.exec(token);
+    const closing = /^<\/(b|strong|i|em|u|s|strike|code|pre|a)>$/iu.exec(token);
+    const nextOpen = [...openTags];
+    if (opening) nextOpen.push(opening[1].toLowerCase());
+    else if (closing && nextOpen.at(-1) === closing[1].toLowerCase()) nextOpen.pop();
+
+    const closingCost = nextOpen.reduce((n, tag) => n + tag.length + 3, 0);
+    if (result.length + token.length + closingCost + 1 > limit) break;
+    result += token;
+    openTags.splice(0, openTags.length, ...nextOpen);
+  }
+  const closings = [...openTags].reverse().map((tag) => '</' + tag + '>').join('');
+  return result.trimEnd() + '…' + closings;
+}
+
 export async function editTelegramMessage(input: {
   destinationChatId: string;
   messageId: number;
   messageKind: TelegramMessageKind;
   text: string;
+  buttons?: TelegramAlertInput['buttons'];
+  linkPreview?: boolean;
 }): Promise<TelegramAlertResult> {
   const botToken = token();
   const destination = input.destinationChatId.trim();
@@ -452,8 +582,8 @@ export async function editTelegramMessage(input: {
     return { ok: false, attempts: 0, skipped: 'NOT_CONFIGURED' };
   }
 
-  const renderedText = input.text.slice(
-    0,
+  const renderedText = boundedTelegramEditHtml(
+    input.text,
     input.messageKind === 'PHOTO' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT,
   );
 
@@ -470,7 +600,11 @@ export async function editTelegramMessage(input: {
       if (input.messageKind === 'PHOTO') payload.caption = renderedText;
       else {
         payload.text = renderedText;
-        payload.link_preview_options = { is_disabled: true };
+        payload.link_preview_options = { is_disabled: input.linkPreview !== true };
+      }
+      // Explicit empty keyboard revokes a stale order link, including photo captions.
+      if (input.buttons !== undefined) {
+        payload.reply_markup = telegramInlineKeyboard(input.buttons) ?? { inline_keyboard: [] };
       }
 
       const response = await fetch(
@@ -483,31 +617,40 @@ export async function editTelegramMessage(input: {
         },
       );
 
-      const retryable = response.status === 429 || response.status >= 500;
-      if (retryable && attempt < MAX_RETRIES) {
-        const delay = retryDelay(response, attempt);
-        clearTimeout(timeout);
-        await sleep(delay);
-        return run(attempt + 1);
+      // Edits may race a newer keyboard revocation or signal-state change.
+      // An ambiguous POST can already have applied remotely; delayed replay
+      // could restore a stale order button. Retry only explicit HTTP 429.
+      if (response.status === 429 && attempt < MAX_RETRIES) {
+        const delay = await retryDelay(response, attempt);
+        if (delay !== null) {
+          clearTimeout(timeout);
+          await sleep(delay);
+          return run(attempt + 1);
+        }
       }
-      if (!response.ok) return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      if (!response.ok) {
+        return response.status >= 500
+          ? { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+            errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' }
+          : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      }
 
       let result: TelegramSendResponse;
       try {
         result = (await response.json()) as TelegramSendResponse;
       } catch {
-        return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+        // A malformed HTTP 200 does not prove the edit was rejected.
+        return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
       }
       return result.ok === true
         ? { ok: true, attempts: attempt + 1 }
         : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
     } catch {
-      if (attempt < MAX_RETRIES) {
-        clearTimeout(timeout);
-        await sleep(300 * (attempt + 1));
-        return run(attempt + 1);
-      }
-      return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      // A network abort can happen after the remote message was modified.
+      // Never reapply an old keyboard over a newer revocation.
+      return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
     } finally {
       clearTimeout(timeout);
     }

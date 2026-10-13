@@ -9,6 +9,10 @@ on:
       - 'api-server/supabase/migrations/2026081701_account_readonly_credentials.sql'
       - 'api-server/supabase/migrations/2026081801_account_readonly_service_role.sql'
       - 'api-server/supabase/migrations/2026081801_account_readonly_service_role.down.sql'
+      - 'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'
+      - 'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql'
+      - 'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql'
+      - 'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.down.sql'
   issue_comment:
     types: [created]
 
@@ -45,6 +49,14 @@ jobs:
           grep -Fq "grant select, insert, update, delete on table public.account_readonly_credentials to service_role" api-server/supabase/migrations/2026081801_account_readonly_service_role.sql
           grep -Fq "'order_submitted', false" ops/apply-production-account-readonly-storage.mjs
           grep -Fq "'live_trading_authority', false" ops/apply-production-account-readonly-storage.mjs
+          grep -Fq "provider in ('toss', 'kiwoom', 'upbit', 'bitget')" api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql
+          grep -Fq "ACCOUNT_READONLY_KIWOOM_ROWS_MUST_BE_REMOVED_EXPLICITLY_BEFORE_ROLLBACK" api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.down.sql
+          grep -Fq "'api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql'" ops/apply-production-account-readonly-storage.mjs
+          grep -Fq "exchange in ('bitget', 'upbit', 'kiwoom', 'toss')" api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql
+          grep -Fq "TOSS_TRADING_CONNECTIONS_EXIST" api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.down.sql
+          grep -Fq "'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql'" ops/apply-production-account-readonly-storage.mjs
+          grep -Fq "'provider_constraint_toss', true" ops/apply-production-account-readonly-storage.mjs
+          grep -Fq "'trade_secret_column_exposed', false" ops/apply-production-account-readonly-storage.mjs
 
   apply:
     name: Owner-approved atomic Production account read-only storage apply
@@ -287,7 +299,9 @@ jobs:
           tar -czf "$archive" \
             ops/apply-production-account-readonly-storage.mjs \
             api-server/supabase/migrations/2026081701_account_readonly_credentials.sql \
-            api-server/supabase/migrations/2026081801_account_readonly_service_role.sql
+            api-server/supabase/migrations/2026081801_account_readonly_service_role.sql \
+            api-server/supabase/migrations/2026092501_account_readonly_kiwoom_provider.sql \
+            api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
           remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-account-readonly-storage.mjs' \
@@ -306,10 +320,14 @@ jobs:
             && value?.expected_active_sha === activeSha
             && value?.production_project_match === true
             && value?.atomic_transaction === true
-            && value?.tables_verified === 1
+            && value?.migrations_applied === 4
+            && value?.tables_verified === 3
             && value?.rls_enabled === true
             && value?.api_roles_revoked === true
             && value?.service_role_access === true
+            && value?.provider_constraint_kiwoom === true
+            && value?.provider_constraint_toss === true
+            && value?.trade_secret_column_exposed === false
             && value?.database_changed === true
             && value?.credentials_recorded === false
             && value?.raw_credentials_exposed === false
@@ -352,7 +370,9 @@ jobs:
                 `- Approved exact current main SHA: \`${process.env.TARGET_SHA}\``,
                 '- Atomic transaction: `true`',
                 '- account_readonly_credentials verified: `true`',
-                '- Browser/API direct table privileges: `0`',
+                '- trade_exchange_connections / trade_orders Toss provider constraints: `true`',
+                '- Browser/API direct credential-table privileges: `0`',
+                '- authenticated encrypted trading credential column access: `false`',
                 '- service_role encrypted storage access: `true`',
                 '- Secret values recorded: `false`',
                 '- Orders/cancels/transfers/withdrawals: `0`',
@@ -372,6 +392,8 @@ jobs:
             echo "- Exact current main SHA: \`${{ steps.command.outputs.target_sha }}\`"
             echo '- Atomic DB transaction: `true`'
             echo '- Browser/API direct credential-table access: `0`'
+            echo '- Toss trading provider schema enabled: `true`'
+            echo '- Encrypted trading credential column exposed to authenticated: `false`'
             echo '- Orders/cancels/transfers/withdrawals: `0`'
             echo '- Live trading authority: `false`'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -27,7 +27,7 @@ function completeEvidence(overrides: Partial<ProviderPredeployEvidence> = {}): P
 
 test('provider authority contract', () => {
   assert.equal(CANONICAL_PROVIDER_BY_MARKET.KR_STOCK, 'toss');
-  assert.equal(CANONICAL_PROVIDER_BY_MARKET.US_STOCK, 'toss');
+  assert.equal(CANONICAL_PROVIDER_BY_MARKET.US_STOCK, 'kiwoom');
   assert.equal(CANONICAL_PROVIDER_BY_MARKET.CRYPTO_SPOT, 'upbit');
   assert.equal(CANONICAL_PROVIDER_BY_MARKET.CRYPTO_FUTURES, 'bitget');
 });

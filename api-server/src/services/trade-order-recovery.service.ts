@@ -1,11 +1,25 @@
 import type { TradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
+import { readBoundedTradingProviderJson } from './trading-provider-response.service';
+import { kiwoomRecoveryOrderIdentityValid, kiwoomReadonlyRecoverySnapshot, readCompleteKiwoomOrderRows,
+  kiwoomReadonlyRecoveryRequestValid } from './kiwoom-readonly-order-recovery.service';
+import { TradeAutomationService, liveCapabilityDecision } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { isTransientTradingProviderError, tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetOrderQuery,
+  prepareKiwoomDomesticOrderHistory,
+  prepareKiwoomToken,
+  prepareKiwoomUnfilled,
+  prepareKiwoomUsOrderHistory,
+  prepareKiwoomUsUnfilled,
+  prepareTossOpenOrders,
+  prepareTossOrderQuery,
+  prepareTossToken,
   prepareUpbitOrderQuery,
   type BitgetCredentials,
+  type KiwoomCredentials,
   type PreparedExchangeRequest,
+  type TossCredentials,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
 import type {
@@ -20,6 +34,8 @@ type ExchangePayload = Record<string, unknown>;
 const BASE_URLS = {
   bitget: 'https://api.bitget.com',
   upbit: 'https://api.upbit.com',
+  kiwoom: 'https://api.kiwoom.com',
+  toss: 'https://openapi.tossinvest.com',
 };
 
 const QUANTITY_EPSILON = 1e-12;
@@ -29,9 +45,30 @@ function isRecord(value: unknown): value is ExchangePayload {
 }
 
 function finiteNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'number' && (typeof value !== 'string'
+    || !/^-?\d+(?:\.\d+)?$/u.test(value))) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function knownFilledQuantity(value: unknown, provider: string): number {
+  const quantity = finiteNumber(value);
+  if (quantity === null || quantity < 0) throw new Error(`${provider}_ORDER_FILLED_QUANTITY_UNKNOWN`);
+  return quantity;
+}
+
+export function assertReadonlyOrderRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
+  const read = request.method === 'GET' && request.body === null;
+  const token = request.method === 'POST' && request.path === '/oauth2/token' && request.query === '';
+  const valid = baseUrl === BASE_URLS.bitget ? read && request.path === '/api/v2/mix/order/detail'
+    : baseUrl === BASE_URLS.upbit ? read && request.path === '/v1/order'
+    : baseUrl === BASE_URLS.toss ? token || read && (request.path === '/api/v1/orders'
+      || /^\/api\/v1\/orders\/[^/?#]+$/u.test(request.path))
+    : baseUrl === BASE_URLS.kiwoom ? token || kiwoomReadonlyRecoveryRequestValid(request)
+    : false;
+  if (!valid || request.query.includes('#') || request.query.includes('?')) {
+    throw new Error('ORDER_RECOVERY_READONLY_TRANSPORT_REQUIRED');
+  }
 }
 
 function text(value: unknown): string | null {
@@ -52,10 +89,12 @@ function invalidResponseCode(baseUrl: string) {
   if (baseUrl.includes('bitget.com')) return 'BITGET_INVALID_RESPONSE';
   if (baseUrl.includes('upbit.com')) return 'UPBIT_INVALID_RESPONSE';
   if (baseUrl.includes('kiwoom.com')) return 'KIWOOM_INVALID_RESPONSE';
+  if (baseUrl.includes('tossinvest.com')) return 'TOSS_INVALID_RESPONSE';
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
-async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
+async function sendRecoveryResponse(baseUrl: string, request: PreparedExchangeRequest) {
+  assertReadonlyOrderRecoveryRequest(baseUrl, request);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
@@ -65,32 +104,32 @@ async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeReq
       headers: request.headers,
       body: request.body,
       signal: controller.signal,
+      redirect: 'error',
     });
-    if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    const raw = await response.text();
-    if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
-    let payload: unknown;
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      throw new Error(invalidResponseCode(baseUrl));
-    }
+    if (!response.ok) throw new Error(tradingProviderHttpErrorCode(baseUrl, response.status));
+    const payload = await readBoundedTradingProviderJson(response, { signal: controller.signal,
+      invalidCode: invalidResponseCode(baseUrl), boundCode: 'ORDER_RECOVERY_RESPONSE_BOUND_EXCEEDED' });
     if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
-    return payload;
+    return { payload, apiId: response.headers.get('api-id'),
+      contYn: response.headers.get('cont-yn'), nextKey: response.headers.get('next-key') };
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
-    if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(tradingProviderTimeoutCode(baseUrl));
+    if (error instanceof TypeError) throw new Error(tradingProviderNetworkErrorCode(baseUrl));
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
+async function sendRecoveryRequest(baseUrl: string, request: PreparedExchangeRequest) {
+  return (await sendRecoveryResponse(baseUrl, request)).payload;
+}
+
 function bitgetData(payload: ExchangePayload, expectedClientOid: string) {
   const code = text(payload.code);
-  if (!code) throw new Error('BITGET_INVALID_RESPONSE');
+  if (!code || !/^\d{5}$/u.test(code)) throw new Error('BITGET_INVALID_RESPONSE');
   if (code !== '00000') throw new Error(`BITGET_${code}`);
-  const candidate = Array.isArray(payload.data) ? payload.data[0] : payload.data;
+  const candidate = payload.data;
   if (!isRecord(candidate)) throw new Error('BITGET_INVALID_RESPONSE');
   if (text(candidate.clientOid) !== expectedClientOid) throw new Error('BITGET_INVALID_RESPONSE');
   return candidate;
@@ -139,9 +178,11 @@ function bitgetSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Trad
   if (text(row.symbol)?.toUpperCase() !== plan.symbol.toUpperCase()) {
     throw new Error('BITGET_ORDER_IDENTITY_MISMATCH');
   }
+  const exchangeOrderId = text(row.orderId ?? row.order_id);
+  if (!exchangeOrderId || !/^[1-9]\d{0,39}$/u.test(exchangeOrderId)) throw new Error('BITGET_ORDER_IDENTITY_MISMATCH');
   const providerStatusCode = String(row.status ?? row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.size ?? row.quantity ?? row.qty) ?? order.requestedQuantity;
-  const filledQuantity = finiteNumber(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume) ?? 0;
+  const filledQuantity = knownFilledQuantity(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume, 'BITGET');
   const remainingQuantity = requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity);
   const state = stateFromBitget(providerStatusCode, filledQuantity);
   if (!state) throw new Error('BITGET_ORDER_STATUS_UNKNOWN');
@@ -149,7 +190,7 @@ function bitgetSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Trad
   const rawFills = Array.isArray(row.fills) ? row.fills.filter(isRecord) : [];
   const fills = rawFills.map((fill, index) => fillFromRow(fill, `bitget-${order.id}-${index}`, updatedAt)).filter((fill): fill is TradingFill => fill !== null);
   return {
-    exchangeOrderId: text(row.orderId ?? row.order_id) ?? order.exchangeOrderId,
+    exchangeOrderId,
     state,
     requestedQuantity,
     filledQuantity,
@@ -170,8 +211,17 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
   const expectedMarket = `KRW-${plan.symbol.toUpperCase().replace(/^KRW-/, '')}`;
   if (text(row.market)?.toUpperCase() !== expectedMarket) throw new Error('UPBIT_ORDER_IDENTITY_MISMATCH');
   const providerStatusCode = String(row.state ?? '').toLowerCase();
-  const requestedQuantity = finiteNumber(row.volume) ?? order.requestedQuantity;
-  const filledQuantity = finiteNumber(row.executed_volume) ?? 0;
+  const quoteSized = row.ord_type === 'price';
+  if (quoteSized && (plan.orderType !== 'market' || plan.side !== 'buy' || row.side !== 'bid'
+    || finiteNumber(plan.quoteAmount) === null || Number(plan.quoteAmount) <= 0
+    || finiteNumber(row.price) === null || Number(row.price) <= 0 || Number(row.price) > Number(plan.quoteAmount)
+    || row.volume !== null && row.volume !== undefined)) {
+    throw new Error('UPBIT_QUOTE_ORDER_CONTRACT_MISMATCH');
+  }
+  // The submitted market-buy request is denominated in KRW. Its estimated
+  // plan quantity is not a promised base-asset quantity at the exchange.
+  const requestedQuantity = quoteSized ? null : finiteNumber(row.volume) ?? order.requestedQuantity;
+  const filledQuantity = knownFilledQuantity(row.executed_volume, 'UPBIT');
   const remainingQuantity = finiteNumber(row.remaining_volume)
     ?? (requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity));
   const state = stateFromUpbit(providerStatusCode, filledQuantity);
@@ -187,7 +237,10 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
     requestedQuantity,
     filledQuantity,
     remainingQuantity,
-    averageFillPrice: weightedQuantity > 0 ? weightedValue / weightedQuantity : finiteNumber(row.price),
+    // For ord_type=price this is the entire quote-currency spend, NOT a unit
+    // fill price. Only actual trades can supply the weighted average.
+    averageFillPrice: weightedQuantity > 0 && quantitiesMatch(weightedQuantity, filledQuantity)
+      ? weightedValue / weightedQuantity : null,
     fills,
     feeAmount: finiteNumber(row.paid_fee),
     feeCurrency: 'KRW',
@@ -196,6 +249,105 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
     cancelable: state === 'ACCEPTED' || state === 'PARTIALLY_FILLED',
     providerStatusCode,
   };
+}
+
+
+function tossData(payload: ExchangePayload) {
+  if (payload.error) throw new Error('TOSS_ORDER_LOOKUP_FAILED');
+  const code = text(payload.code ?? payload.return_code);
+  if (code && !['0', '00000', 'SUCCESS'].includes(code.toUpperCase())) {
+    throw new Error(/^\d{1,6}$/u.test(code) ? `TOSS_${code}` : 'TOSS_ORDER_LOOKUP_FAILED');
+  }
+  return isRecord(payload.result) ? payload.result : payload;
+}
+
+function tossToken(payload: ExchangePayload) {
+  const row = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
+  const token = text(row.access_token ?? row.accessToken ?? payload.access_token);
+  if (!token) throw new Error('TOSS_TOKEN_MISSING');
+  return token;
+}
+
+function stateFromToss(status: string, filledQuantity: number): TradingExchangeOrderSnapshot['state'] | null {
+  if (['open', 'pending', 'accepted', 'waiting'].includes(status)) {
+    return filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED';
+  }
+  if (['partially_filled', 'partial_fill', 'partial-filled'].includes(status)) return 'PARTIALLY_FILLED';
+  if (['filled', 'completed', 'done'].includes(status)) return 'FILLED';
+  if (['cancelled', 'canceled', 'cancel'].includes(status)) return 'CANCELED';
+  if (['rejected', 'failed', 'expired'].includes(status)) return 'REJECTED';
+  return null;
+}
+
+function tossSnapshot(payload: ExchangePayload, plan: TradingPlan, order: TradingOrder): TradingExchangeOrderSnapshot {
+  const row = tossData(payload);
+  const orderId = text(row.orderId ?? row.order_id);
+  if (!orderId || (order.exchangeOrderId && order.exchangeOrderId !== orderId)) {
+    throw new Error('TOSS_ORDER_IDENTITY_MISMATCH');
+  }
+  if (text(row.symbol)?.toUpperCase() !== plan.symbol.toUpperCase()) throw new Error('TOSS_ORDER_IDENTITY_MISMATCH');
+  const execution = isRecord(row.execution) ? row.execution : {};
+  const requestedQuantity = finiteNumber(row.quantity) ?? order.requestedQuantity;
+  const filledQuantity = knownFilledQuantity(execution.filledQuantity ?? row.filledQuantity ?? row.executedQuantity, 'TOSS');
+  const remainingQuantity = finiteNumber(row.remainingQuantity)
+    ?? (requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity));
+  const providerStatusCode = String(row.status ?? row.orderStatus ?? row.state ?? '').toLowerCase();
+  const state = stateFromToss(providerStatusCode, filledQuantity);
+  if (!state) throw new Error('TOSS_ORDER_STATUS_UNKNOWN');
+  return {
+    exchangeOrderId: orderId,
+    state,
+    requestedQuantity,
+    filledQuantity,
+    remainingQuantity,
+    averageFillPrice: finiteNumber(execution.averageFillPrice ?? execution.averagePrice ?? row.averageFillPrice),
+    fills: [],
+    feeAmount: finiteNumber(execution.feeAmount ?? row.feeAmount),
+    feeCurrency: text(execution.feeCurrency ?? row.feeCurrency),
+    exchangeCreatedAt: timestamp(row.createdAt ?? row.created_at),
+    exchangeUpdatedAt: timestamp(row.updatedAt ?? row.updated_at ?? execution.updatedAt),
+    cancelable: state === 'ACCEPTED' || state === 'PARTIALLY_FILLED',
+    providerStatusCode,
+  };
+}
+
+function tossOpenOrderId(payload: ExchangePayload, expectedClientOrderId: string) {
+  tossData(payload); // An error envelope cannot prove absence or ownership.
+  const result = payload.result;
+  const values = Array.isArray(result)
+    ? result
+    : isRecord(result) && Array.isArray(result.orders) ? result.orders : null;
+  if (!values || values.some((row) => !isRecord(row))) throw new Error('TOSS_OPEN_ORDER_RESPONSE_INVALID');
+  const matching = values.filter((row: ExchangePayload) => text(row.clientOrderId ?? row.client_order_id) === expectedClientOrderId);
+  if (matching.length > 1) throw new Error('TOSS_RECOVERY_ORDER_ROW_AMBIGUOUS');
+  const orderId = matching.length === 1 ? text(matching[0].orderId ?? matching[0].order_id) : null;
+  if (matching.length === 1 && !orderId) throw new Error('TOSS_ORDER_IDENTITY_MISMATCH');
+  return orderId;
+}
+
+function assertKiwoom(payload: ExchangePayload) {
+  const raw = payload.return_code ?? payload.returnCode ?? payload.code;
+  if (raw == null || !['0', '00000', '20'].includes(String(raw))) {
+    throw new Error(`KIWOOM_${String(raw ?? 'INVALID_RESPONSE')}`);
+  }
+  return payload;
+}
+
+function kiwoomToken(payload: ExchangePayload) {
+  const nested = isRecord(payload.data) ? payload.data : null;
+  const token = text(payload.token ?? nested?.token);
+  if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+  return token;
+}
+
+function kiwoomOrderDate(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error('KIWOOM_ORDER_DATE_INVALID');
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}${map.month}${map.day}`;
 }
 
 function quantitiesMatch(left: number, right: number) {
@@ -217,18 +369,26 @@ function mergeFills(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot)
   ));
 }
 
-function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot): TradingExchangeOrderSnapshot {
+function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot, plan: TradingPlan): TradingExchangeOrderSnapshot {
+  if (!Number.isFinite(snapshot.filledQuantity) || snapshot.filledQuantity < 0
+    || snapshot.requestedQuantity !== null && (!Number.isFinite(snapshot.requestedQuantity) || snapshot.requestedQuantity <= 0)
+    || snapshot.remainingQuantity !== null && (!Number.isFinite(snapshot.remainingQuantity) || snapshot.remainingQuantity < 0)) {
+    throw new Error('RECONCILIATION_QUANTITY_INVALID');
+  }
   if (order.exchangeOrderId && snapshot.exchangeOrderId && order.exchangeOrderId !== snapshot.exchangeOrderId) {
     throw new Error('RECONCILIATION_ORDER_ID_MISMATCH');
   }
-  if (order.requestedQuantity !== null && snapshot.requestedQuantity !== null
-    && !quantitiesMatch(order.requestedQuantity, snapshot.requestedQuantity)) {
+  const quoteSized = plan.exchange === 'upbit' && plan.orderType === 'market' && plan.side === 'buy'
+    && Number(plan.quoteAmount) > 0 && snapshot.requestedQuantity === null;
+  const storedRequestedQuantity = quoteSized ? null : order.requestedQuantity;
+  if (storedRequestedQuantity !== null && snapshot.requestedQuantity !== null
+    && !quantitiesMatch(storedRequestedQuantity, snapshot.requestedQuantity)) {
     throw new Error('RECONCILIATION_REQUESTED_QUANTITY_MISMATCH');
   }
   if (snapshot.filledQuantity + QUANTITY_EPSILON < order.filledQuantity) {
     throw new Error('RECONCILIATION_FILLED_QUANTITY_REGRESSION');
   }
-  const requestedQuantity = snapshot.requestedQuantity ?? order.requestedQuantity;
+  const requestedQuantity = snapshot.requestedQuantity ?? storedRequestedQuantity;
   if (requestedQuantity !== null && snapshot.filledQuantity > requestedQuantity + QUANTITY_EPSILON) {
     throw new Error('RECONCILIATION_FILLED_QUANTITY_EXCEEDED');
   }
@@ -271,9 +431,8 @@ function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSna
 }
 
 function transientRecoveryError(code: string) {
-  return code === 'EXCHANGE_TIMEOUT' || code === 'EXCHANGE_NETWORK_ERROR' || code.startsWith('EXCHANGE_HTTP_')
-    || code.endsWith('_ORDER_LOOKUP_EMPTY') || code.endsWith('_ORDER_LOOKUP_FAILED')
-    || code.endsWith('_INVALID_RESPONSE');
+  return isTransientTradingProviderError(code)
+    || /^(BITGET|UPBIT|KIWOOM|TOSS)_HTTP_404$/.test(code);
 }
 
 export class TradeOrderRecoveryService {
@@ -288,13 +447,6 @@ export class TradeOrderRecoveryService {
     if (order.state !== 'RECOVERY_REQUIRED') return order;
     if (order.manualReviewRequired) return order;
     if (order.nextRetryAt && Date.parse(order.nextRetryAt) > Date.now()) return order;
-    if (plan.exchange === 'kiwoom') {
-      return this.pending(
-        order,
-        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
-        true,
-      );
-    }
 
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (!connection?.configured || !connection.encryptedCredentials) {
@@ -306,25 +458,89 @@ export class TradeOrderRecoveryService {
     if (plan.accountMode === 'paper' || plan.accountMode === 'mock') {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
     }
+    const readCapability = liveCapabilityDecision(plan.exchange, 'OPEN_ORDER_READ');
+    if (!readCapability.allowed) {
+      return this.pending(
+        order,
+        readCapability.blockCodes[0] ?? 'SPOT_LIVE_OPEN_ORDER_READ_CAPABILITY_BLOCKED',
+        true,
+      );
+    }
+    if (plan.exchange === 'kiwoom' && !kiwoomRecoveryOrderIdentityValid(plan, order)) {
+      return this.pending(
+        order,
+        'KIWOOM_RECOVERY_ORDER_ID_INVALID',
+        true,
+      );
+    }
+
     try {
       const credentials = decryptTradingCredentials(connection.encryptedCredentials);
       let snapshot: TradingExchangeOrderSnapshot;
+
       if (plan.exchange === 'bitget') {
-        snapshot = bitgetSnapshot(await sendRecoveryRequest(BASE_URLS.bitget,
-          prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId)), plan, order);
+        snapshot = bitgetSnapshot(await sendRecoveryRequest(
+          BASE_URLS.bitget,
+          prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId),
+        ), plan, order);
+      } else if (plan.exchange === 'upbit') {
+        snapshot = upbitSnapshot(await sendRecoveryRequest(
+          BASE_URLS.upbit,
+          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId),
+        ), plan, order);
+      } else if (plan.exchange === 'toss') {
+        const tossCredentials = credentials as TossCredentials;
+        const tokenPayload = await sendRecoveryRequest(BASE_URLS.toss, prepareTossToken(tossCredentials));
+        const authenticated = { ...tossCredentials, accessToken: tossToken(tokenPayload) };
+        if (!order.exchangeOrderId) {
+          const open = await sendRecoveryRequest(BASE_URLS.toss, prepareTossOpenOrders(authenticated, plan.symbol));
+          const discovered = tossOpenOrderId(open, order.clientOrderId);
+          if (!discovered) {
+            return this.pending(order, 'TOSS_AMBIGUOUS_SUBMISSION_ORDER_ID_UNRESOLVED', true);
+          }
+          order.exchangeOrderId = discovered;
+        }
+        snapshot = tossSnapshot(await sendRecoveryRequest(
+          BASE_URLS.toss,
+          prepareTossOrderQuery(authenticated, order.exchangeOrderId),
+        ), plan, order);
       } else {
-        snapshot = upbitSnapshot(await sendRecoveryRequest(BASE_URLS.upbit,
-          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId)), plan, order);
+        if (!order.exchangeOrderId) {
+          return this.pending(order, 'KIWOOM_AMBIGUOUS_SUBMISSION_ORDER_ID_UNRESOLVED', true);
+        }
+        const kiwoomCredentials = credentials as KiwoomCredentials;
+        const tokenPayload = assertKiwoom(await sendRecoveryRequest(BASE_URLS.kiwoom, prepareKiwoomToken(kiwoomCredentials)));
+        const authenticated = { ...kiwoomCredentials, accessToken: kiwoomToken(tokenPayload) };
+        const date = kiwoomOrderDate(order.createdAt);
+        const readRows = (request: PreparedExchangeRequest) => readCompleteKiwoomOrderRows(request,
+          (next) => sendRecoveryResponse(BASE_URLS.kiwoom, next));
+        if (plan.market.toUpperCase() === 'US') {
+          const open = await readRows(prepareKiwoomUsUnfilled(authenticated, plan, date));
+          const result = kiwoomReadonlyRecoverySnapshot(open, plan, order, 'ust21050')
+            ?? kiwoomReadonlyRecoverySnapshot(await readRows(
+              prepareKiwoomUsOrderHistory(authenticated, plan, order.exchangeOrderId, date)), plan, order, 'ust21150');
+          if (!result) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+          snapshot = result;
+        } else {
+          const open = await readRows(prepareKiwoomUnfilled(authenticated));
+          const result = kiwoomReadonlyRecoverySnapshot(open, plan, order, 'ka10075')
+            ?? kiwoomReadonlyRecoverySnapshot(await readRows(
+              prepareKiwoomDomesticOrderHistory(authenticated, plan, order.exchangeOrderId, date)), plan, order, 'kt00007');
+          if (!result) throw new Error('KIWOOM_ORDER_LOOKUP_EMPTY');
+          snapshot = result;
+        }
       }
-      return await this.applySnapshot(order, snapshot);
+
+      return await this.applySnapshot(order, snapshot, plan);
     } catch (error) {
-      const code = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_RECONCILIATION_FAILED';
+      const rawCode = error instanceof Error ? error.message.split(':')[0] : '';
+      const code = /^[A-Z][A-Z0-9_]{0,120}$/u.test(rawCode) ? rawCode : 'EXCHANGE_RECONCILIATION_FAILED';
       return this.pending(order, code, !transientRecoveryError(code));
     }
   }
 
-  private async applySnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot) {
-    const validated = validateSnapshot(order, snapshot);
+  private async applySnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot, plan: TradingPlan) {
+    const validated = validateSnapshot(order, snapshot, plan);
     order.exchangeOrderId = validated.exchangeOrderId ?? order.exchangeOrderId;
     order.requestedQuantity = validated.requestedQuantity;
     order.remainingQuantity = validated.remainingQuantity;

@@ -14,6 +14,7 @@ export type MemberWatchlistSignalEvent = {
   type: 'NEW_CANDIDATE' | 'STATE_CHANGED' | 'RESCAN_REQUESTED';
   id: string;
   serviceSha: string;
+  occurrenceKey?: string;
   market: MemberWatchlistMarket;
   symbol: string;
   strategy: string;
@@ -108,6 +109,9 @@ export async function deliverMemberWatchlistTelegramForSignal(
   if (!memberWatchlistTelegramProducerEnabled(env)) return empty('DISABLED');
   const contract = signalContract(event);
   if (!contract) return empty('INELIGIBLE');
+  if(event.occurrenceKey !== undefined &&
+    !/^signal-intelligence-v3:episode-v2:[0-9a-f]{64}$/u.test(event.occurrenceKey))
+    return empty('INELIGIBLE');
 
   const findSubscribers = dependencies.findSubscribers ?? findMemberWatchlistSubscribers;
   const deliver = dependencies.deliver ?? deliverPersonalTelegramAlert;
@@ -129,7 +133,9 @@ export async function deliverMemberWatchlistTelegramForSignal(
     failed: 0,
     reason: 'COMPLETE',
   };
-  const eventId = `member-watchlist:${event.serviceSha}:${event.id}`;
+  const eventId = event.occurrenceKey
+    ? 'member-watchlist:'+event.occurrenceKey
+    : `member-watchlist:${event.serviceSha}:${event.id}`;
   const details = [
     '관심종목 신호',
     `${event.strategy}/${event.timeframe} · ${event.direction}`,
@@ -173,6 +179,16 @@ export async function deliverMemberWatchlistTelegramForSignal(
       if (dispatch.status === 'SKIPPED') {
         if (dispatch.reason === 'STORAGE_UNAVAILABLE') result.failed += 1;
         else result.skipped += 1;
+        continue;
+      }
+      if (dispatch.policy.decision.action === 'BATCHED') {
+        // Durable digest admission is successful queuing, NOT a direct
+        // Telegram Bot API send and NOT a suppressed signal. Preserve the
+        // recipient's configured digest preference and audit that queue.
+        const queued = durableQueueState(dispatch);
+        if (queued === true) result.queued += 1;
+        else if (queued === false) result.skipped += 1;
+        else result.failed += 1;
         continue;
       }
       if (dispatch.policy.decision.action !== 'IMMEDIATE') {

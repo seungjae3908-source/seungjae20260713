@@ -66,9 +66,14 @@ assert.equal(snapshot.lists.futuresShort.length, 1);
 assert.equal(snapshot.events.some((event) => event.type === 'RESCAN_REQUESTED' && event.symbol === 'ETHUSDT'), true);
 
 const longEvent = snapshot.events.find((event) => event.type === 'NEW_CANDIDATE' && event.direction === 'LONG');
-const telegram = toCanonicalTelegramAlert(longEvent, (room) => room === 'CRYPTO_ROOM' ? 'test-crypto-room' : 'test-stock-room');
+const telegram = toCanonicalTelegramAlert(longEvent, (room) => ({
+  KR_STOCK_ROOM: 'test-kr-stock-room',
+  US_STOCK_ROOM: 'test-us-stock-room',
+  CRYPTO_SPOT_ROOM: 'test-crypto-spot-room',
+  CRYPTO_FUTURES_ROOM: 'test-crypto-futures-room',
+})[room] ?? null);
 assert.equal(telegram.type, 'crypto_futures_long');
-assert.equal(telegram.destinationChatId, 'test-crypto-room');
+assert.equal(telegram.destinationChatId, 'test-crypto-futures-room');
 
 console.log(JSON.stringify({
   ok: true,

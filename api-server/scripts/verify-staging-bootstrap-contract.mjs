@@ -17,6 +17,8 @@ const telegramStorage = await read('api-server/supabase/migrations/2026081501_pe
 const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
 const telegramPolicyCleanupNormalized = telegramPolicyCleanup.replaceAll('\r\n', '\n');
 const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
+const memberAccessHardening = await read('api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql');
+const memberSecurityDefinerLockdown = await read('api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const watchlistVerifier = await read('api-server/scripts/verify-staging-watchlist-store.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
@@ -36,6 +38,36 @@ assert(manifest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'ma
 assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atomic runner must include personal Telegram policy cleanup');
 assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest must include authenticated member watchlist storage');
 assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
+assert(manifest.includes('2026100601_member_access_s_ai_hardening.sql'), 'manifest must include member S/AI hardening');
+assert(manifest.includes('2026100801_member_security_definer_lockdown.sql'), 'manifest must include member SECURITY DEFINER lockdown');
+assert(runner.includes('2026100601_member_access_s_ai_hardening.sql'), 'atomic runner must include member S/AI hardening');
+assert(runner.includes('2026100801_member_security_definer_lockdown.sql'), 'atomic runner must include member SECURITY DEFINER lockdown');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'member security lockdown must verify trigger-only direct EXECUTE removal');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'member security lockdown must verify PUBLIC EXECUTE removal from RLS helpers');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'), 'member security lockdown must preserve authenticated RLS helper execution');
+assert(memberSecurityDefinerLockdown.includes("grant execute on function %s to authenticated"), 'member security lockdown must not regrant helper execution to anon');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'), 'member security lockdown must reject PUBLIC/anon permission RPC execution');
+assert(memberSecurityDefinerLockdown.includes('record_member_password_reset_authorization'), 'member security lockdown must provide narrow password-reset audit RPC');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_AUDIT_TABLE_PRIVILEGE_INVALID'), 'member security lockdown must make audit table read-only to authenticated clients');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_AUDIT_DIRECT_INSERT_POLICY_PRESENT'), 'member security lockdown must reject direct audit INSERT policies');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID'), 'member security lockdown must verify password-reset audit RPC privileges');
+assert(memberSecurityDefinerLockdown.includes("'public.is_full_member()'"), 'member security lockdown must revoke the obsolete legacy full-member helper');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'), 'member security lockdown must remove public/anon profile table grants');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID'), 'member security lockdown must keep only authenticated SELECT on profiles');
+assert(memberSecurityDefinerLockdown.includes('revoke all privileges on table public.profiles from public, anon, authenticated'), 'member security lockdown must reset profile Data API ACLs');
+assert(memberSecurityDefinerLockdown.includes('grant select on table public.profiles to authenticated'), 'member security lockdown must restore authenticated profile SELECT only');
+assert(assertion.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'final assertion must verify trigger-only SECURITY DEFINER lockdown');
+assert(assertion.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'final assertion must verify RLS helper PUBLIC privilege lockdown');
+assert(assertion.includes('MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'), 'final assertion must verify authenticated helper execution');
+assert(assertion.includes('MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'), 'final assertion must verify permission RPC least privilege');
+assert(memberAccessHardening.includes('membership_expires_at'), 'member hardening must add membership expiry');
+assert(memberAccessHardening.includes("public.current_membership_level() in ('associate', 'regular', 'admin')"), 'member hardening must allow associate own-journal analytics reads');
+assert(memberAccessHardening.includes('member.password.reset'), 'member hardening must allow audited password reset actions');
+assert(assertion.includes("'membership_expires_at'"), 'final assertion must require membership expiry');
+assert(assertion.includes("'profiles_membership_expiry_idx'"), 'final assertion must require membership expiry index');
+assert(assertion.includes('associate own-journal analytics read policy'), 'final assertion must verify associate journal analytics RLS');
+assert(dbVerifier.includes('2026100601_member_access_s_ai_hardening.sql'), 'database CI must apply member S/AI hardening');
+assert(dbVerifier.includes('member_access_s_ai_hardening_integration.sql'), 'database CI must run member S/AI hardening integration');
 
 for (const marker of [
   'create table if not exists public.member_watchlist_items',
@@ -174,5 +206,21 @@ assert(
   serverEntry.includes('deploySha: identity.processDeploySha,'),
   'health response must expose deploySha from the process-start identity',
 );
+
+for (const migration of [
+  '2026080502_trade_automation_safety_hardening.sql',
+  '2026100901_admin_four_paper_wallet_rls_guard.sql',
+]) {
+  assert(manifest.includes(migration), `staging manifest must include ${migration}`);
+  assert(runner.includes(migration), `staging atomic runner must include ${migration}`);
+}
+assert(assertion.includes('STAGING_ADMIN_V2_RLS_GUARD_REQUIRED'),
+  'staging SQL must attest administrator V2 paper wallet and order-write RLS');
+assert(assertion.includes('admin_four_paper_wallet_rls_guard_ready()'),
+  'staging SQL must invoke the real DB guard readiness function');
+assert(runner.includes('admin_v2_rls_verified: true'),
+  'staging atomic bootstrap artifact must record V2 guard proof');
+assert(dbVerifier.includes('value.admin_v2_rls_verified !== true'),
+  'staging release DB gate must reject old bootstrap artifacts lacking V2 guard proof');
 
 console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, member watchlist storage, no-user-copy, and no-manual-account-secret contracts verified');

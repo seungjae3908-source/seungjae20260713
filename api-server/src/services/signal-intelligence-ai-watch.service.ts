@@ -1,6 +1,11 @@
+import path from 'node:path';
 import { answerAiChat } from './ai-chat.service';
+import { FileTelegramIntelligenceStateStore, type TelegramIntelligenceStateStore } from './telegram-intelligence-worker.service';
+import { boundedTelegramV3Json, validTelegramV3CurrentSource } from './telegram-v3-current-source.service';
+import { aiWatchDurableKey, sendAiWatchWithDurableReceipt } from './telegram-ai-watch-delivery.service';
 import { sendTelegramAlert } from './telegram-notification.service';
 import { logger } from '../lib/logger';
+import { telegramMarketRoomForLane, telegramMarketRoomChatId } from './telegram-market-room.service';
 
 const SIGNAL_URL = 'http://127.0.0.1:8790/v1/signals';
 const RESCAN_URL = 'http://127.0.0.1:8790/internal/rescan';
@@ -25,6 +30,9 @@ type WatchEnvelope = {
   serviceSha: string;
   executionAuthority: 'NONE';
   snapshot: {
+    serviceSha: string;
+    generatedAt: string;
+    publicDataOnly: true;
     safety: { executionAuthority: 'NONE'; privateTradingApiAllowed: false; realOrderAllowed: false };
     events: WatchEvent[];
   };
@@ -88,8 +96,8 @@ function materialChange(result: AiWatchResult): boolean {
 }
 
 function destination(event: WatchEvent): string | null {
-  if (event.market === 'KR_STOCK' || event.market === 'US_STOCK') return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-  return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  // Never collapse distinct four-market signals into legacy stock/crypto rooms.
+  return telegramMarketRoomChatId(telegramMarketRoomForLane(event.market));
 }
 
 function watchPrompt(event: WatchEvent): string {
@@ -110,14 +118,20 @@ export class SignalIntelligenceAiWatch {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly ai: typeof answerAiChat = answerAiChat,
     private readonly deliver: typeof sendTelegramAlert = sendTelegramAlert,
+    private readonly store: TelegramIntelligenceStateStore = new FileTelegramIntelligenceStateStore(
+      process.env.SIGNAL_INTELLIGENCE_AI_WATCH_STATE_PATH?.trim()
+        || path.resolve(process.cwd(), '.runtime/signal-ai-watch-delivery-state.json'),
+    ),
   ) {}
 
   private prune(now: number): void {
     for (const [key, at] of this.reviewed) if (now - at > REVIEW_TTL_MS) this.reviewed.delete(key);
   }
 
-  async runOnce(now = new Date()): Promise<{ reviewed: number; material: number; rescans: number; aiUnavailable: number }> {
-    const result = { reviewed: 0, material: 0, rescans: 0, aiUnavailable: 0 };
+  async runOnce(now = new Date()) {
+    const result = { reviewed: 0, material: 0, rescans: 0, aiUnavailable: 0,
+      deliveryAccepted: 0, deliveryDeduped: 0, deliveryUnconfirmed: 0,
+      deliveryNotAttempted: 0 };
     if (this.running || !aiConfigured()) return result;
     this.running = true;
     this.prune(now.getTime());
@@ -127,8 +141,12 @@ export class SignalIntelligenceAiWatch {
       let response: Response;
       try { response = await this.fetchImpl(SIGNAL_URL, { signal: controller.signal }); } finally { clearTimeout(timeout); }
       if (!response.ok) return result;
-      const envelope = await response.json() as WatchEnvelope;
-      if (envelope.ok !== true || envelope.executionAuthority !== 'NONE'
+      // A JSON 200 alone does not establish a current, complete 12-lane
+      // public source. Bound response bytes and validate full V3 lineage.
+      const envelope = await boundedTelegramV3Json(response) as WatchEnvelope;
+      if (!envelope || envelope.ok !== true || envelope.executionAuthority !== 'NONE'
+        || !validTelegramV3CurrentSource(envelope.snapshot, now.getTime())
+        || envelope.snapshot.serviceSha !== envelope.serviceSha
         || envelope.snapshot?.safety?.executionAuthority !== 'NONE'
         || envelope.snapshot?.safety?.privateTradingApiAllowed !== false
         || envelope.snapshot?.safety?.realOrderAllowed !== false
@@ -165,13 +183,22 @@ export class SignalIntelligenceAiWatch {
         }
 
         const chatId = destination(event);
-        if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true' && chatId) {
-          await this.deliver({
+        // Existing AI watch had in-memory-only dedupe. Require separate
+        // reconciliation/approval before enabling its durable delivery lane.
+        if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'
+          && process.env.TELEGRAM_AI_WATCH_DELIVERY_APPROVED === 'true' && chatId) {
+          const durableKey = aiWatchDurableKey({
+            signalId: event.id, eventType: event.type,
+            sourceDay: envelope.snapshot.generatedAt.slice(0,10),
+            catalyst: reviewed.catalyst, technicalChange: reviewed.technicalChange,
+            contradiction: reviewed.contradiction,
+          });
+          const status = await sendAiWatchWithDurableReceipt(this.store, durableKey, {
             type: 'intelligence_report',
             symbol: event.symbol,
             market: event.market,
             destinationChatId: chatId,
-            dedupeKey: `signal-ai-watch:${key}:${reviewed.catalyst}:${reviewed.technicalChange}:${reviewed.contradiction}`,
+            dedupeKey: durableKey,
             duplicateWindowMs: REVIEW_TTL_MS,
             cooldownMs: 0,
             timestamp: now.toISOString(),
@@ -184,7 +211,13 @@ export class SignalIntelligenceAiWatch {
               reviewed.reason ? `근거: ${reviewed.reason}` : null,
               'AI는 주문/승격 권한 없음 · public Scanner 즉시 재계산만 요청',
             ].filter(Boolean).join('\n'),
-          });
+          }, now, this.deliver);
+          if (status === 'ACCEPTED') result.deliveryAccepted += 1;
+          else if (status === 'ALREADY_RESERVED') result.deliveryDeduped += 1;
+          else if (status === 'UNCONFIRMED') result.deliveryUnconfirmed += 1;
+          else result.deliveryNotAttempted += 1;
+        } else {
+          result.deliveryNotAttempted += 1;
         }
       }
       return result;
@@ -194,20 +227,48 @@ export class SignalIntelligenceAiWatch {
   }
 }
 
+export type SignalIntelligenceAiWatchRuntimeHealth = Readonly<{
+  state: 'NOT_STARTED' | 'DISABLED' | 'RUNNING' | 'STOPPING' | 'STOPPED';
+  inFlight: number;
+}>;
+let aiWatchRuntimeHealth: SignalIntelligenceAiWatchRuntimeHealth =
+  Object.freeze({state:'NOT_STARTED',inFlight:0});
+export function readSignalIntelligenceAiWatchRuntimeHealth(): SignalIntelligenceAiWatchRuntimeHealth {
+  return aiWatchRuntimeHealth;
+}
+function updateAiWatchRuntimeHealth(patch:Partial<SignalIntelligenceAiWatchRuntimeHealth>) {
+  aiWatchRuntimeHealth = Object.freeze({...aiWatchRuntimeHealth,...patch});
+}
+
 export function startSignalIntelligenceAiWatch(): { stop(): void } | null {
-  if (!aiConfigured()) return null;
+  if (aiWatchRuntimeHealth.state === 'RUNNING' || aiWatchRuntimeHealth.state === 'STOPPING')
+    return null;
+  if (!aiConfigured()) {
+    aiWatchRuntimeHealth = Object.freeze({state:'DISABLED',inFlight:0});
+    return null;
+  }
   const watch = new SignalIntelligenceAiWatch();
+  aiWatchRuntimeHealth = Object.freeze({state:'RUNNING',inFlight:0});
   const tick = async () => {
+    updateAiWatchRuntimeHealth({inFlight:aiWatchRuntimeHealth.inFlight+1});
     try {
       const result = await watch.runOnce(new Date());
       if (result.material > 0 || result.aiUnavailable > 0) logger.info({ result }, 'signal intelligence AI watch tick');
     } catch {
       logger.debug('signal intelligence AI watch unavailable');
+    } finally {
+      const remaining = Math.max(0,aiWatchRuntimeHealth.inFlight-1);
+      updateAiWatchRuntimeHealth({inFlight:remaining,...(
+        remaining===0 && aiWatchRuntimeHealth.state==='STOPPING' ? {state:'STOPPED' as const} : {}
+      )});
     }
   };
   void tick();
   const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.SIGNAL_INTELLIGENCE_AI_WATCH_INTERVAL_MS));
   timer.unref?.();
   console.log('[signal-intelligence-ai-watch] started');
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => {
+    clearInterval(timer);
+    updateAiWatchRuntimeHealth({state:aiWatchRuntimeHealth.inFlight===0?'STOPPED':'STOPPING'});
+  } };
 }

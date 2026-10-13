@@ -1,6 +1,6 @@
 -- Explicit PostgREST table privileges for user-scoped paper journal storage.
 -- RLS remains the authority for owner and membership-tier isolation.
--- Review/CI only until a separate staging database application is approved.
+-- Applied in Staging bootstrap and by the protected Production deploy privilege gate.
 
 begin;
 

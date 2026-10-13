@@ -29,7 +29,8 @@ test('backtester result UI localizes raw result codes without changing the calcu
   expect(panel).toContain("training: '학습'");
   expect(panel).toContain("validation: '검증'");
   expect(panel).toContain("test: '테스트'");
-  expect(panel).toContain('손익비(PF)');
+  expect(panel).toContain('손익비');
+  expect(panel).not.toContain('손익비(PF)');
   expect(panel).toContain('샤프지수');
   expect(panel).toContain('소르티노지수');
   expect(panel).toContain('칼마지수');

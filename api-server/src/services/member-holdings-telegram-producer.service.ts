@@ -1,4 +1,4 @@
-import { hasCapability } from '../../../packages/member-access/src/index.js';
+import { hasCanonicalMemberAccessState, hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
 import { collectStockNewsDisclosureIntelligence } from './news-disclosure-market-intelligence.service';
@@ -89,6 +89,8 @@ type ProfileRow = {
   membership_level?: string | null;
   is_active?: boolean | null;
   role?: string | null;
+  membership_expires_at?: string | null;
+  permissions_updated_at?: string | null;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
@@ -120,7 +122,7 @@ function canonicalStockMarket(value: unknown): CanonicalStockMarket | null {
  * must not re-implement or widen membership truth here.
  */
 export function memberHoldingProfileEligibleForPersonalTelegram(profile: ProfileRow): boolean {
-  return hasCapability(profile, 'canConnectPersonalTelegram');
+  return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');
 }
 
 export function memberHoldingsTelegramProducerEnabled(
@@ -165,7 +167,7 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
       const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
       const { data: profiles, error: profileError } = await client
         .from('profiles')
-        .select('id,status,membership_level,is_active,role')
+        .select('id,status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')
         .in('id', batch)
         .eq('status', 'approved');
       if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
@@ -255,8 +257,8 @@ function scannerEvidenceForHolder(
       stopLoss: alert.stopLoss,
     },
     warnings: [
-      `Scanner ${alert.state} 신호와 실제 앱 보유종목이 일치했습니다.`,
-      '실제 주문/체결이 아니며 AI 판단·신뢰도·성과 근거가 없으면 N/A로 유지됩니다.',
+      '검색기 신호와 현재 보유종목이 일치했습니다.',
+      '실제 주문/체결 알림이 아닙니다.',
       ...(newsWarning ? [newsWarning] : []),
     ],
   };
@@ -314,7 +316,7 @@ export async function fanoutMemberHoldingScannerAlert(
     try {
       news = await newsReader(symbol, market, holders[0]?.name ?? symbol);
     } catch {
-      newsWarning = '보유종목 뉴스·공시 분석을 불러오지 못해 해당 영역은 N/A로 유지됩니다.';
+      newsWarning = '보유종목 뉴스·공시 확인이 지연되고 있습니다.';
     }
   }
 

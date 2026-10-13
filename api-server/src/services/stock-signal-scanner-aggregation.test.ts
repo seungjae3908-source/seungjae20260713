@@ -1,8 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Candle } from '../sample/types';
-import { ScannerUniverseService, clearScannerUniverseCacheForTests } from './scanner-universe.service';
-import { aggregateUsSessionCandles } from './stock-signal-scanner.service';
+import {
+  ScannerUniverseService,
+  clearScannerUniverseCacheForTests,
+  excludeUnsupportedKrPublicProviderSymbols,
+  requiresPublicOnlyKrUniverse,
+  type ScannerUniverseEntry,
+} from './scanner-universe.service';
+import { aggregateUsSessionCandles, completedStockScannerCandles } from './stock-signal-scanner.service';
+
+test('stock scanner uses completed intraday bars and preserves invalid/future facts for explicit quality rejection', () => {
+  const now = Date.parse('2026-10-12T15:30:00Z');
+  const closed = row('2026-10-12T15:15:00Z', 100, 102, 99, 101, 10);
+  const pending = { ...closed, time: '2026-10-12T15:29:00Z' };
+  const future = { ...closed, time: '2026-10-12T15:31:00Z' };
+  const invalid = { ...closed, time: 'invalid-time' };
+  assert.deepEqual(completedStockScannerCandles('US', '15m', [closed, pending, future, invalid], now), [closed, future, invalid]);
+  assert.equal(completedStockScannerCandles('KR', '15m', [{ ...closed, time: '20261012122900' }],
+    Date.parse('2026-10-12T03:30:00Z')).length, 0, 'Kiwoom compact KST bars follow the same completion gate');
+});
+
+test('daily scanner bars become complete at the exchange local close, including New York DST', () => {
+  const us = row('2026-10-12T13:30:00Z', 100, 102, 99, 101, 10);
+  assert.equal(completedStockScannerCandles('US', '1D', [us], Date.parse('2026-10-12T19:59:00Z')).length, 0);
+  assert.equal(completedStockScannerCandles('US', '1D', [us], Date.parse('2026-10-12T20:00:00Z')).length, 1);
+  const kr = { ...us, time: '2026-10-12T00:00:00Z' };
+  assert.equal(completedStockScannerCandles('KR', '1D', [kr], Date.parse('2026-10-12T06:29:00Z')).length, 0);
+  assert.equal(completedStockScannerCandles('KR', '1D', [kr], Date.parse('2026-10-12T06:30:00Z')).length, 1);
+});
 
 function row(
   time: string,
@@ -18,6 +44,33 @@ function row(
 function simple(time: string, value: number): Candle {
   return row(time, value, value + 2, value - 2, value + 1, value * 10);
 }
+
+test('KR scanner treats an unconfigured Kiwoom provider as public-only and excludes unsupported KRX codes', () => {
+  assert.equal(requiresPublicOnlyKrUniverse(undefined, false), true);
+  assert.equal(requiresPublicOnlyKrUniverse(undefined, true), false);
+  assert.equal(requiresPublicOnlyKrUniverse('true', true), true);
+
+  const entries: ScannerUniverseEntry[] = [
+    {
+      ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', assetType: 'STOCK',
+      exchange: 'KOSPI', listingStatus: 'LISTED', source: 'krx-symbol-master',
+    },
+    {
+      ticker: '0000Z0', name: '공개 공급자 미지원 상품', market: 'KR', currency: 'KRW', assetType: 'ETF',
+      exchange: 'ETF·ETN', listingStatus: 'LISTED', source: 'krx-symbol-master',
+    },
+  ];
+
+  const filtered = excludeUnsupportedKrPublicProviderSymbols(entries);
+  assert.deepEqual(filtered.entries.map((entry) => entry.ticker), ['005930']);
+  assert.deepEqual(filtered.exclusions, [{
+    ticker: '0000Z0',
+    name: '공개 공급자 미지원 상품',
+    exchange: 'ETF·ETN',
+    assetType: 'ETF',
+    reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL',
+  }]);
+});
 
 test('KR scanner universe deadline aborts live provider work and returns explicit stale fallback', async () => {
   clearScannerUniverseCacheForTests();

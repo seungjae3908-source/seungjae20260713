@@ -401,8 +401,11 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
 
     const response = await restoredPage.goto('/', { waitUntil: 'domcontentloaded' });
     if (response) expect(response.status()).toBeLessThan(400);
-    await expect(restoredPage.getByTestId('error-state')).toBeVisible({ timeout: 5_000 });
-    await expect(restoredPage.getByRole('button', { name: '다시 시도' })).toBeVisible();
+    const recovery = restoredPage.getByTestId('account-bootstrap-error');
+    await expect(recovery).toBeVisible({ timeout: 5_000 });
+    await expect(recovery).toContainText('계정 상태를 불러오지 못했습니다.');
+    await expect(recovery.getByRole('button', { name: '다시 확인', exact: true })).toBeVisible();
+    await expect(restoredPage.getByTestId('error-state')).toHaveCount(0);
     expect(restoredCounters.sameOriginProfile).toBe(1);
     expect(restoredCounters.directSupabaseProfile).toBe(0);
     expect(restoredCounters.orderRequests).toEqual([]);

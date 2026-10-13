@@ -39,6 +39,7 @@ import {
   type ScannerProviderHealthState,
 } from '../services/scanner-provider-health.contract';
 import { withScannerOutcome } from '../services/scanner-signal.types';
+import { ScannerAiReviewError, scannerAiEvidenceReviewer, type ScannerAiEvidenceReviewer } from '../services/scanner-ai-evidence-review.service';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
 
@@ -59,6 +60,7 @@ export interface BoundedMarketScanRouteDependencies {
   scanner?: StockScannerRunner;
   guard?: ScannerRequestGuard;
   deadlineMs?: number;
+  aiReviewer?: ScannerAiEvidenceReviewer;
 }
 
 class ScanRouteDeadlineError extends Error {
@@ -149,20 +151,6 @@ function responseError(res: Response, error: unknown) {
       exchangeRequestSent: false,
     });
   }
-  if (error instanceof ScanProviderUnavailableError) {
-    return res.status(502).json({
-      ok: false,
-      error: 'SCAN_PROVIDER_ERROR',
-      dataState: 'unavailable',
-      cards: [],
-      alerts: [],
-      providerHealth: providerHealthFrom(error),
-      message: '조건검색 데이터 공급자 오류이며 정상적인 결과 0건이 아닙니다.',
-      outcome: 'PROVIDER_FAILURE',
-      orderSubmitted: false,
-      exchangeRequestSent: false,
-    });
-  }
   const code = error instanceof Error ? error.message.split(':')[0] : 'SCAN_FAILED';
   const status = code === 'SCAN_TIMEFRAME_UNSUPPORTED' ? 400 : 500;
   return res.status(status).json({
@@ -173,6 +161,46 @@ function responseError(res: Response, error: unknown) {
     orderSubmitted: false,
     exchangeRequestSent: false,
   });
+}
+
+function providerUnavailableResponse(input: {
+  market: 'KR' | 'US';
+  timeframe: string;
+  cursor: number;
+  deadlineMs: number;
+  elapsedMs: number;
+  error: ScanProviderUnavailableError;
+}) {
+  const providerHealth = providerHealthFrom(input.error);
+  const timeoutCount = providerHealth.filter((provider) => provider.timeout || provider.state === 'TIMEOUT').length;
+  const providerErrorCount = providerHealth.filter((provider) =>
+    provider.state !== 'READY' && provider.state !== 'SEARCH_EMPTY').length;
+  const fallback = routeDeadlineResponse(input);
+  return {
+    ...fallback,
+    failures: [{
+      symbol: '*',
+      reason: 'provider_error' as const,
+      message: 'Scanner providers did not return enough verified market data.',
+    }],
+    providerHealth: providerHealth.length > 0
+      ? providerHealth
+      : [createScannerProviderHealth({
+        provider: 'scanner-provider',
+        state: 'PROVIDER_FAILURE',
+        freshness: 'UNKNOWN',
+        failureReason: 'SCAN_PROVIDER_ERROR',
+      })],
+    execution: {
+      ...fallback.execution,
+      providerErrorCount: Math.max(1, providerErrorCount),
+      timeoutCount,
+      timedOut: timeoutCount > 0,
+      elapsedMs: Math.max(0, Math.min(input.deadlineMs, input.elapsedMs)),
+    },
+    dataState: 'unavailable' as const,
+    message: '조건검색 데이터 공급자가 불안정해 검증되지 않은 후보는 표시하지 않습니다. 잠시 후 다시 시도해 주세요.',
+  };
 }
 
 function routeDeadlineResponse(input: {
@@ -241,6 +269,7 @@ export function createBoundedMarketScanRouter(
   const router: IRouter = Router();
   const scanner = dependencies.scanner ?? StockSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
+  const aiReviewer = dependencies.aiReviewer ?? scannerAiEvidenceReviewer;
   const routeDeadlineMs = dependencies.deadlineMs ?? STOCK_SCANNER_ROUTE_DEADLINE_MS;
   if (!Number.isFinite(routeDeadlineMs) || routeDeadlineMs <= 0) {
     throw new Error(`invalid stock scanner route deadline: ${routeDeadlineMs}`);
@@ -248,6 +277,36 @@ export function createBoundedMarketScanRouter(
 
   router.use(requireScannerSession);
   router.use(requireCapability('canAccessBasicInfo'));
+
+  router.post('/ai-review', async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).some(key => key !== 'signalId' && key !== 'evidenceKey')
+      || typeof body.signalId !== 'string' || !body.signalId || body.signalId.length > 240
+      || typeof body.evidenceKey !== 'string' || !/^[a-f0-9]{64}$/.test(body.evidenceKey)) {
+      return res.status(400).json({ ok: false, error: 'AI_REVIEW_REFERENCE_INVALID' });
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(new Error('AI_REVIEW_ABORTED'));
+    req.once('aborted', abort); res.once('close', abort);
+    const timer = setTimeout(abort, 7000);
+    let lease: ReturnType<ScannerRequestGuard['acquire']> | undefined;
+    try {
+      lease = guard.acquire(req.member!.id, `ai-review:${body.signalId}:${body.evidenceKey}`);
+      const result = await aiReviewer.review(req.member!.id, body.signalId, body.evidenceKey, controller.signal,
+        grade => grade == null || canReadScannerGrade(req.membershipLevel ?? 'pending', grade));
+      if (!controller.signal.aborted && !res.writableEnded) return res.json({ ok: true, ...result });
+      if (!res.writableEnded && !res.destroyed) return res.status(504).json({ ok: false, error: 'AI_REVIEW_DEADLINE' });
+    } catch (error) {
+      if (res.writableEnded || res.destroyed) return;
+      if (error instanceof ScannerAiReviewError) return res.status(error.status).json({ ok: false, error: error.code });
+      if (error instanceof ScannerRequestGuardError) return responseError(res, error);
+      return res.status(controller.signal.aborted ? 504 : 502).json({ ok: false, error: 'AI_REVIEW_UNAVAILABLE' });
+    } finally {
+      clearTimeout(timer); lease?.release(); req.removeListener('aborted', abort); res.removeListener('close', abort);
+    }
+  });
 
   router.get('/', async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -286,6 +345,7 @@ export function createBoundedMarketScanRouter(
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let routeDeadlineExceeded = false;
     const cursor = finite(req.query.cursor, 0, 1_000_000) ?? 0;
+    const scanStartedAt = Date.now();
 
     try {
       lease = guard.acquire(req.member!.id, requestKey(req));
@@ -318,7 +378,8 @@ export function createBoundedMarketScanRouter(
       const result = await Promise.race([scanPromise, routeDeadline]);
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
-      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      const visibleResult = aiReviewer.capture(req.member!.id,
+        withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined)));
       productPaperSourceRegistry.captureScanner(req.member!.id, visibleResult, String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
       void deliverScannerTelegramAlerts(
         visibleResult.alerts,
@@ -344,6 +405,23 @@ export function createBoundedMarketScanRouter(
         const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
         res.setHeader('X-Scanner-Request-Id', fallback.requestId);
         return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
+      }
+      if (error instanceof ScanProviderUnavailableError && !res.writableEnded) {
+        const fallback = withScannerOutcome(providerUnavailableResponse({
+          market,
+          timeframe,
+          cursor,
+          deadlineMs: routeDeadlineMs,
+          elapsedMs: Date.now() - scanStartedAt,
+          error,
+        }));
+        res.setHeader('X-Scanner-Request-Id', fallback.requestId);
+        return res.json({
+          ...fallback,
+          strategy: strategyMode,
+          partial: true,
+          elapsedMs: fallback.execution.elapsedMs,
+        });
       }
       if (controller.signal.aborted || error instanceof ScanRequestAbortedError || res.writableEnded) return;
       return responseError(res, error);
