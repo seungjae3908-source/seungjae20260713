@@ -22,3 +22,39 @@ Scope: protect the existing investment platform's Telegram function only. Replit
 5. Only after protections and human environment approvals can protected Production release be attempted. Roll back safely on any failure; no orders, transfers or withdrawals.
 
 This is a preflight risk inventory, not a claim of Production readiness or realized trading profitability.
+
+## 2026-10-13 — One-batch release and isolated worker preparation
+
+This is DRAFT SOURCE ONLY. No independent service installation, Bot API send,
+LIVE order activation or Production modification occurred. No Replit.
+
+The API still starts embedded Telegram workers by default. An explicitly
+approved TELEGRAM_WORKER_OWNER=isolated suppresses only the three Telegram
+worker starts; the pre-existing Paper and Trading workers remain unchanged.
+The new api-server/dist/telegram-isolated-worker.mjs is built but dormant.
+
+The independently controlled launcher ops/run-telegram-isolated-worker.sh
+requires a sealed release marker, SHA256 manifest, six non-colliding Telegram
+rooms, personal service-role storage, exact-sha owner approval, exclusive flock
+and two separate actual PM2 readbacks proving the old Telegram writers are
+disabled. The launcher never restarts stock-app or changes live flags.
+
+Existing manual LIVE and embedded Telegram workers were active in previous
+Production evidence. Therefore isolated cutover is NO_GO until a separately
+reviewed trading-preserving shutdown/handoff and explicit human approval.
+The old PM2 cannot be safely restarted solely to satisfy Telegram QA.
+
+The pure one-batch verdict accumulates all release blockers in ONE result:
+(1) exact-head Full CI required six SUCCESS, (2) protected complete Staging
+including resolution of Paper holdings HTTP 400, (3) Signal V3 fresh successful
+cycle, HTTP 200 and valid source evidence, (4) six-room and personally owned
+SENT plus fill-to-Journal-to-Telegram verified events and dedupe, (5) preserved
+durable ledgers, one isolated send writer and safe rollback, (6) exact
+preservation of existing financial authority and zero Telegram-triggered
+order/cancel/transfer/withdrawal. Fixture PASS grants NO Production permission.
+
+Desired pipeline: freeze one candidate -> all static/batch blockers -> only
+Telegram scoped QA -> ONE exact-head Full CI -> full protected Staging QA ->
+real protected Signal V3 and Bot readbacks -> separately approved single-writer
+cutover -> protected Production release -> natural use receipts and financial
+safety invariants. Orders remain owned by the Trading release, not Telegram.

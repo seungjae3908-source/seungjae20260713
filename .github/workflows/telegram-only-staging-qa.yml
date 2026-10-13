@@ -10,6 +10,13 @@ on:
       - api-server/test.mjs
       - api-server/package.json
       - 'api-server/src/**/*telegram*'
+      - api-server/src/telegram-isolated-worker.ts
+      - api-server/src/lib/telegram-worker-ownership.ts
+      - api-server/build.mjs
+      - ops/run-telegram-isolated-worker.sh
+      - ops/telegram-batch-release-verdict.mjs
+      - .github/tests/telegram-isolated-worker-contract.test.mjs
+      - .github/tests/telegram-batch-release-verdict.test.mjs
       - 'api-server/src/features/user-broker-telegram/**'
       - 'api-server/scripts/*telegram*'
       - 'stock-analyzer/src/**/*telegram*'
@@ -49,6 +56,8 @@ jobs:
           node-version: '22'
       - name: Install pinned workspace dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Validate dormant isolated worker Bash syntax only
+        run: bash -n ops/run-telegram-isolated-worker.sh
       - name: Telegram-only service tests (no Browser, no network delivery)
         run: pnpm --dir api-server test:telegram
       - name: Strict V3 intake and member-watchlist mocked source tests
@@ -61,7 +70,9 @@ jobs:
             .github/tests/telegram-six-room-gate.test.mjs \
             .github/tests/telegram-database-evidence.test.mjs \
             .github/tests/telegram-only-staging-qa.test.mjs \
-            .github/tests/telegram-watchlist-consent-contract.test.mjs
+            .github/tests/telegram-watchlist-consent-contract.test.mjs \
+            .github/tests/telegram-isolated-worker-contract.test.mjs \
+            .github/tests/telegram-batch-release-verdict.test.mjs
 
   protected-staging-network:
     name: Staging Telegram-only network and exact-SHA evidence, no send/deploy
@@ -137,7 +148,9 @@ jobs:
             .github/tests/telegram-six-room-gate.test.mjs \
             .github/tests/telegram-database-evidence.test.mjs \
             .github/tests/telegram-only-staging-qa.test.mjs \
-            .github/tests/telegram-watchlist-consent-contract.test.mjs
+            .github/tests/telegram-watchlist-consent-contract.test.mjs \
+            .github/tests/telegram-isolated-worker-contract.test.mjs \
+            .github/tests/telegram-batch-release-verdict.test.mjs
       - name: Configure isolated Staging SSH, fail closed without known host pinning
         run: |
           set -Eeuo pipefail
