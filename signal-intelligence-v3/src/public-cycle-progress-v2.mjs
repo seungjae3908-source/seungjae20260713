@@ -24,6 +24,30 @@ const mergeCounters = (left, right) => {
   for (const [key, value] of Object.entries(counterMap(right))) result[key] = integer(result[key]) + value;
   return result;
 };
+const failureDetail = value => {
+  if (!value || typeof value !== 'object') return null;
+  const symbol = typeof value.symbol === 'string' ? value.symbol.trim().toUpperCase() : '';
+  const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
+  const message = typeof value.message === 'string' ? value.message.trim() : '';
+  const market = typeof value.market === 'string' ? value.market.trim() : '';
+  const timeframe = typeof value.timeframe === 'string' ? value.timeframe.trim() : '';
+  const rosterId = typeof value.rosterId === 'string' ? value.rosterId.trim() : '';
+  const sourceCycleId = typeof value.sourceCycleId === 'string' ? value.sourceCycleId.trim() : '';
+  if (!symbol || !reason || !message || !['CRYPTO_SPOT', 'CRYPTO_FUTURES'].includes(market)
+      || !timeframe || !/^[a-f0-9]{64}$/u.test(rosterId) || !sourceCycleId
+      || !count(value.cursorBefore) || !count(value.cursorAfter)) return null;
+  return {
+    symbol: symbol.slice(0, 80),
+    reason: reason.slice(0, 80),
+    message: message.slice(0, 180),
+    market,
+    timeframe,
+    cursorBefore: value.cursorBefore,
+    cursorAfter: value.cursorAfter,
+    rosterId,
+    sourceCycleId,
+  };
+};
 
 function emptyRotationLane(row) {
   return {
@@ -49,6 +73,9 @@ function emptyRotationLane(row) {
     timeoutCount: 0,
     failureCount: 0,
     failureReasonCounts: {},
+    failureDetails: [],
+    failureDetailCount: 0,
+    failureUnattributedCount: 0,
     dataStateCounts: {},
     dataQualityStateCounts: {},
     dataQualityIssueCounts: {},
@@ -142,6 +169,12 @@ export function mergePublicCryptoRotationEvidence({
     lane.timeoutCount += integer(row.timeouts);
     lane.failureCount += integer(row.pageExecution?.failuresObserved);
     lane.failureReasonCounts = mergeCounters(lane.failureReasonCounts, row.failureReasonCounts);
+    const observedFailureCount = integer(row.pageExecution?.failuresObserved);
+    const details = (Array.isArray(row.failureDetails) ? row.failureDetails : [])
+      .map(failureDetail).filter(Boolean);
+    lane.failureDetails.push(...details);
+    lane.failureDetailCount += details.length;
+    lane.failureUnattributedCount += Math.max(0, observedFailureCount - details.length);
     lane.dataStateCounts = mergeCounters(lane.dataStateCounts, { [row.responseDataState ?? 'unknown']: 1 });
     lane.dataQualityStateCounts = mergeCounters(lane.dataQualityStateCounts, {
       TRUSTED: integer(row.responseDiagnostic?.trustedCards),

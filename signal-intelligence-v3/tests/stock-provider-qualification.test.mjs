@@ -50,6 +50,19 @@ test('selects an official credentialed provider only after query, credential and
   assert.equal(selected?.connectable, true);
 });
 
+test('does not overstate provider market or timeframe coverage before exact payload validation', () => {
+  const observations = {
+    TOSS_INVEST: { httpStatus: 200, payloadValidated: true, observedAt, credentialsReady: true, usageTermsConfirmed: true },
+    KIWOOM: { httpStatus: 200, payloadValidated: true, observedAt, credentialsReady: true, usageTermsConfirmed: true },
+  };
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'KR_STOCK', timeframe: '5m', observations })?.provider, 'KIWOOM');
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'KR_STOCK', timeframe: '60m', observations })?.provider, 'KIWOOM');
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'KR_STOCK', timeframe: '1D', observations })?.provider, 'TOSS_INVEST');
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'US_STOCK', timeframe: '5m', observations }), null);
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'US_STOCK', timeframe: '60m', observations }), null);
+  assert.equal(selectQualifiedStockPriceProvider({ market: 'US_STOCK', timeframe: '1D', observations })?.provider, 'TOSS_INVEST');
+});
+
 test('keeps page-internal endpoints disconnected even if they return data', () => {
   const observations = {
     NAVER_PAGE: { httpStatus: 200, payloadValidated: true, observedAt, usageTermsConfirmed: true },

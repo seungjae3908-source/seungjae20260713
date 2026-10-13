@@ -267,3 +267,50 @@ test('crypto rotation evidence resets unsafe positions on roster drift and never
   assert.equal(lane.fullCursorRotationComplete, false);
   assert.equal(lane.expectedNextCursor, 0);
 });
+
+test('crypto rotation evidence retains each exact provider failure instead of treating a blocked page as bad symbols', () => {
+  const sha = 'f'.repeat(40);
+  const row = cryptoRotationPage('FUTURES_SWING_60M', 0);
+  row.status = 'BLOCKED_DATA';
+  row.cursorRotationReason = 'BLOCKED_RESEARCH_ROTATION_ONLY';
+  row.pageExecution.dataSuccessCount = 4;
+  row.pageExecution.failuresObserved = 1;
+  row.failureReasonCounts = { invalid_data: 1 };
+  row.failureDetails = [{
+    symbol: 'NEWCOINUSDT',
+    reason: 'invalid_data',
+    message: '유효한 캔들·시세를 만들지 못했습니다.',
+    market: 'CRYPTO_FUTURES',
+    timeframe: '60m',
+    cursorBefore: 0,
+    cursorAfter: 5,
+    rosterId: 'b'.repeat(64),
+    sourceCycleId: 'cycle-one',
+  }];
+  const report = mergePublicCryptoRotationEvidence({ serviceSha: sha, coverage: [row] });
+  const lane = report.lanes.FUTURES_SWING_60M;
+  assert.equal(lane.failureCount, 1);
+  assert.equal(lane.failureDetailCount, 1);
+  assert.equal(lane.failureUnattributedCount, 0);
+  assert.deepEqual(lane.failureDetails, row.failureDetails);
+  assert.equal(lane.uniqueAttemptedCount, 5);
+  assert.equal(lane.uniqueSuccessCount, 0, 'page-level success remains deliberately conservative');
+  assert.equal(lane.dataBlockedUniqueCount, 5);
+});
+
+test('missing or malformed per-symbol failure evidence is counted as unattributed and cannot look complete', () => {
+  const sha = '1'.repeat(40);
+  const row = cryptoRotationPage('FUTURES_MID_LONG_4H', 0);
+  row.status = 'BLOCKED_DATA';
+  row.cursorRotationReason = 'BLOCKED_RESEARCH_ROTATION_ONLY';
+  row.pageExecution.dataSuccessCount = 3;
+  row.pageExecution.failuresObserved = 2;
+  row.failureReasonCounts = { invalid_data: 2 };
+  row.failureDetails = [{ symbol: 'BAD', reason: 'invalid_data', message: '', market: 'CRYPTO_FUTURES' }];
+  const report = mergePublicCryptoRotationEvidence({ serviceSha: sha, coverage: [row] });
+  const lane = report.lanes.FUTURES_MID_LONG_4H;
+  assert.equal(lane.failureCount, 2);
+  assert.equal(lane.failureDetailCount, 0);
+  assert.equal(lane.failureUnattributedCount, 2);
+  assert.deepEqual(lane.failureDetails, []);
+});

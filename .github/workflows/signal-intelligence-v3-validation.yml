@@ -230,6 +230,17 @@ jobs:
               || lane.uniqueAttemptedCount !== lane.totalUniverse
               || lane.cursorContinuityFailures !== 0
               || !/^[a-f0-9]{64}$/.test(lane.rosterId)) process.exit(1);
+            if (lane.failureDetailCount !== lane.failureCount
+              || lane.failureUnattributedCount !== 0
+              || !Array.isArray(lane.failureDetails)
+              || lane.failureDetails.length !== lane.failureCount) process.exit(1);
+            for (const failure of lane.failureDetails) {
+              if (!failure.symbol || !failure.reason || !failure.message
+                || failure.market !== lane.market || failure.timeframe !== lane.timeframe
+                || failure.rosterId !== lane.rosterId || !failure.sourceCycleId
+                || !Number.isSafeInteger(failure.cursorBefore)
+                || !Number.isSafeInteger(failure.cursorAfter)) process.exit(1);
+            }
           }
           for (const market of ['CRYPTO_SPOT','CRYPTO_FUTURES']) {
             const row = report.markets[market];

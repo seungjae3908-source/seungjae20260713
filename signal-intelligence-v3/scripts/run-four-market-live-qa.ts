@@ -368,11 +368,16 @@ async function main() {
   const handoff = handoffRead.value;
   const observations = { YAHOO_CHART: yahooObservation, NASDAQ_TRADER: nasdaqObservation };
   const stockProviderComparison = qualifyStockProviders(observations);
-  const selectedKr = selectQualifiedStockPriceProvider({ market: 'KR_STOCK', observations });
-  const selectedUs = selectQualifiedStockPriceProvider({ market: 'US_STOCK', observations });
+  const stockSelection = Object.fromEntries(['KR_STOCK', 'US_STOCK'].map((market) => [market,
+    Object.fromEntries(PROFILES_BY_MARKET[market].map((profile) => [profile.strategy,
+      selectQualifiedStockPriceProvider({ market, timeframe: profile.timeframe, observations })]))]));
   const rows = [];
-  for (const profile of PROFILES_BY_MARKET.KR_STOCK) rows.push(await runStockLane(REPRESENTATIVES.KR_STOCK, profile, selectedKr));
-  for (const profile of PROFILES_BY_MARKET.US_STOCK) rows.push(await runStockLane(REPRESENTATIVES.US_STOCK, profile, selectedUs));
+  for (const profile of PROFILES_BY_MARKET.KR_STOCK) {
+    rows.push(await runStockLane(REPRESENTATIVES.KR_STOCK, profile, stockSelection.KR_STOCK[profile.strategy]));
+  }
+  for (const profile of PROFILES_BY_MARKET.US_STOCK) {
+    rows.push(await runStockLane(REPRESENTATIVES.US_STOCK, profile, stockSelection.US_STOCK[profile.strategy]));
+  }
   for (const profile of PROFILES_BY_MARKET.CRYPTO_SPOT) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_SPOT, profile));
   for (const profile of PROFILES_BY_MARKET.CRYPTO_FUTURES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_FUTURES, profile));
   const canonicalBySignalId = canonicalFor(rows);
@@ -400,7 +405,8 @@ async function main() {
     providerObservations: { yahoo: yahooObservation, yahooGovernor: yahooProviderDiagnostics(), nasdaqTrader: nasdaqObservation,
       upbit: providerMetrics.upbit, bitget: providerMetrics.bitget },
     stockProviderComparison,
-    selectedStockProviders: { KR_STOCK: selectedKr?.provider ?? null, US_STOCK: selectedUs?.provider ?? null },
+    selectedStockProviders: Object.fromEntries(Object.entries(stockSelection).map(([market, selections]) => [market,
+      Object.fromEntries(Object.entries(selections).map(([strategy, selected]) => [strategy, selected?.provider ?? null]))])),
     handoff: { pathConfigured: Boolean(process.env.MEMBER_AUTO_TRADING_HANDOFF_PATH?.trim()), readError: handoffRead?.error ?? null,
       status: handoff?.status ?? 'MISSING', entryCount: handoff?.entryCount ?? 0 },
     summary: { laneCount: rows.length, querySuccessCount: rows.reduce((sum, row) => sum + row.querySuccessCount, 0),
