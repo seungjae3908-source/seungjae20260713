@@ -5,8 +5,12 @@ const sources = {
   CRYPTO_SPOT: ['upbit-public'], CRYPTO_FUTURES: ['bitget-public'],
 };
 const count = value => Number.isSafeInteger(value) && value >= 0;
-const lanes = ['KR', 'US', 'SPOT', 'FUTURES'].flatMap(m =>
-  ['SCALPING_15M', m === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
+const lanes = [
+  'KR_SCALPING_5M', 'KR_SWING_60M', 'KR_MID_LONG_1D',
+  'US_SCALPING_5M', 'US_SWING_60M', 'US_MID_LONG_1D',
+  'SPOT_SCALPING_15M', 'SPOT_SWING_4H', 'SPOT_MID_LONG_4H',
+  'FUTURES_SCALPING_5M', 'FUTURES_SWING_60M', 'FUTURES_MID_LONG_4H',
+];
 const marketForLane = lane => ({ KR: 'KR_STOCK', US: 'US_STOCK', SPOT: 'CRYPTO_SPOT', FUTURES: 'CRYPTO_FUTURES' })[lane?.split('_')[0]];
 
 // Stock producers publish the detailed counters directly. The older crypto

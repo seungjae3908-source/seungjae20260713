@@ -9,6 +9,7 @@ import { CryptoPricePrecisionService } from '../../api-server/src/services/scann
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
 import { resolveScannerCanonicalPaperIdentity } from '../../api-server/src/services/scanner-canonical-paper-identity.service';
+import { FORWARD_OBSERVER_LANES } from '../../api-server/src/services/forward-recommendation-observer-runtime.service';
 import {
   getCandles as getYahooCandles,
   getQuote as getYahooQuote,
@@ -23,7 +24,6 @@ import {
 } from '../src/stock-provider-qualification.mjs';
 
 import {
-  spotPublicQaProfile,
   upbitPublicQaCandleUrl,
   normalizeUpbitPublicQaCandles,
 } from '../src/four-market-qa-upbit-candles.mjs';
@@ -37,11 +37,12 @@ const EXACT_SHA = /^[0-9a-f]{40}$/u;
 
 if (!EXACT_SHA.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
-const PROFILES = Object.freeze([
-  Object.freeze({ strategy: 'SCALPING', strategyMode: 'scalping', timeframe: '15m' }),
-  Object.freeze({ strategy: 'SWING', strategyMode: 'swing', timeframe: '60m' }),
-  Object.freeze({ strategy: 'MID_LONG', strategyMode: 'position', timeframe: '1D' }),
-]);
+const PROFILES_BY_MARKET = Object.freeze(Object.fromEntries(
+  ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((market) => [market,
+    Object.freeze(FORWARD_OBSERVER_LANES.filter((lane) => lane.market === market).map((lane) => Object.freeze({
+      strategy: lane.style, strategyMode: lane.strategyMode, timeframe: lane.timeframe,
+    })))]),
+));
 
 const REPRESENTATIVES = Object.freeze({
   KR_STOCK: Object.freeze({ market: 'KR_STOCK', scannerMarket: 'KR', symbol: '005930', providerSymbol: '005930.KS', name: 'Samsung Electronics', exchange: 'KOSPI', currency: 'KRW', assetType: 'STOCK' }),
@@ -240,10 +241,20 @@ async function bitgetTicker(symbol) {
   }
   const row = rows.find((item) => String(item.symbol).toUpperCase() === symbol);
   if (!row) throw new Error(`BITGET_TICKER_MISSING:${symbol}`);
+  const [fundingBody, openInterestBody] = await Promise.all([
+    fetchPublicJson(`https://api.bitget.com/api/v2/mix/market/current-fund-rate?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES`, 'bitget'),
+    fetchPublicJson(`https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES`, 'bitget'),
+  ]);
+  const funding = fundingBody?.data?.[0];
+  const openInterest = openInterestBody?.data?.openInterestList?.[0];
+  if (String(fundingBody?.code) !== '00000' || String(openInterestBody?.code) !== '00000'
+      || !Number.isFinite(Number(funding?.fundingRate)) || !(Number(openInterest?.size) >= 0)) {
+    throw new Error(`BITGET_DERIVATIVES_EVIDENCE_INVALID:${symbol}`);
+  }
   const price = Number(row.markPrice ?? row.lastPr);
   return { symbol, name: symbol, price, changePercent: Number(row.change24h ?? 0) * 100,
     volume: Number(row.baseVolume ?? 0), tradingValue: Number(row.usdtVolume ?? 0), bid: Number(row.bidPr) || null,
-    ask: Number(row.askPr) || null, fundingRate: Number(row.fundingRate) || 0, openInterest: Number(row.holdingAmount) || 0,
+    ask: Number(row.askPr) || null, fundingRate: Number(funding.fundingRate), openInterest: Number(openInterest.size),
     timestamp: Number(row.ts ?? Date.now()), warning: false };
 }
 
@@ -281,8 +292,12 @@ async function runCryptoLane(asset, profile) {
       },
       async getSpread(market, current) {
         if (market === 'futures') {
-          if (current.bid && current.ask) observed.spread = 1;
-          return { bid: current.bid, ask: current.ask };
+          const body = await fetchPublicJson(`https://api.bitget.com/api/v2/mix/market/merge-depth?symbol=${encodeURIComponent(current.symbol)}&productType=USDT-FUTURES&precision=scale0&limit=15`, 'bitget');
+          const bid = Number(body?.data?.bids?.[0]?.[0]) || null;
+          const ask = Number(body?.data?.asks?.[0]?.[0]) || null;
+          if (String(body?.code) !== '00000' || !bid || !ask || bid > ask) throw new Error('BITGET_DEPTH_INVALID');
+          observed.spread = 1;
+          return { bid, ask };
         }
         const rows = await fetchPublicJson(`https://api.upbit.com/v1/orderbook?markets=${encodeURIComponent(`KRW-${current.symbol}`)}&level=0`, 'upbit');
         const unit = rows?.[0]?.orderbook_units?.[0];
@@ -356,10 +371,10 @@ async function main() {
   const selectedKr = selectQualifiedStockPriceProvider({ market: 'KR_STOCK', observations });
   const selectedUs = selectQualifiedStockPriceProvider({ market: 'US_STOCK', observations });
   const rows = [];
-  for (const profile of PROFILES) rows.push(await runStockLane(REPRESENTATIVES.KR_STOCK, profile, selectedKr));
-  for (const profile of PROFILES) rows.push(await runStockLane(REPRESENTATIVES.US_STOCK, profile, selectedUs));
-  for (const profile of PROFILES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_SPOT, spotPublicQaProfile(profile)));
-  for (const profile of PROFILES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_FUTURES, profile));
+  for (const profile of PROFILES_BY_MARKET.KR_STOCK) rows.push(await runStockLane(REPRESENTATIVES.KR_STOCK, profile, selectedKr));
+  for (const profile of PROFILES_BY_MARKET.US_STOCK) rows.push(await runStockLane(REPRESENTATIVES.US_STOCK, profile, selectedUs));
+  for (const profile of PROFILES_BY_MARKET.CRYPTO_SPOT) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_SPOT, profile));
+  for (const profile of PROFILES_BY_MARKET.CRYPTO_FUTURES) rows.push(await runCryptoLane(REPRESENTATIVES.CRYPTO_FUTURES, profile));
   const canonicalBySignalId = canonicalFor(rows);
   const riskBySignalId = riskEvidenceBySignal(handoff);
   const expectedServiceSha = handoffExpectedSha(handoff);
