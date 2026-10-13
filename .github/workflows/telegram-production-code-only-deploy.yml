@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/telegram-production-code-only-deploy.yml
       - .github/tests/telegram-production-code-only-deploy.test.mjs
+      - .github/tests/telegram-live-guard-matrix.test.mjs
+      - docs/telegram-batch-release-preflight-20261012.md
       - ops/telegram-production-code-only-scope.mjs
       - docs/telegram-production-code-only-deploy.md
   issue_comment:
@@ -26,7 +28,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test .github/tests/telegram-production-code-only-deploy.test.mjs
+      - run: node --test .github/tests/telegram-production-code-only-deploy.test.mjs .github/tests/telegram-live-guard-matrix.test.mjs
 
   protected-telegram-code-only:
     name: Owner-protected Telegram code-only production deploy and read-only checks
@@ -199,6 +201,8 @@ jobs:
             ||env.pm_cwd!=='/opt/stock-app'
             ||env.pm_exec_path!=='/opt/stock-app/api-server/dist/index.mjs')
             throw Error('TELEGRAM_PREDEPLOY_SHA_OR_PM2_MISMATCH');
+          // Protect existing LIVE/AUTO/PAPER and separate manual futures
+          // capability-based authority before Telegram-only PM2 mutation.
           const tradingKeys=[
             'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED',
             'PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED',
@@ -207,11 +211,22 @@ jobs:
             'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
             'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED','FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED',
             'BITGET_FUTURES_LIVE_ORDER_ENABLED','CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED',
-            'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED','BITGET_LIVE_ORDER_ENABLED',
-            'UPBIT_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED',
+            'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+            'KIWOOM_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED',
           ];
-          if(tradingKeys.some(k=>env[k]==='true')
-            ||String(env.executionAuthority||'NONE').toUpperCase()!=='NONE')
+          const activeBoolean = value => value != null && String(value).trim() !== ''
+            && !['false','0'].includes(String(value).trim().toLowerCase());
+          const activeAuthority = value =>
+            !['NONE',''].includes(String(value ?? 'NONE').trim().toUpperCase());
+          const activeAllowlist = value => String(value ?? '').trim() !== '';
+          if (tradingKeys.some(key => activeBoolean(env[key]))
+            || activeAuthority(env.executionAuthority)
+            || activeAuthority(env.FUTURES_LIVE_EXECUTION_AUTHORITY)
+            || activeAllowlist(env.SPOT_LIVE_CAPABILITY_ALLOWLIST)
+            || activeAllowlist(env.SPOT_LIVE_MARKET_ALLOWLIST)
+            || activeAllowlist(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST)
+            || activeAllowlist(env.FUTURES_LIVE_MARKET_ALLOWLIST))
             throw Error('TELEGRAM_PRODUCTION_TRADING_AUTHORITY_ACTIVE');
           if(env.LIVE_TELEGRAM_ACTIVATION_APPROVED!=='true'
             ||env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED!=='true'

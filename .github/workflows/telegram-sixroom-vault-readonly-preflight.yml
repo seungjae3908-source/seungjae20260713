@@ -77,7 +77,8 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'main_sha='+m[1]+'\n');
           NODE
 
-      - name: Verify immutable checkout and main ancestry
+      - name: Verify immutable pinned source and current main ancestry
+        id: ancestry
         env:
           EXPECTED_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
         run: |
@@ -88,9 +89,15 @@ jobs:
           git cat-file -e "$EXPECTED_MAIN_SHA^{commit}"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main
-          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"
           test "$GITHUB_SHA" = "$EXPECTED_MAIN_SHA"
-          echo 'VAULT_PREFLIGHT_IMMUTABLE_MAIN_ANCESTRY_OK'
+          CURRENT_MAIN_SHA="$(git rev-parse origin/main)"
+          if [[ "$CURRENT_MAIN_SHA" = "$EXPECTED_MAIN_SHA" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo 'VAULT_PREFLIGHT_MAIN_ADVANCED_READ_ONLY_OBSERVATION'
+          fi
+          echo 'VAULT_PREFLIGHT_PINNED_SOURCE_ANCESTRY_OK'
 
       - name: Prepare protected Production SSH (no secret logging)
         run: |
@@ -156,6 +163,7 @@ jobs:
       - name: Report safe classification (no IDs, UUIDs or tokens)
         env:
           REPORT: ${{ env.SANITIZED_REPORT }}
+          PINNED_MAIN_IS_CURRENT: ${{ steps.ancestry.outputs.current }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -165,6 +173,7 @@ jobs:
             const body = [
               'Telegram six-room Vault READ-ONLY Production preflight',
               '- Expected main SHA: ' + (v.mainSha || 'invalid'),
+              '- Pinned main still current: ' + (process.env.PINNED_MAIN_IS_CURRENT === 'true'),
               '- Actual Production PM2 SHA: ' + (v.pm2Sha || 'unverified'),
               '- Actual deploy marker SHA: ' + (v.markerSha || 'unverified'),
               '- Production PM2 online: ' + String(v.pm2Online),
@@ -191,12 +200,14 @@ jobs:
       - name: Block false-green when Production is not Telegram-ready
         env:
           REPORT: ${{ env.SANITIZED_REPORT }}
+          PINNED_MAIN_IS_CURRENT: ${{ steps.ancestry.outputs.current }}
         run: |
           set -Eeuo pipefail
           node - "$REPORT" <<'NODE'
           const fs = require('node:fs');
           const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const ready = r.classification === 'READY_FOR_PROTECTED_BINDING_REVIEW'
+          const ready = process.env.PINNED_MAIN_IS_CURRENT === 'true'
+            && r.classification === 'READY_FOR_PROTECTED_BINDING_REVIEW'
             && r.pm2Online === true
             && r.vaultValid === true
             && r.botIdentityVerified === true
@@ -206,6 +217,7 @@ jobs:
             && Object.values(r.roomResults ?? {}).length === 6
             && Object.values(r.roomResults ?? {}).every(x => x === 'PASS');
           if (!ready) {
+            if(process.env.PINNED_MAIN_IS_CURRENT !== 'true') console.error('VAULT_PREFLIGHT_MAIN_MOVED_NOT_RELEASE_READY');
             console.error('VAULT_PREFLIGHT_OPERATIONAL_NOT_READY');
             console.error('Sanitized classification: ' + r.classification);
             console.error('Sanitized failure stage: ' + r.failureStage);
