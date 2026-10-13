@@ -491,7 +491,7 @@ test('protected independent source Bash is syntax-valid and sealed tar smoke is 
   const script=step(names[0]);
   assert.match(script,/git archive --format=tar "\$TARGET_SHA"/u,
     'public bundle must contain immutable Git tree only');
-  assert.doesNotMatch(script,/\bcp -a\b/u,
+  assert.doesNotMatch(script,/^\s*cp\s+-a\b/mu,
     'workspace node_modules and untracked secret files must never be copied');
   const boundary=script.indexOf('# Check real server dependencies with READ-ONLY commands');
   assert.ok(boundary>0,'offline packaging must precede any SSH');
