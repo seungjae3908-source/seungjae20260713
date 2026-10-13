@@ -113,28 +113,40 @@ function resetToBackoff(socket,nowMs,reason){
 // Preserve the COMPLETE requested tail, even past a single 180m REST page.
 function gap(state,market,symbol,from,to,reason,observedAtMs){
   if(!goodMs(from)||!goodMs(to)||to<=from)return;
+  const queue=state.pendingRestAudits;
   const maxSpan=PUBLIC_WS_SUPERVISOR_LIMITS.maxOutageAuditMinutes*60_000;
-  const prior=state.pendingRestAudits.find(v=>
-    v.market===market&&v.symbol===symbol
-    &&(v.requestedEndExclusiveMs??v.toExclusiveMs)>=from
-    &&v.fromMs<=to);
-  if(prior){
-    const requiredEnd=Math.max(prior.requestedEndExclusiveMs??
-      prior.toExclusiveMs,to);
-    prior.requestedEndExclusiveMs=requiredEnd;
-    prior.toExclusiveMs=Math.min(requiredEnd,prior.fromMs+maxSpan);
-    prior.unverifiedBeyondCap=requiredEnd>prior.toExclusiveMs;
-    prior.reason=prior.reason===reason?reason:'MIXED_WS_REST_AUDIT_REQUIRED';
-    prior.lastObservedAtMs=observedAtMs;
-    return;
+  let start=from,end=to,firstSeen=observedAtMs,lastSeen=observedAtMs;
+  let explanation=reason,firstIndex=queue.length;
+  // A new interval can bridge MORE THAN ONE old interval. Re-scan after
+  // expansion so a previously skipped interval cannot remain orphaned.
+  const matched=new Set();
+  let grew=true;
+  while(grew){
+    grew=false;
+    for(let i=0;i<queue.length;i++){
+      if(matched.has(i))continue;
+      const old=queue[i];
+      const oldEnd=old.requestedEndExclusiveMs??old.toExclusiveMs;
+      if(old.market!==market||old.symbol!==symbol
+        ||oldEnd<start||old.fromMs>end)continue;
+      matched.add(i);firstIndex=Math.min(firstIndex,i);
+      start=Math.min(start,old.fromMs);end=Math.max(end,oldEnd);
+      firstSeen=Math.min(firstSeen,old.observedAtMs);
+      lastSeen=Math.max(lastSeen,old.lastObservedAtMs??old.observedAtMs);
+      if(explanation!==old.reason)
+        explanation='MIXED_WS_REST_AUDIT_REQUIRED';
+      grew=true;
+    }
   }
-  if(state.pendingRestAudits.length>=PUBLIC_WS_SUPERVISOR_LIMITS.maxPendingRestAudits)
+  if(queue.length-matched.size>=
+    PUBLIC_WS_SUPERVISOR_LIMITS.maxPendingRestAudits)
     fail('WS_SUPERVISOR_PENDING_AUDIT_LIMIT');
-  const limitedEnd=Math.min(to,from+maxSpan);
-  state.pendingRestAudits.push({
-    market,symbol,fromMs:from,toExclusiveMs:limitedEnd,
-    requestedEndExclusiveMs:to,unverifiedBeyondCap:to>limitedEnd,
-    reason,observedAtMs,lastObservedAtMs:observedAtMs,
+  for(const i of [...matched].sort((a,b)=>b-a))queue.splice(i,1);
+  const limitedEnd=Math.min(end,start+maxSpan);
+  queue.splice(firstIndex,0,{
+    market,symbol,fromMs:start,toExclusiveMs:limitedEnd,
+    requestedEndExclusiveMs:end,unverifiedBeyondCap:end>limitedEnd,
+    reason:explanation,observedAtMs:firstSeen,lastObservedAtMs:lastSeen,
     sourceVerified:false,restBackfillRequired:true,
   });
 }
@@ -182,11 +194,25 @@ export function pollPublicCryptoWsSupervisorV1({
     const waiting=socket.awaitingPongSinceMs>0
       &&nowMs-socket.awaitingPongSinceMs>
       PUBLIC_WS_SUPERVISOR_LIMITS.pongTimeoutMs;
-    const connecting=socket.phase==='CONNECTING'
+    const connecting=['CONNECTING','SUBSCRIBING','AWAIT_ACK']
+      .includes(socket.phase)
       &&nowMs-socket.connectSentAtMs>
       PUBLIC_WS_SUPERVISOR_LIMITS.connectTimeoutMs;
     if(waiting||connecting){
-      resetToBackoff(socket,nowMs,waiting?'PONG_TIMEOUT':'CONNECT_TIMEOUT');
+      const reason=waiting?'PONG_TIMEOUT'
+        :socket.phase==='CONNECTING'?'CONNECT_TIMEOUT'
+          :'SUBSCRIPTION_TIMEOUT';
+      if(socket.subscribedAtMs>0){
+        const end=Math.floor(nowMs/60_000)*60_000;
+        for(const symbol of socket.symbols){
+          const prior=socket.provisionalBySymbol[symbol]?.current;
+          const from=prior?.row.timestamp
+            ??Math.floor(socket.subscribedAtMs/60_000)*60_000;
+          gap(s,socket.market,symbol,from,end,
+            'WEBSOCKET_TRANSPORT_TIMEOUT_UNVERIFIED',nowMs);
+        }
+      }
+      resetToBackoff(socket,nowMs,reason);
       return result(s,effect('CLOSE_AND_RETRY_PUBLIC_SOCKET',{
         socketId:socket.id,reason:socket.lastFailure,
         nextEligibleMs:socket.nextConnectAtMs,
@@ -247,6 +273,13 @@ export function observePublicCryptoWsSupervisorV1({
   if(kind==='SUBSCRIPTION_SENT'){
     if(socket.phase!=='SUBSCRIBING')
       fail('WS_SUPERVISOR_SUBSCRIBE_SEQUENCE_INVALID');
+    if(socket.lastCloseAtMs>0){
+      const from=Math.floor(socket.lastCloseAtMs/60_000)*60_000;
+      const end=Math.floor(nowMs/60_000)*60_000;
+      for(const symbol of socket.symbols)
+        gap(s,socket.market,symbol,from,end,
+          'WEBSOCKET_RECONNECT_INTERVAL_UNVERIFIED',nowMs);
+    }
     socket.phase=socket.provider==='UPBIT'?'STREAMING':'AWAIT_ACK';
     if(socket.provider==='UPBIT')socket.reconnectFailures=0;
     socket.subscribedAtMs=nowMs;socket.lastPingAtMs=nowMs;
@@ -294,9 +327,10 @@ export function observePublicCryptoWsSupervisorV1({
     const opened=socket.subscribedAtMs>0;
     for(const symbol of socket.symbols){
       const previous=socket.provisionalBySymbol[symbol]?.current;
-      if(opened&&previous){
-        gap(s,socket.market,symbol,
-          previous.row.timestamp,
+      if(opened){
+        const from=previous?.row.timestamp
+          ??Math.floor(socket.subscribedAtMs/60_000)*60_000;
+        gap(s,socket.market,symbol,from,
           Math.floor(nowMs/60_000)*60_000,
           'WEBSOCKET_DISCONNECT_UNVERIFIED',nowMs);
       }

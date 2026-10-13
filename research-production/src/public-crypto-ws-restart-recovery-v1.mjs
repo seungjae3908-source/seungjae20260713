@@ -75,9 +75,11 @@ export async function planPublicWsRestartRecoveryV1({
   const audits=[];
   for(const symbol of expectedSymbols){
     const last=records.get(symbol);
-    // The last provisional minute may never have been REST confirmed.
-    // Start from that candle itself (not the following minute).
-    const fromMs=last?.timestamp??startMs;
+    // The sealed spool proves only which provisional snapshots were seen.
+    // It cannot certify earlier minutes of this shard. On restart every
+    // minute since shard start is an unknown REST debt, including observed
+    // WebSocket candles which were never independently finalized.
+    const fromMs=startMs;
     const toExclusiveMs=Math.min(closeUntil,
       fromMs+maxRestWindowMinutes*60_000);
     if(toExclusiveMs<=fromMs)continue;
@@ -89,6 +91,7 @@ export async function planPublicWsRestartRecoveryV1({
       lastProvisionalReceiptMs:last?.lastObservedAtMs??null,
       missingFromSidecar:last==null,
       historicalBeforeSidecarUnverified:true,
+      entireSidecarShardRestUnverified:true,
       needsRestReadback:true,
       sourceVerified:false,noTradeIndependentlyCertified:false,
       ...authority(),
