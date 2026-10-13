@@ -30,6 +30,8 @@ type AutomaticPaperRuntimeReadiness = {
   blockers: string[];
   workerMode: 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND';
   paperWalletReady: boolean;
+  // Server-owned four-market wallet RLS attestation. Unknown status blocks Paper holdings reads.
+  fourMarketDatabaseGuardReady?: boolean | null;
   paperCapitalPolicyReady: boolean;
   strategyAllowlistReady: boolean;
   workerTickFresh: boolean;
@@ -491,6 +493,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
+  // Do not request automatic Paper holdings before the epoch and role-specific
+  // four-market database guard are verified. Never fabricate an empty account.
+  // Manual Paper and already-active manual LIVE retain their own read path.
+  const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync
+    && !autoPaperRuntimeError
+    && autoPaperRuntimeReadiness?.paperWalletReady === true
+    && autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true;
+  const paperHoldingsReadAllowed = paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable;
   const policy = runtimeStatus?.policy;
   const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)
     && policy.enabledStrategies.length > 0;
@@ -964,12 +974,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           {sectionContent}
 
+          {mode === 'paper' && paperOrigin === 'automatic' && !fixture && canPaper && !automaticPaperHoldingsReadable ? (
+            <p role="status" data-testid="automatic-paper-holdings-awaiting-evidence" className="text-xs text-muted-foreground">
+              자동모의 보유종목 조회 대기 · 4시장 가상계좌 원장과 회원 조회 권한이 검증되면 자동으로 표시합니다.
+            </p>
+          ) : null}
           <TradingHoldingsPanel market={marketMeta.selectionMarket}
             providers={(runtimeStatus?.connections ?? []).filter(row => row.accountMode === 'live' && row.configured
               && (market === 'domestic_stock' ? row.exchange === 'kiwoom' || row.exchange === 'toss' : row.exchange === selectedProvider))
               .map(row => row.exchange)}
             accountMode={mode === 'auto' ? 'live' : 'paper'} origin={paperOrigin}
-            userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : canPaper}
+            userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}
             fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} />
         </div>
       </main>

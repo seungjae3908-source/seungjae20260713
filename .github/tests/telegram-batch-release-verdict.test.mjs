@@ -9,7 +9,17 @@ const ciKeys=['application-ci/verified','browser-ui/verified','database-rls/veri
   'security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
 function fixture() {
  return {
-  sha,ci:{sha,completed:true,fullConclusion:'success',runId:1,
+  sha,
+  release:{candidateSha:sha,latestMainSha:sha,immutableSourceVerified:true,
+    independentTelegramOnlyScope:true},
+  permissions:{ipv4TlsReliable:true,botGetMeVerified:true,
+    allSixRoomPostingRightsVerified:true,roomIdsUniqueVerified:true,
+    noCurrentForbidden403:true,rateLimitBackoffVerified:true,checkedAt:date},
+  operations:{aiWatchMigratedSafely:true,allFourSendersOwnedByOneProcess:true,
+    noInFlightLegacyPosts:true,durableLedgerFsyncAndRollbackVerified:true,
+    diskAndPermissionsAdequate:true,sharedDeploymentLockVerified:true,
+    manualLivePreservedDuringCutover:true,restartAndRecoveryProbePassed:true},
+  ci:{sha,completed:true,fullConclusion:'success',runId:1,
     statuses:Object.fromEntries(ciKeys.map(k=>[k,'success']))},
   staging:{sha,releaseReady:true,authAndRlsReady:true,paperHoldingsHttp400Resolved:true,
     telegramMockPassed:true,protected:true,runId:2,checkedAt:date},
@@ -17,7 +27,8 @@ function fixture() {
     sourceSha:sha,observedAt:date},
   delivery:{rooms,marketSides,botAcceptedAllRooms:true,personalSentReceipt:true,
     memberOwnershipVerified:true,dedupeVerified:true,fillToJournalToTelegramVerified:true,
-    uncertainSendNotReplayed:true,observedAt:date},
+    uncertainSendNotReplayed:true,aiWatchDurableDedupeVerified:true,
+    aiWatchMigrationApproved:true,observedAt:date},
   cutover:{isolatedWorkerInstalled:true,leaseOwnerUnique:true,oldTelegramWorkersOff:true,
     persistedLedgerPreserved:true,recoveryVerified:true,productionSha:sha,checkedAt:date},
   safety:{tradingRuntimeBeforeHash:hash,tradingRuntimeAfterHash:hash,telegramTriggeredOrders:0,
@@ -34,6 +45,9 @@ test('all structural proofs still require protected approval, not real-send proo
 });
 test('one run inventories every blocker without repeated Full CI',()=>{
  assert.deepEqual(evaluateTelegramBatchRelease({sha},{expectedSha:sha,nowMs:now}).blockers,[
+  'RELEASE_MAIN_DRIFT_OR_SCOPE_UNPROVEN',
+  'TELEGRAM_RIGHTS_TLS_403_OR_RATE_LIMIT_BLOCKED',
+  'FOUR_WORKERS_STORAGE_AND_ROLLBACK_UNPROVEN',
   'EXACT_HEAD_FULL_CI_MISSING',
   'STAGING_FULL_AND_TELEGRAM_QA_MISSING',
   'SIGNAL_V3_503_OR_STALE',
@@ -44,10 +58,18 @@ test('one run inventories every blocker without repeated Full CI',()=>{
 });
 test('each independent weakness is NO_GO, never quietly skipped',()=>{
  for(const [change,reason] of [
+  [x=>x.release.latestMainSha='c'.repeat(40),'RELEASE_MAIN_DRIFT_OR_SCOPE_UNPROVEN'],
+  [x=>x.permissions.noCurrentForbidden403=false,'TELEGRAM_RIGHTS_TLS_403_OR_RATE_LIMIT_BLOCKED'],
+  [x=>x.permissions.ipv4TlsReliable=false,'TELEGRAM_RIGHTS_TLS_403_OR_RATE_LIMIT_BLOCKED'],
+  [x=>x.operations.allFourSendersOwnedByOneProcess=false,'FOUR_WORKERS_STORAGE_AND_ROLLBACK_UNPROVEN'],
+  [x=>x.operations.sharedDeploymentLockVerified=false,'FOUR_WORKERS_STORAGE_AND_ROLLBACK_UNPROVEN'],
+  [x=>x.operations.restartAndRecoveryProbePassed=false,'FOUR_WORKERS_STORAGE_AND_ROLLBACK_UNPROVEN'],
   [x=>x.ci.statuses['browser-ui/verified']='failure','EXACT_HEAD_FULL_CI_MISSING'],
   [x=>x.staging.paperHoldingsHttp400Resolved=false,'STAGING_FULL_AND_TELEGRAM_QA_MISSING'],
   [x=>x.signalV3.http=503,'SIGNAL_V3_503_OR_STALE'],
   [x=>x.delivery.personalSentReceipt=false,'SIX_ROOM_PERSONAL_TRADE_EVENT_EVIDENCE_MISSING'],
+  [x=>x.delivery.aiWatchMigrationApproved=false,'SIX_ROOM_PERSONAL_TRADE_EVENT_EVIDENCE_MISSING'],
+  [x=>x.delivery.aiWatchDurableDedupeVerified=false,'SIX_ROOM_PERSONAL_TRADE_EVENT_EVIDENCE_MISSING'],
   [x=>x.cutover.oldTelegramWorkersOff=false,'ISOLATED_TG_SINGLE_WRITER_CUTOVER_NOT_PROVEN'],
   [x=>x.safety.telegramTriggeredOrders=1,'LIVE_TRADING_PRESERVATION_NOT_PROVEN'],
  ]){const x=fixture();change(x);const v=evaluateTelegramBatchRelease(x,{expectedSha:sha,nowMs:now});

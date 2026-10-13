@@ -81,8 +81,10 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
       return { snapshots, failedProviders: sources.filter((_, index) => results[index]!.status === 'rejected') };
     },
   });
-  const snapshots = query.data?.snapshots;
-  const partialFailure = Boolean(query.data?.failedProviders.length);
+  // Query cache may still hold previous results after evidence is revoked.
+  // Never render stale automatic Paper holdings when the explicit gate closes.
+  const snapshots = enabled ? query.data?.snapshots : undefined;
+  const partialFailure = enabled && Boolean(query.data?.failedProviders.length);
   const items = (fixture ?? snapshots?.flatMap(result => result.items) ?? []).filter(row => row.market === market);
   const selected = items.find(row => row.id === selectedId) ?? null;
   const hasUnverified = snapshots?.some(result => !result.ownershipVerified || result.stale) ?? false;
@@ -115,7 +117,7 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
       } catch { /* Unsupported identity stays fail closed; do not navigate to a default asset. */ }
     }
   }
-  const pending = fixture == null && query.isLoading;
+  const pending = enabled && fixture == null && query.isLoading;
   const unavailable = fixture == null && (!enabled || accountMode === 'live' && !providerKey);
   return (
     <section className="min-w-0 rounded-2xl border border-card-border bg-card p-3 sm:p-4" data-testid="trading-holdings">
@@ -123,7 +125,7 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
         <h2 className="text-sm font-bold">보유종목</h2>
         <span className="text-xs text-muted-foreground">{accountMode === 'live' ? '실계좌 · 읽기 전용' : '모의계좌'}</span>
       </div>
-      {query.isError ? <p role="alert" className="mt-3 text-xs text-amber-600">보유정보 조회 실패 · 마지막 표시값은 최신 상태가 아닙니다.</p> : null}
+      {enabled && query.isError ? <p role="alert" className="mt-3 text-xs text-amber-600">보유정보 조회 실패 · 마지막 표시값은 최신 상태가 아닙니다.</p> : null}
       {partialFailure ? <p role="alert" className="mt-3 text-xs text-amber-600">일부 계좌 조회 실패 · 확인된 계좌만 표시합니다.</p> : null}
       {hasUnverified ? <p role="alert" className="mt-3 text-xs text-amber-600">소유 수량 대조 필요 · AUTO 자산으로 임의 분류하지 않습니다.</p> : null}
       {pending ? <p role="status" className="mt-3 text-sm text-muted-foreground">보유정보 확인 중</p> : null}
@@ -171,7 +173,7 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
         className="fixed inset-x-0 bottom-0 top-auto m-0 max-h-[85dvh] w-full max-w-none overflow-y-auto rounded-t-2xl border border-card-border p-0 text-foreground shadow-2xl backdrop:bg-black/60 sm:inset-0 sm:m-auto sm:max-w-xl sm:rounded-2xl"
         data-testid="holding-detail-dialog">
         {selected ? <div className="space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6">
-          {query.isError ? <p role="alert" className="text-xs text-amber-600">마지막 조회값 · 현재 상태는 미확인입니다.</p> : null}
+          {enabled && query.isError ? <p role="alert" className="text-xs text-amber-600">마지막 조회값 · 현재 상태는 미확인입니다.</p> : null}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0"><h2 id="holding-title" className="break-all text-lg font-bold">{selected.displayName}</h2>
               <p id="holding-scope" className="mt-1 text-xs text-muted-foreground">{selected.symbol} · {selected.provider} · {ownershipLabel(selected, accountMode === 'paper')}</p></div>

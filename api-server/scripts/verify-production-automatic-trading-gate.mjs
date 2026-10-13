@@ -25,6 +25,7 @@ const liveExecution = read('api-server/src/services/trade-execution.service.ts')
 const positionIsolation = read('api-server/src/services/automatic-live-position-isolation.service.ts');
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
+const holdingsPanel = read('stock-analyzer/src/components/trading-holdings-panel.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
 const tradeAutomationPolicyGuard = read('api-server/src/services/trade-automation-policy-guard.service.ts');
 const tradeAutomationPolicyGuardTest = read('api-server/src/services/trade-automation-policy-guard.service.test.ts');
@@ -86,6 +87,21 @@ requireText(tradeRisk, 'Math.min(leverage, maximumBitgetLeverage)', 'AUTO_GATE_R
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
+
+// A previously unverified 4-market Paper wallet can raise HTTP 400 on the
+// holdings GET. The UI must refuse the request until the SAME authenticated
+// account's wallet epoch and RLS guard are both proven. The strict backend
+// rejection stays unchanged; manual Paper and manual LIVE are unaffected.
+for (const [input, token, code] of [
+  [autoTradingPage, 'const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync', 'AUTO_PAPER_HOLDINGS_MEMBER_AUTH_REQUIRED'],
+  [autoTradingPage, 'autoPaperRuntimeReadiness?.paperWalletReady === true', 'AUTO_PAPER_HOLDINGS_WALLET_PROOF_REQUIRED'],
+  [autoTradingPage, 'autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true', 'AUTO_PAPER_HOLDINGS_DB_PROOF_REQUIRED'],
+  [autoTradingPage, "paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable", 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
+  [autoTradingPage, "enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}", 'AUTO_PAPER_HOLDINGS_READ_GATE_REQUIRED'],
+  [holdingsPanel, 'const snapshots = enabled ? query.data?.snapshots : undefined;', 'AUTO_PAPER_HOLDINGS_CACHED_SCOPE_GUARD_REQUIRED'],
+  [holdingsPanel, 'enabled: enabled && fixture == null', 'AUTO_PAPER_HOLDINGS_QUERY_DISABLED_REQUIRED'],
+  [workflow, 'stock-analyzer/src/components/trading-holdings-panel.tsx', 'AUTO_PAPER_HOLDINGS_CI_SCOPE_REQUIRED'],
+]) requireText(input, token, code);
 
 // A fresh 1M automatic Paper wallet is a separate virtual ledger. Existing
 // automatic Paper fills, manual wallets and incomplete history must never be
