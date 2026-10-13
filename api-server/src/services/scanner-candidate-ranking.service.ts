@@ -164,7 +164,8 @@ export function rankScannerCandidates(input: ScannerCandidateRankingInput): Scan
       hardFilterRejectedCount += 1;
       return [];
     }
-    const backtest = input.backtests?.[card.symbol];
+    const direction = String(card.action ?? card.direction ?? '').toUpperCase();
+    const backtest = input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol];
     if (!backtest || backtest.status !== 'verified') backtestMissingCount += 1;
     const relative = {
       tradingValuePercentile: percentile(tradingValues, card.tradingValue),

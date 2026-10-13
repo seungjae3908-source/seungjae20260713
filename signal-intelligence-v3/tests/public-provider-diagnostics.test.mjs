@@ -8,7 +8,7 @@ import {
 
 test('public provider inventory contains the exact production hosts and both stock fallbacks', () => {
   assert.deepEqual([...new Set(PUBLIC_PROVIDER_ENDPOINTS.map((row) => new URL(row.url).hostname))], [
-    'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com', 'api.upbit.com', 'api.bitget.com',
+    'data.krx.co.kr', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com', 'api.upbit.com', 'api.bitget.com',
   ]);
 });
 
