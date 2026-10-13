@@ -110,3 +110,37 @@ test('packager does not embed credentials and never runs Bot, PM2, DB or a worke
  assert.ok(code.includes("mode: 'PREPARE_ONLY'"));
  assert.ok(code.includes('workerStarted: false'));
 });
+
+test('modification of either tracked support script fails before release creation',()=>{
+  for(const rel of files.filter(p=>p.startsWith('ops/'))){
+    const x=repo();try{
+      fs.appendFileSync(path.join(x.checkout,rel),'unreviewed change\\n');
+      assert.throws(()=>prepareTelegramIsolatedRelease({
+        checkedOutSha:x.sha,checkoutRoot:x.checkout,destination:x.output,
+      }),/TRACKED_SOURCE_DRIFT/,rel);
+      assert.equal(fs.existsSync(x.output),false);
+    }finally{x.close()}
+  }
+});
+
+test('generated standalone bundle may be untracked but tracked launch scripts must remain exact',()=>{
+  const x=repo();try{
+    fs.appendFileSync(path.join(x.checkout,files[0]),'generated-bundle\\n');
+    const value=prepareTelegramIsolatedRelease({
+      checkedOutSha:x.sha,checkoutRoot:x.checkout,destination:x.output,
+    });
+    assert.equal(value.sha,x.sha);
+    assert.equal(value.mode,'PREPARE_ONLY');
+    assert.equal(fs.readFileSync(path.join(x.output,files[0]),'utf8'),
+      fs.readFileSync(path.join(x.checkout,files[0]),'utf8'));
+  }finally{x.close()}
+});
+
+test('nested subdirectory is not accepted as the root of the advertised Git checkout',()=>{
+  const x=repo();try{
+    assert.throws(()=>prepareTelegramIsolatedRelease({
+      checkedOutSha:x.sha,checkoutRoot:path.join(x.checkout,'ops'),destination:x.output,
+    }),/SOURCE_ROOT_MISMATCH/);
+    assert.equal(fs.existsSync(x.output),false);
+  }finally{x.close()}
+});

@@ -44,3 +44,18 @@ Real 6-room Bot acceptance, owned personal `SENT`, Signal V3 genuine fresh
 observable gates. The package alone satisfies **none** of them.
 
 Replit and Replit Agent are prohibited.
+
+
+## Immutable support-source proof (follow-up)
+
+A checkout whose HEAD matches the approved SHA is not, by itself, proof that
+its working-tree launcher or quiescence verifier still matches that commit.
+Preparation now compares each tracked `ops/run-telegram-isolated-worker.sh`
+and `ops/telegram-legacy-owner-runtime-proof.mjs` blob against the exact
+`HEAD:path` Git object before writing any output, and requires the actual
+Git root to equal the supplied checkout directory. A generated standalone
+bundle remains untracked by design but is compiled and startup-checked by the
+pinned offline CI job. Any tampered support script fails closed before a
+release directory is created. An exception after writing the last marker also
+removes that marker and quarantines the incomplete release, never marking an
+incomplete release ready. None of these checks installs or starts a service.
