@@ -208,10 +208,12 @@ export class ScannerProviderHealthTracker {
     ticker: string,
     timeframe: Timeframe,
     signal?: AbortSignal,
+    exchange?: string | null,
   ): Promise<Candle[]> {
     const startedAt = Date.now();
     try {
-      const meta = await runWithSignal(signal, () => MarketDataService.getCandlesMeta(ticker, timeframe));
+      const meta = await runWithSignal(signal, () => MarketDataService.getCandlesMeta(ticker, timeframe,
+        { purpose: 'scanner', signal, exchange }));
       const latencyMs = Math.max(0, Date.now() - startedAt);
       const freshness = candleFreshness(timeframe, meta.candles);
       if (meta.fallbackFrom) {

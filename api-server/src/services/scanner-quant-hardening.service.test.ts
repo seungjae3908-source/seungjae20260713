@@ -6,6 +6,62 @@ import type { Candle } from '../sample/types';
 
 const NOW = Date.parse('2026-08-08T03:30:00.000Z');
 
+test('failed separate context cannot silently reuse primary bars as higher-timeframe confirmation', () => {
+  const result = applyScannerQuantHardening({ card: candidate(), timeframe: '5m',
+    candles: freshCandles(), contextCandles: [], strategyMode: 'scalping', now: NOW,
+    sessionAware: false });
+  assert.equal(result.strongSignalEligible, false);
+  assert.equal(result.dataQuality?.strongSignalAllowed, false);
+  assert.notEqual(result.dataQuality?.state, 'TRUSTED');
+  assert.ok(result.unverified.includes('상위 시간봉 근거'));
+  assert.equal(result.pricePlan.entryZone, null);
+  assert.equal(result.pricePlan.stopLoss, null);
+  assert.ok(result.warnings.includes('CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'));
+  assert.ok(!['S', 'A'].includes(result.signalGrade!));
+});
+
+test('present but invalid higher-timeframe bars never authorize a plan or contaminate direction evidence', () => {
+  for (const mutate of [
+    (rows: Candle[]) => { rows.at(-1)!.time = NOW + 60_000; },
+    (rows: Candle[]) => { rows.at(-1)!.time = rows.at(-2)!.time; },
+    (rows: Candle[]) => { rows.at(-1)!.high = 1; },
+    (rows: Candle[]) => { rows.at(-1)!.volume = -1; },
+  ]) {
+    const context = freshCandles(); mutate(context);
+    const result = applyScannerQuantHardening({ card: candidate(), timeframe: '5m',
+      candles: freshCandles(), contextCandles: context, contextTimeframe: '15m',
+      strategyMode: 'scalping', now: NOW, sessionAware: false });
+    assert.equal(result.dataQuality?.state, 'DATA_UNTRUSTED');
+    assert.equal(result.dataState, 'untrusted');
+    assert.equal(result.strongSignalEligible, false);
+    assert.equal(result.dataQuality?.strongSignalAllowed, false);
+    assert.equal(result.pricePlan.entryZone, null);
+    assert.ok(result.unverified.includes('상위 시간봉 근거'));
+    assert.ok(result.dataQuality?.issues.some(issue => issue.message.startsWith('상위 시간봉')));
+    assert.ok(!['S', 'A'].includes(result.signalGrade!));
+  }
+});
+
+test('stale higher-timeframe evidence cannot authorize a strong signal with fresh primary bars', () => {
+  const context = freshCandles().map(row => ({ ...row, time: Number(row.time) - 3 * 60 * 60_000 }));
+  const result = applyScannerQuantHardening({ card: candidate(), timeframe: '5m',
+    candles: freshCandles(), contextCandles: context, contextTimeframe: '15m',
+    strategyMode: 'scalping', now: NOW, sessionAware: false });
+  assert.equal(result.dataQuality?.state, 'DATA_UNTRUSTED');
+  assert.equal(result.strongSignalEligible, false);
+  assert.equal(result.pricePlan.stopLoss, null);
+});
+
+test('one valid context bar is still insufficient for higher-timeframe EMA60 confirmation', () => {
+  const result = applyScannerQuantHardening({ card: candidate(), timeframe: '5m', candles: freshCandles(),
+    contextCandles: freshCandles().slice(-1), contextTimeframe: '15m', strategyMode: 'scalping', now: NOW });
+  assert.equal(result.dataQuality?.state, 'DEGRADED');
+  assert.equal(result.dataQuality?.strongSignalAllowed, false);
+  assert.equal(result.pricePlan.entryZone, null);
+  assert.ok(result.unverified.includes('상위 시간봉 근거'));
+  assert.ok(result.warnings.includes('CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT'));
+});
+
 function staleCandles(): Candle[] {
   return Array.from({ length: 80 }, (_, index) => {
     const close = 100 + index * 0.05;

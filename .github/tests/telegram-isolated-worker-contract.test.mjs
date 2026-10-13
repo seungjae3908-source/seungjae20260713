@@ -40,7 +40,10 @@ test('standalone validates six rooms, lease, secrets and zero trading authority 
     'startMemberAutoTradingBackgroundWorker','startTradeRecoveryWorker',
     'startPriceAlertMonitor','app.listen','createServer','placeOrder',
   ])assert.ok(!entry.includes(forbidden),forbidden);
-  assert.ok(embedded.indexOf('startSignalIntelligenceAiWatch();') < embedded.indexOf('} else {'));
+  const ownerStart = embedded.indexOf('if (embeddedTelegramOwner) {');
+  const ownerEnd = embedded.indexOf("      } else {", ownerStart);
+  assert.ok(ownerStart > 0 && ownerEnd > ownerStart);
+  assert.ok(embedded.slice(ownerStart, ownerEnd).includes('startSignalIntelligenceAiWatch();'));
   assert.ok(entry.includes('const aiWatch = startSignalIntelligenceAiWatch();'));
   assert.ok(entry.includes('aiWatch?.stop();'));
   const ai = fs.readFileSync('api-server/src/services/signal-intelligence-ai-watch.service.ts','utf8');
@@ -58,9 +61,9 @@ test('runner requires old PM2 disabled twice and holds exclusive persistent floc
   for(const marker of [
     'set -Eeuo pipefail','umask 077','TELEGRAM_TARGET_SHA',
     'TELEGRAM_LEGACY_WRITER_NOT_QUIESCED',
-    'LIVE_TELEGRAM_ACTIVATION_APPROVED',
-    'PERSONAL_TELEGRAM_WORKER_ENABLED',
-    'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
+    'TELEGRAM_WORKER_OWNER',
+    'TELEGRAM_LEGACY_RUNTIME_HEALTH_UNPROVEN',
+    'DEPLOY_SHA',
     'flock -n 9',
     'TELEGRAM_SINGLE_WRITER_LEASE=LOCK_HELD_V1',
     'TELEGRAM_ISOLATED_RELEASE_IDENTITY_MISMATCH',

@@ -4,6 +4,79 @@ on:
   pull_request:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
+      - api-server/package.json
+      - api-server/scripts/ai-preview-diagnostic-contract.mjs
+      - api-server/scripts/contract-source-text.mjs
+      - api-server/scripts/contract-source-text.test.mjs
+      - api-server/scripts/staging-detail-canonical-route-contract.mjs
+      - api-server/scripts/verify-ai-preview-diagnostic-contract.mjs
+      - api-server/scripts/verify-ai-preview-diagnostic-contract.test.mjs
+      - api-server/scripts/verify-staging-detail-canonical-route-contract.mjs
+      - api-server/scripts/verify-production-us-chart-candle-priority-contract.mjs
+      - api-server/src/kiwoom-chart-window.test.ts
+      - api-server/src/providers/krx-source-pair.test.ts
+      - api-server/src/providers/krx.ts
+      - api-server/src/providers/nasdaq-trader.test.ts
+      - api-server/src/providers/nasdaq-trader.ts
+      - api-server/src/providers/us-universe.ts
+      - api-server/src/providers/yahoo-timeframe.test.ts
+      - api-server/src/providers/yahoo.ts
+      - api-server/src/routes/bounded-market-scan.ts
+      - api-server/src/routes/crypto-signal-scan.ts
+      - api-server/src/routes/scanner-ai-evidence-review.smoke.test.ts
+      - api-server/src/services/bounded-scanner.service.test.ts
+      - api-server/src/services/bounded-scanner.service.ts
+      - api-server/src/services/market-data.service.ts
+      - api-server/src/services/market-intelligence-ai-analysis.service.test.ts
+      - api-server/src/services/market-intelligence-ai-analysis.service.ts
+      - api-server/src/services/scanner-ai-evidence-review.service.test.ts
+      - api-server/src/services/scanner-ai-evidence-review.service.ts
+      - api-server/src/services/scanner-ai-provider.service.test.ts
+      - api-server/src/services/scanner-ai-provider.service.ts
+      - api-server/src/services/scanner-crypto-price-precision.service.test.ts
+      - api-server/src/services/scanner-data-quality.service.test.ts
+      - api-server/src/services/scanner-data-quality.service.ts
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-market-profile-overlay.service.ts
+      - api-server/src/services/scanner-outcome.test.ts
+      - api-server/src/services/scanner-provider-health.service.ts
+      - api-server/src/services/scanner-quant-hardening.service.test.ts
+      - api-server/src/services/scanner-quant-hardening.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.test.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/scanner-signal-lifecycle.service.test.ts
+      - api-server/src/services/scanner-signal-lifecycle.service.ts
+      - api-server/src/services/scanner-signal.types.ts
+      - api-server/src/services/scanner-universe.service.ts
+      - api-server/src/services/stock-signal-scanner-aggregation.test.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/services/unified-asset-search-fallback.test.ts
+      - api-server/src/services/unified-asset-search.service.ts
+      - api-server/test.mjs
+      - signal-intelligence-v3/README.md
+      - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - signal-intelligence-v3/src/public-cycle-progress-v2.mjs
+      - signal-intelligence-v3/src/public-stock-provider-adapter.mjs
+      - signal-intelligence-v3/src/server.mjs
+      - signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs
+      - signal-intelligence-v3/tests/public-stock-provider-adapter.test.mjs
+      - signal-intelligence-v3/tests/server.test.mjs
+      - stock-analyzer/e2e/expanded-gap-closure.spec.ts
+      - stock-analyzer/e2e/final-expanded-targeted-evidence.spec.ts
+      - stock-analyzer/e2e/phase11-ai-workspace.spec.ts
+      - stock-analyzer/e2e/scanner-direction-badges.spec.ts
+      - stock-analyzer/e2e/scanner-mobile-collision.spec.ts
+      - stock-analyzer/e2e/scanner-mobile-detail-tabs.spec.ts
+      - stock-analyzer/e2e/signal-scanner-mobile-ranking-direction.spec.ts
+      - stock-analyzer/e2e/signal-scanner-quality-panel.spec.ts
+      - stock-analyzer/e2e/signal-scanner.spec.ts
+      - stock-analyzer/src/lib/scanner-request.test.ts
+      - stock-analyzer/src/lib/signal-scanner.ts
+      - stock-analyzer/src/pages/signal-scanner.tsx
+      - .github/scripts/scanner-readonly-repair-scope.mjs
+      - .github/tests/scanner-readonly-repair-scope.test.mjs
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
+      - .github/workflows/research-workspace-integration-v1.yml
       - .github/scripts/paper-forward-reviewed-paths.mjs
       # Separately approved Paper scope supplement: exactly 19 paths.
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -23,7 +96,6 @@ on:
       - api-server/src/services/trade-exchange-adapters.service.ts
       - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
       - api-server/supabase/bootstrap/staging-bootstrap.sql
-      - api-server/test.mjs
       - stock-analyzer/e2e/production-auto-live-only-qa.spec.ts
       # Owner-approved exact AUTO safety paths; no directory-wide trigger.
       - .github/config/automatic-live-preactivation-checklist.json
@@ -35,7 +107,6 @@ on:
       - .github/tests/kiwoom-readonly-recovery-security-contract.test.mjs
       - .github/tests/production-auto-live-budget-contract.test.mjs
       - .github/workflows/application-fast-ci.yml
-      - api-server/package.json
       - api-server/scripts/automatic-live-preflight-stages.mjs
       - api-server/scripts/automatic-live-preflight-stages.test.mjs
       - api-server/scripts/kiwoom-readonly-recovery-security-contract.mjs
@@ -414,11 +485,14 @@ jobs:
           ).splitlines()
           if len(auto_supplement) != 19 or len(set(auto_supplement)) != 19:
               raise SystemExit('AUTO_LIVE_SUPPLEMENT_MUST_BE_EXACTLY_19')
+          scanner = subprocess.check_output(
+              ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
+          ).splitlines()
           if len(trigger) != len(set(trigger)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_DUPLICATE_PATH')
           if len(allowed) != len(set(allowed)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_ALLOWLIST_DUPLICATE_PATH')
-          missing = sorted(set(allowed + auto_safety + auto_supplement) - set(trigger))
+          missing = sorted(set(allowed + auto_safety + auto_supplement + scanner) - set(trigger))
           if missing:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
@@ -433,6 +507,10 @@ jobs:
             base="$(git merge-base HEAD origin/main)"
           fi
           git cat-file -e "$base^{commit}"
+          # Immutable scanner bytes are classification evidence, never execution
+          # approval. Validate unchanged deployment/order guards before inclusion.
+          node --test .github/tests/scanner-readonly-repair-scope.test.mjs
+          node .github/scripts/scanner-readonly-repair-scope.mjs --verify "$base"
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
@@ -447,6 +525,8 @@ jobs:
           mapfile -t research_batch < <(node .github/scripts/research-center-batch-scope.mjs --list-paths)
           test "${#research_batch[@]}" -gt 0
           allowed+=("${research_batch[@]}")
+          mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
+          allowed+=("${scanner_repair[@]}")
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
           for path in "${changed[@]}"; do
@@ -463,7 +543,7 @@ jobs:
               case "$path" in
                 stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
                 *)
-                  if ! printf '%s\n' "${research_batch[@]}" | grep -Fx "$path" >/dev/null \
+                  if ! printf '%s\n' "${research_batch[@]}" "${scanner_repair[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_supplement[@]}" | grep -Fx "$path" >/dev/null; then
                     echo "Unexpected Paper-facing UI change: $path" >&2
