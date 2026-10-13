@@ -205,3 +205,26 @@ const require = __createRequire(import.meta.url);
 });
 
 console.log('[api-server] built Paper Canonical remote readiness tool');
+
+/* The isolated Telegram entry is built as a dormant artifact.
+ * Normal stock-app PM2 never executes it. */
+await build({
+  entryPoints: [path.resolve(rootDir, 'src/telegram-isolated-worker.ts')],
+  outfile: path.resolve(outDir, 'telegram-isolated-worker.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  sourcemap: true,
+  minify: false,
+  packages: 'external',
+  external,
+  banner: {
+    js: "\nimport { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);\n",
+  },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+  },
+  logLevel: 'info',
+});
+console.log('[api-server] built dormant isolated Telegram worker bundle');

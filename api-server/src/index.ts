@@ -21,6 +21,7 @@ import {
 } from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
+import { embeddedTelegramWorkersAllowed } from './lib/telegram-worker-ownership';
 import {
   areBackgroundWorkersEnabled,
   resolveApiBindHost,
@@ -276,9 +277,13 @@ app.listen(
       startPriceAlertMonitor();
       startTradeRecoveryWorker();
       startMemberAutoTradingBackgroundWorker();
-      startUserTelegramDeliveryWorker();
-      startTelegramIntelligenceWorker();
-      startSignalIntelligenceTelegramSubscriber();
+      if (embeddedTelegramWorkersAllowed(process.env)) {
+        startUserTelegramDeliveryWorker();
+        startTelegramIntelligenceWorker();
+        startSignalIntelligenceTelegramSubscriber();
+      } else {
+        console.log('[api-server] Telegram workers owned by separately approved isolated process');
+      }
       startSignalIntelligenceAiWatch();
     }
 
