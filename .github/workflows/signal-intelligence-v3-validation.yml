@@ -11,6 +11,12 @@ on:
       - 'market-prediction-lab/src/public-coverage-audit-v1.js'
       - '.github/workflows/signal-intelligence-v3-validation.yml'
   workflow_dispatch:
+    inputs:
+      bitget_history_probe_only:
+        description: 'Run only the bounded public Bitget Download Center UI probe'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -21,6 +27,7 @@ concurrency:
 
 jobs:
   contract:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -86,6 +93,7 @@ jobs:
           echo 'AI leverage authority=false'
 
   producer-bundle:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -277,5 +285,181 @@ jobs:
         with:
           name: signal-intelligence-v3-deploy-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/deploy
+          retention-days: 30
+          if-no-files-found: error
+
+  bitget-history-probe:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install isolated Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Probe the intended Futures Depth download UI once
+        working-directory: stock-analyzer
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/bitget-history-probe
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          pnpm exec node --input-type=module - <<'NODE'
+          import { chromium } from '@playwright/test';
+          import { createHash } from 'node:crypto';
+          import { writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+
+          const pageUrl = 'https://www.bitget.com/data-download';
+          const evidenceDir = process.env.EVIDENCE_DIR;
+          const observed = [];
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({
+            acceptDownloads: false,
+            locale: 'en-US',
+            timezoneId: 'UTC',
+          });
+          const page = await context.newPage();
+          page.on('response', (response) => {
+            try {
+              const url = new URL(response.url());
+              if (url.hostname === 'bitget.com' || url.hostname.endsWith('.bitget.com')) {
+                observed.push({
+                  url: url.href,
+                  status: response.status(),
+                  contentType: response.headers()['content-type'] ?? null,
+                });
+              }
+            } catch {}
+          });
+
+          const navigation = await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+          await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {});
+          const before = await page.locator('a,button,[role="button"]').evaluateAll((nodes) => nodes.map((node, index) => ({
+            index,
+            tag: node.tagName,
+            text: (node.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 300),
+            href: node instanceof HTMLAnchorElement ? node.href : null,
+            download: node instanceof HTMLAnchorElement ? node.download || null : null,
+            disabled: 'disabled' in node ? Boolean(node.disabled) : null,
+          })).filter((row) => row.text || row.href));
+
+          const downloadControls = page.locator('a,button,[role="button"]').filter({ hasText: /^\s*Download\s*$/i });
+          const downloadControlCount = await downloadControls.count();
+          let interaction = { attempted: false, selectedIndex: null, download: null, popup: null, error: null };
+          if (downloadControlCount > 0) {
+            const selectedIndex = downloadControlCount - 1;
+            interaction = { ...interaction, attempted: true, selectedIndex };
+            const downloadPromise = page.waitForEvent('download', { timeout: 8_000 }).catch(() => null);
+            const popupPromise = page.waitForEvent('popup', { timeout: 8_000 }).catch(() => null);
+            try {
+              await downloadControls.nth(selectedIndex).click({ timeout: 15_000 });
+              const [download, popup] = await Promise.all([downloadPromise, popupPromise]);
+              if (download) {
+                interaction.download = {
+                  url: download.url(),
+                  suggestedFilename: download.suggestedFilename(),
+                  cancelledBeforeBodyPersistence: true,
+                };
+                await download.cancel();
+              }
+              if (popup) {
+                await popup.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => {});
+                interaction.popup = { url: popup.url(), title: await popup.title() };
+                await popup.close();
+              }
+            } catch (error) {
+              interaction.error = String(error?.message ?? error).slice(0, 1_000);
+            }
+          }
+          await page.waitForTimeout(2_000);
+          const after = {
+            url: page.url(),
+            title: await page.title(),
+            bodyText: (await page.locator('body').innerText()).replace(/\s+/gu, ' ').trim().slice(0, 20_000),
+            dialogs: await page.locator('[role="dialog"]').allInnerTexts(),
+            controls: await page.locator('input,select,option,a,button,[role="button"]').evaluateAll((nodes) => nodes.map((node, index) => ({
+              index,
+              tag: node.tagName,
+              type: node.getAttribute('type'),
+              name: node.getAttribute('name'),
+              value: 'value' in node ? String(node.value).slice(0, 300) : null,
+              text: (node.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 300),
+              href: node instanceof HTMLAnchorElement ? node.href : null,
+              download: node instanceof HTMLAnchorElement ? node.download || null : null,
+            })).filter((row) => row.text || row.href || row.name || row.value)),
+          };
+          await page.screenshot({ path: path.join(evidenceDir, 'bitget-history-probe.png'), fullPage: true });
+          await browser.close();
+
+          const dedupedResponses = [...new Map(observed.map((row) => [`${row.status}:${row.url}`, row])).values()];
+          const responseIdentity = createHash('sha256')
+            .update(JSON.stringify(dedupedResponses))
+            .digest('hex');
+          const report = {
+            schemaVersion: 'bitget-public-history-ui-probe-v1',
+            serviceSha: process.env.EXPECTED_SHA,
+            generatedAt: new Date().toISOString(),
+            pageUrl,
+            navigation: {
+              status: navigation?.status() ?? null,
+              finalUrl: pageUrl,
+            },
+            downloadControlCount,
+            before,
+            interaction,
+            after,
+            observedResponses: dedupedResponses,
+            responseIdentity,
+            safety: {
+              publicUiOnly: true,
+              singleDownloadControlInteraction: true,
+              downloadedBodyPersisted: false,
+              credentialsRead: false,
+              privateApiUsed: false,
+              orderSubmitted: false,
+            },
+          };
+          await writeFile(path.join(evidenceDir, 'bitget-history-probe.json'), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
+          console.log(JSON.stringify({
+            serviceSha: report.serviceSha,
+            navigationStatus: report.navigation.status,
+            downloadControlCount,
+            interaction,
+            observedResponseCount: dedupedResponses.length,
+            responseIdentity,
+          }, null, 2));
+          if (report.navigation.status !== 200 || downloadControlCount < 6) process.exit(1);
+          NODE
+      - name: Assert no execution authority
+        run: |
+          test '${{ github.event_name }}' = workflow_dispatch
+          test '${{ inputs.bitget_history_probe_only }}' = true
+          echo 'executionAuthority=NONE'
+          echo 'privateTradingApiAllowed=false'
+          echo 'orderSubmitted=false'
+      - name: Upload bounded discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitget-history-probe-${{ github.sha }}
+          path: ${{ runner.temp }}/bitget-history-probe
           retention-days: 30
           if-no-files-found: error
