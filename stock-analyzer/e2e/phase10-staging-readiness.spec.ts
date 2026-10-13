@@ -530,6 +530,31 @@ function isSameOriginBrowserRead(request: Request) {
   }
 }
 
+// Match only same-origin stock candle GETs. Any failed request still goes through
+// the strict browser error collection and fails Staging; this only drains reads.
+function isPendingStockCandleReadIdentity(input: {
+  method: string;
+  rawUrl: string;
+  origin: string;
+}) {
+  try {
+    const url = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && url.origin === input.origin
+      && /^\/api\/stocks\/[^/]+\/candles$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isStockCandleOwnerRoute(rawUrl: string) {
+  try {
+    return ['/ai-chart', '/stock-info', '/stock-info/analysis'].includes(new URL(rawUrl).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function isScannerReadIdentity(input: {
   method: string;
   rawUrl: string;
@@ -562,6 +587,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const mutations = new Set<Request>();
   const apiGets = new Set<Request>();
   const browserReads = new Set<Request>();
+  const stockCandleStarted = new WeakMap<Request, { path: string; at: number }>();
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
   pendingSameOriginReadRequests.set(page, browserReads);
@@ -575,6 +601,14 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
     if (isSameOriginBrowserRead(request)) browserReads.add(request);
+    if (isPendingStockCandleReadIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      origin: new URL(page.url()).origin,
+    })) {
+      // Path-only evidence: never record query strings or account identifiers.
+      stockCandleStarted.set(request, { path: diagnosticUrl(page.url()), at: Date.now() });
+    }
     const capabilityDenial = activeCapabilityDenialObservations.get(page);
     if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
       capabilityDenial.requests.add(request);
@@ -677,7 +711,11 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   });
   page.on('requestfailed', (request) => {
     completeBrowserRequest(page, request);
-    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
+    const started = stockCandleStarted.get(request);
+    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`)
+      + (started
+        ? ` [candleStartPath=${started.path} endPath=${diagnosticUrl(page.url())} ageMs=${Date.now() - started.at}]`
+        : '');
     const diagnostic: Diagnostic = {
       test: testName,
       url: diagnosticUrl(request.url()),
@@ -824,6 +862,38 @@ async function waitForBrowserNetworkQuiescence(page: Page) {
       intervals: [100, 200, 300, 500],
     },
   ).toBe('quiescent');
+}
+
+async function waitForPendingStockCandleReads(page: Page) {
+  const origin = new URL(page.url()).origin;
+  let quietSince: number | null = null;
+  await expect.poll(
+    () => {
+      const outstanding = [...(pendingSameOriginReadRequests.get(page) ?? [])]
+        .filter((request) => isPendingStockCandleReadIdentity({
+          method: request.method(),
+          rawUrl: request.url(),
+          origin,
+        })).length;
+      if (outstanding > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 1_200 ? 'quiescent' : 'quiet';
+    },
+    {
+      message: 'real AAPL/stock candle GETs must settle before verifier navigation or teardown',
+      timeout: 20_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe('quiescent');
+}
+
+async function drainBeforeStockChartDeparture(page: Page) {
+  if (isStockCandleOwnerRoute(page.url())) {
+    await waitForPendingStockCandleReads(page);
+  }
 }
 
 async function waitForScannerNetworkQuiescence(page: Page) {
@@ -1176,6 +1246,7 @@ async function expectNavigationTransition(
   open: () => Promise<void>,
 ) {
   await settle(page);
+  await drainBeforeStockChartDeparture(page);
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
     toRoute: routeIdentity(route, page.url()),
@@ -1209,6 +1280,7 @@ async function expectHealthyRoute<T>(
   observeAfterSettle?: () => Promise<T>,
 ): Promise<T | void> {
   await settle(page);
+  await drainBeforeStockChartDeparture(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
     ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
@@ -1251,6 +1323,7 @@ async function expectHealthyRoute<T>(
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
+  await drainBeforeStockChartDeparture(page);
   const origin = new URL(page.url()).origin;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
@@ -1466,6 +1539,9 @@ async function selectVisibleUsAaplForAnalysis(page: Page) {
     expect(chartResponse, 'AAPL chart read must complete instead of aborting').not.toBeNull();
     expect(chartResponse!.status(), 'AAPL chart read must complete below HTTP 400').toBeLessThan(400);
   }
+  // Real AAPL analysis may begin a delayed candle fallback after /chart finished.
+  // Observe and drain it instead of accepting a verifier-created abort.
+  await waitForPendingStockCandleReads(page);
 }
 
 async function runAuthenticatedSearchCertification(page: Page) {
@@ -1693,6 +1769,7 @@ async function runAuthenticatedAiChartCertification(
       diagnostics.authenticated_ai_chart.sessions.push(timing);
       await expectHealthyRoute(page, '/');
       await waitForBrowserNetworkQuiescence(page);
+      await waitForPendingStockCandleReads(page);
       verifierOwnedTeardownSafe = true;
     } finally {
       if (verifierOwnedTeardownSafe) {
@@ -1950,6 +2027,25 @@ test('scanner read identity accepts only same-origin market scan GETs', () => {
     rawUrl: 'https://other.example.test/api/market/scan',
     origin,
   })).toBe(false);
+});
+
+test('stock candle drain matches only the exact same-origin GET and chart owner routes', () => {
+  const origin = 'https://staging.example.test';
+  const sample = { method: 'GET', rawUrl: `${origin}/api/stocks/AAPL/candles?tf=5m`, origin };
+  expect(isPendingStockCandleReadIdentity(sample)).toBe(true);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/stocks/AAPL/candles` })).toBe(true);
+  expect(isPendingStockCandleReadIdentity({ ...sample, method: 'POST' })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/stocks/AAPL/chart?tf=5m` })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/market/scan` })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: 'https://other.example.test/api/stocks/AAPL/candles' })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: 'not-a-url' })).toBe(false);
+  for (const route of ['/ai-chart', '/stock-info', '/stock-info/analysis']) {
+    expect(isStockCandleOwnerRoute(`${origin}${route}?ticker=AAPL`)).toBe(true);
+  }
+  for (const route of ['/', '/scanner', '/portfolio', '/stock-info-other']) {
+    expect(isStockCandleOwnerRoute(`${origin}${route}`)).toBe(false);
+  }
+  expect(isStockCandleOwnerRoute('not-a-url')).toBe(false);
 });
 
 test('stock chart hedge abort proof requires a matching successful primary candle identity', () => {
@@ -2477,6 +2573,7 @@ test.describe('real staging release readiness', () => {
     await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
+    await waitForPendingStockCandleReads(page);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
