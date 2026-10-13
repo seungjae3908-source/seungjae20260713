@@ -49,7 +49,7 @@ test('default restart recovery is disabled and cannot read source root',async()=
   assert.equal(x.publicProviderGETCount,0);
   assert.equal(x.executionAuthority,'NONE');
 });
-test('restart uses only sealed provisional timestamps and marks every unseen symbol unknown',async()=>{
+test('restart cannot erase the start of a shard even if its last candle was observed',async()=>{
   await room(async root=>{
     await fixture(root);
     const resumed=START+20*MIN+10_000;
@@ -59,7 +59,8 @@ test('restart uses only sealed provisional timestamps and marks every unseen sym
     assert.equal(x.sourceAudits.length,2);
     assert.equal(x.symbolsWithProvisionalObservations,1);
     assert.equal(x.sourceAudits[0].symbol,'BTC');
-    assert.equal(x.sourceAudits[0].fromMs,START+3*MIN);
+    assert.equal(x.sourceAudits[0].fromMs,START);
+    assert.equal(x.sourceAudits[0].entireSidecarShardRestUnverified,true);
     assert.equal(x.sourceAudits[0].requestedEndExclusiveMs,START+20*MIN);
     assert.equal(x.sourceAudits[0].missingFromSidecar,false);
     assert.equal(x.sourceAudits[1].symbol,'ETH');
@@ -81,8 +82,8 @@ test('offline longer than 180 minutes preserves exact unresolved tail timestamp'
       expectedSymbols:['BTC','ETH'],resumeAtMs,maxRestWindowMinutes:180});
     assert.equal(x.sourceAudits.length,2);
     const btc=x.sourceAudits[0];
-    assert.equal(btc.fromMs,START+3*MIN);
-    assert.equal(btc.toExclusiveMs,START+183*MIN);
+    assert.equal(btc.fromMs,START);
+    assert.equal(btc.toExclusiveMs,START+180*MIN);
     assert.equal(btc.requestedEndExclusiveMs,START+500*MIN);
     assert.equal(btc.unverifiedBeyondCap,true);
     assert.equal(btc.lastWebsocketMinuteMs,START+3*MIN);
