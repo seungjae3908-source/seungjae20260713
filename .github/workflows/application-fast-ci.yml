@@ -89,6 +89,9 @@ jobs:
             --markdown-output /tmp/connection-graph.md
           cat /tmp/connection-graph.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify bounded GitHub dispatcher read-only retry contract
+        run: node --test .github/tests/browser-adaptive-github-read.test.mjs .github/tests/telegram-dispatch-scoped-qa.test.mjs
+
       - name: Run product integrity audit
         run: |
           set -euo pipefail
@@ -327,6 +330,20 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         with:
           script: |
+            // Retry only transient read-only GitHub metadata GETs. Dispatch,
+            // required tests, approvals and release commands are NEVER retried.
+            const getMetadata = async (read, label) => {
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try { return await read(); }
+                catch (error) {
+                  const status = Number(error?.status ?? error?.response?.status);
+                  if (![500,502,503,504].includes(status) || attempt === 3) throw error;
+                  core.warning('GITHUB_READ_ONLY_TRANSIENT_RETRY:' + label + ':' + attempt);
+                  await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                }
+              }
+              throw new Error('GITHUB_READ_ONLY_RETRY_EXHAUSTED');
+            };
             const targetSha = String(process.env.TARGET_SHA || '').toLowerCase();
             const prNumber = Number(process.env.PR_NUMBER || 0);
             const baseRef = String(process.env.BASE_REF || '');
@@ -336,11 +353,11 @@ jobs:
               return;
             }
 
-            const { data: pr } = await github.rest.pulls.get({
+            const { data: pr } = await getMetadata(() => github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: prNumber,
-            });
+            }), 'pr');
             if (pr.state !== 'open') {
               core.setFailed(`[PREMERGE_PR_NOT_OPEN] state=${pr.state}`);
               return;
@@ -354,15 +371,51 @@ jobs:
               return;
             }
 
+            // A Telegram Draft must pass its scoped mocks BEFORE spending the
+            // canonical Full CI budget. Fail on any same-SHA failure; never
+            // re-run a failed scoped QA unchanged to manufacture green proof.
+            const telegramScope = headRef.startsWith('drift/telegram-')
+              || String(pr.title || '').toLowerCase().includes('telegram');
+            if (telegramScope) {
+              const qaWorkflowId = 'telegram-only-staging-qa.yml';
+              let exactTelegramQa = [];
+              for (let attempt = 1; attempt <= 6; attempt++) {
+                const { data: qaPage } = await getMetadata(() => github.rest.actions.listWorkflowRuns({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: qaWorkflowId,
+                  event: 'pull_request',
+                  branch: headRef,
+                  per_page: 100,
+                }), 'telegram-scoped-qa');
+                exactTelegramQa = (qaPage.workflow_runs ?? []).filter(run =>
+                  String(run.head_sha || '').toLowerCase() === targetSha);
+                const unsafe = exactTelegramQa.some(run =>
+                  run.status === 'completed' && ['failure', 'cancelled', 'timed_out'].includes(run.conclusion));
+                if (unsafe) {
+                  core.setFailed('[TELEGRAM_SCOPED_QA_FAILED_EXACT_SHA]');
+                  return;
+                }
+                if (exactTelegramQa.some(run =>
+                  run.status === 'completed' && run.conclusion === 'success')) break;
+                if (attempt < 6) await new Promise(resolve => setTimeout(resolve, 10_000));
+              }
+              if (!exactTelegramQa.some(run =>
+                run.status === 'completed' && run.conclusion === 'success')) {
+                core.setFailed('[TELEGRAM_SCOPED_QA_NOT_SUCCESS_EXACT_SHA]');
+                return;
+              }
+            }
+
             const workflowId = 'futures-public-network-smoke.yml';
-            const { data: existingPage } = await github.rest.actions.listWorkflowRuns({
+            const { data: existingPage } = await getMetadata(() => github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: workflowId,
               event: 'workflow_dispatch',
               branch: headRef,
               per_page: 100,
-            });
+            }), 'workflow-runs');
             const existing = existingPage.workflow_runs ?? [];
             const exactRuns = existing
               .filter((run) => String(run.head_sha || '').toLowerCase() === targetSha)

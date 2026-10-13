@@ -58,14 +58,22 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     expect(navigation).toContain(internalRoute);
   }
 
+  // One visible Technical trading menu; the Paper route stays reachable
+  // through the real shared trading workspace instead of a duplicate menu.
   for (const canonicalStagingLabel of [
     "name: 'AI차트'",
     "openMenuRoute('technical', 'AI차트'",
-    "openMenuRoute('technical', '모의매매'",
-    "['검색기', 'AI차트', '과거검증', '모의매매']",
+    "openMenuRoute('technical', '기술매매', '/auto-trading')",
+    "['검색기', 'AI차트', '과거검증', '기술매매']",
+    "page.getByTestId('technical-mode-paper')",
+    "expectNavigationTransition(page, '/paper-trading'",
+    "page.getByTestId('trading-paper-modes')",
   ]) {
     expect(stagingReadiness).toContain(canonicalStagingLabel);
   }
+  expect(navigation).toContain("label: '기술매매'");
+  expect(navigation.match(/href: APP_ROUTES\.paperTrading/g) ?? []).toHaveLength(0);
+  expect(stagingReadiness).not.toContain("openMenuRoute('technical', '모의매매'");
 
   for (const staleStagingLabel of [
     "name: 'AI 차트'",
