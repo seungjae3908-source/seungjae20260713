@@ -10,7 +10,6 @@ import {
   getKiwoomToken,
   kiwoomRequest,
 } from './providers/kiwoom';
-import { resetYahooProviderRuntimeForTests } from './providers/yahoo';
 import MarketDataService, {
   APP_KR_INTRADAY_DEADLINE_MS,
   resolveKrInteractiveMaxPages,
@@ -85,13 +84,11 @@ async function withMockKiwoom<T>(
   delete process.env.KIWOOM_PROXY_KEY;
   globalThis.fetch = mockFetch;
   clearKiwoomTokenCache();
-  resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
 
   try {
     return await run();
   } finally {
     clearKiwoomTokenCache();
-    resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
     globalThis.fetch = originalFetch;
     for (const [key, value] of originalEnv) {
       if (value == null) delete process.env[key];
