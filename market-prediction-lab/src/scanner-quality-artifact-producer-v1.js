@@ -348,6 +348,12 @@ export function buildScannerQualityEntryV1(input = {}) {
   if (!Array.isArray(input.foldResults) || input.foldResults.length !== input.folds.length) {
     return blocked("QUALITY_FOLD_RESULT_COUNT_MISMATCH");
   }
+  // An operator-supplied small sample cannot lower the S-grade policy floor.
+  // All quality reports remain evidence-only until separately admitted.
+  if (input.minimumTradeCount !== undefined
+      && (!Number.isInteger(input.minimumTradeCount) || input.minimumTradeCount < 40)) {
+    return blocked("QUALITY_MINIMUM_TRADE_COUNT_BELOW_POLICY_FLOOR", { policyMinimum: 40 });
+  }
 
   const datasetBlockers = validateDatasetEvidence(
     identity,
@@ -480,11 +486,24 @@ export function materializeForwardObserverScannerQualityArtifactV1(input = {}) {
   if (!Array.isArray(input.entries) || input.entries.length === 0) {
     throw new Error("QUALITY_ARTIFACT_ENTRIES_REQUIRED");
   }
+  const seen = new Set();
   const entries = input.entries.map((value, index) => {
-    const entry = value?.status === "READY" ? value.entry : value?.identity ? value : null;
+    // Raw caller-created rows must not bypass the OOS/WF and full-cost producer.
+    const entry = value?.schemaVersion === SCANNER_QUALITY_ARTIFACT_PRODUCER_V1
+      && value?.status === "READY" ? value.entry : null;
     if (!entry || entry.identity?.researchCodeSha?.toLowerCase() !== researchCodeSha) {
       throw new Error(`QUALITY_ARTIFACT_ENTRY_INVALID:${index}`);
     }
+    const identity = entry.identity;
+    // The scanner consumer matches this key without datasetSnapshotHash;
+    // two otherwise-identical datasets would be ambiguous, not two votes.
+    const key = [
+      identity.strategyId, identity.strategyVersion, identity.parameterHash,
+      identity.researchCodeSha.toLowerCase(), identity.market,
+      String(identity.symbol).toUpperCase(), identity.timeframe, identity.direction,
+    ].join("|");
+    if (seen.has(key)) throw new Error(`QUALITY_ARTIFACT_AMBIGUOUS_ACTIVE_IDENTITY:${index}`);
+    seen.add(key);
     return entry;
   });
 
