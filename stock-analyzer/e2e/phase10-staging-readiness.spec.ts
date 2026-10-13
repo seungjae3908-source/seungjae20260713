@@ -1329,7 +1329,9 @@ function scannerFixture(state: 'complete' | 'partial' | 'unavailable') {
     requestId: `phase10-${state}`,
     assetClass: 'stock',
     market: 'KR',
-    timeframe: '1D',
+    // The new KR stock swing profile requests 4H; the actual scanner
+    // rejects mismatched 1D data rather than showing an unsafe signal.
+    timeframe: '4H',
     cards: [],
     alerts: [],
     failures: unavailable
@@ -2340,6 +2342,14 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';
     await page.route('**/api/market/scan**', async (route) => {
+      // Verify the live request contract, not only the synthetic response.
+      // Any unexpected strategy/timeframe/grade remains a genuine QA failure.
+      const requested = new URL(route.request().url());
+      expect(requested.pathname).toBe('/api/market/scan');
+      expect(requested.searchParams.get('market')).toBe('KR');
+      expect(requested.searchParams.get('strategy')).toBe('swing');
+      expect(requested.searchParams.get('timeframe')).toBe('4H');
+      expect(requested.searchParams.getAll('grade')).toEqual(['S']);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
