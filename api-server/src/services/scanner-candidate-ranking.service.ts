@@ -111,7 +111,7 @@ function metricScore(backtest: ScannerBacktestQualitySummary, weights: ScannerRa
 
 export function passesMinimumBacktestQuality(summary: ScannerBacktestQualitySummary): boolean {
   if (summary.status !== 'verified') return false;
-  const minTrades = summary.minimumTradeCount ?? 40;
+  const minTrades = Math.max(40, summary.minimumTradeCount ?? 40);
   return (summary.tradeCount ?? 0) >= minTrades
     && finite(summary.expectancyPercent) && summary.expectancyPercent > 0
     && finite(summary.profitFactor) && summary.profitFactor >= 1.05
