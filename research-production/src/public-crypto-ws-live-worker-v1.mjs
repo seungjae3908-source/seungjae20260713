@@ -392,10 +392,14 @@ export function createPublicCryptoWsLiveWorkerV1({
     return Object.freeze({
       contract:LIVE_WS_WORKER_CONTRACT,
       status:halted?'HALTED_MANUAL_REVIEW':
-        !started?'NOT_STARTED':stopped?'STOPPED_SOURCE_ONLY':'RUNNING_SOURCE_ONLY',
+        !started?'NOT_STARTED':stopped?'STOPPED_SOURCE_ONLY':
+        state.sockets.some(s=>s.phase==='HALT_REVIEW')
+          ?'DEGRADED_MANUAL_REVIEW':'RUNNING_SOURCE_ONLY',
       errorCode,sourceOnly:true,openedPublicSockets:count.connectionsOpened,
       activeSocketCount:socketById.size,
       supervisorStreaming:state.sockets.filter(s=>s.phase==='STREAMING').length,
+      manualReviewRequired:state.sockets.filter(s=>s.phase==='HALT_REVIEW').length,
+      continuousCoverageProven:false,
       pendingRestAudits:state.pendingRestAudits.length,
       provisionalSidecarsStored:count.sidecarsStored,
       provisionalSidecarsReused:count.sidecarsReused,
