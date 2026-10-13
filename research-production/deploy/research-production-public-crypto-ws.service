@@ -1,0 +1,57 @@
+# Dormant source-only unit. NOT installed/enabled/started by any release path.
+# Exact runtime environment, data rights, roster and capacity require independent
+# owner approval and protected host validation before any operator activation.
+[Unit]
+Description=Isolated public crypto 1m WebSocket source collector (approval required)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-public-ws.env
+Environment=LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_API_ENABLED=false ORDER_AUTHORITY=false
+ExecStart=/usr/bin/flock -n -E 75 /var/lib/investment-research-production/public-ws/.worker.lock /usr/bin/env LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_API_ENABLED=false ORDER_AUTHORITY=false RESEARCH_PUBLIC_WS_SIDECAR_ROOT=/var/lib/investment-research-production/public-ws RESEARCH_PUBLIC_WS_ROSTER_MANIFEST=/etc/investment-research/research-public-ws-roster.json node --max-old-space-size=160 research-production/bin/public-crypto-websocket-worker.mjs --execute
+Restart=on-abnormal
+RestartPreventExitStatus=2 75
+RestartSec=30s
+TimeoutStartSec=60s
+TimeoutStopSec=45s
+KillMode=control-group
+CPUAccounting=true
+CPUQuota=40%
+MemoryAccounting=true
+MemoryHigh=320M
+MemoryMax=512M
+MemorySwapMax=64M
+TasksMax=64
+LimitNOFILE=4096
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production/public-ws
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=research-public-ws
+
+# Deliberately no [Install] or WantedBy: cannot be enabled as a timer or
+# dependency by the generic Research deployment. Separate review required.
