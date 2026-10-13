@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createServer } from 'node:http';
 
 import {
   buildResearchAiEvidence,
@@ -508,4 +509,130 @@ test('provider or model change invalidates an old retry backoff for the same evi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+async function recoveryFixture(run, profiles = ['forward']) {
+  const root = await mkdtemp(join(tmpdir(), 'TEST-ONLY-ai-recovery-'));
+  try {
+    await writeCycles(root, profiles);
+    const delays = [];
+    return await run({root, delays, input:{repoRoot:'/TEST_ONLY/repo',stateRoot:root,researchSha:SHA,
+      env:{RESEARCH_AI_FREE_TIER_CONFIRMED:'true',AI_CHAT_PROVIDER:'gemini',GEMINI_API_KEY:SECRET},
+      verifyGitHead:false,preflight:fakePreflight(root),retryDelay:async ms=>{delays.push(ms);}}});
+  } finally {
+    assert.equal(resolve(root, '..'), resolve(tmpdir()));
+    await rm(root, {recursive:true,force:true});
+  }
+}
+
+test('slow response gets the bounded 60s default without changing provider or model', async () => recoveryFixture(async ({input}) => {
+  const result = await runResearchAiReviewScan({...input, invoke:async ({policy,timeoutMs,prompt})=>{
+    assert.equal(timeoutMs,60_000);
+    assert.equal(policy.provider,'gemini');
+    assert.equal(policy.model,'gemini-3.1-flash-lite');
+    assert.match(prompt,/900-token output budget: at most 1 short hypothesis/);
+    assert.match(prompt,/Keep summary and thesis under 160 characters/);
+    // Deterministic latency boundary: the old 15s configuration would time out.
+    if(timeoutMs<20_000)throw new Error('FREE_AI_TIMEOUT');
+    return {answer:safeAnswer,provider:policy.provider,model:policy.model};
+  }});
+  assert.equal(result.providerNetworkCalls,1);
+  assert.equal(result.status,'PARTIAL_COVERAGE_COMPLETE');
+  assert.equal(result.requestTimeoutMs,60_000);
+  assert.equal(result.profileCoverage.allProfilesCurrentAndReviewed,false);
+}));
+
+for (const failure of ['FREE_AI_TIMEOUT', 'FREE_AI_NETWORK_UNAVAILABLE', 'FREE_AI_PROVIDER_UNAVAILABLE']) {
+test(`a single transient retry for ${failure} retains the real failed attempt and requires a real valid response`, async () => recoveryFixture(async ({input,delays})=>{
+  let calls=0;
+  const result=await runResearchAiReviewScan({...input,invoke:async({policy})=>{
+    if(++calls===1)throw new Error(failure);
+    return {answer:safeAnswer,provider:policy.provider,model:policy.model};
+  }});
+  assert.equal(calls,2);
+  assert.equal(result.providerNetworkCalls,2);
+  assert.equal(result.status,'PARTIAL_COVERAGE_COMPLETE');
+  assert.deepEqual(result.providerFailures,[{profile:'forward',reason:failure,attempt:1,retryScheduled:true}]);
+  assert.equal(delays.length,1);assert.ok(delays[0]>=1000&&delays[0]<=1250);
+  assert.equal(result.safety.paidFallback,false);
+  assert.equal(result.safety.executionAuthority,'NONE');
+}));
+}
+
+test('failed request cooldown starts after the bounded attempts finish, not at scan start',async()=>recoveryFixture(async({input})=>{
+  const startedAt=1787010000000;
+  let time=startedAt;
+  const r=await runResearchAiReviewScan({...input,now:()=>time,invoke:async()=>{
+    time+=60000;throw new Error('FREE_AI_TIMEOUT');
+  }});
+  assert.equal(r.providerNetworkCalls,2);
+  assert.equal(r.blockedProfiles[0].retryAfterAt,startedAt+120000+15*60*1000);
+}));
+
+test('persistent transient failure stays blocked and budget exhaustion never sends a fourth request', async () => recoveryFixture(async({input,delays})=>{
+  let calls=0;
+  const result=await runResearchAiReviewScan({...input,maxCalls:99,timeoutMs:999999,
+    invoke:async({timeoutMs})=>{assert.equal(timeoutMs,60000);calls++;throw new Error('FREE_AI_TIMEOUT');}});
+  assert.equal(calls,3);assert.equal(result.providerNetworkCalls,3);
+  assert.equal(result.status,'PARTIAL_AI_UNAVAILABLE');
+  assert.equal(result.reviews.length,0);assert.equal(delays.length,1);
+  assert.equal(result.blockedProfiles.length,2);
+  assert.ok(result.deferredProfiles.some(x=>x.reason==='SCAN_CALL_BUDGET_EXHAUSTED'));
+  assert.ok(3*60000+2*1250<5*60*1000);
+},['forward','fast-historical','long-history']));
+
+test('a one-call budget forbids even a transient retry', async()=>recoveryFixture(async({input,delays})=>{
+  const r=await runResearchAiReviewScan({...input,maxCalls:1,invoke:async()=>{throw new Error('FREE_AI_TIMEOUT');}});
+  assert.equal(r.providerNetworkCalls,1);assert.equal(delays.length,0);
+  assert.equal(r.status,'PARTIAL_AI_UNAVAILABLE');assert.equal(r.providerFailures[0].retryScheduled,false);
+}));
+
+for(const reason of ['FREE_AI_RATE_LIMITED','FREE_AI_AUTH_REJECTED','FREE_AI_REQUEST_REJECTED','FREE_AI_PROVIDER_RESPONSE_INVALID','FREE_AI_PROVIDER_ERROR']){
+  test(`quota/auth/request/schema error ${reason} is not retried`,async()=>recoveryFixture(async({input,delays})=>{
+    const r=await runResearchAiReviewScan({...input,invoke:async()=>{throw new Error(reason);}});
+    assert.equal(r.providerNetworkCalls,1);assert.equal(delays.length,0);
+    assert.equal(r.blockedProfiles[0].reason,reason);assert.equal(r.status,'PARTIAL_AI_UNAVAILABLE');
+  }));
+}
+
+test('real HTTP status mapping retries temporary 5xx/timeout only, not permanent provider or request errors',async()=>{
+  for(const [status,reason,recoverable] of [[400,'FREE_AI_REQUEST_REJECTED',false],
+    [401,'FREE_AI_AUTH_REJECTED',false],[403,'FREE_AI_AUTH_REJECTED',false],
+    [404,'FREE_AI_PROVIDER_ERROR',false],[422,'FREE_AI_REQUEST_REJECTED',false],
+    [429,'FREE_AI_RATE_LIMITED',false],[408,'FREE_AI_TIMEOUT',true],
+    [500,'FREE_AI_PROVIDER_UNAVAILABLE',true],[503,'FREE_AI_PROVIDER_UNAVAILABLE',true],
+    [504,'FREE_AI_TIMEOUT',true]]){
+    await recoveryFixture(async({input,delays})=>{
+      let calls=0;
+      const r=await runResearchAiReviewScan({...input,invoke:invokeResearchFreeAi,fetchImpl:async()=>{
+        if(++calls===1)return new Response('{}',{status});
+        return new Response(JSON.stringify({candidates:[{content:{parts:[{text:safeAnswer}]}}]}),{status:200});
+      }});
+      assert.equal(calls,recoverable?2:1,String(status));
+      assert.equal(delays.length,recoverable?1:0,String(status));
+      assert.equal(r.status,recoverable?'PARTIAL_COVERAGE_COMPLETE':'PARTIAL_AI_UNAVAILABLE',String(status));
+      assert.equal(r.providerFailures[0].reason,reason,String(status));
+    });
+  }
+});
+
+test('real HTTP response-body timeout aborts; a bounded longer deadline parses the response',async()=>{
+  const server=createServer((_req,res)=>{
+    res.writeHead(200,{'content-type':'application/json'});res.flushHeaders();
+    setTimeout(()=>{
+      if(!res.destroyed)res.end(JSON.stringify({candidates:[{content:{parts:[{text:safeAnswer}]}}]}));
+    },80);
+  });
+  await new Promise(resolveListen=>server.listen(0,'127.0.0.1',resolveListen));
+  const input={policy:{provider:'gemini',model:'gemini-3.1-flash-lite',apiKey:'TEST_ONLY'},prompt:'TEST_ONLY',
+    fetchImpl:(_url,options)=>fetch(`http://127.0.0.1:${server.address().port}`,options)};
+  try{
+    await assert.rejects(invokeResearchFreeAi({...input,timeoutMs:20}),/FREE_AI_TIMEOUT/);
+    const r=await invokeResearchFreeAi({...input,timeoutMs:2000});assert.equal(r.answer,safeAnswer);
+  }finally{server.closeAllConnections();await new Promise(resolveClose=>server.close(resolveClose));}
+});
+
+test('network errors use a safe fixed code, not provider payload or key values',async()=>{
+  await assert.rejects(invokeResearchFreeAi({policy:{provider:'gemini',model:'gemini-3.1-flash-lite',apiKey:SECRET},
+    prompt:'TEST_ONLY',fetchImpl:async()=>{throw new TypeError('fetch failed');}}),/^Error: FREE_AI_NETWORK_UNAVAILABLE$/);
 });

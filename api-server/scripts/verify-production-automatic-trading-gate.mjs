@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const manualReceipts = read('.github/scripts/production-manual-live-receipts.cjs');
 const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
 const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
 const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
@@ -39,6 +40,8 @@ const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-p
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
+const budgetMigration = read('api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.sql');
+const signalIdentity = read('ops/production-auto-live-signal-identity.cjs');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -46,6 +49,14 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// A migration proof must install under hosted non-superuser privileges without
+// replacing definition-drift verification with a caller-controlled parameter.
+requireText(budgetMigration, 'automatic_live_budget_expected_schema_fingerprint()', 'AUTO_GATE_OWNER_BOUND_BUDGET_PROOF_MISSING');
+requireText(budgetMigration, "substring(p.prosrc from '^select ''([0-9a-f]{32})''::text;$')", 'AUTO_GATE_SEALED_BUDGET_LITERAL_CHECK_MISSING');
+requireText(budgetMigration, "not pg_has_role('service_role',p.proowner,'MEMBER')", 'AUTO_GATE_RUNTIME_BUDGET_PROOF_OWNERSHIP_FORBIDDEN');
+forbid(budgetMigration, /automatic_live_guard\.expected_schema_fingerprint/u, 'AUTO_GATE_CUSTOM_PARAMETER_AUTHORITY_FORBIDDEN');
+requireText(workflow, 'node --test .github/tests/production-auto-live-budget-contract.test.mjs', 'AUTO_GATE_BUDGET_PROOF_REGRESSION_WIRING_MISSING');
 
 // Account connectivity uses read-only vault keys; execution reuse has a distinct
 // Kiwoom key name. The shared worker/pre-submit/holdings reader must bridge it
@@ -155,11 +166,16 @@ for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) 
   requireText(workflow, market, 'AUTO_GATE_MARKET_MISSING');
 }
 
-requireText(workflow, 'providers: kiwoom,toss,upbit', 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
-requireText(workflow, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
-requireText(workflow, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_SPOT_MANUAL_GATE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_FUTURES_MANUAL_GATE_MISSING');
+requireText(workflow, 'await inspectManualLiveReceipts({', 'AUTO_GATE_MANUAL_RECEIPT_VERIFIER_WIRING_MISSING');
+requireText(manualReceipts, "field(body, 'providers') !== 'kiwoom,toss,upbit'", 'AUTO_GATE_SPOT_RECEIPT_SET_MISSING');
+requireText(manualReceipts, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTURES_RECEIPT_MISSING');
+requireText(manualReceipts, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
+requireText(manualReceipts, 'AUTOMATIC_TRADING_EXACT_${kind.toUpperCase()}_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_BOTH_MANUAL_RECEIPTS_REQUIRED');
+for (const proof of ["comment?.user?.login !== 'github-actions[bot]'", 'at < deploymentAt',
+  "field(body, 'target_sha') !== targetSha", '/^[2-7]$/u', 'run.head_sha === targetSha',
+  "run.status === 'completed' && run.conclusion === 'success'", 'run.path === expectedPath']) {
+  requireText(manualReceipts, proof, 'AUTO_GATE_MANUAL_RECEIPT_PROVENANCE_MISSING');
+}
 requireText(workflow, 'const ciRunId = release.requiredCiRunId;', 'AUTO_GATE_REQUIRED_CI_HELPER_WIRING_MISSING');
 requireText(workflow, 'Date.parse(release.productionDeployCompletedAt)', 'AUTO_GATE_DEPLOYMENT_BOUNDARY_HELPER_WIRING_MISSING');
 requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_6_OF_6', 'AUTO_GATE_REQUIRED_CI_6_OF_6_HELPER_MISSING');
@@ -182,6 +198,37 @@ forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
   'AUTO_GATE_OPTIONAL_FEATURE_COUPLING_FORBIDDEN');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
+requireText(workflow, 'await requireFreshPublishedHandoff(before);', 'AUTO_GATE_PREARM_HANDOFF_GUARD_UNWIRED');
+requireText(workflow, 'const automaticLiveHandoffPath =', 'AUTO_GATE_ISOLATED_SOURCE_CONSTANT_MISSING');
+requireText(workflow, '/opt/stock-app-data/auto-live-signal-v1/runtime-state/handoff/member-auto-trading-latest.json',
+  'AUTO_GATE_ISOLATED_SOURCE_PATH_MISSING');
+requireText(workflow, 'const handoffPath = automaticLiveHandoffPath;', 'AUTO_GATE_PREARM_ISOLATED_PATH_NOT_USED');
+requireText(workflow, 'published.default?.readProductionAutoLiveSignalHandoff', 'AUTO_GATE_NOFOLLOW_READER_MISSING');
+requireText(workflow, 'h = readTrustedHandoff(handoffPath);', 'AUTO_GATE_HANDOFF_READER_NOT_CALLED');
+requireText(workflow, 'MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath',
+  'AUTO_GATE_PM2_ISOLATED_BINDING_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_INDEPENDENT_HANDOFF_BINDING_INVALID',
+  'AUTO_GATE_ACTIVE_PM2_SOURCE_RECHECK_MISSING');
+requireText(workflow, "MEMBER_AUTO_TRADING_HANDOFF_PATH: String(before.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? '')",
+  'AUTO_GATE_DISABLE_SOURCE_PRESERVATION_MISSING');
+forbid(workflow, /\/opt\/stock-app-data\/paper-forward-v1\/runtime-state\/handoff\/member-auto-trading-latest\.json/u,
+  'AUTO_GATE_PAPER_SIGNAL_FALLBACK_FORBIDDEN');
+requireText(workflow, 'ops/production-auto-live-signal-identity.cjs', 'AUTO_GATE_PREARM_CANONICAL_SOURCE_NOT_IMPORTED');
+requireText(workflow, 'verifyProductionAutoLivePrearmHandoff', 'AUTO_GATE_PREARM_CANONICAL_CHECK_NOT_CALLED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_VALIDATOR_UNAVAILABLE', 'AUTO_GATE_PREARM_MODULE_MISSING_BLOCK');
+requireText(workflow, "signal.producerInvocationVerified !== false", 'AUTO_GATE_PREARM_NO_FAKE_ISSUER_MISSING');
+requireText(workflow, 'node --test .github/scripts/production-auto-live-signal-identity.test.cjs', 'AUTO_GATE_PREARM_TEST_WIRING_MISSING');
+requireText(signalIdentity, 'validateMemberAutoTradingPaperHandoff(value, nowMs)', 'AUTO_GATE_PREARM_CANONICAL_DIGEST_VALIDATION_MISSING');
+requireText(signalIdentity, 'sourceTransportOnly', 'AUTO_GATE_PREARM_TRANSPORT_ONLY_PROOF_MISSING');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_CONTRACT_INVALID', 'AUTO_GATE_PREARM_DIGEST_FAILURE_NOT_BLOCKED');
+requireText(workflow, 'AUTOMATIC_TRADING_PREARM_HANDOFF_MISSING_OR_INVALID', 'AUTO_GATE_PREARM_HANDOFF_MISSING_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_BLOCKED_OR_STALE', 'AUTO_GATE_PREARM_HANDOFF_FRESHNESS_BLOCK');
+requireText(signalIdentity, 'AUTOMATIC_TRADING_PREARM_HANDOFF_SHA_MISMATCH', 'AUTO_GATE_PREARM_HANDOFF_SHA_BLOCK');
+const preArmCall = workflow.indexOf('requireFreshPublishedHandoff(before);');
+const pm2Enable = workflow.indexOf('restartAutomatic(true, before);', preArmCall);
+if (preArmCall < 0 || pm2Enable < 0 || preArmCall >= pm2Enable) {
+  throw new Error('AUTO_GATE_PREARM_GUARD_MUST_PRECEDE_ANY_MUTATION');
+}
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
@@ -256,6 +303,44 @@ requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOL
 requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
 
 forbid(paperWorker, /signalReasons\.filter\(\(reason\) => reason !== 'CANONICAL_PAPER_HANDOFF'\)/u, 'AUTO_GATE_PAPER_LINEAGE_REMOVAL_FORBIDDEN');
+
+const installJobStart = workflow.indexOf('  install-public-signal:');
+if (installJobStart < 0) throw new Error('AUTO_PUBLIC_COLLECTOR_SEPARATE_OWNER_INSTALL_JOB_MISSING');
+const sourceOnlyJob = workflow.slice(installJobStart);
+for (const part of [
+  "startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  "environment: production",
+  "ref: main",
+  "AUTO_LIVE_PUBLIC_INSTALL_REQUIRES_EXACT_CURRENT_MAIN",
+  "AUTO_LIVE_PUBLIC_INSTALL_EXACT_MAIN_FULL_CI_REQUIRED",
+  "run.event === 'workflow_dispatch'",
+  "AUTO_LIVE_PUBLIC_INSTALL_ACTIVE_OPERATION_CONFLICT",
+  "AUTO_LIVE_PUBLIC_INSTALL_DEPLOYED_SHA_MISMATCH",
+  "AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH",
+  "AUTO_LIVE_PUBLIC_INSTALL_CRON_READBACK_UNAVAILABLE",
+  "AUTO_LIVE_PUBLIC_INSTALL_SCHEDULE_READBACK_INVALID",
+  "status:'CONFIGURATION_VERIFIED_ONLY'",
+  "inspectManagedPaperForwardSchedule(",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_PREFLIGHT=true",
+  "AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true",
+  "AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true",
+  "ops/production-auto-live-signal-identity.cjs",
+  "AUTO_LIVE_PUBLIC_INSTALL_SANITIZED_RECEIPT_INVALID",
+  "private_provider_calls: 0",
+  "live_auto_authority_granted: false",
+  "24_hour_uninterrupted_collection_verified: false",
+]) requireText(sourceOnlyJob, part, 'AUTO_PUBLIC_COLLECTOR_SOURCE_ONLY_CONTRACT_DRIFT');
+requireText(workflow, "|| startsWith(github.event.comment.body, '/install-auto-live-public-signal ')",
+  'AUTO_PUBLIC_COLLECTOR_CONCURRENCY_MISSING');
+forbid(sourceOnlyJob, /\bpm2\s+(?:start|restart|delete|save|set)\b/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_PM2');
+forbid(sourceOnlyJob, /ops\/(?:disable|install)-paper-forward-schedule\.sh/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_TOUCH_PAPER_SCHEDULE');
+forbid(sourceOnlyJob, /(?:psql|supabase)\s+(?:db|migration|run|sql|execute)/ui,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_MUTATE_DB');
+forbid(sourceOnlyJob, /AUTO_TRADING[ \t]*[:=][ \t]*['"]?true|LIVE_TRADING[ \t]*[:=][ \t]*['"]?true/u,
+  'AUTO_PUBLIC_COLLECTOR_MUST_NOT_ARM_LIVE');
+
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /if:\s*\$\{\{\s*false\s*\}\}/u, 'AUTO_GATE_YAML_DEAD_VALIDATION_BLOCK_FORBIDDEN');

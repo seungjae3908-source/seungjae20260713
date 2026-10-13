@@ -9,6 +9,8 @@ import {
   DIAGNOSTIC_SCHEMA_VERSION,
   buildPaperForwardNoDeployDiagnostics,
 } from '../../ops/collect-paper-forward-no-deploy-diagnostics.mjs';
+import { __paperForwardScheduleTestables } from '../src/paper-forward-schedule-runtime-base-v1.js';
+import { createRecurringPaperLoopState } from '../src/recurring-paper-loop-v1.js';
 
 const TARGET_SHA = 'a'.repeat(40);
 const FAILED_RUN_ID = 35038921110;
@@ -401,20 +403,59 @@ const bashPath = (path) => process.platform === 'win32'
 const permissionFlag = process.allowedNodeEnvironmentFlags.has('--permission')
   ? '--permission' : '--experimental-permission';
 
+test('installer checks same-SHA mode identity read-only before mutation and never rewrites prior state', async () => {
+  const installer = (await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8'))
+    .replaceAll('\r\n', '\n');
+  const marker = '# Read-only mode identity preflight precedes every installer filesystem mutation.';
+  const start = installer.indexOf(marker);
+  const mutation = installer.indexOf('mkdir -p "$RELEASE_ROOT"');
+  assert.ok(start >= 0 && start < mutation);
+  const preflight = installer.slice(start, mutation).match(/<<'NODE'\n([\s\S]*?)\nNODE/u)?.[1];
+  assert.ok(preflight, 'execute the real installer preflight, not a duplicate checker');
+  const root = await mkdtemp(join(tmpdir(), 'paper-forward-install-mode-'));
+  const statePath = join(root, 'state.json');
+  const identity = __paperForwardScheduleTestables.buildIdentity(TARGET_SHA);
+  const state = createRecurringPaperLoopState({ identity,
+    ledger: __paperForwardScheduleTestables.initialLedger(), createdAtMs: ACTIVATION_AT_MS });
+  const before = JSON.stringify(state);
+  try {
+    await writeFile(statePath, before);
+    const launch = (outcome, autoRefresh, target = TARGET_SHA) => spawnSync(process.execPath,
+      ['--input-type=module', '-', sourceLab, statePath, target, outcome, autoRefresh],
+      { input: preflight, encoding: 'utf8' });
+    const unchanged = launch('false', 'false');
+    assert.equal(unchanged.status, 0, unchanged.stderr);
+    for (const [outcome, refresh] of [['false', 'true'], ['true', 'false'], ['true', 'true']]) {
+      const rejected = launch(outcome, refresh);
+      assert.equal(rejected.status, 11);
+      assert.equal(rejected.stdout, '');
+      assert.equal(rejected.stderr,
+        '[paper-forward-activate] PAPER_FORWARD_EXISTING_STATE_MODE_INCOMPATIBLE\n');
+      assert.equal(await readFile(statePath, 'utf8'), before);
+    }
+    const predecessor = launch('false', 'true', 'b'.repeat(40));
+    assert.equal(predecessor.status, 0, 'different SHA still uses the existing disabled-schedule archive contract');
+    assert.equal(await readFile(statePath, 'utf8'), before);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 // Only ordinary files and malformed input are used here. No policy values or
 // valid Risk Policy record are created, and no scheduled cycle is run.
 async function withRiskPolicyTransport(run) {
   return withProductionShapedPinnedRelease(async ({ root, release }) => {
-    const installer = await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8');
+    const installer = (await readFile(join(repositoryRoot, 'ops', 'install-paper-forward-schedule.sh'), 'utf8'))
+      .replaceAll('\r\n', '\n');
     const assignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_RECORD_PATH=.*$/mu)?.[0];
+    const autoSignalAssignment = installer.match(/^AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED=.*$/mu)?.[0];
     const decisionAssignment = installer.match(/^PAPER_FORWARD_RISK_POLICY_DECISION_PATH=.*$/mu)?.[0];
     const guard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_RECORD_PATH" \|\| -n "\$PAPER_FORWARD_RISK_POLICY_DECISION_PATH" \]\]; then[\s\S]*?RISK_POLICY_SOURCE_MODE="APPROVED_DECISION"\n  fi\nfi/u)?.[0];
     const costAssignment = installer.match(/^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=.*$/mu)?.[0];
     const costGuard = installer.match(/if \[\[ "\$OUTCOME_ACCUMULATION_ENABLED" == "true" \|\| -n "\$PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH" \]\]; then[\s\S]*?\nfi/u)?.[0];
     const whitelist = installer.match(/exec \/usr\/bin\/env -i[\s\S]*?(?=\nWRAPPER)/u)?.[0];
-    assert.ok(assignment && decisionAssignment && guard && costAssignment && costGuard && whitelist,
+    assert.ok(assignment && autoSignalAssignment && decisionAssignment && guard && costAssignment && costGuard && whitelist,
       'execute the actual installer config, preflight and env-i contract');
     assert.equal(assignment, 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH="${PAPER_FORWARD_RISK_POLICY_RECORD_PATH:-}"');
+    assert.equal(autoSignalAssignment, 'AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED="${AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED:-false}"');
     assert.equal(decisionAssignment, 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH="${PAPER_FORWARD_RISK_POLICY_DECISION_PATH:-}"');
     assert.equal(costAssignment, 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}"');
     assert.doesNotMatch(installer, /GENERIC_RISK_POLICY_LIVE_RECORD_PATH|generic-risk-policy-live-v1\.json/u);
@@ -507,6 +548,7 @@ async function withRiskPolicyTransport(run) {
         PUBLISHER_ACCOUNT_ID_SHA256=''
         fail() { printf '%s\\n' "$1" >&2; exit "$2"; }
         ${assignment}
+        ${autoSignalAssignment}
         ${decisionAssignment}
         ${preflight ? guard : ''}
         ${costAssignment}

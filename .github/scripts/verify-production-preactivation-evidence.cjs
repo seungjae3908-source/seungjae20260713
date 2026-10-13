@@ -76,6 +76,14 @@ assertAccountReceipt(account, context);
 if (qaScope === 'auto_live' || requirePositionIsolation) assertAutomaticPositionIsolationReceipt(account);
 assertCredentialReceipt(credential, context);
 
+// An older full/trading-core/UI receipt is not an AUTO safety-control proof.
+// The current subset expressly cannot prove the remaining execution/runtime
+// controls. Keep every AUTO activation route closed until a complete, audited
+// control collector is wired; never interpret absent fields as zero/success.
+if (requirePositionIsolation || qaScope === 'auto_live') {
+  throw new Error('PREACTIVATION_AUTOMATIC_LIVE_COMPLETE_CONTROL_AUDIT_REQUIRED');
+}
+
 const boundary = Date.parse(String(boundaryText ?? ''));
 if (!Number.isFinite(boundary)) throw new Error('PREACTIVATION_EVIDENCE_BOUNDARY_INVALID');
 const scopedReceipts = qaScope === 'trading_core'
