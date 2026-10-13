@@ -108,7 +108,7 @@ function safeArray(value, label, maxItems = 8, maxItemLength = 500) {
   return value.map((item, index) => safeText(item, `${label}[${index}]`, maxItemLength));
 }
 
-function parseAiAnswer(answer) {
+export function parseResearchFreeAiReviewForResearchOnlyV1(answer) {
   if (typeof answer !== 'string' || answer.length > 16_000) throw new Error('INVALID_AI_OUTPUT');
   const raw = answer.trim();
   if (!raw.startsWith('{') || !raw.endsWith('}') || raw.includes('```')) throw new Error('MALFORMED_AI_JSON');
@@ -479,7 +479,7 @@ export async function runResearchAiReviewScan({
       }
       if (response?.provider && response.provider !== policy.provider) throw new Error('PROVIDER_IDENTITY_MISMATCH');
       if (response?.model !== policy.model) throw new Error('PROVIDER_IDENTITY_MISMATCH');
-      const parsed = parseAiAnswer(response.answer);
+      const parsed = parseResearchFreeAiReviewForResearchOnlyV1(response.answer);
       const artifact = Object.freeze({
         schemaVersion: 'research-production-ai-review-v1',
         status: 'READY', observedAt, researchSha: base.researchSha, profile,
