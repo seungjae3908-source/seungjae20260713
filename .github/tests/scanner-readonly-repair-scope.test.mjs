@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURCE_SHA, SCANNER_REPAIR_WORKFLOW_BASE_SHA,
   SCANNER_PROTECTED_AUTHORITY_PATHS, SCANNER_REPAIR_INTEGRATION_BASE_SHA, SCANNER_REPAIR_INTEGRATION_BLOBS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
+import { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 
 const base = 'b'.repeat(40), blob = 'a'.repeat(40), drift = 'c'.repeat(40);
 const stock = 'api-server/src/services/stock-signal-scanner.service.ts';
@@ -47,6 +48,23 @@ test('mixed execution changes and renamed/unlisted files never acquire a scanner
   assert.ok(verifier.includes('&&!pinnedScannerRepair.includes(p)'));
   assert.ok(verifier.includes('AUTOMATIC_TRADING_SCOPE_GUARD_MISSING'));
   assert.ok(verifier.includes('UNREVIEWED_PATH:'));
+});
+
+test('automatic signal pipeline overlap is routed to full Trading guards, never the immutable Scanner exemption', () => {
+  const overlap = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.filter((path) =>
+    SCANNER_REPAIR_PINNED_PATHS.includes(path));
+  assert.deepEqual(overlap.sort(), [
+    'api-server/src/services/scanner-indicator-library.service.ts',
+    'api-server/src/services/scanner-quant-strategy.service.test.ts',
+    'api-server/src/services/scanner-quant-strategy.service.ts',
+    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+    'signal-intelligence-v3/README.md',
+    'signal-intelligence-v3/scripts/run-public-scanner-cycle.ts',
+  ]);
+  assert.deepEqual(verifyPinnedScannerScope(overlap, base, () => {
+    throw new Error('FULL_TRADING_REVIEW_MUST_NOT_READ_PINNED_BLOB');
+  }), []);
 });
 
 test('all exact scanner paths are PR-trigger covered without dropping any Paper safety step', () => {
