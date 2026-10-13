@@ -361,7 +361,7 @@ export function createPublicCryptoWsLiveWorkerV1({
         restBackfillRequired:true,sourceVerified:false});
     }
     if(merged.size>2_048)fail('LIVE_WS_RESTART_AUDIT_LIMIT');
-    state.pendingRestAudits.push(...merged.values().filter(x=>
+    state.pendingRestAudits.push(...[...merged.values()].filter(x=>
       x.requestedEndExclusiveMs>x.fromMs));
     started=true;
     if(schedule)timer=setInterval(()=>{void pulse();},intervalMs);
