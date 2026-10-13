@@ -540,6 +540,9 @@ jobs:
             count: funding.records.length,
             firstTimestamp: funding.records[0]?.timestamp ?? null,
             lastTimestamp: funding.records.at(-1)?.timestamp ?? null,
+            observedSpanDays: funding.records.length < 2
+              ? 0
+              : (funding.records.at(-1).timestamp - funding.records[0].timestamp) / (24 * HOUR_MS),
             exhausted: funding.exhausted,
             sha256: digest(funding.records),
             alignedCandleCoverage: fundingCoverage,
