@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   publicCyclePageDecision,
   currentPublicCyclePublication,
+  publicDataQualityDiagnostic,
   publicExecutionEvidence,
+  publicMarketSummary,
 } from '../src/public-cycle-progress-v2.mjs';
 
 function page(overrides = {}) {
@@ -87,6 +89,41 @@ test('explicit producer counters take precedence and malformed counters fail to 
     filteredByStrategyCount: 0,
     staleCount: 0,
   });
+});
+
+test('public quality diagnostics retain rejection codes after ranking removes cards', () => {
+  const result = publicDataQualityDiagnostic([
+    { dataQuality: { state: 'DATA_UNTRUSTED', issues: [{ code: 'MISSING_CANDLE' }, { code: 'MISSING_CANDLE' }] } },
+    { dataQuality: { state: 'DEGRADED', issues: [{ code: 'ABNORMAL_SPIKE' }] } },
+    { dataQuality: { state: 'TRUSTED', issues: [] } },
+  ], 'provider evidence');
+  assert.deepEqual(result, {
+    evaluatedCards: 3,
+    trustedCards: 1,
+    degradedCards: 1,
+    untrustedCards: 1,
+    issueCounts: { MISSING_CANDLE: 2, ABNORMAL_SPIKE: 1 },
+    message: 'provider evidence',
+  });
+});
+
+test('market summary distinguishes provider-gated rosters and quality-blocked completed pages', () => {
+  const providerPages = ['A', 'B', 'C'].map(() => ({ status: 'BLOCKED_PROVIDER', totalUniverse: 4007,
+    pageExecution: { requestedCount: 0, dataSuccessCount: 0 }, scannedCards: 0 }));
+  assert.deepEqual(publicMarketSummary(providerPages).providerGatedCount, 4007);
+  assert.deepEqual(publicMarketSummary(providerPages).dataBlockedCount, 4007);
+
+  const qualityPages = [
+    { status: 'VALID_NO_TRADE', totalUniverse: 295, pageExecution: { requestedCount: 5, dataSuccessCount: 5 }, scannedCards: 0 },
+    { status: 'BLOCKED_DATA', totalUniverse: 295, pageExecution: { requestedCount: 5, dataSuccessCount: 5 }, scannedCards: 0 },
+  ];
+  const summary = publicMarketSummary(qualityPages);
+  assert.equal(summary.queriedCount, 5);
+  assert.equal(summary.dataSuccessCount, 5);
+  assert.equal(summary.qualityBlockedCount, 5);
+  assert.equal(summary.dataBlockedCount, 5);
+  assert.equal(summary.normalNoSignalLaneCount, 1);
+  assert.equal(summary.blockedLaneCount, 1);
 });
 
 function snapshot() {
