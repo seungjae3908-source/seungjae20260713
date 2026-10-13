@@ -997,6 +997,48 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal(second.liveOrders, 0);
 });
 
+test('Signal V3 admission may only remove canonical handoff entries before automatic evaluation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  let exactHandoffSeen = false;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async admitHandoffEntries(value) {
+      exactHandoffSeen = value.entries[0]?.identity.signalId === 'signal-worker-1';
+      return [];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(exactHandoffSeen, true);
+  assert.equal(result.handoffReady, true);
+  assert.equal(result.entries, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('Signal V3 admission cannot inject or duplicate an entry outside the validated handoff', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async admitHandoffEntries(value) {
+      return [{ ...value.entries[0], handoffId: 'paper-auto-handoff:sha256:' + '0'.repeat(64) }];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.handoffErrorCode, 'BACKGROUND_SIGNAL_SELECTION_NOT_VETO_ONLY');
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
 test('same-tick automatic entries refresh canonical exposure before evaluating the next signal', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
