@@ -6,6 +6,8 @@ export interface ScannerMacdSnapshot {
   histogram: number | null;
 }
 
+export type ScannerWaveStructure = 'BULLISH' | 'BEARISH' | 'MIXED' | 'INSUFFICIENT';
+
 export interface ScannerIndicatorSnapshot {
   close: number | null;
   ema12: number | null;
@@ -26,6 +28,11 @@ export interface ScannerIndicatorSnapshot {
   resistance20: number | null;
   volumeTrend20: number | null;
   momentum5: number | null;
+  /** Confirmed-pivot market structure. The final right-side bars are never
+   * treated as confirmed pivots, preventing a current-bar look-ahead label. */
+  waveStructure: ScannerWaveStructure;
+  confirmedPivotHighs: number;
+  confirmedPivotLows: number;
 }
 
 function average(values: number[]): number | null {
@@ -196,6 +203,39 @@ export function scannerTradeIntensityProxy(candles: ScannerQualityCandle[], look
   return pressure * relativeVolume;
 }
 
+export function scannerWaveStructure(
+  candles: ScannerQualityCandle[],
+  leftBars = 2,
+  rightBars = 2,
+): Readonly<{ structure: ScannerWaveStructure; confirmedHighs: number; confirmedLows: number }> {
+  if (!Number.isInteger(leftBars) || !Number.isInteger(rightBars) || leftBars < 1 || rightBars < 1
+    || candles.length < leftBars + rightBars + 5) {
+    return Object.freeze({ structure: 'INSUFFICIENT', confirmedHighs: 0, confirmedLows: 0 });
+  }
+  const highs: number[] = [];
+  const lows: number[] = [];
+  for (let index = leftBars; index < candles.length - rightBars; index += 1) {
+    const row = candles[index];
+    const left = candles.slice(index - leftBars, index);
+    const right = candles.slice(index + 1, index + rightBars + 1);
+    if (left.every((item) => row.high > item.high) && right.every((item) => row.high >= item.high)) highs.push(row.high);
+    if (left.every((item) => row.low < item.low) && right.every((item) => row.low <= item.low)) lows.push(row.low);
+  }
+  if (highs.length < 2 || lows.length < 2) {
+    return Object.freeze({ structure: 'INSUFFICIENT', confirmedHighs: highs.length, confirmedLows: lows.length });
+  }
+  const higherHigh = highs.at(-1)! > highs.at(-2)!;
+  const higherLow = lows.at(-1)! > lows.at(-2)!;
+  const lowerHigh = highs.at(-1)! < highs.at(-2)!;
+  const lowerLow = lows.at(-1)! < lows.at(-2)!;
+  const structure: ScannerWaveStructure = higherHigh && higherLow
+    ? 'BULLISH'
+    : lowerHigh && lowerLow
+      ? 'BEARISH'
+      : 'MIXED';
+  return Object.freeze({ structure, confirmedHighs: highs.length, confirmedLows: lows.length });
+}
+
 export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[], sessionTimeZone?: string): ScannerIndicatorSnapshot {
   const closes = candles.map((row) => row.close).filter(Number.isFinite);
   // A breakout must be compared with prior bars, not its own high/low.
@@ -211,6 +251,7 @@ export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[], s
   const momentum5 = closes.length >= 6 && closes.at(-6)! > 0
     ? closes.at(-1)! / closes.at(-6)! - 1
     : null;
+  const wave = scannerWaveStructure(candles);
 
   return {
     close: latest?.close ?? null,
@@ -232,5 +273,8 @@ export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[], s
     resistance20: recent20.length === 20 ? Math.max(...recent20.map((row) => row.high)) : null,
     volumeTrend20,
     momentum5,
+    waveStructure: wave.structure,
+    confirmedPivotHighs: wave.confirmedHighs,
+    confirmedPivotLows: wave.confirmedLows,
   };
 }

@@ -82,9 +82,16 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 }
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
-  return createHash('sha256').update([
-    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
-  ].join(':')).digest('hex');
+  const parts = [
+    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId,
+    input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+  ];
+  // Preserve the historical key byte-for-byte when no occurrence is supplied,
+  // so manual and pre-release plans cannot be duplicated by this rollout.
+  if (typeof input.signalOccurrenceId === 'string' && input.signalOccurrenceId.trim()) {
+    parts.splice(5, 0, input.signalOccurrenceId.trim());
+  }
+  return createHash('sha256').update(parts.join(':')).digest('hex');
 }
 
 export { liveExecutionAuthority, type LiveExecutionAuthority };

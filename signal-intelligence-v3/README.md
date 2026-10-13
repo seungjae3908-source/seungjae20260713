@@ -51,10 +51,37 @@ become verified current rosters. The footer's New York time remains the search
 index basis time, distinct from the download time. This current listing source
 does not supply delisted/PIT history, corporate actions or licensed minute bars.
 
-Producer state schema 3 binds each lane cursor to a SHA-256 of the ordered
+Producer state schema 4 binds each lane cursor to a SHA-256 of the ordered
 eligible roster. Listing/source/order changes reset the lane to zero before
 publication. Snapshot roster-binding version 1 also requires matching current
 page and row provenance. Dynamic price/volume changes do not change this binding.
+
+### Canonical automatic-trading handoff
+
+The public runner can consume `SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE`.
+Scanner cards receive Profit/Risk/AI provenance only after an exact match on
+signal, market, symbol, timeframe and direction against a digest-validated
+`member-auto-trading-paper-handoff-v1` entry. It re-reads and validates the
+handoff for each lane and immediately before publication, then rebuilds the
+adapter input from the original card. Missing, expired, changed or ambiguous
+evidence therefore produces no candidate; retained state cannot preserve a
+stale profitability approval.
+
+The background worker may opt into the published snapshot with
+`MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_PATH` and its exact immutable release
+SHA in `MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_SHA`. Its bridge is veto-only: it can
+remove entries from the already validated canonical handoff but cannot inject,
+replace, duplicate or mutate one. Omitting either path keeps the release
+disabled and does not change deployment or real-order authority.
+
+### Public provider connectivity diagnostic
+
+`scripts/diagnose-public-providers.ts` probes only these public origins:
+`query1.finance.yahoo.com`, `query2.finance.yahoo.com`,
+`www.nasdaqtrader.com`, `api.upbit.com`, and `api.bitget.com`. When an HTTP(S)
+proxy is configured, it checks the CONNECT tunnel first. A proxy CONNECT 403 is
+reported separately from an HTTP 403 returned after reaching the provider, and
+the report never reads credentials or calls private/order endpoints.
 
 The stock scanner excludes open intraday candles and daily bars before regular
 exchange-local close (US DST-aware); early-close calendars remain outside this

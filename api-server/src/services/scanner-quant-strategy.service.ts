@@ -136,6 +136,11 @@ function trendDirection(snapshot: ScannerIndicatorSnapshot): -1 | 0 | 1 {
   const fast = snapshot.ema20 ?? snapshot.ema12; const slow = snapshot.ema60 ?? snapshot.ema26;
   if (fast == null || slow == null || fast === slow) return 0; return fast > slow ? 1 : -1;
 }
+function waveDirection(snapshot: ScannerIndicatorSnapshot): -1 | 0 | 1 {
+  if (snapshot.waveStructure === 'BULLISH') return 1;
+  if (snapshot.waveStructure === 'BEARISH') return -1;
+  return 0;
+}
 
 function scalpingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndicatorSnapshot, input: ScannerQuantStrategyInput): ScannerQuantFactors {
   const close = primary.close ?? input.price;
@@ -144,12 +149,14 @@ function scalpingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndi
   if (primary.resistance20 != null && close >= primary.resistance20) technical += 15;
   let trend = 45; if (primary.ema12 != null && primary.ema26 != null) trend += primary.ema12 > primary.ema26 ? 25 : -20;
   const contextTrend = trendDirection(context); if (contextTrend > 0) trend += 20; if (contextTrend < 0) trend -= 20;
+  const primaryWave = waveDirection(primary); if (primaryWave > 0) trend += 8; if (primaryWave < 0) trend -= 8;
   let momentum = 45; if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 20 : -18;
   if (primary.rsi14 != null) { if (primary.rsi14 >= 45 && primary.rsi14 <= 68) momentum += 20; else if (primary.rsi14 > 78) momentum -= 25; else if (primary.rsi14 < 30) momentum -= 10; }
   if (primary.momentum5 != null) momentum += clamp(primary.momentum5 * 700, -15, 15);
   let volume = scoreRelativeVolume(primary.relativeVolume20);
   if (primary.tradeIntensityProxy != null) { momentum += clamp(primary.tradeIntensityProxy * 10, -12, 12); technical += clamp(primary.tradeIntensityProxy * 5, -8, 8); volume += clamp(primary.tradeIntensityProxy * 8, -12, 12); }
   let marketRegime = 50; if (contextTrend > 0) marketRegime += 30; if (contextTrend < 0) marketRegime -= 30;
+  const contextWave = waveDirection(context); if (contextWave > 0) marketRegime += 8; if (contextWave < 0) marketRegime -= 8;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 12;
   return { technical: clamp(technical), trend: clamp(trend), momentum: clamp(momentum), volume: clamp(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreScalpingVolatility(primary, input.price), marketRegime: clamp(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -160,14 +167,17 @@ function swingFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndicat
   if (primary.sma20 != null && primary.sma60 != null) trend += primary.sma20 > primary.sma60 ? 14 : -12;
   if (primary.sma60 != null && primary.sma120 != null) trend += primary.sma60 > primary.sma120 ? 12 : -10;
   if (primary.adx14 != null) trend += primary.adx14 >= 25 ? 12 : primary.adx14 < 15 ? -8 : 0;
+  const primaryWave = waveDirection(primary); if (primaryWave > 0) trend += 12; if (primaryWave < 0) trend -= 12;
   let technical = 45; if (primary.resistance20 != null && close > primary.resistance20) technical += 28;
   if (primary.ema20 != null && close >= primary.ema20 * 0.98 && close <= primary.ema20 * 1.04) technical += 14;
   if (primary.support20 != null && close < primary.support20) technical -= 28;
+  if (primaryWave > 0) technical += 8; if (primaryWave < 0) technical -= 8;
   let momentum = 45; if (primary.macd.histogram != null) momentum += primary.macd.histogram > 0 ? 22 : -18;
   if (primary.rsi14 != null) { if (primary.rsi14 >= 45 && primary.rsi14 <= 70) momentum += 18; else if (primary.rsi14 > 80) momentum -= 22; else if (primary.rsi14 < 32) momentum -= 10; }
   let volume = scoreRelativeVolume(primary.relativeVolume20) * 0.65 + 35;
   if (primary.volumeTrend20 != null) volume += clamp(primary.volumeTrend20 * 80, -20, 20);
   let marketRegime = 50; const contextTrend = trendDirection(context); if (contextTrend > 0) marketRegime += 28; if (contextTrend < 0) marketRegime -= 28;
+  const contextWave = waveDirection(context); if (contextWave > 0) marketRegime += 10; if (contextWave < 0) marketRegime -= 10;
   if (context.adx14 != null && context.adx14 >= 20) marketRegime += 15;
   return { technical: clamp(technical), trend: clamp(trend), momentum: clamp(momentum), volume: clamp(volume), liquidity: scoreLiquidity(input.spreadPercent, input.tradingValue), volatility: scoreSwingVolatility(primary, input.price), marketRegime: clamp(marketRegime), risk: scoreRisk(input.riskScore) };
 }
@@ -257,6 +267,7 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     `전략 ${input.mode}`, `기술 ${Math.round(factors.technical)}`, `추세 ${Math.round(factors.trend)}`,
     `모멘텀 ${Math.round(factors.momentum)}`, `거래량 ${Math.round(factors.volume)}`, `유동성 ${Math.round(factors.liquidity)}`,
     `변동성 ${Math.round(factors.volatility)}`, `시장국면 ${Math.round(factors.marketRegime)}`, `리스크 ${Math.round(factors.risk)}`,
+    `확정파동 ${primary.waveStructure}(${primary.confirmedPivotHighs}H/${primary.confirmedPivotLows}L)`,
     `독립근거 ${independentSignalEvidence ? '충족' : '부족'}`,
     ...(input.mode === 'scalping' && primary.tradeIntensityProxy != null ? [`체결강도 대용지표 ${primary.tradeIntensityProxy.toFixed(2)}`] : []),
   ];
