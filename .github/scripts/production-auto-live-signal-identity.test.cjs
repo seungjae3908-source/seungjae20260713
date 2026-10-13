@@ -532,6 +532,20 @@ test('protected independent source Bash is syntax-valid and sealed tar smoke is 
   } finally { fs.rmSync(temp,{recursive:true,force:true}); }
 });
 
+test('isolated collector installation records owner-run identity before Cron and recovers from an invalid receipt', () => {
+  const script=buildIndependentAutoLivePublicInstallScript();
+  assert.ok(script.includes('sealed install run ID required'));
+  assert.ok(script.includes('installRunId:installRunId || null'));
+  assert.ok(script.indexOf('sealed install run ID required') < script.indexOf('CRON_OUTPUT='));
+  const workflow=readFileSync('.github/workflows/production-automatic-trading-gate.yml','utf8');
+  const ownerInstall=workflow.slice(workflow.indexOf('  install-public-signal:'));
+  assert.ok(ownerInstall.includes("steps.public_install.outcome == 'failure'"));
+  assert.ok(ownerInstall.includes("String(value.installRunId)!==String(process.argv[4])"));
+  assert.ok(ownerInstall.includes('AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_NO_OWNED_ROOT'));
+  assert.ok(ownerInstall.includes('AUTO_LIVE_PUBLIC_INSTALL_READBACK_RUN_ID_MISMATCH'));
+  assert.equal(ownerInstall.includes("if: failure() && steps.public_install.outcome == 'success' &&"),false);
+});
+
 test('separate PUBLIC-only installer syntax and all protected Paper/financial boundaries', () => {
   const { spawnSync } = require('node:child_process');
   const script = buildIndependentAutoLivePublicInstallScript();
