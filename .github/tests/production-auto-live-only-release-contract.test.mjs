@@ -72,10 +72,17 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
     "steps.public_install.outcome == 'success'",
     "steps.source_readback.outcome != 'success'",
     'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_SCOPE_INVALID',
+    'AUTO_LIVE_PUBLIC_INSTALL_READBACK_RUN_ID_MISMATCH',
+    'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_NO_OWNED_ROOT',
+    'AUTO_LIVE_INDEPENDENT_INSTALL_RUN_ID=%q',
+    'String(value.installRunId)!==String(process.argv[4])',
+    "steps.public_install.outcome == 'failure'",
     'AUTO_LIVE_PUBLIC_INSTALL_POSTAUDIT_FAILED_CLOSED_DISABLED',
   ]) assert.ok(sourceOnly.includes(proof), 'sealed standalone public source missing: '+proof);
   assert.equal(sourceOnly.includes('/opt/stock-app/.deploy/current-sha'),false);
   assert.equal(sourceOnly.includes('cd /opt/stock-app &&'),false);
+  assert.equal(sourceOnly.includes("if: failure() && steps.public_install.outcome == 'success' &&"),false,
+    'receipt parse failure after Cron mutation must trigger bounded rollback');
   assert.ok(isolatedPlan.includes('sealed public source manifest mismatch'));
   assert.ok(isolatedPlan.includes('sealed helper source content mismatch'));
   assert.ok(isolatedPlan.includes('bin/production-auto-live-signal-identity.cjs'));

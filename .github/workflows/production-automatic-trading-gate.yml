@@ -1294,7 +1294,7 @@ jobs:
           # This is NOT the Application deployment pipeline: no DB/RLS,
           # PM2, provider credentials, Paper-state mutation or live-order calls.
           [[ "$PUBLIC_SOURCE_STAGE" =~ ^/opt/stock-app-data/\.auto-live-public-seal\.[A-Za-z0-9]{8}$ ]] || exit 1
-          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_SEAL_DIR=%q AUTO_LIVE_INDEPENDENT_SOURCE_MANIFEST_HASH=%q AUTO_LIVE_INDEPENDENT_SOURCE_HELPER_HASH=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA" "$PUBLIC_SOURCE_STAGE" "$PUBLIC_MANIFEST_SHA256" "$PUBLIC_HELPER_SHA256")"
+          remote_env="$(printf 'AUTO_LIVE_TARGET_SHA=%q AUTO_LIVE_INDEPENDENT_SOURCE_SEAL_DIR=%q AUTO_LIVE_INDEPENDENT_SOURCE_MANIFEST_HASH=%q AUTO_LIVE_INDEPENDENT_SOURCE_HELPER_HASH=%q AUTO_LIVE_INDEPENDENT_INSTALL_RUN_ID=%q AUTO_LIVE_INDEPENDENT_SOURCE_INSTALL=true AUTO_LIVE_INDEPENDENT_SIGNAL_INSTALL_APPROVED=true' "$TARGET_SHA" "$PUBLIC_SOURCE_STAGE" "$PUBLIC_MANIFEST_SHA256" "$PUBLIC_HELPER_SHA256" "$GITHUB_RUN_ID")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
@@ -1329,7 +1329,7 @@ jobs:
           TARGET_SHA: ${{ steps.source_command.outputs.sha }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          remote_env="$(printf 'TARGET_SHA=%q SOURCE_INSTALL_RUN_ID=%q' "$TARGET_SHA" "$GITHUB_RUN_ID")"
           # Readback must execute the isolated installed exact-main helper,
           # never the old app checkout. Compare installed helper hash first.
           installed_helper_hash="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
@@ -1352,6 +1352,9 @@ jobs:
           const sha = String(process.env.TARGET_SHA || '');
           const root = '/opt/stock-app-data/auto-live-signal-v1';
           const activation = readProductionAutoLiveScheduleActivation(root + '/activation.json');
+          if (String(activation.installRunId) !== String(process.env.SOURCE_INSTALL_RUN_ID)) {
+            throw new Error('AUTO_LIVE_PUBLIC_INSTALL_READBACK_RUN_ID_MISMATCH');
+          }
           const cron = spawnSync('crontab',['-l'],{
             encoding:'utf8',timeout:5000,maxBuffer:1024*1024,
             env:{...process.env,LC_ALL:'C'},
@@ -1373,7 +1376,7 @@ jobs:
           // needs observed genuine ticks and independent scanner/AI evidence.
           process.stdout.write(JSON.stringify({
             schemaVersion:'auto-live-independent-public-schedule-readback-v1',
-            targetSha:sha,status:'CONFIGURATION_VERIFIED_ONLY',
+            targetSha:sha,installRunId:process.env.SOURCE_INSTALL_RUN_ID,status:'CONFIGURATION_VERIFIED_ONLY',
             exactActiveCommand:true,activationBound:true,
             independentPaperRoot:true,paperRootMutated:false,
             paperCronReplaced:false,realOrderSubmitted:false,
@@ -1384,7 +1387,7 @@ jobs:
           node - "$RUNNER_TEMP/public-source-schedule-readback.json" "$TARGET_SHA" <<'NODE'
           const fs = require('node:fs');
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (p.targetSha !== process.argv[3] ||
+          if (p.targetSha !== process.argv[3] || p.installRunId !== process.env.GITHUB_RUN_ID ||
             p.status !== 'CONFIGURATION_VERIFIED_ONLY' ||
             p.exactActiveCommand !== true || p.activationBound !== true ||
             p.independentPaperRoot !== true || p.paperRootMutated !== false ||
@@ -1396,24 +1399,28 @@ jobs:
           NODE
 
       - name: Disable only the newly installed public observer if postinstall readback fails
-        if: failure() && steps.public_install.outcome == 'success' && steps.source_readback.outcome != 'success'
+        if: failure() && (steps.public_install.outcome == 'success' || steps.public_install.outcome == 'failure') && steps.source_readback.outcome != 'success'
         shell: bash
         env:
           TARGET_SHA: ${{ steps.source_command.outputs.sha }}
         run: |
           set -Eeuo pipefail
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          remote_env="$(printf 'TARGET_SHA=%q SOURCE_INSTALL_RUN_ID=%q' "$TARGET_SHA" "$GITHUB_RUN_ID")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
             -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'BASH'
           set -Eeuo pipefail
           root='/opt/stock-app-data/auto-live-signal-v1'
+          if [[ ! -e "$root" && ! -L "$root" ]]; then
+            printf '%s\n' 'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_NO_OWNED_ROOT'
+            exit 0
+          fi
           [[ -d "$root" && ! -L "$root" && -f "$root/activation.json" && ! -L "$root/activation.json" ]]
-          node - "$root/activation.json" "$TARGET_SHA" <<'NODE'
+          node - "$root/activation.json" "$TARGET_SHA" "$SOURCE_INSTALL_RUN_ID" <<'NODE'
           const fs=require('node:fs');
           const value=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-          if(value.targetSha!==process.argv[3]
+          if(value.targetSha!==process.argv[3] || String(value.installRunId)!==String(process.argv[4])
             || value.independentPaperRoot!==true
             || value.paperRootMutated!==false
             || value.paperCronReplaced!==false
