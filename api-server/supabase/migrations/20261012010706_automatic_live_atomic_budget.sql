@@ -273,24 +273,36 @@ begin
   end loop;
 end $ledger_policies$;
 
--- Catalog-only proof of the installed definitions. No trading/user/credential
--- values are read or hashed. Include the proof function itself, all five ledger
--- policy bodies, routine ACLs and GUCs; exclude only the expected digest slot to
--- avoid a self-referential hash. A policy/function drift is not a ready schema.
+-- The installation owner seals the baseline in a constant SQL function, not a
+-- custom GUC: hosted Postgres can deny ALTER FUNCTION SET on custom parameters.
+-- Runtime roles can read this proof but cannot replace its owner-owned body.
+create or replace function public.automatic_live_budget_expected_schema_fingerprint()
+returns text language sql immutable security invoker set search_path=pg_catalog,public,pg_temp
+as $expected$select '00000000000000000000000000000000'::text;$expected$;
+revoke all on function public.automatic_live_budget_expected_schema_fingerprint() from public,anon,authenticated;
+grant execute on function public.automatic_live_budget_expected_schema_fingerprint() to service_role;
+
+-- Catalog-only proof. Normalize ONLY the exact constant digest literal in the
+-- owner-owned baseline function, not its language/ACL/owner/settings or any
+-- executable expression. Dynamic/self-recomputing baselines are drift, too.
 create or replace function public.automatic_live_budget_schema_fingerprint()
 returns text language sql stable security invoker set search_path=pg_catalog,public,pg_temp
 as $fingerprint$
   select md5(jsonb_build_object(
     'routines',(select jsonb_agg(jsonb_build_object(
-      'name',p.proname,'args',pg_get_function_identity_arguments(p.oid),'source',p.prosrc,
+      'name',p.proname,'args',pg_get_function_identity_arguments(p.oid),
+      'source',case when p.proname='automatic_live_budget_expected_schema_fingerprint' then
+        regexp_replace(p.prosrc,'^select ''[0-9a-f]{32}''::text;$','select ''<owner-bound-schema-fingerprint>''::text;')
+        else p.prosrc end,
+      'language',p.prolang,
       'result',pg_get_function_result(p.oid),
       'volatile',p.provolatile,'definer',p.prosecdef,'owner',p.proowner,'acl',p.proacl::text,
-      'settings',array(select cfg from unnest(p.proconfig) cfg
-        where cfg not like 'automatic_live_guard.expected_schema_fingerprint=%' order by cfg)
+      'settings',array(select cfg from unnest(p.proconfig) cfg order by cfg)
     ) order by p.proname,pg_get_function_identity_arguments(p.oid))
       from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
       and p.proname in ('read_automatic_live_budget_snapshot','reserve_automatic_live_entry_budget','claim_trade_order_execution',
-        'read_automatic_live_budget_guard','is_automatic_live_ledger_payload','automatic_live_budget_schema_fingerprint')),
+        'read_automatic_live_budget_guard','is_automatic_live_ledger_payload','automatic_live_budget_schema_fingerprint',
+        'automatic_live_budget_expected_schema_fingerprint')),
     'relations',(select jsonb_agg(jsonb_build_object(
       'name',c.relname,'kind',c.relkind,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
       'owner',c.relowner,'acl',c.relacl::text,
@@ -347,20 +359,31 @@ as $guard$
       from pg_policy where polrelid in ('public.trade_order_plans'::regclass,'public.trade_orders'::regclass,
         'public.trade_order_events'::regclass,'public.trade_order_legs'::regclass,'public.trade_protection_orders'::regclass)
         and polname in ('auto_live_server_insert_guard','auto_live_server_update_guard','auto_live_server_delete_guard'))
-    and (select count(*)=1 and bool_and(split_part(cfg,'=',2)=public.automatic_live_budget_schema_fingerprint())
-      from pg_proc p cross join lateral unnest(p.proconfig) cfg
-      where p.oid='public.read_automatic_live_budget_guard()'::regprocedure
-      and cfg like 'automatic_live_guard.expected_schema_fingerprint=%')
+    and (select count(*)=1 and bool_and(
+      not p.prosecdef and p.provolatile='i'
+      and p.prolang=(select oid from pg_language where lanname='sql')
+      and p.prosrc ~ '^select ''[0-9a-f]{32}''::text;$'
+      and p.proowner=(select proowner from pg_proc where oid='public.read_automatic_live_budget_guard()'::regprocedure)
+      and not pg_has_role('service_role',p.proowner,'MEMBER')
+      and not pg_has_role('authenticated',p.proowner,'MEMBER')
+      and not pg_has_role('anon',p.proowner,'MEMBER')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      -- Read the sealed literal as catalog data; never execute a possibly
+      -- tampered baseline body while checking whether definitions are safe.
+      and substring(p.prosrc from '^select ''([0-9a-f]{32})''::text;$')=public.automatic_live_budget_schema_fingerprint())
+      from pg_proc p where p.oid=to_regprocedure('public.automatic_live_budget_expected_schema_fingerprint()'))
   ,false));
 $guard$;
 revoke all on function public.read_automatic_live_budget_guard() from public,anon,authenticated;
 grant execute on function public.read_automatic_live_budget_guard() to service_role;
--- Capture only after this migration has installed all canonical definitions and
--- ACLs. Ordinary callers cannot ALTER the function-owned setting, and changing
--- a session GUC cannot replace the expected value read from pg_proc.proconfig.
+-- Capture after all canonical definitions/ACLs. The exact digest slot alone is
+-- normalized by the catalog proof, so sealing cannot change its own hash.
 do $bind_schema$ begin
-  execute format('alter function public.read_automatic_live_budget_guard() set automatic_live_guard.expected_schema_fingerprint to %L',
-    public.automatic_live_budget_schema_fingerprint());
+  execute format('create or replace function public.automatic_live_budget_expected_schema_fingerprint()
+    returns text language sql immutable security invoker set search_path=pg_catalog,public,pg_temp as %L',
+    format('select %L::text;',public.automatic_live_budget_schema_fingerprint()));
 end $bind_schema$;
 notify pgrst,'reload schema';
 commit;
