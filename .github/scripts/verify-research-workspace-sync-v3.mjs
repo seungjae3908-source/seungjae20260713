@@ -2,7 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_SOURCE_SHA, verifyPinnedScannerScope, createScannerBlobReader } from './scanner-readonly-repair-scope.mjs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
-import { AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
+import {
+ AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+ AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
+} from './paper-forward-reviewed-paths.mjs';
 import { ONE_PASS_BASE_MAIN, ONE_PASS_SOURCE_ANCESTOR, ONE_PASS_NATIVE_PINS, ONE_PASS_RESEARCH_PINS, ONE_PASS_PROTECTED_MAIN_PINS, ONE_PASS_SUPPORT_PATHS } from '../../research-production/src/research-one-pass-source-pins-v1.mjs';
 const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
@@ -325,6 +328,9 @@ const automaticTradingDriftReviewed=[
  // Exact owner-approved AUTO safety paths still require both Trading guards
  // below; protected Research prefixes, main ancestry and route bytes stay gated.
  ...AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS,
+ // Scanner-repair overlap is intentionally sent through this full gate, never
+ // through the immutable historical-repair exemption.
+ ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
  // Read-only holdings UI and entry evidence, with no new database or financial scope.
  'stock-analyzer/src/components/bottom-nav.tsx',
  'stock-analyzer/e2e/app-navigation.spec.ts',
@@ -641,6 +647,10 @@ const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.
  &&!pinnedScannerRepair.includes(p)
  &&!isPersonalTelegramMembershipOnlyChange(p)&&!preservedPaperIntegration.includes(p)
  &&!isResearchOnlyNavigationDiff(p,git('diff','--unified=0',MAIN,'HEAD','--',p)));
+const automaticSignalGeneratedRuntimeOutputs=new Set([
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+]);
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
   '.github/workflows/production-automatic-trading-gate.yml',
@@ -667,7 +677,8 @@ if(automaticTradingChanged.length>0){
    throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_ACTIVATION_FORBIDDEN');
  }
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
- for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
+ for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix))
+  &&!automaticSignalGeneratedRuntimeOutputs.has(p))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
 const canonicalMemberFixtureOnlyPaths=new Set([
  'api-server/src/services/research-workspace-authorization-v5.test.ts',
@@ -867,6 +878,10 @@ for(const p of protectedPaths){
    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
    'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
   ].includes(path))exceptions.add(path);
+  // Deterministic runtime outputs regenerated from reviewed Scanner sources
+  // remain exact-file exceptions only after the full Trading guards above run.
+  if(p==='market-prediction-lab')for(const path of automaticSignalGeneratedRuntimeOutputs)
+   if(automaticTradingChanged.includes(path))exceptions.add(path);
   const unexpected=git('diff','--name-only',MAIN,'HEAD','--',p).split('\n').filter(Boolean).filter((item)=>!exceptions.has(item));
   if(unexpected.length>0)throw new Error('PROTECTED_PATH_CHANGED:'+p+':'+unexpected.join(','));
   continue;
