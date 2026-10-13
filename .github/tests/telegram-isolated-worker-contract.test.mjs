@@ -58,9 +58,13 @@ test('runner requires old PM2 disabled twice and holds exclusive persistent floc
     'sha256sum --check --quiet',
   ]) assert.ok(runner.includes(marker),marker);
   assert.equal(runner.split('legacy_inactive\n').length-1,2,'two real owner probes');
+  assert.match(runner,/telegram-legacy-owner-runtime-proof\\.mjs/u);
+  assert.match(runner,/flock -n 8/u);
+  assert.match(runner,/http:\\/\\/127\\.0\\.0\\.1/u);
+  assert.match(runner,/--max-time 6/u);
   for(const forbidden of [
     'pm2 restart','pm2 reload','pm2 stop','pm2 delete',
-    'psql ','curl ','sendMessage','LIVE_TRADING=true','AUTO_TRADING=true',
+    'psql ','sendMessage','LIVE_TRADING=true','AUTO_TRADING=true',
   ])assert.ok(!runner.includes(forbidden),forbidden);
   assert.ok(qa.includes('telegram-isolated-worker-contract.test.mjs'));
 });

@@ -1,0 +1,90 @@
+name: Research PIT Minute Read-Only Drift QA
+
+on:
+  pull_request:
+    paths:
+      - market-prediction-lab/src/research-selected-window-v1.js
+      - market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js
+      - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js
+      - market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+      - api-server/src/routes/research-workspace.ts
+      - api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts
+      - stock-analyzer/src/components/research-pit-minute-coverage.tsx
+      - stock-analyzer/src/lib/research-pit-minute-coverage-period.ts
+      - stock-analyzer/src/pages/research-center.tsx
+      - .github/workflows/research-pit-minute-readonly-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-pit-minute-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-source-readonly:
+    name: Private Compact PIT Source Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Prove no trading authority and test private original-source receipts
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+
+  admin-api-smoke:
+    name: Admin-only API HTTP GET Safety Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install exact-lockfile test dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Bundle only the private source GET HTTP smoke
+        working-directory: api-server
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+          node --input-type=module <<'NODE'
+          import { build } from 'esbuild';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const file = join(tmpdir(), 'research-pit-coverage-readonly-smoke.test.cjs');
+          await build({
+            entryPoints:['src/routes/research-workspace-pit-minute-coverage.smoke.test.ts'],
+            outfile:file,bundle:true,platform:'node',format:'cjs',
+            target:'node20',define:{'import.meta.env':'{}'},logLevel:'warning',
+          });
+          const result = spawnSync(process.execPath,['--test',file],{stdio:'inherit'});
+          if (result.error) throw result.error;
+          process.exitCode = result.status ?? 1;
+          NODE

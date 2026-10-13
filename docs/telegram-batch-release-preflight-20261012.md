@@ -58,3 +58,27 @@ Telegram scoped QA -> ONE exact-head Full CI -> full protected Staging QA ->
 real protected Signal V3 and Bot readbacks -> separately approved single-writer
 cutover -> protected Production release -> natural use receipts and financial
 safety invariants. Orders remain owned by the Trading release, not Telegram.
+
+### 2026-10-13 follow-up: actual legacy worker quiescence, not just PM2 flags
+
+An earlier isolated-worker launcher read three PM2 environment strings; those
+values alone cannot establish that in-memory background timers have stopped.
+The Draft now additionally reads the SAME running API `/api/health` at a
+hardcoded loopback host and bounded owner-selected port. It demands an
+exact SHA match to the installed Production marker, identityMatch=true,
+a recent health timestamp, personal worker disabled, brief worker DISABLED,
+and a new read-only subscriber lane DISABLED with inFlight=0. Missing or
+legacy health schemas fail closed; malformed/unavailable responses do not
+become permission for a second Telegram sender.
+
+The independent launcher holds the original stock-app deployment flock
+as well as its own owner flock for its lifetime, so the guarded production
+deploy cannot restart the shared PM2 while this Telegram sender runs.
+Two PM2 checks and two current-runtime checks are required before starting.
+No stock-app PM2 command, database write, financial API or Bot send is in
+this preflight. Owner-reviewed SSH/systemd installation and receipt provenance
+are still pending and cannot be inferred from green mocks.
+
+The existing real Production app lacks proof it is quiesced and is not
+assumed to support this new health schema until separately deployed.
+Therefore manual LIVE preservation still keeps cutover NO_GO. No Replit.

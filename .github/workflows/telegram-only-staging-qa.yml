@@ -17,6 +17,8 @@ on:
       - ops/telegram-batch-release-verdict.mjs
       - .github/tests/telegram-isolated-worker-contract.test.mjs
       - .github/tests/telegram-batch-release-verdict.test.mjs
+      - .github/tests/telegram-legacy-owner-runtime-proof.test.mjs
+      - ops/telegram-legacy-owner-runtime-proof.mjs
       - 'api-server/src/features/user-broker-telegram/**'
       - 'api-server/scripts/*telegram*'
       - 'stock-analyzer/src/**/*telegram*'
@@ -72,7 +74,8 @@ jobs:
             .github/tests/telegram-only-staging-qa.test.mjs \
             .github/tests/telegram-watchlist-consent-contract.test.mjs \
             .github/tests/telegram-isolated-worker-contract.test.mjs \
-            .github/tests/telegram-batch-release-verdict.test.mjs
+            .github/tests/telegram-batch-release-verdict.test.mjs \
+            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs
 
   protected-staging-network:
     name: Staging Telegram-only network and exact-SHA evidence, no send/deploy
@@ -150,7 +153,8 @@ jobs:
             .github/tests/telegram-only-staging-qa.test.mjs \
             .github/tests/telegram-watchlist-consent-contract.test.mjs \
             .github/tests/telegram-isolated-worker-contract.test.mjs \
-            .github/tests/telegram-batch-release-verdict.test.mjs
+            .github/tests/telegram-batch-release-verdict.test.mjs \
+            .github/tests/telegram-legacy-owner-runtime-proof.test.mjs
       - name: Configure isolated Staging SSH, fail closed without known host pinning
         run: |
           set -Eeuo pipefail
