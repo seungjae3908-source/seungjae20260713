@@ -6,6 +6,9 @@ on:
       - '.github/workflows/research-isolated-release.yml'
       - '.github/scripts/research-isolated-release.cjs'
       - '.github/tests/research-isolated-release.test.cjs'
+      - '.github/scripts/research-audit-approval-lifecycle.cjs'
+      - '.github/tests/research-audit-approval-lifecycle.test.cjs'
+      - '.github/workflows/research-audit-approval-lifecycle.yml'
       - 'api-server/scripts/release-candidate-provenance.cjs'
       - 'api-server/scripts/production-ci-provenance.cjs'
       - 'ops/research-activation-preflight.mjs'
@@ -40,7 +43,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check .github/scripts/research-isolated-release.cjs
-          node --test .github/tests/research-isolated-release.test.cjs
+          node --test .github/tests/research-isolated-release.test.cjs .github/tests/research-audit-approval-lifecycle.test.cjs
       - name: Existing Research activation and read-only preflight regressions
         run: |
           set -Eeuo pipefail
@@ -96,21 +99,23 @@ jobs:
         with:
           node-version: '22'
       - name: Revalidate actual current main and code proof after human approval
+        id: revalidate
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('node:fs');
             const {authorize} = require('./.github/scripts/research-isolated-release.cjs');
-            const proof = await authorize({ github, context, targetSha: process.env.RESEARCH_TARGET_SHA });
-            fs.mkdirSync('research-isolated-evidence', {recursive:true,mode:0o700});
-            fs.writeFileSync('research-isolated-evidence/code-proof.json', JSON.stringify(proof), {mode:0o600});
+            const {revalidateWithReceipt} = require('./.github/scripts/research-audit-approval-lifecycle.cjs');
+            await revalidateWithReceipt({github,context,authorize,
+              targetSha:process.env.RESEARCH_TARGET_SHA,attempt:process.env.GITHUB_RUN_ATTEMPT});
       - name: Observe unchanged public shared-app identity; never require its LIVE gates OFF
+        id: app_identity
         run: |
           set -Eeuo pipefail
           curl --proto '=https' --tlsv1.2 -fsS --max-time 15 https://lsj119.com/api/health |
             node -e 'let s="";process.stdin.on("data",c=>{s+=c;if(s.length>65536)process.exit(1)});process.stdin.on("end",()=>{const v=JSON.parse(s);if(v.ok!==true||v.identityMatch!==true||!/^[a-f0-9]{40}$/.test(v.deploySha)||v.deployMarkerSha!==v.deploySha)process.exit(1);console.log(v.deploySha);});' > research-isolated-evidence/app-sha
           echo "EXPECTED_DEPLOY_SHA=$(cat research-isolated-evidence/app-sha)" >> "$GITHUB_ENV"
       - name: Configure pinned SSH only on the ephemeral runner
+        id: ssh_config
         run: |
           set -Eeuo pipefail
           test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
@@ -121,6 +126,7 @@ jobs:
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Read every actual host prerequisite, dependency and economic-input gap before any runtime mutation
+        id: host_audit
         run: |
           set -Eeuo pipefail
           test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$RESEARCH_TARGET_SHA"
@@ -148,6 +154,7 @@ jobs:
           } | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "sudo -n env $remote_env node --input-type=module" > research-isolated-evidence/host-preflight.json
       - name: Record every blocker without turning audit success into operational readiness
+        id: audit_receipt
         run: |
           set -Eeuo pipefail
           node <<'NODE'
@@ -163,16 +170,40 @@ jobs:
             'Shared app/LIVE/PM2/Paper/Telegram were not changed. No new app UI or profitability claimed.',''].join('\n'));
           NODE
       - name: Recheck shared-app identity after the operation, including failed operations
+        id: app_after
         if: always() && env.EXPECTED_DEPLOY_SHA != ''
         run: |
           set -Eeuo pipefail
           curl --proto '=https' --tlsv1.2 -fsS --max-time 15 https://lsj119.com/api/health |
             node -e 'let s="";process.stdin.on("data",c=>{s+=c;if(s.length>65536)process.exit(1)});process.stdin.on("end",()=>{const v=JSON.parse(s);if(v.ok!==true||v.identityMatch!==true||v.deploySha!==process.env.EXPECTED_DEPLOY_SHA||v.deployMarkerSha!==v.deploySha)process.exit(1);console.log(JSON.stringify({sharedAppIdentityUnchanged:true,appUiDeployed:false}));});' > research-isolated-evidence/shared-app-after.json
+      - name: Preserve primary failure and actual step outcomes
+        if: always() && hashFiles('research-isolated-evidence/preflight-status.json') != ''
+        env:
+          APP_IDENTITY_OUTCOME: ${{ steps.app_identity.outcome }}
+          SSH_CONFIG_OUTCOME: ${{ steps.ssh_config.outcome }}
+          HOST_AUDIT_OUTCOME: ${{ steps.host_audit.outcome }}
+          AUDIT_RECEIPT_OUTCOME: ${{ steps.audit_receipt.outcome }}
+          APP_AFTER_OUTCOME: ${{ steps.app_after.outcome }}
+        run: |
+          node <<'NODE'
+          const fs=require('node:fs');
+          const {finishReceipt}=require('./.github/scripts/research-audit-approval-lifecycle.cjs');
+          const receipt=finishReceipt({outcomes:{app_identity:process.env.APP_IDENTITY_OUTCOME,
+            ssh_config:process.env.SSH_CONFIG_OUTCOME,host_audit:process.env.HOST_AUDIT_OUTCOME,
+            audit_receipt:process.env.AUDIT_RECEIPT_OUTCOME,app_after:process.env.APP_AFTER_OUTCOME}});
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '\n## Research audit lifecycle\nStatus: '+receipt.status+
+            '\nReason: '+(receipt.reasonCode??'none')+'\nRequested SHA: '+receipt.targetSha+
+            '\nObserved main: '+(receipt.observedMainSha??'unknown')+
+            '\nHost audit completed: '+receipt.hostAuditCompleted+'\nActivation granted: false\n');
+          NODE
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && hashFiles('research-isolated-evidence/preflight-status.json') != ''
         with:
-          name: research-isolated-audit-${{ env.RESEARCH_TARGET_SHA }}-${{ github.run_id }}
+          name: research-isolated-audit-${{ env.RESEARCH_TARGET_SHA }}-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: |
+            research-isolated-evidence/preflight-status.json
+            research-isolated-evidence/code-proof.json
             research-isolated-evidence/research-audit.json
             research-isolated-evidence/shared-app-after.json
           if-no-files-found: error
