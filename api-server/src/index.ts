@@ -10,7 +10,7 @@ import {
   startUserTelegramDeliveryWorker,
 } from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
-import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
+import { startTradeRecoveryWorker, readTradeRecoveryRuntimeHealth } from './services/trade-recovery-worker.service';
 import {
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
@@ -62,6 +62,7 @@ function healthPayload(route: '/health' | '/api/health') {
     bindHost,
     backgroundWorkersEnabled,
     autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
+    tradeRecoveryWorker: readTradeRecoveryRuntimeHealth(),
     userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
     telegramIntelligenceWorker: readTelegramIntelligenceWorkerHealth(),
     time: new Date().toISOString(),

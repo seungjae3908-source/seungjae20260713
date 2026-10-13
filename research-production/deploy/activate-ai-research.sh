@@ -154,7 +154,7 @@ process.stdout.write(JSON.stringify({
 NODE
 }
 
-provider_preflight() {
+provider_preflight() (
   if provider_env_ready >/dev/null; then
     provider_env_ready
     return 0
@@ -166,7 +166,9 @@ provider_preflight() {
   fi
   local evidence
   evidence="$(mktemp)"
-  trap 'rm -f "$evidence"' RETURN
+  # A RETURN trap survives this helper and later sees its expired local.
+  # The subshell keeps cleanup and its EXIT trap out of the caller's traps.
+  trap 'rm -f -- "$evidence"' EXIT
   "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" preflight \
     --app-root "$APP_ROOT" \
     --process-name stock-app > "$evidence"
@@ -188,7 +190,7 @@ if (value?.schemaVersion !== 'research-provider-bootstrap-v1'
   throw new Error('AI_RESEARCH_PROVIDER_PREFLIGHT_NOT_READY');
 }
 NODE
-}
+)
 
 normalize_existing_provider_env() {
   provider_credentials_present >/dev/null
@@ -244,9 +246,12 @@ require_runtime_policy_env() {
     exit 72
   }
 
-  "${SUDO[@]}" node - "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV" <<'NODE'
-const fs = require('node:fs');
-const { parseEnv } = require('node:util');
+  "${SUDO[@]}" node --input-type=module - "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV" \
+    "$RESEARCH_ROOT/research-production/src/research-video-discovery-policy.mjs" <<'NODE'
+import fs from 'node:fs';
+import { parseEnv } from 'node:util';
+import { pathToFileURL } from 'node:url';
+const { resolveResearchVideoDiscoveryQueries } = await import(pathToFileURL(process.argv[4]).href);
 
 const aiPath = process.argv[2];
 const videoPath = process.argv[3];
@@ -293,6 +298,7 @@ const maxResults = Number(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? '3');
 if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 3) {
   throw new Error('VIDEO_RESEARCH_MAX_RESULTS_INVALID');
 }
+const queries = resolveResearchVideoDiscoveryQueries(video);
 const region = String(video.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim().toUpperCase();
 if (region && !/^[A-Z]{2}$/.test(region)) {
   throw new Error('VIDEO_RESEARCH_REGION_INVALID');
@@ -316,6 +322,7 @@ process.stdout.write(JSON.stringify({
   video: {
     approved: true,
     maxResults,
+    queryCount: queries.length,
     region: region || null,
     language: language || null,
     publishedAfterHours,
@@ -391,10 +398,10 @@ refresh_current_sha_forward_evidence() {
   require_current_sha_ai_evidence_ready
 }
 
-verify_workspace_worker_health() {
+verify_workspace_worker_health() (
   local evidence
   evidence="$(mktemp)"
-  trap 'rm -f "$evidence"' RETURN
+  trap 'rm -f -- "$evidence"' EXIT
   local -a research_user_cmd
   if command -v runuser >/dev/null 2>&1; then
     research_user_cmd=("${SUDO[@]}" runuser -u investment-research --)
@@ -424,7 +431,7 @@ NODE
   done
   echo "AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE" >&2
   return 1
-}
+)
 
 verify_one_shot_evidence() {
   local started_ms="$1"
@@ -620,18 +627,22 @@ activate() {
   "${SUDO[@]}" systemctl start research-production-approved-job-intake.service || true
 
   local service
+  local one_shot_failed=false
   for service in "${services[@]}"; do
     local result status
-    result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"
-    status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"
+    if ! result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"; then result=UNKNOWN; fi
+    if ! status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"; then status=UNKNOWN; fi
+    echo "AI_RESEARCH_ONE_SHOT_RESULT:$service:result=$result:status=$status"
     [[ "$result" == "success" && "$status" == "0" ]] || {
       if [[ "$service" == "research-production-ai-review.service" ]]; then
         print_ai_diagnostic
       fi
       echo "AI_RESEARCH_ONE_SHOT_FAILED:$service:result=$result:status=$status" >&2
-      exit 70
+      one_shot_failed=true
     }
   done
+  # All already-started components are reported before the single fail-closed exit.
+  [[ "$one_shot_failed" == false ]] || exit 70
 
   verify_one_shot_evidence "$one_shot_started_ms"
 
