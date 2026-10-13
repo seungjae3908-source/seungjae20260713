@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } from './paper-forward-reviewed-paths.mjs';
 
 // This is an immutable scope classification for the user's Draft scanner repair,
 // not trading approval. Every shared byte must match the verified source commit.
@@ -114,8 +115,13 @@ export const SCANNER_PROTECTED_AUTHORITY_PATHS = Object.freeze([
   'pnpm-lock.yaml',
 ]);
 const pinned = new Set(SCANNER_REPAIR_PINNED_PATHS);
+const fullAutomaticReview = new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS);
 export function verifyPinnedScannerScope(changed, base, readBlob) {
-  const scanner = changed.filter(path => pinned.has(path));
+  // A path cannot receive both the old immutable-repair exemption and the
+  // newer full automatic-trading review. Exact pipeline paths fall through to
+  // the mandatory Production guards instead of being misclassified as a
+  // byte-identical historical repair.
+  const scanner = changed.filter(path => pinned.has(path) && !fullAutomaticReview.has(path));
   if (!scanner.length) return [];
   if (!/^[0-9a-f]{40}$/u.test(base ?? '')) throw new Error('SCANNER_SCOPE_BASE_REQUIRED');
   for (const path of scanner) {
@@ -137,7 +143,7 @@ export function verifyPinnedScannerScope(changed, base, readBlob) {
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 export function createScannerBlobReader(changed, base) {
   if (!/^[0-9a-f]{40}$/u.test(base ?? '')) throw new Error('SCANNER_SCOPE_BASE_REQUIRED');
-  const active = changed.filter(path => pinned.has(path));
+  const active = changed.filter(path => pinned.has(path) && !fullAutomaticReview.has(path));
   const refs = active.length ? [
     ...active.flatMap(path => [SCANNER_REPAIR_SOURCE_SHA + ':' + path, 'HEAD:' + path]),
     ...SCANNER_PROTECTED_AUTHORITY_PATHS.flatMap(path => [base + ':' + path, 'HEAD:' + path]),
