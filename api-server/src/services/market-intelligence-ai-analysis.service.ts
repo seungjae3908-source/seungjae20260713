@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { answerAiChat, type AiChatResult } from './ai-chat.service';
 
 export type MarketIntelligenceAiMode = 'NO_AI' | 'CHEAP_AI' | 'DEEP_AI' | 'MULTI_EVIDENCE';
@@ -78,6 +79,7 @@ export interface MarketIntelligenceAiAnalyzerOptions {
   cacheTtlMs?: number;
   maxCacheEntries?: number;
   timeoutMs?: number;
+  maxInFlight?: number;
 }
 
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|password|비밀번호|계좌번호|주민등록번호|실행키|주문\s*승인\s*토큰)\s*[:=]\s*\S{6,})/i;
@@ -294,17 +296,22 @@ export class MarketIntelligenceAiAnalyzer {
   private readonly cacheTtlMs: number;
   private readonly maxCacheEntries: number;
   private readonly timeoutMs: number;
+  private readonly maxInFlight: number;
   private providerCalls = 0;
   private cacheHits = 0;
   private inFlightHits = 0;
   private unavailableCount = 0;
 
   constructor(options: MarketIntelligenceAiAnalyzerOptions = {}) {
+    for (const [key, value] of Object.entries(options)) {
+      if (typeof value === 'number' && (!Number.isFinite(value) || value < 0)) throw new Error(`AI_ANALYZER_OPTION_INVALID:${key}`);
+    }
     this.answer = options.answerAiChatImpl ?? answerAiChat;
     this.now = options.now ?? Date.now;
     this.cacheTtlMs = Math.max(1_000, Math.min(options.cacheTtlMs ?? 15 * 60_000, 24 * 60 * 60_000));
     this.maxCacheEntries = Math.max(1, Math.min(options.maxCacheEntries ?? 1_000, 10_000));
     this.timeoutMs = Math.max(1_000, Math.min(options.timeoutMs ?? 15_000, 60_000));
+    this.maxInFlight = Math.max(1, Math.min(options.maxInFlight ?? 64, 128));
   }
 
   get stats(): Readonly<MarketIntelligenceAiAnalyzerStats> {
@@ -313,44 +320,53 @@ export class MarketIntelligenceAiAnalyzer {
   }
 
   async analyze(rawInput: MarketIntelligencePublicEvidenceInput, signal?: AbortSignal): Promise<MarketIntelligenceAiAnalysisResult> {
+    if (signal?.aborted) throw signal.reason ?? new Error('ABORTED');
     const input = publicEvidence(rawInput);
     const blocker = canAnalyze(input);
     if (blocker) return blocker === 'AI_ROUTE_NO_AI' || blocker === 'AI_BLOCKED_BY_EVIDENCE_STATUS' ? skipped(input, blocker) : unavailable(input, blocker);
+    if (input.publishedAt && (!Number.isFinite(Date.parse(input.publishedAt)) || Date.parse(input.publishedAt) > this.now())) {
+      return unavailable(input, 'PUBLIC_EVIDENCE_TIMESTAMP_INVALID');
+    }
+    // A caller-provided event key alone does not bind a changed fact snapshot.
+    const contentKey = createHash('sha256').update(JSON.stringify(input)).digest('hex');
 
     this.pruneExpired();
-    const cached = this.completed.get(input.analysisKey);
+    const cached = this.completed.get(contentKey);
     if (cached && cached.expiresAt > this.now()) {
       this.cacheHits += 1;
-      return { ...cached.value, cache: 'HIT' };
+      return { ...structuredClone(cached.value), cache: 'HIT' };
     }
 
-    const existing = this.inFlight.get(input.analysisKey);
+    const existing = this.inFlight.get(contentKey);
     if (existing) {
       this.inFlightHits += 1;
       const value = await this.waitFor(existing, signal);
-      return { ...value, cache: 'IN_FLIGHT_REUSE' };
+      return { ...structuredClone(value), cache: 'IN_FLIGHT_REUSE' };
     }
+    if (this.inFlight.size >= this.maxInFlight) return unavailable(input, 'AI_CAPACITY_EXHAUSTED');
 
     const shared = this.perform(input)
       .then((value) => {
-        if (value.status === 'ANALYZED') this.putCache(input.analysisKey, value);
+        if (value.status === 'ANALYZED') this.putCache(contentKey, structuredClone(value));
         return value;
       })
       .finally(() => {
-        if (this.inFlight.get(input.analysisKey) === shared) this.inFlight.delete(input.analysisKey);
+        if (this.inFlight.get(contentKey) === shared) this.inFlight.delete(contentKey);
       });
-    this.inFlight.set(input.analysisKey, shared);
-    return await this.waitFor(shared, signal);
+    this.inFlight.set(contentKey, shared);
+    return structuredClone(await this.waitFor(shared, signal));
   }
 
   private async perform(input: MarketIntelligencePublicEvidenceInput): Promise<MarketIntelligenceAiAnalysisResult> {
     this.providerCalls += 1;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('AI_PROVIDER_DEADLINE')), this.timeoutMs);
     try {
       const prepared = buildPrompt(input);
-      const result = await this.answer({
+      const result = await this.waitFor(Promise.resolve().then(() => this.answer({
         message: prepared.prompt,
         portfolioAssistantContext: assistantEvidenceContext(prepared.evidenceInput),
-      }, undefined, undefined, this.timeoutMs);
+      }, undefined, controller.signal, this.timeoutMs)), controller.signal);
       const analysis = parseStructuredAnalysis(result.answer, prepared.evidenceInput);
       if (!analysis) {
         this.unavailableCount += 1;
@@ -359,14 +375,16 @@ export class MarketIntelligenceAiAnalyzer {
       return { status: 'ANALYZED', analysisKey: input.analysisKey, model: result.model, analysis, reason: null, cache: 'MISS', safety };
     } catch (cause) {
       this.unavailableCount += 1;
-      const code = cause && typeof cause === 'object' && 'code' in cause && typeof (cause as { code?: unknown }).code === 'string'
+      const code = controller.signal.aborted ? 'AI_PROVIDER_DEADLINE' : cause && typeof cause === 'object' && 'code' in cause && typeof (cause as { code?: unknown }).code === 'string'
         ? (cause as { code: string }).code
         : 'AI_PROVIDER_UNAVAILABLE';
       return unavailable(input, code, 'MISS');
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  private waitFor(promise: Promise<MarketIntelligenceAiAnalysisResult>, signal?: AbortSignal): Promise<MarketIntelligenceAiAnalysisResult> {
+  private waitFor<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
     if (!signal) return promise;
     if (signal.aborted) return Promise.reject(signal.reason ?? new Error('ABORTED'));
     return new Promise((resolve, reject) => {
