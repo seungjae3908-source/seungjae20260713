@@ -115,9 +115,10 @@ function stockProviderCandidates(asset) {
 async function yahooFallback(asset, operation) {
   let lastError;
   for (const providerSymbol of stockProviderCandidates(asset)) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try { return { value: await yahooStart(() => operation(providerSymbol)), providerSymbol }; }
-      catch (error) { lastError = error; if (attempt < 3) await sleep(180 * attempt); }
+    try { return { value: await yahooStart(() => operation(providerSymbol)), providerSymbol }; }
+    catch (error) {
+      lastError = error;
+      if (/YAHOO_CHART_HTTP_429|RATE_LIMIT_COOLDOWN_ACTIVE/u.test(String(error?.message ?? error))) throw error;
     }
   }
   throw lastError ?? new Error('YAHOO_REPRESENTATIVE_FAILED');

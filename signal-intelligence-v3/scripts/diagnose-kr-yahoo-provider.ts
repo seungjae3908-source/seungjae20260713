@@ -14,68 +14,48 @@ const PROFILES = [
   { profile: 'MID_LONG', strategyMode: 'position', timeframe: '1D', range: '10y', interval: '1d' },
 ];
 const QUOTE_PROFILE = { profile: 'QUOTE', range: '1mo', interval: '1d' };
-const HOSTS = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
-const HARD_TIMEOUT_MS = 8_000;
 
 function sanitize(value) {
   return String(value ?? '').replace(/https?:\/\/[^\s|]+/gu, '[url]').slice(0, 320);
 }
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function providerCandidates(symbol) { return [`${symbol}.KS`, `${symbol}.KQ`]; }
 
-async function probe(host, symbol, profile) {
+async function probe(symbol, profile) {
   const providerSymbol = `${symbol}.KS`;
-  const url = `https://${host}/v8/finance/chart/${encodeURIComponent(providerSymbol)}?range=${profile.range}&interval=${profile.interval}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('DIAGNOSTIC_TIMEOUT')), HARD_TIMEOUT_MS);
   const started = Date.now();
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        accept: 'application/json,text/plain,*/*',
-        'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-      },
-    });
-    const elapsedMs = Date.now() - started;
-    let json = null;
-    let parseError = null;
-    try { json = await response.json(); } catch (error) { parseError = sanitize(error instanceof Error ? error.message : error); }
-    const result = json?.chart?.result?.[0];
-    const quote = result?.indicators?.quote?.[0];
-    const timestamps = Array.isArray(result?.timestamp) ? result.timestamp : [];
-    const closes = Array.isArray(quote?.close) ? quote.close.filter((v) => Number.isFinite(Number(v))) : [];
+    const value = profile.profile === 'QUOTE'
+      ? await yahoo.getQuote(providerSymbol)
+      : await yahoo.getCandles(providerSymbol, profile.timeframe);
+    const count = Array.isArray(value) ? value.length : Number(value?.price) > 0 ? 1 : 0;
     return {
-      symbol, providerSymbol, profile: profile.profile, host, httpStatus: response.status,
-      ok: response.ok && Boolean(quote) && timestamps.length > 0 && closes.length > 0,
-      elapsedMs, timestampCount: timestamps.length, validCloseCount: closes.length,
-      chartErrorCode: sanitize(json?.chart?.error?.code ?? ''), chartErrorDescription: sanitize(json?.chart?.error?.description ?? ''), parseError,
+      symbol, providerSymbol, profile: profile.profile, transport: 'GOVERNED_YAHOO_PROVIDER',
+      httpStatus: count > 0 ? 200 : 502, ok: count > 0,
+      elapsedMs: Date.now() - started, count,
     };
   } catch (error) {
+    const message = sanitize(error instanceof Error ? error.message : error);
     return {
-      symbol, providerSymbol, profile: profile.profile, host, httpStatus: null, ok: false,
+      symbol, providerSymbol, profile: profile.profile, transport: 'GOVERNED_YAHOO_PROVIDER',
+      httpStatus: Number(message.match(/YAHOO_CHART_HTTP_(\d{3})/u)?.[1] ?? 0) || null, ok: false,
       elapsedMs: Date.now() - started, errorName: error instanceof Error ? error.name : 'UNKNOWN',
-      error: sanitize(error instanceof Error ? error.message : error),
+      error: message,
     };
-  } finally { clearTimeout(timeout); }
+  }
 }
 
 async function yahooFallback(symbol, operation, calls, kind) {
   let lastError;
   for (const providerSymbol of providerCandidates(symbol)) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const started = Date.now();
-      try {
-        const value = await operation(providerSymbol);
-        calls.push({ kind, providerSymbol, attempt, ok: true, elapsedMs: Date.now() - started, count: Array.isArray(value) ? value.length : undefined });
-        return value;
-      } catch (error) {
-        lastError = error;
-        calls.push({ kind, providerSymbol, attempt, ok: false, elapsedMs: Date.now() - started, error: sanitize(error instanceof Error ? error.message : error) });
-        if (attempt < 3) await sleep(150 * attempt);
-      }
+    const started = Date.now();
+    try {
+      const value = await operation(providerSymbol);
+      calls.push({ kind, providerSymbol, attempt: 1, ok: true, elapsedMs: Date.now() - started, count: Array.isArray(value) ? value.length : undefined });
+      return value;
+    } catch (error) {
+      lastError = error;
+      calls.push({ kind, providerSymbol, attempt: 1, ok: false, elapsedMs: Date.now() - started, error: sanitize(error instanceof Error ? error.message : error) });
+      if (/YAHOO_CHART_HTTP_429|RATE_LIMIT_COOLDOWN_ACTIVE/u.test(String(error?.message ?? error))) throw error;
     }
   }
   throw lastError ?? new Error('YAHOO_DIAGNOSTIC_FALLBACK_FAILED');
@@ -132,9 +112,10 @@ async function scannerProbe(symbol, profile) {
 }
 
 const rows = [];
+yahoo.resetYahooProviderRuntimeForDiagnostics();
 for (const symbol of SYMBOLS) {
   for (const profile of [...PROFILES, QUOTE_PROFILE]) {
-    for (const host of HOSTS) rows.push(await probe(host, symbol, profile));
+    rows.push(await probe(symbol, profile));
   }
 }
 const scannerRows = [];
@@ -144,8 +125,7 @@ const summary = {
   directTotal: rows.length,
   directOk: rows.filter((row) => row.ok).length,
   directFailed: rows.filter((row) => !row.ok).length,
-  query1Ok: rows.filter((row) => row.host.startsWith('query1') && row.ok).length,
-  query2Ok: rows.filter((row) => row.host.startsWith('query2') && row.ok).length,
+  governedProviderOk: rows.filter((row) => row.ok).length,
   under1650ms: rows.filter((row) => row.ok && row.elapsedMs <= 1650).length,
   under3500ms: rows.filter((row) => row.ok && row.elapsedMs <= 3500).length,
   scannerTotal: scannerRows.length,
@@ -154,9 +134,9 @@ const summary = {
 };
 
 const report = {
-  schemaVersion: 2, generatedAt: new Date().toISOString(), publicOnly: true,
+  schemaVersion: 3, generatedAt: new Date().toISOString(), publicOnly: true,
   executionAuthority: 'NONE', privateApiAllowed: false, realOrderAllowed: false,
-  hardTimeoutMs: HARD_TIMEOUT_MS, summary, rows, scannerRows,
+  summary, yahooGovernor: yahoo.yahooProviderDiagnostics(), rows, scannerRows,
 };
 await mkdir(path.dirname(OUTPUT), { recursive: true });
 await writeFile(OUTPUT, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

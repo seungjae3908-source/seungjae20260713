@@ -1,4 +1,5 @@
 import type { FxQuote } from '../modules/portfolio/intelligence-v2.ts';
+import { getGovernedYahooJson } from '../providers/yahoo';
 
 type FetchLike = typeof fetch;
 
@@ -23,9 +24,10 @@ async function fetchJsonWithTimeout(fetchImpl: FetchLike, url: string, timeoutMs
 }
 
 async function loadUsdKrw(fetchImpl: FetchLike): Promise<FxQuote> {
-  const payload = await fetchJsonWithTimeout(
-    fetchImpl,
-    'https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1m&range=1d',
+  const yahooPath = '/v8/finance/chart/KRW=X?interval=1m&range=1d';
+  const payload = (fetchImpl === globalThis.fetch
+    ? await getGovernedYahooJson(yahooPath, 30_000)
+    : await fetchJsonWithTimeout(fetchImpl, `https://query1.finance.yahoo.com${yahooPath}`)
   ) as { chart?: { result?: Array<{ meta?: { regularMarketPrice?: number; regularMarketTime?: number } }> } };
   const meta = payload.chart?.result?.[0]?.meta;
   const rate = finitePositive(meta?.regularMarketPrice);

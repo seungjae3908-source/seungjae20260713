@@ -80,12 +80,10 @@ export async function buildPublicStockPrefetch(input) {
     const candidates = providerCandidates(market, entry.ticker, entry);
     let lastError;
     for (const providerSymbol of candidates) {
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try { return { value: await schedule(() => operation(providerSymbol)), providerSymbol }; }
-        catch (error) {
-          lastError = error;
-          if (attempt < 3) await sleep(120 * attempt);
-        }
+      try { return { value: await schedule(() => operation(providerSymbol)), providerSymbol }; }
+      catch (error) {
+        lastError = error;
+        if (/YAHOO_CHART_HTTP_429|RATE_LIMIT_COOLDOWN_ACTIVE/u.test(errorCode(error))) throw error;
       }
     }
     throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
