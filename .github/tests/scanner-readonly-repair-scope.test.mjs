@@ -67,7 +67,7 @@ test('all exact scanner paths are PR-trigger covered without dropping any Paper 
 
 
 test('only the two exact audited merger blobs are accepted on the pinned current main', () => {
-  assert.equal(SCANNER_REPAIR_INTEGRATION_BASE_SHA, 'eacf9173fdc42d0e88aa3930a8e66d26cb3b024c');
+  assert.equal(SCANNER_REPAIR_INTEGRATION_BASE_SHA, '964d3a619b931589e0f31cd9a2b8dce4ebcf3314');
   assert.deepEqual(Object.keys(SCANNER_REPAIR_INTEGRATION_BLOBS).sort(),
     ['api-server/package.json', 'api-server/test.mjs'].sort());
   assert.equal(Object.isFrozen(SCANNER_REPAIR_INTEGRATION_BLOBS), true);
