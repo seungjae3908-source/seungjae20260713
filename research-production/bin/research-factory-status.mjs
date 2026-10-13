@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { buildResearchFactoryRuntimeStatusV1 } from '../src/research-factory-runtime-status.mjs';
@@ -73,9 +75,30 @@ async function atomicJson(path,value) {
   if(!info.isDirectory()||info.isSymbolicLink()||resolve(await realpath(directory))!==directory){
     throw new Error('Factory output directory unsafe');
   }
-  const temp=`${path}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temp,`${JSON.stringify(value,null,2)}\n`,{mode:0o600});
-  await rename(temp,path);
+  const bytes=`${JSON.stringify(value,null,2)}\n`;
+  const temp=join(directory,`.research-factory-status-${randomUUID()}.tmp`);
+  // The old PID+millisecond name could collide between overlapping runs.
+  // Do not expose partially written evidence or leave a pending file after I/O failure.
+  try{
+    const handle=await open(temp,
+      constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+    try{
+      await handle.writeFile(bytes,'utf8');
+      await handle.sync();
+    }finally{
+      await handle.close();
+    }
+    await rename(temp,path);
+    if(process.platform!=='win32'){
+      // Persist the published directory entry, not just the JSON bytes.
+      const parent=await open(directory,
+        constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+      try{await parent.sync();}finally{await parent.close();}
+    }
+  }finally{
+    try{await unlink(temp);}
+    catch(error){if(error?.code!=='ENOENT') throw error;}
+  }
 }
 
 let outputPath=null;
