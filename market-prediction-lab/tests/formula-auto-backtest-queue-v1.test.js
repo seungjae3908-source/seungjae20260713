@@ -12,7 +12,9 @@ import {
   buildFormulaProducedTrainInputV1,
   ingestFormulaProducedTrainInputsV1,
   FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
+  FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1,
   buildFormulaPaperStrategyRegistryV1,
+  buildFormulaResearchPaperExperimentRegistryV1,
   evaluateFormulaAutoBacktestQueueItemV1,
   processFormulaAutoBacktestQueueV1,
 } from '../src/formula-auto-backtest-queue-v1.js';
@@ -199,6 +201,94 @@ test('only PASS research survivors enter the Paper strategy registry and never t
   assert.equal(registry.realOrder, false);
 });
 
+test('positive cost-modeled HOLD may enter only the separate inactive research Paper registry', () => {
+  const { formula, generated } = compiledMomentumFormula();
+  const candidate = {
+    formulaCandidate: formula,
+    generatedCandidate: generated,
+    formulaCandidateId: formula.candidateId,
+    generatedCandidateId: generated.generatedCandidateId,
+    parameterIdentity: generated.parameterIdentity,
+    strategyHash: formula.formulaHash,
+    strategyFamily: formula.strategyFamily,
+    market: formula.market,
+    timeframe: formula.timeframe,
+    direction: formula.direction,
+    researchSurvivor: false,
+    tradingAuthority: false,
+    safety: { executionAuthority: 'NONE' },
+    failure: { failureCode: 'INSUFFICIENT_SAMPLE' },
+    stageRecords: [{
+      stage: 'HISTORICAL_BACKTEST',
+      status: 'MISSING_EVIDENCE',
+      evidenceId: 'tournament-evidence:sha256:' + '1'.repeat(64),
+      evidence: {
+        metrics: {
+          trades: 45,
+          return: 0.08,
+          winRate: 0.46,
+          profitFactor: 1.23,
+          expectancy: 17.5,
+          maximumDrawdown: 0.11,
+          finalCapital: 10_800,
+        },
+      },
+    }],
+  };
+  const row = {
+    state: 'HOLD',
+    freshEvaluation: true,
+    itemDigest: 'd'.repeat(64),
+    evaluatedAt: new Date().toISOString(),
+    tournamentId: 'research-paper-experiment-v1',
+    tournament: { candidates: [candidate] },
+    researchPaperAssumptions: {
+      cost: {
+        entryFeeRate: 0.001,
+        exitFeeRate: 0.001,
+        taxRate: 0,
+        slippageRate: 0.0005,
+        spreadRate: 0.0002,
+        latencyDriftRate: 0,
+        latencyBars: 0,
+        evidenceClass: 'MODEL_ASSUMPTION_NOT_PROVIDER_ATTESTED',
+        liquidityImpact: null,
+      },
+      risk: {
+        riskPerTrade: 0.01,
+        maximumCapitalFraction: 0.5,
+        leverage: 1,
+        basicRiskCheck: 'PASS',
+      },
+    },
+  };
+  const registry = buildFormulaResearchPaperExperimentRegistryV1([row], {
+    researchCodeSha: 'f'.repeat(40),
+  });
+  assert.equal(registry.contract, FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1);
+  assert.equal(registry.entryCount, 1);
+  assert.equal(registry.entries[0].paperState, 'RESEARCH_REGISTERED_WAITING_FUTURE_SIGNAL');
+  assert.equal(registry.entries[0].researchStatus, 'BACKTEST_CANDIDATE');
+  assert.equal(registry.entries[0].experimentalResearchOnly, true);
+  assert.equal(registry.entries[0].genuineS, false);
+  assert.equal(registry.entries[0].activationRequired, true);
+  assert.equal(registry.entries[0].actualPaperOperationActive, false);
+  assert.equal(registry.entries[0].paperDispatchAllowed, false);
+  assert.equal(registry.entries[0].executionAuthority, 'NONE');
+  assert.equal(buildFormulaResearchPaperExperimentRegistryV1([
+    { ...row, freshEvaluation: false },
+  ], { researchCodeSha: 'f'.repeat(40) }).entryCount, 0);
+  assert.equal(buildFormulaResearchPaperExperimentRegistryV1([
+    { ...row, tournament: { candidates: [{
+      ...candidate,
+      stageRecords: [{
+        ...candidate.stageRecords[0],
+        evidence: { metrics: { ...candidate.stageRecords[0].evidence.metrics, return: -0.01 } },
+      }],
+    }] } },
+  ], { researchCodeSha: 'f'.repeat(40) }).entryCount, 0);
+});
+
 test('queue persists immutable audit results and repeated processing is idempotent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-'));
   const inbox = join(root, 'formula-backtest', 'inbox');
@@ -211,11 +301,18 @@ test('queue persists immutable audit results and repeated processing is idempote
   assert.equal(first.deletionAllowed, false);
   assert.equal(first.executionAuthority, 'NONE');
   assert.equal(first.paperRegisteredCount, 0);
+  assert.equal(first.researchPaperRegisteredCount, 0);
   const paperRegistry = JSON.parse(await readFile(join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
   assert.equal(paperRegistry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
   assert.equal(paperRegistry.entryCount, 0);
   assert.equal(paperRegistry.researchCodeSha, 'd'.repeat(40));
   assert.equal(paperRegistry.executionAuthority, 'NONE');
+  const researchRegistry = JSON.parse(await readFile(
+    join(root, 'latest', 'formula-research-paper-experiment-registry.json'), 'utf8'));
+  assert.equal(researchRegistry.contract, FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1);
+  assert.equal(researchRegistry.entryCount, 0);
+  assert.equal(researchRegistry.actualPaperOperationActive, false);
+  assert.equal(researchRegistry.executionAuthority, 'NONE');
 
   const resultFiles = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
   assert.equal(resultFiles.length, 1);
