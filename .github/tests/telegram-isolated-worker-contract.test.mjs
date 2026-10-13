@@ -58,9 +58,9 @@ test('runner requires old PM2 disabled twice and holds exclusive persistent floc
     'sha256sum --check --quiet',
   ]) assert.ok(runner.includes(marker),marker);
   assert.equal(runner.split('legacy_inactive\n').length-1,2,'two real owner probes');
-  assert.match(runner,/telegram-legacy-owner-runtime-proof\\.mjs/u);
+  assert.ok(runner.includes('telegram-legacy-owner-runtime-proof.mjs'));
   assert.match(runner,/flock -n 8/u);
-  assert.match(runner,/http:\\/\\/127\\.0\\.0\\.1/u);
+  assert.ok(runner.includes('http://127.0.0.1:'));
   assert.match(runner,/--max-time 6/u);
   for(const forbidden of [
     'pm2 restart','pm2 reload','pm2 stop','pm2 delete',
