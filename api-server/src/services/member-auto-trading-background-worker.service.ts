@@ -12,6 +12,7 @@ import {
   type MemberAutoTradingPaperHandoff,
   type MemberAutoTradingPaperHandoffEntry,
 } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
+import { selectSignalAdmittedHandoffEntries } from '../../../signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   createServiceRoleTradingRepository,
@@ -370,6 +371,12 @@ type MemberRuntimeState = Readonly<{
 
 export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
+  /** Optional veto-only Signal V3 gate. The original handoff is validated
+   * before this selector runs; implementations may only remove entries. */
+  admitHandoffEntries?(
+    handoff: MemberAutoTradingPaperHandoff,
+    nowMs: number,
+  ): Promise<readonly MemberAutoTradingPaperHandoffEntry[]>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
   memberBatchCycleCompleted?(): boolean;
   telegramDeliveryHealthy?(nowMs: number): boolean;
@@ -1429,6 +1436,7 @@ function buildPlanInput(
     stockExchange,
     strategyId: entry.identity.strategyId,
     signalId: entry.identity.signalId,
+    signalOccurrenceId: `${entry.identity.signalId}@${String(entry.signal.timestampMs ?? entry.evaluatedAtMs)}`,
     symbol: entry.identity.symbol,
     market: mapping.planMarket,
     side,
@@ -1888,6 +1896,24 @@ export function selectRotatingHandoffEntries<T>(
   return { entries: selected, nextOffset: start + selected.length >= entries.length ? 0 : start + selected.length };
 }
 
+export function enforceVetoOnlyHandoffSelection(
+  handoff: MemberAutoTradingPaperHandoff,
+  selected: readonly MemberAutoTradingPaperHandoffEntry[],
+) {
+  if (!Array.isArray(selected)) throw new Error('BACKGROUND_SIGNAL_SELECTION_INVALID');
+  const canonicalById = new Map(handoff.entries.map((entry) => [entry.handoffId, entry]));
+  const seen = new Set<string>();
+  return selected.map((entry) => {
+    const handoffId = entry?.handoffId;
+    const canonical = typeof handoffId === 'string' ? canonicalById.get(handoffId) : null;
+    if (!canonical || seen.has(handoffId)) throw new Error('BACKGROUND_SIGNAL_SELECTION_NOT_VETO_ONLY');
+    seen.add(handoffId);
+    // Always return the digest-validated object from the original handoff. A
+    // selector can remove identities, never replace or mutate their evidence.
+    return canonical;
+  });
+}
+
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
   private stopped = false;
@@ -1981,6 +2007,7 @@ export class MemberAutoTradingBackgroundWorker {
       const nowMs = now.getTime();
       // A broken new-entry handoff cannot suppress guarded existing exits.
       let handoff: MemberAutoTradingPaperHandoff | null = null;
+      let admittedHandoffEntries: readonly MemberAutoTradingPaperHandoffEntry[] = [];
       try {
         handoff = await this.source.readHandoff(nowMs);
         if (handoff?.status === 'READY'
@@ -1993,6 +2020,10 @@ export class MemberAutoTradingBackgroundWorker {
           result.handoffStatus = handoff.status;
           if (handoff.status === 'BLOCKED_DATA') {
             result.handoffErrorCode = errorCode(new Error(String(handoff.blockers[0] ?? 'BACKGROUND_HANDOFF_BLOCKED')));
+          } else {
+            admittedHandoffEntries = this.source.admitHandoffEntries
+              ? enforceVetoOnlyHandoffSelection(handoff, await this.source.admitHandoffEntries(handoff, nowMs))
+              : handoff.entries;
           }
         } else result.handoffErrorCode = 'BACKGROUND_HANDOFF_MISSING';
       } catch (error) {
@@ -2017,7 +2048,7 @@ export class MemberAutoTradingBackgroundWorker {
         && !member.policy.emergencyStopped
         && !member.policy.newEntriesStopped).length;
       const batch = selectRotatingHandoffEntries(
-        result.handoffReady ? handoff!.entries : [],
+        result.handoffReady ? admittedHandoffEntries : [],
         this.handoffEntryOffset,
         MAX_ENTRIES_PER_TICK,
       );
@@ -2648,6 +2679,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     private readonly client: SupabaseClient = getSupabase(),
     private readonly handoffPath = process.env.MEMBER_AUTO_TRADING_HANDOFF_PATH?.trim()
       || DEFAULT_HANDOFF_PATH,
+    private readonly signalIntelligencePath = process.env.MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_PATH?.trim()
+      || null,
+    private readonly signalIntelligenceSha = process.env.MEMBER_AUTO_TRADING_SIGNAL_INTELLIGENCE_SHA?.trim().toLowerCase()
+      || null,
   ) {
     if (!hasSupabaseServerKey()) throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
   }
@@ -2661,6 +2696,32 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       throw error;
     }
     return validateMemberAutoTradingPaperHandoff(parsed, nowMs);
+  }
+
+  async admitHandoffEntries(handoff: MemberAutoTradingPaperHandoff, nowMs: number) {
+    // The bridge is opt-in until its release artifact and service path receive
+    // separate deployment approval. Existing Paper/Live behavior is unchanged
+    // when the path is absent.
+    if (!this.signalIntelligencePath) return handoff.entries;
+    if (!this.signalIntelligenceSha || !/^[0-9a-f]{40}$/u.test(this.signalIntelligenceSha)) {
+      throw new Error('BACKGROUND_SIGNAL_INTELLIGENCE_SHA_REQUIRED');
+    }
+    let snapshot: unknown;
+    try {
+      snapshot = JSON.parse(await readFile(path.resolve(this.signalIntelligencePath), 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new Error('BACKGROUND_SIGNAL_INTELLIGENCE_MISSING');
+      }
+      throw new Error('BACKGROUND_SIGNAL_INTELLIGENCE_UNREADABLE');
+    }
+    const selection = selectSignalAdmittedHandoffEntries({
+      handoff, snapshot, nowMs, expectedServiceSha: this.signalIntelligenceSha,
+    });
+    if (selection.status !== 'READY') {
+      throw new Error(String(selection.blockers[0] ?? 'BACKGROUND_SIGNAL_INTELLIGENCE_BLOCKED'));
+    }
+    return selection.entries;
   }
 
   async listEligibleMembers() {

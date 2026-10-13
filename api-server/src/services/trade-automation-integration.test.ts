@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
+import { TradeAutomationService, tradingIdempotencyKey } from './trade-automation.service';
 import { TradeExecutionService, bitgetAcknowledgedOrderId } from './trade-execution.service';
 import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
@@ -444,6 +444,15 @@ test('zero daily order quota stays opportunity-driven while an explicit positive
     marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
   }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
+test('validated signal occurrences are idempotent within one event and allow a later repeat opportunity', () => {
+  const first = plan({ signalId: 'stable-scanner-signal', signalOccurrenceId: 'stable-scanner-signal@1000' });
+  const replay = { ...first };
+  const later = { ...first, signalOccurrenceId: 'stable-scanner-signal@2000' };
+  assert.equal(tradingIdempotencyKey(USER_A, first), tradingIdempotencyKey(USER_A, replay));
+  assert.notEqual(tradingIdempotencyKey(USER_A, first), tradingIdempotencyKey(USER_A, later));
+  assert.equal(first.signalId, later.signalId, 'the scanner strategy identity remains stable');
 });
 
 test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
