@@ -12,6 +12,215 @@ const lanes = [
   'FUTURES_SCALPING_5M', 'FUTURES_SWING_60M', 'FUTURES_MID_LONG_4H',
 ];
 const marketForLane = lane => ({ KR: 'KR_STOCK', US: 'US_STOCK', SPOT: 'CRYPTO_SPOT', FUTURES: 'CRYPTO_FUTURES' })[lane?.split('_')[0]];
+const cryptoLanes = lanes.filter(lane => lane.startsWith('SPOT_') || lane.startsWith('FUTURES_'));
+
+const integer = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const uniqueSortedIntegers = values => [...new Set((Array.isArray(values) ? values : [])
+  .filter(value => Number.isSafeInteger(value) && value >= 0))].sort((left, right) => left - right);
+const counterMap = value => Object.fromEntries(Object.entries(value && typeof value === 'object' ? value : {})
+  .filter(([, countValue]) => Number.isSafeInteger(countValue) && countValue >= 0));
+const mergeCounters = (left, right) => {
+  const result = { ...counterMap(left) };
+  for (const [key, value] of Object.entries(counterMap(right))) result[key] = integer(result[key]) + value;
+  return result;
+};
+
+function emptyRotationLane(row) {
+  return {
+    laneId: row.laneId,
+    market: row.market,
+    strategy: row.strategy,
+    timeframe: row.timeframe,
+    rosterId: null,
+    totalUniverse: 0,
+    attemptedIndices: [],
+    successfulIndices: [],
+    pageCount: 0,
+    verifiedPageCount: 0,
+    blockedPageCount: 0,
+    searchFailurePageCount: 0,
+    cursorContinuityFailures: 0,
+    rosterChangeCount: 0,
+    expectedNextCursor: null,
+    totalRequestedCount: 0,
+    totalStartedCount: 0,
+    totalCompletedCount: 0,
+    providerErrorCount: 0,
+    timeoutCount: 0,
+    failureCount: 0,
+    failureReasonCounts: {},
+    dataStateCounts: {},
+    dataQualityStateCounts: {},
+    dataQualityIssueCounts: {},
+    priceTickErrorCount: 0,
+    rawCandidateCount: 0,
+    sGradeCandidateCount: 0,
+    canonicalJoinCount: 0,
+    workerAdmissionCount: 0,
+    scannerQualityStatusCounts: {},
+    scannerQualityMatchedCount: 0,
+    scannerQualityBlockerCount: 0,
+    elapsedMs: 0,
+    fullCursorRotationComplete: false,
+    allDataSuccess: false,
+  };
+}
+
+function addIndices(previous, start, length, total) {
+  const values = uniqueSortedIntegers(previous);
+  if (!count(start) || !count(length) || !count(total) || start + length > total) return values;
+  for (let index = start; index < start + length; index += 1) values.push(index);
+  return uniqueSortedIntegers(values);
+}
+
+/**
+ * Accumulate immutable, public-only full-rotation evidence across process
+ * restarts. Numeric roster positions are retained instead of market payloads;
+ * rosterId binds those positions to the exact ordered public symbol roster.
+ * This is observation evidence only and can never grant quality or execution.
+ */
+export function mergePublicCryptoRotationEvidence({
+  previous = null,
+  coverage = [],
+  networkTelemetry = {},
+  serviceSha,
+  nowMs = Date.now(),
+  workerEntries = [],
+} = {}) {
+  if (!/^[a-f0-9]{40}$/u.test(serviceSha ?? '')) throw new Error('ROTATION_EVIDENCE_SERVICE_SHA_REQUIRED');
+  const reusable = previous?.schemaVersion === 1 && previous?.serviceSha === serviceSha;
+  const report = reusable ? structuredClone(previous) : {
+    schemaVersion: 1,
+    kind: 'public-crypto-full-cursor-rotation-evidence',
+    serviceSha,
+    startedAt: new Date(nowMs).toISOString(),
+    updatedAt: new Date(nowMs).toISOString(),
+    completedAt: null,
+    durationMs: 0,
+    runCount: 0,
+    processRestartTransitions: 0,
+    lanes: {},
+    networkTelemetry: {},
+    markets: {},
+    rotationComplete: false,
+    publicDataOnly: true,
+    liveTrading: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    executionAuthority: 'NONE',
+  };
+  report.runCount = integer(report.runCount) + 1;
+  report.processRestartTransitions = Math.max(0, report.runCount - 1);
+  report.updatedAt = new Date(nowMs).toISOString();
+  report.durationMs = Math.max(0, nowMs - Date.parse(report.startedAt));
+  report.networkTelemetry = mergeCounters(report.networkTelemetry, networkTelemetry);
+
+  const admittedByLane = new Map();
+  for (const entry of Array.isArray(workerEntries) ? workerEntries : []) {
+    const laneId = entry?.provenance?.laneId;
+    if (cryptoLanes.includes(laneId)) admittedByLane.set(laneId, integer(admittedByLane.get(laneId)) + 1);
+  }
+
+  for (const row of Array.isArray(coverage) ? coverage : []) {
+    if (!cryptoLanes.includes(row?.laneId) || !['CRYPTO_SPOT', 'CRYPTO_FUTURES'].includes(row?.market)) continue;
+    if (row.cursorRotationReason === 'ROTATION_EVIDENCE_ALREADY_COMPLETE') continue;
+    let lane = report.lanes[row.laneId] ?? emptyRotationLane(row);
+    const rosterId = /^[a-f0-9]{64}$/u.test(row.rosterId ?? '') ? row.rosterId : null;
+    const totalUniverse = count(row.totalUniverse) ? row.totalUniverse : 0;
+    const changedRoster = lane.rosterId != null && rosterId != null && lane.rosterId !== rosterId;
+    if (changedRoster) {
+      const changes = integer(lane.rosterChangeCount) + 1;
+      lane = { ...emptyRotationLane(row), rosterChangeCount: changes };
+    }
+    if (rosterId != null) lane.rosterId = rosterId;
+    if (totalUniverse > 0) lane.totalUniverse = totalUniverse;
+    lane.pageCount = integer(lane.pageCount) + 1;
+    lane.totalRequestedCount += integer(row.pageExecution?.requestedCount);
+    lane.totalStartedCount += integer(row.pageExecution?.startedCount);
+    lane.totalCompletedCount += integer(row.pageExecution?.completedCount);
+    lane.providerErrorCount += integer(row.providerErrors) + integer(row.universeProviderErrors);
+    lane.timeoutCount += integer(row.timeouts);
+    lane.failureCount += integer(row.pageExecution?.failuresObserved);
+    lane.failureReasonCounts = mergeCounters(lane.failureReasonCounts, row.failureReasonCounts);
+    lane.dataStateCounts = mergeCounters(lane.dataStateCounts, { [row.responseDataState ?? 'unknown']: 1 });
+    lane.dataQualityStateCounts = mergeCounters(lane.dataQualityStateCounts, {
+      TRUSTED: integer(row.responseDiagnostic?.trustedCards),
+      DEGRADED: integer(row.responseDiagnostic?.degradedCards),
+      DATA_UNTRUSTED: integer(row.responseDiagnostic?.untrustedCards),
+    });
+    lane.dataQualityIssueCounts = mergeCounters(lane.dataQualityIssueCounts, row.responseDiagnostic?.issueCounts);
+    lane.priceTickErrorCount += integer(row.priceTickErrorCount);
+    lane.rawCandidateCount += integer(row.scannedCards);
+    lane.sGradeCandidateCount += integer(row.sGradeCards);
+    lane.canonicalJoinCount += integer(row.canonicalHandoffJoin?.joinedSGrade);
+    lane.workerAdmissionCount += integer(admittedByLane.get(row.laneId));
+    lane.scannerQualityStatusCounts = mergeCounters(lane.scannerQualityStatusCounts, {
+      [row.scannerQuality?.selectionStatus ?? row.scannerQuality?.artifactStatus ?? 'UNKNOWN']: 1,
+    });
+    lane.scannerQualityMatchedCount += integer(row.scannerQuality?.matchedSymbols);
+    lane.scannerQualityBlockerCount += integer(row.scannerQuality?.blockerCount);
+    lane.elapsedMs += integer(row.pageExecution?.elapsedMs);
+    if (row.status === 'SEARCH_FAILURE') lane.searchFailurePageCount += 1;
+    else if (row.status === 'BLOCKED_DATA') lane.blockedPageCount += 1;
+    else if (['CANDIDATES_AVAILABLE', 'VALID_NO_TRADE'].includes(row.status)) lane.verifiedPageCount += 1;
+
+    const requested = integer(row.pageExecution?.requestedCount);
+    const started = integer(row.pageExecution?.startedCount);
+    const dataSuccess = integer(row.pageExecution?.dataSuccessCount);
+    const cursor = count(row.cursorBefore) ? row.cursorBefore : null;
+    const exactStartedPage = cursor != null && requested > 0 && started === requested
+      && totalUniverse > 0 && cursor + requested <= totalUniverse
+      && rosterId != null && (!changedRoster || cursor === 0)
+      && row.cursorRotationReason !== 'ROSTER_CHANGED_RESTART';
+    if (lane.expectedNextCursor != null && cursor !== lane.expectedNextCursor && !changedRoster) {
+      lane.cursorContinuityFailures += 1;
+    }
+    if (exactStartedPage) {
+      lane.attemptedIndices = addIndices(lane.attemptedIndices, cursor, requested, totalUniverse);
+      if (dataSuccess === requested && integer(row.pageExecution?.failuresObserved) === 0) {
+        lane.successfulIndices = addIndices(lane.successfulIndices, cursor, requested, totalUniverse);
+      }
+      lane.expectedNextCursor = row.cursorAfter;
+    } else if (row.cursorRotationReason === 'ROSTER_CHANGED_RESTART') {
+      lane.expectedNextCursor = 0;
+    } else if (cursor != null) {
+      lane.expectedNextCursor = cursor;
+    }
+    lane.uniqueAttemptedCount = uniqueSortedIntegers(lane.attemptedIndices).length;
+    lane.uniqueSuccessCount = uniqueSortedIntegers(lane.successfulIndices).length;
+    lane.duplicateAttemptCount = Math.max(0, lane.totalStartedCount - lane.uniqueAttemptedCount);
+    lane.missingAttemptCount = Math.max(0, lane.totalUniverse - lane.uniqueAttemptedCount);
+    lane.dataBlockedUniqueCount = Math.max(0, lane.uniqueAttemptedCount - lane.uniqueSuccessCount);
+    lane.fullCursorRotationComplete = lane.totalUniverse > 0
+      && lane.uniqueAttemptedCount === lane.totalUniverse;
+    lane.allDataSuccess = lane.fullCursorRotationComplete
+      && lane.uniqueSuccessCount === lane.totalUniverse;
+    report.lanes[row.laneId] = lane;
+  }
+
+  report.markets = Object.fromEntries(['CRYPTO_SPOT', 'CRYPTO_FUTURES'].map(market => {
+    const rows = cryptoLanes.map(laneId => report.lanes[laneId]).filter(lane => lane?.market === market);
+    const complete = rows.length === 3 && rows.every(lane => lane.fullCursorRotationComplete === true);
+    return [market, {
+      laneCount: rows.length,
+      totalUniverse: rows.length ? Math.max(...rows.map(lane => integer(lane.totalUniverse))) : 0,
+      minimumUniqueAttemptedAcrossLanes: rows.length ? Math.min(...rows.map(lane => integer(lane.uniqueAttemptedCount))) : 0,
+      minimumUniqueSuccessAcrossLanes: rows.length ? Math.min(...rows.map(lane => integer(lane.uniqueSuccessCount))) : 0,
+      providerErrorCount: rows.reduce((sum, lane) => sum + integer(lane.providerErrorCount), 0),
+      timeoutCount: rows.reduce((sum, lane) => sum + integer(lane.timeoutCount), 0),
+      failureCount: rows.reduce((sum, lane) => sum + integer(lane.failureCount), 0),
+      rawCandidateCount: rows.reduce((sum, lane) => sum + integer(lane.rawCandidateCount), 0),
+      sGradeCandidateCount: rows.reduce((sum, lane) => sum + integer(lane.sGradeCandidateCount), 0),
+      canonicalJoinCount: rows.reduce((sum, lane) => sum + integer(lane.canonicalJoinCount), 0),
+      workerAdmissionCount: rows.reduce((sum, lane) => sum + integer(lane.workerAdmissionCount), 0),
+      fullCursorRotationComplete: complete,
+      allLaneDataSuccess: complete && rows.every(lane => lane.allDataSuccess === true),
+    }];
+  }));
+  report.rotationComplete = Object.values(report.markets).every(market => market.fullCursorRotationComplete === true);
+  if (report.rotationComplete && report.completedAt == null) report.completedAt = new Date(nowMs).toISOString();
+  return report;
+}
 
 // Stock producers publish the detailed counters directly. The older crypto
 // response contract only publishes completed work plus per-symbol failures.
