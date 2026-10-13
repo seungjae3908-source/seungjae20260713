@@ -261,6 +261,44 @@ test('new signal scanner sends explicit strategy and only scanner read endpoints
   assert.doesNotMatch(scannerPage, forbidden);
 });
 
+test('four-market scanner transport enforces S-only server filtering before alerts or Paper capture', async () => {
+  const base = scannerRequest(77_001);
+  const requests: SignalScannerRequest[] = [
+    base,
+    { ...base, market: 'US', cursor: 77_002 },
+    { ...base, assetClass: 'coin_spot', market: 'UPBIT', cursor: 77_003 },
+    { ...base, assetClass: 'coin_futures', market: 'BITGET', cursor: 77_004 },
+  ];
+  const requestedUrls: string[] = [];
+  let call = 0;
+  await withMockFetch(async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    const expected = requests[call++];
+    const body = await scannerSuccess('s-only').json() as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      ...body, market: expected.market, assetClass: expected.assetClass,
+      timeframe: expected.timeframe, requestId: `s-only-${call}`,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }, async () => {
+    for (const request of requests) {
+      const response = await fetchSignalScanner(request, new AbortController().signal);
+      assert.equal(response.ok, true);
+    }
+  });
+  assert.equal(requestedUrls.length, 4);
+  for (let i = 0; i < requests.length; i++) {
+    const url = new URL(requestedUrls[i], 'https://scanner.test');
+    assert.equal(url.searchParams.get('grade'), 'S', 'no A-grade candidate may be requested');
+    assert.equal(url.searchParams.getAll('grade').length, 1);
+    assert.ok(SIGNAL_SCANNER_READ_PATHS.includes(url.pathname as typeof SIGNAL_SCANNER_READ_PATHS[number]));
+  }
+  const scanner = source('stock-analyzer/src/lib/signal-scanner.ts');
+  assert.match(scanner, /authorizedFetch\(scannerSGradeOnlyUrl\(request\)/);
+  assert.match(scanner, /request\.cacheOwner \?\? 'unscoped', scannerSGradeOnlyUrl\(request\)/);
+  assert.doesNotMatch(scanner, /\/api\/orders|\/api\/execute/);
+});
+
 test('same scanner request key reuses one in-flight upstream request', async () => {
   const request = scannerRequest(101);
   let upstreamCalls = 0;

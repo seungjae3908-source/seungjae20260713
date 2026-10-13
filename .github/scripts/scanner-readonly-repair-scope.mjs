@@ -7,14 +7,15 @@ export const SCANNER_REPAIR_SOURCE_SHA = 'dc15772f67822418c2eb4fa4cfc93b0b07542f
 // Keep the pre-policy workflow baseline immutable even when a later source-only
 // regression fixture is pinned. A repin must not bless removal of safety steps.
 export const SCANNER_REPAIR_WORKFLOW_BASE_SHA = '6139042aaef5e7fec6bcc39648ccdddb949121e6';
-// Exactly two source blobs were reviewed in the 2026-10-13 two-parent
-// scanner/main reconciliation. They preserve the base AUTO/Trading test
-// registrations and the previous immutable scanner tests. Neither an
-// arbitrary future base nor any other scanner blob can use this exception.
+// Exact current-main branch integration pins: two preserved AUTO test registry
+// blobs and two S-only (not A-grade) scanner transport/regression blobs.
+// This cannot exempt any other path, branch baseline or future mutation.
 export const SCANNER_REPAIR_INTEGRATION_BASE_SHA = '964d3a619b931589e0f31cd9a2b8dce4ebcf3314';
 export const SCANNER_REPAIR_INTEGRATION_BLOBS = Object.freeze({
   'api-server/package.json': 'f403e2c80fe2c25bbb8c9bbe4f03d88c8d1ea6e7',
   'api-server/test.mjs': 'bc409c4eba77b38bf422b2cb1e6916b0a050509e',
+  'stock-analyzer/src/lib/signal-scanner.ts': '74e76587563b7a3373a90a3ab8a2b8f0593c2940',
+  'stock-analyzer/src/lib/scanner-request.test.ts': 'a9df28952560e7ed63d2adfba30b85c9b8b015ec',
 });
 export const SCANNER_REPAIR_PINNED_PATHS = Object.freeze([
   "api-server/package.json",
