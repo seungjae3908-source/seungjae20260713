@@ -134,6 +134,7 @@ export interface ScanExecutionOptions {
 
 export interface BoundedScanResult {
   cards: ScanCard[];
+  failures?: Array<{ symbol: string; reason: 'provider_error' | 'timeout' | 'invalid_data'; message: string }>;
   selected: string[];
   supportedIndicators: string[];
   scanned: number;
@@ -371,11 +372,10 @@ function percentChange(from: number, to: number): number {
   return from ? ((to - from) / Math.abs(from)) * 100 : 0;
 }
 
-function scanTimeframe(value: unknown, market: string): ScannerTimeframe {
+function scanTimeframe(value: unknown, _market: string): ScannerTimeframe {
   const normalized = String(value ?? '1D') === '1H' ? '60m' : String(value ?? '1D');
-  if (String(market).toUpperCase() === 'US' && normalized === '4H') {
-    throw new Error('SCAN_TIMEFRAME_UNSUPPORTED:US:4H');
-  }
+  // The stock provider derives US 4H from session-aligned hourly bars.
+  // Rejecting it here prevented the UI's default swing search from running.
   return isScannerTimeframe(normalized) ? normalized : '1D';
 }
 
@@ -815,6 +815,14 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       ).length;
       const workerErrorCount = Math.max(0, work.rejectedCount - providerErrorCount);
       const timeoutCount = work.timedOutCount;
+      const failures: NonNullable<BoundedScanResult['failures']> = work.outcomes
+        .filter(outcome => outcome.status !== 'fulfilled')
+        .map(outcome => ({
+          symbol: String(pool[outcome.index]?.ticker ?? ''),
+          reason: outcome.status === 'timed_out' ? 'timeout' : outcome.reason instanceof ScanProviderWorkError ? 'provider_error' : 'invalid_data',
+          // Public diagnostics must not expose raw upstream URLs, keys or bodies.
+          message: outcome.status === 'timed_out' ? '시장데이터 조회 시간이 초과되었습니다.' : '시장데이터를 확인하지 못했습니다.',
+        }));
       const providerFailureCount = providerErrorCount + timeoutCount;
       const unreliable = pool.length > 0 && providerFailureCount > 0 && (
         completedCount === 0
@@ -863,6 +871,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
 
       return {
         cards,
+        failures,
         selected: [...active.map((key) => SCAN_LABELS[key]), ...(includesMarketCap ? ['시총'] : [])],
         supportedIndicators: SUPPORTED_INDICATORS,
         scanned: work.startedCount,

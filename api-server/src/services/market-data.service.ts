@@ -6,7 +6,7 @@ import {
   getQuote as getTossQuote,
   isTossConfigured,
 } from '../providers/toss';
-import { getCandles as getYahooCandles } from '../providers/yahoo';
+import { getCandles as getYahooCandles, type YahooChartRequestOptions } from '../providers/yahoo';
 import { getKiwoomChartCandlesMeta } from '../kiwoom-chart';
 import type { Candle, CompanyProfile, Quote, Timeframe } from '../sample/types';
 
@@ -158,8 +158,12 @@ function getSharedKrTossCandles(
 async function getBoundedKrInteractiveCandlesMeta(
   ticker: string,
   timeframe: Timeframe,
+  options: YahooChartRequestOptions = {},
 ): Promise<MarketDataCandlesMeta> {
+  if (options.signal?.aborted) throw interactiveAbortError();
   const controller = new AbortController();
+  const onParentAbort = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener('abort', onParentAbort, { once: true });
   const deadlineAt = Date.now() + APP_KR_INTRADAY_DEADLINE_MS;
   const deadlineError = new Error('KR_INTERACTIVE_PROVIDER_DEADLINE');
   deadlineError.name = 'TimeoutError';
@@ -220,7 +224,7 @@ async function getBoundedKrInteractiveCandlesMeta(
     await new Promise((resolve) => setTimeout(resolve, APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS));
     if (controller.signal.aborted) throw interactiveAbortError();
 
-    const candles = await getYahooCandles(String(ticker).trim(), String(timeframe));
+    const candles = await getYahooCandles(String(ticker).trim(), String(timeframe), { ...options, signal: controller.signal });
     if (candles.length < minimumUsefulCandles(timeframe)) {
       throw new Error('YAHOO_INSUFFICIENT_CANDLES');
     }
@@ -292,6 +296,7 @@ async function getBoundedKrInteractiveCandlesMeta(
     };
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener('abort', onParentAbort);
     controller.abort();
   }
 }
@@ -299,8 +304,9 @@ async function getBoundedKrInteractiveCandlesMeta(
 async function getBoundedKrIntradayCandlesMeta(
   ticker: string,
   timeframe: Timeframe,
+  options: YahooChartRequestOptions = {},
 ): Promise<MarketDataCandlesMeta> {
-  return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
+  return getBoundedKrInteractiveCandlesMeta(ticker, timeframe, options);
 }
 
 export class MarketDataService extends BaseMarketDataService {
@@ -328,7 +334,11 @@ export class MarketDataService extends BaseMarketDataService {
   static async getCandlesMeta(
     ticker: string,
     timeframe: Timeframe = '1D',
+    options: YahooChartRequestOptions = {},
   ): Promise<MarketDataCandlesMeta> {
+    if (options.purpose === 'scanner' && !/^\d{6}$/u.test(ticker)) {
+      return { candles: await getYahooCandles(ticker, timeframe, options), provider: 'yahoo', fetchedAt: new Date().toISOString() };
+    }
     /*
      * App-facing KR interactive charts must terminate inside the browser's
      * primary endpoint budget. Kiwoom and the public Yahoo fallback therefore
@@ -339,11 +349,11 @@ export class MarketDataService extends BaseMarketDataService {
      * directly and keep their deep pagination semantics.
      */
     if (isBoundedKrIntradayRequest(ticker, timeframe)) {
-      return getBoundedKrIntradayCandlesMeta(ticker, timeframe);
+      return getBoundedKrIntradayCandlesMeta(ticker, timeframe, options);
     }
 
     if (isBoundedKrInteractiveRequest(ticker, timeframe)) {
-      return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
+      return getBoundedKrInteractiveCandlesMeta(ticker, timeframe, options);
     }
 
     let primaryResult: MarketDataCandlesMeta | null = null;

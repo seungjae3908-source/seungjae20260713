@@ -16,7 +16,7 @@ function candidate() {
   };
 }
 
-async function startServer(stateFile, port) {
+async function startServer(stateFile, port, extraEnv = {}) {
   const child = spawn(process.execPath, ['signal-intelligence-v3/src/server.mjs'], {
     cwd: process.cwd(),
     env: {
@@ -26,6 +26,7 @@ async function startServer(stateFile, port) {
       SIGNAL_INTELLIGENCE_PORT: String(port),
       SIGNAL_INTELLIGENCE_STATE_FILE: stateFile,
       SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS: '600000',
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -111,4 +112,52 @@ test('non-loopback bind is rejected', async () => {
   const code = await new Promise((resolve) => child.once('exit', resolve));
   assert.notEqual(code, 0);
   assert.match(stderr, /SIGNAL_INTELLIGENCE_LOOPBACK_ONLY/);
+});
+
+test('future snapshots and wrong release hashes never pass freshness or signal reads', async () => {
+  for (const [change, expected] of [
+    [{ generatedAt: new Date(Date.now() + 3600_000).toISOString() }, 'SNAPSHOT_STALE'],
+    [{ serviceSha: 'b'.repeat(40) }, 'SNAPSHOT_SERVICE_SHA_MISMATCH'],
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), 'signal-v3-'));
+    const state = join(dir, 'snapshot.json');
+    await writeFile(state, JSON.stringify({ ...runSignalIntelligenceV3([candidate()]), ...change }));
+    const port = 20000 + Math.floor(Math.random() * 1000);
+    const server = await startServer(state, port);
+    try {
+      const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+      assert.equal(health.snapshotFresh, false);
+      const response = await fetch(`http://127.0.0.1:${port}/v1/signals/kr`);
+      assert.equal(response.status, 503); assert.equal((await response.json()).error, expected);
+    } finally {
+      server.child.kill('SIGTERM'); await new Promise(r => server.child.once('exit', r));
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('full-profile retained history without current verified page evidence is not a fresh candidate', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'signal-v3-')); const state = join(dir, 'snapshot.json');
+  await writeFile(state, JSON.stringify({ ...runSignalIntelligenceV3([candidate()]), profile: { fullStrategyCoverage: true }, coverage: [] }));
+  const port = 21000 + Math.floor(Math.random() * 1000); const server = await startServer(state, port);
+  try {
+    const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(health.snapshotTimestampFresh, true); assert.equal(health.snapshotFresh, false);
+    assert.equal(health.snapshotCurrentPageSourceReady, false);
+    const body = await (await fetch(`http://127.0.0.1:${port}/v1/signals/kr`)).json();
+    assert.deepEqual(body.candidates, []);
+  } finally {
+    server.child.kill('SIGTERM'); await new Promise(r => server.child.once('exit', r)); await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('NaN, Infinity and nonpositive freshness limits are rejected', async () => {
+  for (const value of ['NaN', 'Infinity', '-1', '0']) {
+    const child = spawn(process.execPath, ['signal-intelligence-v3/src/server.mjs'], { cwd: process.cwd(),
+      env: { ...process.env, SIGNAL_INTELLIGENCE_SERVICE_SHA: SHA, SIGNAL_INTELLIGENCE_HOST: '127.0.0.1',
+        SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS: value }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
+    assert.notEqual(await new Promise(r => child.once('exit', r)), 0);
+    assert.match(stderr, /SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID/);
+  }
 });

@@ -2,6 +2,93 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 
 const forbiddenRequest = /\/(?:stocks\/auto-trade|trade-automation|paper-trading|crypto\/(?:spot\/accounts|futures\/(?:auto|account|positions))|orders?|cancel)(?:[/?]|$)/i;
 
+async function installAiReviewSession(page: Page) {
+  const id = '77777777-7777-4777-8777-777777777777';
+  await page.addInitScript(id => {
+    const encode = (v: object) => btoa(JSON.stringify(v)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const expires_at = 4_102_444_800;
+    localStorage.setItem('sb-127-auth-token', JSON.stringify({ access_token: `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: id, role: 'authenticated', exp: expires_at })}.e2e`,
+      refresh_token: 'offline-test-refresh', expires_at, expires_in: 3600, token_type: 'bearer',
+      user: { id, aud: 'authenticated', role: 'authenticated', email: 'ai-review@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, identities: [], created_at: '2026-08-01T00:00:00Z' } }));
+  }, id);
+  const profile = { id, login_name: 'ai-review', display_name: 'AI Review', role: 'member', status: 'approved',
+    membership_level: 'regular', is_active: true, permissions_updated_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z' };
+  await page.route('**/__e2e-supabase/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(profile) }));
+  await page.route('**/api/auth/profile**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(profile) }));
+}
+
+function aiReviewResponse(signalId: string, evidenceKey: string) {
+  return { ok: true, signalId, evidenceKey, status: 'REVIEWED', model: 'offline-fixture', reason: null,
+    facts: ['공개 스캐너의 추세 근거'], analysis: { summaryShort: '공개 근거를 검토했으며 수익성은 확인되지 않았습니다.',
+      factEvidenceRefs: [0], inferences: ['추론은 실제 수익이 아닙니다.'], uncertainty: ['비용 반영 OOS 검증이 필요합니다.'], riskFlags: [] },
+    safety: { publicEvidenceOnly: true, executionAuthority: 'NONE', orderAllowed: false, paperOrderAllowed: false,
+      profitabilityPass: false, profitProbability: null, scoreImpact: 0, rankImpact: 0 } };
+}
+
+test('AI evidence review is explicit, grounded and has zero order authority', async ({ page }) => {
+  const requests: string[] = []; let reviews = 0;
+  page.on('request', r => { if (forbiddenRequest.test(new URL(r.url()).pathname)) requests.push(r.url()); });
+  await installBaseMocks(page, []); await installAiReviewSession(page);
+  await page.route('**/api/market/scan**', route => fulfill(route, scannerResponse()));
+  await page.route('**/api/market/scan/ai-review', async route => {
+    reviews++;
+    const body = route.request().postDataJSON();
+    expect(Object.keys(body).sort()).toEqual(['evidenceKey', 'signalId']);
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(aiReviewResponse(body.signalId, body.evidenceKey)) });
+  });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+  const panel = page.getByTestId('scanner-mobile-sheet').getByTestId('scanner-ai-evidence-review');
+  expect(reviews).toBe(0);
+  await panel.getByRole('button', { name: 'AI 근거 검토', exact: true }).click();
+  await expect(panel).toContainText('공개 근거를 검토했으며 수익성은 확인되지 않았습니다.');
+  await expect(panel).toContainText('비용 반영 OOS 검증이 필요합니다.');
+  await expect(panel).toContainText('공개 스캐너의 추세 근거');
+  await expect(panel).toContainText('점수·순위는 변경하지 않습니다.');
+  expect(reviews).toBe(1); expect(requests).toEqual([]);
+});
+
+test('mismatched or order-authorizing AI responses cannot appear as a review', async ({ page }) => {
+  await installBaseMocks(page, []); await installAiReviewSession(page);
+  await page.route('**/api/market/scan**', route => fulfill(route, scannerResponse()));
+  await page.route('**/api/market/scan/ai-review', async route => {
+    const body = route.request().postDataJSON(); const result = aiReviewResponse('wrong-signal', body.evidenceKey);
+    result.safety.orderAllowed = true;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(result) });
+  });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+  const panel = page.getByTestId('scanner-mobile-sheet').getByTestId('scanner-ai-evidence-review');
+  await panel.getByRole('button', { name: 'AI 근거 검토', exact: true }).click();
+  await expect(panel.getByRole('alert')).toContainText('AI 검토를 받지 못했습니다.');
+  await expect(panel).not.toContainText('공개 근거를 검토했으며 수익성은 확인되지 않았습니다.');
+});
+
+test('switching the selected market cancels a late AI review and never shows it for another signal', async ({ page }) => {
+  await installBaseMocks(page, []); await installAiReviewSession(page);
+  await page.route('**/api/market/scan**', route => {
+    const us = new URL(route.request().url()).searchParams.get('market') === 'US';
+    return fulfill(route, scannerResponse(us ? { market: 'US', symbol: 'AAPL', name: 'Apple' } : {}));
+  });
+  let started = false;
+  await page.route('**/api/market/scan/ai-review', async route => {
+    started = true; const body = route.request().postDataJSON();
+    await new Promise(r => setTimeout(r, 1000));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(aiReviewResponse(body.signalId, body.evidenceKey)) }).catch(() => {});
+  });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ }).click();
+  const sheet = page.getByTestId('scanner-mobile-sheet');
+  await sheet.getByRole('button', { name: 'AI 근거 검토', exact: true }).click();
+  await expect.poll(() => started).toBe(true);
+  await sheet.getByRole('button', { name: 'Signal Detail 닫기' }).click();
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^미국주식/ }).click();
+  await page.getByRole('button', { name: /^Apple AAPL · US · STOCK$/ }).click();
+  await page.waitForTimeout(1100);
+  await expect(sheet.getByTestId('scanner-ai-evidence-review')).not.toContainText('공개 근거를 검토했으며 수익성은 확인되지 않았습니다.');
+});
+
 type ResponseOptions = {
   market?: string;
   assetClass?: 'stock' | 'coin_spot' | 'coin_futures';
@@ -22,6 +109,7 @@ function scannerResponse(options: ResponseOptions = {}) {
   const partial = options.partial ?? false;
   const card = {
     signalId: `signal:${market}:${symbol}:${timeframe}`,
+    aiReviewEvidenceKey: 'a'.repeat(64),
     assetClass,
     market,
     exchange: assetClass === 'coin_spot' ? 'UPBIT' : assetClass === 'coin_futures' ? 'BITGET' : 'KRX',
@@ -159,6 +247,11 @@ function validZeroScannerResponse() {
 
 async function fulfill(route: Route, payload: unknown, delayMs = 0) {
   if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  // A successful fixture must describe the requested timeframe, just like
+  // the real API. Identity-mismatch tests use route.fulfill directly.
+  if (typeof payload === 'object' && payload !== null && 'ok' in payload && payload.ok === true) {
+    payload = { ...payload, timeframe: new URL(route.request().url()).searchParams.get('timeframe') ?? '1D' };
+  }
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -316,6 +409,34 @@ test('actual-provider semantics with zero signals remains a valid flow fixture',
   await expect(page.getByTestId('scanner-zero-outcome')).toContainText('공급자 데이터와 분석은 정상');
   await expect(page.getByTestId('scanner-zero-outcome')).toContainText('유니버스 80');
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('blocked empty data is not displayed as a verified no-signal result', async ({ page }) => {
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', route => {
+    const response = validZeroScannerResponse();
+    return fulfill(route, { ...response, dataState: 'untrusted', outcome: 'DATA_QUALITY_REJECT',
+      message: '상위 시간봉 검증 실패 · 정상 검색 결과가 아닙니다.' });
+  });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('DATA_QUALITY_REJECT');
+  await expect(page.getByTestId('scanner-zero-outcome')).not.toContainText('공급자 데이터와 분석은 정상');
+});
+
+test('a failed market switch never shows the previous market cards or treats them as partial results', async ({ page }) => {
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('market') === 'US') {
+      return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'PROVIDER_UNAVAILABLE' }) });
+    }
+    return fulfill(route, scannerResponse());
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByRole('button', { name: /^삼성전자 005930/ })).toBeVisible();
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^미국주식/ }).click();
+  await expect(page.getByRole('button', { name: /^삼성전자 005930/ })).toHaveCount(0);
+  await expect(page.getByRole('alert')).toBeVisible();
 });
 
 test('latest timeframe response wins and all four public markets remain separated', async ({ page }) => {

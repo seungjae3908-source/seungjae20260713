@@ -39,6 +39,7 @@ import {
   type ScannerProviderHealthState,
 } from '../services/scanner-provider-health.contract';
 import { withScannerOutcome } from '../services/scanner-signal.types';
+import { ScannerAiReviewError, scannerAiEvidenceReviewer, type ScannerAiEvidenceReviewer } from '../services/scanner-ai-evidence-review.service';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
 
@@ -59,6 +60,7 @@ export interface BoundedMarketScanRouteDependencies {
   scanner?: StockScannerRunner;
   guard?: ScannerRequestGuard;
   deadlineMs?: number;
+  aiReviewer?: ScannerAiEvidenceReviewer;
 }
 
 class ScanRouteDeadlineError extends Error {
@@ -267,6 +269,7 @@ export function createBoundedMarketScanRouter(
   const router: IRouter = Router();
   const scanner = dependencies.scanner ?? StockSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
+  const aiReviewer = dependencies.aiReviewer ?? scannerAiEvidenceReviewer;
   const routeDeadlineMs = dependencies.deadlineMs ?? STOCK_SCANNER_ROUTE_DEADLINE_MS;
   if (!Number.isFinite(routeDeadlineMs) || routeDeadlineMs <= 0) {
     throw new Error(`invalid stock scanner route deadline: ${routeDeadlineMs}`);
@@ -274,6 +277,36 @@ export function createBoundedMarketScanRouter(
 
   router.use(requireScannerSession);
   router.use(requireCapability('canAccessBasicInfo'));
+
+  router.post('/ai-review', async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || Object.keys(body).some(key => key !== 'signalId' && key !== 'evidenceKey')
+      || typeof body.signalId !== 'string' || !body.signalId || body.signalId.length > 240
+      || typeof body.evidenceKey !== 'string' || !/^[a-f0-9]{64}$/.test(body.evidenceKey)) {
+      return res.status(400).json({ ok: false, error: 'AI_REVIEW_REFERENCE_INVALID' });
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(new Error('AI_REVIEW_ABORTED'));
+    req.once('aborted', abort); res.once('close', abort);
+    const timer = setTimeout(abort, 7000);
+    let lease: ReturnType<ScannerRequestGuard['acquire']> | undefined;
+    try {
+      lease = guard.acquire(req.member!.id, `ai-review:${body.signalId}:${body.evidenceKey}`);
+      const result = await aiReviewer.review(req.member!.id, body.signalId, body.evidenceKey, controller.signal,
+        grade => grade == null || canReadScannerGrade(req.membershipLevel ?? 'pending', grade));
+      if (!controller.signal.aborted && !res.writableEnded) return res.json({ ok: true, ...result });
+      if (!res.writableEnded && !res.destroyed) return res.status(504).json({ ok: false, error: 'AI_REVIEW_DEADLINE' });
+    } catch (error) {
+      if (res.writableEnded || res.destroyed) return;
+      if (error instanceof ScannerAiReviewError) return res.status(error.status).json({ ok: false, error: error.code });
+      if (error instanceof ScannerRequestGuardError) return responseError(res, error);
+      return res.status(controller.signal.aborted ? 504 : 502).json({ ok: false, error: 'AI_REVIEW_UNAVAILABLE' });
+    } finally {
+      clearTimeout(timer); lease?.release(); req.removeListener('aborted', abort); res.removeListener('close', abort);
+    }
+  });
 
   router.get('/', async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -345,7 +378,8 @@ export function createBoundedMarketScanRouter(
       const result = await Promise.race([scanPromise, routeDeadline]);
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
-      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      const visibleResult = aiReviewer.capture(req.member!.id,
+        withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined)));
       productPaperSourceRegistry.captureScanner(req.member!.id, visibleResult, String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase());
       void deliverScannerTelegramAlerts(
         visibleResult.alerts,

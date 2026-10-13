@@ -1,4 +1,4 @@
-import type { ScannerQualityCandle } from './scanner-data-quality.service';
+import { scannerTimestampMs, type ScannerQualityCandle } from './scanner-data-quality.service';
 
 export interface ScannerMacdSnapshot {
   macd: number | null;
@@ -57,23 +57,30 @@ export function scannerEma(values: number[], period: number): number | null {
 }
 
 export function scannerRsi(values: number[], period = 14): number | null {
-  if (values.length <= period) return null;
+  if (!Number.isInteger(period) || period < 1 || values.length <= period) return null;
   let gains = 0;
   let losses = 0;
-  const start = values.length - period;
-  for (let index = start; index < values.length; index += 1) {
+  for (let index = 1; index <= period; index += 1) {
     const delta = values[index] - values[index - 1];
     if (delta >= 0) gains += delta;
     else losses += Math.abs(delta);
   }
+  gains /= period;
+  losses /= period;
+  for (let index = period + 1; index < values.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    gains = (gains * (period - 1) + Math.max(0, delta)) / period;
+    losses = (losses * (period - 1) + Math.max(0, -delta)) / period;
+  }
+  if (gains === 0 && losses === 0) return 50;
   if (losses === 0) return 100;
   const relativeStrength = gains / losses;
   return 100 - 100 / (1 + relativeStrength);
 }
 
 export function scannerAtr(candles: ScannerQualityCandle[], period = 14): number | null {
-  if (candles.length < 2) return null;
-  const rows = candles.slice(-Math.min(candles.length, period + 1));
+  if (!Number.isInteger(period) || period < 1 || candles.length <= period) return null;
+  const rows = candles;
   const ranges: number[] = [];
   for (let index = 1; index < rows.length; index += 1) {
     const current = rows[index];
@@ -84,7 +91,9 @@ export function scannerAtr(candles: ScannerQualityCandle[], period = 14): number
       Math.abs(current.low - previous.close),
     ));
   }
-  return average(ranges);
+  let atr = average(ranges.slice(0, period))!;
+  for (const range of ranges.slice(period)) atr = (atr * (period - 1) + range) / period;
+  return atr;
 }
 
 export function scannerMacd(values: number[]): ScannerMacdSnapshot {
@@ -109,11 +118,12 @@ export function scannerMacd(values: number[]): ScannerMacdSnapshot {
 }
 
 export function scannerAdx(candles: ScannerQualityCandle[], period = 14): number | null {
-  if (candles.length < period + 1) return null;
-  const rows = candles.slice(-(period + 1));
+  if (!Number.isInteger(period) || period < 2 || candles.length < 2 * period) return null;
+  const rows = candles;
   let trTotal = 0;
   let plusTotal = 0;
   let minusTotal = 0;
+  const dxValues: number[] = [];
   for (let index = 1; index < rows.length; index += 1) {
     const current = rows[index];
     const previous = rows[index - 1];
@@ -124,22 +134,40 @@ export function scannerAdx(candles: ScannerQualityCandle[], period = 14): number
       Math.abs(current.high - previous.close),
       Math.abs(current.low - previous.close),
     );
-    trTotal += trueRange;
-    if (upMove > downMove && upMove > 0) plusTotal += upMove;
-    if (downMove > upMove && downMove > 0) minusTotal += downMove;
+    const plus = upMove > downMove && upMove > 0 ? upMove : 0;
+    const minus = downMove > upMove && downMove > 0 ? downMove : 0;
+    if (index < period) {
+      trTotal += trueRange;
+      plusTotal += plus;
+      minusTotal += minus;
+      continue;
+    }
+    trTotal = trTotal - trTotal / period + trueRange;
+    plusTotal = plusTotal - plusTotal / period + plus;
+    minusTotal = minusTotal - minusTotal / period + minus;
+    const denominator = plusTotal + minusTotal;
+    dxValues.push(trTotal > 0 && denominator > 0 ? Math.abs(plusTotal - minusTotal) / denominator * 100 : 0);
   }
-  if (!(trTotal > 0)) return null;
-  const plusDi = plusTotal / trTotal * 100;
-  const minusDi = minusTotal / trTotal * 100;
-  const denominator = plusDi + minusDi;
-  if (!(denominator > 0)) return 0;
-  return Math.abs(plusDi - minusDi) / denominator * 100;
+  // ADX is Wilder-smoothed DX, not the latest window's single DX value.
+  let adx = average(dxValues.slice(0, period))!;
+  for (const dx of dxValues.slice(period)) adx = (adx * (period - 1) + dx) / period;
+  return adx;
 }
 
-export function scannerVwap(candles: ScannerQualityCandle[]): number | null {
+export function scannerVwap(candles: ScannerQualityCandle[], sessionTimeZone?: string): number | null {
+  const latestAt = candles.length ? scannerTimestampMs(candles.at(-1)!.time) : null;
+  const formatter = sessionTimeZone ? new Intl.DateTimeFormat('en-CA', {
+    timeZone: sessionTimeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  }) : null;
+  if (formatter && latestAt == null) return null;
+  const sessionDate = formatter ? formatter.format(new Date(latestAt!)) : null;
   let weighted = 0;
   let volume = 0;
   for (const candle of candles) {
+    if (formatter) {
+      const at = scannerTimestampMs(candle.time);
+      if (at == null || formatter.format(new Date(at)) !== sessionDate) continue;
+    }
     if (!(candle.volume >= 0) || !Number.isFinite(candle.volume)) continue;
     const typical = (candle.high + candle.low + candle.close) / 3;
     weighted += typical * candle.volume;
@@ -168,9 +196,10 @@ export function scannerTradeIntensityProxy(candles: ScannerQualityCandle[], look
   return pressure * relativeVolume;
 }
 
-export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[]): ScannerIndicatorSnapshot {
+export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[], sessionTimeZone?: string): ScannerIndicatorSnapshot {
   const closes = candles.map((row) => row.close).filter(Number.isFinite);
-  const recent20 = candles.slice(-20);
+  // A breakout must be compared with prior bars, not its own high/low.
+  const recent20 = candles.slice(-21, -1);
   const latest = candles.at(-1) ?? null;
   const firstVolumeWindow = candles.slice(-20, -10).map((row) => row.volume).filter(Number.isFinite);
   const lastVolumeWindow = candles.slice(-10).map((row) => row.volume).filter(Number.isFinite);
@@ -195,12 +224,12 @@ export function buildScannerIndicatorSnapshot(candles: ScannerQualityCandle[]): 
     rsi14: scannerRsi(closes, 14),
     atr14: scannerAtr(candles, 14),
     adx14: scannerAdx(candles, 14),
-    vwap: scannerVwap(candles),
+    vwap: scannerVwap(candles, sessionTimeZone),
     relativeVolume20: scannerRelativeVolume(candles, 20),
     tradeIntensityProxy: scannerTradeIntensityProxy(candles, 20),
     macd: scannerMacd(closes),
-    support20: recent20.length ? Math.min(...recent20.map((row) => row.low)) : null,
-    resistance20: recent20.length ? Math.max(...recent20.map((row) => row.high)) : null,
+    support20: recent20.length === 20 ? Math.min(...recent20.map((row) => row.low)) : null,
+    resistance20: recent20.length === 20 ? Math.max(...recent20.map((row) => row.high)) : null,
     volumeTrend20,
     momentum5,
   };
