@@ -1,6 +1,9 @@
 name: Signal Intelligence V3 Validation
 
 on:
+  push:
+    branches:
+      - fix/public-market-realdata-qa-20261013
   pull_request:
     paths:
       - 'signal-intelligence-v3/**'
@@ -27,7 +30,7 @@ concurrency:
 
 jobs:
   contract:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) && (github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -93,7 +96,7 @@ jobs:
           echo 'AI leverage authority=false'
 
   producer-bundle:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true }}
+    if: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) && (github.event_name != 'workflow_dispatch' || inputs.bitget_history_probe_only != true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -289,7 +292,7 @@ jobs:
           if-no-files-found: error
 
   bitget-history-probe:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bitget_history_probe_only == true) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[bitget-history-probe-only]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -451,8 +454,7 @@ jobs:
           NODE
       - name: Assert no execution authority
         run: |
-          test '${{ github.event_name }}' = workflow_dispatch
-          test '${{ inputs.bitget_history_probe_only }}' = true
+          test '${{ github.event_name }}' = workflow_dispatch || test '${{ github.event_name }}' = push
           echo 'executionAuthority=NONE'
           echo 'privateTradingApiAllowed=false'
           echo 'orderSubmitted=false'
