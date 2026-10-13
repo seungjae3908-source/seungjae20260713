@@ -15,6 +15,7 @@ export type ForwardObserverScannerQualityIdentity = Readonly<{
   parameterHash: string;
   researchCodeSha: string;
   market: ForwardObserverLane['market'];
+  strategyHorizon: ForwardObserverLane['strategyHorizon'];
   symbol: string;
   timeframe: ForwardObserverLane['timeframe'];
   direction: Exclude<ScannerTradeAction, 'NONE'>;
@@ -75,7 +76,7 @@ function nonEmpty(value: unknown): value is string {
 
 function normalizeDirection(action: ScannerTradeAction | undefined, lane: ForwardObserverLane): Exclude<ScannerTradeAction, 'NONE'> | null {
   if (lane.market === 'CRYPTO_FUTURES') return action === 'LONG' || action === 'SHORT' ? action : null;
-  return action === 'BUY' || action === 'SELL' ? action : null;
+  return action === 'BUY' ? action : null;
 }
 
 function artifactSafetyValid(value: unknown): value is ForwardObserverScannerQualityArtifact['safety'] {
@@ -113,6 +114,7 @@ function validateArtifactShape(artifact: ForwardObserverScannerQualityArtifact, 
       || !SHA64.test(identity.parameterHash)
       || !SHA40.test(identity.researchCodeSha)
       || identity.researchCodeSha.toLowerCase() !== researchCodeSha.toLowerCase()
+      || !['SCALP', 'SWING', 'POSITION'].includes(identity.strategyHorizon)
       || !nonEmpty(identity.symbol)
       || !nonEmpty(identity.timeframe)
       || !SHA64.test(identity.datasetSnapshotHash)
@@ -138,6 +140,7 @@ function validateArtifactShape(artifact: ForwardObserverScannerQualityArtifact, 
       identity.parameterHash,
       identity.researchCodeSha.toLowerCase(),
       identity.market,
+      identity.strategyHorizon,
       identity.symbol.toUpperCase(),
       identity.timeframe,
       identity.direction,
@@ -187,9 +190,10 @@ function expectedPromotionIdentity(
   researchCodeSha: string,
 ) {
   const records = new StrategyPromotionService({ sourceSha: researchCodeSha })
-    .list({ market: lane.market, strategyHorizon: 'SWING', direction }).items;
+    .list({ market: lane.market, strategyHorizon: lane.strategyHorizon, direction }).items;
   const exact = records.filter((record) =>
     record.identity.market === lane.market
+    && record.identity.strategyHorizon === lane.strategyHorizon
     && record.identity.timeframe === lane.timeframe
     && record.identity.direction === direction
     && record.identity.researchCodeSha === researchCodeSha);
@@ -261,6 +265,7 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
       && entry.identity.parameterHash === promotion.parameterHash
       && entry.identity.researchCodeSha.toLowerCase() === researchCodeSha
       && entry.identity.market === input.lane.market
+      && entry.identity.strategyHorizon === input.lane.strategyHorizon
       && entry.identity.symbol.toUpperCase() === symbol
       && entry.identity.timeframe === input.lane.timeframe
       && entry.identity.direction === direction);

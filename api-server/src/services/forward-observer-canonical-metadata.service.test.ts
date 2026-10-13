@@ -53,7 +53,8 @@ function card(overrides: Partial<ScannerSignalCard> = {}): ScannerSignalCard {
   };
 }
 
-const KR_LANE = { market: 'KR_STOCK' as const, timeframe: '60m' as const };
+const KR_LANE = { market: 'KR_STOCK' as const, timeframe: '60m' as const,
+  strategyMode: 'swing' as const, strategyHorizon: 'SWING' as const, style: 'SWING' as const };
 
 test('authoritative Promotion identity is forwarded unchanged into the pre-Profit paperCandidate', () => {
   const source = new StrategyPromotionService({ sourceSha: SHA })
@@ -135,19 +136,19 @@ test('CRYPTO_SPOT SWING 4H Promotion identity attaches only to the exact 4H obse
   });
   const exact = resolveForwardObserverCanonicalMetadata({
     card: spot,
-    lane: { market: 'CRYPTO_SPOT', timeframe: '4H' },
+    lane: { market: 'CRYPTO_SPOT', timeframe: '4H', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
     researchCodeSha: SHA,
   });
   assert.deepEqual(exact.blockers, []);
   assert.ok(exact.paperCandidate);
   assert.equal(exact.paperCandidate.signal.timeframe, '4H');
-  assert.equal(exact.paperCandidate.signal.horizon, 12);
+  assert.equal(exact.paperCandidate.signal.horizon, 3);
   assert.equal(exact.paperCandidate.signal.market, 'CRYPTO_SPOT');
   assert.equal(exact.paperCandidate.executionAuthority, 'NONE');
 
   const wrongLane = resolveForwardObserverCanonicalMetadata({
     card: spot,
-    lane: { market: 'CRYPTO_SPOT', timeframe: '60m' },
+    lane: { market: 'CRYPTO_SPOT', timeframe: '60m', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
     researchCodeSha: SHA,
   });
   assert.equal(wrongLane.paperCandidate, null);

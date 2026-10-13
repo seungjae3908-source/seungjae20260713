@@ -7,6 +7,7 @@ import {
   canonicalForwardStrategyIdentityFromCard,
   createForwardObserverRuntimeState,
   latestCardEvidenceTimestamp,
+  migrateForwardObserverRuntimeState,
   runForwardRecommendationObserverCycle,
   validateForwardObserverRuntimeState,
   type ForwardObserverLane,
@@ -180,23 +181,42 @@ function response(lane: ForwardObserverLane, cards: ScannerSignalCard[]): Scanne
   };
 }
 
-test('observer lane topology preserves 60m stocks/futures and canonical Spot 4H', () => {
+test('observer lane topology covers four markets times three independent canonical strategy horizons', () => {
   assert.deepEqual(
-    FORWARD_OBSERVER_LANES.map((lane) => [lane.id, lane.market, lane.timeframe]),
+    FORWARD_OBSERVER_LANES.map((lane) => [lane.id, lane.market, lane.strategyHorizon, lane.timeframe]),
     [
-      ['KR_SWING_60M', 'KR_STOCK', '60m'],
-      ['US_SWING_60M', 'US_STOCK', '60m'],
-      ['SPOT_SWING_4H', 'CRYPTO_SPOT', '4H'],
-      ['FUTURES_SWING_60M', 'CRYPTO_FUTURES', '60m'],
+      ['KR_SWING_60M', 'KR_STOCK', 'SWING', '60m'],
+      ['US_SWING_60M', 'US_STOCK', 'SWING', '60m'],
+      ['SPOT_SWING_4H', 'CRYPTO_SPOT', 'SWING', '4H'],
+      ['FUTURES_SWING_60M', 'CRYPTO_FUTURES', 'SWING', '60m'],
+      ['KR_SCALPING_5M', 'KR_STOCK', 'SCALP', '5m'],
+      ['KR_MID_LONG_1D', 'KR_STOCK', 'POSITION', '1D'],
+      ['US_SCALPING_5M', 'US_STOCK', 'SCALP', '5m'],
+      ['US_MID_LONG_1D', 'US_STOCK', 'POSITION', '1D'],
+      ['SPOT_SCALPING_15M', 'CRYPTO_SPOT', 'SCALP', '15m'],
+      ['SPOT_MID_LONG_4H', 'CRYPTO_SPOT', 'POSITION', '4H'],
+      ['FUTURES_SCALPING_5M', 'CRYPTO_FUTURES', 'SCALP', '5m'],
+      ['FUTURES_MID_LONG_4H', 'CRYPTO_FUTURES', 'POSITION', '4H'],
     ],
   );
   const state = createForwardObserverRuntimeState(SHA, new Date(T0));
-  assert.deepEqual(state.cursors, {
-    KR_SWING_60M: 0,
-    US_SWING_60M: 0,
-    SPOT_SWING_4H: 0,
-    FUTURES_SWING_60M: 0,
-  });
+  assert.deepEqual(state.cursors, Object.fromEntries(FORWARD_OBSERVER_LANES.map((lane) => [lane.id, 0])));
+});
+
+test('legacy four-lane restart state migrates without losing SWING cursors or observations', () => {
+  const current = createForwardObserverRuntimeState(SHA, new Date(T0));
+  const legacy = {
+    ...current,
+    schemaVersion: 1,
+    cursors: { KR_SWING_60M: 7, US_SWING_60M: 8, SPOT_SWING_4H: 9, FUTURES_SWING_60M: 10 },
+  };
+  const migrated = migrateForwardObserverRuntimeState(legacy, SHA);
+  assert.equal(migrated.schemaVersion, 1);
+  assert.equal(migrated.cursors.KR_SWING_60M, 7);
+  assert.equal(migrated.cursors.FUTURES_SWING_60M, 10);
+  assert.equal(migrated.cursors.KR_SCALPING_5M, 0);
+  assert.equal(migrated.cursors.FUTURES_MID_LONG_4H, 0);
+  assert.deepEqual(migrated.observations, legacy.observations);
 });
 
 test('runtime state is immutable-SHA scoped and fail-closed on cursor or safety mixing', () => {
@@ -318,12 +338,7 @@ test('cycle creates one idempotent public observation, ignores pre-signal bars a
   assert.equal(first.state.observations[0]?.identity.parameterHash, 'kr-swing-params-v1');
   assert.equal(first.state.observations[0]?.snapshot.strategyProfileVersion, 'signal-profile-v1');
   assert.equal('strategyProfileVersion' in (first.state.observations[0]?.identity ?? {}), false);
-  assert.deepEqual(first.state.cursors, {
-    KR_SWING_60M: 20,
-    US_SWING_60M: 20,
-    SPOT_SWING_4H: 20,
-    FUTURES_SWING_60M: 20,
-  });
+  assert.deepEqual(first.state.cursors, Object.fromEntries(FORWARD_OBSERVER_LANES.map((lane) => [lane.id, 20])));
 
   const second = await runForwardRecommendationObserverCycle({
     state: first.state,
@@ -476,7 +491,7 @@ test('summary reports exact mixed Forward timeframes', async () => {
       now: () => new Date(T0 + 60_000),
     },
   });
-  assert.deepEqual(result.summary.coverage.strategies, ['SWING']);
-  assert.deepEqual(result.summary.coverage.timeframes, ['60m', '4H']);
-  assert.equal(result.summary.coverage.fullStrategyCoverage, false);
+  assert.deepEqual(result.summary.coverage.strategies, ['SCALPING', 'SWING', 'MID_LONG']);
+  assert.deepEqual(result.summary.coverage.timeframes, ['5m', '15m', '60m', '4H', '1D']);
+  assert.equal(result.summary.coverage.fullStrategyCoverage, true);
 });

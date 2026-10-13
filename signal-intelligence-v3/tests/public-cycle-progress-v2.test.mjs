@@ -92,8 +92,14 @@ test('explicit producer counters take precedence and malformed counters fail to 
 function snapshot() {
   const markets = { KR: ['KR_STOCK', 'krx-symbol-master'], US: ['US_STOCK', 'nasdaq-trader-public-directory'],
     SPOT: ['CRYPTO_SPOT', 'upbit-public'], FUTURES: ['CRYPTO_FUTURES', 'bitget-public'] };
+  const profiles = {
+    KR: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_1D'],
+    US: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_1D'],
+    SPOT: ['SCALPING_15M', 'SWING_4H', 'MID_LONG_4H'],
+    FUTURES: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_4H'],
+  };
   const coverage = Object.entries(markets).flatMap(([prefix, [market, source]]) =>
-    ['SCALPING_15M', prefix === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => ({
+    profiles[prefix].map(p => ({
       laneId: `${prefix}_${p}`, market, sourceCycleId: 'now', status: 'VALID_NO_TRADE', universeSource: source,
       rosterId: 'a'.repeat(64),
       universePartial: false, universeStale: false, universeProviderErrors: 0, responseDataState: 'complete',
@@ -102,7 +108,7 @@ function snapshot() {
         partial: false, timedOut: false, cancelled: false },
     })));
   const rows = ['now', 'old'].map(cycle => ({ id: cycle, market: 'KR_STOCK',
-    provenance: { laneId: 'KR_SCALPING_15M', cursor: 0, sourceCycleId: cycle, rosterId: 'a'.repeat(64) } }));
+    provenance: { laneId: 'KR_SCALPING_5M', cursor: 0, sourceCycleId: cycle, rosterId: 'a'.repeat(64) } }));
   return { rosterBindingVersion: 1, sourceCycleId: 'now', coverage, rows, lists: { krBuy: rows }, events: rows.map(r => ({ id: r.id })) };
 }
 

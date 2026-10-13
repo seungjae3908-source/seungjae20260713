@@ -4,8 +4,12 @@ import { createHash } from 'node:crypto';
  * Telegram-only runtime intake proof. Safe GET envelopes alone are not
  * evidence of a fresh market event. No Bot API, DB, broker or file actions.
  */
-const IDS=['KR','US','SPOT','FUTURES'].flatMap(m=>
- ['SCALPING_15M',m==='SPOT'?'SWING_4H':'SWING_60M','MID_LONG_1D'].map(x=>m+'_'+x));
+const IDS=[
+ 'KR_SCALPING_5M','KR_SWING_60M','KR_MID_LONG_1D',
+ 'US_SCALPING_5M','US_SWING_60M','US_MID_LONG_1D',
+ 'SPOT_SCALPING_15M','SPOT_SWING_4H','SPOT_MID_LONG_4H',
+ 'FUTURES_SCALPING_5M','FUTURES_SWING_60M','FUTURES_MID_LONG_4H',
+];
 const SHA=/^[0-9a-f]{40}$/u;
 const EPOCH=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const OBJ=(x:unknown):Record<string,any>|null=>
@@ -19,6 +23,12 @@ const SOURCE:Record<string,string[]>={
 };
 const PREFIX:Record<string,string>={KR_STOCK:'KR',US_STOCK:'US',
  CRYPTO_SPOT:'SPOT',CRYPTO_FUTURES:'FUTURES'};
+const SLOT:Record<string,Record<string,readonly [string,string]>>={
+ KR_STOCK:{SCALPING:['SCALPING_5M','5m'],SWING:['SWING_60M','60m'],MID_LONG:['MID_LONG_1D','1D']},
+ US_STOCK:{SCALPING:['SCALPING_5M','5m'],SWING:['SWING_60M','60m'],MID_LONG:['MID_LONG_1D','1D']},
+ CRYPTO_SPOT:{SCALPING:['SCALPING_15M','15m'],SWING:['SWING_4H','4H'],MID_LONG:['MID_LONG_4H','4H']},
+ CRYPTO_FUTURES:{SCALPING:['SCALPING_5M','5m'],SWING:['SWING_60M','60m'],MID_LONG:['MID_LONG_4H','4H']},
+};
 const STATUSES=new Set(['CANDIDATES_AVAILABLE','VALID_NO_TRADE','BLOCKED_DATA','SEARCH_FAILURE']);
 
 /** Stable immutable delivery episode: same source-day candidate across polls,
@@ -123,10 +133,8 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
       : SOURCE[market]?.length>0&&(dir==='BUY'||(!candidateEvent&&dir===null))))
     return false;
   const expectedId=[market,event.symbol,event.strategy,event.timeframe,dir].join('|');
-  const slot=event.timeframe==='15m'?'SCALPING_15M'
-    :event.timeframe==='60m'?'SWING_60M'
-      :event.timeframe==='4H'?'SWING_4H'
-      :event.timeframe==='1D'?'MID_LONG_1D':null;
+  const configuredSlot=SLOT[market]?.[event.strategy];
+  const slot=configuredSlot?.[1]===event.timeframe?configuredSlot[0]:null;
   if(event.id!==expectedId||!slot)return false;
   const row=candidates.get(event.id);
   if(!row||row.market!==market||row.symbol!==event.symbol
