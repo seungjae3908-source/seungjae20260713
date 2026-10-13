@@ -387,8 +387,15 @@ function asLastGoodFallback(response: ScannerResponse, error: SignalScannerReque
   };
 }
 
+// Explicit S-only read on all four markets. The existing API grade gate
+// filters cards and Telegram alerts before publishing them. This never grants
+// execution authority or turns an unavailable market into a fake S signal.
+function scannerSGradeOnlyUrl(request: SignalScannerRequest): string {
+  return `${buildSignalScannerRequestUrl(request)}&grade=S`;
+}
+
 async function requestScannerUpstream(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
-  const response = await authorizedFetch(buildSignalScannerRequestUrl(request), {
+  const response = await authorizedFetch(scannerSGradeOnlyUrl(request), {
     signal,
     cache: 'no-store',
     headers: { 'Cache-Control': 'no-cache, no-store, max-age=0', Pragma: 'no-cache' },
@@ -469,7 +476,7 @@ function consumeInFlight(key: string, entry: ScannerInFlight, signal: AbortSigna
 
 export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
   if (signal.aborted) throw abortError();
-  const key = JSON.stringify([request.cacheOwner ?? 'unscoped', buildSignalScannerRequestUrl(request)]);
+  const key = JSON.stringify([request.cacheOwner ?? 'unscoped', scannerSGradeOnlyUrl(request)]);
   const existing = scannerInFlight.get(key);
   if (existing) return consumeInFlight(key, existing, signal);
 
