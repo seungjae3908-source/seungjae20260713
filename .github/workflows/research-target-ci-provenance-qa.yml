@@ -1,0 +1,35 @@
+name: Research Target CI Provenance Unit QA
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/scripts/research-target-ci-provenance.cjs
+      - .github/tests/research-target-ci-provenance.test.cjs
+      - .github/workflows/research-target-ci-provenance-qa.yml
+      - .github/scripts/research-isolated-release.cjs
+      - api-server/scripts/release-candidate-provenance.cjs
+      - api-server/scripts/production-ci-provenance.cjs
+
+permissions:
+  contents: read
+
+jobs:
+  metadata-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test code-proof resolution with mocked GitHub metadata only
+        run: |
+          set -Eeuo pipefail
+          node --check .github/scripts/research-target-ci-provenance.cjs
+          node --test .github/tests/research-target-ci-provenance.test.cjs
+      - name: Source-only boundary
+        run: echo 'Unwired metadata helper only. No runtime, activation, CI dispatch, human approval or financial authority.'
