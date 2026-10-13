@@ -9,9 +9,9 @@ if (!file || !/^[0-9a-f]{40}$/.test(sha)) {
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
 const features = value?.features ?? {};
 if (
-  value?.schemaVersion !== 'staging-automation-research-verdict-v1'
+  value?.schemaVersion !== 'staging-automation-paper-research-backtester-verdict-v2'
   || value?.targetSha !== sha
-  || value?.scope !== 'AUTOMATION_RESEARCH_ONLY'
+  || value?.scope !== 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY'
   || value?.scopedStagingQa !== 'PASS'
   || value?.release_ready !== true
   || value?.productionReleaseReady !== true
@@ -22,7 +22,7 @@ if (
   || features.automaticPaperTrading !== 'PASS'
   || features.researchCenter !== 'PASS'
   || features.backtester !== 'PASS'
-  || features.telegramTradeJournal !== 'PASS'
+  || value?.telegramExcludedFromScope !== true
   || value?.automaticTradingActivated !== false
   || value?.liveTradingAuthorityGranted !== false
   || value?.autoTradingAuthorityGranted !== false

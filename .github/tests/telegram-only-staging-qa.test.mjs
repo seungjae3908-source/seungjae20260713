@@ -4,8 +4,10 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import {
   SAFE_NETWORK_STATUSES,
+  isPublicTelegramIpv4,
   STAGING_REQUIRED_STATUS,
   probeStagingTelegramNetwork,
+  readStagingLoopbackHealth,
   runStagingReadOnlyProbe,
   stagingTelegramVerdict,
 } from '../../ops/telegram-only-staging-readonly.mjs';
@@ -27,7 +29,25 @@ test('scope contains exactly Telegram service test targets and an explicit test 
   assert.equal(pkg.scripts['test:telegram'], 'node ./test.mjs telegram');
   assert.ok(runner.includes('telegram: ['));
   const group = runner.slice(runner.indexOf('  telegram: ['), runner.indexOf('  search: ['));
-  assert.equal((group.match(/\.test\.ts/g) || []).length, 11);
+  const declared=[...group.matchAll(/path[.]join[(]root, '([^']+[.]test[.]ts)'[)]/gu)]
+    .map(match=>match[1]);
+  const exactExpected=[
+    'src/lib/telegram-worker-ownership.test.ts',
+    'src/services/telegram-ai-watch-delivery.service.test.ts',
+    'src/services/telegram-notification.service.test.ts',
+    'src/services/telegram-test-message.service.test.ts',
+    'src/services/telegram-market-brief.service.test.ts',
+    'src/services/telegram-readable-format.service.test.ts',
+    'src/services/telegram-investment-intelligence.service.test.ts',
+    'src/services/scanner-telegram-plan-format.service.test.ts',
+    'src/services/member-holdings-telegram-alert.contract.test.ts',
+    'src/services/member-holdings-telegram-producer.service.test.ts',
+    'src/features/user-broker-telegram/user-broker-telegram.service.test.ts',
+    'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts',
+    'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts',
+  ];
+  assert.equal(new Set(declared).size,declared.length,'no duplicate Telegram test registration');
+  assert.deepEqual(declared.sort(),exactExpected.sort());
   assert.ok(group.includes('src/services/telegram-notification.service.test.ts'));
   assert.ok(group.includes('src/services/telegram-market-brief.service.test.ts'));
   assert.ok(group.includes('user-broker-telegram/user-broker-telegram.service.test.ts'));
@@ -48,10 +68,14 @@ test('Staging transport is fail-closed on a stale PM2 or deploy marker', async (
       return sha;
     },
     network: async () => 'IPV4_TLS_READY',
+    health: async () => ({ runtimeSha:sha, markerSha:sha, identityMatch:true }),
   };
   const accepted = await runStagingReadOnlyProbe(common);
   assert.equal(accepted.classification, STAGING_REQUIRED_STATUS);
   assert.equal(accepted.scope, 'TELEGRAM_ONLY_STAGING_NETWORK');
+  assert.equal(accepted.runtimeSha, sha);
+  assert.equal(accepted.healthMarkerSha, sha);
+  assert.equal(accepted.healthIdentityMatch, true);
   assert.equal(accepted.botIdentityVerified, false);
   assert.equal(accepted.roomPostingVerified, false);
   assert.equal(accepted.telegramSends, 0);
@@ -61,11 +85,23 @@ test('Staging transport is fail-closed on a stale PM2 or deploy marker', async (
 
   assert.equal((await runStagingReadOnlyProbe({
     ...common, pm2Exec: () => fakeProcess('b'.repeat(40)),
-  })).classification, 'STAGING_RUNTIME_SHA_MISMATCH');
+  })).classification, 'STAGING_PM2_ENV_CONFLICT');
   assert.equal((await runStagingReadOnlyProbe({
     ...common, pm2Exec: () => fakeProcess('b'.repeat(40)),
     fileRead: () => 'b'.repeat(40),
+    health: async () => ({
+      runtimeSha:'b'.repeat(40), markerSha:'b'.repeat(40), identityMatch:true,
+    }),
   })).classification, 'STAGING_RUNTIME_NOT_AT_MAIN');
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, pm2Exec: () => fakeProcess(null),
+  })).classification, STAGING_REQUIRED_STATUS);
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, health: async () => null,
+  })).classification, 'STAGING_RUNTIME_HEALTH_UNAVAILABLE');
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, fileRead: () => 'b'.repeat(40),
+  })).classification, 'STAGING_RUNTIME_SHA_MISMATCH');
   assert.equal((await runStagingReadOnlyProbe({
     ...common, network: async () => 'IPV4_TLS_TIMEOUT',
   })).classification, 'STAGING_TELEGRAM_NETWORK_BLOCKED');
@@ -77,10 +113,10 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     lookupImpl: (host, opts, done) => {
       assert.equal(host, 'api.telegram.org');
       assert.equal(opts.family, 4);
-      done(null, '192.0.2.123', 4);
+      done(null, '149.154.166.110', 4);
     },
     connectImpl: config => {
-      assert.equal(config.host, 'api.telegram.org');
+      assert.equal(config.host, '149.154.166.110');
       assert.equal(config.servername, 'api.telegram.org');
       assert.equal(config.port, 443);
       assert.equal(config.family, 4);
@@ -94,7 +130,7 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     },
   });
   assert.equal(success, 'IPV4_TLS_READY');
-  assert.equal(success.includes('192.0.2'), false);
+  assert.equal(success.includes('149.154'), false);
   assert.ok(SAFE_NETWORK_STATUSES.includes(success));
 
   const rejected = await probeStagingTelegramNetwork({
@@ -116,6 +152,7 @@ test('read-only staging probe never reads Production path and never records secr
   const unavailable = await runStagingReadOnlyProbe({
     target:sha, pm2Exec:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
     fileRead:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
+    health:async()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
     network:async()=> 'IPV4_DNS_FAILED',
   });
   assert.equal(unavailable.classification, 'STAGING_PM2_OFFLINE');
@@ -155,4 +192,197 @@ test('owner command is exact-current-main, protected in isolated staging environ
   assert.ok(workflow.includes('node --test'));
   assert.ok(workflow.includes('api-server/src/features/user-broker-telegram/**'));
   assert.ok(workflow.includes('secretValuesRecorded !== false'));
+});
+
+test('local Staging health proves Node env-loaded SHA but never returns its full payload', async () => {
+  const input = {
+    ok:true,service:'api-server',route:'/api/health',deploySha:sha,
+    processDeploySha:sha,deployMarkerSha:sha,identityMatch:true,
+    secretPotentiallyInWorkerState:'DO_NOT_EXPOSE_THIS_VALUE',
+  };
+  const read = await readStagingLoopbackHealth({
+    getImpl: (url, opts, onResponse) => {
+      assert.equal(url, 'http://127.0.0.1:18083/api/health');
+      assert.equal(opts.timeout, 5000);
+      const request = new EventEmitter();
+      request.destroy = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        onResponse(response);
+        response.emit('data', Buffer.from(JSON.stringify(input)));
+        response.emit('end');
+      });
+      return request;
+    },
+  });
+  assert.deepEqual(read, {runtimeSha:sha, markerSha:sha, identityMatch:true});
+  assert.equal(JSON.stringify(read).includes('DO_NOT_EXPOSE_THIS_VALUE'), false);
+});
+
+test('Staging health rejects invalid endpoint or untrusted process SHA', async () => {
+  const simulate = body => readStagingLoopbackHealth({
+    getImpl: (_url, _opts, onResponse) => {
+      const request = new EventEmitter();
+      request.destroy = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        onResponse(response);
+        response.emit('data', Buffer.from(JSON.stringify(body)));
+        response.emit('end');
+      });
+      return request;
+    },
+  });
+  assert.equal(await simulate({
+    ok:true,service:'unknown',route:'/api/health',
+    deploySha:sha,processDeploySha:sha,deployMarkerSha:sha,identityMatch:true,
+  }), null);
+  assert.equal(await simulate({
+    ok:true,service:'api-server',route:'/api/health',
+    deploySha:sha,processDeploySha:'invalid',deployMarkerSha:sha,identityMatch:true,
+  }), null);
+  const redacted = await readStagingLoopbackHealth({
+    getImpl: () => { throw new Error('DO_NOT_PUBLISH_RAW_HTTP_ERROR'); },
+  });
+  assert.equal(redacted, null);
+});
+
+test('Staging QA reports health runtime SHA separately from supervisor environment', () => {
+  assert.ok(source.includes("http://127.0.0.1:18083/api/health"));
+  assert.ok(source.includes("const STAGING_PM2 = 'seungjae-staging'"));
+  assert.ok(workflow.includes("'runtimeSha','healthMarkerSha','healthIdentityMatch'"));
+  assert.ok(workflow.includes("Actual running Staging app SHA: "));
+  assert.ok(workflow.includes("TELEGRAM_STAGING_SCOPE_NOT_READY"));
+  assert.ok(!source.includes("http://0.0.0.0"));
+});
+
+
+test('Staging TLS probe uses one DNS lookup, never logs addresses, and classifies phase timeouts', async () => {
+  const cases = [
+    { events: ['timeout'], expected: 'IPV4_TCP_TIMEOUT' },
+    { events: ['connect', 'timeout'], expected: 'IPV4_TLS_TIMEOUT' },
+    { events: ['connect', 'secureConnect'], expected: 'IPV4_TLS_CERT_FAILED' },
+  ];
+  for (const item of cases) {
+    let lookups = 0;
+    let connects = 0;
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (host, opts, done) => {
+        assert.equal(host, 'api.telegram.org');
+        assert.equal(opts.family, 4);
+        lookups++;
+        done(null, '149.154.166.111', 4);
+      },
+      connectImpl: config => {
+        connects++;
+        assert.equal(config.host, '149.154.166.111');
+        assert.equal(config.servername, 'api.telegram.org');
+        assert.equal(config.rejectUnauthorized, true);
+        assert.equal(config.autoSelectFamily, false);
+        const socket = new EventEmitter();
+        socket.authorized = false;
+        socket.destroyed = false;
+        socket.destroy = () => { socket.destroyed = true; };
+        queueMicrotask(() => item.events.forEach(event => socket.emit(event)));
+        return socket;
+      },
+    });
+    assert.equal(lookups, 1);
+    assert.equal(connects, 1);
+    assert.equal(result, item.expected);
+    assert.ok(SAFE_NETWORK_STATUSES.includes(result));
+    assert.ok(!JSON.stringify({ result }).includes('149.154.166.111'));
+  }
+});
+
+test('Staging probe fails closed on malformed IPv4 DNS without opening a socket', async () => {
+  for (const address of ['host.example', '127.0.0.1.2', '::1', '']) {
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (_host, _opts, done) => done(null, address, 4),
+      connectImpl: () => { throw Error('MUST_NOT_CONNECT'); },
+    });
+    assert.equal(result, 'IPV4_DNS_FAILED');
+  }
+});
+
+
+test('Staging rejects private, loopback, CGNAT, documentation and multicast DNS replies',async()=>{
+  for (const ip of [
+    '10.0.0.1','172.16.8.9','192.168.1.10','127.0.0.1',
+    '169.254.12.23','100.64.0.1','192.0.2.123','198.51.100.7',
+    '203.0.113.7','198.18.0.9','224.0.0.5','255.255.255.255',
+  ]) {
+    assert.equal(isPublicTelegramIpv4(ip),false);
+    let connects=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connects++;throw Error('MUST_NOT_CONNECT_INTERNAL');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connects,0);
+    assert.ok(!JSON.stringify(result).includes(ip));
+  }
+  // Previously 192.0.0.1 and 192.0.0.9 escaped the partial
+  // special-purpose exclusion despite not being Telegram edge IPs.
+  for(const ip of ['192.0.0.1','192.0.0.8','192.0.0.9','192.0.0.10',
+    '192.0.0.254','192.0.2.250']){
+    assert.equal(isPublicTelegramIpv4(ip),false,ip);
+    let connected=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_h,_o,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connected++;throw Error('MUST_NOT_CONNECT');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connected,0);
+  }
+  assert.equal(isPublicTelegramIpv4('149.154.166.110'),true);
+});
+
+test('Staging TLS certificate failure is distinct from TCP disconnect and never logs exception',async()=>{
+  const classify=error=>probeStagingTelegramNetwork({
+    lookupImpl:(_host,_opts,callback)=>callback(null,'149.154.166.111',4),
+    connectImpl:(_config)=>{
+      const socket=new EventEmitter();
+      socket.destroyed=false;
+      socket.destroy=()=>{socket.destroyed=true;};
+      queueMicrotask(()=>socket.emit('error',error));
+      return socket;
+    },
+  });
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_DNS_DETAIL'),
+    {code:'ERR_TLS_CERT_ALTNAME_INVALID'})),'IPV4_TLS_CERT_FAILED');
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_TCP_DETAIL'),
+    {code:'ECONNRESET'})),'IPV4_TLS_CONNECT_FAILED');
+});
+
+test('native ETIMEDOUT errors preserve TCP/TLS phase instead of generic connect failure', async()=>{
+  for(const afterTcp of [false,true]){
+    let lookups=0,connects=0;
+    const verdict=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>{
+        lookups++;cb(null,'149.154.166.110',4);
+      },
+      connectImpl:()=>{
+        connects++;
+        const socket=new EventEmitter();
+        socket.destroyed=false;
+        socket.destroy=()=>{socket.destroyed=true;};
+        queueMicrotask(()=>{
+          if(afterTcp)socket.emit('connect');
+          socket.emit('error',Object.assign(
+            new Error('DO_NOT_LOG_PROVIDER_PRIVATE_ROUTING'),
+            {code:'ETIMEDOUT'},
+          ));
+        });
+        return socket;
+      },
+    });
+    assert.equal(lookups,1);
+    assert.equal(connects,1);
+    assert.equal(verdict,afterTcp?'IPV4_TLS_TIMEOUT':'IPV4_TCP_TIMEOUT');
+    assert.ok(SAFE_NETWORK_STATUSES.includes(verdict));
+    assert.equal(JSON.stringify(verdict).includes('PRIVATE_ROUTING'),false);
+  }
 });

@@ -241,7 +241,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       {
         id: 'auto-trading',
         href: APP_ROUTES.autoTrading,
-        label: '자동매매',
+        label: '기술매매',
         icon: 'power',
         capability: 'canAccessAutoTrading',
       },
@@ -251,13 +251,6 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         label: '과거검증',
         icon: 'chart',
         capability: 'canAccessBacktests',
-      },
-      {
-        id: 'paper-trading',
-        href: APP_ROUTES.paperTrading,
-        label: '모의매매',
-        icon: 'power',
-        capability: 'canAccessPaperTrading',
       },
     ],
   },
@@ -277,7 +270,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     menu: [
       { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 정보', icon: 'chat', capability: 'canAccessBasicInfo' },
-      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },
+      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
       {
         id: 'portfolio',
         href: APP_ROUTES.portfolio,
@@ -364,6 +357,7 @@ export function navigationGroupMatches(group: NavigationGroup, location: string)
 }
 
 export function navigationMenuItemMatches(item: NavigationMenuItem, location: string): boolean {
+  if (item.id === 'auto-trading' && cleanAppPath(location) === APP_ROUTES.paperTrading) return true;
   return cleanAppPath(location) === item.href;
 }
 

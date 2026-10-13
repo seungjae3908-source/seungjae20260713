@@ -530,7 +530,9 @@ function isSameOriginBrowserRead(request: Request) {
   }
 }
 
-function isPendingAiChartCandleReadIdentity(input: {
+// Match only same-origin stock candle GETs. Any failed request still goes through
+// the strict browser error collection and fails Staging; this only drains reads.
+function isPendingStockCandleReadIdentity(input: {
   method: string;
   rawUrl: string;
   origin: string;
@@ -540,6 +542,14 @@ function isPendingAiChartCandleReadIdentity(input: {
     return input.method === 'GET'
       && url.origin === input.origin
       && /^\/api\/stocks\/[^/]+\/candles$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isStockCandleOwnerRoute(rawUrl: string) {
+  try {
+    return ['/ai-chart', '/stock-info', '/stock-info/analysis'].includes(new URL(rawUrl).pathname);
   } catch {
     return false;
   }
@@ -577,6 +587,7 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const mutations = new Set<Request>();
   const apiGets = new Set<Request>();
   const browserReads = new Set<Request>();
+  const stockCandleStarted = new WeakMap<Request, { path: string; at: number }>();
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
   pendingSameOriginReadRequests.set(page, browserReads);
@@ -590,6 +601,14 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
     if (isSameOriginBrowserRead(request)) browserReads.add(request);
+    if (isPendingStockCandleReadIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      origin: new URL(page.url()).origin,
+    })) {
+      // Path-only evidence: never record query strings or account identifiers.
+      stockCandleStarted.set(request, { path: diagnosticUrl(page.url()), at: Date.now() });
+    }
     const capabilityDenial = activeCapabilityDenialObservations.get(page);
     if (capabilityDenial && isCapabilityDenialApiGet(request, capabilityDenial)) {
       capabilityDenial.requests.add(request);
@@ -692,7 +711,11 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   });
   page.on('requestfailed', (request) => {
     completeBrowserRequest(page, request);
-    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`);
+    const started = stockCandleStarted.get(request);
+    const detail = diagnosticText(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`)
+      + (started
+        ? ` [candleStartPath=${started.path} endPath=${diagnosticUrl(page.url())} ageMs=${Date.now() - started.at}]`
+        : '');
     const diagnostic: Diagnostic = {
       test: testName,
       url: diagnosticUrl(request.url()),
@@ -841,13 +864,13 @@ async function waitForBrowserNetworkQuiescence(page: Page) {
   ).toBe('quiescent');
 }
 
-async function waitForPendingAiChartCandleReads(page: Page) {
+async function waitForPendingStockCandleReads(page: Page) {
   const origin = new URL(page.url()).origin;
   let quietSince: number | null = null;
   await expect.poll(
     () => {
       const outstanding = [...(pendingSameOriginReadRequests.get(page) ?? [])]
-        .filter((request) => isPendingAiChartCandleReadIdentity({
+        .filter((request) => isPendingStockCandleReadIdentity({
           method: request.method(),
           rawUrl: request.url(),
           origin,
@@ -857,14 +880,20 @@ async function waitForPendingAiChartCandleReads(page: Page) {
         return 'pending';
       }
       if (quietSince === null) quietSince = Date.now();
-      return Date.now() - quietSince >= 750 ? 'quiescent' : 'quiet';
+      return Date.now() - quietSince >= 1_200 ? 'quiescent' : 'quiet';
     },
     {
-      message: 'real same-origin AI Chart candle reads must settle before navigation',
+      message: 'real AAPL/stock candle GETs must settle before verifier navigation or teardown',
       timeout: 20_000,
       intervals: [100, 200, 300, 500],
     },
   ).toBe('quiescent');
+}
+
+async function drainBeforeStockChartDeparture(page: Page) {
+  if (isStockCandleOwnerRoute(page.url())) {
+    await waitForPendingStockCandleReads(page);
+  }
 }
 
 async function waitForScannerNetworkQuiescence(page: Page) {
@@ -1217,6 +1246,7 @@ async function expectNavigationTransition(
   open: () => Promise<void>,
 ) {
   await settle(page);
+  await drainBeforeStockChartDeparture(page);
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
     toRoute: routeIdentity(route, page.url()),
@@ -1250,9 +1280,7 @@ async function expectHealthyRoute<T>(
   observeAfterSettle?: () => Promise<T>,
 ): Promise<T | void> {
   await settle(page);
-  if (['/ai-chart', '/stock-info'].includes(new URL(page.url()).pathname)) {
-    await waitForPendingAiChartCandleReads(page);
-  }
+  await drainBeforeStockChartDeparture(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
     ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
@@ -1295,9 +1323,7 @@ async function expectHealthyRoute<T>(
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
-  if (['/ai-chart', '/stock-info'].includes(new URL(page.url()).pathname)) {
-    await waitForPendingAiChartCandleReads(page);
-  }
+  await drainBeforeStockChartDeparture(page);
   const origin = new URL(page.url()).origin;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
@@ -1376,7 +1402,9 @@ function scannerFixture(state: 'complete' | 'partial' | 'unavailable') {
     requestId: `phase10-${state}`,
     assetClass: 'stock',
     market: 'KR',
-    timeframe: '1D',
+    // The new KR stock swing profile requests 4H; the actual scanner
+    // rejects mismatched 1D data rather than showing an unsafe signal.
+    timeframe: '4H',
     cards: [],
     alerts: [],
     failures: unavailable
@@ -1511,6 +1539,9 @@ async function selectVisibleUsAaplForAnalysis(page: Page) {
     expect(chartResponse, 'AAPL chart read must complete instead of aborting').not.toBeNull();
     expect(chartResponse!.status(), 'AAPL chart read must complete below HTTP 400').toBeLessThan(400);
   }
+  // Real AAPL analysis may begin a delayed candle fallback after /chart finished.
+  // Observe and drain it instead of accepting a verifier-created abort.
+  await waitForPendingStockCandleReads(page);
 }
 
 async function runAuthenticatedSearchCertification(page: Page) {
@@ -1701,45 +1732,6 @@ async function runAuthenticatedAiChartCertification(
             : null,
         };
       });
-      // Capture only public static asset path/timings, never querystrings,
-      // request headers, tokens or account identities. Keep the strict p95
-      // requirement unchanged: this is diagnostic evidence, not a bypass.
-      const publicChunkWaterfall = await page.evaluate(() => {
-        const origin = window.location.origin;
-        return performance.getEntriesByType('resource')
-          .filter((entry): entry is PerformanceResourceTiming => entry instanceof PerformanceResourceTiming)
-          .flatMap((entry) => {
-            try {
-              const url = new URL(entry.name);
-              if (url.origin !== origin || !url.pathname.startsWith('/assets/')
-                || !/\.(?:js|css)$/.test(url.pathname)) return [];
-              return [{
-                path: url.pathname,
-                initiatorType: entry.initiatorType,
-                startedAtMs: Math.round(entry.startTime),
-                responseStartMs: Math.round(entry.responseStart),
-                responseEndMs: Math.round(entry.responseEnd),
-                durationMs: Math.round(entry.duration),
-                transferSize: entry.transferSize,
-                decodedBodySize: entry.decodedBodySize,
-              }];
-            } catch {
-              return [];
-            }
-          })
-          .sort((left, right) => right.responseEndMs - left.responseEndMs)
-          .slice(0, 25);
-      });
-      await testInfo.attach('ai-chart-cold-public-asset-waterfall-session-' + session + '.json', {
-        body: Buffer.from(JSON.stringify({
-          session,
-          firstUsableChartMs: cold.usableMs,
-          firstShellMs: cold.firstShellMs,
-          coldRouteChunkMs: navigationTiming.firstRouteChunkMs,
-          assets: publicChunkWaterfall,
-        }, null, 2)),
-        contentType: 'application/json',
-      });
       expect(
         navigationTiming.firstRouteChunkMs,
         'AI Chart route chunk timing must be present; missing timing is not zero',
@@ -1777,6 +1769,7 @@ async function runAuthenticatedAiChartCertification(
       diagnostics.authenticated_ai_chart.sessions.push(timing);
       await expectHealthyRoute(page, '/');
       await waitForBrowserNetworkQuiescence(page);
+      await waitForPendingStockCandleReads(page);
       verifierOwnedTeardownSafe = true;
     } finally {
       if (verifierOwnedTeardownSafe) {
@@ -2036,6 +2029,25 @@ test('scanner read identity accepts only same-origin market scan GETs', () => {
   })).toBe(false);
 });
 
+test('stock candle drain matches only the exact same-origin GET and chart owner routes', () => {
+  const origin = 'https://staging.example.test';
+  const sample = { method: 'GET', rawUrl: `${origin}/api/stocks/AAPL/candles?tf=5m`, origin };
+  expect(isPendingStockCandleReadIdentity(sample)).toBe(true);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/stocks/AAPL/candles` })).toBe(true);
+  expect(isPendingStockCandleReadIdentity({ ...sample, method: 'POST' })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/stocks/AAPL/chart?tf=5m` })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: `${origin}/api/market/scan` })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: 'https://other.example.test/api/stocks/AAPL/candles' })).toBe(false);
+  expect(isPendingStockCandleReadIdentity({ ...sample, rawUrl: 'not-a-url' })).toBe(false);
+  for (const route of ['/ai-chart', '/stock-info', '/stock-info/analysis']) {
+    expect(isStockCandleOwnerRoute(`${origin}${route}?ticker=AAPL`)).toBe(true);
+  }
+  for (const route of ['/', '/scanner', '/portfolio', '/stock-info-other']) {
+    expect(isStockCandleOwnerRoute(`${origin}${route}`)).toBe(false);
+  }
+  expect(isStockCandleOwnerRoute('not-a-url')).toBe(false);
+});
+
 test('stock chart hedge abort proof requires a matching successful primary candle identity', () => {
   const origin = 'https://staging.example.test';
   const successfulPrimaryIdentity = stockChartReadIdentity({
@@ -2063,30 +2075,6 @@ test('stock chart hedge abort proof requires a matching successful primary candl
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, successfulPrimaryIdentity: null })).toBe(false);
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, now: 12_001 })).toBe(false);
-});
-
-test('stock detail and AI Chart departures drain only legitimate same-origin candle reads', () => {
-  const origin = 'https://staging.example.test';
-  const sample = {
-    method: 'GET',
-    rawUrl: `${origin}/api/stocks/005930/candles?tf=5m`,
-    origin,
-  };
-  expect(isPendingAiChartCandleReadIdentity(sample)).toBe(true);
-  expect(isPendingAiChartCandleReadIdentity({
-    ...sample, rawUrl: `${origin}/api/stocks/005930/candles`,
-  })).toBe(true);
-  expect(isPendingAiChartCandleReadIdentity({ ...sample, method: 'POST' })).toBe(false);
-  expect(isPendingAiChartCandleReadIdentity({
-    ...sample, rawUrl: `${origin}/api/stocks/005930/chart?tf=5m`,
-  })).toBe(false);
-  expect(isPendingAiChartCandleReadIdentity({
-    ...sample, rawUrl: `${origin}/api/market/scan`,
-  })).toBe(false);
-  expect(isPendingAiChartCandleReadIdentity({
-    ...sample, rawUrl: 'https://other.example.test/api/stocks/005930/candles',
-  })).toBe(false);
-  expect(isPendingAiChartCandleReadIdentity({ ...sample, rawUrl: 'not-a-url' })).toBe(false);
 });
 
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
@@ -2450,6 +2438,14 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';
     await page.route('**/api/market/scan**', async (route) => {
+      // Verify the live request contract, not only the synthetic response.
+      // Any unexpected strategy/timeframe/grade remains a genuine QA failure.
+      const requested = new URL(route.request().url());
+      expect(requested.pathname).toBe('/api/market/scan');
+      expect(requested.searchParams.get('market')).toBe('KR');
+      expect(requested.searchParams.get('strategy')).toBe('swing');
+      expect(requested.searchParams.get('timeframe')).toBe('4H');
+      expect(requested.searchParams.getAll('grade')).toEqual(['S']);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -2577,6 +2573,7 @@ test.describe('real staging release readiness', () => {
     await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
+    await waitForPendingStockCandleReads(page);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
@@ -2678,7 +2675,15 @@ test.describe('real staging release readiness', () => {
 
     await openMenuRoute('information', '포트폴리오', '/portfolio');
 
-    await openMenuRoute('technical', '모의매매', '/paper-trading');
+    // Product navigation has ONE technical trading menu. Paper is the real
+    // reachable execution-scope tab inside that shared trading workspace.
+    await openMenuRoute('technical', '기술매매', '/auto-trading');
+    const paperMode = page.getByTestId('technical-mode-paper');
+    await expect(paperMode).toBeVisible();
+    await expectNavigationTransition(page, '/paper-trading', async () => {
+      await paperMode.click();
+    });
+    await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
     await expect(page.locator('body')).toContainText(/모의|paper/i);
 
     await openMenuRoute('information', '연구센터', '/research-center');
@@ -2778,7 +2783,7 @@ test.describe('real staging release readiness', () => {
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
-    for (const label of ['검색기', 'AI차트', '과거검증', '모의매매']) {
+    for (const label of ['검색기', 'AI차트', '과거검증', '기술매매']) {
       const target = technicalMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing technical navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });
@@ -2793,6 +2798,16 @@ test.describe('real staging release readiness', () => {
         }
         await item.click();
       });
+      if (label === '기술매매') {
+        // Verify the Paper target from its real shared workspace, not a
+        // duplicate/deprecated top-level navigation link.
+        const paperTab = page.getByTestId('technical-mode-paper');
+        await expect(paperTab).toBeVisible();
+        await expectNavigationTransition(page, '/paper-trading', async () => {
+          await paperTab.click();
+        });
+        await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
+      }
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');

@@ -118,19 +118,23 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();
   await expect(page.getByTestId('portfolio-data-quality')).toContainText('일부 데이터');
 
-  await openMenuItem(page, '기술', '모의매매');
+  await openMenuItem(page, '기술', '기술매매');
+  await expect(page).toHaveURL(/\/auto-trading$/u);
+  await expect(page.getByTestId('technical-trading-modes')).toBeVisible();
+  await page.getByTestId('technical-mode-paper').click();
   await expect(page).toHaveURL(/\/paper-trading$/u);
   await expect(page.getByTestId('paper-trading-shell')).toBeVisible();
+  await expect(page.getByTestId('trading-paper-modes')).toBeVisible();
 
   await openMenuItem(page, '정보', '연구센터');
   await expect(page).toHaveURL(/\/research-center$/u);
   await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-general-view')).toBeVisible();
-  await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+  await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(6);
 
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toBeVisible();
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await expect(page.getByRole('button', { name: '연구', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toHaveCount(0);
   await expect(page.getByTestId('research-overview-tab')).toBeVisible();
 
   await page.reload();

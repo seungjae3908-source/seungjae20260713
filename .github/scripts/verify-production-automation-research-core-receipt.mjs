@@ -9,7 +9,7 @@ if (!file || !/^[0-9a-f]{40}$/.test(sha) || !Number.isSafeInteger(runId) || runI
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
 const features = value?.features ?? {};
 if (
-  value?.schemaVersion !== 'production-automation-research-core-qa-v1'
+  value?.schemaVersion !== 'production-automation-paper-research-backtester-core-qa-v2'
   || value?.targetSha !== sha
   || value?.productionDeployRunId !== runId
   || value?.officialProductionOrigin !== true
@@ -20,21 +20,13 @@ if (
   || features.automaticPaperTrading !== 'PASS'
   || features.researchCenter !== 'PASS'
   || features.backtester !== 'PASS'
-  || features.telegramTradeJournal !== 'PASS'
   || value?.backtestMode !== 'backtest-only'
   || value?.paperRuntimeContractVerified !== true
   || typeof value?.paperRuntimeReadyAtDeploy !== 'boolean'
   || !Array.isArray(value?.paperRuntimeBlockers)
   || value.paperRuntimeBlockers.some((entry) => typeof entry !== 'string' || !/^[A-Z][A-Z0-9_]{1,90}$/.test(entry))
-  || value?.telegramTradeJournalReady !== true
   || value?.journalReadbackReady !== true
-  || value?.telegramJournalPreferenceConfigured !== true
-  || value?.telegramRuntimeContractVerified !== true
-  || typeof value?.telegramConnectedAtDeploy !== 'boolean'
-  || typeof value?.telegramWorkerReadyAtDeploy !== 'boolean'
-  || value?.telegramTestDelivered !== false
-  || value?.telegramTestMessages !== 0
-  || value?.telegramTestDeferredToProtectedActivation !== true
+  || value?.telegramExcludedFromScope !== true
   || value?.policyMutationPerformed !== false
   || value?.liveTradingAuthorityGranted !== false
   || value?.autoTradingAuthorityGranted !== false

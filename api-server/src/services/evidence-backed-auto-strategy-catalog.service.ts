@@ -52,7 +52,7 @@ export type StrategyRuleEvidenceKey =
   | 'fundingRiskReady';
 
 export type StrategyPilotProfile = Readonly<{
-  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
+  mode: 'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY';
   initialOperatingCapitalKrw: number;
   profitCompoundShare: 0.5;
   profitReserveShare: 0.5;
@@ -63,19 +63,19 @@ export type StrategyPilotProfile = Readonly<{
   maxConcurrentLivePositions: number;
   maxDailyLiveEntries: null;
   maxDailyLosingTrades: number;
-  dailyLossStopKrw: number;
+  dailyLossStopPercent: 3;
   maxConsecutiveLosses: number;
   lossCooldownMinutes: number;
   sameSymbolReentryRequiresFreshSignal: true;
   futuresMaxLeverage: 7;
   paperMirrorRequired: true;
   pairedFillComparisonRequired: true;
-  liveOrderRequiresExplicitConfirmation: true;
-  automaticLiveExecutionAllowed: false;
+  liveOrderRequiresExplicitConfirmation: false;
+  automaticLiveExecutionAllowed: true;
 }>;
 
 export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
-  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM',
+  mode: 'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY',
   initialOperatingCapitalKrw: 500_000,
   profitCompoundShare: 0.5,
   profitReserveShare: 0.5,
@@ -86,15 +86,15 @@ export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   maxConcurrentLivePositions: 2,
   maxDailyLiveEntries: null,
   maxDailyLosingTrades: 5,
-  dailyLossStopKrw: 25_000,
+  dailyLossStopPercent: 3,
   maxConsecutiveLosses: 3,
   lossCooldownMinutes: 30,
   sameSymbolReentryRequiresFreshSignal: true,
   futuresMaxLeverage: 7,
   paperMirrorRequired: true,
   pairedFillComparisonRequired: true,
-  liveOrderRequiresExplicitConfirmation: true,
-  automaticLiveExecutionAllowed: false,
+  liveOrderRequiresExplicitConfirmation: false,
+  automaticLiveExecutionAllowed: true,
 });
 
 export type StrategyRulePackDefinition = Readonly<{

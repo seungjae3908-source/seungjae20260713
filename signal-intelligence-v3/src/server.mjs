@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
+import { currentPublicCyclePublication } from './public-cycle-progress-v2.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
@@ -14,6 +15,7 @@ const PRODUCER_PATH = String(process.env.SIGNAL_INTELLIGENCE_PRODUCER_PATH || ''
 if (!/^([0-9a-f]{40})$/.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 if (HOST !== '127.0.0.1' && HOST !== '::1') throw new Error('SIGNAL_INTELLIGENCE_LOOPBACK_ONLY');
 if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) throw new Error('SIGNAL_INTELLIGENCE_PORT_INVALID');
+if (!Number.isFinite(MAX_STATE_AGE_MS) || MAX_STATE_AGE_MS <= 0) throw new Error('SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID');
 if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mjs'))) throw new Error('SIGNAL_INTELLIGENCE_PRODUCER_PATH_INVALID');
 
 let cache = { mtimeMs: -1, snapshot: null, loadedAt: null, error: 'SNAPSHOT_NOT_READY' };
@@ -28,6 +30,13 @@ async function loadSnapshot() {
     if (cache.snapshot && cache.mtimeMs === metadata.mtimeMs) return cache;
     const parsed = JSON.parse(await readFile(STATE_FILE, 'utf8'));
     assertSignalIntelligenceV3Snapshot(parsed);
+    if (parsed.serviceSha != null && parsed.serviceSha !== SERVICE_SHA) throw new Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
+    if (parsed.profile?.fullStrategyCoverage === true) {
+      const publication = currentPublicCyclePublication(parsed);
+      parsed.lists = publication.lists;
+      parsed.events = publication.events;
+      parsed.currentPageSourceReady = publication.currentPageReady;
+    }
     cache = { mtimeMs: metadata.mtimeMs, snapshot: parsed, loadedAt: new Date().toISOString(), error: null };
     return cache;
   } catch (error) {
@@ -54,7 +63,8 @@ function json(res, status, body) {
 
 function snapshotAgeMs(snapshot) {
   const generatedAt = Date.parse(snapshot?.generatedAt || '');
-  return Number.isFinite(generatedAt) ? Math.max(0, Date.now() - generatedAt) : Number.POSITIVE_INFINITY;
+  const age = Date.now() - generatedAt;
+  return Number.isFinite(generatedAt) && age >= 0 ? age : Number.POSITIVE_INFINITY;
 }
 
 function publicList(snapshot, name) {
@@ -74,6 +84,8 @@ function triggerPublicRescan() {
       ...process.env,
       SIGNAL_INTELLIGENCE_SERVICE_SHA: SERVICE_SHA,
       SIGNAL_INTELLIGENCE_STATE_FILE: STATE_FILE,
+      SIGNAL_INTELLIGENCE_STATE_DIR: dirname(STATE_FILE),
+      SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true',
       LIVE_TRADING: 'false',
       PRIVATE_API_ENABLED: 'false',
       ORDER_AUTHORITY: 'false',
@@ -133,7 +145,11 @@ const server = createServer(async (req, res) => {
       port: PORT,
       snapshotReady: Boolean(state.snapshot),
       snapshotAgeMs: ageMs,
-      snapshotFresh: ageMs != null ? ageMs <= MAX_STATE_AGE_MS : false,
+      snapshotTimestampFresh: ageMs != null && ageMs <= MAX_STATE_AGE_MS,
+      snapshotCurrentPageSourceReady: state.snapshot?.profile?.fullStrategyCoverage === true
+        ? state.snapshot.currentPageSourceReady === true : null,
+      snapshotFresh: ageMs != null && ageMs <= MAX_STATE_AGE_MS
+        && (state.snapshot?.profile?.fullStrategyCoverage !== true || state.snapshot.currentPageSourceReady === true),
       snapshotError: state.error,
       rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode },
       executionAuthority: 'NONE',

@@ -29,7 +29,7 @@ const POLICY_SIGNAL_TYPES = [
   'PROVIDER_SERVER_ERROR',
 ] as const;
 const POLICY_PRIORITIES = ['CRITICAL', 'IMPORTANT', 'INFO'] as const;
-const TELEGRAM_STATUSES = ['ACTIVE', 'REVOKED', 'DISCONNECTED', 'UNAVAILABLE'] as const;
+const TELEGRAM_STATUSES = ['ACTIVE', 'REVOKED', 'DISCONNECTED', 'UNAVAILABLE', 'RECOVERY_REQUIRED'] as const;
 const ALERT_POLICY_SOURCES = ['STORED', 'DEFAULT_MISSING', 'DEFAULT_INVALID'] as const;
 const BROKER_EXCHANGES = ['bitget', 'upbit', 'kiwoom', 'toss'] as const;
 const BROKER_ACCOUNT_MODES = ['paper', 'mock', 'live'] as const;
@@ -173,7 +173,7 @@ function validateAlertPolicy(value: unknown, expectedUserId: string): void {
     || (policy.deliveryMode === 'BATCHED' && (!digest.enabled || digest.windowMs === 0))) fail();
 }
 
-function validateTelegramRuntime(value: unknown): void {
+function validateTelegramRuntime(value: unknown, now: number): void {
   const runtime = record(value);
   if (!runtime) fail();
   for (const key of [
@@ -187,6 +187,10 @@ function validateTelegramRuntime(value: unknown): void {
     'aiExplanationEnabled',
     'signalFollowupEnabled',
     'memberHoldingsEnabled',
+    'backgroundWorkersEnabled',
+    'personalWorkerEnabled',
+    'personalWorkerStarted',
+    'personalWorkerHealthy',
   ] as const) {
     if (typeof runtime[key] !== 'boolean') fail();
   }
@@ -194,6 +198,13 @@ function validateTelegramRuntime(value: unknown): void {
     && runtime.webhookConfigured === true
     && runtime.botUsernameConfigured === true;
   if (runtime.linkingReady !== expectedLinkingReady) fail();
+  if (!nullableString(runtime.personalWorkerErrorCode)
+    || !timestampOrNull(runtime.personalWorkerLastTickAt, now)
+    || !timestampOrNull(runtime.personalWorkerLastConfirmedDeliveryAt, now)) fail();
+  if (runtime.personalWorkerHealthy === true
+    && (runtime.personalWorkerStarted !== true
+      || runtime.personalWorkerErrorCode !== null
+      || runtime.personalWorkerLastConfirmedDeliveryAt === null)) fail();
   if (runtime.orderAuthority !== 'NONE'
     || runtime.privateTradingApiAllowed !== false
     || runtime.realOrderAllowed !== false) fail();
@@ -218,7 +229,18 @@ export function requireUserIntegrationsResponse(
     || typeof telegram.connected !== 'boolean'
     || !TELEGRAM_STATUSES.includes(telegram.status as (typeof TELEGRAM_STATUSES)[number])
     || !timestampOrNull(telegram.connectedAt, now)) fail();
-  if (telegram.connected === true) {
+  if (typeof telegram.recoveryRequired !== 'boolean'
+    || !nullableString(telegram.recoveryErrorCode)
+    || !timestampOrNull(telegram.recoveryFailedAt, now)) fail();
+  if (telegram.recoveryRequired === true) {
+    if (telegram.connected !== false
+      || telegram.status !== 'RECOVERY_REQUIRED'
+      || telegram.connectedAt === null
+      || telegram.recoveryErrorCode === null
+      || telegram.recoveryFailedAt === null) fail();
+  } else if (telegram.recoveryErrorCode !== null || telegram.recoveryFailedAt !== null) {
+    fail();
+  } else if (telegram.connected === true) {
     if (telegram.status !== 'ACTIVE' || telegram.connectedAt === null) fail();
   } else if (telegram.status === 'ACTIVE'
     || ((telegram.status === 'DISCONNECTED' || telegram.status === 'UNAVAILABLE')
@@ -247,7 +269,7 @@ export function requireUserIntegrationsResponse(
 
   validateAlertPolicy(root.alertPolicy, expectedUserId);
   if (!ALERT_POLICY_SOURCES.includes(root.alertPolicySource as (typeof ALERT_POLICY_SOURCES)[number])) fail();
-  validateTelegramRuntime(root.telegramRuntime);
+  validateTelegramRuntime(root.telegramRuntime, now);
 
   const expectedPartial = root.telegramStorageAvailable === false
     || root.brokerConnectionsAvailable === false

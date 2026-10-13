@@ -4,18 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import { runAndPublishSanitizedVideoResearchSnapshotV1 } from '../../packages/external-research/src/video-intelligence-phase3-snapshot-caller.js';
 import { preflightResearchProduction } from './engine.mjs';
-
-const DEFAULT_QUERIES = Object.freeze([
-  '국내 주식 단타 거래량 돌파 전략',
-  '미국 주식 데이트레이딩 RVOL ORB 전략',
-  '코인 현물 CVD 오더플로우 VWAP 전략',
-  '코인 선물 OI CVD 테이커 플로우 전략',
-  'korea stock momentum volume breakout strategy',
-  'US stocks in play RVOL ORB retest strategy',
-  'crypto spot order flow CVD VWAP reclaim strategy',
-  'crypto futures open interest CVD trend strategy',
-]);
-const MAX_QUERY_COUNT = 8;
+import { resolveResearchVideoDiscoveryQueries } from './research-video-discovery-policy.mjs';
 const MAX_RESULTS = 3;
 
 export const RESEARCH_VIDEO_DISCOVERY_SAFETY = Object.freeze({
@@ -34,33 +23,8 @@ export const RESEARCH_VIDEO_DISCOVERY_SAFETY = Object.freeze({
   realOrderEnabled: false,
 });
 
-const secretPattern = /(?:bearer\s+\S+|sk-[A-Za-z0-9_-]{12,}|(?:api[_ -]?key|access[_ -]?token|password|secret)\s*[:=]\s*\S+)/iu;
-const controlPattern = /[\u0000-\u001f\u007f]/u;
-
 function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
-}
-
-function cleanQuery(value) {
-  if (typeof value !== 'string') return null;
-  const query = value.normalize('NFKC').trim();
-  if (!query || query.length > 120 || controlPattern.test(query) || secretPattern.test(query)) return null;
-  return query;
-}
-
-function parseQueries(env) {
-  const raw = String(env.RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON ?? '').trim();
-  if (!raw) return [...DEFAULT_QUERIES];
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch { throw new Error('VIDEO_DISCOVERY_QUERIES_INVALID'); }
-  if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > MAX_QUERY_COUNT) {
-    throw new Error('VIDEO_DISCOVERY_QUERIES_INVALID');
-  }
-  const queries = parsed.map(cleanQuery);
-  if (queries.some((query) => !query) || new Set(queries).size !== queries.length) {
-    throw new Error('VIDEO_DISCOVERY_QUERIES_INVALID');
-  }
-  return queries;
 }
 
 function parseDiscoveryScope(env) {
@@ -126,7 +90,7 @@ async function exclusiveJson(path, value, env) {
 export function resolveResearchVideoDiscoveryPolicy(env = process.env) {
   const approved = String(env.RESEARCH_VIDEO_DISCOVERY_APPROVED ?? '').trim().toLowerCase() === 'true';
   const apiKey = String(env.YOUTUBE_DATA_API_KEY ?? '').trim();
-  const queries = parseQueries(env);
+  const queries = resolveResearchVideoDiscoveryQueries(env);
   const maxResultsRaw = Number(env.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? MAX_RESULTS);
   const maxResults = Number.isSafeInteger(maxResultsRaw) && maxResultsRaw >= 1 && maxResultsRaw <= MAX_RESULTS
     ? maxResultsRaw : MAX_RESULTS;

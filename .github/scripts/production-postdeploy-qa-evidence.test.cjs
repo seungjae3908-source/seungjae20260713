@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildProductionPostdeployQaEvidence, verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
+const {
+  buildProductionPostdeployQaEvidence,
+  verifyPostDeployMainLineage,
+  isActiveProductionTradingGateRun,
+  revalidateProductionTradingGateConflicts,
+  assertAutomaticPositionIsolationReceipt,
+  assertAutoLiveSignalReceipt,
+} = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
 const ZERO = {
@@ -13,6 +20,54 @@ const ZERO = {
   autoTradingAuthorityGranted: false,
 };
 const providers = ['bitget', 'kiwoom', 'toss', 'upbit'];
+test('signal transport receipts reject legacy unbound schema and never accept fabricated producer invocation', () => {
+  const receipt = { schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
+    productionDeployRunId: 42, canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true, maximumAgeMinutes: 30, entryCount: 0,
+    observedMarkets: [], entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true,
+    producerInvocationVerified: false, scheduleActive: true, scheduleEntryCount: 1,
+    disableSentinelPresent: false, publicDataOnly: true, privateRequestCount: 0,
+    financialMutationCount: 0, executionAuthority: 'NONE', realOrderSubmitted: false,
+    secretValuesRecorded: false, accountValuesRecorded: false, ...ZERO };
+  const context = { targetSha: SHA, productionDeployRunId: 42 };
+  assert.doesNotThrow(() => assertAutoLiveSignalReceipt(receipt, context));
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    schemaVersion: 'production-auto-live-signal-source-v1' }, context), /SIGNAL_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt,
+    producerInvocationVerified: true }, context), /SIGNAL_IDENTITY_INVALID/);
+  assert.throws(() => assertAutoLiveSignalReceipt({ ...receipt, entryCount: 1, entryShaMatch: true,
+    entryResearchCodeShas: ['a'.repeat(40)], observedMarkets: ['KR_STOCK'] }, context), /SIGNAL_IDENTITY_INVALID/);
+});
+const { REQUIRED_CHECKS, ADDITIONAL_CONTROLS } = require('./automatic-live-preactivation-audit.cjs');
+// Synthetic unit evidence only; this fixture must never be emitted as a runtime receipt.
+function memberAccountSignalFixture() {
+  return {
+    schemaVersion: 'automatic-live-preactivation-audit-v1', targetSha: SHA,
+    generatedAt: '2026-10-04T00:01:30.000Z', scope: 'MEMBER_ACCOUNT_AND_SIGNAL_READONLY_REHEARSAL',
+    ready: true, activationReady: false,
+    checks: REQUIRED_CHECKS.map((id) => ({ id, status: 'PASS', codes: [] })),
+    additionalRequiredControls: [...ADDITIONAL_CONTROLS], paperOutOfScope: true, telegramOutOfScope: true,
+    orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+    liveTradingAuthorityGrantedByAudit: false, autoTradingAuthorityGrantedByAudit: false,
+  };
+}
+
+test('AUTO isolation proof protects existing manual assets and rejects absent, mixed or mutating evidence', () => {
+  const account = fixture().account;
+  account.providers.find((row) => row.provider === 'toss').automaticPositionIsolation.manualProtectedPositionCount = 1;
+  account.providers.find((row) => row.provider === 'upbit').automaticPositionIsolation.manualProtectedPositionCount = 2;
+  assert.doesNotThrow(() => assertAutomaticPositionIsolationReceipt(account));
+  for (const [key, invalid] of [ ['ready', false], ['manualEntryBlocked', false], ['canonicalExitOnly', false],
+    ['ambiguousPositionCount', 1], ['manualProtectedPositionCount', -1], ['orderRequests', 1],
+    ['autoTradingAuthorityGranted', true], ['policyVersion', 'old-unscoped'] ]) {
+    const bad = structuredClone(account);
+    bad.providers[0].automaticPositionIsolation[key] = invalid;
+    assert.throws(() => assertAutomaticPositionIsolationReceipt(bad), /POSITION_ISOLATION/);
+  }
+  const old = structuredClone(account);
+  delete old.providers[0].automaticPositionIsolation;
+  assert.throws(() => assertAutomaticPositionIsolationReceipt(old), /POSITION_ISOLATION/);
+});
 
 function fixture() {
   return {
@@ -49,6 +104,9 @@ function fixture() {
         provider, connected: true, status: 'CONNECTED', stale: false, fresh: true,
         errorCode: null, checkedAtPresent: true, lastGoodAtPresent: true,
         reconciliation: 'PASS', reconciliationPassed: true, openOrderCount: 0,
+        automaticPositionIsolation: { ok: true, provider, policyVersion: 'manual-protected-auto-ledger-v1',
+          ready: true, fresh: true, manualEntryBlocked: true, canonicalExitOnly: true,
+          manualProtectedPositionCount: 0, automaticOwnedPositionCount: 0, ambiguousPositionCount: 0, ...ZERO },
       })),
       safetyCounters: {
         openOrderCount: 0,
@@ -125,6 +183,40 @@ test('only executing Trading Gate workflows block post-deploy QA; PR checks are 
   assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'waiting'}), false);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed', conclusion:'failure'}), false);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed'}), false);
+});
+test('transient non-command Issue runs are revalidated while a persistent Trading Gate remains blocking', async () => {
+  const slept = [];
+  const transient = await revalidateProductionTradingGateConflicts(
+    [{id: 101, event:'issue_comment', status:'in_progress'}],
+    {
+      stabilizationMs: 10_000,
+      sleep: async (milliseconds) => slept.push(milliseconds),
+      loadRun: async () => ({id: 101, event:'issue_comment', status:'completed', conclusion:'skipped'}),
+    },
+  );
+  assert.deepEqual(transient, []);
+  assert.deepEqual(slept, [10_000]);
+
+  const persistent = await revalidateProductionTradingGateConflicts(
+    [{id: 202, event:'issue_comment', status:'waiting'}],
+    {
+      sleep: async () => {},
+      loadRun: async () => ({id: 202, event:'issue_comment', status:'waiting'}),
+    },
+  );
+  assert.deepEqual(persistent, [{id: 202, event:'issue_comment', status:'waiting'}]);
+});
+test('Gate revalidation does not sleep or call GitHub when no authority-capable run is active', async () => {
+  let called = false;
+  const result = await revalidateProductionTradingGateConflicts(
+    [{id: 303, event:'pull_request', status:'in_progress'}],
+    {
+      sleep: async () => { called = true; },
+      loadRun: async () => { called = true; },
+    },
+  );
+  assert.deepEqual(result, []);
+  assert.equal(called, false);
 });
 test('postdeploy main movement requires proven fast-forward ancestry, not a forced or diverged SHA', () => {
   const laterSha = 'c'.repeat(40);
@@ -245,6 +337,138 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.memberAutoPolicyReady, true);
   assert.equal(evidence.memberAutoLivePilotReady, true);
   assert.equal(evidence.memberAutoPilotStage, 'validated');
+});
+
+test('AUTO-only subset can complete QA without Paper/Telegram but cannot grant overall activation readiness', () => {
+  const input = fixture();
+  input.qaScope = 'auto_live';
+  input.comprehensive = null;
+  input.autoLive = {
+    schemaVersion: 'production-auto-live-readonly-qa-v3',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
+    viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    markets: {
+      domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS',
+    },
+    memberAutoPolicyReady: true,
+    memberAutoPolicyBlockers: [],
+    memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 7,
+    memberAutoPilotStage: 'formula-ai-exception',
+    memberAutoLivePilotReady: true,
+    providerVerificationFresh: true,
+    marketReadinessBlockersOnlyExpectedPreactivation: true,
+    workerPreactivationSafe: true,
+    workerEnabled: false,
+    liveBackgroundRequested: false,
+    liveEntryArmPresent: false,
+    liveEntriesArmed: false,
+    pendingOrderCount: 0,
+    recoveryRequiredOrderCount: 0,
+    statusRequestOrderSubmissionCount: 0,
+    paperTrading: 'OUT_OF_SCOPE',
+    telegram: 'OUT_OF_SCOPE',
+    paperRequests: 0,
+    telegramRequests: 0,
+    observedMutationRequests: 0,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  input.autoLiveSignal = {
+    schemaVersion: 'production-auto-live-signal-source-v2',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:30.000Z',
+    canonicalValidation: true,
+    handoffStatus: 'READY',
+    handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true,
+    maximumAgeMinutes: 30,
+    entryCount: 0,
+    observedMarkets: [],
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
+    scheduleActive: true,
+    scheduleEntryCount: 1,
+    disableSentinelPresent: false,
+    publicDataOnly: true,
+    privateRequestCount: 0,
+    financialMutationCount: 0,
+    executionAuthority: 'NONE',
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    realOrderSubmitted: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.qaComplete, true);
+  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.automaticLiveActivationReady, false);
+  assert.deepEqual(evidence.unprovenAutomaticLiveControls, [
+    ...input.autoLive.memberAccountSignalAudit.additionalRequiredControls,
+    'SCANNER_PRODUCER_CONNECTED', 'AI_PRODUCER_CONNECTED', 'STRATEGY_EXECUTION_LINKAGE']);
+  assert.equal(evidence.qaScope, 'auto_live');
+  assert.equal(evidence.autoLiveQa, 'PASS');
+  assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
+  assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
+  assert.equal(evidence.memberAutoPolicyReady, true);
+  assert.equal(evidence.memberAutoLivePilotReady, true);
+  assert.equal(evidence.autoLiveSignalTransport, 'PASS');
+  assert.equal(evidence.canonicalAutoLiveSignalSource, 'NOT_PROVEN');
+  assert.equal(evidence.telegramActivationState, 'NOT_EVALUATED');
+  const missing = structuredClone(input);
+  delete missing.autoLive.memberAccountSignalAudit;
+  assert.throws(() => buildProductionPostdeployQaEvidence(missing), /MEMBER_SIGNAL_AUDIT_INVALID/);
+  const disconnected = structuredClone(input);
+  const producer = disconnected.autoLive.memberAccountSignalAudit.checks
+    .find((row) => row.id === 'GENUINE_SCANNER_AND_AI_CONNECTION');
+  producer.status = 'BLOCKED';
+  producer.codes = ['PREACTIVATION_SCANNER_AI_PRODUCER_BINDING_NOT_PROVEN'];
+  assert.throws(() => buildProductionPostdeployQaEvidence(disconnected), /MEMBER_SIGNAL_AUDIT_INVALID/);
+});
+
+test('rejects Automatic LIVE evidence when the canonical signal schedule is not active', () => {
+  const input = fixture();
+  input.qaScope = 'auto_live';
+  input.comprehensive = null;
+  input.autoLive = {
+    schemaVersion: 'production-auto-live-readonly-qa-v3', targetSha: SHA,
+    productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true, authenticatedProductionSession: true, identityMatch: true,
+    memberAccountSignalAudit: memberAccountSignalFixture(),
+    viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    markets: { domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS' },
+    memberAutoPolicyReady: true, memberAutoPolicyBlockers: [], memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'formula-ai-exception', memberAutoLivePilotReady: true,
+    providerVerificationFresh: true, marketReadinessBlockersOnlyExpectedPreactivation: true,
+    workerPreactivationSafe: true, workerEnabled: false, liveBackgroundRequested: false,
+    liveEntryArmPresent: false, liveEntriesArmed: false, pendingOrderCount: 0,
+    recoveryRequiredOrderCount: 0, statusRequestOrderSubmissionCount: 0,
+    paperTrading: 'OUT_OF_SCOPE', telegram: 'OUT_OF_SCOPE', paperRequests: 0, telegramRequests: 0,
+    observedMutationRequests: 0, realOrderSubmitted: false, secretValuesRecorded: false,
+    accountValuesRecorded: false, ...ZERO,
+  };
+  input.autoLiveSignal = {
+    schemaVersion: 'production-auto-live-signal-source-v2', targetSha: SHA,
+    productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:30.000Z',
+    canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true,
+    maximumAgeMinutes: 30, entryCount: 0, observedMarkets: [], scheduleActive: false,
+    entryShaMatch: null, entryResearchCodeShas: [], sourceTransportOnly: true, producerInvocationVerified: false,
+    scheduleEntryCount: 0, disableSentinelPresent: false, publicDataOnly: true,
+    privateRequestCount: 0, financialMutationCount: 0, executionAuthority: 'NONE',
+    secretValuesRecorded: false, accountValuesRecorded: false, realOrderSubmitted: false, ...ZERO,
+  };
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /AUTO_LIVE_SIGNAL_INVALID/);
 });
 
 test('Trading Core evidence may be core-ready while live pilot remains intentionally unprepared', () => {

@@ -349,7 +349,7 @@ export function buildResearchPipeline(
   if (sources.length > 0) {
     const available = sources.filter((source) => source.status === 'AVAILABLE').length;
     external.status = sources.some((source) => source.status === 'UNLINKED' || source.status === 'NOT_ON_MAIN') ? 'insufficient' : 'verified';
-    external.metrics = [metric('Canonical source', available), metric('전체 source', sources.length)];
+    external.metrics = [metric('확인된 자료', available), metric('전체 자료', sources.length)];
     external.updatedAt = promotion?.generatedAt ?? null;
     external.blocker = sources.some((source) => source.status !== 'AVAILABLE') ? 'EXTERNAL_RESEARCH_SOURCE_UNLINKED' : null;
     external.evidenceState = external.blocker ? 'NOT_EVALUABLE' : 'PRESENT';
@@ -372,7 +372,7 @@ export function buildResearchPipeline(
   const shadow = overview.shadow.records;
   const shadowCard: ResearchPipelineCard = {
     key: 'shadow',
-    label: 'Shadow',
+    label: '관찰 검증',
     status: shadow.present ? 'accumulating' : 'unmeasured',
     metrics: [
       metric('전체', shadow.totalRecords),
@@ -429,9 +429,9 @@ export function buildResearchPipeline(
   const settlementCount = ledger.settlementCount;
   const settlementCard: ResearchPipelineCard = {
     key: 'settlement',
-    label: 'Settlement',
+    label: '정산',
     status: !ledger.present || settlementCount == null ? 'unmeasured' : settlementCount === 0 ? 'waiting' : 'accumulating',
-    metrics: [metric('Settlement N', settlementCount), textMetric('Full Cost', '자료 부족')],
+    metrics: [metric('정산 표본', settlementCount), textMetric('총비용', '자료 부족')],
     updatedAt: overviewTimestamp(overview),
     blocker: !ledger.present || settlementCount == null
       ? 'SETTLEMENT_NOT_EVIDENCED'
@@ -458,15 +458,15 @@ export function buildResearchPipeline(
   return [
     external,
     promotionStageCard(promotion, 'backtest', '백테스트', 'HISTORICAL_BACKTEST'),
-    promotionStageCard(promotion, 'oos', 'OOS', 'OUT_OF_SAMPLE'),
-    promotionStageCard(promotion, 'purged-walk-forward', 'Purged Walk-Forward', 'PURGED_WALK_FORWARD'),
-    promotionStageCard(promotion, 'final-holdout', 'Final Holdout', 'FINAL_HOLDOUT'),
+    promotionStageCard(promotion, 'oos', '미사용 표본 검증', 'OUT_OF_SAMPLE'),
+    promotionStageCard(promotion, 'purged-walk-forward', '누수 제거 순차 검증', 'PURGED_WALK_FORWARD'),
+    promotionStageCard(promotion, 'final-holdout', '최종 보류 표본', 'FINAL_HOLDOUT'),
     shadowCard,
     paperCard,
     settlementCard,
     {
       key: 'profitability',
-      label: 'Profitability',
+      label: '수익성',
       status: overview.profitability.proven ? 'verified' : 'waiting',
       metrics: [textMetric('검증', overview.profitability.proven ? '충족' : '아직 검증되지 않음')],
       updatedAt: overviewTimestamp(overview),
@@ -476,7 +476,7 @@ export function buildResearchPipeline(
     },
     {
       key: 'strategy-health',
-      label: 'Strategy Health',
+      label: '전략 상태',
       status: healthStatus,
       metrics: [textMetric('상태', health?.status === 'HEALTHY' ? '정상' : health?.status === 'WATCH' ? '관찰 필요' : health?.status === 'FAIL' ? '실패' : '근거 부족')],
       updatedAt: overviewTimestamp(overview),
@@ -486,7 +486,7 @@ export function buildResearchPipeline(
     },
     {
       key: 'promotion',
-      label: 'Promotion',
+      label: '전략 승격',
       status: !promotion ? 'unmeasured' : promotion.promotionCandidates > 0 ? 'validating' : 'waiting',
       metrics: [metric('후보', promotion?.promotionCandidates), metric('전략', promotion?.items.length)],
       updatedAt: promotion?.generatedAt ?? null,
@@ -496,9 +496,9 @@ export function buildResearchPipeline(
     },
     {
       key: 'champion',
-      label: 'Champion',
+      label: '대표 전략',
       status: championExplicit && championValue ? 'verified' : championExplicit ? 'waiting' : 'unmeasured',
-      metrics: [textMetric('현재', championExplicit ? (championValue ? '검증된 Champion 있음' : '현재 검증된 Champion 없음') : '자료 없음')],
+      metrics: [textMetric('현재', championExplicit ? (championValue ? '검증된 대표 전략 있음' : '현재 검증된 대표 전략 없음') : '자료 없음')],
       updatedAt: overviewTimestamp(overview),
       blocker: championExplicit && !championValue ? 'CURRENT_VALIDATED_CHAMPION_NONE' : championExplicit ? null : 'CHAMPION_EVIDENCE_NOT_PUBLISHED',
       evidenceState: championExplicit ? (championValue ? 'PRESENT' : 'NOT_EVALUABLE') : 'MISSING',
@@ -508,14 +508,14 @@ export function buildResearchPipeline(
 }
 
 const COST_LABELS: Readonly<Record<FullCostKey, string>> = Object.freeze({
-  commission: 'Commission',
-  tax: 'Tax',
-  spread: 'Spread',
-  slippage: 'Slippage',
-  funding: 'Funding',
-  latency: 'Latency',
-  liquidityImpact: 'Liquidity impact',
-  partialFillImpact: 'Partial-fill impact',
+  commission: '수수료',
+  tax: '세금',
+  spread: '호가 차이',
+  slippage: '체결 오차',
+  funding: '펀딩 비용',
+  latency: '지연 비용',
+  liquidityImpact: '유동성 영향',
+  partialFillImpact: '부분체결 영향',
 });
 
 export function buildFullCostRows(evidence: CanonicalCostEvidence | null | undefined): CostDisplayRow[] {

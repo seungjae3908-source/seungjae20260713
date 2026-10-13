@@ -56,10 +56,17 @@ function verifyStatic() {
     === 'psql_process_failed', 'process failure classification mismatch');
   assert(script.includes('PAPER_JOURNAL_ROWS_CHANGED'), 'row-invariance assertion missing');
   assert(script.includes('PAPER_JOURNAL_POLICY_CONTRACT_INVALID'), 'membership policy verification missing');
-  assert(script.includes('policy_count not in (24, 27)'),
-    'legacy Paper grant verification must accept only canonical 24-policy or protected 27-policy DB state');
+  assert(script.includes('policy_count not in (24, 27, 30)'),
+    'Paper grant verification must accept only canonical legacy/admin/member V2 states');
+  assert(script.includes('if policy_count in (27, 30) then'),
+    'both protected V2 states must require the administrator guard');
   assert(script.includes("execute 'select public.admin_four_paper_wallet_rls_guard_ready()'"),
-    '27-policy admin V2 rollout must attest exact wallet and canonical-order RLS before passing');
+    'admin V2 rollout must attest exact wallet and canonical-order RLS before passing');
+  assert(script.includes('if policy_count = 30 then')
+    && script.includes("to_regprocedure('public.four_market_paper_wallet_rls_guard_ready()') is null")
+    && script.includes("execute 'select public.four_market_paper_wallet_rls_guard_ready()'")
+    && script.includes('if member_v2_guard_ready is distinct from true then'),
+    '30-policy member V2 state must attest combined wallet and canonical-order protections');
   assert(script.includes('PAPER_JOURNAL_COLUMN_CONTRACT_INVALID'), 'column verification missing');
   assert(script.includes('PAPER_JOURNAL_PRIMARY_KEY_INVALID'), 'primary key verification missing');
   assert(script.includes("'authenticated_crud_grants',24"), 'authenticated CRUD verification missing');
