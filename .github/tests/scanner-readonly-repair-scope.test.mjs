@@ -66,10 +66,10 @@ test('all exact scanner paths are PR-trigger covered without dropping any Paper 
 });
 
 
-test('only the two exact audited merger blobs are accepted on the pinned current main', () => {
+test('only exact audited merger and S-only scanner blobs are accepted on the pinned current main', () => {
   assert.equal(SCANNER_REPAIR_INTEGRATION_BASE_SHA, '964d3a619b931589e0f31cd9a2b8dce4ebcf3314');
   assert.deepEqual(Object.keys(SCANNER_REPAIR_INTEGRATION_BLOBS).sort(),
-    ['api-server/package.json', 'api-server/test.mjs'].sort());
+    ['api-server/package.json', 'api-server/test.mjs', 'stock-analyzer/src/lib/signal-scanner.ts', 'stock-analyzer/src/lib/scanner-request.test.ts'].sort());
   assert.equal(Object.isFrozen(SCANNER_REPAIR_INTEGRATION_BLOBS), true);
   for (const [path, expected] of Object.entries(SCANNER_REPAIR_INTEGRATION_BLOBS)) {
     const legitimate = (ref, name) => ref === 'HEAD' && name === path ? expected : blob;
