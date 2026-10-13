@@ -117,8 +117,8 @@ function gap(state,market,symbol,from,to,reason,observedAtMs){
   const maxSpan=PUBLIC_WS_SUPERVISOR_LIMITS.maxOutageAuditMinutes*60_000;
   let start=from,end=to,firstSeen=observedAtMs,lastSeen=observedAtMs;
   let explanation=reason,firstIndex=queue.length;
-  // A new interval can bridge MORE THAN ONE old interval. Re-scan after
-  // expansion so a previously skipped interval cannot remain orphaned.
+  // Merge ALL still-unverified ranges of this same market/symbol. Never
+  // silently discard separated outages or classify intervening minutes.
   const matched=new Set();
   let grew=true;
   while(grew){
@@ -127,8 +127,11 @@ function gap(state,market,symbol,from,to,reason,observedAtMs){
       if(matched.has(i))continue;
       const old=queue[i];
       const oldEnd=old.requestedEndExclusiveMs??old.toExclusiveMs;
-      if(old.market!==market||old.symbol!==symbol
-        ||oldEnd<start||old.fromMs>end)continue;
+      // Pending REST debt is deliberately merged even across disjoint
+      // intervals: no intervening time is counted as source-verified.
+      // This bounds the queue to one unresolved record per symbol during
+      // repeated long-running connection failures.
+      if(old.market!==market||old.symbol!==symbol)continue;
       matched.add(i);firstIndex=Math.min(firstIndex,i);
       start=Math.min(start,old.fromMs);end=Math.max(end,oldEnd);
       firstSeen=Math.min(firstSeen,old.observedAtMs);

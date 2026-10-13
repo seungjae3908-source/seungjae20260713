@@ -292,3 +292,31 @@ test('missing Bitget subscribe ACK times out rather than hanging indefinitely',(
   assert.equal(r.state.sockets[0].phase,'BACKOFF');
   assert.equal(r.state.executionAuthority,'NONE');
 });
+
+test('separated long-running REST debts for same symbol collapse without evidence promotion',()=>{
+  let s=started();
+  const at=START+20*60_000+31_000;
+  s=doSee(s,0,'CANDLE',at,spotPacket(START+20*60_000,at)).state;
+  s=structuredClone(s);
+  const prior=(fromMs,toExclusiveMs)=>({
+    market:'CRYPTO_SPOT',symbol:'BTC',fromMs,toExclusiveMs,
+    requestedEndExclusiveMs:toExclusiveMs,unverifiedBeyondCap:false,
+    reason:'EARLIER_OFFLINE_SOURCE_UNVERIFIED',observedAtMs:NOW,
+    lastObservedAtMs:NOW,restBackfillRequired:true,sourceVerified:false,
+  });
+  s.pendingRestAudits=[
+    prior(START,START+60_000),
+    prior(START+10*60_000,START+11*60_000),
+  ];
+  const later=START+24*60_000+31_000;
+  const result=doSee(s,0,'CANDLE',later,
+    spotPacket(START+24*60_000,later));
+  assert.equal(result.state.pendingRestAudits.length,1);
+  const debt=result.state.pendingRestAudits[0];
+  assert.equal(debt.fromMs,START);
+  assert.equal(debt.requestedEndExclusiveMs,START+24*60_000);
+  assert.equal(debt.reason,'MIXED_WS_REST_AUDIT_REQUIRED');
+  assert.equal(debt.sourceVerified,false);
+  assert.equal(debt.restBackfillRequired,true);
+  assert.equal(result.state.executionAuthority,'NONE');
+});
