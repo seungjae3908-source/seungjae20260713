@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import signalIdentity from './production-auto-live-signal-identity.cjs';
 import {
@@ -10,18 +9,15 @@ const targetSha = String(targetRaw ?? '').trim().toLowerCase();
 const productionDeployRunId = Number(runIdRaw);
 const scheduleActivatedAtMs = Number(scheduleActivatedAtRaw);
 const maximumAgeMs = 30 * 60_000;
-const scheduleTag = '# stock-app-paper-forward-v1';
 
 if (!handoffPath || !/^[0-9a-f]{40}$/u.test(targetSha)
   || !Number.isSafeInteger(productionDeployRunId) || productionDeployRunId <= 0
   || !Number.isSafeInteger(scheduleActivatedAtMs) || scheduleActivatedAtMs <= 0) {
   throw new Error('AUTO_LIVE_SIGNAL_AUDIT_ARGUMENT_INVALID');
 }
-if (!existsSync(handoffPath)) throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_MISSING');
-
 const nowMs = Date.now();
 const handoff = validateMemberAutoTradingPaperHandoff(
-  JSON.parse(readFileSync(handoffPath, 'utf8')),
+  signalIdentity.readProductionAutoLiveSignalHandoff(handoffPath),
   nowMs,
 );
 if (handoff.status !== 'READY' || handoff.blockers.length !== 0) {
@@ -42,13 +38,40 @@ if (handoff.safety.executionAuthority !== 'NONE'
   throw new Error('AUTO_LIVE_SIGNAL_HANDOFF_AUTHORITY_INVALID');
 }
 
-const cron = spawnSync('crontab', ['-l'], { encoding: 'utf8' });
-if (cron.status !== 0 && cron.status !== 1) throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
-const taggedLines = String(cron.stdout ?? '').split(/\r?\n/u)
-  .filter((line) => line.includes(scheduleTag));
-if (taggedLines.length !== 1) throw new Error(`AUTO_LIVE_SIGNAL_SCHEDULE_COUNT_INVALID:${taggedLines.length}`);
-if (existsSync('/opt/stock-app-data/paper-forward-v1/DISABLED')) {
-  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_DISABLED');
+// Read-only command: bound execution time and output size, fail closed on
+// stderr/exit errors rather than deriving schedule proof from partial output.
+const cron = spawnSync('crontab', ['-l'], {
+  encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+  env: { ...process.env, LC_ALL: 'C' },
+});
+if (cron.error || cron.signal || cron.status !== 0 || typeof cron.stdout !== 'string') {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_INSPECTION_FAILED');
+}
+const scheduleRoot = '/opt/stock-app-data/auto-live-signal-v1';
+const activationPath = scheduleRoot + '/activation.json';
+const wrapperPath = scheduleRoot + '/bin/run-auto-live-public-signal';
+let activation;
+try {
+  activation = signalIdentity.readProductionAutoLiveScheduleActivation(activationPath);
+} catch {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_ACTIVATION_MISSING_OR_INVALID');
+}
+signalIdentity.inspectManagedPaperForwardSchedule(
+  String(cron.stdout ?? ''), activation, targetSha, scheduleActivatedAtMs, nowMs,
+);
+signalIdentity.assertAutoLiveSignalNotDisabled(scheduleRoot);
+try {
+  const wrapper = signalIdentity.readProductionAutoLiveScheduleWrapper(wrapperPath);
+  if (!wrapper.includes("PAPER_FORWARD_RESEARCH_SHA='" + targetSha + "'")
+    || !wrapper.includes("PAPER_FORWARD_ROOT='/opt/stock-app-data/auto-live-signal-v1/runtime-state'")
+    || !wrapper.includes("AUTO_LIVE_PUBLIC_SIGNAL_REFRESH_ENABLED='true'")
+    || !wrapper.includes("PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='false'")
+    || !wrapper.includes("LIVE_TRADING='false'")
+    || !wrapper.includes("PRIVATE_TRADING_API_ALLOWED='false'")) {
+    throw new Error('INVALID_WRAPPER_IDENTITY');
+  }
+} catch {
+  throw new Error('AUTO_LIVE_SIGNAL_SCHEDULE_WRAPPER_INVALID');
 }
 
 const identity = signalIdentity.inspectSignalEntryIdentity(handoff.entries, targetSha);
