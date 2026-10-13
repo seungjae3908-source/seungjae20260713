@@ -543,3 +543,55 @@ export function materializeForwardObserverScannerQualityArtifactV1(input = {}) {
     executionAuthority: "NONE",
   });
 }
+
+
+/**
+ * Batch materialization is all-or-nothing. Each job must have actual frozen
+ * dataset, OOS, walk-forward and full-cost evidence consumed by the single
+ * entry producer. Unit-test fixtures cannot create operational evidence.
+ */
+export function buildScannerQualityBatchV1(input = {}) {
+  const researchCodeSha = String(input.researchCodeSha ?? "").toLowerCase();
+  if (!SHA40.test(researchCodeSha)) return blocked("QUALITY_BATCH_RESEARCH_SHA_REQUIRED");
+  if (!Array.isArray(input.jobs) || input.jobs.length === 0) {
+    return blocked("QUALITY_BATCH_JOBS_REQUIRED");
+  }
+
+  const ready = [];
+  for (const [index, job] of input.jobs.entries()) {
+    if (String(job?.identity?.researchCodeSha ?? "").toLowerCase() !== researchCodeSha) {
+      return blocked("QUALITY_BATCH_RESEARCH_SHA_MISMATCH", { index });
+    }
+    const result = buildScannerQualityEntryV1(job);
+    if (result.status !== "READY") {
+      return blocked("QUALITY_BATCH_ENTRY_BLOCKED", {
+        index,
+        market: job?.identity?.market ?? null,
+        symbol: job?.identity?.symbol ?? null,
+        reason: result.reason,
+        entryBlockers: result.details?.blockers ?? [],
+      });
+    }
+    ready.push(result);
+  }
+  try {
+    const materialized = materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha, entries: ready,
+    });
+    return deepFreeze({
+      ...materialized,
+      diagnostics: {
+        entryCount: ready.length,
+        markets: Object.fromEntries([...MARKETS].map((market) => [
+          market, ready.filter((row) => row.entry.identity.market === market).length,
+        ])),
+        // Evidence generation cannot itself authorize promotion or orders.
+        executionAuthority: "NONE",
+      },
+    });
+  } catch (error) {
+    return blocked("QUALITY_BATCH_MATERIALIZATION_BLOCKED", {
+      reason: String(error?.message ?? error).split(":")[0],
+    });
+  }
+}
