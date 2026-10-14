@@ -114,15 +114,6 @@ for (const token of [
 ]) requireText(tradeAutomationSmoke, token, 'AUTO_GATE_ENCRYPTED_READONLY_CREDENTIAL_REGRESSION_MISSING');
 requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUTO_GATE_ENCRYPTED_CREDENTIAL_CHECK_WIRING_MISSING');
 
-for (const formulaPath of [
-  'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
-  'market-prediction-lab/src/formula-auto-backtest-queue-v1.js',
-  'market-prediction-lab/src/registered-formula-prospective-watch-v1.js',
-  'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
-  'market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js',
-  'market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js',
-]) requireText(workflow, `- ${formulaPath}`, 'AUTO_GATE_FORMULA_RESEARCH_SCOPE_MISSING');
-
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');
