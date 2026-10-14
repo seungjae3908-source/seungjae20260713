@@ -65,8 +65,12 @@ export function inspectSealedDormant({root=ROOT,sha,expectedManifestSha}){
   path.join(release,'ops'),path.join(release,'.deploy'),
  ])if(!safeDir(part))return invalid('DORMANT_RELEASE_UNSAFE');
  const state=path.join(root,'state');
- if(!safeDir(state)||(fs.statSync(state).mode&0o777)!==0o700)
-  return invalid('DORMANT_STATE_ROOT_UNSAFE');
+ let stateSecure=false;
+ try{
+  const st=fs.lstatSync(state);
+  stateSecure=safeDir(state)&&(st.mode&0o777)===0o700;
+ }catch{/* Treat disappeared/unstable state root as an explicit NO-GO. */}
+ if(!stateSecure)return invalid('DORMANT_STATE_ROOT_UNSAFE');
  // A dormant installation must not silently be counted as a started worker.
  try {if(fs.readdirSync(state).length!==0)return invalid('DORMANT_STATE_NOT_EMPTY');}
  catch{return invalid('DORMANT_STATE_UNREADABLE');}
@@ -110,17 +114,20 @@ export function inspectSealedDormant({root=ROOT,sha,expectedManifestSha}){
   return invalid('DORMANT_INSTALL_RECEIPT_INVALID');
  return {valid:true,code:'SEALED_DORMANT_BYTES_VERIFIED'};
 }
-const financialKeys=[
- 'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
- 'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
- 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
- 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
- 'UPBIT_LIVE_ORDER_ENABLED','BITGET_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED',
- 'TOSS_LIVE_ORDER_ENABLED','SPOT_LIVE_CAPABILITY_ALLOWLIST',
- 'SPOT_LIVE_MARKET_ALLOWLIST','FUTURES_LIVE_CAPABILITY_ALLOWLIST',
- 'FUTURES_LIVE_MARKET_ALLOWLIST','executionAuthority',
- 'FUTURES_LIVE_EXECUTION_AUTHORITY',
-];
+/** Match guarded installer configuration coverage, not just trading keys.
+ * Include all app uppercase environment, exclude only PM2 internal metadata.
+ * Never emit raw values; hash them before returning any process evidence.
+ */
+export function safeApplicationPm2Digest(env){
+ if(!env||typeof env!=='object'||Array.isArray(env))return null;
+ const keys=Object.keys(env)
+  .filter(key=>(/^[A-Z][A-Z0-9_]*$/u.test(key)
+    &&!key.startsWith('PM2_')&&!key.startsWith('AXM_'))
+    ||key==='executionAuthority')
+  .sort();
+ const configured=keys.map(key=>[key,env[key]]);
+ return digest(Buffer.from(JSON.stringify(configured),'utf8'));
+}
 export function sanitizePm2ForDormantReadback(rows,marker){
  if(!Array.isArray(rows))return null;
  const matches=rows.filter(row=>row?.name==='stock-app');
@@ -134,18 +141,14 @@ export function sanitizePm2ForDormantReadback(rows,marker){
   ||!Number.isSafeInteger(env.pm_uptime)||env.pm_uptime<=0
   ||!Number.isSafeInteger(env.restart_time)||env.restart_time<0)
   return null;
- const protectedEnv=Object.fromEntries(
-  [...new Set([...financialKeys,
-   ...Object.keys(env).filter(key=>/^[A-Z][A-Z0-9_]*$/u.test(key)
-    &&(/^(TELEGRAM_|SIGNAL_|PERSONAL_|PAPER_|LIVE_|AUTO_)/u.test(key)
-      ||key.endsWith('_ENABLED')))])].sort()
-    .map(key=>[key,env[key]??null]));
+ const protectedDigest=safeApplicationPm2Digest(env);
+ if(!protectedDigest)return null;
  return {
   sha:marker,pid:row.pid,started:env.pm_uptime,restarts:env.restart_time,
   owner:env.TELEGRAM_WORKER_OWNER==='isolated'?'isolated':
    env.TELEGRAM_WORKER_OWNER==null||env.TELEGRAM_WORKER_OWNER==='embedded'
     ?'embedded':'UNKNOWN',
-  protectedDigest:digest(Buffer.from(JSON.stringify(protectedEnv),'utf8')),
+  protectedDigest,
  };
 }
 function readPm2(){
@@ -184,6 +187,20 @@ export async function auditTelegramDormantReadback({
  evidence.deployedSha=first.sha;
  evidence.owner=first.owner;
  evidence.pm2Stable=JSON.stringify(first)===JSON.stringify(second);
+ // The inspection does not hold a write lock (strictly zero host mutations).
+ // Recheck all sealed bytes AFTER the second process observation; otherwise a
+ // concurrently modified payload can incorrectly be reported as sealed.
+ const endSeal=inspectSealedDormant({root,sha,expectedManifestSha});
+ if(!endSeal.valid){
+  evidence.sealed=false;
+  evidence.pm2Stable=false;
+  evidence.classification='DORMANT_CHANGED_DURING_READBACK';
+  return evidence;
+ }
+ if(evidence.owner!=='embedded'){
+  evidence.classification='SEALED_PRESENT_PM2_OWNER_UNEXPECTED';
+  return evidence;
+ }
  evidence.classification=evidence.pm2Stable
   ?'SEALED_DORMANT_BYTES_PM2_STABLE_NOW'
   :'SEALED_PRESENT_PM2_CHANGED_NOW';
