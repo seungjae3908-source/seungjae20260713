@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>STOCK AI · UI vNext Preview</title>
+  <style>
+    :root{
+      color-scheme:dark;
+      --canvas:#08101c; --shell:#0d1726; --surface:#111d2e; --surface2:#162338;
+      --line:#24344c; --line2:#30435f; --text:#f4f7fb; --muted:#9cafc6;
+      --primary:#4f8cff; --primary2:#76a7ff; --green:#3ddc97; --red:#ff6b78;
+      --yellow:#f5c451; --purple:#b28cff; --shadow:0 22px 70px rgba(0,0,0,.34);
+      --r:18px; --gap:16px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:
+      radial-gradient(900px 500px at 50% -180px,rgba(79,140,255,.20),transparent 62%),#050b13;color:var(--text)}
+    button,input{font:inherit}
+    button{cursor:pointer}
+    .preview-toolbar{
+      position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:center;
+      gap:10px;padding:14px 16px;background:rgba(5,11,19,.86);backdrop-filter:blur(18px);
+      border-bottom:1px solid rgba(255,255,255,.07)
+    }
+    .preview-toolbar .label{font-size:12px;font-weight:800;color:#c9d6e6;margin-right:6px}
+    .device-btn{border:1px solid #2a3d5a;background:#0f1a2a;color:#b9c9dc;border-radius:999px;padding:9px 13px;font-weight:800;font-size:12px}
+    .device-btn.active{background:#eaf2ff;color:#10213b;border-color:#eaf2ff}
+    .viewport-note{margin-left:6px;color:#7f93ab;font-size:11px}
+    .preview-stage{padding:18px;display:flex;justify-content:center;align-items:flex-start;min-height:calc(100vh - 64px)}
+    .device-shell{
+      container-type:inline-size;
+      width:min(1460px,calc(100vw - 36px));height:min(880px,calc(100vh - 96px));
+      min-height:640px;background:var(--shell);border:1px solid #283955;border-radius:28px;
+      overflow:hidden;box-shadow:var(--shadow);transition:width .25s ease,border-radius .25s ease;
+      position:relative
+    }
+    .device-shell[data-device="desktop"]{width:min(1440px,calc(100vw - 36px))}
+    .device-shell[data-device="tablet"]{width:min(834px,calc(100vw - 36px))}
+    .device-shell[data-device="mobile"]{width:min(390px,calc(100vw - 22px));border-radius:32px}
+    .app{height:100%;display:grid;grid-template-columns:224px minmax(0,1fr);background:
+      radial-gradient(700px 380px at 65% -80px,rgba(79,140,255,.11),transparent 66%),var(--shell)}
+    .sidebar{border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:18px;background:rgba(10,19,32,.74)}
+    .brand{display:flex;align-items:center;gap:10px;padding:0 8px 8px;font-weight:950;letter-spacing:-.03em}
+    .brand-mark{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#77a8ff,#356bda);box-shadow:0 7px 20px rgba(79,140,255,.25)}
+    .nav-stack{display:grid;gap:5px}
+    .nav-item{border:0;background:transparent;color:#9eb0c6;text-align:left;padding:11px 12px;border-radius:12px;font-size:13px;font-weight:800;display:flex;gap:9px;align-items:center}
+    .nav-item:hover{background:#142236;color:#e8f0fb}
+    .nav-item.active{background:#1b2b43;color:white;box-shadow:inset 0 0 0 1px #2a4060}
+    .nav-icon{width:20px;text-align:center;opacity:.9}
+    .sidebar-spacer{flex:1}
+    .side-card{border:1px solid var(--line);background:#111e30;border-radius:14px;padding:12px}
+    .side-card b{font-size:12px}.side-card p{font-size:11px;color:var(--muted);line-height:1.45;margin:6px 0 0}
+    .workspace{min-width:0;display:flex;flex-direction:column;height:100%}
+    .topbar{height:66px;flex:0 0 auto;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 20px;background:rgba(13,23,38,.84);backdrop-filter:blur(12px)}
+    .top-title{font-weight:900;font-size:14px;white-space:nowrap}
+    .global-search{flex:1;max-width:720px;position:relative}
+    .global-search input{width:100%;height:40px;border:1px solid #2a3c57;background:#101b2b;color:white;border-radius:13px;padding:0 14px 0 38px;outline:none}
+    .global-search input:focus{border-color:#4f8cff;box-shadow:0 0 0 3px rgba(79,140,255,.12)}
+    .search-ico{position:absolute;left:13px;top:9px;color:#6f86a3}
+    .top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+    .status-dot{display:flex;gap:7px;align-items:center;color:#9eb0c5;font-size:11px;font-weight:800;padding:7px 9px;border:1px solid #263850;border-radius:999px}
+    .status-dot i{width:7px;height:7px;background:var(--green);border-radius:50%;box-shadow:0 0 0 4px rgba(61,220,151,.08)}
+    .avatar{width:34px;height:34px;border-radius:12px;background:#1b2c45;border:1px solid #2a4060;display:grid;place-items:center;font-size:11px;font-weight:900}
+    .tablet-nav{display:none;border-bottom:1px solid var(--line);padding:8px 12px;gap:7px;background:#0e1929;overflow-x:auto;scrollbar-width:none}
+    .tablet-nav::-webkit-scrollbar{display:none}
+    .tablet-nav button{white-space:nowrap;border:1px solid transparent;background:transparent;color:#92a6be;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:850}
+    .tablet-nav button.active{background:#192941;color:white;border-color:#293d59}
+    .content-scroll{flex:1;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+    .page{display:none;padding:22px 24px 32px;max-width:1500px;margin:0 auto;width:100%}
+    .page.active{display:block}
+    .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}
+    .eyebrow{font-size:10px;font-weight:950;letter-spacing:.14em;color:#79a8ff;text-transform:uppercase}
+    h1,h2,h3,p{margin:0}
+    .page-head h1{font-size:25px;letter-spacing:-.04em;margin-top:5px}
+    .page-sub{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.5}
+    .seg{display:flex;background:#101b2b;border:1px solid var(--line);padding:4px;border-radius:12px}
+    .seg button{border:0;background:transparent;color:#8da3bc;padding:8px 11px;border-radius:8px;font-size:11px;font-weight:900}
+    .seg button.active{background:#223653;color:#fff}
+    .kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .card{background:linear-gradient(180deg,rgba(23,36,56,.96),rgba(16,28,45,.96));border:1px solid var(--line);border-radius:var(--r);box-shadow:0 10px 34px rgba(0,0,0,.08)}
+    .kpi{padding:16px}
+    .kpi small{color:#94a8c0;font-size:11px;font-weight:800}.kpi strong{display:block;margin-top:7px;font-size:22px;letter-spacing:-.04em}
+    .kpi .delta{margin-top:8px;font-size:11px;font-weight:850;color:var(--green)}
+    .delta.neg{color:var(--red)}
+    .grid-2{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr);gap:14px;margin-top:14px}
+    .section-card{padding:16px}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+    .section-head h2{font-size:15px;letter-spacing:-.02em}.section-head span{font-size:11px;color:var(--muted)}
+    .rows{display:grid;gap:4px}
+    .row{display:grid;grid-template-columns:minmax(0,1.4fr) .65fr .65fr .7fr;align-items:center;gap:10px;padding:11px 10px;border-radius:12px}
+    .row.head{color:#758ba6;font-size:10px;font-weight:900;text-transform:uppercase}
+    .row:not(.head):hover{background:#182840}
+    .asset{display:flex;align-items:center;gap:10px;min-width:0}
+    .coin{width:32px;height:32px;border-radius:10px;background:#223551;display:grid;place-items:center;font-size:10px;font-weight:950}
+    .asset b{font-size:12px}.asset small{display:block;color:#7f94ad;margin-top:3px;font-size:10px}
+    .num{font-size:11px;text-align:right;color:#dbe5f1}.pos{color:var(--green)}.neg{color:var(--red)}
+    .pill{justify-self:end;border-radius:999px;padding:5px 8px;font-size:9px;font-weight:950}
+    .buy{background:rgba(61,220,151,.12);color:#7aefb9}.wait{background:rgba(245,196,81,.10);color:#f7d777}.sell{background:rgba(255,107,120,.11);color:#ff9aa4}
+    .brief{padding:16px;display:grid;gap:12px}
+    .brief-main{padding:14px;border-radius:15px;background:#13243a;border:1px solid #28415f}
+    .brief-main .big{font-size:20px;font-weight:950;margin-top:5px}.brief-main p{margin-top:8px;color:#b6c6d8;font-size:11px;line-height:1.55}
+    .mini-stat{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    .mini-stat div{padding:11px;border-radius:12px;background:#111d2e;border:1px solid #22334b}
+    .mini-stat small{font-size:9px;color:#7f93ad}.mini-stat b{display:block;font-size:12px;margin-top:4px}
+    .chart-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}
+    .chart-card{padding:15px;min-height:560px}
+    .chart-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .symbol{font-size:18px;font-weight:950;margin-right:auto}.symbol small{display:block;font-size:10px;font-weight:700;color:#7990aa;margin-top:3px}
+    .tf{border:1px solid #2b3c56;background:#111e31;color:#8fa4bc;border-radius:9px;padding:7px 9px;font-size:10px;font-weight:900}
+    .tf.active{background:#2a4162;color:#fff;border-color:#41628c}
+    .chart-box{height:410px;border-radius:15px;background:
+      linear-gradient(rgba(72,98,132,.12) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(72,98,132,.12) 1px,transparent 1px),
+      linear-gradient(180deg,#0e1a2a,#0c1725);
+      background-size:100% 52px,76px 100%,100% 100%;border:1px solid #243650;position:relative;overflow:hidden}
+    .chart-box svg{position:absolute;inset:0;width:100%;height:100%}
+    .price-tag{position:absolute;right:11px;top:38%;padding:5px 8px;border-radius:7px;background:#3f7ef1;color:white;font-size:10px;font-weight:950}
+    .signal-band{position:absolute;right:12px;top:47%;width:112px;height:86px;border-radius:10px;background:linear-gradient(180deg,rgba(61,220,151,.12),rgba(79,140,255,.10));border:1px solid rgba(104,151,227,.25)}
+    .ai-panel{padding:15px;display:flex;flex-direction:column;gap:12px}
+    .decision{padding:15px;border-radius:15px;background:#13263d;border:1px solid #2b4568}
+    .decision small{color:#79a6de;font-size:9px;font-weight:950;letter-spacing:.12em}.decision strong{display:block;font-size:27px;margin-top:4px}
+    .decision p{font-size:11px;color:#a9bdd3;line-height:1.5;margin-top:8px}
+    .trade-plan{display:grid;gap:8px}
+    .plan-row{display:flex;justify-content:space-between;gap:10px;padding:10px 11px;border-radius:11px;background:#111e30;border:1px solid #22334b}
+    .plan-row span{font-size:10px;color:#8fa3ba}.plan-row b{font-size:11px}
+    .reason-list{display:grid;gap:7px}
+    .reason{display:flex;gap:9px;align-items:flex-start;font-size:11px;color:#bccada;line-height:1.45}
+    .reason i{font-style:normal;color:#78a7ff}
+    .pipeline-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+    .pipe-kpi{padding:14px}.pipe-kpi small{color:#8fa4bc;font-size:10px}.pipe-kpi b{display:block;font-size:20px;margin-top:5px}
+    .pipeline{margin-top:14px;padding:17px}
+    .steps{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:stretch}
+    .step{padding:12px;border-radius:13px;border:1px solid #263851;background:#111e30;min-height:92px;position:relative}
+    .step:not(:last-child):after{content:"→";position:absolute;right:-9px;top:36px;color:#536b89;z-index:2}
+    .step .n{font-size:9px;color:#6f85a0;font-weight:950}.step b{display:block;font-size:11px;margin-top:7px}.step small{display:block;font-size:9px;color:#7f94ad;margin-top:6px;line-height:1.35}
+    .step.done{border-color:rgba(61,220,151,.34);background:rgba(61,220,151,.06)}.step.active{border-color:#4b78b1;background:#162b45}
+    .candidate-list{margin-top:14px;display:grid;gap:8px}
+    .candidate{padding:13px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center}
+    .candidate b{font-size:12px}.candidate small{display:block;margin-top:4px;color:#8095ad;font-size:10px}
+    .tag{font-size:9px;font-weight:950;padding:5px 8px;border-radius:999px;background:#1a2a41;color:#9db7d6;border:1px solid #2b405d}
+    .account-top{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+    .providers{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-top:14px}
+    .provider{padding:14px;min-width:0}.provider-head{display:flex;align-items:center;justify-content:space-between;gap:9px}
+    .provider-head b{font-size:12px}.connected{font-size:9px;font-weight:950;color:#83efbd;background:rgba(61,220,151,.09);padding:5px 7px;border-radius:999px}
+    .provider dl{display:grid;grid-template-columns:1fr auto;gap:7px 10px;margin:13px 0 0}.provider dt{font-size:9px;color:#8297af}.provider dd{margin:0;font-size:10px;font-weight:850;text-align:right}
+    .provider button{width:100%;height:36px;margin-top:13px;border:1px solid #36527a;background:#1b3150;color:#dce9fa;border-radius:10px;font-weight:900;font-size:10px}
+    details.advanced{margin-top:14px;border:1px solid var(--line);background:#101b2b;border-radius:14px;padding:12px}
+    details.advanced summary{cursor:pointer;font-size:11px;font-weight:900;color:#a7b8cc}
+    details.advanced p{font-size:10px;color:#7f94ad;margin-top:10px;line-height:1.5}
+    .settings-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+    .setting-tile{padding:17px;min-height:110px}.setting-tile .ico{font-size:21px}.setting-tile b{display:block;font-size:12px;margin-top:10px}.setting-tile p{font-size:10px;color:#879cb4;line-height:1.4;margin-top:5px}
+    .mobile-nav{display:none}
+    .mobile-title{display:none}
+    .mobile-ai-dock{display:none}
+    .note{margin-top:14px;color:#7f94ad;font-size:10px;text-align:center}
+    @container (max-width:1099px){
+      .app{grid-template-columns:1fr}.sidebar{display:none}.tablet-nav{display:flex}
+      .page{padding:18px 18px 28px}.topbar{padding:0 16px;height:62px}
+      .grid-2{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(4,1fr)}
+      .chart-layout{grid-template-columns:1fr}.ai-panel{display:grid;grid-template-columns:1.1fr 1fr 1.1fr;align-items:start}
+      .decision{min-height:100%}.reason-list{min-width:0}.providers{grid-template-columns:repeat(2,1fr)}
+      .steps{grid-template-columns:repeat(3,1fr)}.step:nth-child(3):after{display:none}
+      .settings-grid{grid-template-columns:repeat(2,1fr)}
+    }
+    @container (max-width:719px){
+      .device-shell{border-radius:24px}.topbar{height:58px;padding:0 12px}
+      .top-title,.status-dot,.avatar{display:none}.global-search{max-width:none}.global-search input{height:38px}
+      .tablet-nav{display:none}.page{padding:14px 12px 90px}.page-head{align-items:flex-start;margin-bottom:13px}
+      .page-head h1{font-size:21px}.page-sub{font-size:11px}.page-head .seg{display:none}
+      .mobile-title{display:block;color:#90a5bd;font-size:10px;font-weight:900;margin-bottom:3px}
+      .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.kpi{padding:13px}.kpi strong{font-size:18px}
+      .grid-2{gap:10px;margin-top:10px}.section-card,.brief{padding:13px}
+      .row{grid-template-columns:minmax(0,1fr) .6fr .55fr;padding:10px 5px}.row.head{display:none}.row .hide-m{display:none}
+      .chart-card{padding:11px;min-height:0}.chart-box{height:335px}.chart-layout{gap:10px}.chart-toolbar{margin-bottom:9px}.symbol{font-size:16px}
+      .tf{padding:7px 8px}.ai-panel{display:block;padding:12px}.trade-plan{grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+      .plan-row{display:block;text-align:center;padding:9px 5px}.plan-row b{display:block;margin-top:4px}.reason-list{margin-top:10px}
+      .pipeline-summary{grid-template-columns:repeat(2,1fr);gap:8px}.pipe-kpi{padding:12px}
+      .pipeline{padding:13px;margin-top:10px}.steps{grid-template-columns:1fr 1fr;gap:7px}.step{min-height:84px;padding:10px}
+      .step:after{display:none!important}.candidate{grid-template-columns:minmax(0,1fr) auto}.candidate .hide-m{display:none}
+      .account-top{grid-template-columns:repeat(2,1fr);gap:8px}.providers{grid-template-columns:1fr;gap:8px;margin-top:10px}
+      .provider{padding:13px}.settings-grid{grid-template-columns:1fr 1fr;gap:8px}.setting-tile{padding:13px;min-height:102px}
+      .mobile-nav{position:absolute;display:grid;grid-template-columns:repeat(5,1fr);left:8px;right:8px;bottom:8px;height:64px;background:rgba(11,20,33,.96);border:1px solid #2b3d58;border-radius:20px;backdrop-filter:blur(16px);z-index:20;padding:5px}
+      .mobile-nav button{border:0;background:transparent;color:#7990aa;border-radius:13px;font-size:9px;font-weight:900;display:grid;place-items:center;gap:2px}
+      .mobile-nav button span{font-size:17px;line-height:17px}.mobile-nav button.active{background:#1b2e49;color:white}
+      .content-scroll{padding-bottom:0}.mini-stat{grid-template-columns:1fr 1fr}
+    }
+    @container (max-width:399px){
+      .page{padding-left:10px;padding-right:10px}.kpi-grid{gap:7px}.kpi{padding:11px}
+      .settings-grid{grid-template-columns:1fr}.chart-box{height:310px}
+      .trade-plan{grid-template-columns:1fr 1fr 1fr}.plan-row span{font-size:9px}.plan-row b{font-size:10px}
+    }
+  </style>
+</head>
+<body>
+  <div class="preview-toolbar">
+    <span class="label">UI vNext 테스트</span>
+    <button class="device-btn active" data-device-btn="auto">Auto</button>
+    <button class="device-btn" data-device-btn="desktop">PC</button>
+    <button class="device-btn" data-device-btn="tablet">Tablet</button>
+    <button class="device-btn" data-device-btn="mobile">Mobile</button>
+    <span class="viewport-note" id="viewportLabel"></span>
+  </div>
+
+  <div class="preview-stage">
+    <div class="device-shell" id="deviceShell" data-device="auto">
+      <div class="app">
+        <aside class="sidebar">
+          <div class="brand"><div class="brand-mark">S</div>STOCK AI</div>
+          <nav class="nav-stack" aria-label="테스트 메뉴">
+            <button class="nav-item active" data-page-btn="home"><span class="nav-icon">⌂</span>홈</button>
+            <button class="nav-item" data-page-btn="chart"><span class="nav-icon">⌁</span>AI 차트</button>
+            <button class="nav-item" data-page-btn="research"><span class="nav-icon">⌘</span>연구센터</button>
+            <button class="nav-item" data-page-btn="account"><span class="nav-icon">◫</span>계정</button>
+            <button class="nav-item" data-page-btn="settings"><span class="nav-icon">⚙</span>설정</button>
+          </nav>
+          <div class="sidebar-spacer"></div>
+          <div class="side-card">
+            <b>Preview only</b>
+            <p>실데이터·주문·계좌 API 호출 없이 레이아웃과 정보계층만 확인하는 정적 테스트 버전입니다.</p>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <header class="topbar">
+            <div class="top-title">STOCK AI</div>
+            <div class="global-search">
+              <span class="search-ico">⌕</span>
+              <input aria-label="종목 검색" placeholder="종목명 · 티커 · 코인 검색" />
+            </div>
+            <div class="top-actions">
+              <div class="status-dot"><i></i>시장 연결 정상</div>
+              <div class="avatar">SJ</div>
+            </div>
+          </header>
+
+          <nav class="tablet-nav" aria-label="태블릿 메뉴">
+            <button class="active" data-page-btn="home">홈</button>
+            <button data-page-btn="chart">AI 차트</button>
+            <button data-page-btn="research">연구센터</button>
+            <button data-page-btn="account">계정</button>
+            <button data-page-btn="settings">설정</button>
+          </nav>
+
+          <div class="content-scroll">
+            <main class="page active" data-page="home">
+              <div class="page-head">
+                <div>
+                  <div class="mobile-title">홈</div>
+                  <div class="eyebrow">TODAY</div>
+                  <h1>오늘의 투자 상태</h1>
+                  <p class="page-sub">중요한 숫자와 행동만 먼저 보고, 상세 근거는 필요할 때 펼쳐봅니다.</p>
+                </div>
+                <div class="seg"><button class="active">전체</button><button>국내</button><button>해외</button><button>코인</button></div>
+              </div>
+
+              <section class="kpi-grid">
+                <article class="card kpi"><small>총 자산</small><strong>₩27,325,000</strong><div class="delta">+1.84% 오늘</div></article>
+                <article class="card kpi"><small>오늘 손익</small><strong>+₩486,200</strong><div class="delta">실현 + 미실현</div></article>
+                <article class="card kpi"><small>매수 후보</small><strong>7</strong><div class="delta">강한 신호 3</div></article>
+                <article class="card kpi"><small>알림</small><strong>4</strong><div class="delta neg">확인 필요 1</div></article>
+              </section>
+
+              <div class="grid-2">
+                <section class="card section-card">
+                  <div class="section-head"><h2>주요 신호</h2><span>중복 신호 제거</span></div>
+                  <div class="rows">
+                    <div class="row head"><span>종목</span><span style="text-align:right">현재가</span><span style="text-align:right">변동</span><span style="text-align:right">판단</span></div>
+                    <div class="row"><div class="asset"><div class="coin">NV</div><div><b>NVDA</b><small>해외 · 반도체 · 단타</small></div></div><div class="num">$189.42</div><div class="num pos">+4.8%</div><span class="pill buy">매수</span></div>
+                    <div class="row"><div class="asset"><div class="coin">005</div><div><b>삼성전자</b><small>국내 · 대형주 · 스윙</small></div></div><div class="num">₩98,400</div><div class="num pos">+2.1%</div><span class="pill wait">관망</span></div>
+                    <div class="row"><div class="asset"><div class="coin">BTC</div><div><b>BTC/USDT</b><small>선물 · 돌파 · 단타</small></div></div><div class="num">$119,230</div><div class="num pos">+1.9%</div><span class="pill buy">매수</span></div>
+                    <div class="row"><div class="asset"><div class="coin">TS</div><div><b>TSLA</b><small>해외 · 변동성 · 단타</small></div></div><div class="num">$451.08</div><div class="num neg">-1.3%</div><span class="pill sell">무효</span></div>
+                  </div>
+                </section>
+
+                <aside class="card brief">
+                  <div class="section-head"><h2>AI 브리핑</h2><span>핵심만</span></div>
+                  <div class="brief-main"><div class="eyebrow">MARKET REGIME</div><div class="big">상승 우위 · 변동성 높음</div><p>추세 추종 신호는 유지하되, 급등 후 추격 진입은 제한합니다. 손절 기준이 없는 후보는 제외합니다.</p></div>
+                  <div class="mini-stat">
+                    <div><small>상승 종목 비율</small><b>63%</b></div>
+                    <div><small>강한 신호</small><b>3개</b></div>
+                    <div><small>리스크 경보</small><b>1개</b></div>
+                    <div><small>시장 국면</small><b>Risk-on</b></div>
+                  </div>
+                </aside>
+              </div>
+            </main>
+
+            <main class="page" data-page="chart">
+              <div class="page-head">
+                <div>
+                  <div class="mobile-title">AI 차트</div>
+                  <div class="eyebrow">AI CHART</div>
+                  <h1>차트가 중심인 분석 화면</h1>
+                  <p class="page-sub">차트 1순위, 판단·진입·목표·손절 2순위, 상세 근거는 3순위로 정리했습니다.</p>
+                </div>
+                <div class="seg"><button class="active">단타</button><button>스윙</button><button>중장기</button></div>
+              </div>
+
+              <div class="chart-layout">
+                <section class="card chart-card">
+                  <div class="chart-toolbar">
+                    <div class="symbol">BTC / USDT <small>선물 · 단타 · 15분</small></div>
+                    <button class="tf">5m</button><button class="tf active">15m</button><button class="tf">1H</button><button class="tf">4H</button><button class="tf">1D</button>
+                  </div>
+                  <div class="chart-box">
+                    <svg viewBox="0 0 1000 440" preserveAspectRatio="none" aria-label="샘플 가격 차트">
+                      <defs>
+                        <linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4f8cff" stop-opacity=".24"/><stop offset="1" stop-color="#4f8cff" stop-opacity="0"/></linearGradient>
+                      </defs>
+                      <path d="M0 360 C70 348 92 332 145 340 S230 300 270 317 S330 286 375 295 S430 260 470 270 S530 220 580 232 S640 207 688 215 S738 180 782 190 S830 160 875 168 S930 125 1000 140 L1000 440 L0 440Z" fill="url(#area)"/>
+                      <path d="M0 360 C70 348 92 332 145 340 S230 300 270 317 S330 286 375 295 S430 260 470 270 S530 220 580 232 S640 207 688 215 S738 180 782 190 S830 160 875 168 S930 125 1000 140" fill="none" stroke="#6ba0ff" stroke-width="4"/>
+                      <path d="M0 385 C90 370 160 382 235 345 S380 340 460 305 S610 318 680 270 S815 292 1000 215" fill="none" stroke="#3ddc97" stroke-width="2" opacity=".8"/>
+                    </svg>
+                    <div class="signal-band"></div><div class="price-tag">$119,230</div>
+                  </div>
+                </section>
+
+                <aside class="card ai-panel">
+                  <div class="decision"><small>AI DECISION</small><strong>WAIT</strong><p>상승 구조는 유지 중이지만 현재 가격이 1차 진입 범위를 벗어났습니다. 재진입 조건을 기다립니다.</p></div>
+                  <div class="trade-plan">
+                    <div class="plan-row"><span>1차 진입</span><b>$117,800</b></div>
+                    <div class="plan-row"><span>목표가</span><b class="pos">$123,900</b></div>
+                    <div class="plan-row"><span>손절가</span><b class="neg">$115,960</b></div>
+                  </div>
+                  <div class="reason-list">
+                    <div class="reason"><i>01</i><span>15분봉 HH/HL 구조 유지</span></div>
+                    <div class="reason"><i>02</i><span>돌파 거래량 확인, 추격 진입은 비추천</span></div>
+                    <div class="reason"><i>03</i><span>상위 시간봉 추세와 같은 방향</span></div>
+                  </div>
+                </aside>
+              </div>
+            </main>
+
+            <main class="page" data-page="research">
+              <div class="page-head">
+                <div>
+                  <div class="mobile-title">연구센터</div>
+                  <div class="eyebrow">RESEARCH</div>
+                  <h1>연구 상태를 사람 말로</h1>
+                  <p class="page-sub">내부 코드·UNKNOWN·MISSING_EVIDENCE를 첫 화면에서 숨기고 현재 단계와 막힌 이유만 보여줍니다.</p>
+                </div>
+              </div>
+              <section class="pipeline-summary">
+                <article class="card pipe-kpi"><small>연구 중</small><b>12</b></article>
+                <article class="card pipe-kpi"><small>검증 중</small><b>4</b></article>
+                <article class="card pipe-kpi"><small>실전 검증</small><b>2</b></article>
+                <article class="card pipe-kpi"><small>채택</small><b>3</b></article>
+              </section>
+              <section class="card pipeline">
+                <div class="section-head"><h2>전략 검증 흐름</h2><span>상세 기술정보는 펼쳐보기</span></div>
+                <div class="steps">
+                  <div class="step done"><span class="n">01</span><b>아이디어</b><small>후보 생성 완료</small></div>
+                  <div class="step done"><span class="n">02</span><b>백테스트</b><small>비용 포함 검증</small></div>
+                  <div class="step active"><span class="n">03</span><b>Validation</b><small>표본 수집 중</small></div>
+                  <div class="step"><span class="n">04</span><b>OOS</b><small>아직 시작 전</small></div>
+                  <div class="step"><span class="n">05</span><b>Paper</b><small>대기</small></div>
+                  <div class="step"><span class="n">06</span><b>채택 검토</b><small>근거 충족 후</small></div>
+                </div>
+              </section>
+              <section class="candidate-list">
+                <article class="card candidate"><div><b>Breakout + Volume V7</b><small>CRYPTO FUTURES · 15m · Long/Short</small></div><span class="tag">Validation</span><span class="tag hide-m">표본 38</span></article>
+                <article class="card candidate"><div><b>Momentum Pullback V4</b><small>US STOCK · 1H · Long</small></div><span class="tag">OOS 준비</span><span class="tag hide-m">표본 64</span></article>
+                <article class="card candidate"><div><b>Mean Reversion V3</b><small>KR STOCK · 15m · Long</small></div><span class="tag">연구 중</span><span class="tag hide-m">표본 21</span></article>
+              </section>
+            </main>
+
+            <main class="page" data-page="account">
+              <div class="page-head">
+                <div>
+                  <div class="mobile-title">계정</div>
+                  <div class="eyebrow">ACCOUNT</div>
+                  <h1>실계좌 요약</h1>
+                  <p class="page-sub">자산과 연결상태를 먼저 보여주고 환경변수·내부 코드는 상세정보 안으로 내립니다.</p>
+                </div>
+                <div class="seg"><button class="active">KRW</button><button>USD</button></div>
+              </div>
+              <section class="account-top">
+                <article class="card kpi"><small>총 자산</small><strong>₩27.3M</strong></article>
+                <article class="card kpi"><small>보유 자산</small><strong>₩18.6M</strong></article>
+                <article class="card kpi"><small>주문 가능</small><strong>₩8.7M</strong></article>
+                <article class="card kpi"><small>미체결</small><strong>3</strong></article>
+              </section>
+              <section class="providers">
+                <article class="card provider"><div class="provider-head"><b>Toss</b><span class="connected">연결됨</span></div><dl><dt>보유</dt><dd>₩4.2M</dd><dt>주문 가능</dt><dd>₩1.4M</dd><dt>동기화</dt><dd>13:51</dd></dl><button>계정 보기</button></article>
+                <article class="card provider"><div class="provider-head"><b>Kiwoom</b><span class="connected">연결됨</span></div><dl><dt>보유</dt><dd>₩8.9M</dd><dt>주문 가능</dt><dd>₩3.1M</dd><dt>동기화</dt><dd>13:51</dd></dl><button>계정 보기</button></article>
+                <article class="card provider"><div class="provider-head"><b>Upbit</b><span class="connected">연결됨</span></div><dl><dt>보유</dt><dd>₩3.8M</dd><dt>주문 가능</dt><dd>₩2.2M</dd><dt>동기화</dt><dd>13:50</dd></dl><button>계정 보기</button></article>
+                <article class="card provider"><div class="provider-head"><b>Bitget</b><span class="connected" style="color:#f7d777;background:rgba(245,196,81,.08)">확인 필요</span></div><dl><dt>보유</dt><dd>₩1.7M</dd><dt>주문 가능</dt><dd>₩2.0M</dd><dt>동기화</dt><dd>점검 중</dd></dl><button>연결 점검</button></article>
+              </section>
+              <details class="advanced"><summary>기술 상세정보 보기</summary><p>Provider 원본 코드, runtime flag, 마지막 오류코드 같은 운영용 정보는 이 영역에만 표시하는 구조입니다. 일반 사용자 화면에는 연결됨 / 확인 필요 / 연결 필요만 노출합니다.</p></details>
+            </main>
+
+            <main class="page" data-page="settings">
+              <div class="page-head">
+                <div>
+                  <div class="mobile-title">설정</div>
+                  <div class="eyebrow">SETTINGS</div>
+                  <h1>설정</h1>
+                  <p class="page-sub">큰 빈 공간 대신 자주 쓰는 설정을 밀도 있게 정리했습니다.</p>
+                </div>
+              </div>
+              <section class="settings-grid">
+                <article class="card setting-tile"><div class="ico">◐</div><b>화면</b><p>밝기, 테마, 숫자 표시 방식을 설정합니다.</p></article>
+                <article class="card setting-tile"><div class="ico">◉</div><b>알림</b><p>앱·텔레그램·체결 알림을 관리합니다.</p></article>
+                <article class="card setting-tile"><div class="ico">⌁</div><b>차트</b><p>기본 시간봉과 AI 표시 옵션을 정합니다.</p></article>
+                <article class="card setting-tile"><div class="ico">₩</div><b>통화</b><p>KRW / USD 표시 기준을 선택합니다.</p></article>
+                <article class="card setting-tile"><div class="ico">▦</div><b>데이터</b><p>동기화와 캐시 상태를 확인합니다.</p></article>
+                <article class="card setting-tile"><div class="ico">⌾</div><b>개인정보</b><p>계정 보안과 연결 권한을 관리합니다.</p></article>
+              </section>
+              <p class="note">UI vNext static preview · 실거래/실계좌 API 호출 없음</p>
+            </main>
+          </div>
+
+          <nav class="mobile-nav" aria-label="모바일 주요 메뉴">
+            <button class="active" data-page-btn="home"><span>⌂</span>홈</button>
+            <button data-page-btn="chart"><span>⌁</span>차트</button>
+            <button data-page-btn="research"><span>⌘</span>연구</button>
+            <button data-page-btn="account"><span>◫</span>계정</button>
+            <button data-page-btn="settings"><span>⚙</span>설정</button>
+          </nav>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const shell = document.getElementById('deviceShell');
+    const viewportLabel = document.getElementById('viewportLabel');
+    const deviceButtons = [...document.querySelectorAll('[data-device-btn]')];
+    const pageButtons = [...document.querySelectorAll('[data-page-btn]')];
+    const pages = [...document.querySelectorAll('[data-page]')];
+
+    function setDevice(mode){
+      shell.dataset.device = mode;
+      deviceButtons.forEach(b => b.classList.toggle('active', b.dataset.deviceBtn === mode));
+      updateViewportLabel();
+    }
+    function updateViewportLabel(){
+      const w = Math.round(shell.getBoundingClientRect().width);
+      const mode = shell.dataset.device;
+      const bucket = w < 720 ? 'Mobile' : w < 1100 ? 'Tablet' : 'Desktop';
+      viewportLabel.textContent = mode === 'auto' ? bucket + ' · ' + w + 'px' : w + 'px';
+    }
+    function setPage(name){
+      pages.forEach(p => p.classList.toggle('active', p.dataset.page === name));
+      pageButtons.forEach(b => b.classList.toggle('active', b.dataset.pageBtn === name));
+      const scroller = document.querySelector('.content-scroll');
+      if(scroller) scroller.scrollTo({top:0,behavior:'smooth'});
+    }
+    deviceButtons.forEach(b => b.addEventListener('click', () => setDevice(b.dataset.deviceBtn)));
+    pageButtons.forEach(b => b.addEventListener('click', () => setPage(b.dataset.pageBtn)));
+    window.addEventListener('resize', updateViewportLabel);
+    new ResizeObserver(updateViewportLabel).observe(shell);
+    updateViewportLabel();
+  </script>
+</body>
+</html>
