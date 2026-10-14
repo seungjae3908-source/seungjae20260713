@@ -7,6 +7,7 @@ import { createResearchWorkerQueue } from '../../../packages/external-research/s
 import { readResearchOrchestratorStatusV10 } from '../../../packages/external-research/src/research-workspace-orchestrator-v10.js';
 import { readResearchOneShotReviewV15 } from '../../../packages/external-research/src/research-workspace-one-shot-review-v15.js';
 import { createStoredWorkspaceHandler } from '../../../packages/external-research/src/research-workspace-store-v2.js';
+import { createRuleValidationHandler } from './research-rule-validation';
 import { loadVideoResearchRuntimeEvidenceSnapshot, sanitizeVideoResearchRuntimeEvidence } from './video-research-source-evidence';
 import {
   readResearchPITMinuteCoverageV1,
@@ -154,6 +155,8 @@ export function createResearchWorkspaceRouter(): IRouter {
       });
     }
   });
+  // Validated, hand-recorded rule-validation snapshot. GET only; no files, accounts or orders.
+  router.get('/rule-validation', createRuleValidationHandler());
   // .all intentionally rejects HEAD and all write verbs before touching research files.
   router.all('/', (req, res) => { void read(req, res); });
   return router;
