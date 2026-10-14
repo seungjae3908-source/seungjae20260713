@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { UpbitExternalPilotPublicDataClient } from '../../api-server/src/services/upbit-external-pilot-public-data.service';
 import {
@@ -8,6 +8,7 @@ import {
   produceUpbitTrendPullbackExternalPilot,
 } from '../../api-server/src/services/external-strategy-pilot-producer.service';
 import { parseExternalStrategyPilotHandoffFile } from '../../api-server/src/services/member-auto-trading-background-worker.service';
+import { appendPublicQaCycle } from '../../api-server/src/services/external-strategy-pilot-statistics.service';
 
 const serviceSha = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 if (!/^[a-f0-9]{40}$/u.test(serviceSha)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
@@ -16,6 +17,8 @@ const outputFile = path.resolve(process.env.EXTERNAL_PILOT_QA_OUTPUT_FILE
   ?? './state/external-pilot/upbit-public-qa.json');
 const handoffFile = path.resolve(process.env.MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH
   ?? './state/external-pilot/member-auto-trading-latest.json');
+const historyFile = path.resolve(process.env.EXTERNAL_PILOT_STATISTICS_HISTORY_PATH
+  ?? './state/external-pilot/public-signal-history-v1.json');
 const symbols = [...new Set(String(process.env.EXTERNAL_PILOT_UPBIT_SYMBOLS ?? 'KRW-BTC,KRW-ETH,KRW-XRP')
   .split(',').map((value) => value.trim().toUpperCase()).filter(Boolean))].slice(0, 10);
 if (symbols.length === 0) throw new Error('EXTERNAL_PILOT_UPBIT_SYMBOLS_REQUIRED');
@@ -127,4 +130,11 @@ const report = Object.freeze({
   }),
 });
 await atomicJson(outputFile, report);
+let previousHistory = null;
+try {
+  previousHistory = JSON.parse(await readFile(historyFile, 'utf8'));
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+await atomicJson(historyFile, appendPublicQaCycle(previousHistory, report));
 console.log(JSON.stringify(report));

@@ -146,13 +146,13 @@ test('Paper run expressions stay below the GitHub 21000 character limit', () => 
   assert.ok(workflow.includes('mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)'));
 });
 
-test('AUTO safety registration is exactly 62 reviewable paths, separate from legacy Paper', () => {
+test('AUTO safety registration is exactly 64 reviewable paths, separate from legacy Paper', () => {
   const paths = AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS;
-  assert.equal(paths.length, 62);
-  assert.equal(new Set(paths).size, 62);
+  assert.equal(paths.length, 64);
+  assert.equal(new Set(paths).size, 64);
   assert.deepEqual(paths, [...paths].sort());
   assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
-    '9f519f843fa7136f1f06528a09e892f924efdf0a3865f5f2130046f129430d2e');
+    'e89c25da75072db89de7cb4128de1e4dccc5b588c62391f1da237c598d286cff');
   assert.equal(Object.isFrozen(paths), true);
   for (const path of paths) {
     assert.ok(!path.includes('*') && !path.includes('..') && !path.startsWith('/'));
@@ -167,11 +167,11 @@ test('AUTO safety registration is exactly 62 reviewable paths, separate from leg
 
 test('automatic signal pipeline scope is exact and receives full Trading review instead of Scanner repair status', () => {
   const paths = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS;
-  assert.equal(paths.length, 70);
-  assert.equal(new Set(paths).size, 70);
+  assert.equal(paths.length, 72);
+  assert.equal(new Set(paths).size, 72);
   assert.deepEqual(paths, [...paths].sort());
   assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
-    '1763a04aff064ce09b7424dca7ad36f0cf1d8e6c9e3f2615d68c7cdab20bd3ed');
+    '80766729b0003a8d4e84fc0fb2413fdf59f2d36067b186563a6d29ed8750eb7e');
   assert.equal(Object.isFrozen(paths), true);
   const generatedRuntimeOutputs = new Set([
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
@@ -216,8 +216,8 @@ test('registered AUTO paths retain Trading, protected-main and Paper assertions 
     ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS, '.github/scripts/paper-forward-reviewed-paths.mjs']) {
     assert.ok(researchTrigger.includes(path), path);
   }
-  for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 62',
-    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 70',
+  for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 64',
+    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 72',
     'allowed+=("${auto_safety[@]}")', 'allowed+=("${auto_signal[@]}")',
     'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
     assert.ok(workflow.includes(token), token);
