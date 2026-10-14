@@ -7,7 +7,15 @@ const proof = () => ({schemaVersion:'research-ai-one-shot-proof-v1',targetSha:SH
   ai:{status:'PARTIAL_COVERAGE_COMPLETE',provider:'gemini',providerNetworkCalls:1,cacheHits:0,reviewCount:1},
   video:{status:'COMPLETE',providerNetworkCalls:1,sourceCount:0},
   credentialValuesExposed:false,executionAuthority:'NONE'});
-const log = () => [JSON.stringify(proof()), ...REQUIRED_MARKERS, 'TARGET_SHA=' + SHA].join('\n');
+const operationalProof = () => ({schemaVersion:'research-ai-operational-transition-v2',status:'PASS',targetSha:SHA,
+  actualNaturalCycle:{status:'NATURAL_CYCLE_PROVEN',directiveConsumed:true,discoveryStatus:'DOSSIER_STAGED',
+    discoveryEvidenceStatus:'DOSSIER_STAGED',discoveryExecution:'FRESH_THIS_INVOCATION',
+    providerCalls:{attempted:2,succeeded:2,failed:0},sourceFetches:{attempted:3,succeeded:3,failed:0},
+    formulaGeneratedCount:1,actualBacktestCount:1,paperActivated:false,executionAuthority:'NONE'},
+  longHistory:{state:'STALE_RELEASE_EVIDENCE_PRESERVED',treatedAsFailure:false},
+  youtube:{state:'PROVIDER_SUCCESS_ZERO_RESULTS'},liveTrading:false,privateTradingApiAllowed:false,
+  realOrderEnabled:false,executionAuthority:'NONE'});
+const log = () => [JSON.stringify(proof()),JSON.stringify(operationalProof()), ...REQUIRED_MARKERS, 'TARGET_SHA=' + SHA].join('\n');
 const evaluate = (extra={}) => evaluateAiActivationResult({diagnostics:log(),targetSha:SHA,
   remoteExitCode:0,captureExitCode:0,...extra});
 
@@ -16,6 +24,9 @@ test('only zero remote and capture exits with exact safe one-shot proof can succ
   assert.equal(r.activationSucceeded,true);
   assert.equal(r.failureReason,null);
   assert.equal(r.completionEvidenceObserved,true);
+  assert.equal(r.naturalCycleProven,true);
+  assert.equal(r.longHistoryState,'STALE_RELEASE_EVIDENCE_PRESERVED');
+  assert.equal(r.youtubeState,'PROVIDER_SUCCESS_ZERO_RESULTS');
   assert.equal(r.runtimeRecheckRequired,false);
   assert.equal(r.grantsExecutionAuthority,false);
 });
@@ -65,6 +76,17 @@ test('missing, mismatched, stale-last or unsafe completion proof blocks success'
     log()+'\nAI_REVIEW_TIMER_ENABLED=false',
     log()+'\n'+REQUIRED_MARKERS.find(x=>x.startsWith('LIVE_TRADING=')).replace('false','true'),
   ]) assert.equal(evaluate({diagnostics}).activationSucceeded,false);
+  for (const invalid of [
+    null,
+    {...operationalProof(),targetSha:'b'.repeat(40)},
+    {...operationalProof(),actualNaturalCycle:{...operationalProof().actualNaturalCycle,discoveryStatus:'ALREADY_DISCOVERED'}},
+    {...operationalProof(),actualNaturalCycle:{...operationalProof().actualNaturalCycle,actualBacktestCount:0}},
+  ]) {
+    const diagnostics = invalid == null
+      ? log().replace(JSON.stringify(operationalProof()), '')
+      : log().replace(JSON.stringify(operationalProof()), JSON.stringify(invalid));
+    assert.equal(evaluate({diagnostics}).activationSucceeded,false);
+  }
 });
 
 test('cached AI is distinguished from a new call and video still requires a real network call', () => {
@@ -102,7 +124,7 @@ test('the production timeout diagnostic preserves provider cause separately from
 
 test('pretty proof handles quoted braces, but malformed or truncated trailing JSON cannot finalize success',()=>{
   const p=proof();p.testOnly='quoted { braces } and \\" escaping';
-  const diagnostics=[JSON.stringify(p,null,2),...REQUIRED_MARKERS,'TARGET_SHA='+SHA].join('\n');
+  const diagnostics=[JSON.stringify(p,null,2),JSON.stringify(operationalProof(),null,2),...REQUIRED_MARKERS,'TARGET_SHA='+SHA].join('\n');
   assert.equal(evaluate({diagnostics}).activationSucceeded,true);
   for(const tail of ['\n{"incomplete":','\n{bad}\n']){
     assert.equal(evaluate({diagnostics:diagnostics+tail}).activationSucceeded,false);
