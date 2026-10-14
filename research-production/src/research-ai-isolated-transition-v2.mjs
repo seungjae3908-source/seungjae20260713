@@ -157,6 +157,33 @@ async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, resear
   });
 }
 
+function safeProfilePreflightReason(error) {
+  const message = String(error?.message ?? '');
+  if (/^ISOLATED_TRANSITION_[A-Z0-9_]+(?::[a-z-]+)?$/u.test(message)) return message;
+  if (['EACCES', 'ELOOP', 'EPERM'].includes(error?.code)) return `PROFILE_SOURCE_${error.code}`;
+  return 'ISOLATED_TRANSITION_PROFILE_SOURCE_READ_ERROR';
+}
+
+// Examine *all* current profile snapshots before a live provider request.
+// Keep original SHA, status and schema unchanged; fail closed with one
+// bounded, sanitized aggregate instead of discovering one missing contract
+// after each production-environment approval.
+async function seedAllResearchProfilesV2({ sourceStateRoot, isolatedStateRoot, researchSha }) {
+  const profiles = [];
+  const blockers = [];
+  for (const profile of PROFILE_NAMES) {
+    try {
+      profiles.push(await seedProfile({ sourceStateRoot, isolatedStateRoot, profile, researchSha }));
+    } catch (error) {
+      blockers.push(`${profile}=${safeProfilePreflightReason(error)}`);
+    }
+  }
+  if (blockers.length !== 0) {
+    throw new Error(`ISOLATED_TRANSITION_PROFILE_PREFLIGHT_BLOCKERS:${blockers.join('|')}`);
+  }
+  return profiles;
+}
+
 function verifyCycle(cycle) {
   if (cycle?.status !== 'COMPLETE' || cycle?.directiveConsumed !== true || cycle?.discoveryStatus !== 'DOSSIER_STAGED'
     || cycle?.actualProviderCalls?.attempted !== 2 || cycle?.actualProviderCalls?.succeeded !== 2
@@ -232,10 +259,9 @@ export async function runResearchAiIsolatedTransitionV2({
       blockedStrategiesPreserved: rebound.blockedStrategyIdentityDigests.length,
     });
   }
-  const profiles = [];
-  for (const profile of PROFILE_NAMES) profiles.push(await seedProfile({
-    sourceStateRoot, isolatedStateRoot, profile, researchSha,
-  }));
+  const profiles = await seedAllResearchProfilesV2({
+    sourceStateRoot, isolatedStateRoot, researchSha,
+  });
   const reviewSeed = profiles.find((row) => row.profile === 'forward' && row.sourceResearchSha)
     ?? profiles.find((row) => row.sourceResearchSha);
   if (!reviewSeed) throw new Error('ISOLATED_TRANSITION_REVIEW_EVIDENCE_MISSING');
