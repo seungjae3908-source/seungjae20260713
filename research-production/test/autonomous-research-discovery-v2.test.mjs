@@ -9,6 +9,7 @@ import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v
 import { runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 
 const SHA = 'a'.repeat(40);
+const NEXT_SHA = 'd'.repeat(40);
 const AT = '2026-10-14T01:00:00.000Z';
 const SOURCE_SHA = 'b'.repeat(40);
 const sourceText = `class ParticipationBreakout:
@@ -193,6 +194,62 @@ test('successful directive receipt is restart-idempotent and does not call provi
   assert.equal(ai.count(), 2);
 });
 
+test('cycle consumes a persisted directive before any closed-loop rewrite', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  let loopCalls = 0;
+  const result = await runAutonomousResearchCycleV2({
+    stateRoot: root,
+    researchCodeSha: SHA,
+    env: env(),
+    now: () => AT,
+    runLoop: async () => { loopCalls += 1; throw new Error('PERSISTED_DIRECTIVE_WAS_REWRITTEN'); },
+    runDiscovery: async () => ({
+      status: 'AI_DISCOVERY_UNAVAILABLE', directiveConsumed: true,
+      actualProviderCalls: { attempted: 1, succeeded: 0, failed: 1 },
+      actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 },
+      candidate: null, stagedDossierDigest: null, nextAction: 'RETRY_AFTER_BOUNDED_BACKOFF',
+      reason: 'FREE_AI_RATE_LIMITED', retryAfterAt: Date.parse(AT) + 60_000,
+    }),
+    runShockLane: shockLaneStub,
+    runProviderLane: providerLaneStub,
+  });
+  assert.equal(loopCalls, 0);
+  assert.equal(result.status, 'PARTIAL_AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(result.directiveConsumed, true);
+  assert.equal(result.continuousResearch, true);
+});
+
+test('cycle rebinds a prior-release directive before discovery and archives both identities', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const prior = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
+  let discoveryCalls = 0;
+  const result = await runAutonomousResearchCycleV2({
+    stateRoot: root, researchCodeSha: NEXT_SHA, env: env(), now: () => AT,
+    runLoop: async () => { throw new Error('REBIND_MUST_PRECEDE_LOOP'); },
+    runDiscovery: async ({ stateRoot }) => {
+      discoveryCalls += 1;
+      const rebound = JSON.parse(await readFile(join(stateRoot, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
+      assert.equal(rebound.researchCodeSha, NEXT_SHA);
+      assert.equal(rebound.selectionPolicy.sameIdentityRetryAllowed, false);
+      return { status: 'AI_DISCOVERY_UNAVAILABLE', directiveConsumed: true,
+        actualProviderCalls: { attempted: 1, succeeded: 0, failed: 1 },
+        actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 }, candidate: null,
+        stagedDossierDigest: null, nextAction: 'RETRY_AFTER_BOUNDED_BACKOFF', reason: 'FREE_AI_RATE_LIMITED',
+        retryAfterAt: Date.parse(AT) + 60_000 };
+    },
+    runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
+  });
+  assert.equal(discoveryCalls, 1);
+  assert.equal(result.status, 'PARTIAL_AI_DISCOVERY_UNAVAILABLE');
+  assert.equal((await readFile(join(root, 'autonomous-research', 'releases', SHA, 'directives',
+    `${prior.directiveDigest}.json`), 'utf8')).length > 0, true);
+  const rebound = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
+  assert.equal((await readFile(join(root, 'autonomous-research', 'releases', NEXT_SHA, 'directives',
+    `${rebound.directiveDigest}.json`), 'utf8')).length > 0, true);
+});
+
 test('a new failure directive cannot spend a second extraction call on the same source revision', async (t) => {
   const root = await fixture(t);
   const ai = provider();
@@ -209,6 +266,30 @@ test('a new failure directive cannot spend a second extraction call on the same 
   assert.deepEqual(repeated.actualSourceFetches, { attempted: 3, succeeded: 3, failed: 0 });
   assert.equal(repeated.retryAfterAt, Date.parse(AT) + 6 * 60 * 60 * 1_000);
   assert.equal(ai.count(), 3);
+});
+
+test('a later release preserves prior state and cannot rediscover the same source revision', async (t) => {
+  const root = await fixture(t);
+  const firstAi = provider();
+  await runAutonomousResearchCycleV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: firstAi.invoke, fetchImpl: sourceFetch(), datasetLoader,
+    runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
+  });
+  const oldStatePath = join(root, 'autonomous-research', 'releases', SHA, 'state.json');
+  const oldState = await readFile(oldStatePath, 'utf8');
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: NEXT_SHA, now: () => AT });
+  const nextAi = provider();
+  const repeated = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: NEXT_SHA, env: env(), now: () => AT,
+    invoke: nextAi.invoke, fetchImpl: sourceFetch(), datasetLoader,
+  });
+  assert.equal(repeated.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(repeated.reason, 'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED');
+  assert.equal(nextAi.count(), 1);
+  assert.equal(await readFile(oldStatePath, 'utf8'), oldState);
+  const nextState = JSON.parse(await readFile(join(root, 'autonomous-research', 'releases', NEXT_SHA, 'state.json'), 'utf8'));
+  assert.equal(nextState.researchCodeSha, NEXT_SHA);
 });
 
 test('AI locator that is absent from fetched source fails closed before Formula or backtest', async (t) => {
