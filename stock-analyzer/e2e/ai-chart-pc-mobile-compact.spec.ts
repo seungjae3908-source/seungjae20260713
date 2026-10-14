@@ -122,6 +122,6 @@ test('desktop keeps the chart and analysis side by side without mobile tabs', as
 
   await expect(page.getByTestId('ai-chart-mobile-tabs')).toHaveCount(0);
   await expect(page.getByText('현재 상태')).toBeVisible();
-  await expect(page.getByText('현재 판단')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-current-judgment').getByRole('heading', { name: '현재 판단' })).toBeVisible();
   await expect(page.getByText('단타 · 읽기 전용')).toBeVisible();
 });

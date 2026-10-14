@@ -320,6 +320,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const containerRef = useRef<HTMLDivElement | null>(null);
   const crosshairLegendRef = useRef<HTMLDivElement | null>(null);
   const crosshairActiveRef = useRef(false);
+  const pointerInsideCanvasRef = useRef(false);
   const latestCandleRef = useRef<NormalizedChartCandle | null>(candles.at(-1) ?? null);
   const observedCandlesRef = useRef(candles);
   observedCandlesRef.current = candles;
@@ -495,32 +496,20 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       if (typeof param.time === 'number' && Number.isFinite(param.time)) onCandleSelect(param.time);
     };
     const handleCrosshairMove: Parameters<IChartApi['subscribeCrosshairMove']>[0] = (param) => {
-      const candleRow = param.seriesData.get(candle);
-      const volumeRow = param.seriesData.get(volume);
-      const volumeValue = volumeRow && 'value' in volumeRow
-        ? volumeRow.value
+      // Hidden volume series and auto-drawing overlays can omit seriesData.
+      // Recover the exact, validated candle from our bounded normalized rows,
+      // never fabricate OHLCV or require a hidden histogram hit.
+      const row = typeof param.time === 'number'
+        ? observedCandlesRef.current.find(item => item.time === param.time)
         : null;
-      if (
-        typeof param.time === 'number'
-        && candleRow
-        && 'open' in candleRow
-        && 'high' in candleRow
-        && 'low' in candleRow
-        && 'close' in candleRow
-        && volumeValue != null
-        && Number.isFinite(volumeValue)
-      ) {
+      if (row) {
         crosshairActiveRef.current = true;
-        updateCrosshairLegend(crosshairLegendRef.current, {
-          time: param.time,
-          open: candleRow.open,
-          high: candleRow.high,
-          low: candleRow.low,
-          close: candleRow.close,
-          volume: volumeValue,
-        }, timeframe, moneyRef.current);
+        updateCrosshairLegend(crosshairLegendRef.current, row, timeframe, moneyRef.current);
         return;
       }
+      // A non-candle overlay callback must not erase a legitimate pointer
+      // selection made by the chart's own canvas.
+      if (pointerInsideCanvasRef.current) return;
       crosshairActiveRef.current = false;
       updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, moneyRef.current);
     };
@@ -537,19 +526,37 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       }
     };
     const onPointerMove = (event: PointerEvent) => {
+      // Capture chart pointer events before lightweight-charts may stop them.
+      if (!(event.target instanceof Node) || !container.contains(event.target)) return;
       const bounds = container.getBoundingClientRect();
       const coordinate = event.clientX - bounds.left;
       if (coordinate < 0 || coordinate > bounds.width) return;
-      const logical = chart.timeScale().coordinateToLogical(coordinate);
-      if (logical == null || !Number.isFinite(logical)) return;
-      const index = Math.round(logical);
-      const current = observedCandlesRef.current[index];
-      // A pointer over whitespace must never become a synthetic candle.
+      pointerInsideCanvasRef.current = true;
+      const scale = chart.timeScale();
+      const rows = observedCandlesRef.current;
+      if (rows.length < 2) return;
+      const coordinateTime = scale.coordinateToTime(coordinate);
+      const exact = typeof coordinateTime === 'number'
+        ? rows.find(row => row.time === coordinateTime)
+        : undefined;
+      const logical = scale.coordinateToLogical(coordinate);
+      if (!exact && (logical == null || !Number.isFinite(logical))) return;
+      // Logical positions outside the current bars use the nearest *real*
+      // candle in the loaded window; no synthetic time/price is generated.
+      const index = logical == null ? 0 : Math.min(rows.length - 1, Math.max(0, Math.round(logical)));
+      const current = exact ?? rows[index];
       if (!current || !Number.isFinite(current.time) || current.time <= 0) return;
       crosshairActiveRef.current = true;
       updateCrosshairLegend(crosshairLegendRef.current, current, timeframe, moneyRef.current);
     };
-    container.addEventListener('pointermove', onPointerMove, { passive: true });
+    const onPointerLeave = () => {
+      pointerInsideCanvasRef.current = false;
+      crosshairActiveRef.current = false;
+      updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, moneyRef.current);
+    };
+    const wrapper = wrapperRef.current;
+    wrapper?.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
+    container.addEventListener('pointerleave', onPointerLeave);
     chart.subscribeClick(handleClick);
     chart.subscribeCrosshairMove(handleCrosshairMove);
     chart.timeScale().subscribeVisibleLogicalRangeChange(publishVisibleRange);
@@ -569,7 +576,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
-      container.removeEventListener('pointermove', onPointerMove);
+      wrapper?.removeEventListener('pointermove', onPointerMove, { capture: true });
+      container.removeEventListener('pointerleave', onPointerLeave);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishVisibleRange);
       instanceRef.current = null;
       drawingLinesRef.current = [];
