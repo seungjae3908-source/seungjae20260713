@@ -44,6 +44,21 @@ pm2_digest() {
   '
 }
 before="$(pm2_digest)"
+# The independently controlled launcher REQUIRES this private state directory.
+# Prepare it while holding BOTH real locks, without touching live PM2 or ledgers.
+# Existing state is NEVER chmodded or replaced; unexpected permissions fail closed.
+STATE="$BASE/state"
+[[ ! -L "$STATE" ]] || {
+  echo 'TELEGRAM_DORMANT_STATE_SYMLINK_FORBIDDEN' >&2; exit 22;
+}
+if [[ -e "$STATE" ]]; then
+  [[ -d "$STATE" && "$(stat -c %a "$STATE")" == 700 && -w "$STATE" ]] || {
+    echo 'TELEGRAM_DORMANT_STATE_DIRECTORY_UNSAFE' >&2; exit 22;
+  }
+else
+  mkdir -m 700 -- "$STATE"
+fi
+[[ -d "$STATE" && ! -L "$STATE" && -w "$STATE" ]] || exit 22
 mkdir -m 700 -- "$INPUT/unpacked"
 actual="$(tar -tf "$INPUT/telegram-dormant-payload.tar" | LC_ALL=C sort)"
 expected="$(printf '%s\n' \
