@@ -7,6 +7,7 @@ import {
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingAssetClass,
+  type DailyProfitTargetAction,
   type TradingMarketSnapshot,
   type TradingPlanInput,
   type TradingPolicy,
@@ -53,6 +54,21 @@ function clampNumber(value: unknown, minimum: number, maximum: number, fallback:
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(maximum, Math.max(minimum, parsed));
+}
+function dailyProfitTargetAction(value: unknown): DailyProfitTargetAction {
+  return value === 'STOP_NEW_ENTRIES' || value === 'NOTIFY_ONLY'
+    ? value : 'PROFIT_PROTECTION';
+}
+function dailyProfitTarget(value: unknown) {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  return {
+    enabled: source.enabled === true,
+    // This is deliberately independent of order size, leverage and every loss
+    // ceiling. A large desired return cannot widen any financial authority.
+    targetPercent: clampNumber(source.targetPercent, 0.01, 10_000, 5),
+    afterTargetAction: dailyProfitTargetAction(source.afterTargetAction),
+  } as const;
 }
 function planReferencePrice(plan: TradingPlanInput) {
   const candidates = [
@@ -126,6 +142,12 @@ export function normalizeTradingPolicy(
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
+    dailyProfitTargetByMarket: {
+      domestic_stock: dailyProfitTarget(input.dailyProfitTargetByMarket?.domestic_stock),
+      us_stock: dailyProfitTarget(input.dailyProfitTargetByMarket?.us_stock),
+      crypto_spot: dailyProfitTarget(input.dailyProfitTargetByMarket?.crypto_spot),
+      crypto_futures: dailyProfitTarget(input.dailyProfitTargetByMarket?.crypto_futures),
+    },
     marketEnabled,
     stockBrokerByMarket,
     exchangeEnabled: {

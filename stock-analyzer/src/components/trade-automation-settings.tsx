@@ -9,12 +9,19 @@ type StockMarket = 'domestic_stock' | 'us_stock';
 type StockBroker = 'kiwoom' | 'toss';
 type MarketSwitches = Record<Market, boolean>;
 type StockBrokerByMarket = Record<StockMarket, StockBroker>;
+type DailyProfitTargetAction = 'STOP_NEW_ENTRIES' | 'PROFIT_PROTECTION' | 'NOTIFY_ONLY';
+type DailyProfitTargetPolicy = {
+  enabled: boolean;
+  targetPercent: number;
+  afterTargetAction: DailyProfitTargetAction;
+};
 
 type Policy = {
   mode: 'approval' | 'automatic';
   automaticEnabled: boolean;
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
+  dailyProfitTargetByMarket?: Record<Market, DailyProfitTargetPolicy>;
   marketEnabled?: MarketSwitches;
   stockBrokerByMarket?: StockBrokerByMarket;
   exchangeEnabled: Record<Exchange, boolean>;
@@ -34,6 +41,7 @@ type Policy = {
 type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
   marketEnabled: MarketSwitches;
   stockBrokerByMarket: StockBrokerByMarket;
+  dailyProfitTargetByMarket: Record<Market, DailyProfitTargetPolicy>;
 };
 
 type Status = {
@@ -58,6 +66,33 @@ type Status = {
     todayFilledOrders: number;
     lastActivityAt: string | null;
   }>;
+  dailyProfitTargetByMarket?: Partial<Record<Market, {
+    market: Market;
+    tradingDay: string;
+    timeZone: string;
+    enabled: boolean;
+    targetPercent: number;
+    afterTargetAction: DailyProfitTargetAction;
+    realizedNetProfitKrw: number | null;
+    unrealizedPnlKrw: number | null;
+    highNetProfitKrw: number | null;
+    realizedReturnPercent: number | null;
+    remainingTargetPercent: number | null;
+    targetReached: boolean;
+    profitProtectionActive: boolean;
+    compoundProfitShare: 0.5;
+    reserveProfitShare: 0.5;
+    protectionRiskBudgetKrw: number | null;
+    newEntryAllowed: boolean;
+    newEntryBlockReason: string | null;
+    observedAt: string;
+  }>>;
+  currentStrategyPlanByMarket?: Partial<Record<Market, {
+    strategyId: string;
+    stopPrice: number;
+    targetPrices: number[];
+    updatedAt: string;
+  } | null>>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
   liveAutomaticExecutionServerEnabled?: Record<Exchange, boolean>;
   liveExecutionReadiness?: Partial<Record<Exchange, {
@@ -144,6 +179,35 @@ const MARKET_DESCRIPTIONS: Record<Market, string> = {
   crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated · 역할별 레버리지 상한',
 };
 
+const PROFIT_TARGET_ACTION_LABELS: Record<DailyProfitTargetAction, string> = {
+  STOP_NEW_ENTRIES: '신규 진입 중단',
+  PROFIT_PROTECTION: '수익 보호 모드 (추천)',
+  NOTIFY_ONLY: '알림만',
+};
+
+const PROFIT_TARGET_BLOCK_LABELS: Record<string, string> = {
+  DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_REQUIRED: '비용 차감 정산 근거 확인 필요',
+  DAILY_PROFIT_TARGET_REACHED_STOP_NEW_ENTRIES: '오늘 목표 도달 · 신규 진입 중단',
+  DAILY_PROFIT_TARGET_UNREALIZED_EVIDENCE_REQUIRED: '미실현 손익 확인 필요',
+  DAILY_PROFIT_TARGET_STRENGTHENED_SIGNAL_REQUIRED: '강화된 우수 신호 대기',
+  DAILY_PROFIT_TARGET_PLANNED_RISK_REQUIRED: '주문 전 위험금액 확인 필요',
+  DAILY_PROFIT_TARGET_PROTECTION_RISK_BUDGET_EXCEEDED: '수익 보호 추가 위험예산 초과',
+};
+
+function profitTargetBlockLabel(value: string | null | undefined) {
+  if (!value) return '근거 확인 필요';
+  return PROFIT_TARGET_BLOCK_LABELS[value] ?? value;
+}
+
+function wonOrUnavailable(value: number | null | undefined) {
+  return value == null || !Number.isFinite(value)
+    ? 'N/A' : `${Math.round(value).toLocaleString('ko-KR')}원`;
+}
+
+function percentOrUnavailable(value: number | null | undefined) {
+  return value == null || !Number.isFinite(value) ? 'N/A' : `${value.toFixed(2)}%`;
+}
+
 const BITGET_LEVERAGE_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 
 const DEFAULT_MARKETS: MarketSwitches = {
@@ -158,6 +222,12 @@ const DEFAULT_POLICY: UiPolicy = {
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
+  dailyProfitTargetByMarket: {
+    domestic_stock: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    us_stock: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    crypto_spot: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    crypto_futures: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+  },
   marketEnabled: DEFAULT_MARKETS,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
   exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
@@ -191,6 +261,16 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
     mode: 'automatic',
     marketEnabled,
     stockBrokerByMarket,
+    dailyProfitTargetByMarket: {
+      domestic_stock: policy.dailyProfitTargetByMarket?.domestic_stock
+        ?? DEFAULT_POLICY.dailyProfitTargetByMarket.domestic_stock,
+      us_stock: policy.dailyProfitTargetByMarket?.us_stock
+        ?? DEFAULT_POLICY.dailyProfitTargetByMarket.us_stock,
+      crypto_spot: policy.dailyProfitTargetByMarket?.crypto_spot
+        ?? DEFAULT_POLICY.dailyProfitTargetByMarket.crypto_spot,
+      crypto_futures: policy.dailyProfitTargetByMarket?.crypto_futures
+        ?? DEFAULT_POLICY.dailyProfitTargetByMarket.crypto_futures,
+    },
     exchangeEnabled: {
       bitget: marketEnabled.crypto_futures,
       upbit: marketEnabled.crypto_spot,
@@ -321,6 +401,16 @@ export function TradeAutomationSettings({
         exchangeEnabled: exchangesForMarkets(current.marketEnabled, stockBrokerByMarket),
       };
     });
+  }
+
+  function updateDailyProfitTarget(market: Market, patch: Partial<DailyProfitTargetPolicy>) {
+    setDraft((current) => ({
+      ...current,
+      dailyProfitTargetByMarket: {
+        ...current.dailyProfitTargetByMarket,
+        [market]: { ...current.dailyProfitTargetByMarket[market], ...patch },
+      },
+    }));
   }
 
   async function save(confirmed: boolean) {
@@ -485,6 +575,12 @@ export function TradeAutomationSettings({
   const discoveryMaxOrderKrw = status?.discoveryMaxOrderKrw
     ?? (canManagePilot ? 500_000 : 100_000);
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
+  const activeProfitTargets = (Object.keys(MARKET_LABELS) as Market[])
+    .filter((market) => draft.dailyProfitTargetByMarket[market].enabled)
+    .map((market) => {
+      const target = draft.dailyProfitTargetByMarket[market];
+      return `${MARKET_LABELS[market]} ${target.targetPercent}% · ${PROFIT_TARGET_ACTION_LABELS[target.afterTargetAction]}`;
+    });
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
     ? ['bitget']
@@ -550,6 +646,76 @@ export function TradeAutomationSettings({
           <Switch active={draft.marketEnabled[market]} />
         </button>
       ))}
+    </div>
+
+    <div className="mt-4 space-y-2" data-testid="daily-profit-target-settings">
+      <div>
+        <p className="text-xs font-extrabold">시장별 일일 희망 수익률·수익 보호</p>
+        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+          희망 목표는 수익 보장이 아닙니다. 높은 목표를 입력해도 주문금액·레버리지·거래 횟수·손실 한도는 늘어나지 않습니다.
+          신규 진입 중단을 선택해도 기존 포지션의 보호주문·손절·익절·청산은 계속 관리합니다.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+        {visibleMarkets.map((market) => {
+          const target = draft.dailyProfitTargetByMarket[market];
+          const observed = status?.dailyProfitTargetByMarket?.[market];
+          const plan = status?.currentStrategyPlanByMarket?.[market];
+          return <article key={market} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`daily-profit-target-${market}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-extrabold">{MARKET_LABELS[market]}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{observed?.tradingDay ?? '관측 전'} · {observed?.timeZone ?? '시장별 거래일'}</p>
+              </div>
+              <button type="button" onClick={() => updateDailyProfitTarget(market, { enabled: !target.enabled })}
+                aria-label={`${MARKET_LABELS[market]} 희망 수익률 사용`} aria-pressed={target.enabled}>
+                <Switch active={target.enabled} />
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="text-[11px] font-bold">
+                희망 수익률
+                <span className="mt-1 flex items-center gap-1">
+                  <input type="number" min="0.01" step="0.01" value={target.targetPercent}
+                    onChange={(event) => updateDailyProfitTarget(market, { targetPercent: Number(event.target.value) })}
+                    className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold"
+                    aria-label={`${MARKET_LABELS[market]} 일일 희망 수익률`} />
+                  <span>%</span>
+                </span>
+              </label>
+              <label className="text-[11px] font-bold">
+                목표 달성 후
+                <select value={target.afterTargetAction}
+                  onChange={(event) => updateDailyProfitTarget(market, { afterTargetAction: event.target.value as DailyProfitTargetAction })}
+                  className="mt-1 h-10 w-full rounded-xl border border-card-border bg-card px-2 text-xs"
+                  aria-label={`${MARKET_LABELS[market]} 목표 달성 후 동작`}>
+                  {(Object.keys(PROFIT_TARGET_ACTION_LABELS) as DailyProfitTargetAction[]).map((action) =>
+                    <option key={action} value={action}>{PROFIT_TARGET_ACTION_LABELS[action]}</option>)}
+                </select>
+              </label>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">오늘 실현 순수익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.realizedNetProfitKrw)}</dd></div>
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">미실현 손익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.unrealizedPnlKrw)}</dd></div>
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">최고 순수익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.highNetProfitKrw)}</dd></div>
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">목표까지 남음</dt><dd className="mt-1 font-extrabold">{percentOrUnavailable(observed?.remainingTargetPercent)}</dd></div>
+            </dl>
+            <p className="mt-2 text-[10px] font-semibold" data-testid={`profit-protection-state-${market}`}>
+              수익 보호 · {observed?.profitProtectionActive ? '작동 중' : '대기'} · 복리 50% / 적립 50%
+            </p>
+            <p className="mt-1 text-[10px] text-muted-foreground" data-testid={`profit-target-block-${market}`}>
+              신규 진입 · {observed?.newEntryAllowed === false
+                ? `차단 (${profitTargetBlockLabel(observed.newEntryBlockReason)})`
+                : observed ? '기존 Risk 한도 내 평가 가능' : '실제 정산·위험 관측 대기'}
+            </p>
+            <p className="mt-1 text-[10px] text-muted-foreground" data-testid={`current-exit-plan-${market}`}>
+              현재 손절·익절 · {plan
+                ? `${plan.strategyId} · SL ${plan.stopPrice.toLocaleString('ko-KR')} · TP ${plan.targetPrices.map((value) => value.toLocaleString('ko-KR')).join(' / ')}`
+                : '활성 전략 계획 없음'}
+            </p>
+          </article>;
+        })}
+      </div>
     </div>
 
     {!selectedMarket || selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock' ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
@@ -785,6 +951,7 @@ export function TradeAutomationSettings({
         <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
           <dt className="font-bold">자동 실행</dt><dd>{draft.automaticEnabled ? '켜짐' : '꺼짐'}</dd>
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
+          <dt className="font-bold">희망 수익률</dt><dd>{activeProfitTargets.join(' / ') || '사용 안 함 · 기존 정책 유지'}</dd>
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget {Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}배 · 역할 상한 {maximumBitgetLeverage}배 · isolated</dd>
@@ -821,7 +988,7 @@ function NumberField({ label, value, onChange, suffix, max }: {
   return <label className="rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
     {label}
     <span className="mt-2 flex items-center gap-1">
-      <input type="number" min="0" max={max} value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
+      <input type="number" min="0" max={max} step="any" value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
       <span>{suffix}</span>
     </span>
   </label>;

@@ -10,6 +10,7 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import type { TradingPlanInput } from './trade-automation.types';
+import { dailyProfitTargetEvidenceReason } from './daily-profit-target.service';
 import {
   deriveRulePackPilotCapitalFromTrades,
   deriveRulePackPilotExecutionPolicy,
@@ -562,6 +563,52 @@ test('dynamic policy recheck fails closed on unsigned, too-large or revoked auto
     );
     assert.equal(rechecked.totalCapitalKrw, 2_000_000);
     assert.equal(rechecked.maxOrderKrw, 100_000);
+    const targetPolicy = normalizeTradingPolicy({
+      ...policy,
+      dailyProfitTargetByMarket: {
+        ...policy.dailyProfitTargetByMarket,
+        crypto_spot: { enabled: true, targetPercent: 3, afterTargetAction: 'STOP_NEW_ENTRIES' },
+      },
+    });
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed100, targetPolicy, new Date(NOW), 0),
+      /DAILY_PROFIT_TARGET_EVIDENCE_REQUIRED/,
+      'an enabled target cannot disappear between worker admission and the signed order boundary',
+    );
+    const withExactTargetEvidence = {
+      ...pilotReceiptInput(100_000),
+      signalReasons: [
+        ...pilotReceiptInput(100_000).signalReasons,
+        dailyProfitTargetEvidenceReason({
+          market: 'crypto_spot', tradingDay: '2026-10-08', realizedNetProfitKrw: 0,
+          unrealizedPnlKrw: 0, strengthenedSignalQualified: false,
+          plannedRiskKrw: 100, observedAtMs: NOW,
+        }),
+      ],
+    };
+    const exactTargetSigned = makePlan(issueRulePackPilotDynamicCapReceipt(
+      user, withExactTargetEvidence, NOW,
+    ));
+    assert.equal((await resolveRulePackPilotDynamicCapPolicy(
+      repository, user, exactTargetSigned, targetPolicy, new Date(NOW), 0,
+    )).maxOrderKrw, 100_000);
+    const driftedTargetEvidence = {
+      ...pilotReceiptInput(100_000),
+      signalReasons: [
+        ...pilotReceiptInput(100_000).signalReasons,
+        dailyProfitTargetEvidenceReason({
+          market: 'crypto_spot', tradingDay: '2026-10-08', realizedNetProfitKrw: 1,
+          unrealizedPnlKrw: 0, strengthenedSignalQualified: false,
+          plannedRiskKrw: 100, observedAtMs: NOW,
+        }),
+      ],
+    };
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user,
+        makePlan(issueRulePackPilotDynamicCapReceipt(user, driftedTargetEvidence, NOW)),
+        targetPolicy, new Date(NOW), 0),
+      /DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_DRIFT/,
+    );
     const signedOverDiscovery = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(100_001), NOW));
     await assert.rejects(
       resolveRulePackPilotDynamicCapPolicy(repository, user, signedOverDiscovery, policy, new Date(NOW), 0),

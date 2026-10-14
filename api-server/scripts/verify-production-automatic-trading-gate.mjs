@@ -41,6 +41,8 @@ const formulaAiException = read('api-server/src/services/formula-ai-live-excepti
 const strategyCatalog = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
 const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts');
 const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
+const dailyProfitTarget = read('api-server/src/services/daily-profit-target.service.ts');
+const dailyProfitTargetTest = read('api-server/src/services/daily-profit-target.service.test.ts');
 const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
@@ -86,6 +88,46 @@ requireText(paperWorkerTest,
 requireText(automaticLiveBudgetTest,
   'a fresh signal may re-enter the same instrument only after a confirmed full canonical exit',
   'AUTO_GATE_CONFIRMED_EXIT_REENTRY_REGRESSION_MISSING');
+
+// A desired return is display/admission policy, never profit authority. Only
+// full-cost settled PnL reaches it; high inputs cannot expand size, leverage or
+// loss limits, and stop mode applies to new entries while exit supervision is
+// kept on the independent reducing path above.
+for (const token of ["'STOP_NEW_ENTRIES'", "'PROFIT_PROTECTION'", "'NOTIFY_ONLY'"]) {
+  requireText(tradeTypes, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_ACTION_MISSING');
+}
+for (const token of [
+  "domestic_stock: 'Asia/Seoul'", "us_stock: 'America/New_York'",
+  "crypto_futures: 'UTC'", 'compoundProfitShare: 0.5', 'reserveProfitShare: 0.5',
+  'targetIsGuarantee: false', 'riskLimitsExpanded: false',
+  'DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_REQUIRED',
+  'DAILY_PROFIT_TARGET_STRENGTHENED_SIGNAL_REQUIRED',
+  'DAILY_PROFIT_TARGET_PROTECTION_RISK_BUDGET_EXCEEDED',
+]) requireText(dailyProfitTarget, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_CONTRACT_MISSING');
+for (const token of [
+  '3% target is decided from settled net profit',
+  '100% desired target never expands risk',
+  'profit protection requires a strengthened signal',
+  'market day keys are isolated across Seoul, New York and UTC',
+  'policy normalization preserves decimal 3% and 100% targets independently across four markets',
+  'short-lived target evidence is exact-market, exact-day and tamper evident',
+]) requireText(dailyProfitTargetTest, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_REGRESSION_MISSING');
+for (const token of [
+  'evaluateDailyProfitTarget({', 'dailyProfitTargetEvidenceReason({',
+  'rememberDailyProfitTargetRuntime(', 'notifyDailyProfitTarget',
+  'Observe settlement-backed targets even on a quiet market tick.',
+]) requireText(paperWorker, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_WORKER_WIRING_MISSING');
+for (const token of [
+  'parseDailyProfitTargetEvidenceReason(plan.signalReasons',
+  'DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_DRIFT',
+]) requireText(pilotCapital, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_SIGNED_BOUNDARY_MISSING');
+for (const token of [
+  '시장별 일일 희망 수익률·수익 보호', '수익 보호 모드 (추천)',
+  '복리 50% / 적립 50%', '기존 포지션의 보호주문·손절·익절·청산은 계속 관리합니다.',
+]) requireText(autoTradingSettings, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_UI_MISSING');
+requireText(tradeAutomationSmoke,
+  'daily profit targets preserve decimal per-market choices without expanding role risk limits',
+  'AUTO_GATE_DAILY_PROFIT_TARGET_API_REGRESSION_MISSING');
 
 // A migration proof must install under hosted non-superuser privileges without
 // replacing definition-drift verification with a caller-controlled parameter.
@@ -952,5 +994,10 @@ console.log(JSON.stringify({
   stickyMemberStopRequiresConfirmedResume: true,
   externalEmergencyStopReflectedInSettings: true,
   automaticExitClosedLoop: true,
+  dailyProfitTargetUsesSettledNetProfit: true,
+  dailyProfitTargetDoesNotExpandRisk: true,
+  dailyProfitTargetStopsNewEntriesOnly: true,
+  dailyProfitTargetMarketDayIsolated: true,
+  dailyProfitTargetCompoundReserveSplit: '50/50',
   accountQaSchemaVersion: 'v3',
 }));
