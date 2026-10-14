@@ -25,6 +25,7 @@ import {
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
   telegramBriefTickStalled,
+  boundedTelegramBriefPreSendRead,
   type TelegramBriefStage,
   readTelegramIntelligenceWorkerHealth,
   safeTelegramBriefFailureCode,
@@ -1411,4 +1412,56 @@ test('a hung Telegram Bot POST retains durable reservation and cannot re-enter',
     if (original === undefined) delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
     else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED = original;
   }
+});
+
+
+test('public or ledger read pre-send deadline rejects, and never authorizes a Bot POST', async () => {
+  const owner = () => '-1001234567890123';
+  const testAt = new Date('2026-10-14T06:50:00.000Z');
+  let releaseRead: ((value: boolean) => void) | null = null;
+  const delayed = new Promise<boolean>(resolve => { releaseRead = resolve; });
+  let sends = 0, reservations = 0, lookups = 0;
+  const ledger = {
+    has: () => {lookups += 1; return delayed;},
+    hasUnconfirmed: async () => false,
+    markUnconfirmed: async () => {reservations += 1;},
+    markDelivered: async () => {},
+    releaseExplicitNoSend: async () => {},
+  };
+  const worker = new TelegramIntelligenceWorker(
+    ledger,
+    async () => {sends += 1; return {ok:true,attempts:1} as any;},
+    owner,
+    async () => {throw Error('UNEXPECTED_PUBLIC_SOURCE');},
+    () => {},
+    15,
+  );
+  const prior = process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED = 'false';
+  try {
+    await assert.rejects(worker.runOnce(testAt), /TELEGRAM_BRIEF_PRE_SEND_TIMEOUT/u);
+    assert.equal(lookups,1);
+    assert.equal(reservations,0);
+    assert.equal(sends,0);
+    // A late successful read MUST NOT continue to reserve or send after timeout.
+    releaseRead?.(false);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(reservations,0);
+    assert.equal(sends,0);
+  } finally {
+    releaseRead?.(false);
+    if(prior===undefined) delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=prior;
+  }
+});
+test('bounded pre-send helper never times out an accepted response, but rejects hung reads', async()=>{
+  assert.equal(await boundedTelegramBriefPreSendRead(async()=>41,20),41);
+  await assert.rejects(
+    boundedTelegramBriefPreSendRead(async()=>await new Promise<number>(()=>{}),10),
+    /TELEGRAM_BRIEF_PRE_SEND_TIMEOUT/u,
+  );
+  await assert.rejects(
+    boundedTelegramBriefPreSendRead(async()=>41,16_000),
+    /TELEGRAM_BRIEF_PRE_SEND_INVALID/u,
+  );
 });
