@@ -542,6 +542,14 @@ process.stdout.write(JSON.stringify({
 NODE
 }
 
+verify_v2_operational_transition() {
+  local started_ms="$1"
+  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-ai-operational-transition-v2.mjs" \
+    --state-root "$STATE_ROOT" \
+    --research-sha "$TARGET_SHA" \
+    --started-at-ms "$started_ms"
+}
+
 verify_unit_sources() {
   local unit
   for unit in "${services[@]}" "${timers[@]}" "${daemon_services[@]}"; do
@@ -552,6 +560,15 @@ verify_unit_sources() {
     }
     systemd-analyze verify "$source" >/dev/null
   done
+  local core_service="$RESEARCH_ROOT/research-production/deploy/research-production@.service"
+  local long_timer="$RESEARCH_ROOT/research-production/deploy/research-production-long-history.timer"
+  [[ -f "$core_service" && -f "$long_timer" ]] || {
+    echo "AI_RESEARCH_LONG_HISTORY_REFRESH_PATH_MISSING" >&2
+    exit 69
+  }
+  grep -Fq 'ExecStart=/usr/bin/env node research-production/bin/research-cycle.mjs run --profile %i' "$core_service"
+  grep -Fq 'Unit=research-production@long-history.service' "$long_timer"
+  systemd-analyze verify "$core_service" "$long_timer" >/dev/null
 }
 
 confirm_free_only() {
@@ -645,6 +662,11 @@ activate() {
   [[ "$one_shot_failed" == false ]] || exit 70
 
   verify_one_shot_evidence "$one_shot_started_ms"
+  # Do not equate a healthy legacy review/provider call with the new V2
+  # closed loop. Require a fresh directive, two real free-AI stages, three
+  # verified public-source reads, FormulaCandidate creation and an actual
+  # existing-queue backtest before recurring schedules can be re-enabled.
+  verify_v2_operational_transition "$one_shot_started_ms"
 
   "${SUDO[@]}" systemctl enable --now "${timers[@]}" "${daemon_services[@]}"
   local timer
