@@ -189,10 +189,10 @@ test('real shell freeze guards reject running and unknown workloads without swit
   const core = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const ai = readFileSync(new URL('../deploy/activate-ai-research.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const guards = [
-    [core.slice(core.indexOf('\n  stop_oneshot_workloads() {'), core.indexOf('\n  restore_previous_runtime() {')), 'stop_oneshot_workloads'],
-    [ai.slice(ai.indexOf('\ndisable_timers() {'), ai.indexOf('\nresearch_sha() {')), 'disable_timers'],
+    [core.slice(core.indexOf('\n  stop_oneshot_workloads() {'), core.indexOf('\n  restore_previous_runtime() {')), 'stop_oneshot_workloads', 1],
+    [ai.slice(ai.indexOf('\nrequire_idle_one_shots() {'), ai.indexOf('\nresearch_sha() {')), 'disable_timers', 0],
   ];
-  for (const [helper, invoke] of guards) {
+  for (const [helper, invoke, expectedStops] of guards) {
     for (const [active, load, result] of [['inactive','loaded',0], ['failed','loaded',0],
       ['inactive','not-found',0], ['active','not-found',1], ['active','loaded',1], ['activating','loaded',1],
       ['deactivating','loaded',1], ['reloading','loaded',1], ['','',1]]) {
@@ -207,8 +207,9 @@ ${helper}
 ${invoke}; status=$?; printf 'RESULT=%s;STOPPED=%s' "$status" "$STOPPED"; exit "$status"`;
     const run = spawnSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8', timeout: 10000 });
     assert.equal(run.status, result, `${active}/${load}: ${run.stderr || run.error || ''}`);
-    assert.match(run.stdout, /STOPPED=1/u);
-    if (result === 1) assert.match(run.stderr, /(?:AI_)?RESEARCH_WORKLOAD_(?:NOT_STOPPED|STATE_UNKNOWN)/u);
+    assert.match(run.stdout, new RegExp(`STOPPED=${expectedStops}`,'u'));
+    if (result === 1) assert.match(run.stderr,
+      /(?:AI_)?RESEARCH_(?:WORKLOAD_(?:NOT_STOPPED|STATE_UNKNOWN)|CUTOVER_BUSY)/u);
     }
   }
 });

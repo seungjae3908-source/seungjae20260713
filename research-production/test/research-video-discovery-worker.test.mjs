@@ -236,6 +236,13 @@ test('zero-source discovery stores measured current/history without creating a r
     assert.equal(result.sourceCount, 0);
     assert.equal(result.sourceReviewDigest, null);
     assert.equal(result.reviewInboxCreated, false);
+    assert.equal(result.queryIndex, 0);
+    assert.equal(result.nextQueryIndex, 0);
+    assert.equal(result.requestOrder, 'date');
+    assert.equal(result.publishedAfterHours, 720);
+    assert.equal(result.publishedAfter, '2026-09-02T09:00:00.000Z');
+    assert.equal(result.zeroResultReason, 'ACTIVE_QUERY_AND_FILTERS_RETURNED_NO_PUBLIC_VIDEO');
+    assert.equal(result.nextRequiredStep, 'ADVANCE_TO_NEXT_QUERY_ON_NEXT_SCHEDULED_SCAN');
     await assert.rejects(() => readdir(join(root, 'video-research', 'inbox')), /ENOENT/);
     const history = await readdir(join(root, 'video-research', 'history'));
     assert.equal(history.length, 1);
