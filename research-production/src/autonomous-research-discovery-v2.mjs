@@ -16,7 +16,6 @@ import {
 } from './autonomous-research-closed-loop-v1.mjs';
 import {
   invokeResearchFreeAi,
-  parseResearchFreeAiReviewForResearchOnlyV1,
   resolveResearchFreeAiPolicy,
 } from './research-ai-review-worker.mjs';
 
@@ -103,6 +102,90 @@ function readTags(review) {
   return { tags, hypothesis, review };
 }
 
+// Discovery-only AI parser. The pinned hourly review parser
+// (research-ai-review-worker.mjs) is unchanged and stays strict. A discovery
+// model must be able to describe a strategy's risks ("drawdown in ranging
+// markets") and quote the source's rule text, which the review parser rejects
+// by word. Here we still reject secrets/private data, imperative trading
+// instructions, execution-authority wording, guaranteed returns, and NUMERIC
+// performance claims (a metric stated with a value). Locator tags are quoted
+// source text and are separately required to be exact source substrings.
+const DISCOVERY_TOP_LEVEL = new Set(['summary', 'findings', 'hypotheses', 'risks', 'disposition']);
+const DISCOVERY_HYPOTHESIS = new Set(['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale']);
+const DISCOVERY_DISPOSITIONS = new Set(['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA']);
+const DISCOVERY_QUOTED_TAGS = new Set(['ENTRY_LOCATOR', 'EXIT_LOCATOR', 'RISK_LOCATOR']);
+const discoverySecretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|비밀번호|계좌번호)\s*[:=]\s*\S{8,})/i;
+const discoveryPrivateDataPattern = /(?:\b\d{6}-[1-4]\d{6}\b|주민등록번호|생년월일)/i;
+const discoveryGuaranteedPattern = /(?:guaranteed\s*(?:profit|return)|risk[- ]?free\s*(?:profit|return)|무조건\s*상승|확실한\s*수익|손실\s*없)/i;
+const discoveryImperativePattern = /(?:executionAuthority|orderAllowed|order\s*(?:submit|cancel|amend)|\b(?:BUY|SELL|LONG|SHORT)\s+NOW\b|(?:매수|매도|롱|숏|진입).{0,16}(?:하세요|하십시오|권장))/i;
+const discoveryNumericClaimPattern = new RegExp([
+  String.raw`(?:sharpe|sortino|calmar|profit\s*factor|\bPF\b|expectancy|\bCAGR\b|\bROI\b|\bPnL\b|win\s*-?\s*rate|max(?:imum)?\s*drawdown|\bMDD\b|drawdown|annuali[sz]ed\s+returns?|total\s+returns?|net\s+returns?|승률|수익률|손익비|최대\s*낙폭)`
+    + String.raw`\s*(?:ratio\s*)?(?:of|was|is|were|=|:|around|about|approximately|~|≈|reached|achieved|over|above|near|약|은|는|이|가)?\s*[-+]?\d`,
+  String.raw`[-+]?\d+(?:[.,]\d+)?\s*(?:%|퍼센트)\s*(?:win\s*-?\s*rate|returns?|profit|gains?|CAGR|ROI|drawdown|승률|수익률|수익|이익)`,
+].join('|'), 'i');
+
+function discoveryObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function discoveryKeys(row, allowed, label) {
+  for (const key of Object.keys(row)) if (!allowed.has(key)) throw new Error(`${label}_UNSUPPORTED_KEY`);
+}
+
+function discoveryText(value, label, max = 800, { quoted = false } = {}) {
+  if (typeof value !== 'string' || value.length > max) throw new Error(`${label}_INVALID`);
+  const text = value.normalize('NFKC').replace(/[\u200B-\u200D\u2060\uFEFF]/gu, '').replace(/[<>]/gu, ' ').trim().slice(0, max);
+  if (!text) throw new Error(`${label}_REQUIRED`);
+  if (discoverySecretPattern.test(text) || discoveryPrivateDataPattern.test(text)) throw new Error('PRIVATE_DATA_FORBIDDEN');
+  if (quoted) return text;
+  if (discoveryGuaranteedPattern.test(text) || discoveryImperativePattern.test(text)) throw new Error('FORBIDDEN_AI_AUTHORITY');
+  if (discoveryNumericClaimPattern.test(text)) throw new Error('FORBIDDEN_AI_PERFORMANCE_CLAIM');
+  return text;
+}
+
+function discoveryArray(value, label, maxItems = 8, maxItemLength = 500) {
+  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`${label}_INVALID`);
+  return value.map((item, index) => {
+    const tag = /^([A-Z][A-Z0-9_]*)=/u.exec(typeof item === 'string' ? item.trim() : '');
+    return discoveryText(item, `${label}[${index}]`, maxItemLength, { quoted: Boolean(tag && DISCOVERY_QUOTED_TAGS.has(tag[1])) });
+  });
+}
+
+export function parseResearchFreeAiDiscoveryForResearchOnlyV1(answer) {
+  if (typeof answer !== 'string' || answer.length > 16_000) throw new Error('INVALID_AI_OUTPUT');
+  const raw = answer.trim();
+  if (!raw.startsWith('{') || !raw.endsWith('}') || raw.includes('```')) throw new Error('MALFORMED_AI_JSON');
+  let decoded;
+  try { decoded = JSON.parse(raw); } catch { throw new Error('MALFORMED_AI_JSON'); }
+  const row = discoveryObject(decoded);
+  if (!row) throw new Error('INVALID_AI_OUTPUT');
+  discoveryKeys(row, DISCOVERY_TOP_LEVEL, 'response');
+  const disposition = typeof row.disposition === 'string' ? row.disposition.trim() : '';
+  if (!DISCOVERY_DISPOSITIONS.has(disposition)) throw new Error('INVALID_AI_DISPOSITION');
+  if (!Array.isArray(row.hypotheses) || row.hypotheses.length > 4) throw new Error('INVALID_AI_HYPOTHESES');
+  const hypotheses = row.hypotheses.map((value, index) => {
+    const hypothesis = discoveryObject(value);
+    if (!hypothesis) throw new Error('INVALID_AI_HYPOTHESIS');
+    discoveryKeys(hypothesis, DISCOVERY_HYPOTHESIS, `hypotheses[${index}]`);
+    if (typeof hypothesis.hypothesisId !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,119}$/u.test(hypothesis.hypothesisId)) throw new Error('INVALID_AI_HYPOTHESIS_ID');
+    return Object.freeze({
+      hypothesisId: discoveryText(hypothesis.hypothesisId, `hypotheses[${index}].hypothesisId`, 120),
+      thesis: discoveryText(hypothesis.thesis, `hypotheses[${index}].thesis`, 700),
+      requiredEvidence: Object.freeze(discoveryArray(hypothesis.requiredEvidence, `hypotheses[${index}].requiredEvidence`, 8, 500)),
+      falsification: discoveryText(hypothesis.falsification, `hypotheses[${index}].falsification`, 500),
+      intendedRegime: discoveryText(hypothesis.intendedRegime, `hypotheses[${index}].intendedRegime`, 240),
+      independenceRationale: discoveryText(hypothesis.independenceRationale, `hypotheses[${index}].independenceRationale`, 500),
+    });
+  });
+  return Object.freeze({
+    summary: discoveryText(row.summary, 'summary', 800),
+    findings: Object.freeze(discoveryArray(row.findings, 'findings', 8, 500)),
+    hypotheses: Object.freeze(hypotheses),
+    risks: Object.freeze(discoveryArray(row.risks, 'risks', 8, 500)),
+    disposition,
+  });
+}
+
 function requiredTag(parsed, name) {
   const value = parsed.tags.get(name);
   if (!value) throw new Error(`AI_DISCOVERY_TAG_REQUIRED:${name}`);
@@ -110,7 +193,7 @@ function requiredTag(parsed, name) {
 }
 
 function parseSourcePlan(answer) {
-  const parsed = readTags(parseResearchFreeAiReviewForResearchOnlyV1(answer));
+  const parsed = readTags(parseResearchFreeAiDiscoveryForResearchOnlyV1(answer));
   const repository = requiredTag(parsed, 'REPOSITORY').replace(/\/$/u, '');
   const match = SAFE_REPOSITORY.exec(repository);
   if (!match) throw new Error('AI_DISCOVERY_REPOSITORY_INVALID');
@@ -142,7 +225,7 @@ function exactLocator(source, value, label, { optional = false } = {}) {
 }
 
 function parseRuleExtraction(answer, sourceText) {
-  const parsed = readTags(parseResearchFreeAiReviewForResearchOnlyV1(answer));
+  const parsed = readTags(parseResearchFreeAiDiscoveryForResearchOnlyV1(answer));
   const market = requiredTag(parsed, 'MARKET').toUpperCase();
   const timeframe = requiredTag(parsed, 'TIMEFRAME').toLowerCase();
   const direction = requiredTag(parsed, 'DIRECTION').toUpperCase();
