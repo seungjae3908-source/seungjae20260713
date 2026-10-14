@@ -11,6 +11,7 @@ const repositoryRoot = path.resolve(apiRoot, '..');
 // All provider/execution dependencies in these tests are fake transports.
 // This runner neither loads Production credentials nor calls Production APIs.
 const entries = [
+  'daily-profit-target.service.test.ts',
   'member-auto-trading-background-worker.service.test.ts',
   'trade-recovery-worker.test.ts',
   'trade-automation-repository-compatibility.test.ts',

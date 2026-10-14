@@ -2132,6 +2132,48 @@ test('member order baseline stays 500k while an administrator may save the 1M ba
   }
 });
 
+test('daily profit targets preserve decimal per-market choices without expanding role risk limits', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const regular = await startServer(true, 'regular');
+  try {
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...DEFAULT_TRADING_POLICY,
+        mode: 'approval',
+        automaticEnabled: false,
+        maxDailyOrders: 0,
+        maxOrderKrw: 9_999_999,
+        bitgetLeverage: 3,
+        dailyProfitTargetByMarket: {
+          domestic_stock: { enabled: true, targetPercent: 3, afterTargetAction: 'STOP_NEW_ENTRIES' },
+          us_stock: { enabled: true, targetPercent: 100, afterTargetAction: 'NOTIFY_ONLY' },
+          crypto_spot: { enabled: true, targetPercent: 3.75, afterTargetAction: 'PROFIT_PROTECTION' },
+          crypto_futures: { enabled: false, targetPercent: 10.5, afterTargetAction: 'PROFIT_PROTECTION' },
+        },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    const body = await saved.json() as { policy: typeof DEFAULT_TRADING_POLICY };
+    assert.equal(body.policy.dailyProfitTargetByMarket.domestic_stock.targetPercent, 3);
+    assert.equal(body.policy.dailyProfitTargetByMarket.us_stock.targetPercent, 100);
+    assert.equal(body.policy.dailyProfitTargetByMarket.crypto_spot.targetPercent, 3.75);
+    assert.equal(body.policy.dailyProfitTargetByMarket.crypto_futures.enabled, false);
+    assert.equal(body.policy.maxDailyOrders, 0, '0 remains opportunity-driven rather than a daily quota');
+    assert.equal(body.policy.maxOrderKrw, 500_000, 'a high target cannot expand the member order cap');
+    assert.equal(body.policy.bitgetLeverage, 3);
+
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as { policy: typeof DEFAULT_TRADING_POLICY };
+    assert.deepEqual(statusBody.policy.dailyProfitTargetByMarket,
+      body.policy.dailyProfitTargetByMarket, 'all four market choices must round-trip independently');
+  } finally {
+    await close(regular.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('member Bitget leverage stops at 3x while an administrator can save exact 7x', async () => {
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);

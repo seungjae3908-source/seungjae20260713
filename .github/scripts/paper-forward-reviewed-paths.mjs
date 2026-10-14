@@ -270,9 +270,9 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/src/lib/excel-export.ts",
   ".github/scripts/paper-forward-reviewed-paths.mjs"
 ]);
-// Exact AUTO safety paths; this Draft proposes six external-Pilot paths for
-// owner review. This is not a directory exemption or permission to deploy or
-// activate. Keep the immutable legacy Paper set separate.
+// Exact AUTO safety paths. New entries remain an owner-review proposal: this
+// is not a directory exemption or permission to deploy or activate. Keep the
+// immutable legacy Paper and Research sets separate.
 export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   ".github/config/automatic-live-preactivation-checklist.json",
   ".github/scripts/automatic-live-preactivation-audit.cjs",
@@ -301,6 +301,8 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/automatic-live-unrealized-risk.service.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.test.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.ts",
+  "api-server/src/services/daily-profit-target.service.test.ts",
+  "api-server/src/services/daily-profit-target.service.ts",
   "api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts",
   "api-server/src/services/formula-ai-live-exception.service.test.ts",
   "api-server/src/services/formula-ai-live-exception.service.ts",
@@ -328,6 +330,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/apply-production-auto-live-budget.mjs",
   "ops/production-auto-live-signal-identity.cjs",
   "ops/production-auto-live-signal-source-audit.mjs",
+  "stock-analyzer/e2e/phase12-trade-automation.spec.ts",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
   "stock-analyzer/src/components/trade-automation-settings.tsx",
 ]);

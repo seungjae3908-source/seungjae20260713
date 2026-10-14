@@ -153,6 +153,38 @@ test('automatic trading keeps standing authorization while settings follow one s
   expectNoBrowserFailures(failures);
 });
 
+test('per-market desired returns accept 3%, 100% and decimals without changing unlimited opportunity policy', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+
+  const domesticTarget = page.getByLabel('국내주식 일일 희망 수익률');
+  await expect(domesticTarget).toHaveValue('5');
+  await page.getByRole('button', { name: '국내주식 희망 수익률 사용' }).click();
+  await domesticTarget.fill('3');
+  await page.getByLabel('국내주식 목표 달성 후 동작').selectOption('STOP_NEW_ENTRIES');
+
+  await page.getByTestId('trading-market-us_stock').click();
+  await page.getByRole('button', { name: '미국주식 희망 수익률 사용' }).click();
+  await page.getByLabel('미국주식 일일 희망 수익률').fill('100');
+  await page.getByLabel('미국주식 목표 달성 후 동작').selectOption('NOTIFY_ONLY');
+
+  await page.getByTestId('trading-market-crypto_spot').click();
+  await expect(page.getByLabel('코인현물 일일 희망 수익률')).toHaveValue('5');
+  await page.getByLabel('코인현물 일일 희망 수익률').fill('3.75');
+  await expect(page.getByTestId('profit-protection-state-crypto_spot')).toContainText('작동 중');
+  await expect(page.getByTestId('profit-protection-state-crypto_spot')).toContainText('복리 50% / 적립 50%');
+  await expect(page.getByTestId('profit-target-block-crypto_spot')).toContainText('강화');
+  await expect(page.getByTestId('current-exit-plan-crypto_spot')).toContainText('TREND_PULLBACK_REACCEL_V1');
+  await expect(page.getByTestId('current-exit-plan-crypto_spot')).toContainText('SL 98,000');
+
+  await page.getByTestId('trading-market-domestic_stock').click();
+  await expect(domesticTarget).toHaveValue('3');
+  await expect(page.getByLabel('국내주식 목표 달성 후 동작')).toHaveValue('STOP_NEW_ENTRIES');
+  await expect(page.getByLabel('일일 주문 수 (0=기회 기반)')).toHaveValue('0');
+  expectNoBrowserFailures(failures);
+});
+
 test('automatic trading surface never exposes per-order approval actions', async ({ page }) => {
   const approvalRequests: string[] = [];
   page.on('request', (request) => {

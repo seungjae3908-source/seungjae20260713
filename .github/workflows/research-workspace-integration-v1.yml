@@ -103,6 +103,8 @@ on:
       - api-server/src/services/automatic-live-unrealized-risk.service.ts
       - api-server/src/services/bitget-native-protection-readonly.service.test.ts
       - api-server/src/services/bitget-native-protection-readonly.service.ts
+      - api-server/src/services/daily-profit-target.service.test.ts
+      - api-server/src/services/daily-profit-target.service.ts
       - api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts
       - api-server/src/services/kiwoom-readonly-order-recovery.service.ts
       - api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts
@@ -125,6 +127,7 @@ on:
       - ops/apply-production-auto-live-budget.mjs
       - ops/production-auto-live-signal-identity.cjs
       - ops/production-auto-live-signal-source-audit.mjs
+      - stock-analyzer/e2e/phase12-trade-automation.spec.ts
       - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
       - stock-analyzer/src/components/trade-automation-settings.tsx
       - .github/scripts/research-center-batch-scope.mjs

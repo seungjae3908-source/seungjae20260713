@@ -16,12 +16,14 @@ import { TradeOrderAmendmentService } from '../services/trade-order-amendment.se
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
   readMemberAutoTradingBackgroundRuntimeHealth,
+  readMemberDailyProfitTargetRuntime,
   automaticPaperWalletBootstrapReadiness,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   memberAutoTradingWorkerMode,
   SupabaseMemberAutoTradingBackgroundSource,
 } from '../services/member-auto-trading-background-worker.service';
 import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
+import { tradingDayKeyForMarket } from '../services/daily-profit-target.service';
 import { assertPublicLivePlanOrigin, publicPlanPolicy, assertPublicPlanApprovalOrigin } from '../services/public-live-plan-origin.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { getUserSupabase } from '../lib/supabase';
@@ -1225,6 +1227,31 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       crypto_spot: null,
       crypto_futures: null,
     };
+    const currentStrategyPlanByMarket: Record<TradingAssetClass, {
+      strategyId: string;
+      stopPrice: number;
+      targetPrices: number[];
+      updatedAt: string;
+    } | null> = {
+      domestic_stock: null,
+      us_stock: null,
+      crypto_spot: null,
+      crypto_futures: null,
+    };
+    for (const plan of plans) {
+      const assetClass = tradingAssetClassForPlan(plan);
+      const currentPlan = currentStrategyPlanByMarket[assetClass];
+      if (plan.executionMode === 'automatic' && plan.reduceOnly !== true
+        && (currentPlan == null || plan.updatedAt > currentPlan.updatedAt)) {
+        currentStrategyPlanByMarket[assetClass] = {
+          strategyId: plan.strategyId,
+          stopPrice: plan.stopPrice,
+          targetPrices: [...plan.targetPrices],
+          updatedAt: plan.updatedAt,
+        };
+      }
+    }
+    const dailyProfitTargetByMarket = readMemberDailyProfitTargetRuntime(userId);
     const marketActivityByMarket = emptyMarketActivity();
     const todayKst = kstDayKey(Date.now());
     for (const order of orders) {
@@ -1290,6 +1317,16 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         if (persistentGlobalStop || environmentGlobalStop) blockers.push('GLOBAL_EMERGENCY_STOP_ACTIVE');
         if (!policy.marketEnabled[assetClass]) blockers.push('MARKET_AUTOMATIC_DISABLED');
         if (!policy.exchangeEnabled[exchange]) blockers.push('EXCHANGE_AUTOMATIC_DISABLED');
+        const profitTarget = dailyProfitTargetByMarket[assetClass];
+        const currentTargetPolicy = policy.dailyProfitTargetByMarket[assetClass];
+        const currentProfitTarget = profitTarget
+          && currentTargetPolicy.enabled
+          && profitTarget.targetPercent === currentTargetPolicy.targetPercent
+          && profitTarget.afterTargetAction === currentTargetPolicy.afterTargetAction
+          && profitTarget.tradingDay === tradingDayKeyForMarket(assetClass, Date.now());
+        if (currentProfitTarget && !profitTarget.newEntryAllowed && profitTarget.newEntryBlockReason) {
+          blockers.push(profitTarget.newEntryBlockReason);
+        }
         const uniqueBlockers = [...new Set(blockers)];
         return [assetClass, {
           exchange,
@@ -1347,6 +1384,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
+      dailyProfitTargetByMarket,
+      currentStrategyPlanByMarket,
       automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans),
       actualOrderSubmittedByStatusRequest: false,
     });
