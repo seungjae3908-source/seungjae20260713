@@ -1418,7 +1418,7 @@ test('a hung Telegram Bot POST retains durable reservation and cannot re-enter',
 test('public or ledger read pre-send deadline rejects, and never authorizes a Bot POST', async () => {
   const owner = () => '-1001234567890123';
   const testAt = new Date('2026-10-14T06:50:00.000Z');
-  let releaseRead: ((value: boolean) => void) | null = null;
+  let releaseRead!: (value: boolean) => void;
   const delayed = new Promise<boolean>(resolve => { releaseRead = resolve; });
   let sends = 0, reservations = 0, lookups = 0;
   const ledger = {
@@ -1444,12 +1444,12 @@ test('public or ledger read pre-send deadline rejects, and never authorizes a Bo
     assert.equal(reservations,0);
     assert.equal(sends,0);
     // A late successful read MUST NOT continue to reserve or send after timeout.
-    releaseRead?.(false);
+    releaseRead(false);
     await new Promise(resolve => setTimeout(resolve, 15));
     assert.equal(reservations,0);
     assert.equal(sends,0);
   } finally {
-    releaseRead?.(false);
+    releaseRead(false);
     if(prior===undefined) delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
     else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=prior;
   }
