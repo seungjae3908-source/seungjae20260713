@@ -28,6 +28,36 @@ const MAX_LEDGER_BYTES = 1_048_576;
 // A stuck tick could have been accepted by Bot API already. This watchdog
 // only marks health degraded; it NEVER retries or releases dedupe reservations.
 const BRIEF_STALL_AFTER_MS = 10 * 60_000;
+const BRIEF_PRE_SEND_MAX_MS = 15_000;
+const BRIEF_PUBLIC_READ_MAX_MS = 8_500;
+
+/**
+ * Deadline is ONLY permitted for an operation that cannot send Telegram or
+ * persist a send reservation: optional public reads and ledger has()/hasUnconfirmed().
+ * If its underlying promise completes late there is NO continuing caller
+ * that may issue a Bot POST. NEVER wrap reservation, delivery or receipt writes.
+ */
+export async function boundedTelegramBriefPreSendRead<T>(
+  read: () => Promise<T>,
+  timeoutMs: number = BRIEF_PRE_SEND_MAX_MS,
+): Promise<T> {
+  if (typeof read !== 'function' || !Number.isSafeInteger(timeoutMs)
+      || timeoutMs < 1 || timeoutMs > BRIEF_PRE_SEND_MAX_MS)
+    throw new Error('TELEGRAM_BRIEF_PRE_SEND_INVALID');
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      Promise.resolve().then(read),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('TELEGRAM_BRIEF_PRE_SEND_TIMEOUT'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 export type TelegramBriefStage =
   | 'IDLE' | 'PLAN' | 'PUBLIC_BRIEF_READ' | 'LEDGER_LOOKUP'
   | 'RESERVE_UNCONFIRMED' | 'BOT_POST' | 'DURABLE_RECEIPT_WRITE';
@@ -298,6 +328,7 @@ export class TelegramIntelligenceWorker {
     private readonly resolveChatId: (destination: TelegramReportDestination) => string | null = telegramDestinationChatId,
     private readonly collectBrief: TelegramBriefCollector = collectTelegramMarketBrief,
     private readonly stageObserver: (stage: TelegramBriefStage) => void = () => {},
+    private readonly preSendReadTimeoutMs: number = BRIEF_PRE_SEND_MAX_MS,
   ) {}
 
   async runOnce(now = new Date()): Promise<TelegramIntelligenceRunResult> {
@@ -329,7 +360,9 @@ export class TelegramIntelligenceWorker {
       if (plans.length > 0 && process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED === 'true') {
         try {
           this.stageObserver('PUBLIC_BRIEF_READ');
-          briefSnapshot = await this.collectBrief();
+          briefSnapshot = await boundedTelegramBriefPreSendRead(
+            () => this.collectBrief(), BRIEF_PUBLIC_READ_MAX_MS,
+          );
         } catch (error) {
           logger.warn(
             { code: safeTelegramBriefFailureCode(error) },
@@ -352,11 +385,15 @@ export class TelegramIntelligenceWorker {
         for (const [chatId, destination] of uniqueChats) {
           const deliveryKey = `${plan.dedupeKey}:${destination}:${chatId}`;
           this.stageObserver('LEDGER_LOOKUP');
-          if (await this.store.has(deliveryKey)) {
+          if (await boundedTelegramBriefPreSendRead(
+            () => this.store.has(deliveryKey), this.preSendReadTimeoutMs,
+          )) {
             result.deduped += 1;
             continue;
           }
-          if (await this.store.hasUnconfirmed(deliveryKey)) {
+          if (await boundedTelegramBriefPreSendRead(
+            () => this.store.hasUnconfirmed(deliveryKey), this.preSendReadTimeoutMs,
+          )) {
             result.failed += 1;
             continue;
           }
