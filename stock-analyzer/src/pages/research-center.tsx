@@ -28,6 +28,7 @@ import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 import { ResearchLightweightMarketWatchPanel } from '@/components/research-lightweight-market-watch-panel';
 import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';
+import { ResearchRuleValidationPanel } from '@/components/research-rule-validation-panel';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -871,6 +872,7 @@ export default function ResearchCenterPage({ activeTab, onTabChange, embedded = 
           </section>
         ) : null}
 
+        {tab === 'evidence' ? <ResearchRuleValidationPanel /> : null}
         {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}
         {overview && cards.length ? (
           <>
