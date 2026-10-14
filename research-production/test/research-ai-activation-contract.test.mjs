@@ -13,24 +13,56 @@ const workflowUrl = new URL('../../.github/workflows/research-ai-production-acti
 const aiCliUrl = new URL('../bin/research-ai-review.mjs', import.meta.url);
 const aiServiceUrl = new URL('../deploy/research-production-ai-review.service', import.meta.url);
 
-test('AI Research activation is fail-closed and exact-SHA bound', async () => {
+test('AI Research activation is fail-closed, exact-SHA bound and rollback-first', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   assert.match(script, /TARGET_SHA must be an exact lowercase 40-character SHA/);
   assert.match(script, /AI_RESEARCH_CURRENT_SHA_MISMATCH/);
   assert.match(script, /\/opt\/investment-research\/releases\/[^\n]*\$TARGET_SHA/);
-  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=\$safe_disabled/);
+  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
+  assert.match(script, /ROLLBACK_FAILED=true/);
+  assert.match(script, /AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT="\$snapshot_root"/);
+  assert.match(script, /restore_runtime_snapshot "\$AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT"/);
+  assert.match(script, /capture_runtime_snapshot "\$baseline"/);
   assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
   assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
   assert.match(script, /systemctl disable --now/);
 });
 
-test('AI cutover stops active one-shots, not just their timers', async () => {
+test('AI cutover refuses to kill an in-flight previous-release one-shot', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const freeze = script.slice(script.indexOf('disable_timers()'), script.indexOf('research_sha()'));
-  assert.match(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
-  assert.match(freeze, /AI_RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  const freeze = script.slice(script.indexOf('require_idle_one_shots()'), script.indexOf('capture_runtime_snapshot()'));
+  assert.doesNotMatch(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
+  assert.match(freeze, /AI_RESEARCH_CUTOVER_BUSY/u);
   const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.ok(activation.indexOf('require_isolated_validation') < activation.indexOf('disable_timers'));
   assert.ok(activation.indexOf('disable_timers') < activation.indexOf('install-ai-research-units.sh'));
+});
+
+test('isolated validation uses a disjoint state root and no systemd mutation', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const isolated = script.slice(script.indexOf('validate_isolated()'), script.indexOf('require_isolated_validation()'));
+  assert.match(isolated, /research-ai-isolated-transition-v2\.mjs/u);
+  assert.match(isolated, /--source-state-root "\$STATE_ROOT"/u);
+  assert.match(isolated, /--isolated-state-root "\$isolated_root"/u);
+  assert.match(isolated, /stage_isolated_release/u);
+  assert.match(isolated, /capture_runtime_snapshot "\$baseline"/u);
+  assert.match(isolated, /PRODUCTION_STATE_MUTATED=false/u);
+  assert.doesNotMatch(isolated, /systemctl/u);
+});
+
+test('rollback restores SHA-pinned prior units, isolated env, enablement and active state', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const rollback = script.slice(script.indexOf('restore_runtime_snapshot()'), script.indexOf('research_sha()'));
+  assert.match(rollback, /runtime-before\.tsv/u);
+  assert.match(rollback, /install -o root -g root -m 0644/u);
+  assert.match(rollback, /restore-units\/\$name/u);
+  assert.match(rollback, /env\/research-production\.env/u);
+  assert.match(rollback, /systemctl enable/u);
+  assert.match(rollback, /systemctl start/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK=RESTORED/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_UNIT_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH/u);
 });
 
 test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
@@ -42,15 +74,16 @@ test('free confirmation binds to the deployed app SHA without app writes or rest
 
 test('provider readiness is proven before timer activation and secrets are not printed', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const preflight = script.indexOf('provider_preflight');
-  const materialize = script.indexOf('research-provider-bootstrap.mjs" materialize');
+  const preflight = script.indexOf('require_existing_provider_env');
   const enable = script.indexOf('systemctl enable --now');
-  assert.ok(preflight >= 0 && materialize > preflight && enable > materialize);
+  assert.ok(preflight >= 0 && enable > preflight);
   assert.match(script, /fullStackReady !== true/);
   assert.match(script, /providers\.youtube !== 'PRESENT'/);
   assert.match(script, /providers\.gemini !== 'PRESENT'/);
   assert.match(script, /providers\.groq !== 'PRESENT'/);
   assert.doesNotMatch(script, /echo .*API_KEY|printf .*API_KEY/);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(activation, /materialize_or_reuse_provider_env|chown root:investment-research|chmod 0640/u);
 });
 
 
@@ -158,13 +191,23 @@ test('one-shot workers must succeed before recurring timers are enabled', async 
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT=success/);
 });
 
+test('long-history refresh stays on the existing exact-SHA core service and old completion is not rewritten', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /research-production@\.service/);
+  assert.match(script, /research-production-long-history\.timer/);
+  assert.match(script, /Unit=research-production@long-history\.service/);
+  assert.match(script, /AI_RESEARCH_LONG_HISTORY_REFRESH_PATH_MISSING/);
+  assert.doesNotMatch(script, /rm .*long-history|unlink .*long-history/u);
+});
+
 test('fresh one-shot provider evidence is required before recurring timers enable', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   const ai = script.indexOf('systemctl start research-production-ai-review.service');
   const video = script.indexOf('systemctl start research-production-video-discovery.service');
   const proof = script.indexOf('verify_one_shot_evidence "$one_shot_started_ms"');
+  const v2Proof = script.indexOf('verify_v2_operational_transition "$one_shot_started_ms"');
   const enable = script.indexOf('systemctl enable --now');
-  assert.ok(ai >= 0 && video > ai && proof > video && enable > proof);
+  assert.ok(ai >= 0 && video > ai && proof > video && v2Proof > proof && enable > v2Proof);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_READY/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
@@ -172,6 +215,7 @@ test('fresh one-shot provider evidence is required before recurring timers enabl
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_STALE/);
+  assert.match(script, /research-ai-operational-transition-v2\.mjs/);
 });
 test('AI activation preserves no-trading authority contract', async () => {
   const script = await readFile(scriptUrl, 'utf8');
@@ -256,15 +300,19 @@ test('approved-job intake and workspace heartbeat are proven before activation c
 
 
 test('AI review business failures are visible to systemd instead of exiting success', async () => {
-  const [cli, service] = await Promise.all([
+  const [cli, service, coordinator] = await Promise.all([
     readFile(aiCliUrl, 'utf8'),
     readFile(aiServiceUrl, 'utf8'),
+    readFile(new URL('../bin/autonomous-research-coordinator-v2.mjs', import.meta.url), 'utf8'),
   ]);
   assert.match(cli, /PARTIAL_AI_UNAVAILABLE/);
   assert.match(cli, /WAITING_FOR_FREE_AI/);
   assert.match(cli, /DEFERRED_RETRY/);
   assert.match(cli, /process\.exitCode = 75/);
-  assert.match(service, /ExecStart=.*research-ai-review\.mjs run/);
+  assert.match(coordinator, /runResearchAiReviewScan/);
+  assert.match(coordinator, /WAITING_OR_PARTIAL_AI/);
+  assert.match(coordinator, /process\.exitCode = failed \? 1 : unavailable \? 75 : 0/);
+  assert.match(service, /ExecStart=.*autonomous-research-coordinator-v2\.mjs/);
   assert.doesNotMatch(service, /SuccessExitStatus=.*75/);
 });
 

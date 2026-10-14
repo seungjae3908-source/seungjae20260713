@@ -5,11 +5,14 @@ on:
     branches: [main]
     paths:
       - .github/workflows/research-ai-production-activation.yml
+      - .github/workflows/research-ai-isolated-validation.yml
       - .github/scripts/research-ai-activation-result.cjs
       - research-production/deploy/activate-ai-research.sh
       - research-production/deploy/install-ai-research-units.sh
       - research-production/deploy/research-production-ai-review.service
       - research-production/deploy/research-production-ai-review.timer
+      - research-production/deploy/research-production@.service
+      - research-production/deploy/research-production-long-history.timer
       - research-production/deploy/research-production-video-discovery.service
       - research-production/deploy/research-production-video-discovery.timer
       - research-production/deploy/research-production-approved-job-intake.service
@@ -21,17 +24,29 @@ on:
       - research-production/src/research-free-policy-confirmation.mjs
       - research-production/test/research-free-policy-confirmation.test.mjs
       - research-production/bin/research-ai-review.mjs
+      - research-production/bin/autonomous-research-coordinator-v2.mjs
+      - research-production/bin/research-ai-operational-transition-v2.mjs
+      - research-production/bin/research-ai-isolated-transition-v2.mjs
       - research-production/bin/research-ai-diagnostic.mjs
       - research-production/bin/research-forward-runtime-diagnostic.mjs
       - research-production/bin/research-video-discovery.mjs
       - research-production/bin/research-video-approved-job.mjs
       - research-production/src/research-ai-review-worker.mjs
+      - research-production/src/autonomous-research-cycle-v2.mjs
+      - research-production/src/autonomous-research-discovery-v2.mjs
+      - research-production/src/research-ai-operational-transition-v2.mjs
+      - research-production/src/research-ai-isolated-transition-v2.mjs
       - research-production/src/research-video-discovery-worker.mjs
       - research-production/src/research-video-discovery-policy.mjs
       - research-production/test/research-ai-activation-contract.test.mjs
       - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-forward-runtime-diagnostic.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
+      - research-production/test/autonomous-research-discovery-v2.test.mjs
+      - research-production/test/research-ai-operational-transition-v2.test.mjs
+      - research-production/test/research-ai-isolated-transition-v2.test.mjs
+      - research-production/test/research-ai-isolated-workflow-contract.test.mjs
+      - research-production/test/research-ai-cutover-rollback.test.mjs
       - research-production/test/research-approved-job-intake.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
@@ -72,7 +87,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-ai-research.sh
           bash -n research-production/deploy/install-ai-research-units.sh
-          systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
+          systemd-analyze verify             research-production/deploy/research-production@.service             research-production/deploy/research-production-long-history.timer             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
           node --test \
             research-production/test/research-ai-activation-contract.test.mjs \
             research-production/test/research-ai-activation-lifecycle.test.mjs \
@@ -81,6 +96,11 @@ jobs:
             research-production/test/research-ai-diagnostic.test.mjs \
             research-production/test/research-forward-runtime-diagnostic.test.mjs \
             research-production/test/research-ai-review-worker.test.mjs \
+            research-production/test/autonomous-research-discovery-v2.test.mjs \
+            research-production/test/research-ai-operational-transition-v2.test.mjs \
+            research-production/test/research-ai-isolated-transition-v2.test.mjs \
+            research-production/test/research-ai-isolated-workflow-contract.test.mjs \
+            research-production/test/research-ai-cutover-rollback.test.mjs \
             research-production/test/research-approved-job-intake.test.mjs \
             research-production/test/research-ai-units-install-contract.test.mjs \
             research-production/test/research-provider-bootstrap.test.mjs \
@@ -205,6 +225,22 @@ jobs:
               core.setFailed('AI_RESEARCH_EXACT_RESEARCH_PRODUCTION_RECEIPT_REQUIRED:' + target);
               return;
             }
+            const isolatedReceipt = [...comments].reverse().find((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
+              const text = String(comment.body ?? '');
+              return text.includes('[RESEARCH_AI_ISOLATED_VALIDATION]')
+                && text.includes('status: success')
+                && text.includes('target_sha: ' + target)
+                && text.includes('production_state_mutated: false')
+                && text.includes('natural_cycle_proven: true')
+                && text.includes('live_trading: false')
+                && text.includes('private_api: false')
+                && text.includes('order_authority: false');
+            });
+            if (!isolatedReceipt) {
+              core.setFailed('AI_RESEARCH_EXACT_ISOLATED_VALIDATION_RECEIPT_REQUIRED:' + target);
+              return;
+            }
             const duplicate = [...comments].reverse().find((comment) => {
               if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
               const text = String(comment.body ?? '');
@@ -291,16 +327,6 @@ jobs:
             exit 1
           fi
 
-      - name: Read-only AI Research preflight
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight"             < research-production/deploy/activate-ai-research.sh             | tee "$RUNNER_TEMP/ai-research-preflight.txt"
-          grep -Fxq 'AI_RESEARCH_PREFLIGHT=PASS' "$RUNNER_TEMP/ai-research-preflight.txt"
-          grep -Fxq "TARGET_SHA=$TARGET_SHA" "$RUNNER_TEMP/ai-research-preflight.txt"
-          grep -Fxq 'executionAuthority=NONE' "$RUNNER_TEMP/ai-research-preflight.txt"
-
       - name: Activate AI Review and Video Discovery timers with one-shot proof
         id: activate_ai
         shell: bash
@@ -321,6 +347,11 @@ jobs:
             'failure_reason=' + (result.failureReason ?? ''),
             'provider_failure_reason=' + (result.providerFailureReason ?? ''),
             'completion_evidence_observed=' + result.completionEvidenceObserved,
+            'natural_cycle_proven=' + result.naturalCycleProven,
+            'long_history_state=' + (result.longHistoryState ?? ''),
+            'youtube_state=' + (result.youtubeState ?? ''),
+            'rollback_state=' + result.rollbackState,
+            'existing_service_preserved=' + result.existingServicePreserved,
             'runtime_recheck_required=' + result.runtimeRecheckRequired, '',
           ].join('\n'));
           console.log(JSON.stringify(result));
@@ -334,7 +365,6 @@ jobs:
           name: research-ai-activation-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/ai-research-consent.txt
-            ${{ runner.temp }}/ai-research-preflight.txt
             ${{ runner.temp }}/ai-research-activation.txt
           if-no-files-found: ignore
           retention-days: 7
@@ -346,6 +376,11 @@ jobs:
           FAILURE_REASON: ${{ steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason || 'AI_RESEARCH_ACTIVATION_WORKFLOW_FAILED' }}
           PROVIDER_FAILURE_REASON: ${{ steps.activate_ai.outputs.provider_failure_reason || 'NOT_OBSERVED' }}
           COMPLETION_EVIDENCE_OBSERVED: ${{ steps.activate_ai.outputs.completion_evidence_observed || 'false' }}
+          NATURAL_CYCLE_PROVEN: ${{ steps.activate_ai.outputs.natural_cycle_proven || 'false' }}
+          LONG_HISTORY_STATE: ${{ steps.activate_ai.outputs.long_history_state || 'NOT_PROVEN' }}
+          YOUTUBE_STATE: ${{ steps.activate_ai.outputs.youtube_state || 'NOT_PROVEN' }}
+          ROLLBACK_STATE: ${{ steps.activate_ai.outputs.rollback_state || 'NOT_PROVEN' }}
+          EXISTING_SERVICE_PRESERVED: ${{ steps.activate_ai.outputs.existing_service_preserved || 'false' }}
           RUNTIME_RECHECK_REQUIRED: ${{ steps.activate_ai.outputs.runtime_recheck_required == 'true' || steps.activate_ai.outputs.completion_evidence_observed == 'true' }}
         with:
           script: |
@@ -360,6 +395,11 @@ jobs:
                 'failure_reason: ' + process.env.FAILURE_REASON,
                 'provider_failure_reason: ' + process.env.PROVIDER_FAILURE_REASON,
                 'completion_evidence_observed: ' + process.env.COMPLETION_EVIDENCE_OBSERVED,
+                'autonomous_v2_natural_cycle: ' + process.env.NATURAL_CYCLE_PROVEN,
+                'long_history_state: ' + process.env.LONG_HISTORY_STATE,
+                'youtube_state: ' + process.env.YOUTUBE_STATE,
+                'rollback_state: ' + process.env.ROLLBACK_STATE,
+                'existing_service_preserved: ' + process.env.EXISTING_SERVICE_PRESERVED,
                 'runtime_recheck_required: ' + process.env.RUNTIME_RECHECK_REQUIRED,
                 'provider_secret_values_exposed: false',
                 'live_trading: false',
@@ -390,6 +430,10 @@ jobs:
                 'provider_secret_values_exposed: false',
                 'ai_review_one_shot: success',
                 'video_discovery_one_shot: success',
+                'autonomous_v2_natural_cycle: success',
+                'long_history_stale_is_failure: false',
+                'long_history_state: ${{ steps.activate_ai.outputs.long_history_state }}',
+                'youtube_state: ${{ steps.activate_ai.outputs.youtube_state }}',
                 'ai_review_timer_enabled: true',
                 'video_discovery_timer_enabled: true',
                 'approved_job_intake_timer_enabled: true',
