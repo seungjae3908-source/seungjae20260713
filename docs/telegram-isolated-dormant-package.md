@@ -422,3 +422,47 @@ owner anomalies and a no-mutation protected workflow contract.
 These are source/CI preflight fixes only. They do NOT prove the historical
 Production PM2 state, overwrite the old release, restart a process or
 authorize sender activation. No Replit was used.
+
+
+## Full-source Telegram recovery pre-CI audit 2026-10-14 13:27 KST
+
+After Full CI #38511222330 passed for the PRIOR #1888 HEAD, a new
+source-to-Production readback review identified additional gaps:
+
+1. The original manifest covered three executable files, NOT preparation.json.
+   Verifying preparation JSON fields alone was insufficient. The readback
+   now requires the prepared receipt bytes to match the immutable original
+   GitHub push artifact SHA-256. Both producer and install use canonical
+   JSON.stringify receipt plus a newline, making exact-byte verification
+   compatible with the existing failed installation.
+2. A two-pass stable PM2 snapshot does not prove that Production is still
+   on the deployed revision observed BEFORE the failed protected install.
+   The readback now requires exact legacy deployed SHA
+   3e104bbeefffcb3bb5ce03b57637f548e493b8e6, failing closed on a new
+   revision even when current PID/restart metadata appears stable.
+   Historical process preservation DURING the earlier failed install
+   remains unproven and is never claimed.
+3. Rechecking current main ONLY before Production access leaves a release
+   report race. The workflow now checks exact main after remote inspection
+   and rechecks from GitHub again immediately before posting any proof.
+4. The protected readback now requires genuine exact-current-main Required
+   CI 6/6 and postmerge provenance BEFORE SSH, reusing the pre-existing
+   production validation helpers; it restricts the owner command to the
+   original failed installation source package SHA
+   bcb8503559cd64c853f211ed1a10f5c5fad3c04f.
+
+The private release root also checks its ancestor directory ownership-safety
+properties (non-symlink and non-world-writable), and regression tests cover
+semantically unchanged but byte-tampered preparation JSON, a different live
+deploy revision, missing prerequisites, and an unsafe release ancestor.
+
+No real Bot POST, start, restart, secret, account, trading, Paper, DB or host
+file mutation is authorized by the source-only checks. No Replit.
+Do NOT rerun the old failed create-only installer or clean its existing
+release/current and incoming directories: preserve evidence.
+
+The only subsequent server step is a separately approved, protected,
+READ-ONLY observation after approved PR merge and exact-main Required6 proof.
+Even complete sealed bytes plus a stable currently embedded PM2 instance
+do NOT prove a single sender, four stopped legacy lanes, valid Signal V3
+production data or operational Telegram delivery.

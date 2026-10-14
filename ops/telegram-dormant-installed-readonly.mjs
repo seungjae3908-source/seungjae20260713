@@ -50,11 +50,14 @@ const exactKeys=(value,keys)=>value&&typeof value==='object'
  &&JSON.stringify(Object.keys(value).sort())===JSON.stringify([...keys].sort());
 
 /** Validate exact original package manifest against the immutable push artifact. */
-export function inspectSealedDormant({root=ROOT,sha,expectedManifestSha}){
+export function inspectSealedDormant({root=ROOT,sha,expectedManifestSha,expectedPreparationSha}){
  const invalid=code=>({valid:false,code});
  if(!SHA.test(String(sha))||!HASH.test(String(expectedManifestSha))
-  ||!path.isAbsolute(root)||path.resolve(root)!==root)
+  ||!HASH.test(String(expectedPreparationSha))
+  ||typeof root!=='string'||!path.isAbsolute(root)||path.resolve(root)!==root)
   return invalid('INVALID_READBACK_ARGUMENTS');
+ if(!safeDir(path.dirname(root)))
+  return invalid('DORMANT_PARENT_ROOT_UNSAFE');
  const release=path.join(root,'release','current');
  if(!safeDir(root)||!safeDir(path.join(root,'release')))
   return invalid('DORMANT_ROOT_UNSAFE_OR_MISSING');
@@ -94,7 +97,10 @@ export function inspectSealedDormant({root=ROOT,sha,expectedManifestSha}){
   if(!bytes||digest(bytes)!==match[1])
    return invalid('DORMANT_PAYLOAD_INVALID');
  }
- const preparation=safeJson(safeRead(path.join(release,'.deploy','preparation.json'),8192));
+ const preparationBytes=safeRead(path.join(release,'.deploy','preparation.json'),8192);
+ if(!preparationBytes||digest(preparationBytes)!==expectedPreparationSha)
+  return invalid('DORMANT_PREPARATION_PROVENANCE_MISMATCH');
+ const preparation=safeJson(preparationBytes);
  if(!preparation||preparation.schemaVersion!=='telegram-isolated-dormant-package-v1'
   ||preparation.sha!==sha||preparation.mode!=='PREPARE_ONLY'
   ||preparation.workerStarted!==false||preparation.productionAppChanged!==false
@@ -162,7 +168,7 @@ function readPm2(){
  }catch{return null;}
 }
 export async function auditTelegramDormantReadback({
- sha,expectedManifestSha,root=ROOT,
+ sha,expectedManifestSha,expectedPreparationSha,expectedDeployedSha,root=ROOT,
  readPm2Impl=readPm2,waitImpl=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
 }){
  const evidence={
@@ -174,8 +180,10 @@ export async function auditTelegramDormantReadback({
   telegramSends:0,pm2Mutations:0,databaseWrites:0,financialMutations:0,
   secretValuesRecorded:false,
  };
- if(!SHA.test(String(sha))||!HASH.test(String(expectedManifestSha)))return evidence;
- const seal=inspectSealedDormant({root,sha,expectedManifestSha});
+ if(!SHA.test(String(sha))||!HASH.test(String(expectedManifestSha))
+   ||!HASH.test(String(expectedPreparationSha))
+   ||!SHA.test(String(expectedDeployedSha)))return evidence;
+ const seal=inspectSealedDormant({root,sha,expectedManifestSha,expectedPreparationSha});
  if(!seal.valid){evidence.classification=seal.code;return evidence;}
  evidence.sealed=true;
  const first=await readPm2Impl();
@@ -190,7 +198,7 @@ export async function auditTelegramDormantReadback({
  // The inspection does not hold a write lock (strictly zero host mutations).
  // Recheck all sealed bytes AFTER the second process observation; otherwise a
  // concurrently modified payload can incorrectly be reported as sealed.
- const endSeal=inspectSealedDormant({root,sha,expectedManifestSha});
+ const endSeal=inspectSealedDormant({root,sha,expectedManifestSha,expectedPreparationSha});
  if(!endSeal.valid){
   evidence.sealed=false;
   evidence.pm2Stable=false;
@@ -199,6 +207,12 @@ export async function auditTelegramDormantReadback({
  }
  if(evidence.owner!=='embedded'){
   evidence.classification='SEALED_PRESENT_PM2_OWNER_UNEXPECTED';
+  return evidence;
+ }
+ // Stable current process != proven original production revision. Demand the
+ // pre-install SHA recorded by the original protected Production audit.
+ if(first.sha!==expectedDeployedSha){
+  evidence.classification='SEALED_PRESENT_DEPLOYED_SHA_UNEXPECTED';
   return evidence;
  }
  evidence.classification=evidence.pm2Stable
@@ -211,6 +225,8 @@ if(process.env.TELEGRAM_DORMANT_READBACK_EXECUTE==='true'){
  const report=await auditTelegramDormantReadback({
   sha:process.env.TELEGRAM_DORMANT_READBACK_SHA,
   expectedManifestSha:process.env.TELEGRAM_DORMANT_READBACK_MANIFEST,
+  expectedPreparationSha:process.env.TELEGRAM_DORMANT_READBACK_PREPARATION_SHA,
+  expectedDeployedSha:process.env.TELEGRAM_DORMANT_READBACK_EXPECTED_DEPLOYED_SHA,
  });
  process.stdout.write(JSON.stringify(report)+'\n');
 }

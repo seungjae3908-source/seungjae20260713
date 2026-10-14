@@ -54,6 +54,7 @@ jobs:
       actions: read
       contents: read
       issues: write
+      statuses: read
     env:
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -81,6 +82,10 @@ jobs:
           const m=/^\/run-telegram-dormant-readback ([a-f0-9]{40}) ([a-f0-9]{40})$/u.exec(
             String(process.env.BODY||'').trim());
           if(!m)throw Error('TELEGRAM_READBACK_TWO_EXACT_SHAS_REQUIRED');
+          // One-time recovery of the exact immutable package from failed
+          // Production install #38503780994, not an arbitrary older artifact.
+          if(m[2]!=='bcb8503559cd64c853f211ed1a10f5c5fad3c04f')
+            throw Error('TELEGRAM_READBACK_ORIGINAL_PACKAGE_SHA_REQUIRED');
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
             'main='+m[1]+'\npackage='+m[2]+'\n');
           NODE
@@ -100,6 +105,54 @@ jobs:
                    ops/telegram-dormant-artifact-extract.py; do
             test "$(git rev-parse "HEAD:$p")" = "$(git hash-object "$p")"
           done
+      - name: Reuse Required6 and Post-Merge provenance checks before Production access
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const target=process.env.MAIN_SHA;
+            const owner=context.repo.owner,repo=context.repo.repo;
+            const latest=(await github.rest.repos.getBranch({
+              owner,repo,branch:'main',
+            })).data.commit.sha;
+            if(target!==latest||context.sha!==target){
+              core.setFailed('TELEGRAM_READBACK_MAIN_STALE');return;
+            }
+            const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{
+              owner,repo,ref:target,per_page:100,
+            });
+            const {inspectRequiredStatusEvidence,evaluateProductionCiProvenance}=
+              require(process.env.GITHUB_WORKSPACE
+                +'/api-server/scripts/production-ci-provenance.cjs');
+            const required=inspectRequiredStatusEvidence(statuses);
+            if(!required.ok){
+              core.setFailed('TELEGRAM_READBACK_REQUIRED6_UNVERIFIED');return;
+            }
+            const ci=(await github.rest.actions.getWorkflowRun({
+              owner,repo,run_id:required.runId,
+            })).data;
+            if(!evaluateProductionCiProvenance({
+              targetSha:target,currentMainSha:target,statuses,run:ci,
+            }).ok){
+              core.setFailed('TELEGRAM_READBACK_CI_PROVENANCE_UNTRUSTED');return;
+            }
+            const {inspectPostMergeStatusEvidence,evaluatePostMergeStatusProvenance}=
+              require(process.env.GITHUB_WORKSPACE
+                +'/api-server/scripts/release-candidate-provenance.cjs');
+            const post=inspectPostMergeStatusEvidence(statuses);
+            if(!post.ok){
+              core.setFailed('TELEGRAM_READBACK_POSTMERGE_UNVERIFIED');return;
+            }
+            const run=(await github.rest.actions.getWorkflowRun({
+              owner,repo,run_id:post.runId,
+            })).data;
+            if(!evaluatePostMergeStatusProvenance({
+              targetSha:target,currentMainSha:target,statuses,run,
+            }).ok){
+              core.setFailed('TELEGRAM_READBACK_POSTMERGE_PROVENANCE_UNTRUSTED');return;
+            }
+            core.info('TELEGRAM_READBACK_IMMUTABLE_MAIN_REQUIRED6_POSTMERGE_OK');
       - name: Authenticate unique original successful exact-package push artifact
         id: proof
         env:
@@ -167,8 +220,10 @@ jobs:
           python3 ops/telegram-dormant-artifact-extract.py "$zip" "$source" "$PACKAGE_SHA"
           (cd "$source" && sha256sum --check --quiet .deploy/telegram-sha256.manifest)
           manifest="$(sha256sum "$source/.deploy/telegram-sha256.manifest" | cut -d' ' -f1)"
-          [[ "$manifest" =~ ^[a-f0-9]{64}$ ]]
+          preparation="$(sha256sum "$source/.deploy/preparation.json" | cut -d' ' -f1)"
+          [[ "$manifest" =~ ^[a-f0-9]{64}$ && "$preparation" =~ ^[a-f0-9]{64}$ ]]
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          echo "preparation=$preparation" >> "$GITHUB_OUTPUT"
       - name: Pin Production SSH host identity
         run: |
           set -Eeuo pipefail
@@ -184,9 +239,12 @@ jobs:
           MAIN_SHA: ${{ steps.command.outputs.main }}
           PACKAGE_SHA: ${{ steps.command.outputs.package }}
           MANIFEST_SHA: ${{ steps.seal.outputs.manifest }}
+          PREPARATION_SHA: ${{ steps.seal.outputs.preparation }}
+          EXPECTED_DEPLOYED_SHA: 3e104bbeefffcb3bb5ce03b57637f548e493b8e6
         run: |
           set -Eeuo pipefail
           [[ "$PACKAGE_SHA" =~ ^[a-f0-9]{40}$ && "$MANIFEST_SHA" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$PREPARATION_SHA" =~ ^[a-f0-9]{64}$ && "$EXPECTED_DEPLOYED_SHA" =~ ^[a-f0-9]{40}$ ]]
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main)" = "$MAIN_SHA"
           report="$RUNNER_TEMP/telegram-dormant-installed-readonly.json"
@@ -194,13 +252,14 @@ jobs:
           ssh -i "$HOME/.ssh/telegram-readback-id" -p "$SSH_PORT" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "TELEGRAM_DORMANT_READBACK_EXECUTE=true TELEGRAM_DORMANT_READBACK_SHA=$PACKAGE_SHA TELEGRAM_DORMANT_READBACK_MANIFEST=$MANIFEST_SHA node --input-type=module -" \
+            "TELEGRAM_DORMANT_READBACK_EXECUTE=true TELEGRAM_DORMANT_READBACK_SHA=$PACKAGE_SHA TELEGRAM_DORMANT_READBACK_MANIFEST=$MANIFEST_SHA TELEGRAM_DORMANT_READBACK_PREPARATION_SHA=$PREPARATION_SHA TELEGRAM_DORMANT_READBACK_EXPECTED_DEPLOYED_SHA=$EXPECTED_DEPLOYED_SHA node --input-type=module -" \
             < ops/telegram-dormant-installed-readonly.mjs > "$report"
       - name: Reject unsanitized readback or invented activation
         id: validated
         env:
           REPORT: ${{ env.TELEGRAM_READBACK_REPORT }}
           PACKAGE_SHA: ${{ steps.command.outputs.package }}
+          EXPECTED_DEPLOYED_SHA: 3e104bbeefffcb3bb5ce03b57637f548e493b8e6
         run: |
           set -Eeuo pipefail
           node <<'NODE'
@@ -211,17 +270,20 @@ jobs:
             'telegramSends','pm2Mutations','databaseWrites','financialMutations',
             'secretValuesRecorded'];
           const allowed=new Set(['INVALID_REQUEST','INVALID_READBACK_ARGUMENTS',
-            'DORMANT_ROOT_UNSAFE_OR_MISSING','DORMANT_RELEASE_ABSENT',
+            'DORMANT_PARENT_ROOT_UNSAFE','DORMANT_ROOT_UNSAFE_OR_MISSING',
+            'DORMANT_RELEASE_ABSENT',
             'DORMANT_RELEASE_UNSAFE','DORMANT_STATE_ROOT_UNSAFE',
             'DORMANT_STATE_NOT_EMPTY','DORMANT_STATE_UNREADABLE',
             'DORMANT_MARKER_NOT_EXACT','DORMANT_INCOMPLETE_MARKER_PRESENT',
             'DORMANT_INCOMPLETE_MARKER_UNVERIFIED',
             'DORMANT_MANIFEST_PROVENANCE_MISMATCH','DORMANT_MANIFEST_INVALID',
             'DORMANT_PAYLOAD_INVALID','DORMANT_PREPARATION_INVALID',
+            'DORMANT_PREPARATION_PROVENANCE_MISMATCH',
             'DORMANT_INSTALL_RECEIPT_INVALID','SEALED_PRESENT_PM2_UNVERIFIED',
             'SEALED_PRESENT_PM2_CHANGED_NOW','SEALED_DORMANT_BYTES_PM2_STABLE_NOW',
             'DORMANT_CHANGED_DURING_READBACK',
-            'SEALED_PRESENT_PM2_OWNER_UNEXPECTED']);
+            'SEALED_PRESENT_PM2_OWNER_UNEXPECTED',
+            'SEALED_PRESENT_DEPLOYED_SHA_UNEXPECTED']);
           if(JSON.stringify(Object.keys(value).sort())!==JSON.stringify(fields.sort())
             ||value.schemaVersion!=='telegram-dormant-install-readback-v1'
             ||value.sourceSha!==process.env.PACKAGE_SHA
@@ -234,7 +296,8 @@ jobs:
               .every(k=>value[k]===0)
             ||value.secretValuesRecorded!==false
             ||(value.classification==='SEALED_DORMANT_BYTES_PM2_STABLE_NOW'
-              &&(!value.sealed||!value.pm2Stable))){
+              &&(!value.sealed||!value.pm2Stable||value.owner!=='embedded'
+                ||value.deployedSha!==process.env.EXPECTED_DEPLOYED_SHA))){
             throw Error('TELEGRAM_READBACK_UNSAFE_RECEIPT');
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
@@ -245,11 +308,21 @@ jobs:
             'stable='+String(value.pm2Stable)+'\n');
           console.log('TELEGRAM_DORMANT_READBACK_SANITIZED');
           NODE
+      - name: Verify current main still exact after Production readback
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$MAIN_SHA"
+          test "$(git rev-parse origin/main)" = "$MAIN_SHA"
+          test "$GITHUB_SHA" = "$MAIN_SHA"
       - name: Record read-only result without claiming running sender or earlier PM2 preservation
         if: steps.validated.outcome == 'success'
         uses: actions/github-script@v7
         env:
           PACKAGE_SHA: ${{ steps.command.outputs.package }}
+          MAIN_SHA: ${{ steps.command.outputs.main }}
           CLASSIFICATION: ${{ steps.validated.outputs.classification }}
           DEPLOYED_SHA: ${{ steps.validated.outputs.deployed }}
           OWNER: ${{ steps.validated.outputs.owner }}
@@ -257,11 +330,19 @@ jobs:
           STABLE: ${{ steps.validated.outputs.stable }}
         with:
           script: |
+            const latest=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            if(latest!==process.env.MAIN_SHA||context.sha!==process.env.MAIN_SHA){
+              core.setFailed('TELEGRAM_READBACK_MAIN_MOVED_BEFORE_REPORT');return;
+            }
             await github.rest.issues.createComment({
               owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
               body:[
                 '[TELEGRAM_DORMANT_POSTCHECK_READONLY_EVIDENCE]',
                 '- Original package SHA: '+process.env.PACKAGE_SHA,
+                '- Main SHA unchanged on readback: '+process.env.MAIN_SHA,
+                '- Original Production deployed SHA: 3e104bbeefffcb3bb5ce03b57637f548e493b8e6',
                 '- Already installed sealed bytes verified: '+process.env.SEALED,
                 '- Current Production PM2 SHA: '+process.env.DEPLOYED_SHA,
                 '- Current Telegram owner: '+process.env.OWNER,
