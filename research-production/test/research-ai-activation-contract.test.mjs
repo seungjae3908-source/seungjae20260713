@@ -158,13 +158,23 @@ test('one-shot workers must succeed before recurring timers are enabled', async 
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT=success/);
 });
 
+test('long-history refresh stays on the existing exact-SHA core service and old completion is not rewritten', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /research-production@\.service/);
+  assert.match(script, /research-production-long-history\.timer/);
+  assert.match(script, /Unit=research-production@long-history\.service/);
+  assert.match(script, /AI_RESEARCH_LONG_HISTORY_REFRESH_PATH_MISSING/);
+  assert.doesNotMatch(script, /rm .*long-history|unlink .*long-history/u);
+});
+
 test('fresh one-shot provider evidence is required before recurring timers enable', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   const ai = script.indexOf('systemctl start research-production-ai-review.service');
   const video = script.indexOf('systemctl start research-production-video-discovery.service');
   const proof = script.indexOf('verify_one_shot_evidence "$one_shot_started_ms"');
+  const v2Proof = script.indexOf('verify_v2_operational_transition "$one_shot_started_ms"');
   const enable = script.indexOf('systemctl enable --now');
-  assert.ok(ai >= 0 && video > ai && proof > video && enable > proof);
+  assert.ok(ai >= 0 && video > ai && proof > video && v2Proof > proof && enable > v2Proof);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_READY/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
@@ -172,6 +182,7 @@ test('fresh one-shot provider evidence is required before recurring timers enabl
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_STALE/);
+  assert.match(script, /research-ai-operational-transition-v2\.mjs/);
 });
 test('AI activation preserves no-trading authority contract', async () => {
   const script = await readFile(scriptUrl, 'utf8');
