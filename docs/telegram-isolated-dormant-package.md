@@ -398,3 +398,27 @@ tests inject telemetry-only drift (permitted) and PID/start/restart/trading/
 owner changes (blocked) with real Bash execution, preserving residual seal on
 post-check failure for the separately protected read-only recovery audit.
 This source change does not repair or confirm any historic Production state.
+
+
+### Pre-Full-CI readback cross-check — 2026-10-14
+
+Additional preflight found three risks in the initial #1888 readback:
+1. Its PM2 configuration digest covered only a subset of application flags,
+   unlike the installer; changes in DB, runtime or other uppercase
+   configuration could otherwise appear stable.
+2. It verified sealed bytes only before the pair of process observations;
+   a changed file during that interval could escape the single proof.
+3. It did not distinguish unexpected Telegram PM2 owner modes from a clean
+   old embedded sender, and owner-only workflow guards lacked a dedicated
+   focused contract test.
+
+The readback now mirrors the installer's comprehensive uppercase app-key
+fingerprint (excluding only PM2_/AXM_ internal metadata), repeats the full
+original-manifest sealed file check AFTER PM2 reads, and records an explicit
+NO-GO for unexpected owner modes. Added offline negative tests cover
+DATABASE_URL/other application config changes, binary changes mid-read,
+owner anomalies and a no-mutation protected workflow contract.
+
+These are source/CI preflight fixes only. They do NOT prove the historical
+Production PM2 state, overwrite the old release, restart a process or
+authorize sender activation. No Replit was used.

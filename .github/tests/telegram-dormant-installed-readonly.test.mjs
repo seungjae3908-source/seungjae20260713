@@ -6,6 +6,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {
  inspectSealedDormant,sanitizePm2ForDormantReadback,auditTelegramDormantReadback,
+ safeApplicationPm2Digest,
 } from '../../ops/telegram-dormant-installed-readonly.mjs';
 
 const SHA='b'.repeat(40),OLD='3'.repeat(40);
@@ -174,4 +175,69 @@ test('a stale manifest digest is rejected even if local files and receipt match'
   });
   assert.equal(proof.code,'DORMANT_MANIFEST_PROVENANCE_MISMATCH');
  }finally{x.clean();}
+});
+
+
+test('all uppercase application configuration is protected, not only financial prefixes',async()=>{
+ const x=fixture();
+ try {
+  const original=snapshot({env:{DATABASE_URL:'private://one',NODE_OPTIONS:'--max-old-space-size=512'}});
+  const changed=snapshot({env:{DATABASE_URL:'private://two',NODE_OPTIONS:'--max-old-space-size=512'}});
+  assert.notEqual(original.protectedDigest,changed.protectedDigest);
+  const result=await audit(x,[original,changed]);
+  assert.equal(result.classification,'SEALED_PRESENT_PM2_CHANGED_NOW');
+  assert.equal(result.pm2Stable,false);
+  assert.equal(result.telegramSends,0);
+  assert.equal(JSON.stringify(result).includes('private://'),false);
+ }finally{x.clean();}
+});
+
+test('PM2 owner other than legacy embedded is not accepted as clean old-owner evidence',async()=>{
+ const x=fixture();
+ try{
+  const unknown=snapshot({env:{TELEGRAM_WORKER_OWNER:'unexpected'}});
+  const report=await audit(x,[unknown,unknown]);
+  assert.equal(report.classification,'SEALED_PRESENT_PM2_OWNER_UNEXPECTED');
+  assert.equal(report.pm2Stable,true);
+  assert.equal(report.activationReady,false);
+ }finally{x.clean();}
+});
+
+test('an already verified binary changed while reading PM2 is never reported sealed',async()=>{
+ const x=fixture();
+ try{
+  const before=snapshot();
+  let reads=0;
+  const report=await auditTelegramDormantReadback({
+   root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+   waitImpl:async()=>{},
+   readPm2Impl:()=>{
+    reads++;
+    if(reads===2)fs.appendFileSync(
+      path.join(x.release,FILES[0]),'MODIFIED_DURING_READBACK');
+    return before;
+   },
+  });
+  assert.equal(report.classification,'DORMANT_CHANGED_DURING_READBACK');
+  assert.equal(report.sealed,false);
+  assert.equal(report.pm2Stable,false);
+  assert.equal(report.activationReady,false);
+ }finally{x.clean();}
+});
+
+test('configured-app fingerprint matches protected installer inclusion rules',()=>{
+ const config={
+  TELEGRAM_BOT_TOKEN:'test-only-token',LIVE_TRADING:'true',
+  DATABASE_URL:'nonpublic',NODE_ENV:'production',executionAuthority:'NONE',
+  PM2_HOME:'/tmp/internal',AXM_MONITOR:'ignore',axm_monitor:{heap:17},
+ };
+ const first=safeApplicationPm2Digest(config);
+ assert.equal(typeof first,'string');
+ assert.match(first,/^[a-f0-9]{64}$/u);
+ assert.equal(first,safeApplicationPm2Digest({
+  ...config,PM2_HOME:'/var/tmp/other',AXM_MONITOR:'other',
+  axm_monitor:{heap:98},
+ }));
+ assert.notEqual(first,safeApplicationPm2Digest({...config,NODE_ENV:'test'}));
+ assert.notEqual(first,safeApplicationPm2Digest({...config,TELEGRAM_BOT_TOKEN:'rotated'}));
 });
