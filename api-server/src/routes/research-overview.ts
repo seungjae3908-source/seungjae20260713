@@ -1,5 +1,6 @@
 import { Router, type RequestHandler } from 'express';
 import { sanitizeResearchCenterOverview } from '../services/research-center-readonly-contract.service';
+import { createRuleValidationHandler } from './research-rule-validation';
 
 const URL = 'http://127.0.0.1:18090/api/research/overview';
 export const createResearchOverviewHandler = (read: typeof fetch = fetch): RequestHandler => async (_req, res) => {
@@ -22,4 +23,5 @@ export const createResearchOverviewHandler = (read: typeof fetch = fetch): Reque
 };
 const router = Router();
 router.get('/overview', createResearchOverviewHandler());
+router.get('/rule-validation', createRuleValidationHandler());
 export default router;
