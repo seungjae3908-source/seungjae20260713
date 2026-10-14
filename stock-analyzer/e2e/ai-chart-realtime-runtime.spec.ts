@@ -173,6 +173,9 @@ test('runtime wiring uses bounded client reconciliation and imperative increment
   expect(unified).toContain('reconcileAiChartPublicTrades');
   expect(unified).toContain('streamGenerationRef.current !== generation');
   expect(unified).toContain('applyRealtimeCandle');
+  expect(unified).toContain('const attachedCanvas = realtimeCanvasRef.current;');
+  expect(unified).toContain('!archiveModeRef.current && attachedCanvas && !attachedCanvas.applyRealtimeCandle');
+  expect(unified).not.toContain('!realtimeCanvasRef.current?.applyRealtimeCandle');
   expect(canvas).toContain('useImperativeHandle');
   expect(canvas).toContain('instance.candle.update');
   expect(canvas).toContain('instance.volume.update');

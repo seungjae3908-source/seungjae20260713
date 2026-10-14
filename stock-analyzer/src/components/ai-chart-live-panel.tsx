@@ -3,7 +3,7 @@ import { useChartCurrency } from './chart-currency-provider';
 import { buildChartLiveEvents, isChartLiveSnapshotUsable, mergeChartLiveEvents, type ChartLiveEvent, type ChartLiveEventKind, type ChartLiveSnapshot } from '@/lib/chart-live-feed';
 
 export type { ChartLiveSnapshot } from '@/lib/chart-live-feed';
-const filters: Array<{ value: ChartLiveEventKind | 'all'; label: string }> = [{ value: 'all', label: '전체' }, { value: 'analysis', label: '판단' }, { value: 'pattern', label: '패턴' }, { value: 'wave', label: '파동' }, { value: 'data', label: '데이터' }];
+const filters: Array<{ value: ChartLiveEventKind | 'all'; label: string }> = [{ value: 'all', label: '전체' }, { value: 'analysis', label: '판단' }, { value: 'pattern', label: '패턴' }, { value: 'wave', label: '파동' }, { value: 'bar', label: '봉·거래량' }, { value: 'data', label: '데이터' }];
 const levelLabels: Record<string, string> = { support: '지지', resistance: '저항', target: '참고 목표', invalidation: '무효화' };
 const timeLabel = (value: number) => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const label = { candidate: '후보 감지', confirmed: '돌파 확인', invalidated: '무효화' };
