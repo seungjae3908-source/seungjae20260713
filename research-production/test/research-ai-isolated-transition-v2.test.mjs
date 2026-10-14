@@ -72,10 +72,10 @@ test('isolated transition rebinds the existing directive and proves two distinct
           profitFactor: 0.8, maximumDrawdown: 0.03, expectancy: -0.0025, finalCapital: 990 },
         executionAuthority: 'NONE' });
       const stateRootPath = join(stateRoot, 'autonomous-research', 'releases', TARGET_SHA);
-      await mkdir(stateRootPath, { recursive: true });
+      await mkdir(stateRootPath, { recursive: true, mode: 0o700 });
       await writeFile(join(stateRootPath, 'state.json'), JSON.stringify({
         contract: 'autonomous-research-closed-loop-state/v1', researchCodeSha: TARGET_SHA, records,
-      }));
+      }), { mode: 0o600 });
       return result;
     },
     runReview: async ({ researchSha, verifyGitHead }) => {

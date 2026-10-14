@@ -20,7 +20,8 @@ test('AI Research activation is fail-closed, exact-SHA bound and rollback-first'
   assert.match(script, /\/opt\/investment-research\/releases\/[^\n]*\$TARGET_SHA/);
   assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
   assert.match(script, /ROLLBACK_FAILED=true/);
-  assert.match(script, /restore_runtime_snapshot "\$snapshot_root"/);
+  assert.match(script, /AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT="\$snapshot_root"/);
+  assert.match(script, /restore_runtime_snapshot "\$AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT"/);
   assert.match(script, /capture_runtime_snapshot "\$baseline"/);
   assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
   assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
