@@ -77,6 +77,9 @@ test('crosshair exposes a live OHLCV legend without intercepting chart interacti
   expect(await legend.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe('none');
 
   const latestTime = await legend.getAttribute('data-candle-time');
+  // The chart pane scrolls independently above BottomNav. Move into its
+  // *visible* canvas; otherwise the old viewport point lands on navigation.
+  await canvas.scrollIntoViewIfNeeded();
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   await page.mouse.move(box!.x + box!.width * 0.3, box!.y + box!.height * 0.45);
@@ -138,8 +141,13 @@ test('five-thousand-candle history keeps crosshair, pan, and zoom responsive', a
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
+  // Recalculate after scrolling the genuine left chart pane, rather than
+  // aiming at an offscreen coordinate behind the fixed BottomNav.
+  await canvas.scrollIntoViewIfNeeded();
+  const visibleBox = await canvas.boundingBox();
+  expect(visibleBox).not.toBeNull();
   const interactionStartedAt = performance.now();
-  await page.mouse.move(box!.x + box!.width * 0.35, box!.y + box!.height * 0.45);
+  await page.mouse.move(visibleBox!.x + visibleBox!.width * 0.35, visibleBox!.y + visibleBox!.height * 0.45);
   await expect.poll(() => legend.getAttribute('data-candle-time')).not.toBe(String(BASE_TIME + 4_999 * 300));
   await page.mouse.wheel(0, -420);
   await expect.poll(() => page.getByTestId('unified-chart-wrapper').getAttribute('data-visible-logical-range')).not.toBe(initialRange);

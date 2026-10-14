@@ -1,7 +1,10 @@
 import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
-const BASE_TIME = 1_775_600_000;
 const STEP_SECONDS = 300;
+// This test checks *current* analysis after a timeframe change. The previous
+// April 2026 fixture was always stale by October, so the fail-closed chart
+// correctly withheld its present-tense judgment. Use genuinely recent bars.
+const BASE_TIME = Math.floor(Date.now() / (STEP_SECONDS * 1000)) * STEP_SECONDS - 24 * STEP_SECONDS;
 const DOUBLE_TOP = [100, 104, 110, 104, 100, 103, 109.5, 104, 102, 103, 104];
 
 type BrowserEvidence = {
@@ -108,13 +111,14 @@ async function fulfillStockChart(route: Route, onOneMinuteCall: () => void) {
   }
 
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+  const collectedAt = new Date().toISOString();
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
       provider,
-      fetchedAt: '2026-08-04T11:40:00.000Z',
-      updatedAt: '2026-08-04T11:40:00.000Z',
+      fetchedAt: collectedAt,
+      updatedAt: collectedAt,
       candles,
     }),
   }).catch(() => undefined);
