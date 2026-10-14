@@ -1,7 +1,8 @@
 'use strict';
 
 const REQUIRED_MARKERS = Object.freeze([
-  'AI_RESEARCH_ACTIVATED=true', 'AI_REVIEW_ONE_SHOT=success',
+  'AI_RESEARCH_ACTIVATED=true', 'AI_RESEARCH_ISOLATED_VALIDATION_REUSED=true',
+  'AI_REVIEW_ONE_SHOT=success',
   'VIDEO_DISCOVERY_ONE_SHOT=success', 'AI_REVIEW_TIMER_ENABLED=true',
   'VIDEO_DISCOVERY_TIMER_ENABLED=true', 'APPROVED_JOB_INTAKE_TIMER_ENABLED=true',
   'WORKSPACE_WORKER_ENABLED=true', 'LIVE_TRADING=false',
@@ -9,6 +10,15 @@ const REQUIRED_MARKERS = Object.freeze([
   'executionAuthority=NONE', 'REAL_ORDER_SUBMITTED=false',
 ]);
 const FAILURE_CODES = [
+  'AI_RESEARCH_ISOLATED_ROOT_INVALID', 'AI_RESEARCH_ISOLATED_PROOF_MISSING',
+  'AI_RESEARCH_ISOLATED_VALIDATION_INVALID', 'AI_RESEARCH_ISOLATED_VALIDATION_MARKER_UNSAFE',
+  'AI_RESEARCH_ISOLATED_VALIDATION_MAX_AGE_INVALID',
+  'ISOLATED_TRANSITION_STATE_ROOT_OVERLAP', 'ISOLATED_TRANSITION_SOURCE_ROOT_UNSAFE',
+  'ISOLATED_TRANSITION_REVIEW_EVIDENCE_MISSING',
+  'ISOLATED_TRANSITION_NATURAL_CYCLE_NOT_PROVEN', 'ISOLATED_TRANSITION_AI_REVIEW_NOT_PROVEN',
+  'ISOLATED_TRANSITION_VIDEO_NOT_PROVEN', 'ISOLATED_TRANSITION_DUPLICATE_STRATEGY_SELECTED',
+  'ISOLATED_TRANSITION_CLOSED_LOOP_STATE_INVALID', 'ISOLATED_TRANSITION_BACKTEST_RECORD_MISSING',
+  'AI_RESEARCH_ISOLATED_RELEASE_INVALID', 'AI_RESEARCH_ISOLATED_RELEASE_SHA_MISMATCH',
   'AI_RESEARCH_CURRENT_SHA_FORWARD_REFRESH_FAILED',
   'AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING',
   'AI_RESEARCH_CURRENT_SHA_EVIDENCE_JSON_INVALID',
@@ -23,6 +33,22 @@ const FAILURE_CODES = [
   'AI_RESEARCH_TIMER_STILL_ACTIVE', 'AI_RESEARCH_TIMER_STILL_ENABLED',
   'AI_RESEARCH_DAEMON_STILL_ACTIVE', 'AI_RESEARCH_DAEMON_STILL_ENABLED',
   'AI_RESEARCH_WORKLOAD_STATE_UNKNOWN', 'AI_RESEARCH_WORKLOAD_NOT_STOPPED',
+  'AI_RESEARCH_CUTOVER_BUSY', 'AI_RESEARCH_SNAPSHOT_UNIT_STATE_INVALID',
+  'AI_RESEARCH_SNAPSHOT_ACTIVE_STATE_INVALID', 'AI_RESEARCH_SNAPSHOT_FRAGMENT_UNSAFE',
+  'AI_RESEARCH_SNAPSHOT_FRAGMENT_OWNERSHIP_INVALID', 'AI_RESEARCH_ROLLBACK_MANIFEST_MISSING',
+  'AI_RESEARCH_SNAPSHOT_RELEASE_INVALID', 'AI_RESEARCH_SNAPSHOT_RESEARCH_ENV_MISSING',
+  'AI_RESEARCH_SNAPSHOT_WORKING_DIRECTORY_INVALID', 'AI_RESEARCH_SNAPSHOT_ENVIRONMENT_FILE_INVALID',
+  'AI_RESEARCH_SNAPSHOT_REPO_ROOT_INVALID', 'AI_RESEARCH_SNAPSHOT_CODE_SHA_INVALID',
+  'AI_RESEARCH_SNAPSHOT_GIT_ROOT_INVALID', 'AI_RESEARCH_SNAPSHOT_SAFETY_INVALID',
+  'AI_RESEARCH_ROLLBACK_UNIT_BACKUP_MISSING', 'AI_RESEARCH_ROLLBACK_ENV_BACKUP_MISSING',
+  'AI_RESEARCH_ROLLBACK_UNIT_BACKUP_HASH_MISMATCH', 'AI_RESEARCH_ROLLBACK_WORKLOAD_BUSY',
+  'AI_RESEARCH_ROLLBACK_SNAPSHOT_OWNERSHIP_INVALID',
+  'AI_RESEARCH_ROLLBACK_ENABLE_VERIFY_FAILED', 'AI_RESEARCH_ROLLBACK_ACTIVE_VERIFY_FAILED',
+  'AI_RESEARCH_ROLLBACK_UNIT_HASH_MISMATCH', 'AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH',
+  'AI_RESEARCH_ROLLBACK_EXECUTION_BINDING_MISMATCH',
+  'AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH', 'AI_RESEARCH_INSTALLED_UNIT_MISSING',
+  'AI_RESEARCH_INSTALLED_UNIT_OWNERSHIP_INVALID', 'AI_RESEARCH_INSTALLED_UNIT_SHA_MISMATCH',
+  'ROLLBACK_FAILED',
   'VIDEO_DISCOVERY_ONE_SHOT_SCHEMA_INVALID', 'VIDEO_DISCOVERY_ONE_SHOT_SHA_MISMATCH',
   'VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE', 'VIDEO_DISCOVERY_ONE_SHOT_PROVIDER_INVALID',
   'VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING',
@@ -121,7 +147,7 @@ function evaluateAiActivationResult({ diagnostics, targetSha, remoteExitCode, ca
   const proofs = parsed.records;
   const oneShots = proofs.filter(x => x?.schemaVersion === 'research-ai-one-shot-proof-v1');
   const operationalTransitions = proofs.filter(x => x?.schemaVersion === 'research-ai-operational-transition-v2');
-  const safetyMarkers = REQUIRED_MARKERS.slice(7);
+  const safetyMarkers = REQUIRED_MARKERS.slice(8);
   const safetyConflict = safetyMarkers.some(marker => {
     const key = marker.slice(0, marker.indexOf('='));
     return lines.some(line => line.startsWith(key + '=') && line !== marker);
@@ -153,6 +179,14 @@ function evaluateAiActivationResult({ diagnostics, targetSha, remoteExitCode, ca
       ...(Array.isArray(diagnostic.deferredProfiles) ? diagnostic.deferredProfiles : [])]
       .slice(0, 6).map(x=>x?.reason).find(code=>PROVIDER_FAILURE_CODES.has(code)) ?? null : null;
   const operationalTransition = operationalTransitions.at(-1);
+  const rollbackState = markers.get('ROLLBACK_FAILED') === 'true'
+    ? 'ROLLBACK_FAILED'
+    : markers.get('AI_RESEARCH_EXISTING_RUNTIME_UNCHANGED') === 'true'
+      ? 'UNCHANGED'
+    : markers.get('AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK') === 'true'
+      && markers.get('AI_RESEARCH_PREVIOUS_SERVICE_PRESERVED') === 'true'
+      ? 'RESTORED'
+      : remoteExitCode === 0 ? 'NOT_REQUIRED' : 'NOT_PROVEN';
   return { schemaVersion: 'research-ai-activation-result-v1',
     activationSucceeded: failureReason === null, failureReason,
     providerFailureReason,
@@ -162,6 +196,8 @@ function evaluateAiActivationResult({ diagnostics, targetSha, remoteExitCode, ca
       ? operationalTransition.longHistory.state : null,
     youtubeState: validOperationalTransition(operationalTransition, targetSha)
       ? operationalTransition.youtube?.state ?? null : null,
+    rollbackState,
+    existingServicePreserved: ['UNCHANGED','RESTORED'].includes(rollbackState) || remoteExitCode === 0,
     runtimeRecheckRequired: validInput && failureReason !== null,
     grantsExecutionAuthority: false };
 }

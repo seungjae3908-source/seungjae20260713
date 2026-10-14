@@ -1,7 +1,11 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-import { runAutonomousResearchClosedLoopV1 } from './autonomous-research-closed-loop-v1.mjs';
+import {
+  loadAutonomousResearchNextDirectiveV1,
+  rebindAutonomousResearchNextDirectiveV1,
+  runAutonomousResearchClosedLoopV1,
+} from './autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchDiscoveryV2 } from './autonomous-research-discovery-v2.mjs';
 import { runMarketShockReverseLaneV1 } from './market-shock-reverse-lane-v1.mjs';
 import { runPublicProviderResearchLaneV1 } from './public-provider-research-lane-v1.mjs';
@@ -51,7 +55,25 @@ export async function runAutonomousResearchCycleV2({
   const observedAt = now();
   const loopOptions = { stateRoot, researchCodeSha, maximumStrategiesPerCycle, now: () => observedAt };
   if (processQueue) loopOptions.processQueue = processQueue;
-  const before = await runLoop(loopOptions);
+  // Consume a persisted next-directive before producing another one. Rebuilding
+  // it first changes the digest and can silently discard failure-memory intent,
+  // especially during an exact-SHA isolated cutover validation.
+  const persistedDirective = await loadAutonomousResearchNextDirectiveV1({ stateRoot });
+  let pendingDirective = persistedDirective;
+  if (persistedDirective != null && persistedDirective.researchCodeSha !== researchCodeSha) {
+    const sharedRoot = resolve(stateRoot);
+    await atomicJson(join(sharedRoot, 'autonomous-research', 'releases', persistedDirective.researchCodeSha,
+      'directives', `${persistedDirective.directiveDigest}.json`), persistedDirective);
+    pendingDirective = rebindAutonomousResearchNextDirectiveV1({
+      directive: persistedDirective,
+      researchCodeSha,
+      observedAt,
+    });
+    await atomicJson(join(sharedRoot, 'autonomous-research', 'releases', researchCodeSha,
+      'directives', `${pendingDirective.directiveDigest}.json`), pendingDirective);
+    await atomicJson(join(sharedRoot, 'latest', 'autonomous-research-next-directive.json'), pendingDirective);
+  }
+  const before = pendingDirective == null ? await runLoop(loopOptions) : null;
   const discoveryOptions = { stateRoot, researchCodeSha, env, now: () => observedAt };
   if (invoke) discoveryOptions.invoke = invoke;
   if (fetchImpl) discoveryOptions.fetchImpl = fetchImpl;
@@ -63,6 +85,19 @@ export async function runAutonomousResearchCycleV2({
   ]);
   const shouldRunAgain = ['DOSSIER_STAGED', 'ALREADY_DISCOVERED'].includes(discovery.status);
   const after = shouldRunAgain ? await runLoop(loopOptions) : before;
+  const summary = after ?? Object.freeze({
+    discoveredStrategyCount: 0,
+    completedStrategyCount: Number(pendingDirective?.completedDossierCount ?? 0),
+    formulaGeneratedCount: 0,
+    actualBacktestCount: 0,
+    paperRegisteredCount: 0,
+    actualPaperEntryCount: 0,
+    actualPaperExitCount: 0,
+    failureObservationCount: 0,
+    dispositions: Object.freeze({ BACKTEST_CANDIDATE: 0, IMPROVE: 0, REJECT: 0 }),
+    continueResearch: true,
+    waitingForFuturePaperSignalBlocksResearch: false,
+  });
   const result = Object.freeze({
     schemaVersion: 2,
     contract: AUTONOMOUS_RESEARCH_CYCLE_CONTRACT_V2,
@@ -75,16 +110,16 @@ export async function runAutonomousResearchCycleV2({
     actualSourceFetches: discovery.actualSourceFetches,
     selectedNextStrategy: discovery.candidate,
     stagedDossierDigest: discovery.stagedDossierDigest,
-    discoveredStrategyCount: after.discoveredStrategyCount,
-    completedStrategyCount: after.completedStrategyCount,
-    formulaGeneratedCount: after.formulaGeneratedCount,
-    actualBacktestCount: after.actualBacktestCount,
-    paperRegisteredCount: after.paperRegisteredCount,
-    actualPaperEntryCount: after.actualPaperEntryCount,
-    actualPaperExitCount: after.actualPaperExitCount,
-    failureObservationCount: after.failureObservationCount,
-    dispositions: after.dispositions,
-    continuousResearch: after.continueResearch === true && after.waitingForFuturePaperSignalBlocksResearch === false,
+    discoveredStrategyCount: summary.discoveredStrategyCount,
+    completedStrategyCount: summary.completedStrategyCount,
+    formulaGeneratedCount: summary.formulaGeneratedCount,
+    actualBacktestCount: summary.actualBacktestCount,
+    paperRegisteredCount: summary.paperRegisteredCount,
+    actualPaperEntryCount: summary.actualPaperEntryCount,
+    actualPaperExitCount: summary.actualPaperExitCount,
+    failureObservationCount: summary.failureObservationCount,
+    dispositions: summary.dispositions,
+    continuousResearch: summary.continueResearch === true && summary.waitingForFuturePaperSignalBlocksResearch === false,
     nextAction: discovery.nextAction,
     reason: discovery.reason,
     retryAfterAt: discovery.retryAfterAt,

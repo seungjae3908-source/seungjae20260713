@@ -191,6 +191,7 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
 const researchProductionClosureReviewed=[
+ '.github/workflows/research-ai-isolated-validation.yml',
  '.github/workflows/research-ai-production-activation.yml',
  '.github/workflows/research-production-activation.yml',
  'market-prediction-lab/src/video-research-canonical-handoff-v1.js',
@@ -204,6 +205,7 @@ const researchProductionClosureReviewed=[
  'packages/external-research/src/video-intelligence-phase3-snapshot-caller.js',
  'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
  'research-production/bin/research-approved-job-intake.mjs',
+ 'research-production/bin/research-ai-isolated-transition-v2.mjs',
  'research-production/bin/research-maintenance.mjs',
  'research-production/deploy/activate-ai-research.sh',
  'research-production/deploy/activate-server.sh',
@@ -222,8 +224,12 @@ const researchProductionClosureReviewed=[
  'research-production/deploy/research-production-workspace-worker.service',
  'research-production/deploy/research-video.env.example',
  'research-production/src/research-ai-review-worker.mjs',
+ 'research-production/src/research-ai-isolated-transition-v2.mjs',
  'research-production/src/research-video-discovery-worker.mjs',
  'research-production/test/research-ai-activation-contract.test.mjs',
+ 'research-production/test/research-ai-isolated-transition-v2.test.mjs',
+ 'research-production/test/research-ai-isolated-workflow-contract.test.mjs',
+ 'research-production/test/research-ai-cutover-rollback.test.mjs',
  'research-production/test/research-ai-review-worker.test.mjs',
  'research-production/test/research-ai-units-install-contract.test.mjs',
  'research-production/test/research-approved-job-intake.test.mjs',

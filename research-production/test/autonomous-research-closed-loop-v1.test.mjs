@@ -137,7 +137,7 @@ test('closed loop continues from an unrepresentable source to two distinct real 
       maximumStrategiesPerCycle: 4,
       now: () => OBSERVED_AT,
     });
-    const state = JSON.parse(await readFile(join(root, 'autonomous-research', 'state.json'), 'utf8'));
+    const state = JSON.parse(await readFile(join(root, 'autonomous-research', 'releases', SHA, 'state.json'), 'utf8'));
     assert.equal(result.discoveredStrategyCount, 3);
     assert.equal(result.completedStrategyCount, 3);
     assert.equal(result.formulaGeneratedCount, 2);
@@ -252,7 +252,7 @@ test('a new dossier cannot replay an already failed strategy, dataset and parame
       stateRoot: root, researchCodeSha: SHA, maximumStrategiesPerCycle: 1,
       now: () => '2026-10-14T00:12:00.000Z',
     });
-    const state = JSON.parse(await readFile(join(root, 'autonomous-research', 'state.json'), 'utf8'));
+    const state = JSON.parse(await readFile(join(root, 'autonomous-research', 'releases', SHA, 'state.json'), 'utf8'));
     assert.equal(repeated.queueExecutions, 0);
     assert.equal(state.records.at(-1).reason, 'AUTOMATIC_SAME_IDENTITY_RETRY_BLOCKED');
     assert.deepEqual(state.records.at(-1).lifecycle, ['DISCOVERED', 'DUPLICATE_BLOCKED']);

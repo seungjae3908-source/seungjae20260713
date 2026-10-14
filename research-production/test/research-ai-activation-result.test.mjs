@@ -27,6 +27,8 @@ test('only zero remote and capture exits with exact safe one-shot proof can succ
   assert.equal(r.naturalCycleProven,true);
   assert.equal(r.longHistoryState,'STALE_RELEASE_EVIDENCE_PRESERVED');
   assert.equal(r.youtubeState,'PROVIDER_SUCCESS_ZERO_RESULTS');
+  assert.equal(r.rollbackState,'NOT_REQUIRED');
+  assert.equal(r.existingServicePreserved,true);
   assert.equal(r.runtimeRecheckRequired,false);
   assert.equal(r.grantsExecutionAuthority,false);
 });
@@ -109,10 +111,11 @@ test('the production timeout diagnostic preserves provider cause separately from
   const diagnostic={schemaVersion:'research-production-ai-diagnostic-v1',researchSha:SHA,
     status:'PARTIAL_AI_UNAVAILABLE',provider:'gemini',credentialValuesExposed:false,executionAuthority:'NONE',
     blockedProfiles:[{profile:'forward',reason:'FREE_AI_TIMEOUT'}],deferredProfiles:[{profile:'long-history',reason:'STALE_RELEASE_EVIDENCE'}]};
-  const diagnostics=JSON.stringify(diagnostic,null,2)+'\nAI_RESEARCH_ONE_SHOT_FAILED:research-production-ai-review.service:result=exit-code:status=75\nAI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true';
+  const diagnostics=JSON.stringify(diagnostic,null,2)+'\nAI_RESEARCH_ONE_SHOT_FAILED:research-production-ai-review.service:result=exit-code:status=75\nAI_RESEARCH_ROLLBACK=RESTORED\nAI_RESEARCH_PREVIOUS_SERVICE_PRESERVED=true\nAI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true';
   const r=evaluate({diagnostics,remoteExitCode:70});
   assert.equal(r.activationSucceeded,false);assert.equal(r.failureReason,'AI_RESEARCH_ONE_SHOT_FAILED');
   assert.equal(r.providerFailureReason,'FREE_AI_TIMEOUT');assert.equal(r.runtimeRecheckRequired,true);
+  assert.equal(r.rollbackState,'RESTORED');assert.equal(r.existingServicePreserved,true);
   for(const other of [{...diagnostic,researchSha:'b'.repeat(40)},
     {...diagnostic,credentialValuesExposed:true},
     {...diagnostic,blockedProfiles:[{reason:'TEST_ONLY_SECRET_VALUE'}]}]){
@@ -120,6 +123,16 @@ test('the production timeout diagnostic preserves provider cause separately from
     assert.equal(result.providerFailureReason,null);assert.doesNotMatch(JSON.stringify(result),/TEST_ONLY_SECRET/);
   }
   assert.equal(evaluate({diagnostics:log()+'\n'+JSON.stringify(diagnostic),remoteExitCode:0}).providerFailureReason,null);
+});
+
+test('a pre-cutover refusal records the existing runtime as unchanged',()=>{
+  const diagnostics='AI_RESEARCH_CUTOVER_BUSY:research-production-ai-review.service:active\n'
+    +'AI_RESEARCH_EXISTING_RUNTIME_UNCHANGED=true';
+  const r=evaluate({diagnostics,remoteExitCode:1});
+  assert.equal(r.activationSucceeded,false);
+  assert.equal(r.failureReason,'AI_RESEARCH_CUTOVER_BUSY');
+  assert.equal(r.rollbackState,'UNCHANGED');
+  assert.equal(r.existingServicePreserved,true);
 });
 
 test('pretty proof handles quoted braces, but malformed or truncated trailing JSON cannot finalize success',()=>{
