@@ -12,6 +12,7 @@ const bash = process.platform==='win32' ? 'C:/Program Files/Git/bin/bash.exe' : 
 const shellPath = p => process.platform==='win32'
   ? p.replaceAll('\\','/').replace(/^([A-Za-z]):/,(_,d)=>'/'+d.toLowerCase()) : p;
 const SHA='a'.repeat(40);
+const operationalCli=fileURLToPath(new URL('../bin/research-ai-operational-transition-v2.mjs',import.meta.url));
 const workflow=readFileSync(new URL('../../.github/workflows/research-ai-production-activation.yml',import.meta.url),'utf8').replaceAll('\r\n','\n');
 function sandbox(run) {
   const root=mkdtempSync(join(tmpdir(),'TEST-ONLY-ai-lifecycle-'));
@@ -65,6 +66,19 @@ function activation({workerReady=true,unsafeEvidence=false,oldCleanup=false,oneS
     for(const folder of ['latest','ai-review','video-research'])mkdirSync(join(state,folder),{recursive:true});
     writeFileSync(join(state,'latest','forward.json'),JSON.stringify({schemaVersion:'research-production-cycle-v1',
       profile:'forward',researchSha:SHA,status:'blocked_data'}));
+    writeFileSync(join(state,'latest','autonomous-research-cycle-v2.json'),JSON.stringify({
+      schemaVersion:2,contract:'autonomous-research-cycle/v2',status:'COMPLETE',
+      observedAt:new Date(0).toISOString(),researchCodeSha:SHA,directiveConsumed:true,discoveryStatus:'DOSSIER_STAGED',
+      actualProviderCalls:{attempted:2,succeeded:2,failed:0},actualSourceFetches:{attempted:3,succeeded:3,failed:0},
+      selectedNextStrategy:{repository:'https://github.com/example/public-strategy',sourcePath:'strategy.py',
+        sourceRevision:'c'.repeat(40),family:'PARTICIPATION_BREAKOUT',templateId:'RVOL_BREAKOUT_V1'},
+      stagedDossierDigest:'d'.repeat(64),
+      formulaGeneratedCount:1,actualBacktestCount:1,
+      safety:{executionAuthority:'NONE',liveTrading:false,privateTradingApi:false,realOrder:false}}));
+    writeFileSync(join(state,'latest','autonomous-research-discovery-v2.json'),JSON.stringify({
+      schemaVersion:2,contract:'autonomous-research-discovery/v2',status:'DOSSIER_STAGED',researchCodeSha:SHA,
+      directiveConsumed:true,actualProviderCalls:{attempted:2,succeeded:2,failed:0},
+      actualSourceFetches:{attempted:3,succeeded:3,failed:0},stagedDossierDigest:'d'.repeat(64)}));
     writeFileSync(join(state,'ai-review','latest.json'),JSON.stringify({schemaVersion:'research-production-ai-scan-v1',
       researchSha:SHA,status:'PARTIAL_COVERAGE_COMPLETE',provider:'gemini',providerNetworkCalls:1,cacheHits:0,
       reviews:[{fixtureOnly:true}],blockedProfiles:[],observedAt:0,
@@ -82,12 +96,21 @@ function activation({workerReady=true,unsafeEvidence=false,oldCleanup=false,oneS
 RESEARCH_ROOT="$HARNESS_ROOT/release"; STATE_ROOT="$HARNESS_ROOT/state"
 ENV_ROOT="$HARNESS_ROOT/env"; PROVIDER_ENV="$ENV_ROOT/providers.env"
 AI_POLICY_ENV="$ENV_ROOT/ai.env"; VIDEO_POLICY_ENV="$ENV_ROOT/video.env"
+TRANSITION_ROOT="$HARNESS_ROOT/transition"
 require_exact_research_release() { :; }
 require_research_safety_env() { :; }
 require_runtime_policy_env() { :; }
 provider_env_ready() { :; }
+require_existing_provider_env() { :; }
 verify_unit_sources() { :; }
+verify_installed_unit_ownership() { :; }
+require_isolated_validation() { ISOLATED_BASELINE_SNAPSHOT_ROOT="$HARNESS_ROOT/baseline"; }
+capture_runtime_snapshot() { :; }
+restore_runtime_snapshot() { printf 'AI_RESEARCH_ROLLBACK=RESTORED\n' >&2; }
 print_forward_runtime_diagnostic() { :; }
+verify_v2_operational_transition() {
+  "$REAL_NODE" "$TEST_OPERATIONAL_CLI" --state-root "$STATE_ROOT" --research-sha "$TARGET_SHA" --started-at-ms "$1"
+}
 chown() { :; }; chmod() { :; }; sleep() { :; }
 systemd-analyze() { :; }
 node() { "$REAL_NODE" "$@"; }
@@ -104,6 +127,9 @@ systemctl() {
       ExecMainStatus) if [[ "$TEST_ONESHOT_FAILURES" == true && "$2" != research-production@forward.service ]]; then printf '75\n'; else printf '0\n'; fi;; *) return 90;; esac ;;
     start) if [[ "$2" == research-production-ai-review.service || "$2" == research-production-video-discovery.service ]]; then
       "$REAL_NODE" -e 'const fs=require("node:fs");const p=process.argv[1];const v=JSON.parse(fs.readFileSync(p));v.observedAt=v.schemaVersion==="research-production-ai-scan-v1"?Date.now():new Date().toISOString();fs.writeFileSync(p,JSON.stringify(v));' "$STATE_ROOT/$( [[ "$2" == research-production-ai-review.service ]] && printf ai-review || printf video-research )/latest.json"
+      if [[ "$2" == research-production-ai-review.service ]]; then
+        "$REAL_NODE" -e 'const fs=require("node:fs");const p=process.argv[1];const v=JSON.parse(fs.readFileSync(p));v.observedAt=new Date().toISOString();fs.writeFileSync(p,JSON.stringify(v));' "$STATE_ROOT/latest/autonomous-research-cycle-v2.json"
+      fi
       fi ;;
     stop|daemon-reload) : ;;
     *) return 91 ;;
@@ -119,7 +145,8 @@ runuser() {
 activate
 printf 'SCRIPT_FINALIZED=true\n'
 `;
-    const r=invoke('id() { printf "0\\n"; }\n'+script+'\n'+mocks,root,{TEST_WORKER_READY:String(workerReady),TEST_ONESHOT_FAILURES:String(oneShotFailures)});
+    const r=invoke('id() { printf "0\\n"; }\n'+script+'\n'+mocks,root,{TEST_WORKER_READY:String(workerReady),
+      TEST_ONESHOT_FAILURES:String(oneShotFailures),TEST_OPERATIONAL_CLI:shellPath(operationalCli)});
     return {...r,temporaryFiles:readdirSync(root).filter(x=>x.startsWith('tmp.')),
       events:readFileSync(join(root,'events'),'utf8')};
   });
@@ -145,7 +172,7 @@ test('workspace failure preserves the parent fail-safe rather than replacing it 
   const r=activation({workerReady:false});
   assert.notEqual(r.status,0);
   assert.match(r.stderr,/AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE/u);
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/u);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/u);
   assert.doesNotMatch(r.stdout,/AI_RESEARCH_ACTIVATED=true/u);
   assert.equal(r.temporaryFiles.length,0);
 });
@@ -154,7 +181,7 @@ test('unsafe one-shot fixture cannot reach timer enable or success finalization'
   const r=activation({unsafeEvidence:true});
   assert.notEqual(r.status,0);
   assert.match(r.stderr,/AI_RESEARCH_ONE_SHOT_SAFETY_INVALID/u);
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/u);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/u);
   assert.doesNotMatch(r.events,/^enable /mu);
 });
 
@@ -163,7 +190,7 @@ test('all already-started one-shot results are reported, then failures keep ever
   for(const unit of ['ai-review','video-discovery','approved-job-intake']){
     assert.match(r.stdout,new RegExp('AI_RESEARCH_ONE_SHOT_RESULT:research-production-'+unit+'[.]service:result=exit-code:status=75'));
   }
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
   assert.doesNotMatch(r.events,/^enable /mu);assert.doesNotMatch(r.stdout,/AI_RESEARCH_ACTIVATED=true/);
 });
 
@@ -180,7 +207,15 @@ for(const [remote,capture,reason] of [[0,0,null],
       ai:{status:'COMPLETE',provider:'gemini',providerNetworkCalls:1,cacheHits:0,reviewCount:1},
       video:{status:'COMPLETE',providerNetworkCalls:1,sourceCount:0},
       credentialValuesExposed:false,executionAuthority:'NONE'};
-    const diagnostics=[JSON.stringify(proof),...contract.REQUIRED_MARKERS,'TARGET_SHA='+SHA,
+    const operationalProof={schemaVersion:'research-ai-operational-transition-v2',status:'PASS',targetSha:SHA,
+      actualNaturalCycle:{status:'NATURAL_CYCLE_PROVEN',directiveConsumed:true,discoveryStatus:'DOSSIER_STAGED',
+        discoveryEvidenceStatus:'DOSSIER_STAGED',discoveryExecution:'FRESH_THIS_INVOCATION',
+        providerCalls:{attempted:2,succeeded:2,failed:0},sourceFetches:{attempted:3,succeeded:3,failed:0},
+        formulaGeneratedCount:1,actualBacktestCount:1,paperActivated:false,executionAuthority:'NONE'},
+      longHistory:{state:'STALE_RELEASE_EVIDENCE_PRESERVED',treatedAsFailure:false},
+      youtube:{state:'PROVIDER_SUCCESS_ZERO_RESULTS'},liveTrading:false,privateTradingApiAllowed:false,
+      realOrderEnabled:false,executionAuthority:'NONE'};
+    const diagnostics=[JSON.stringify(proof),JSON.stringify(operationalProof),...contract.REQUIRED_MARKERS,'TARGET_SHA='+SHA,
       ...(remote===1?['main: line 587: evidence: unbound variable']:[])].join('\n')+'\n';
     writeFileSync(join(root,'diagnostics'),diagnostics);
     const repoRoot=fileURLToPath(new URL('../..',import.meta.url));

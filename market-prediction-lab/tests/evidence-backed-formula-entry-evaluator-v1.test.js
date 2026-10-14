@@ -63,6 +63,24 @@ test("EMA crossover uses the closed signal candle and crosses before next-open e
   assert.equal(result.timestamp, START + (3 * STEP));
 });
 
+test("SMA crossover executes a compiler-supported public strategy rule causally", () => {
+  const runtime = createEvidenceBackedFormulaEntryRuntimeV1({
+    selectedParameters: { smaFast: 2, smaSlow: 3 },
+    entryDsl: {
+      action: "LONG",
+      rules: [operator("CROSSOVER", [
+        indicator("SMA", "close", "smaFast"),
+        indicator("SMA", "close", "smaSlow"),
+      ])],
+    },
+  });
+  const rows = candles([1, 1, 1, 2, 2]);
+  const result = runtime.evaluate({ candles: rows, index: 3 });
+  assert.equal(result.status, "EVALUATED");
+  assert.equal(result.signal, true);
+  assert.equal(result.timestamp, START + (3 * STEP));
+});
+
 test("RSI recovery crossover and ceiling reproduce the #721 mean-reversion entry shape", () => {
   const runtime = createEvidenceBackedFormulaEntryRuntimeV1({
     selectedParameters: { rsiPeriod: 2, rsiRecover: 30, rsiCeiling: 60 },
@@ -131,15 +149,6 @@ test("evaluation never reads or validates candles after the closed signal index"
 });
 
 test("globally safe but unsupported DSL vocabulary fails closed instead of being guessed", () => {
-  const smaRuntime = createEvidenceBackedFormulaEntryRuntimeV1({
-    selectedParameters: { period: 2, threshold: 1 },
-    entryDsl: {
-      action: "LONG",
-      rules: [operator("GT", [indicator("SMA", "close", "period"), parameter("threshold")])],
-    },
-  });
-  expectCode(() => smaRuntime.evaluate({ candles: candles([1, 1, 2]), index: 2 }), "INDICATOR_NOT_SUPPORTED_BY_EVIDENCE_BACKED_EVALUATOR");
-
   const gteRuntime = createEvidenceBackedFormulaEntryRuntimeV1({
     selectedParameters: { rocPeriod: 2, threshold: 0 },
     entryDsl: {
