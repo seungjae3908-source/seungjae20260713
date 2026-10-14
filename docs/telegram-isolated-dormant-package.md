@@ -338,3 +338,48 @@ any send reservation or call Telegram.
 These are source-only changes on Draft #1882: Production still uses
 the old PM2 revision, and safe isolated-owner rollout remains NO-GO.
 No Replit, PM2 restart, real Bot send, DB writes, or orders.
+
+
+## 2026-10-14 protected install attempt #2: post-check failure, NOT another fresh install
+
+The first owner-approved protected attempt #38503780994 stopped BEFORE SSH with
+TELEGRAM_DORMANT_REQUIRED6_MISSING. Exact merged-main official Full CI
+#38506733496 subsequently passed Required6/6. Retrying only the failed job
+(attempt #2) reached the real Production server: SSH, original source-artifact
+provenance, ZIP digest verification, ingress creation, transfer, and installer
+receipt validation all completed successfully. The last step returned
+TELEGRAM_DORMANT_PM2_CHANGED_UNEXPECTEDLY (exit 26).
+
+The old guard hashed the ENTIRE pm2_env object including PM2-managed fields.
+The mismatch does NOT prove a restart or harmless telemetry drift. There is
+no stored before/after field-level diff; do not turn off that guard blindly.
+The immutable release/current marker is written BEFORE the final PM2 check.
+A COMPLETE, SEALED but UNCONFIRMED dormant package may therefore remain in
+the host directory. Replaying the create-only installation would hit existing
+release/current and ingress and could destroy the evidence if forcibly cleared.
+
+The new owner-protected read-only recovery audit is implemented in:
+
+- ops/telegram-dormant-installed-readonly.mjs
+- .github/tests/telegram-dormant-installed-readonly.test.mjs
+- .github/workflows/telegram-dormant-installed-readonly.yml
+
+The audit authenticates exactly one successful immutable original GitHub push
+artifact, verifies its ZIP checksum and the manifest digest, then verifies
+already-installed byte hashes, marker, file metadata, installation receipt
+and private state root. It compares the current actual PM2 identity twice,
+without exposing app environment values. It NEVER uploads, installs, restarts,
+changes permissions or worker ownership, sends a Bot message, or touches DB,
+credentials, broker orders or trading/Paper authority.
+
+After separately approved merge and an owner-protected Production environment
+review, the exact command in Release Control #1555 is:
+
+    /run-telegram-dormant-readback <new-current-main-40-sha> bcb8503559cd64c853f211ed1a10f5c5fad3c04f
+
+SEALED_DORMANT_BYTES_PM2_STABLE_NOW verifies only already sealed bytes and
+current two-pass PM2 stability. It does not prove PM2 preservation DURING
+the earlier failed attempt, four send-capable lanes quiesced, a single
+Telegram writer lease, Signal V3 freshness, genuine member SENT or sender
+activation authorization. Any mismatch is NO-GO, with zero host changes.
+The already confirmed six-room messages are NOT resent. No Replit.
