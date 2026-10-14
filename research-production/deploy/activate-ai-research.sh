@@ -278,7 +278,13 @@ restore_runtime_snapshot() {
     case "$enabled" in
       enabled) "${SUDO[@]}" systemctl enable "$name" >/dev/null ;;
       enabled-runtime) "${SUDO[@]}" systemctl enable --runtime "$name" >/dev/null ;;
-      disabled|static|indirect|masked|not-found) ;;
+      disabled|static|indirect|not-found)
+        # Remove any enablement link created by the candidate definition. Once
+        # the original unit bytes are restored, systemd will report its true
+        # disabled/static/indirect/not-found state again.
+        "${SUDO[@]}" systemctl disable "$name" >/dev/null 2>&1 || true
+        ;;
+      masked) "${SUDO[@]}" systemctl mask "$name" >/dev/null ;;
       *) echo "AI_RESEARCH_ROLLBACK_UNIT_STATE_INVALID:$name:$enabled" >&2; return 1 ;;
     esac
     case "$active" in

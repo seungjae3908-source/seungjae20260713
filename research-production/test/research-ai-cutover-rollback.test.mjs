@@ -62,7 +62,14 @@ systemctl() {
     is-enabled) printf '%s\n' "__DL__ENABLED[$1]}"; [[ "__DL__ENABLED[$1]}" == enabled || "__DL__ENABLED[$1]}" == enabled-runtime ]] ;;
     is-active) printf '%s\n' "__DL__ACTIVE[$1]}"; [[ "__DL__ACTIVE[$1]}" == active || "__DL__ACTIVE[$1]}" == activating ]] ;;
     disable)
-      for unit in "$@"; do [[ "$unit" == --now ]] && continue; ENABLED[$unit]=disabled; ACTIVE[$unit]=inactive; done ;;
+      for unit in "$@"; do
+        [[ "$unit" == --now ]] && continue
+        # A restored unit without an [Install] section is reported as static
+        # after disable, matching real systemd rather than a mutable map.
+        if [[ "$unit" == research-production-old-worker.service ]]; then ENABLED[$unit]=static
+        else ENABLED[$unit]=disabled; fi
+        ACTIVE[$unit]=inactive
+      done ;;
     enable)
       local runtime=false; [[ "__DL__1:-}" == --runtime ]] && { runtime=true; shift; }
       ENABLED[$1]=$([[ "$runtime" == true ]] && printf enabled-runtime || printf enabled) ;;
