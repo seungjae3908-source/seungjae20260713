@@ -85,10 +85,18 @@ function fixture(){
    '/opt/stock-app',
    '/var/lock/stock-app-deploy.lock',
  ])assert.ok(realRunner.includes(absolute),absolute);
+ // Placeholder-first substitution: /opt/stock-app is a PREFIX of
+ // /opt/stock-app-data. Never rewrite a previously substituted tmp path.
  const runner=realRunner
-   .replaceAll('/opt/stock-app-data/telegram-isolated-v1',root)
-   .replaceAll('/opt/stock-app',app)
-   .replaceAll('/var/lock/stock-app-deploy.lock',lock);
+   .replaceAll('/opt/stock-app-data/telegram-isolated-v1','__TG_QA_OWNER_ROOT__')
+   .replaceAll('/opt/stock-app','__TG_QA_APP_ROOT__')
+   .replaceAll('/var/lock/stock-app-deploy.lock','__TG_QA_DEPLOY_LOCK__')
+   .replaceAll('__TG_QA_OWNER_ROOT__',root)
+   .replaceAll('__TG_QA_APP_ROOT__',app)
+   .replaceAll('__TG_QA_DEPLOY_LOCK__',lock);
+ assert.ok(runner.includes('readonly RELEASE='+path.join(root,'release','current')));
+ assert.ok(runner.includes('readonly LIVE_APP='+app));
+ assert.ok(!runner.includes('/opt/stock-app-data/telegram-isolated-v1'));
  const runnerFile=path.join(temp,'run-approved-test-copy.sh');
  fs.writeFileSync(runnerFile,runner,{mode:0o700});
  const launch=(patch={})=>spawnSync('bash',[runnerFile],{
