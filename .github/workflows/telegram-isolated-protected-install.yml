@@ -120,9 +120,21 @@ jobs:
             if(!evaluateProductionCiProvenance({
               targetSha:sha,currentMainSha:sha,statuses,run:ci,
             }).ok){core.setFailed('TELEGRAM_DORMANT_FULL_CI_UNTRUSTED');return;}
-            if(!statuses.some(s=>s.context==='post-merge-provenance/verified'
-              && s.state==='success')){
+            // A green context alone is not sufficient; tie the newest status
+            // to its authenticated exact-main push run and expected workflow.
+            const {inspectPostMergeStatusEvidence,evaluatePostMergeStatusProvenance}=
+              require(process.env.GITHUB_WORKSPACE+'/api-server/scripts/release-candidate-provenance.cjs');
+            const postEvidence=inspectPostMergeStatusEvidence(statuses);
+            if(!postEvidence.ok){
               core.setFailed('TELEGRAM_DORMANT_POSTMERGE_PROVENANCE_MISSING');return;
+            }
+            const postRun=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:postEvidence.runId,
+            })).data;
+            if(!evaluatePostMergeStatusProvenance({
+              targetSha:sha,currentMainSha:sha,statuses,run:postRun,
+            }).ok){
+              core.setFailed('TELEGRAM_DORMANT_POSTMERGE_RUN_UNTRUSTED');return;
             }
             const runs=await github.paginate(github.rest.actions.listWorkflowRuns,{
               owner:context.repo.owner,repo:context.repo.repo,
@@ -230,7 +242,7 @@ jobs:
           mkdir -m 700 -- "$BASE/incoming/$TELEGRAM_DORMANT_SHA"
           echo 'TELEGRAM_DORMANT_INGRESS_CREATED_NO_WORKER'
           REMOTE
-      - name: Transfer exactly one sealed package and two exact-main inert source scripts
+      - name: Transfer sealed package and exact-main inert installer only
         env:
           TARGET_SHA: ${{ steps.request.outputs.sha }}
         run: |
@@ -239,8 +251,19 @@ jobs:
             -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$RUNNER_TEMP/telegram-dormant-payload.tar" \
             ops/install-telegram-isolated-dormant-package.mjs \
-            ops/telegram-protected-dormant-install.sh \
             "$SSH_USER@$SSH_HOST:/opt/stock-app-data/telegram-isolated-v1/incoming/$TARGET_SHA/"
+      - name: Re-check main just before irreversible create-only operation
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD:ops/telegram-protected-dormant-install.sh)" == \
+             "$(git hash-object ops/telegram-protected-dormant-install.sh)" ]]
+          [[ "$(git rev-parse HEAD:ops/install-telegram-isolated-dormant-package.mjs)" == \
+             "$(git hash-object ops/install-telegram-isolated-dormant-package.mjs)" ]]
       - name: Install sealed bytes inactive and compare PM2/Trading owner fingerprint
         id: install
         env:
@@ -248,10 +271,15 @@ jobs:
           TAR_SHA: ${{ steps.extracted.outputs.tar_sha }}
         run: |
           set -Eeuo pipefail
+          INSTALLER_SHA="$(sha256sum ops/install-telegram-isolated-dormant-package.mjs | cut -d' ' -f1)"
+          [[ "$INSTALLER_SHA" =~ ^[a-f0-9]{64}$ ]]
+          # Read the audited runner guard over authenticated SSH stdin.
+          # Never execute a potentially swapped copy uploaded to the host.
           ssh -i "$HOME/.ssh/telegram-id" -p "$SSH_PORT" \
             -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "TELEGRAM_DORMANT_PROTECTED_REVIEW=true bash /opt/stock-app-data/telegram-isolated-v1/incoming/$TARGET_SHA/telegram-protected-dormant-install.sh $TARGET_SHA $TAR_SHA"
+            "TELEGRAM_DORMANT_PROTECTED_REVIEW=true bash -s -- $TARGET_SHA $TAR_SHA $INSTALLER_SHA" \
+            < ops/telegram-protected-dormant-install.sh
       - name: Record sanitized inert-only installation, never claim activation
         if: steps.install.outcome == 'success'
         env:
