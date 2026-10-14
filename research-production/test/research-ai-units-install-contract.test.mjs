@@ -29,6 +29,8 @@ test('AI and video services reuse one provider-only Research environment file', 
 test('AI service marks timer contract but does not self-claim timer proof', async () => {
   const unit=await readFile(new URL('../deploy/research-production-ai-review.service', import.meta.url),'utf8');
   assert.match(unit,/Environment=RESEARCH_AI_INVOCATION_MODE=SYSTEMD_TIMER/);
+  assert.ok(unit.indexOf('autonomous-research-closed-loop.mjs') < unit.indexOf('research-ai-review.mjs run'));
+  assert.ok(unit.includes('ExecStart=-/usr/bin/env node research-production/bin/autonomous-research-closed-loop.mjs'));
   assert.doesNotMatch(unit,/scheduledInvocationObserved=true/);
 });
 
