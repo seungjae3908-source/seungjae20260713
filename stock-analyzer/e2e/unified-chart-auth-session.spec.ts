@@ -516,7 +516,7 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
     await page.getByTestId('market-UPBIT').click();
     await expect(page).toHaveURL(/market=UPBIT/);
-    await expect(page.getByText('auth-upbit-fixture', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toContainText('auth-upbit-fixture');
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
 
     expect(tokenCalls).toBe(2);

@@ -163,7 +163,7 @@ function timeline(page: Page) {
 }
 
 function currentAnalysis(page: Page) {
-  return page.locator('section').filter({ hasText: '현재 판단' }).last();
+  return page.getByTestId('ai-chart-current-judgment');
 }
 
 async function expectLatestCandle(page: Page, expectedTime: number) {
@@ -211,7 +211,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
 
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
-  await expect(page.getByText('context-reset-kr-15m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-15m');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
@@ -232,7 +232,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await symbolInput.fill('000660');
   await page.getByTestId('apply-chart-symbol').click();
   await expect(page).toHaveURL(/ticker=000660/);
-  await expect(page.getByText('context-reset-kr-000660', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-000660');
   await expectLatestCandle(page, BASE_TIME + (DOUBLE_TOP.length - 1) * STEP_SECONDS);
   const secondOverlay = page.getByTestId('chart-pattern-overlay');
   await expect(secondOverlay).toHaveCount(1);
@@ -248,7 +248,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await page.getByTestId('market-US').click();
   await expect(page).toHaveURL(/market=US/);
   await expect(page).toHaveURL(/ticker=AAPL/);
-  await expect(page.getByText('context-reset-us-aapl', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-us-aapl');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
