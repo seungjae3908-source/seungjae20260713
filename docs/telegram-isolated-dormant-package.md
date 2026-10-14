@@ -383,3 +383,18 @@ the earlier failed attempt, four send-capable lanes quiesced, a single
 Telegram writer lease, Signal V3 freshness, genuine member SENT or sender
 activation authorization. Any mismatch is NO-GO, with zero host changes.
 The already confirmed six-room messages are NOT resent. No Replit.
+
+
+### Future-install PM2 post-check precision (source-only Draft follow-up)
+
+The protected Bash installer now computes its before/after PM2 fingerprint
+using the real single process PID, start time, restart count, canonical cwd and
+entrypoint, deployed SHA marker, sender-owner mode and ALL configured
+application environment names (uppercase and executionAuthority, hashed
+without printing values). Dynamic PM2-generated lower-case diagnostic objects
+such as axm_monitor/versioning are excluded. It does NOT exempt LIVE, AUTO,
+PAPER, Bot credentials, broker flags or a genuine restart. Fake-PM2 end-to-end
+tests inject telemetry-only drift (permitted) and PID/start/restart/trading/
+owner changes (blocked) with real Bash execution, preserving residual seal on
+post-check failure for the separately protected read-only recovery audit.
+This source change does not repair or confirm any historic Production state.
