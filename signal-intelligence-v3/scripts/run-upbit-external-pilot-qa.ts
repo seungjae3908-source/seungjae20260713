@@ -6,6 +6,7 @@ import {
   buildEmptyExternalPilotHandoffFile,
   ExistingMarketAiExternalPilotReviewer,
   produceUpbitTrendPullbackExternalPilot,
+  resolveExternalPilotFreeAiPolicy,
 } from '../../api-server/src/services/external-strategy-pilot-producer.service';
 import { parseExternalStrategyPilotHandoffFile } from '../../api-server/src/services/member-auto-trading-background-worker.service';
 import { appendPublicQaCycle } from '../../api-server/src/services/external-strategy-pilot-statistics.service';
@@ -25,6 +26,9 @@ if (symbols.length === 0) throw new Error('EXTERNAL_PILOT_UPBIT_SYMBOLS_REQUIRED
 
 function costPolicy() {
   const commissionRate = Number(process.env.EXTERNAL_PILOT_UPBIT_COMMISSION_RATE);
+  const entryCommissionRate = Number(process.env.EXTERNAL_PILOT_UPBIT_ENTRY_COMMISSION_RATE);
+  const exitCommissionRate = Number(process.env.EXTERNAL_PILOT_UPBIT_EXIT_COMMISSION_RATE);
+  const minimumOrderKrw = Number(process.env.EXTERNAL_PILOT_UPBIT_MINIMUM_ORDER_KRW);
   const version = String(process.env.EXTERNAL_PILOT_UPBIT_COST_POLICY_VERSION ?? '').trim();
   const provenance = String(process.env.EXTERNAL_PILOT_UPBIT_COST_PROVENANCE ?? '').trim();
   const quality = String(process.env.EXTERNAL_PILOT_UPBIT_COST_QUALITY ?? '').trim();
@@ -32,7 +36,15 @@ function costPolicy() {
   if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate >= 0.1
     || !version || !provenance || !Number.isFinite(observedAtMs)
     || !['ACCOUNT_READBACK', 'DOCUMENTED_CURRENT_POLICY'].includes(quality)) return null;
-  return Object.freeze({ version, commissionRate, provenance, observedAtMs, quality });
+  return Object.freeze({
+    version, commissionRate, provenance, observedAtMs, quality,
+    ...(Number.isFinite(entryCommissionRate) && entryCommissionRate >= 0
+      ? { entryCommissionRate } : {}),
+    ...(Number.isFinite(exitCommissionRate) && exitCommissionRate >= 0
+      ? { exitCommissionRate } : {}),
+    ...(Number.isFinite(minimumOrderKrw) && minimumOrderKrw > 0
+      ? { minimumOrderKrw } : {}),
+  });
 }
 
 async function atomicJson(file: string, value: unknown) {
@@ -44,8 +56,9 @@ async function atomicJson(file: string, value: unknown) {
 
 const startedAtMs = Date.now();
 const client = new UpbitExternalPilotPublicDataClient();
-const aiReviewer = process.env.EXTERNAL_PILOT_AI_REVIEW_ENABLED === 'true'
-  ? new ExistingMarketAiExternalPilotReviewer()
+const aiPolicy = resolveExternalPilotFreeAiPolicy();
+const aiReviewer = process.env.EXTERNAL_PILOT_AI_REVIEW_ENABLED === 'true' && aiPolicy.configured
+  ? new ExistingMarketAiExternalPilotReviewer(undefined, Date.now, aiPolicy)
   : null;
 const configuredCost = costPolicy();
 const rows = [];
@@ -118,6 +131,10 @@ const report = Object.freeze({
   strategyId: 'TREND_PULLBACK_REACCEL_V1',
   costPolicyConfigured: configuredCost != null,
   aiReviewConfigured: aiReviewer != null,
+  aiReviewConfigurationReason: process.env.EXTERNAL_PILOT_AI_REVIEW_ENABLED === 'true'
+    ? aiPolicy.reason : 'EXTERNAL_PILOT_AI_REVIEW_DISABLED',
+  aiReviewProvider: aiPolicy.configured ? aiPolicy.provider : null,
+  aiReviewModel: aiPolicy.configured ? aiPolicy.model : null,
   rows: Object.freeze(rows),
   totals: Object.freeze(totals),
   safety: Object.freeze({

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   produceUpbitTrendPullbackExternalPilot,
+  resolveExternalPilotFreeAiPolicy,
+  upbitExternalPilotCostPolicyFromOrderChance,
   type ExternalPilotAiReviewer,
 } from './external-strategy-pilot-producer.service';
 import type { UpbitPilotCandle, UpbitTrendPullbackPublicSnapshot } from './upbit-external-pilot-public-data.service';
@@ -82,6 +84,45 @@ const costPolicy = Object.freeze({
   observedAtMs: NOW - 1_000,
   provenance: 'TEST_FIXTURE_ACCOUNT_READBACK',
   quality: 'ACCOUNT_READBACK' as const,
+});
+
+test('Upbit read-only order chance binds entry fee, exit fee and minimum order', () => {
+  const policy = upbitExternalPilotCostPolicyFromOrderChance({
+    market: { bid: { min_total: '5000' }, ask: { min_total: '5000' } },
+    bid_fee: '0.0005', ask_fee: '0.0007',
+  }, NOW);
+  assert.equal(policy.entryCommissionRate, 0.0005);
+  assert.equal(policy.exitCommissionRate, 0.0007);
+  assert.equal(policy.commissionRate, 0.0007);
+  assert.equal(policy.minimumOrderKrw, 5_000);
+  assert.equal(policy.quality, 'ACCOUNT_READBACK');
+  assert.throws(() => upbitExternalPilotCostPolicyFromOrderChance({
+    market: { bid: { min_total: '5000' } }, bid_fee: '0.0005',
+  }, NOW), /UPBIT_PILOT_ACCOUNT_COST_READBACK_INVALID/u);
+});
+
+test('external Pilot AI is configured only for explicitly confirmed free exact models', () => {
+  assert.equal(resolveExternalPilotFreeAiPolicy({
+    GEMINI_API_KEY: 'configured-but-not-confirmed',
+  }).configured, false);
+  assert.deepEqual(resolveExternalPilotFreeAiPolicy({
+    EXTERNAL_PILOT_AI_FREE_TIER_CONFIRMED: 'true',
+    AI_CHAT_PROVIDER: 'google-gemini',
+    GEMINI_API_KEY: 'free-key',
+    GEMINI_MODEL: 'gemini-3.1-flash-lite',
+  }), {
+    configured: true, provider: 'google-gemini', model: 'gemini-3.1-flash-lite',
+    reason: 'FREE_TIER_EXACT_MODEL_CONFIGURED',
+  });
+  assert.equal(resolveExternalPilotFreeAiPolicy({
+    EXTERNAL_PILOT_AI_FREE_TIER_CONFIRMED: 'true',
+    AI_CHAT_PROVIDER: 'openai-compatible',
+    AI_CHAT_API_KEY: 'paid-or-unverified', AI_CHAT_MODEL: 'unknown',
+  }).configured, false);
+  assert.equal(resolveExternalPilotFreeAiPolicy({
+    EXTERNAL_PILOT_AI_FREE_TIER_CONFIRMED: 'true',
+    GEMINI_API_KEY: 'one', GROQ_API_KEY: 'two',
+  }).reason, 'EXTERNAL_PILOT_AI_MULTI_PROVIDER_FALLBACK_BLOCKED');
 });
 test('structural fixture proves exact external envelope, risk and Worker contract without an order', async () => {
   const output = await produceUpbitTrendPullbackExternalPilot({

@@ -46,12 +46,13 @@ test('administrator Production 1M policy apply stays inside the one-approval exa
   assert.ok(ui.includes("maximumBitgetLeverage === 7 ? '관리자 최대 7배' : '회원 최대 3배'"));
   assert.ok(ui.includes('.filter((leverage) => leverage <= maximumBitgetLeverage)'));
   assert.ok(pilotCatalog.includes('initialOperatingCapitalKrw: 500_000'));
-  assert.ok(pilotCapital.includes('policyMaxOrder + growth'));
+  assert.ok(pilotCapital.includes('effectiveCapitalAllocation(policy, targetMarket)'));
+  assert.ok(pilotCapital.includes('Math.min(policy.maxOrderKrw, laneCapital)'));
   assert.ok(pilotCapital.includes('rulePackPilotInitialCapitalForPolicy'));
   assert.ok(memberPaper.includes('AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const'));
-  assert.ok(types.includes('PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000'));
-  assert.ok(types.includes('PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000'));
-  assert.ok(ui.includes('discoveryMaxOrderKrw'));
+  assert.ok(!types.includes('DISCOVERY_MAX_SINGLE_ENTRY_KRW'));
+  assert.ok(!ui.includes('discoveryMaxOrderKrw'));
+  assert.ok(ui.includes('1회 최대 주문금액'));
   assert.ok(adminPaper.includes('ADMIN_MARKET_INITIAL_KRW = 1_000_000'));
   assert.ok(ui.includes("initialMaxOrderLabel = initialMaxOrderKrw === 1_000_000 ? '100만원' : '50만원'"));
   assert.ok(ui.includes("initialMaxOrderKrw === 1_000_000 ? '관리자' : '회원'"));

@@ -257,6 +257,9 @@ export class TradePreSubmissionRiskService {
     }
 
     const fee = snapshot.estimatedFeePercent;
+    const approvedFee = currentPlan.marketSnapshot.estimatedFeePercent;
+    const exitFee = snapshot.estimatedExitFeePercent;
+    const approvedExitFee = currentPlan.marketSnapshot.estimatedExitFeePercent;
     if (!finite(fee) || fee < 0) {
       if (riskReducing) warnings.push('위험축소 청산의 수수료 추정치가 없어도 포지션 축소를 우선합니다.');
       else if (currentPlan.accountMode !== 'paper') blockCodes.push('FEE_ESTIMATE_UNAVAILABLE');
@@ -264,10 +267,19 @@ export class TradePreSubmissionRiskService {
       if (riskReducing) warnings.push('위험축소 청산의 비용이 높지만 포지션 축소를 우선합니다.');
       else blockCodes.push('ESTIMATED_FEE_TOO_HIGH');
     }
+    if (!riskReducing && currentPlan.accountMode === 'live' && finite(approvedFee)
+      && (!finite(fee) || fee > approvedFee + 1e-9)) {
+      blockCodes.push('ENTRY_FEE_POLICY_DRIFT');
+    }
+    if (!riskReducing && currentPlan.accountMode === 'live' && finite(approvedExitFee)
+      && (!finite(exitFee) || exitFee > approvedExitFee + 1e-9)) {
+      blockCodes.push('EXIT_FEE_POLICY_DRIFT');
+    }
 
     if (!riskReducing && finite(currentPrice) && currentPrice > 0 && finite(slippage) && finite(fee)) {
       const targetPercent = targetMovePercent(currentPlan, currentPrice);
-      const roundTripCostPercent = (slippage + fee) * 2;
+      const roundTripCostPercent = slippage * 2 + fee
+        + (finite(exitFee) ? exitFee : fee);
       if (targetPercent != null && targetPercent <= roundTripCostPercent) blockCodes.push('EXPECTED_COST_EXCEEDS_TARGET_MOVE');
     }
 

@@ -82,8 +82,11 @@ on:
       - .github/scripts/production-auto-live-signal-identity.test.cjs
       - .github/scripts/production-manual-live-receipts.cjs
       - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/scripts/verify-automation-research-release-preflight.mjs
       - .github/tests/kiwoom-readonly-recovery-security-contract.test.mjs
       - .github/tests/production-auto-live-budget-contract.test.mjs
+      - .github/tests/production-trading-policy-limit-apply-contract.test.mjs
+      - .github/tests/staging-trading-core-only-contract.test.mjs
       - .github/workflows/application-fast-ci.yml
       - api-server/package.json
       - api-server/scripts/automatic-live-preflight-stages.mjs

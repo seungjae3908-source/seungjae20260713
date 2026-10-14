@@ -14,8 +14,6 @@ const requireAll = (file, markers) => {
 const types = requireAll('api-server/src/services/trade-automation.types.ts', [
   'PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW = 500_000',
   'PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW = 1_000_000',
-  'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000',
-  'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000',
   'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3',
   'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7',
   'dailyLossLimitPercent: 3',
@@ -30,17 +28,15 @@ const catalog = requireAll('api-server/src/services/evidence-backed-auto-strateg
   'automaticLiveExecutionAllowed: true',
 ]);
 requireAll('api-server/src/services/trade-rule-pack-pilot-capital.service.ts', [
-  'rulePackPilotDiscoveryEntryCap',
-  'discoveryEntryCapRequired',
-  'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW',
-  'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW',
+  'rulePackPilotRoleMaximumForPolicy',
+  'effectiveCapitalAllocation(policy, targetMarket)',
+  'roleMaximumOperatingCapitalKrw',
   'BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT',
 ]);
 requireAll('api-server/src/services/member-auto-trading-background-worker.service.ts', [
   "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m'",
   "'automatic-paper-account-v1'",
   'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const',
-  'paperInput.estimatedKrw, nowMs, false',
   'paperInput.estimatedKrw, nowMs,',
   'deriveRulePackPilotExecutionPolicy(',
 ]);
@@ -51,7 +47,7 @@ requireAll('api-server/src/services/trade-automation-risk.service.ts', [
   "'BITGET_ISOLATED_MARGIN_REQUIRED'",
 ]);
 requireAll('api-server/src/routes/trade-automation.ts', [
-  'discoveryMaxOrderKrw: discoveryMaximumSingleEntryKrw(req)',
+  'initialMaxOrderKrw: maximumSingleEntryKrw(req)',
   'PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF',
 ]);
 requireAll('api-server/src/routes/paper-journal.ts', [
@@ -59,7 +55,7 @@ requireAll('api-server/src/routes/paper-journal.ts', [
   'AUTOMATIC_PAPER_LEGACY_WALLET_IMMUTABLE',
 ]);
 requireAll('stock-analyzer/src/components/trade-automation-settings.tsx', [
-  'discoveryMaxOrderKrw',
+  '1회 최대 주문금액',
   '일일 주문 수 (0=기회 기반)',
   '주문별 수동 승인 없이',
 ]);
@@ -94,6 +90,19 @@ if (catalog.includes('PAPER_MIRROR_MANUAL_LIVE_CONFIRM')
 if (!types.includes('maxAssetPercent: 30')) {
   throw new Error('AUTOMATION_RESEARCH_PREFLIGHT_SINGLE_ASSET_BASELINE_MISSING');
 }
+for (const staleDiscoveryCap of [
+  'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW',
+  'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW',
+  'discoveryEntryCapRequired',
+  'discoveryMaxOrderKrw',
+]) {
+  if (types.includes(staleDiscoveryCap)
+    || read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts').includes(staleDiscoveryCap)
+    || read('api-server/src/routes/trade-automation.ts').includes(staleDiscoveryCap)
+    || read('stock-analyzer/src/components/trade-automation-settings.tsx').includes(staleDiscoveryCap)) {
+    throw new Error(`AUTOMATION_RESEARCH_PREFLIGHT_STALE_DISCOVERY_CAP:${staleDiscoveryCap}`);
+  }
+}
 const productionPreflight = productionDeploy.indexOf(
   'Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority',
 );
@@ -112,7 +121,8 @@ if (!(productionPreflight > 0
 process.stdout.write(`${JSON.stringify({
   ok: true,
   preflight: 'AUTOMATION_RESEARCH_RELEASE',
-  liveDiscoveryOrderCapsKrw: { administrator: 500_000, member: 100_000 },
+  separateDiscoveryOrderCap: false,
+  liveOrderCeilingsKrw: { administrator: 1_000_000, member: 500_000 },
   liveRoleCeilingsKrw: { administrator: 1_000_000, member: 500_000 },
   automaticPaperInitialPerMarketKrw: 1_000_000,
   dailyLossLimitPercent: 3,

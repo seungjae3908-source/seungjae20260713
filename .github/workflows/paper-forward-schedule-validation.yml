@@ -140,8 +140,11 @@ on:
       - .github/scripts/production-auto-live-signal-identity.test.cjs
       - .github/scripts/production-manual-live-receipts.cjs
       - .github/scripts/production-manual-live-receipts.test.cjs
+      - .github/scripts/verify-automation-research-release-preflight.mjs
       - .github/tests/kiwoom-readonly-recovery-security-contract.test.mjs
       - .github/tests/production-auto-live-budget-contract.test.mjs
+      - .github/tests/production-trading-policy-limit-apply-contract.test.mjs
+      - .github/tests/staging-trading-core-only-contract.test.mjs
       - .github/workflows/application-fast-ci.yml
       - api-server/scripts/automatic-live-preflight-stages.mjs
       - api-server/scripts/automatic-live-preflight-stages.test.mjs
@@ -533,8 +536,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 64 or len(set(auto_safety)) != 64:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_64')
+          if len(auto_safety) != 67 or len(set(auto_safety)) != 67:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_67')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -574,7 +577,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 64
+          test "${#auto_safety[@]}" -eq 67
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
@@ -591,7 +594,7 @@ jobs:
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
           # Precise staging-only automatic Paper holdings GET fix. The owner
-          # registered 64 AUTO + 19 supplemental safety scopes remain exact.
+          # registered 67 AUTO + 19 supplemental safety scopes remain exact.
           # These three source/test blobs and BOTH Trading guards are pinned.
           paper_holdings_readonly=(
             stock-analyzer/src/pages/auto-trading.tsx

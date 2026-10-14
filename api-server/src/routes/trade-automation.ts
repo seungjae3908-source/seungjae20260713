@@ -92,10 +92,8 @@ import type {
 } from '../services/trade-automation.types';
 import {
   PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
-  PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
-  PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from '../services/trade-automation.types';
 
@@ -1427,7 +1425,6 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       ok: true,
       policy,
       initialMaxOrderKrw: maximumSingleEntryKrw(req),
-      discoveryMaxOrderKrw: discoveryMaximumSingleEntryKrw(req),
       administratorOrderBaseline: maximumSingleEntryKrw(req) === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
       maximumBitgetLeverage: maximumBitgetLeverage(req),
       administratorLeveragePolicy: maximumBitgetLeverage(req) === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
@@ -1766,12 +1763,6 @@ function maximumSingleEntryKrw(req: AuthenticatedRequest) {
   return req.member && hasCapability(req.member, 'canManageMembers')
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
-}
-
-function discoveryMaximumSingleEntryKrw(req: AuthenticatedRequest) {
-  return req.member && hasCapability(req.member, 'canManageMembers')
-    ? PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW
-    : PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW;
 }
 
 function maximumBitgetLeverage(req: AuthenticatedRequest) {
