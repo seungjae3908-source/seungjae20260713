@@ -18,6 +18,11 @@ import {
   isEvidenceBackedAutoStrategyId,
   RULE_PACK_PILOT_PROFILE,
 } from './evidence-backed-auto-strategy-catalog.service';
+import {
+  evaluateDailyProfitTarget,
+  parseDailyProfitTargetEvidenceReason,
+  tradingDayKeyForMarket,
+} from './daily-profit-target.service';
 
 export type RulePackPilotLossReference = Readonly<{ closedAt: string; signalId: string }>;
 export type RulePackPilotCapitalState = Readonly<{
@@ -120,7 +125,8 @@ export function deriveRulePackPilotCapitalFromTrades(
   const blockers: string[] = [];
   const seenTradeIds = new Set<string>();
   let settledTradeCount = 0;
-  const today = kstDay(now);
+  const todayFor = (market: TradingAssetClass | undefined, value: string | Date) =>
+    market ? tradingDayKeyForMarket(market, value) : kstDay(value);
   const nowMs = now.getTime();
 
   const sorted = trades.filter((trade) => targetMarket == null || trade.market === targetMarket)
@@ -193,7 +199,8 @@ export function deriveRulePackPilotCapitalFromTrades(
         closedAt: trade.closedAt, signalId: trade.signalId,
       });
     } else if (pnl > 0) batchWins += 1;
-    if (kstDay(trade.closedAt) === today) {
+    const tradeMarket = targetMarket ?? trade.market;
+    if (todayFor(tradeMarket, trade.closedAt) === todayFor(tradeMarket, now)) {
       dailyRealizedPnlKrw += pnl;
       if (pnl < 0) dailyLosingTrades += 1;
     }
@@ -536,6 +543,31 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     repository, userId, now, rulePackPilotInitialCapitalForPolicy(policy),
     rulePackPilotMarketForPlan(plan),
   );
+  const targetMarket = rulePackPilotMarketForPlan(plan);
+  const targetPolicy = policy.dailyProfitTargetByMarket[targetMarket];
+  if (targetPolicy.enabled) {
+    const evidence = parseDailyProfitTargetEvidenceReason(plan.signalReasons, now.getTime());
+    if (evidence.market !== targetMarket
+      || Math.abs(evidence.realizedNetProfitKrw - pilot.dailyRealizedPnlKrw) > 0.01) {
+      throw new Error('DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_DRIFT');
+    }
+    const target = evaluateDailyProfitTarget({
+      market: targetMarket,
+      policy: targetPolicy,
+      baseCapitalKrw: pilot.initialOperatingCapitalKrw,
+      realizedNetProfitKrw: pilot.dailyRealizedPnlKrw,
+      unrealizedPnlKrw: evidence.unrealizedPnlKrw,
+      cumulativeHighNetProfitKrw: Math.max(0,
+        pilot.highWaterMarkKrw - pilot.initialOperatingCapitalKrw),
+      settlementEvidenceReady: pilot.settlementReady,
+      strengthenedSignalQualified: evidence.strengthenedSignalQualified,
+      plannedRiskKrw: evidence.plannedRiskKrw,
+      now,
+    });
+    if (!target.newEntryAllowed) {
+      throw new Error(target.newEntryBlockReason ?? 'DAILY_PROFIT_TARGET_ENTRY_BLOCKED');
+    }
+  }
   const decision = evaluateRulePackPilotEntryGuard({
     pilot,
     strategyId: plan.strategyId,

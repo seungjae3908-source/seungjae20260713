@@ -106,6 +106,7 @@ import {
   deriveRulePackPilotExecutionPolicy,
   issueRulePackPilotDynamicCapReceipt,
   readRulePackPilotCapitalState,
+  rulePackPilotMarketForPlan,
   rulePackPilotInitialCapitalForPolicy,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -113,6 +114,13 @@ import {
   isEvidenceBackedAutoStrategyId,
   RULE_PACK_PILOT_PROFILE,
 } from './evidence-backed-auto-strategy-catalog.service';
+import {
+  dailyProfitTargetEvidenceReason,
+  evaluateDailyProfitTarget,
+  tradingDayKeyForMarket,
+  type DailyProfitTargetState,
+} from './daily-profit-target.service';
+import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -121,6 +129,43 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+type ObservedDailyProfitTargetState = DailyProfitTargetState & Readonly<{
+  observedAt: string;
+  strategyId: string | null;
+  stopPrice: number | null;
+  targetPrices: readonly number[];
+}>;
+const dailyProfitTargetRuntimeByUser = new Map<string,
+  Partial<Record<TradingAssetClass, ObservedDailyProfitTargetState>>>();
+const DAILY_PROFIT_TARGET_RUNTIME_MAX_USERS = 2_000;
+const DAILY_PROFIT_TARGET_RUNTIME_MAX_AGE_MS = 48 * 60 * 60_000;
+
+export function readMemberDailyProfitTargetRuntime(userId: string) {
+  return structuredClone(dailyProfitTargetRuntimeByUser.get(userId) ?? {});
+}
+function rememberDailyProfitTargetRuntime(
+  userId: string,
+  market: TradingAssetClass,
+  state: ObservedDailyProfitTargetState,
+  nowMs: number,
+) {
+  for (const [storedUserId, markets] of dailyProfitTargetRuntimeByUser) {
+    const latest = Math.max(0, ...Object.values(markets)
+      .map((value) => Date.parse(value?.observedAt ?? ''))
+      .filter(Number.isFinite));
+    if (nowMs - latest > DAILY_PROFIT_TARGET_RUNTIME_MAX_AGE_MS) {
+      dailyProfitTargetRuntimeByUser.delete(storedUserId);
+    }
+  }
+  const previous = dailyProfitTargetRuntimeByUser.get(userId) ?? {};
+  dailyProfitTargetRuntimeByUser.delete(userId);
+  dailyProfitTargetRuntimeByUser.set(userId, { ...previous, [market]: state });
+  while (dailyProfitTargetRuntimeByUser.size > DAILY_PROFIT_TARGET_RUNTIME_MAX_USERS) {
+    const oldest = dailyProfitTargetRuntimeByUser.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    dailyProfitTargetRuntimeByUser.delete(oldest);
+  }
+}
 function maximumSingleEntryKrwForProfile(profile: MemberAccessProfile) {
   return hasCapability(profile, 'canManageMembers')
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
@@ -415,6 +460,12 @@ export interface MemberAutoTradingBackgroundSource {
     /** Exact worker-owned order IDs; never replay all historical user events. */
     orderIds: readonly string[];
   }): Promise<{ inserted: number; deliveryQueued: number; missingReferences: number }>;
+  /** Durable per-user outbox only. The deterministic day/market event ID
+   * prevents repeat notifications and grants no order authority. */
+  notifyDailyProfitTarget?(
+    userId: string,
+    state: ObservedDailyProfitTargetState,
+  ): Promise<boolean>;
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
@@ -461,6 +512,8 @@ export type MemberAutoTradingBackgroundRunResult = {
   privateTradingRequests: number;
   executionEventsInserted: number;
   notificationDeliveriesQueued: number;
+  dailyProfitTargetBlocks: number;
+  dailyProfitTargetNotificationsQueued: number;
   executionSyncMissingReferences: number;
   executionSyncFailures: number;
   liveEntryArmPresent: boolean;
@@ -727,6 +780,30 @@ export function externalStrategyPilotReasonsForLive(
 // Compatibility export for stored `formula-ai-exception` Pilot stage callers.
 // The behavior is now the explicit EXTERNAL_STRATEGY_PILOT admission contract.
 export const formulaAiReviewReasonsForLive = externalStrategyPilotReasonsForLive;
+
+function strengthenedProfitProtectionSignal(
+  entry: MemberAutoTradingPaperHandoffEntry,
+  nowMs: number,
+) {
+  const deterministic = evaluateStrategyRulePackDeterministicGate({
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    signalId: entry.identity.signalId,
+    symbol: entry.identity.symbol,
+    timeframe: entry.identity.timeframe,
+    learningSnapshot: entry.signal.learningSnapshot,
+    dataEvidence: entry.execution.dataEvidence,
+    publicQuote: entry.publicQuote,
+  });
+  const review = (entry as MemberAutoTradingPaperHandoffEntry & { aiReviewEvidence?: unknown }).aiReviewEvidence;
+  return deterministic.recognized && deterministic.readyForAiReview
+    && canonicalAiReviewEvidenceValid(review, entry.identity, entry.evaluatedAtMs)
+    && record(review)?.decision === 'PASS'
+    && finite(record(review)?.expiresAtMs) && nowMs < Number(record(review)?.expiresAtMs)
+    && finite(entry.riskEvidence.actualRiskPercent) && entry.riskEvidence.actualRiskPercent! <= 0.5
+    && finite(entry.riskEvidence.riskReward2) && entry.riskEvidence.riskReward2! >= 3;
+}
 
 export function validateExternalStrategyPilotHandoffEnvelope(
   raw: unknown,
@@ -1768,6 +1845,7 @@ async function liveJournalRiskState(
   runtime: MemberRuntimeState,
   snapshot: CanonicalAccountSnapshot,
   policy: TradingPolicy,
+  targetMarket: TradingAssetClass,
   nowMs: number,
   fxCache: Map<string, MemberAutoTradingFxQuote>,
 ) {
@@ -1782,6 +1860,7 @@ async function liveJournalRiskState(
   const payloads = await readTradeAutomationJournalPayloads(repository, userId);
   const journal = buildUnifiedTradeJournal(payloads, { range: 'ALL', source: 'APP_AUTO' }, new Date(nowMs));
   const closed = journal.trades.filter((trade) => trade.source === 'APP_AUTO' && trade.status === 'CLOSED' && trade.closedAt);
+  const settled: Array<{ closedAtMs: number; market: TradingAssetClass; pnlKrw: number }> = [];
   const pnlKrw = async (cutoff: number) => {
     let total = 0;
     for (const trade of closed) {
@@ -1793,6 +1872,17 @@ async function liveJournalRiskState(
     }
     return total;
   };
+  for (const trade of closed) {
+    const closedAtMs = Date.parse(trade.closedAt ?? '');
+    if (!Number.isFinite(closedAtMs) || !finite(trade.netPnl)) {
+      throw new Error('BACKGROUND_LIVE_REALIZED_PNL_EVIDENCE_REQUIRED');
+    }
+    const market: TradingAssetClass = trade.market === 'CRYPTO_SPOT' ? 'crypto_spot'
+      : trade.market === 'CRYPTO_FUTURES' ? 'crypto_futures'
+        : trade.market === 'US_STOCK' ? 'us_stock' : 'domestic_stock';
+    const fx = await fxFor(trade.market);
+    settled.push({ closedAtMs, market, pnlKrw: trade.netPnl * fx.krwPerQuoteCurrency });
+  }
   // A pending order is NOT proof of an owned broker position. Bind provider
   // holdings only to canonically filled/partially-filled entry quantities,
   // and fail closed until ambiguous fills are reconciled.
@@ -1805,6 +1895,17 @@ async function liveJournalRiskState(
       : source.readLiveAccountSnapshot(userId, provider),
     krwPerQuoteFor: async (plan) => (await fxFor(tradeMarketForPlan(plan))).krwPerQuoteCurrency,
   });
+  const targetOwned = owned.filter((position) =>
+    rulePackPilotMarketForPlan(position.plan) === targetMarket);
+  const marketUnrealizedKrw = targetOwned.length === owned.length ? unrealizedKrw
+    : await automaticLiveUnrealizedPnlKrw({
+      owned: targetOwned, maximumLeverage: policy.bitgetLeverage,
+      orders: runtime.orders, nowMs,
+      readMark: (plan) => source.readMarketMark(tradeMarketForPlan(plan), plan.symbol),
+      snapshotFor: async (provider) => provider === snapshot.provider ? snapshot
+        : source.readLiveAccountSnapshot(userId, provider),
+      krwPerQuoteFor: async (plan) => (await fxFor(tradeMarketForPlan(plan))).krwPerQuoteCurrency,
+    });
   const dailyKrw = await pnlKrw(nowMs - 24 * 60 * 60_000) + unrealizedKrw;
   const weeklyKrw = await pnlKrw(nowMs - 7 * 24 * 60 * 60_000) + unrealizedKrw;
   const equityBase = Math.max(1, policy.totalCapitalKrw);
@@ -1820,6 +1921,12 @@ async function liveJournalRiskState(
     dailyPnlPercent: dailyKrw / equityBase * 100,
     weeklyPnlPercent: weeklyKrw / equityBase * 100,
     consecutiveLosses,
+    dailyRealizedNetPnlKrw: settled
+      .filter((trade) => trade.market === targetMarket
+        && tradingDayKeyForMarket(targetMarket, trade.closedAtMs)
+          === tradingDayKeyForMarket(targetMarket, nowMs))
+      .reduce((sum, trade) => sum + trade.pnlKrw, 0),
+    marketUnrealizedPnlKrw: marketUnrealizedKrw,
   };
 }
 
@@ -1842,7 +1949,9 @@ async function buildLivePlanInput(input: {
   const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
     input.source, input.repository, input.member.userId, input.runtime, input.snapshot,
-    input.member.policy, input.nowMs, input.fxCache,
+    input.member.policy,
+    marketMapping(input.entry.identity.market, input.member.policy).assetClass,
+    input.nowMs, input.fxCache,
   );
   const availableBalance = readOnlyAvailableBalance ?? 0;
   const accountValueKrw = Math.max(1, Math.min(
@@ -1868,6 +1977,8 @@ async function buildLivePlanInput(input: {
       accountValueKrw,
       dailyPnlPercent: risk.dailyPnlPercent,
       weeklyPnlPercent: risk.weeklyPnlPercent,
+      dailyRealizedNetPnlKrw: risk.dailyRealizedNetPnlKrw,
+      unrealizedPnlKrw: risk.marketUnrealizedPnlKrw,
       consecutiveLosses: risk.consecutiveLosses,
       accountExposureKrw: exposure.accountExposureKrw,
       instrumentExposureKrw: exposure.instrumentExposureKrw,
@@ -2173,6 +2284,8 @@ export class MemberAutoTradingBackgroundWorker {
       privateTradingRequests: 0,
       executionEventsInserted: 0,
       notificationDeliveriesQueued: 0,
+      dailyProfitTargetBlocks: 0,
+      dailyProfitTargetNotificationsQueued: 0,
       executionSyncMissingReferences: 0,
       executionSyncFailures: 0,
       liveEntryArmPresent: liveEntryArmPresentThisTick,
@@ -2497,6 +2610,56 @@ export class MemberAutoTradingBackgroundWorker {
               && (await syncExecutionProjection()) && entryProjectionHealthy;
         }
 
+        // Observe settlement-backed targets even on a quiet market tick. This
+        // makes a just-settled target and its durable alert visible without
+        // inventing a candidate. It performs repository/outbox work only: no
+        // provider order, cancel, amend, transfer or withdrawal is available.
+        if (liveModeRequested && memberAutoExecutionEnabled) {
+          const targetMarkets = Object.keys(
+            member.policy.dailyProfitTargetByMarket,
+          ) as TradingAssetClass[];
+          for (const targetMarket of targetMarkets) {
+            const targetPolicy = member.policy.dailyProfitTargetByMarket[targetMarket];
+            if (!targetPolicy.enabled) continue;
+            try {
+              const targetCapital = await formulaAiPilotCapital(targetMarket);
+              const targetState = evaluateDailyProfitTarget({
+                market: targetMarket,
+                policy: targetPolicy,
+                baseCapitalKrw: targetCapital.initialOperatingCapitalKrw,
+                realizedNetProfitKrw: targetCapital.dailyRealizedPnlKrw,
+                unrealizedPnlKrw: null,
+                cumulativeHighNetProfitKrw: Math.max(0,
+                  targetCapital.highWaterMarkKrw - targetCapital.initialOperatingCapitalKrw),
+                settlementEvidenceReady: targetCapital.settlementReady,
+                strengthenedSignalQualified: false,
+                plannedRiskKrw: null,
+                now,
+              });
+              const observed: ObservedDailyProfitTargetState = Object.freeze({
+                ...targetState,
+                observedAt: now.toISOString(),
+                strategyId: null,
+                stopPrice: null,
+                targetPrices: Object.freeze([]),
+              });
+              rememberDailyProfitTargetRuntime(member.userId, targetMarket, observed, nowMs);
+              if (targetState.targetReached && this.source.notifyDailyProfitTarget) {
+                const queued = await this.source.notifyDailyProfitTarget(member.userId, observed);
+                if (queued) {
+                  result.notificationDeliveriesQueued += 1;
+                  result.dailyProfitTargetNotificationsQueued += 1;
+                }
+              }
+            } catch {
+              // Target notification observability cannot manufacture trading
+              // authority. Candidate admission still independently recomputes
+              // and fails closed at the signed order boundary below.
+              result.failures += 1;
+            }
+          }
+        }
+
         if (!entryProjectionHealthy) {
           result.blocked += entries.length;
           continue;
@@ -2699,6 +2862,8 @@ export class MemberAutoTradingBackgroundWorker {
                     liveSeed.marketSnapshot.accountValueKrw),
                   dailyPnlPercent: liveSeed.marketSnapshot.dailyPnlPercent,
                   weeklyPnlPercent: liveSeed.marketSnapshot.weeklyPnlPercent,
+                  dailyRealizedNetPnlKrw: liveSeed.marketSnapshot.dailyRealizedNetPnlKrw,
+                  unrealizedPnlKrw: liveSeed.marketSnapshot.unrealizedPnlKrw,
                   consecutiveLosses: liveSeed.marketSnapshot.consecutiveLosses,
                   accountExposureKrw: liveSeed.marketSnapshot.accountExposureKrw,
                   instrumentExposureKrw: liveSeed.marketSnapshot.instrumentExposureKrw,
@@ -2711,6 +2876,60 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
+              const targetPolicy = member.policy.dailyProfitTargetByMarket[candidateMarket];
+              if (targetPolicy.enabled) {
+                const targetCapital = await formulaAiPilotCapital(candidateMarket);
+                const unrealizedPnlKrw = liveInput.marketSnapshot.unrealizedPnlKrw;
+                const plannedRiskKrw = finite(entry.riskEvidence.actualRiskPercent)
+                  ? liveInput.estimatedKrw * entry.riskEvidence.actualRiskPercent! / 100 : null;
+                const targetState = evaluateDailyProfitTarget({
+                  market: candidateMarket,
+                  policy: targetPolicy,
+                  baseCapitalKrw: targetCapital.initialOperatingCapitalKrw,
+                  realizedNetProfitKrw: targetCapital.dailyRealizedPnlKrw,
+                  unrealizedPnlKrw: finite(unrealizedPnlKrw) ? unrealizedPnlKrw : null,
+                  cumulativeHighNetProfitKrw: Math.max(0,
+                    targetCapital.highWaterMarkKrw - targetCapital.initialOperatingCapitalKrw),
+                  settlementEvidenceReady: targetCapital.settlementReady,
+                  strengthenedSignalQualified: strengthenedProfitProtectionSignal(entry, nowMs),
+                  plannedRiskKrw,
+                  now,
+                });
+                const observed: ObservedDailyProfitTargetState = Object.freeze({
+                  ...targetState,
+                  observedAt: now.toISOString(),
+                  strategyId: entry.identity.strategyId,
+                  stopPrice: liveInput.stopPrice,
+                  targetPrices: Object.freeze([...liveInput.targetPrices]),
+                });
+                rememberDailyProfitTargetRuntime(member.userId, candidateMarket, observed, nowMs);
+                if (targetState.targetReached && this.source.notifyDailyProfitTarget) {
+                  const queued = await this.source.notifyDailyProfitTarget(member.userId, observed);
+                  if (queued) {
+                    result.notificationDeliveriesQueued += 1;
+                    result.dailyProfitTargetNotificationsQueued += 1;
+                  }
+                }
+                if (!targetState.newEntryAllowed) {
+                  result.dailyProfitTargetBlocks += 1;
+                  throw new Error(targetState.newEntryBlockReason ?? 'DAILY_PROFIT_TARGET_ENTRY_BLOCKED');
+                }
+                if (plannedRiskKrw == null || !finite(unrealizedPnlKrw)) {
+                  throw new Error('DAILY_PROFIT_TARGET_EVIDENCE_REQUIRED');
+                }
+                liveInput = {
+                  ...liveInput,
+                  signalReasons: [...liveInput.signalReasons, dailyProfitTargetEvidenceReason({
+                    market: candidateMarket,
+                    tradingDay: targetState.tradingDay,
+                    realizedNetProfitKrw: targetCapital.dailyRealizedPnlKrw,
+                    unrealizedPnlKrw,
+                    strengthenedSignalQualified: strengthenedProfitProtectionSignal(entry, nowMs),
+                    plannedRiskKrw,
+                    observedAtMs: nowMs,
+                  })],
+                };
+              }
               if (member.policy.pilotStage === 'formula-ai-exception') {
                 // The signed receipt also preserves the role-scoped four-
                 // market portfolio ceiling (member 2m / admin 4m) during the
@@ -2768,6 +2987,7 @@ export class MemberAutoTradingBackgroundWorker {
               result.newEntriesFailClosed = true;
             }
             if (code.startsWith('BACKGROUND_')
+              || code.startsWith('DAILY_PROFIT_TARGET_')
               || code.includes('RISK')
               || code.includes('LIMIT')
               || code.includes('BLOCKED')) result.blocked += 1;
@@ -3227,6 +3447,36 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       missingReferences += result.missingReferences;
     }
     return { inserted, deliveryQueued, missingReferences };
+  }
+
+  async notifyDailyProfitTarget(userId: string, state: ObservedDailyProfitTargetState) {
+    const market = state.market === 'crypto_spot' ? 'CRYPTO_SPOT'
+      : state.market === 'crypto_futures' ? 'CRYPTO_FUTURES'
+        : state.market === 'us_stock' ? 'US' : 'KR';
+    const eventId = `daily-profit-target:${userId}:${state.market}:${state.tradingDay}`;
+    const dispatched = await deliverPersonalTelegramAlert({
+      userId,
+      event: {
+        userId,
+        eventId,
+        market,
+        signalType: 'PRICE_TARGET',
+        priority: 'IMPORTANT',
+        occurredAt: state.observedAt,
+      },
+      alert: {
+        type: 'price_alert',
+        title: '자동매매 일일 희망 수익률 도달',
+        market: state.market,
+        currentPrice: state.realizedReturnPercent ?? undefined,
+        targetPrice: state.targetPercent,
+        details: `비용 차감 실현 순수익 기준 · ${state.afterTargetAction} · 수익 보장 아님`,
+        timestamp: state.observedAt,
+        dedupeKey: eventId,
+      },
+      now: new Date(state.observedAt),
+    });
+    return dispatched.status === 'POLICY' && dispatched.deliveryQueued === true;
   }
 
   resolveFx(market: MemberAutoTradingPaperHandoffEntry['identity']['market'], nowMs: number) {

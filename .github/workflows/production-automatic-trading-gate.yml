@@ -48,6 +48,8 @@ on:
       - api-server/src/routes/trade-automation.ts
       - api-server/src/services/trade-automation.types.ts
       - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/daily-profit-target.service.test.ts
+      - api-server/src/services/daily-profit-target.service.ts
       - api-server/src/services/trade-automation-optimization.service.ts
       - api-server/src/services/formula-ai-live-exception.service.test.ts
       - api-server/src/services/formula-ai-live-exception.service.ts
@@ -60,6 +62,7 @@ on:
       # Holdings query restrictions are reviewed in the existing Trading safety gate.
       - stock-analyzer/src/components/trading-holdings-panel.tsx
       - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/phase12-trade-automation.spec.ts
       - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml

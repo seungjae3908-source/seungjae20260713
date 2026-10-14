@@ -38,7 +38,7 @@ const FIXTURE: TradeAutomationStatus = {
     dailyLossLimitPercent: 5,
     maxAssetPercent: 30,
     maxOpenPositions: 5,
-    maxDailyOrders: 10,
+    maxDailyOrders: 0,
     maxConsecutiveLosses: 3,
     bitgetLeverage: 2,
     pilotStage: 'approval-20',
@@ -51,6 +51,24 @@ const FIXTURE: TradeAutomationStatus = {
   emergencyStopped: false,
   credentialVault: { encryptionConfigured: true, keyValueExposed: false },
   lastOrder: null,
+  dailyProfitTargetByMarket: {
+    crypto_spot: {
+      market: 'crypto_spot', tradingDay: '2026-10-14', timeZone: 'Asia/Seoul',
+      enabled: true, targetPercent: 3, afterTargetAction: 'PROFIT_PROTECTION',
+      realizedNetProfitKrw: 15_000, unrealizedPnlKrw: -500, highNetProfitKrw: 16_000,
+      realizedReturnPercent: 3, remainingTargetPercent: 0, targetReached: true,
+      profitProtectionActive: true, compoundProfitShare: 0.5, reserveProfitShare: 0.5,
+      protectionRiskBudgetKrw: 1_000, newEntryAllowed: false,
+      newEntryBlockReason: 'DAILY_PROFIT_TARGET_STRENGTHENED_SIGNAL_REQUIRED',
+      observedAt: '2026-10-14T09:00:00.000Z',
+    },
+  },
+  currentStrategyPlanByMarket: {
+    crypto_spot: {
+      strategyId: 'TREND_PULLBACK_REACCEL_V1', stopPrice: 98_000,
+      targetPrices: [103_000, 105_000], updatedAt: '2026-10-14T09:00:00.000Z',
+    },
+  },
 };
 
 export default function Phase12TradeAutomationE2EPage() {

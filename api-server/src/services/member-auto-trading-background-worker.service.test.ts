@@ -2249,13 +2249,37 @@ test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper ha
     ...immutable,
     reviewDigest: createHash('sha256').update(canonical(immutable)).digest('hex'),
   };
+  assert.throws(
+    () => formulaAiReviewReasonsForLive(entry, nowMs),
+    /BACKGROUND_EXTERNAL_STRATEGY_LIVE_OBSERVATION_REQUIRED/,
+  );
+  entry.execution.dataEvidence = {
+    ...entry.execution.dataEvidence,
+    observationKind: 'LIVE_PUBLIC_MARKET',
+  };
+  const liveEvidenceDigest = strategyRulePackAiEvidenceDigest({
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    signalId: entry.identity.signalId,
+    symbol: entry.identity.symbol,
+    timeframe: entry.identity.timeframe,
+    learningSnapshot: entry.signal.learningSnapshot,
+    dataEvidence: entry.execution.dataEvidence,
+    publicQuote: entry.publicQuote,
+  });
+  const liveImmutable = { ...immutable, evidenceDigest: liveEvidenceDigest };
+  entry.aiReviewEvidence = {
+    ...liveImmutable,
+    reviewDigest: createHash('sha256').update(canonical(liveImmutable)).digest('hex'),
+  };
   const reasons = formulaAiReviewReasonsForLive(entry, nowMs);
   assert.ok(reasons.includes('AI_REVIEW_DECISION:PASS'));
   assert.ok(reasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
   assert.ok(reasons.includes('STRATEGY_RULE_PACK:' + entry.identity.strategyId));
   assert.ok(reasons.includes('ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT'));
   assert.ok(reasons.includes('EXTERNAL_STRATEGY_SOURCE_SET:' + EXTERNAL_STRATEGY_SOURCE_SET_DIGEST));
-  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + evidenceDigest));
+  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + liveEvidenceDigest));
   const externalEnvelope = {
     admissionPath: 'EXTERNAL_STRATEGY_PILOT',
     researchGenuineSClaimed: false,

@@ -8,6 +8,13 @@ export type TradingOrderType = 'market' | 'limit';
 export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
 export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 export type TradingAssetClass = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
+export type DailyProfitTargetAction = 'STOP_NEW_ENTRIES' | 'PROFIT_PROTECTION' | 'NOTIFY_ONLY';
+export type DailyProfitTargetPolicy = Readonly<{
+  enabled: boolean;
+  /** A desired return, never a guarantee or permission to increase risk. */
+  targetPercent: number;
+  afterTargetAction: DailyProfitTargetAction;
+}>;
 
 export type TradingOrderState =
   | 'PLANNED'
@@ -103,6 +110,12 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
+  dailyProfitTargetByMarket: {
+    domestic_stock: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    us_stock: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    crypto_spot: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+    crypto_futures: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+  } as Record<TradingAssetClass, DailyProfitTargetPolicy>,
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: false } as Record<TradingAssetClass, boolean>,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' } as Record<StockTradingAssetClass, StockBroker>,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
@@ -146,6 +159,7 @@ export type TradingPolicy = {
   automaticEnabled: boolean;
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
+  dailyProfitTargetByMarket: Record<TradingAssetClass, DailyProfitTargetPolicy>;
   marketEnabled: Record<TradingAssetClass, boolean>;
   stockBrokerByMarket?: Record<StockTradingAssetClass, StockBroker>;
   exchangeEnabled: Record<TradingExchange, boolean>;
@@ -215,6 +229,10 @@ export type TradingMarketSnapshot = {
   accountValueKrw: number;
   dailyPnlPercent: number;
   weeklyPnlPercent?: number;
+  /** Full-cost settled AUTO profit for this market's exchange-local trading day. */
+  dailyRealizedNetPnlKrw?: number | null;
+  /** Current AUTO-owned mark-to-market only; manual positions remain excluded. */
+  unrealizedPnlKrw?: number | null;
   assetExposurePercent: number;
   accountExposureKrw?: number | null;
   instrumentExposureKrw?: number | null;
