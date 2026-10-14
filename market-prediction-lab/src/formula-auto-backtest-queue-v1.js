@@ -18,6 +18,7 @@ export const FORMULA_AUTO_BACKTEST_QUEUE_ITEM_CONTRACT_V1 = 'research-formula-au
 export const FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1 = 'research-formula-auto-backtest-result/v1';
 export const FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1 = 'research-formula-auto-backtest-summary/v1';
 export const FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1 = 'research-formula-paper-strategy-registry/v1';
+export const FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1 = 'research-formula-paper-experiment-registry/v1';
 export const FORMULA_AUTO_BACKTEST_STATES_V1 = Object.freeze(['PASS', 'HOLD', 'RESERVE', 'EXCLUDE']);
 
 const SAFE_FILE = /^[A-Za-z0-9._-]{1,180}\.json$/u;
@@ -401,6 +402,189 @@ export function buildFormulaPaperStrategyRegistryV1(rows = [], { researchCodeSha
   });
 }
 
+const RESEARCH_PAPER_COST_FIELDS = Object.freeze([
+  'entryFeeRate',
+  'exitFeeRate',
+  'taxRate',
+  'slippageRate',
+  'spreadRate',
+  'latencyDriftRate',
+]);
+
+function researchPaperAssumptions(item) {
+  const backtestInput = item?.dataset?.backtestInput;
+  const costModel = backtestInput?.costModel;
+  const riskModel = backtestInput?.riskModel;
+  const market = item?.formulaCandidate?.market;
+  const leverageAllowed = market === 'CRYPTO_FUTURES'
+    ? finite(riskModel?.leverage) && riskModel.leverage >= 1 && riskModel.leverage <= 3
+    : riskModel?.leverage === 1;
+  if (!costModel || !riskModel
+    || RESEARCH_PAPER_COST_FIELDS.some((key) => !finite(costModel[key]) || costModel[key] < 0)
+    || !Number.isSafeInteger(costModel.latencyBars) || costModel.latencyBars < 0
+    || !finite(riskModel.riskPerTrade) || riskModel.riskPerTrade <= 0 || riskModel.riskPerTrade > 0.05
+    || !finite(riskModel.maximumCapitalFraction) || riskModel.maximumCapitalFraction <= 0
+    || riskModel.maximumCapitalFraction > 1
+    || !leverageAllowed) return null;
+  return Object.freeze({
+    cost: Object.freeze({
+      ...Object.fromEntries(RESEARCH_PAPER_COST_FIELDS.map((key) => [key, costModel[key]])),
+      latencyBars: costModel.latencyBars,
+      evidenceClass: 'MODEL_ASSUMPTION_NOT_PROVIDER_ATTESTED',
+      liquidityImpact: null,
+    }),
+    risk: Object.freeze({
+      riskPerTrade: riskModel.riskPerTrade,
+      maximumCapitalFraction: riskModel.maximumCapitalFraction,
+      leverage: riskModel.leverage,
+      basicRiskCheck: 'PASS',
+    }),
+  });
+}
+
+function researchPaperHistoricalEvidence(candidate) {
+  const historical = candidate?.stageRecords?.find((record) => record?.stage === 'HISTORICAL_BACKTEST');
+  const metrics = historical?.evidence?.metrics;
+  const allowedFailure = candidate?.failure?.failureCode === 'INSUFFICIENT_SAMPLE'
+    || candidate?.failure?.failureCode === 'MISSING_CANONICAL_CALLBACK';
+  if (!historical || !['PASS', 'MISSING_EVIDENCE'].includes(historical.status)
+    || !allowedFailure || !metrics
+    || !Number.isSafeInteger(metrics.trades) || metrics.trades < 30
+    || !finite(metrics.return) || metrics.return <= 0
+    || !finite(metrics.profitFactor) || metrics.profitFactor < 1.05
+    || !finite(metrics.expectancy) || metrics.expectancy <= 0
+    || !finite(metrics.maximumDrawdown) || metrics.maximumDrawdown < 0
+    || metrics.maximumDrawdown > 0.2) return null;
+  return Object.freeze({
+    stageStatus: historical.status,
+    evidenceId: historical.evidenceId ?? null,
+    metrics: Object.freeze({
+      trades: metrics.trades,
+      return: metrics.return,
+      winRate: metrics.winRate ?? null,
+      profitFactor: metrics.profitFactor,
+      expectancy: metrics.expectancy,
+      maximumDrawdown: metrics.maximumDrawdown,
+      finalCapital: metrics.finalCapital ?? null,
+    }),
+    limitation: candidate.failure.failureCode,
+  });
+}
+
+/**
+ * A research-only Paper experiment registry. This intentionally does not
+ * weaken the canonical PASS registry above. It records a cost-positive,
+ * risk-bounded historical candidate so a future public signal can be watched,
+ * while requiring separate activation and granting no Paper/order authority.
+ */
+export function buildFormulaResearchPaperExperimentRegistryV1(rows = [], {
+  researchCodeSha = null,
+} = {}) {
+  if (!Array.isArray(rows)) throw new TypeError('FORMULA_RESEARCH_PAPER_REGISTRY_ROWS_ARRAY_REQUIRED');
+  if (researchCodeSha != null && !/^[0-9a-f]{40}$/iu.test(researchCodeSha)) {
+    throw new TypeError('FORMULA_RESEARCH_PAPER_REGISTRY_RESEARCH_SHA_INVALID');
+  }
+  const normalizedSha = researchCodeSha == null ? null : researchCodeSha.toLowerCase();
+  const entries = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (row?.state !== 'HOLD' || row?.freshEvaluation !== true || !row?.researchPaperAssumptions
+      || !Array.isArray(row?.tournament?.candidates)) continue;
+    for (const candidate of row.tournament.candidates) {
+      const historicalEvidence = researchPaperHistoricalEvidence(candidate);
+      const formula = candidate?.formulaCandidate;
+      const generated = candidate?.generatedCandidate;
+      if (!historicalEvidence || !formula || !generated
+        || candidate?.researchSurvivor === true
+        || candidate?.tradingAuthority !== false
+        || candidate?.safety?.executionAuthority !== 'NONE') continue;
+      const market = candidate.market;
+      const direction = String(candidate.direction ?? '').toUpperCase();
+      const allowedDirection = market === 'CRYPTO_FUTURES'
+        ? (direction === 'LONG' || direction === 'SHORT')
+        : (['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT'].includes(market) && direction === 'LONG');
+      if (!allowedDirection) continue;
+      const exitTypes = new Set(formula.exitDsl?.rules?.map((rule) => rule?.type));
+      if (!exitTypes.has('ATR_STOP') || !exitTypes.has('TARGET') || !exitTypes.has('TIME_EXIT')) continue;
+      const registryId = digest({
+        itemDigest: row.itemDigest,
+        formulaCandidateId: candidate.formulaCandidateId,
+        generatedCandidateId: candidate.generatedCandidateId,
+        parameterIdentity: candidate.parameterIdentity,
+        registryTier: 'RESEARCH_EXPERIMENT',
+        historicalEvidence,
+        modeledCostEvidence: row.researchPaperAssumptions.cost,
+        basicRiskEvidence: row.researchPaperAssumptions.risk,
+      });
+      if (seen.has(registryId)) continue;
+      seen.add(registryId);
+      entries.push(Object.freeze({
+        registryId,
+        source: 'FORMULA_RESEARCH_BACKTEST_CANDIDATE',
+        researchCodeSha: normalizedSha,
+        registeredAt: row.evaluatedAt ?? null,
+        itemDigest: row.itemDigest ?? null,
+        tournamentId: row.tournamentId ?? row.tournament?.tournamentId ?? null,
+        formulaCandidateId: candidate.formulaCandidateId ?? null,
+        generatedCandidateId: candidate.generatedCandidateId ?? null,
+        strategyHash: candidate.strategyHash ?? null,
+        parameterIdentity: candidate.parameterIdentity ?? null,
+        strategyFamily: candidate.strategyFamily ?? null,
+        market,
+        timeframe: candidate.timeframe ?? null,
+        direction,
+        formulaCandidate: structuredClone(formula),
+        generatedCandidate: structuredClone(generated),
+        historicalEvidence,
+        modeledCostEvidence: structuredClone(row.researchPaperAssumptions.cost),
+        basicRiskEvidence: structuredClone(row.researchPaperAssumptions.risk),
+        paperState: 'RESEARCH_REGISTERED_WAITING_FUTURE_SIGNAL',
+        researchStatus: 'BACKTEST_CANDIDATE',
+        experimentalResearchOnly: true,
+        genuineS: false,
+        futureSignalRequired: true,
+        freshPublicEvidenceRequired: true,
+        canonicalPaperAdmissionRequired: true,
+        simulationAuthorityRequired: true,
+        activationRequired: true,
+        actualPaperOperationActive: false,
+        paperDispatchAllowed: false,
+        directTradeOnBacktestPass: false,
+        enabledForPaperEvaluation: true,
+        retainedForAudit: true,
+        liveTrading: false,
+        autoTrading: false,
+        realOrder: false,
+        privateTradingApi: false,
+        executionAuthority: 'NONE',
+      }));
+    }
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    contract: FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1,
+    researchCodeSha: normalizedSha,
+    generatedAt: new Date().toISOString(),
+    entryCount: entries.length,
+    entries: Object.freeze(entries),
+    acceptedSourceState: 'HOLD',
+    requiresPositiveModeledNetReturn: true,
+    minimumTrades: 30,
+    minimumProfitFactor: 1.05,
+    maximumDrawdown: 0.2,
+    providerCostAttestationRequiredForPromotion: true,
+    directTradeOnBacktestPass: false,
+    activationRequired: true,
+    actualPaperOperationActive: false,
+    paperDispatchAllowed: false,
+    liveTrading: false,
+    autoTrading: false,
+    realOrder: false,
+    privateTradingApi: false,
+    executionAuthority: 'NONE',
+  });
+}
+
 export async function evaluateFormulaAutoBacktestQueueItemV1(item) {
   let validated;
   try {
@@ -664,6 +848,7 @@ export async function processFormulaAutoBacktestQueueV1({
   const resultsRoot = join(root, 'formula-backtest', 'results');
   const latestPath = join(root, 'latest', 'formula-backtest-queue.json');
   const paperRegistryPath = join(root, 'latest', 'formula-paper-strategy-registry.json');
+  const researchPaperRegistryPath = join(root, 'latest', 'formula-research-paper-experiment-registry.json');
   await mkdir(inbox, { recursive: true, mode: 0o700 });
   await mkdir(resultsRoot, { recursive: true, mode: 0o700 });
   if (!Number.isSafeInteger(maximumItems) || maximumItems < 1 || maximumItems > 50) {
@@ -709,7 +894,12 @@ export async function processFormulaAutoBacktestQueueV1({
         await readBoundedQueueJson(resultPath, 'FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE'),
         itemDigest, formulaId, queuedAt,
       );
-      rows.push({ ...result, repeated: true });
+      rows.push({
+        ...result,
+        repeated: true,
+        freshEvaluation: false,
+        researchPaperAssumptions: researchPaperAssumptions(item),
+      });
       continue;
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
@@ -739,7 +929,11 @@ export async function processFormulaAutoBacktestQueueV1({
       executionAuthority: 'NONE',
     };
     await writeOnce(resultPath, result);
-    rows.push(result);
+    rows.push({
+      ...result,
+      freshEvaluation: true,
+      researchPaperAssumptions: researchPaperAssumptions(item),
+    });
   }
   const counts = Object.fromEntries(FORMULA_AUTO_BACKTEST_STATES_V1.map((state) => [
     state, rows.filter((row) => row.state === state).length,
@@ -795,12 +989,87 @@ export async function processFormulaAutoBacktestQueueV1({
   for (const entry of newRegistry.entries) registered.set(entry.registryId, entry);
   const entries = [...registered.values()].sort((a, b) => a.registryId.localeCompare(b.registryId));
   const paperRegistry = Object.freeze({ ...newRegistry, entryCount: entries.length, entries: Object.freeze(entries) });
+  // Pre-Genuine-S Paper experiments live in a separate, no-authority registry.
+  // They never enter the canonical PASS registry and still require an explicit
+  // activation decision plus a genuinely future public closed-candle signal.
+  const newResearchPaperRegistry = buildFormulaResearchPaperExperimentRegistryV1(rows, { researchCodeSha });
+  let oldResearchEntries = [];
+  try {
+    const oldRegistry = JSON.parse(await readFile(researchPaperRegistryPath, 'utf8'));
+    if (oldRegistry.contract !== FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1
+      || oldRegistry.executionAuthority !== 'NONE'
+      || oldRegistry.liveTrading !== false
+      || oldRegistry.autoTrading !== false
+      || oldRegistry.realOrder !== false
+      || oldRegistry.privateTradingApi !== false
+      || oldRegistry.actualPaperOperationActive !== false
+      || oldRegistry.paperDispatchAllowed !== false
+      || oldRegistry.activationRequired !== true
+      || !Array.isArray(oldRegistry.entries)
+      || oldRegistry.entryCount !== oldRegistry.entries.length) {
+      throw new Error('FORMULA_QUEUE_PRIOR_RESEARCH_PAPER_REGISTRY_UNSAFE');
+    }
+    const currentSha = researchCodeSha == null ? null : researchCodeSha.toLowerCase();
+    if (oldRegistry.researchCodeSha === currentSha) {
+      for (const entry of oldRegistry.entries) {
+        if (entry?.source !== 'FORMULA_RESEARCH_BACKTEST_CANDIDATE'
+          || entry.executionAuthority !== 'NONE'
+          || entry.liveTrading !== false
+          || entry.autoTrading !== false
+          || entry.realOrder !== false
+          || entry.privateTradingApi !== false
+          || entry.experimentalResearchOnly !== true
+          || entry.genuineS !== false
+          || entry.actualPaperOperationActive !== false
+          || entry.paperDispatchAllowed !== false
+          || entry.activationRequired !== true
+          || entry.paperState !== 'RESEARCH_REGISTERED_WAITING_FUTURE_SIGNAL'
+          || entry.researchStatus !== 'BACKTEST_CANDIDATE'
+          || entry.researchCodeSha !== currentSha
+          || entry.futureSignalRequired !== true
+          || entry.freshPublicEvidenceRequired !== true
+          || entry.canonicalPaperAdmissionRequired !== true
+          || entry.simulationAuthorityRequired !== true
+          || entry.enabledForPaperEvaluation !== true
+          || entry.retainedForAudit !== true
+          || typeof entry.registryId !== 'string'
+          || !/^[0-9a-f]{64}$/u.test(entry.registryId)
+          || !/^[0-9a-f]{64}$/u.test(entry.itemDigest ?? '')
+          || digest({
+            itemDigest: entry.itemDigest,
+            formulaCandidateId: entry.formulaCandidateId,
+            generatedCandidateId: entry.generatedCandidateId,
+            parameterIdentity: entry.parameterIdentity,
+            registryTier: 'RESEARCH_EXPERIMENT',
+            historicalEvidence: entry.historicalEvidence,
+            modeledCostEvidence: entry.modeledCostEvidence,
+            basicRiskEvidence: entry.basicRiskEvidence,
+          }) !== entry.registryId) {
+          throw new Error('FORMULA_QUEUE_PRIOR_RESEARCH_PAPER_REGISTRY_ENTRY_UNSAFE');
+        }
+      }
+      oldResearchEntries = oldRegistry.entries;
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const researchRegistered = new Map(oldResearchEntries.map((entry) => [entry.registryId, entry]));
+  for (const entry of newResearchPaperRegistry.entries) researchRegistered.set(entry.registryId, entry);
+  const researchEntries = [...researchRegistered.values()]
+    .sort((a, b) => a.registryId.localeCompare(b.registryId));
+  const researchPaperRegistry = Object.freeze({
+    ...newResearchPaperRegistry,
+    entryCount: researchEntries.length,
+    entries: Object.freeze(researchEntries),
+  });
   // Successful timer execution alone is not evidence of a Paper-ready strategy.
   const automationReadiness = allFiles.length === 0
     ? 'BLOCKED_DATA_NO_TRAIN_INPUT'
-    : paperRegistry.entryCount === 0
-      ? 'BLOCKED_DATA_OOS_NOT_ATTESTED'
-      : 'WAITING_PROSPECTIVE_SIGNAL_AND_PAPER_ADMISSION';
+    : paperRegistry.entryCount > 0
+      ? 'WAITING_PROSPECTIVE_SIGNAL_AND_PAPER_ADMISSION'
+      : researchPaperRegistry.entryCount > 0
+        ? 'WAITING_RESEARCH_PAPER_ACTIVATION_AND_FUTURE_SIGNAL'
+        : 'BLOCKED_DATA_OOS_NOT_ATTESTED';
   const summary = {
     schemaVersion: 1,
     contract: FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1,
@@ -816,6 +1085,7 @@ export async function processFormulaAutoBacktestQueueV1({
     lastProcessedFileName: files.at(-1) ?? previousCursor,
     counts,
     paperRegisteredCount: paperRegistry.entryCount,
+    researchPaperRegisteredCount: researchPaperRegistry.entryCount,
     rows: rows.map((row) => ({
       formulaId: row.formulaId,
       itemDigest: row.itemDigest,
@@ -836,5 +1106,6 @@ export async function processFormulaAutoBacktestQueueV1({
   };
   await atomicJson(latestPath, summary);
   await atomicJson(paperRegistryPath, paperRegistry);
+  await atomicJson(researchPaperRegistryPath, researchPaperRegistry);
   return Object.freeze(summary);
 }
