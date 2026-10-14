@@ -5,6 +5,7 @@ on:
     paths:
       - ops/telegram-dormant-installed-readonly.mjs
       - .github/tests/telegram-dormant-installed-readonly.test.mjs
+      - .github/tests/telegram-dormant-readonly-workflow-contract.test.mjs
       - .github/workflows/telegram-dormant-installed-readonly.yml
   issue_comment:
     types: [created]
@@ -28,7 +29,8 @@ jobs:
       - run: |
           set -Eeuo pipefail
           node --check ops/telegram-dormant-installed-readonly.mjs
-          node --test .github/tests/telegram-dormant-installed-readonly.test.mjs
+          node --test .github/tests/telegram-dormant-installed-readonly.test.mjs \
+            .github/tests/telegram-dormant-readonly-workflow-contract.test.mjs
 
   readback:
     name: Owner-protected existing sealed bytes readback (zero mutations)
@@ -217,7 +219,9 @@ jobs:
             'DORMANT_MANIFEST_PROVENANCE_MISMATCH','DORMANT_MANIFEST_INVALID',
             'DORMANT_PAYLOAD_INVALID','DORMANT_PREPARATION_INVALID',
             'DORMANT_INSTALL_RECEIPT_INVALID','SEALED_PRESENT_PM2_UNVERIFIED',
-            'SEALED_PRESENT_PM2_CHANGED_NOW','SEALED_DORMANT_BYTES_PM2_STABLE_NOW']);
+            'SEALED_PRESENT_PM2_CHANGED_NOW','SEALED_DORMANT_BYTES_PM2_STABLE_NOW',
+            'DORMANT_CHANGED_DURING_READBACK',
+            'SEALED_PRESENT_PM2_OWNER_UNEXPECTED']);
           if(JSON.stringify(Object.keys(value).sort())!==JSON.stringify(fields.sort())
             ||value.schemaVersion!=='telegram-dormant-install-readback-v1'
             ||value.sourceSha!==process.env.PACKAGE_SHA
