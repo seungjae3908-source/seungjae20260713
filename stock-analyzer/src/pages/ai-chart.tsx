@@ -419,6 +419,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   }, []);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  // Summary-first: do not start chart transport or load its large bundle until
+  // the user first opens the chart; once visited, retain its public stream.
+  const [mobileChartActivated, setMobileChartActivated] = useState(false);
+  const changeMobileTab = useCallback((tab: MobileChartTab) => {
+    if (tab === 'chart') setMobileChartActivated(true);
+    setMobileTab(tab);
+  }, []);
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -851,7 +858,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         <>
           <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl sm:top-[61px]">
             <div className="mx-auto max-w-7xl">
-              <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
+              <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={changeMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
             </div>
           </div>
           <main data-testid="ai-chart-workspace" className="mx-auto w-full max-w-7xl p-3 sm:p-4">
@@ -859,7 +866,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {/* Keep the read-only renderer and its public feed alive across mobile tab changes.
                 `hidden` preserves identity without showing a second chart. */}
             <section data-testid="ai-chart-mobile-chart" hidden={mobileTab !== 'chart'} className="min-w-0 space-y-3">
-              {chart}
+              {(mobileChartActivated || mobileTab === 'chart') ? chart : null}
               {hasSelection && mobileTab === 'chart' ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
             </section>
             {mobileTab === 'position' ? (
