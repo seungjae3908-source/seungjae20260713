@@ -24,6 +24,18 @@ import {
 } from '../services/member-auto-trading-background-worker.service';
 import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
 import { tradingDayKeyForMarket } from '../services/daily-profit-target.service';
+import { loadFreePublicFxQuotes } from '../services/public-fx.service';
+import {
+  externalPilotSignalStatistics,
+  readExternalPilotStatisticsHistory,
+} from '../services/external-strategy-pilot-statistics.service';
+import {
+  buildCapitalAllocationReadiness,
+  capitalProviderForMarket,
+  MARKET_MINIMUM_CAPITAL_KRW,
+  serverAuthoredCapitalAllocation,
+  type CapitalAllocationMarketReadiness,
+} from '../services/auto-trading-capital-allocation.service';
 import { assertPublicLivePlanOrigin, publicPlanPolicy, assertPublicPlanApprovalOrigin } from '../services/public-live-plan-origin.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { getUserSupabase } from '../lib/supabase';
@@ -118,6 +130,11 @@ let readonlyCredentialRepositoryFactoryForTests:
   ((userId: string) => Pick<AccountReadonlyCredentialRepository, 'get'>) | null = null;
 type ExitPreviewReaders = ReturnType<typeof createVaultBackedAccountReaders>;
 let exitPreviewReadersFactoryForTests: (() => ExitPreviewReaders) | null = null;
+let capitalReadinessReaderForTests: ((input: {
+  userId: string;
+  policy: TradingPolicy;
+  roleMaximumPerMarketKrw: number;
+}) => Promise<Record<TradingAssetClass, CapitalAllocationMarketReadiness>>) | null = null;
 
 export function setTradeAutomationRepositoryFactoryForTests(
   factory: ((userId: string) => TradingRepository) | null,
@@ -143,6 +160,37 @@ export function setTradeReadonlyCredentialRepositoryFactoryForTests(
 
 export function setTradeExitPreviewReadersFactoryForTests(factory: (() => ExitPreviewReaders) | null) {
   exitPreviewReadersFactoryForTests = factory;
+}
+export function setTradeCapitalReadinessReaderForTests(reader: typeof capitalReadinessReaderForTests) {
+  capitalReadinessReaderForTests = reader;
+}
+
+async function capitalAllocationReadiness(
+  userId: string,
+  repository: TradingRepository,
+  policy: TradingPolicy,
+  roleMaximumPerMarketKrw: number,
+) {
+  if (capitalReadinessReaderForTests) {
+    return capitalReadinessReaderForTests({ userId, policy, roleMaximumPerMarketKrw });
+  }
+  const connections = await repository.getConnections(userId);
+  const markets: TradingAssetClass[] = ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures'];
+  const providers = [...new Set(markets.map((market) => capitalProviderForMarket(policy, market)))];
+  const settled = await Promise.allSettled(providers.map(async (provider) => {
+    const connection = connections.find((row) => row.exchange === provider);
+    if (!connection?.configured || connection.accountMode !== 'live') throw new Error('LIVE_CONNECTION_NOT_CONFIGURED');
+    return [provider, await readAutomaticLiveExecutionAccount(repository, userId, provider)] as const;
+  }));
+  const snapshots = Object.fromEntries(settled.flatMap((result) =>
+    result.status === 'fulfilled' ? [result.value] : []));
+  const fx = await loadFreePublicFxQuotes().catch(() => ({ quotes: [], missing: ['FX_UNAVAILABLE'] }));
+  const byCurrency = Object.fromEntries(fx.quotes.map((quote) => [quote.currency, quote.krwRate]));
+  return buildCapitalAllocationReadiness({
+    policy, roleMaximumPerMarketKrw, snapshots,
+    krwPerCurrency: { USD: byCurrency.USD, USDT: byCurrency.USDT },
+    leverage: policy.bitgetLeverage,
+  });
 }
 
 function planVersion(plan: TradingPlan) {
@@ -1213,12 +1261,40 @@ router.get('/live-preactivation-readiness', async (req: AuthenticatedRequest, re
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.get('/capital-allocation-readiness', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    const { userId, repository } = context(req);
+    const policy = await repository.getPolicy(userId);
+    const roleMaximumPerMarketKrw = maximumSingleEntryKrw(req);
+    const byMarket = await capitalAllocationReadiness(
+      userId, repository, policy, roleMaximumPerMarketKrw,
+    );
+    return res.json({
+      ok: true,
+      policyVersion: 'user-market-capital-v1',
+      roleMaximumPerMarketKrw,
+      roleMaximumFourMarketKrw: roleMaximumPerMarketKrw * 4,
+      byMarket,
+      readOnly: true,
+      orderSubmitted: false,
+      cancelRequested: false,
+      amendRequested: false,
+      transferRequested: false,
+      withdrawalRequested: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const [policy, connections, orders, plans, persistentGlobalStop] = await Promise.all([
+    const [policy, connections, orders, plans, persistentGlobalStop, externalPilotHistory] = await Promise.all([
       repository.getPolicy(userId), repository.getConnections(userId), repository.listOrders(userId),
       repository.listPlans(userId), repository.getGlobalEmergencyStop(),
+      readExternalPilotStatisticsHistory(
+        process.env.EXTERNAL_PILOT_STATISTICS_HISTORY_PATH?.trim() || null,
+      ),
     ]);
     const plansById = new Map(plans.map((plan) => [plan.id, plan] as const));
     const lastOrderByMarket: Record<TradingAssetClass, TradingOrder | null> = {
@@ -1384,6 +1460,9 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
+      externalPilotSignalStatistics: externalPilotSignalStatistics({
+        history: externalPilotHistory, plans, orders,
+      }),
       dailyProfitTargetByMarket,
       currentStrategyPlanByMarket,
       automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans),
@@ -1556,11 +1635,90 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
         providerMutationRequests: 0,
       });
     }
-    let candidate = normalizeTradingPolicy(req.body, maximumSingleEntryKrw(req));
+    const roleMaximumPerMarketKrw = maximumSingleEntryKrw(req);
+    const rawAllocations = req.body?.capitalAllocationByMarket;
+    const markets: TradingAssetClass[] = ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures'];
+    if (rawAllocations != null && (typeof rawAllocations !== 'object' || Array.isArray(rawAllocations))) {
+      return res.status(409).json({ ok: false, error: 'CAPITAL_ALLOCATION_POLICY_INVALID' });
+    }
+    for (const market of markets) {
+      const raw = rawAllocations?.[market];
+      if (raw?.configured === true) {
+        const amount = Number(raw.operatingCapitalKrw);
+        const order = Number(raw.maxOrderKrw);
+        if (!Number.isFinite(amount) || amount < MARKET_MINIMUM_CAPITAL_KRW[market]
+          || amount > roleMaximumPerMarketKrw
+          || !Number.isFinite(order) || order < MARKET_MINIMUM_CAPITAL_KRW[market] || order > amount
+          || raw.compoundAboveAllocation === true) {
+          return res.status(409).json({
+            ok: false, error: 'CAPITAL_ALLOCATION_ROLE_OR_ORDER_LIMIT',
+            market, roleMaximumPerMarketKrw,
+          });
+        }
+      }
+    }
+    let candidate = normalizeTradingPolicy(req.body, roleMaximumPerMarketKrw);
+    // Audit history is server-owned even though it lives inside the existing
+    // user-scoped JSON policy row. Browser-supplied history is discarded.
+    candidate.capitalAllocationAuditTrail = [...current.capitalAllocationAuditTrail];
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
       candidate.marketEnabled.crypto_futures = false;
       candidate.exchangeEnabled.bitget = false;
       candidate.enabledAssets.bitget = [];
+    }
+    const functionalAllocation = (value: TradingPolicy['capitalAllocationByMarket'][TradingAssetClass]) => ({
+      configured: value.configured,
+      operatingCapitalKrw: value.operatingCapitalKrw,
+      maxOrderKrw: value.maxOrderKrw,
+    });
+    const changedMarkets = markets.filter((market) =>
+      JSON.stringify(functionalAllocation(candidate.capitalAllocationByMarket[market]))
+        !== JSON.stringify(functionalAllocation(current.capitalAllocationByMarket[market]))
+      || capitalProviderForMarket(candidate, market) !== capitalProviderForMarket(current, market));
+    let savedCapitalReadiness: Record<TradingAssetClass, CapitalAllocationMarketReadiness> | null = null;
+    if (changedMarkets.length > 0) {
+      const readiness = await capitalAllocationReadiness(
+        userId, repository, candidate, roleMaximumPerMarketKrw,
+      );
+      savedCapitalReadiness = readiness;
+      candidate.capitalAllocationByMarket = Object.fromEntries(markets.map((market) => [
+        market,
+        changedMarkets.includes(market)
+          ? serverAuthoredCapitalAllocation(candidate.capitalAllocationByMarket[market], readiness[market], new Date(),
+            current.capitalAllocationByMarket[market])
+          : current.capitalAllocationByMarket[market],
+      ])) as TradingPolicy['capitalAllocationByMarket'];
+      const changedAt = new Date().toISOString();
+      const userScopeDigest = createHash('sha256').update(`capital-allocation:${userId}`).digest('hex').slice(0, 24);
+      candidate.capitalAllocationAuditTrail = [
+        ...current.capitalAllocationAuditTrail,
+        ...changedMarkets.map((market) => {
+          const allocation = candidate.capitalAllocationByMarket[market];
+          return {
+            market, configured: allocation.configured,
+            operatingCapitalKrw: allocation.operatingCapitalKrw,
+            maxOrderKrw: allocation.maxOrderKrw,
+            changedAt: allocation.updatedAt ?? changedAt,
+            userScopeDigest,
+            accountScopeId: allocation.accountScopeId,
+            policyVersion: allocation.policyVersion,
+          };
+        }),
+      ].slice(-100);
+    } else {
+      // Never accept browser-authored audit timestamps or account identifiers.
+      candidate.capitalAllocationByMarket = current.capitalAllocationByMarket;
+    }
+    const configuredTotal = markets.reduce((sum, market) => sum
+      + (candidate.capitalAllocationByMarket[market].configured
+        ? candidate.capitalAllocationByMarket[market].operatingCapitalKrw : 0), 0);
+    const roleMaximumFourMarketKrw = roleMaximumPerMarketKrw * 4;
+    if (configuredTotal > roleMaximumFourMarketKrw) {
+      return res.status(409).json({ ok: false, error: 'CAPITAL_ALLOCATION_FOUR_MARKET_ROLE_LIMIT' });
+    }
+    if (configuredTotal > 0) {
+      candidate.totalCapitalKrw = Math.max(configuredTotal,
+        Math.min(candidate.totalCapitalKrw, roleMaximumFourMarketKrw));
     }
     const enablingAutomatic = candidate.mode === 'automatic'
       && (candidate.automaticEnabled
@@ -1580,7 +1738,8 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     }
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
-    return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+    return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled,
+      capitalAllocationReadinessByMarket: savedCapitalReadiness });
   } catch (error) { return errorResponse(res, error); }
 });
 

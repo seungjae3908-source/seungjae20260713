@@ -121,6 +121,11 @@ import {
   type DailyProfitTargetState,
 } from './daily-profit-target.service';
 import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service';
+import {
+  effectiveCapitalAllocation,
+  profitTargetCapitalBaseKrw,
+  tradingCapitalChargeKrw,
+} from './auto-trading-capital-allocation.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -925,13 +930,15 @@ function validateFormulaAiPilotEntry(
   discoveryEntryCapRequired: boolean,
 ) {
   if (member.policy.pilotStage !== 'formula-ai-exception') return;
+  const targetMarket = marketMapping(entry.identity.market, member.policy).assetClass;
+  const allocation = effectiveCapitalAllocation(member.policy, targetMarket);
   const decision = evaluateRulePackPilotEntryGuard({
     pilot,
     strategyId: entry.identity.strategyId,
     symbol: entry.identity.symbol,
     signalId: entry.identity.signalId,
     estimatedKrw,
-    policyMaxOrderKrw: member.policy.maxOrderKrw,
+    policyMaxOrderKrw: allocation.maxOrderKrw,
     policyTotalCapitalKrw: member.policy.totalCapitalKrw,
     openLivePositions: openAutomaticPlans(runtime, 'live').length,
     nowMs,
@@ -1513,6 +1520,10 @@ function exposureState(
     : active.filter((plan) => plan.strategyId === entry.identity.strategyId);
   const sum = (rows: readonly TradingPlan[]) =>
     rows.reduce((total, plan) => total + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
+  const sumCapital = (rows: readonly TradingPlan[]) => rows.reduce((total, plan) => {
+    const charge = tradingCapitalChargeKrw(plan);
+    return total + (Number.isFinite(charge) ? Math.max(0, charge) : Number.POSITIVE_INFINITY);
+  }, 0);
   const marketIsolated = runtime.fourMarketRisk != null && accountMode === 'paper';
   const marketBudgetInput = {
     market: mapping.assetClass,
@@ -1534,6 +1545,7 @@ function exposureState(
     accountExposureKrw, instrumentExposureKrw,
     strategyExposureKrw: sum(sameStrategy),
     assetClassExposureKrw: sum(sameClass),
+    assetClassCapitalCommittedKrw: sumCapital(sameClass),
     openRiskKrw: (marketIsolated ? sameClass : active)
       .reduce((total, plan) => total + plannedRiskKrw(plan), 0),
     openPositionCount: marketIsolated ? sameClass.length : active.length,
@@ -1723,6 +1735,7 @@ function buildPlanInput(
       instrumentExposureKrw: exposure.instrumentExposureKrw,
       strategyExposureKrw: exposure.strategyExposureKrw,
       assetClassExposureKrw: exposure.assetClassExposureKrw,
+      assetClassCapitalCommittedKrw: exposure.assetClassCapitalCommittedKrw,
       openRiskKrw: exposure.openRiskKrw,
       openPositionCount: exposure.openPositionCount,
       dailyOrderCount: exposure.dailyOrderCount,
@@ -2626,7 +2639,9 @@ export class MemberAutoTradingBackgroundWorker {
               const targetState = evaluateDailyProfitTarget({
                 market: targetMarket,
                 policy: targetPolicy,
-                baseCapitalKrw: targetCapital.initialOperatingCapitalKrw,
+                baseCapitalKrw: profitTargetCapitalBaseKrw(
+                  member.policy, targetMarket, targetCapital.initialOperatingCapitalKrw,
+                ),
                 realizedNetProfitKrw: targetCapital.dailyRealizedPnlKrw,
                 unrealizedPnlKrw: null,
                 cumulativeHighNetProfitKrw: Math.max(0,
@@ -2869,6 +2884,7 @@ export class MemberAutoTradingBackgroundWorker {
                   instrumentExposureKrw: liveSeed.marketSnapshot.instrumentExposureKrw,
                   strategyExposureKrw: liveSeed.marketSnapshot.strategyExposureKrw,
                   assetClassExposureKrw: liveSeed.marketSnapshot.assetClassExposureKrw,
+                  assetClassCapitalCommittedKrw: liveSeed.marketSnapshot.assetClassCapitalCommittedKrw,
                   openRiskKrw: liveSeed.marketSnapshot.openRiskKrw,
                   correlatedExposurePercent: liveSeed.marketSnapshot.correlatedExposurePercent,
                   source: `${livePreview.snapshot.source ?? 'provider-private-preflight'}+member-live-auto`,
@@ -2885,7 +2901,9 @@ export class MemberAutoTradingBackgroundWorker {
                 const targetState = evaluateDailyProfitTarget({
                   market: candidateMarket,
                   policy: targetPolicy,
-                  baseCapitalKrw: targetCapital.initialOperatingCapitalKrw,
+                  baseCapitalKrw: profitTargetCapitalBaseKrw(
+                    member.policy, candidateMarket, targetCapital.initialOperatingCapitalKrw,
+                  ),
                   realizedNetProfitKrw: targetCapital.dailyRealizedPnlKrw,
                   unrealizedPnlKrw: finite(unrealizedPnlKrw) ? unrealizedPnlKrw : null,
                   cumulativeHighNetProfitKrw: Math.max(0,

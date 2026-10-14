@@ -43,6 +43,11 @@ const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-cap
 const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
 const dailyProfitTarget = read('api-server/src/services/daily-profit-target.service.ts');
 const dailyProfitTargetTest = read('api-server/src/services/daily-profit-target.service.test.ts');
+const capitalAllocation = read('api-server/src/services/auto-trading-capital-allocation.service.ts');
+const capitalAllocationTest = read('api-server/src/services/auto-trading-capital-allocation.service.test.ts');
+const externalPilotStatistics = read('api-server/src/services/external-strategy-pilot-statistics.service.ts');
+const externalPilotStatisticsTest = read('api-server/src/services/external-strategy-pilot-statistics.service.test.ts');
+const upbitExternalPilotQa = read('signal-intelligence-v3/scripts/run-upbit-external-pilot-qa.ts');
 const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
@@ -128,6 +133,62 @@ for (const token of [
 requireText(tradeAutomationSmoke,
   'daily profit targets preserve decimal per-market choices without expanding role risk limits',
   'AUTO_GATE_DAILY_PROFIT_TARGET_API_REGRESSION_MISSING');
+
+// User-entered capital is a server-audited cash/margin ceiling, independent
+// from the per-order limit. It must never become browser-authored balance
+// evidence or allow compounding to silently raise the selected allocation.
+for (const token of [
+  "USER_MARKET_CAPITAL_POLICY_VERSION = 'user-market-capital-v1'",
+  'compoundAboveAllocation: false', 'capitalAllocationByMarket', 'capitalAllocationAuditTrail',
+]) requireText(tradeTypes, token, 'AUTO_GATE_USER_CAPITAL_POLICY_MISSING');
+for (const token of [
+  'buildCapitalAllocationReadiness', 'serverAuthoredCapitalAllocation',
+  "'ACCOUNT_READBACK_REQUIRED'", "'CAPITAL_ALLOCATION_AVAILABLE_BALANCE_EXCEEDED'",
+  'tradingCapitalChargeKrw', 'accountScopeId',
+]) requireText(capitalAllocation, token, 'AUTO_GATE_USER_CAPITAL_READBACK_CONTRACT_MISSING');
+for (const token of [
+  'OPERATING_CAPITAL_ALLOCATION_LIMIT', 'allocationNotionalLimit',
+  'assetClassCapitalCommittedKrw',
+]) requireText(tradeRisk, token, 'AUTO_GATE_USER_CAPITAL_RISK_WIRING_MISSING');
+for (const token of [
+  'member can configure exact 100k, 250k, and 500k allocations',
+  'administrator role ceiling allows 1m',
+  'two stock lanes sharing one provider cannot allocate the same cash twice',
+  'futures risk uses allocation as isolated margin and keeps leveraged notional separate',
+  'reducing exit remains eligible',
+]) requireText(capitalAllocationTest, token, 'AUTO_GATE_USER_CAPITAL_REGRESSION_MISSING');
+for (const token of [
+  "router.get('/capital-allocation-readiness'", 'serverAuthoredCapitalAllocation(',
+  'roleMaximumFourMarketKrw', 'candidate.capitalAllocationAuditTrail = [',
+  'userScopeDigest', 'orderSubmitted: false',
+]) requireText(tradeAutomationRoute, token, 'AUTO_GATE_USER_CAPITAL_API_MISSING');
+for (const token of [
+  '시장별 자동매매 운용금액', '현재 설정 가능 최대', '1회 최대 주문금액',
+  '사용자 설정은 절대 투입 상한입니다.', '잔고 확인 필요',
+]) requireText(autoTradingSettings, token, 'AUTO_GATE_USER_CAPITAL_UI_MISSING');
+
+// Natural public observations are not interchangeable with fixtures or
+// replay. Missing history stays N/A, while worker/trade counts come only from
+// the member's durable Plan/Order ledger.
+for (const token of [
+  "naturalObservationSource: 'LIVE_PUBLIC_PRODUCER_HISTORY'",
+  "userAdmissionSource: 'DURABLE_PLAN_ORDER_LEDGER'", 'replayAndFixtureExcluded: true',
+  "report.observationKind !== 'LIVE_PUBLIC_MARKET'", 'naturalSignals: available ? sum',
+]) requireText(externalPilotStatistics, token, 'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_CONTRACT_MISSING');
+for (const token of [
+  'only genuine live public observations enter the 30-day signal history',
+  'distinguish missing observations from a measured zero',
+]) requireText(externalPilotStatisticsTest, token, 'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_REGRESSION_MISSING');
+requireText(upbitExternalPilotQa, 'appendPublicQaCycle(previousHistory, report)',
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_PRODUCER_WIRING_MISSING');
+for (const token of [
+  'EXTERNAL_PILOT_STATISTICS_HISTORY_PATH',
+  'external-strategy-pilot-statistics-history-v1',
+  'public-signal-history-v1.json',
+]) requireText(read('.github/workflows/signal-intelligence-v3-validation.yml'), token,
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_WORKFLOW_MISSING');
+requireText(autoTradingSettings, '테스트·Fixture·과거 재생은 제외',
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_UI_MISSING');
 
 // A migration proof must install under hosted non-superuser privileges without
 // replacing definition-drift verification with a caller-controlled parameter.
@@ -618,12 +679,12 @@ const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.se
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 70
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 70
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 72
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 72
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== '1763a04aff064ce09b7424dca7ad36f0cf1d8e6c9e3f2615d68c7cdab20bd3ed') {
+    !== '80766729b0003a8d4e84fc0fb2413fdf59f2d36067b186563a6d29ed8750eb7e') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {

@@ -15,6 +15,49 @@ type DailyProfitTargetPolicy = {
   targetPercent: number;
   afterTargetAction: DailyProfitTargetAction;
 };
+type CapitalAllocationPolicy = {
+  configured: boolean;
+  operatingCapitalKrw: number;
+  maxOrderKrw: number;
+  compoundAboveAllocation: false;
+  policyVersion: 'user-market-capital-v1';
+  updatedAt: string | null;
+  accountScopeId: string | null;
+};
+type CapitalAllocationReadiness = {
+  market: Market;
+  provider: Exchange;
+  currency: string;
+  verified: boolean;
+  actualAvailableKrw: number | null;
+  roleMaximumKrw: number;
+  currentlyAllocatedKrw: number;
+  currentMaximumConfigurableKrw: number | null;
+  excludedKrw: number | null;
+  accountScopeId: string | null;
+  reason: string | null;
+  observedAt: string | null;
+  futuresMarginAllocationKrw: number | null;
+  futuresNominalCeilingKrw: number | null;
+};
+type ExternalPilotWindowStatistics = {
+  days: 1 | 7 | 30;
+  publicObservationAvailable: boolean;
+  monitoringCycles: number;
+  monitoredSymbols: number | null;
+  publicDataSuccesses: number | null;
+  publicDataFailures: number | null;
+  naturalSignals: number | null;
+  eligibleCandidates: number | null;
+  costPolicyBlocked: number | null;
+  aiReviewBlocked: number | null;
+  riskBlocked: number | null;
+  handoffFailures: number | null;
+  workerAdmissions: number;
+  actualLiveTrades: number;
+  strategyCounts: Record<string, number>;
+  primaryReasons: string[];
+};
 
 type Policy = {
   mode: 'approval' | 'automatic';
@@ -22,6 +65,7 @@ type Policy = {
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
   dailyProfitTargetByMarket?: Record<Market, DailyProfitTargetPolicy>;
+  capitalAllocationByMarket?: Record<Market, CapitalAllocationPolicy>;
   marketEnabled?: MarketSwitches;
   stockBrokerByMarket?: StockBrokerByMarket;
   exchangeEnabled: Record<Exchange, boolean>;
@@ -42,6 +86,7 @@ type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
   marketEnabled: MarketSwitches;
   stockBrokerByMarket: StockBrokerByMarket;
   dailyProfitTargetByMarket: Record<Market, DailyProfitTargetPolicy>;
+  capitalAllocationByMarket: Record<Market, CapitalAllocationPolicy>;
 };
 
 type Status = {
@@ -66,6 +111,14 @@ type Status = {
     todayFilledOrders: number;
     lastActivityAt: string | null;
   }>;
+  capitalAllocationReadinessByMarket?: Partial<Record<Market, CapitalAllocationReadiness>>;
+  externalPilotSignalStatistics?: {
+    schemaVersion: 'external-strategy-pilot-signal-statistics-v1';
+    naturalObservationSource: 'LIVE_PUBLIC_PRODUCER_HISTORY';
+    userAdmissionSource: 'DURABLE_PLAN_ORDER_LEDGER';
+    replayAndFixtureExcluded: true;
+    byMarket: Record<Market, Record<'1d' | '7d' | '30d', ExternalPilotWindowStatistics>>;
+  };
   dailyProfitTargetByMarket?: Partial<Record<Market, {
     market: Market;
     tradingDay: string;
@@ -178,6 +231,12 @@ const MARKET_DESCRIPTIONS: Record<Market, string> = {
   crypto_spot: 'Upbit 고정 · 모의매매 지원',
   crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated · 역할별 레버리지 상한',
 };
+const MARKET_MINIMUM_CAPITAL_KRW: Record<Market, number> = {
+  domestic_stock: 1_000,
+  us_stock: 1_000,
+  crypto_spot: 5_000,
+  crypto_futures: 5_000,
+};
 
 const PROFIT_TARGET_ACTION_LABELS: Record<DailyProfitTargetAction, string> = {
   STOP_NEW_ENTRIES: '신규 진입 중단',
@@ -208,6 +267,10 @@ function percentOrUnavailable(value: number | null | undefined) {
   return value == null || !Number.isFinite(value) ? 'N/A' : `${value.toFixed(2)}%`;
 }
 
+function countOrUnavailable(value: number | null | undefined) {
+  return value == null || !Number.isFinite(value) ? 'N/A' : Math.round(value).toLocaleString('ko-KR');
+}
+
 const BITGET_LEVERAGE_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 
 const DEFAULT_MARKETS: MarketSwitches = {
@@ -227,6 +290,12 @@ const DEFAULT_POLICY: UiPolicy = {
     us_stock: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
     crypto_spot: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
     crypto_futures: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
+  },
+  capitalAllocationByMarket: {
+    domestic_stock: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: 500_000, compoundAboveAllocation: false, policyVersion: 'user-market-capital-v1', updatedAt: null, accountScopeId: null },
+    us_stock: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: 500_000, compoundAboveAllocation: false, policyVersion: 'user-market-capital-v1', updatedAt: null, accountScopeId: null },
+    crypto_spot: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: 500_000, compoundAboveAllocation: false, policyVersion: 'user-market-capital-v1', updatedAt: null, accountScopeId: null },
+    crypto_futures: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: 500_000, compoundAboveAllocation: false, policyVersion: 'user-market-capital-v1', updatedAt: null, accountScopeId: null },
   },
   marketEnabled: DEFAULT_MARKETS,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
@@ -270,6 +339,16 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
         ?? DEFAULT_POLICY.dailyProfitTargetByMarket.crypto_spot,
       crypto_futures: policy.dailyProfitTargetByMarket?.crypto_futures
         ?? DEFAULT_POLICY.dailyProfitTargetByMarket.crypto_futures,
+    },
+    capitalAllocationByMarket: {
+      domestic_stock: policy.capitalAllocationByMarket?.domestic_stock
+        ?? DEFAULT_POLICY.capitalAllocationByMarket.domestic_stock,
+      us_stock: policy.capitalAllocationByMarket?.us_stock
+        ?? DEFAULT_POLICY.capitalAllocationByMarket.us_stock,
+      crypto_spot: policy.capitalAllocationByMarket?.crypto_spot
+        ?? DEFAULT_POLICY.capitalAllocationByMarket.crypto_spot,
+      crypto_futures: policy.capitalAllocationByMarket?.crypto_futures
+        ?? DEFAULT_POLICY.capitalAllocationByMarket.crypto_futures,
     },
     exchangeEnabled: {
       bitget: marketEnabled.crypto_futures,
@@ -316,6 +395,10 @@ export function TradeAutomationSettings({
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [capitalReadiness, setCapitalReadiness] = useState<Partial<Record<Market, CapitalAllocationReadiness>>>(
+    fixture?.capitalAllocationReadinessByMarket ?? {},
+  );
+  const [capitalReadbackLoading, setCapitalReadbackLoading] = useState(false);
   const refreshInFlight = useRef(false);
   const statusReadController = useRef<AbortController | null>(null);
   const maximumBitgetLeverage = status?.maximumBitgetLeverage
@@ -341,6 +424,22 @@ export function TradeAutomationSettings({
       if (syncDraft) {
         setDraft(normalizeUiPolicy(payload.policy));
         setMessage('');
+        setCapitalReadbackLoading(true);
+        try {
+          const capitalResponse = await authorizedFetch('/api/trade-automation/capital-allocation-readiness', {
+            signal: controller.signal,
+          });
+          const capitalPayload = await capitalResponse.json() as {
+            ok?: boolean;
+            byMarket?: Partial<Record<Market, CapitalAllocationReadiness>>;
+          };
+          setCapitalReadiness(capitalResponse.ok && capitalPayload.ok !== false
+            ? capitalPayload.byMarket ?? {} : {});
+        } catch {
+          if (!controller.signal.aborted) setCapitalReadiness({});
+        } finally {
+          if (!controller.signal.aborted) setCapitalReadbackLoading(false);
+        }
       }
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -413,6 +512,17 @@ export function TradeAutomationSettings({
     }));
   }
 
+  function updateCapitalAllocation(market: Market, patch: Partial<CapitalAllocationPolicy>) {
+    setDraft((current) => ({
+      ...current,
+      capitalAllocationByMarket: {
+        ...current.capitalAllocationByMarket,
+        [market]: { ...current.capitalAllocationByMarket[market], ...patch,
+          compoundAboveAllocation: false, policyVersion: 'user-market-capital-v1' },
+      },
+    }));
+  }
+
   async function save(confirmed: boolean) {
     const outbound: UiPolicy = {
       ...draft,
@@ -433,11 +543,15 @@ export function TradeAutomationSettings({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...outbound, confirmation: { acknowledged: confirmed } }),
       });
-      const payload = await response.json() as { policy?: Policy; error?: string };
+      const payload = await response.json() as { policy?: Policy; error?: string;
+        capitalAllocationReadinessByMarket?: Partial<Record<Market, CapitalAllocationReadiness>> | null };
       if (!response.ok || !payload.policy) throw new Error(payload.error ?? '저장하지 못했습니다.');
       const normalized = normalizeUiPolicy(payload.policy);
       setDraft(normalized);
       setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
+      if (payload.capitalAllocationReadinessByMarket) {
+        setCapitalReadiness(payload.capitalAllocationReadinessByMarket);
+      }
       setMessage(normalized.automaticEnabled
         ? '자동매매가 켜졌습니다. 활성 시장의 새 신호는 주문별 승인 없이 위험검사를 통과하면 자동 처리됩니다.'
         : '자동매매 설정을 저장했습니다. 현재 자동 실행은 꺼져 있습니다.');
@@ -648,6 +762,135 @@ export function TradeAutomationSettings({
       ))}
     </div>
 
+    <div className="mt-4 space-y-2" data-testid="market-capital-allocation-settings">
+      <div>
+        <p className="text-xs font-extrabold">시장별 자동매매 운용금액</p>
+        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+          역할 한도, 실제 가용잔고, 기존 AUTO 포지션·미체결 예약과 공유 계좌 배정을 함께 확인합니다.
+          설정금액은 논리적 신규진입 상한이며 거래소 계좌의 자금을 물리적으로 분리하지 않습니다.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+        {visibleMarkets.map((market) => {
+          const allocation = draft.capitalAllocationByMarket[market];
+          const readiness = capitalReadiness[market];
+          const observed = status?.dailyProfitTargetByMarket?.[market];
+          const configuredExcluded = readiness?.actualAvailableKrw == null
+            ? null : Math.max(0, readiness.actualAvailableKrw - allocation.operatingCapitalKrw);
+          const quickAmounts = [100_000, 250_000, 500_000, 1_000_000]
+            .filter((amount) => amount <= (readiness?.roleMaximumKrw ?? initialMaxOrderKrw));
+          return <article key={market} className="rounded-2xl border border-card-border bg-background p-3"
+            data-testid={`capital-allocation-${market}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-extrabold">{MARKET_LABELS[market]}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {readiness?.verified ? `${readiness.provider} 조회 검증 · ${readiness.currency}`
+                    : capitalReadbackLoading ? '실제 잔고 확인 중'
+                      : `잔고 확인 필요${readiness?.reason ? ` · ${readiness.reason}` : ''}`}
+                </p>
+              </div>
+              <button type="button"
+                onClick={() => updateCapitalAllocation(market, { configured: !allocation.configured })}
+                aria-label={`${MARKET_LABELS[market]} 운용금액 사용`} aria-pressed={allocation.configured}>
+                <Switch active={allocation.configured} />
+              </button>
+            </div>
+            <dl className="mt-3 grid grid-cols-1 gap-1 text-[10px] sm:grid-cols-3">
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">실제 계좌 가용잔고</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(readiness?.actualAvailableKrw)}</dd></div>
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">등급별 최대 허용</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(readiness?.roleMaximumKrw ?? initialMaxOrderKrw)}</dd></div>
+              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">현재 설정 가능 최대</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(readiness?.currentMaximumConfigurableKrw)}</dd></div>
+            </dl>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="text-[11px] font-bold">내가 사용할 자동매매 금액
+                <input type="number" min={MARKET_MINIMUM_CAPITAL_KRW[market]} step="1" value={allocation.operatingCapitalKrw}
+                  onChange={(event) => updateCapitalAllocation(market, { operatingCapitalKrw: Number(event.target.value) })}
+                  className="mt-1 h-10 w-full rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold"
+                  aria-label={`${MARKET_LABELS[market]} 자동매매 운용금액`} />
+              </label>
+              <label className="text-[11px] font-bold">1회 최대 주문금액
+                <input type="number" min={MARKET_MINIMUM_CAPITAL_KRW[market]} step="1" value={allocation.maxOrderKrw}
+                  onChange={(event) => updateCapitalAllocation(market, { maxOrderKrw: Number(event.target.value) })}
+                  className="mt-1 h-10 w-full rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold"
+                  aria-label={`${MARKET_LABELS[market]} 1회 최대 주문금액`} />
+              </label>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {quickAmounts.map((amount) => <button key={amount} type="button"
+                onClick={() => updateCapitalAllocation(market, { operatingCapitalKrw: amount,
+                  maxOrderKrw: Math.min(allocation.maxOrderKrw, amount) })}
+                className="rounded-lg border border-card-border px-2 py-1 text-[10px] font-bold">
+                {amount.toLocaleString('ko-KR')}원
+              </button>)}
+              <button type="button" disabled={readiness?.currentMaximumConfigurableKrw == null}
+                onClick={() => readiness?.currentMaximumConfigurableKrw != null
+                  && updateCapitalAllocation(market, {
+                    operatingCapitalKrw: readiness.currentMaximumConfigurableKrw,
+                    maxOrderKrw: Math.min(allocation.maxOrderKrw, readiness.currentMaximumConfigurableKrw),
+                  })}
+                className="rounded-lg border border-card-border px-2 py-1 text-[10px] font-bold disabled:opacity-40"
+                data-testid={`capital-maximum-${market}`}>최대금액</button>
+            </div>
+            <dl className="mt-3 grid grid-cols-2 gap-1 text-[10px]">
+              <div><dt className="text-muted-foreground">자동매매 제외 금액</dt><dd className="font-bold">{wonOrUnavailable(configuredExcluded)}</dd></div>
+              <div><dt className="text-muted-foreground">실제 투자 가능 상한</dt><dd className="font-bold">{allocation.configured ? wonOrUnavailable(allocation.operatingCapitalKrw) : '기존 정책 유지'}</dd></div>
+              <div><dt className="text-muted-foreground">정산 수익 재투자 50%</dt><dd className="font-bold">{wonOrUnavailable(observed?.highNetProfitKrw == null ? null : Math.max(0, observed.highNetProfitKrw) * 0.5)}</dd></div>
+              <div><dt className="text-muted-foreground">수익 적립 50%</dt><dd className="font-bold">{wonOrUnavailable(observed?.highNetProfitKrw == null ? null : Math.max(0, observed.highNetProfitKrw) * 0.5)}</dd></div>
+            </dl>
+            {market === 'crypto_futures' ? <p className="mt-2 text-[10px] text-muted-foreground">
+              격리 증거금 할당 {wonOrUnavailable(allocation.operatingCapitalKrw)} · 현재 레버리지 명목상한 {wonOrUnavailable(allocation.operatingCapitalKrw * draft.bitgetLeverage)}
+            </p> : null}
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              사용자 설정은 절대 투입 상한입니다. 복리 50%는 표시·정산하되 명시적 추가 동의 전에는 이 상한을 늘리지 않습니다.
+            </p>
+          </article>;
+        })}
+      </div>
+    </div>
+
+    <div className="mt-4 space-y-2" data-testid="external-pilot-signal-statistics">
+      <div>
+        <p className="text-xs font-extrabold">외부전략 실제 신호 통계</p>
+        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+          LIVE 공개데이터 Producer 관측과 사용자별 영구 Plan/Order 원장만 집계합니다. 테스트·Fixture·과거 재생은 제외하며,
+          관측 이력이 없으면 0으로 추정하지 않고 N/A로 표시합니다.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+        {visibleMarkets.map((market) => {
+          const windows = status?.externalPilotSignalStatistics?.byMarket?.[market];
+          return <article key={market} className="rounded-2xl border border-card-border bg-background p-3"
+            data-testid={`external-pilot-statistics-${market}`}>
+            <p className="text-xs font-extrabold">{MARKET_LABELS[market]}</p>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[520px] text-left text-[10px]">
+                <thead className="text-muted-foreground"><tr>
+                  <th className="py-1 pr-2">기간</th><th className="py-1 pr-2">감시종목/데이터건</th>
+                  <th className="py-1 pr-2">자연/적격</th><th className="py-1 pr-2">비용/AI/Risk</th>
+                  <th className="py-1 pr-2">Handoff 실패</th><th className="py-1">Worker/실거래</th>
+                </tr></thead>
+                <tbody>{(['1d', '7d', '30d'] as const).map((key) => {
+                  const row = windows?.[key];
+                  return <tr key={key} className="border-t border-card-border">
+                    <td className="py-2 pr-2 font-bold">{key.replace('d', '일')}</td>
+                    <td className="py-2 pr-2">{countOrUnavailable(row?.monitoredSymbols)} / {countOrUnavailable(row?.publicDataSuccesses)}</td>
+                    <td className="py-2 pr-2">{countOrUnavailable(row?.naturalSignals)} / {countOrUnavailable(row?.eligibleCandidates)}</td>
+                    <td className="py-2 pr-2">{countOrUnavailable(row?.costPolicyBlocked)} / {countOrUnavailable(row?.aiReviewBlocked)} / {countOrUnavailable(row?.riskBlocked)}</td>
+                    <td className="py-2 pr-2">{countOrUnavailable(row?.handoffFailures)}</td>
+                    <td className="py-2">{countOrUnavailable(row?.workerAdmissions)} / {countOrUnavailable(row?.actualLiveTrades)}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[10px] text-muted-foreground">
+              주요 대기 사유 · {windows?.['1d']?.primaryReasons?.join(', ')
+                || (windows?.['1d']?.publicObservationAvailable === false ? '실제 Producer 관측 이력 없음' : 'N/A')}
+            </p>
+          </article>;
+        })}
+      </div>
+    </div>
+
     <div className="mt-4 space-y-2" data-testid="daily-profit-target-settings">
       <div>
         <p className="text-xs font-extrabold">시장별 일일 희망 수익률·수익 보호</p>
@@ -696,7 +939,6 @@ export function TradeAutomationSettings({
             </div>
             <dl className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
               <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">오늘 실현 순수익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.realizedNetProfitKrw)}</dd></div>
-              <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">미실현 손익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.unrealizedPnlKrw)}</dd></div>
               <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">최고 순수익</dt><dd className="mt-1 font-extrabold">{wonOrUnavailable(observed?.highNetProfitKrw)}</dd></div>
               <div className="rounded-xl bg-secondary/60 p-2"><dt className="text-muted-foreground">목표까지 남음</dt><dd className="mt-1 font-extrabold">{percentOrUnavailable(observed?.remainingTargetPercent)}</dd></div>
             </dl>
@@ -805,9 +1047,9 @@ export function TradeAutomationSettings({
     </div>
 
     <div className="mt-4 grid grid-cols-2 gap-2">
-      <NumberField label="총 운용금액" value={draft.totalCapitalKrw} onChange={(value) => updateNumber('totalCapitalKrw', value)} suffix="원" />
+      <NumberField label="계정 전체 안전상한 (시장별 할당과 별도)" value={draft.totalCapitalKrw} onChange={(value) => updateNumber('totalCapitalKrw', value)} suffix="원" />
       <NumberField
-        label={`1회 기준 주문금액 (초기 최대 ${initialMaxOrderLabel})`}
+        label={`기존 전체 1회 주문 안전상한 (초기 최대 ${initialMaxOrderLabel})`}
         value={draft.maxOrderKrw}
         onChange={(value) => updateNumber('maxOrderKrw', value)}
         suffix="원"
@@ -952,7 +1194,13 @@ export function TradeAutomationSettings({
           <dt className="font-bold">자동 실행</dt><dd>{draft.automaticEnabled ? '켜짐' : '꺼짐'}</dd>
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
           <dt className="font-bold">희망 수익률</dt><dd>{activeProfitTargets.join(' / ') || '사용 안 함 · 기존 정책 유지'}</dd>
-          <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
+          <dt className="font-bold">시장별 운용금액</dt><dd>{activeMarkets.map((market) => {
+            const allocation = draft.capitalAllocationByMarket[market];
+            return `${MARKET_LABELS[market]} ${allocation.configured
+              ? `${allocation.operatingCapitalKrw.toLocaleString('ko-KR')}원 (1회 ${allocation.maxOrderKrw.toLocaleString('ko-KR')}원)`
+              : '기존 정책'}`;
+          }).join(' / ') || '활성 시장 없음'}</dd>
+          <dt className="font-bold">계정 전체 주문 상한</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget {Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}배 · 역할 상한 {maximumBitgetLeverage}배 · isolated</dd>
           <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동 신규진입 차단'}</dd>

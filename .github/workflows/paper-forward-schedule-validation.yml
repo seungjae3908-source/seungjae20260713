@@ -149,6 +149,8 @@ on:
       - api-server/scripts/run-automatic-live-preflight-tests.mjs
       - api-server/scripts/verify-automatic-live-budget-concurrency.sh
       - api-server/scripts/verify-phase8-security.mjs
+      - api-server/src/services/auto-trading-capital-allocation.service.test.ts
+      - api-server/src/services/auto-trading-capital-allocation.service.ts
       - api-server/src/services/automatic-live-budget.service.test.ts
       - api-server/src/services/automatic-live-budget.service.ts
       - api-server/src/services/automatic-live-owner-policy.service.test.ts
@@ -438,6 +440,8 @@ on:
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
       - api-server/src/services/external-strategy-pilot-producer.service.test.ts
       - api-server/src/services/external-strategy-pilot-producer.service.ts
+      - api-server/src/services/external-strategy-pilot-statistics.service.test.ts
+      - api-server/src/services/external-strategy-pilot-statistics.service.ts
       - api-server/src/services/upbit-external-pilot-public-data.service.test.ts
       - api-server/src/services/upbit-external-pilot-public-data.service.ts
       - .github/tests/trading-ops-consolidated-preflight.test.mjs
@@ -529,8 +533,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 62 or len(set(auto_safety)) != 62:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_62')
+          if len(auto_safety) != 64 or len(set(auto_safety)) != 64:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_64')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -539,8 +543,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 70 or len(set(auto_signal)) != 70:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_70')
+          if len(auto_signal) != 72 or len(set(auto_signal)) != 72:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_72')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -570,13 +574,13 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 62
+          test "${#auto_safety[@]}" -eq 64
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 70
+          test "${#auto_signal[@]}" -eq 72
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
@@ -587,7 +591,7 @@ jobs:
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
           # Precise staging-only automatic Paper holdings GET fix. The owner
-          # registered 62 AUTO + 19 supplemental safety scopes remain exact.
+          # registered 64 AUTO + 19 supplemental safety scopes remain exact.
           # These three source/test blobs and BOTH Trading guards are pinned.
           paper_holdings_readonly=(
             stock-analyzer/src/pages/auto-trading.tsx
