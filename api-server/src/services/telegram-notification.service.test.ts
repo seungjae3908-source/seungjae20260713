@@ -24,6 +24,9 @@ import {
   FileTelegramIntelligenceStateStore,
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
+  telegramBriefTickStalled,
+  boundedTelegramBriefPreSendRead,
+  type TelegramBriefStage,
   readTelegramIntelligenceWorkerHealth,
   safeTelegramBriefFailureCode,
 } from './telegram-intelligence-worker.service';
@@ -1340,4 +1343,125 @@ test('member watchlist BATCHED personal digest is counted as durable queue, neve
   assert.equal(refused.queued,0);
   assert.equal(refused.delivered,0);
   assert.equal(refused.skipped,1,'a rejected digest entry is not a queued success');
+});
+
+// Cross-lane at-most-once guard: stalled scheduled brief must never replay a Bot POST.
+test('stalled tick detection allows ten minutes and never treats future/private text as time', () => {
+  const timestamp = '2026-10-14T06:50:00.000Z';
+  const started = Date.parse(timestamp);
+  assert.equal(telegramBriefTickStalled(timestamp, started + 600_000), false);
+  assert.equal(telegramBriefTickStalled(timestamp, started + 600_001), true);
+  assert.equal(telegramBriefTickStalled(timestamp, started - 1), false);
+  for (const bad of [null, '', 'PRIVATE_BOT_TOKEN', '2026-10-14Tbad', 'garbage']) {
+    assert.equal(telegramBriefTickStalled(bad, started + 3_000_000), false);
+  }
+  assert.equal(telegramBriefTickStalled(timestamp, NaN), false);
+  assert.equal(telegramBriefTickStalled(timestamp, Infinity), false);
+});
+
+test('a hung Telegram Bot POST retains durable reservation and cannot re-enter', async () => {
+  const original = process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED = 'false';
+  // Wednesday, October 14 15:50 KST. Exactly one KR_CLOSING plan.
+  const date = new Date('2026-10-14T06:50:00.000Z');
+  const stages: TelegramBriefStage[] = [];
+  let complete: (v: any) => void = () => {};
+  let sendAttempts = 0;
+  const blocked = new Promise<any>(resolve => { complete = resolve; });
+  const ledger = new MemoryTelegramIntelligenceStateStore();
+  const worker = new TelegramIntelligenceWorker(
+    ledger,
+    async () => {
+      sendAttempts += 1;
+      return await blocked;
+    },
+    () => '-1001234567890123',
+    async () => { throw new Error('TEST_MUST_NOT_FETCH_REAL_BRIEF'); },
+    stage => { stages.push(stage); },
+  );
+  try {
+    const first = worker.runOnce(date);
+    for (let i = 0; i < 60 && !stages.includes('BOT_POST'); i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 4));
+    }
+    assert.equal(stages.includes('BOT_POST'), true, stages.join(','));
+    assert.equal(stages.includes('RESERVE_UNCONFIRMED'), true);
+    assert.equal(ledger.unconfirmed.size, 1, 'reservation must exist before Bot POST');
+    assert.equal(sendAttempts, 1);
+
+    const concurrent = await worker.runOnce(date);
+    assert.equal(concurrent.attempted, 0);
+    assert.equal(concurrent.delivered, 0);
+    assert.equal(sendAttempts, 1, 'one unknown POST is never retried');
+
+    complete({ok: true, attempts: 1, receipt: {}});
+    const firstResult = await first;
+    assert.equal(firstResult.attempted, 1);
+    assert.equal(firstResult.delivered, 1);
+    assert.equal(ledger.unconfirmed.size, 0);
+    assert.equal(ledger.delivered.size, 1);
+    assert.equal(stages.includes('DURABLE_RECEIPT_WRITE'), true);
+    assert.equal(stages.at(-1), 'IDLE');
+
+    const later = await worker.runOnce(date);
+    assert.equal(later.attempted, 0);
+    assert.equal(sendAttempts, 1, 'existing delivered key suppresses replay');
+    assert.equal(stages.join('|').includes('-1001234567890123'), false);
+  } finally {
+    complete({ok: true, attempts: 1, receipt: {}});
+    if (original === undefined) delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED = original;
+  }
+});
+
+
+test('public or ledger read pre-send deadline rejects, and never authorizes a Bot POST', async () => {
+  const owner = () => '-1001234567890123';
+  const testAt = new Date('2026-10-14T06:50:00.000Z');
+  let releaseRead!: (value: boolean) => void;
+  const delayed = new Promise<boolean>(resolve => { releaseRead = resolve; });
+  let sends = 0, reservations = 0, lookups = 0;
+  const ledger = {
+    has: () => {lookups += 1; return delayed;},
+    hasUnconfirmed: async () => false,
+    markUnconfirmed: async () => {reservations += 1;},
+    markDelivered: async () => {},
+    releaseExplicitNoSend: async () => {},
+  };
+  const worker = new TelegramIntelligenceWorker(
+    ledger,
+    async () => {sends += 1; return {ok:true,attempts:1} as any;},
+    owner,
+    async () => {throw Error('UNEXPECTED_PUBLIC_SOURCE');},
+    () => {},
+    15,
+  );
+  const prior = process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED = 'false';
+  try {
+    await assert.rejects(worker.runOnce(testAt), /TELEGRAM_BRIEF_PRE_SEND_TIMEOUT/u);
+    assert.equal(lookups,1);
+    assert.equal(reservations,0);
+    assert.equal(sends,0);
+    // A late successful read MUST NOT continue to reserve or send after timeout.
+    releaseRead(false);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    assert.equal(reservations,0);
+    assert.equal(sends,0);
+  } finally {
+    releaseRead(false);
+    if(prior===undefined) delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=prior;
+  }
+});
+test('bounded pre-send helper never times out an accepted response, but rejects hung reads', async()=>{
+  assert.equal(await boundedTelegramBriefPreSendRead(async()=>41,20),41);
+  await assert.rejects(
+    boundedTelegramBriefPreSendRead(async()=>await new Promise<number>(()=>{}),10),
+    /TELEGRAM_BRIEF_PRE_SEND_TIMEOUT/u,
+  );
+  await assert.rejects(
+    boundedTelegramBriefPreSendRead(async()=>41,16_000),
+    /TELEGRAM_BRIEF_PRE_SEND_INVALID/u,
+  );
 });
