@@ -189,7 +189,7 @@ test('symlinked and permissive pre-existing sender state directory block install
       const run=x.execute();
       assert.equal(run.status,22,run.stderr||run.stdout);
       assert.equal(fs.existsSync(x.release),false);
-      assert.equal(fs.readFileSync(path.join(x.app,'.deploy/current-sha'),'utf8'),OLD_SHA+'\\n');
+      assert.equal(fs.readFileSync(path.join(x.app,'.deploy/current-sha'),'utf8'),OLD_SHA+'\n');
       if(unsafe==='permissive')
         assert.equal(fs.statSync(state).mode&0o777,0o755,
           'must not silently chmod operator-owned directory');
