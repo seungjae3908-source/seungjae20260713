@@ -856,12 +856,12 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           </div>
           <main data-testid="ai-chart-workspace" className="mx-auto w-full max-w-7xl p-3 sm:p-4">
             {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={currentAnalysis} /> : emptyState) : null}
-            {mobileTab === 'chart' ? (
-              <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
-                {chart}
-                {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
-              </section>
-            ) : null}
+            {/* Keep the read-only renderer and its public feed alive across mobile tab changes.
+                `hidden` preserves identity without showing a second chart. */}
+            <section data-testid="ai-chart-mobile-chart" hidden={mobileTab !== 'chart'} className="min-w-0 space-y-3">
+              {chart}
+              {hasSelection && mobileTab === 'chart' ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
+            </section>
             {mobileTab === 'position' ? (
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
@@ -881,14 +881,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {mobileTab === 'details' ? (
               <section data-testid="ai-chart-mobile-details" className="min-w-0 space-y-3">
                 {details}
-                {hasSelection ? (
-                  <details className="rounded-2xl border border-card-border bg-card p-3" data-testid="ai-chart-mobile-live-disclosure">
-                    <summary className="min-h-11 cursor-pointer text-sm font-bold">AI 생중계 · 기술 이벤트 보기</summary>
-                    <p className="mb-2 mt-1 text-xs text-muted-foreground">관측 기록은 읽기 전용이며, 차트 탭에서 검증된 현재봉을 확인한 뒤 표시합니다.</p>
-                    <AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} />
-                  </details>
-                ) : null}
               </section>
+            ) : null}
+            {/* Retain the event recorder while this tab is hidden; reopening 상세
+                must not turn the most recent observation into a brand-new feed. */}
+            {hasSelection ? (
+              <div hidden={mobileTab !== 'details'} data-testid="ai-chart-mobile-live-persistent">
+                <details className="rounded-2xl border border-card-border bg-card p-3" data-testid="ai-chart-mobile-live-disclosure">
+                  <summary className="min-h-11 cursor-pointer text-sm font-bold">AI 생중계 · 기술 이벤트 보기</summary>
+                  <p className="mb-2 mt-1 text-xs text-muted-foreground">읽기 전용 관측 기록이며 확정봉과 수신 상태를 확인해 표시합니다. 주문 신호가 아닙니다.</p>
+                  <AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} />
+                </details>
+              </div>
             ) : null}
           </main>
         </>

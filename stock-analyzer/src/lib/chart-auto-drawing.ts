@@ -36,12 +36,14 @@ export function zigZagSwings(rows: readonly NormalizedChartCandle[], sensitivity
     index, time: rows[index].time, price: kind === 'high' ? rows[index].high : rows[index].low, kind, confirmed, confirmedAt,
   });
   for (let i = 1; i < rows.length; i += 1) {
+    // An incomplete last bar can make temporary intrabar highs/lows.
+    // Never allow its extremes to become a subsequently confirmed swing.
+    if (!rows[i].isClosed) continue;
     const threshold = Math.max(atrAt(rows, i) * sensitivity, rows[i].close * 0.003);
     const newHigh = rows[i].high > rows[highIndex].high;
     const newLow = rows[i].low < rows[lowIndex].low;
     if (direction >= 0 && newHigh) highIndex = i;
     if (direction <= 0 && newLow) lowIndex = i;
-    if (!rows[i].isClosed) continue;
     if (direction === 0) {
       if (lowIndex < i && rows[i].close - rows[lowIndex].low >= threshold) {
         points.push(point(lowIndex, 'low', true, rows[i].time)); direction = 1; highIndex = i;
@@ -179,7 +181,9 @@ export function detectWaveCandidates(swings: readonly SwingPoint[]): WaveCandida
 
 export function analyzeAutoDrawing(input: readonly NormalizedChartCandle[]): AutoDrawing {
   if (!input.every(validCandle) || input.some((row, i) => i > 0 && row.time <= input[i - 1].time)) return { patterns: [], waves: [], swings: [], asOf: null };
-  const rows = input.slice(-800);
+  // Pattern confirmations and labels must use completed source candles only.
+  // Forming candles remain available to the price chart but not to this engine.
+  const rows = input.filter(row => row.isClosed).slice(-800);
   const swings = zigZagSwings(rows);
   return { patterns: detectAutoPatterns(rows, swings), waves: detectWaveCandidates(swings), swings, asOf: rows.at(-1)?.time ?? null };
 }

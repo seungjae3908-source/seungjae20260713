@@ -719,7 +719,11 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         if (reconciled.acceptedEvents === 0 || !reconciled.latestCandle) return false;
         // Archive browsing renders older genuine bars in a separate window.
         // Never inject a current live trade into that historical candlestick series.
-        if (!archiveModeRef.current && !realtimeCanvasRef.current?.applyRealtimeCandle(reconciled.latestCandle)) {
+        // A hidden/mobile-tab canvas may be absent. Valid public trades still
+        // advance the reconciled state and render when the chart becomes visible.
+        // Only an attached canvas rejecting a valid update is a recovery error.
+        const attachedCanvas = realtimeCanvasRef.current;
+        if (!archiveModeRef.current && attachedCanvas && !attachedCanvas.applyRealtimeCandle(reconciled.latestCandle)) {
           requestRecovery(['INVALID_EVENT_VALUE'], 'INCREMENTAL_CHART_UPDATE_REJECTED');
           return false;
         }
@@ -1062,7 +1066,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         </div>
         {candles.length >= 2 && (
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-card-border px-3 py-2" data-testid="chart-history-coverage">
-            <span className="text-[11px] text-muted-foreground">실제 캔들 {candles.length}개 · 시작 {new Date(candles[0].time * 1_000).toLocaleString('ko-KR')} · 이전 구간은 제공기관 보유 범위에 따름</span>
+            <span className="text-[11px] text-muted-foreground">실제 캔들 {candles.length}개 · 시작 {new Date(candles[0].time * 1_000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} · 이전 구간은 제공기관 보유 범위에 따름</span>
             {archiveMode && <span data-testid="chart-history-archive-mode" className="text-[11px] font-bold text-warning">과거 구간 보기 · 현재 신호와 분리 · 실주문 없음</span>}
             <button type="button" data-testid="chart-history-load-previous" onClick={() => void loadPreviousCandles()} disabled={!historyPagingServerVerified || historyStatus === 'loading' || historyStatus === 'exhausted'} className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs font-bold disabled:opacity-50">{!historyPagingServerVerified ? '추가 과거봉 조회는 서버 연결 대기' : historyStatus === 'loading' ? '과거 봉 조회 중…' : historyStatus === 'capped' ? '더 이전 구간 계속 탐색' : historyStatus === 'exhausted' ? '조회 가능한 과거 봉 없음' : archiveMode ? '이전 과거 구간' : '이전 캔들 불러오기'}</button>
             {archiveMode && <button type="button" data-testid="chart-history-return-current" onClick={returnToCurrentChart} className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs font-bold">현재 실시간 차트 복귀</button>}

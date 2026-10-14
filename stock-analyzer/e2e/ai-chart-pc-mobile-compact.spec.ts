@@ -81,7 +81,7 @@ for (const width of [360, 390, 412, 430]) {
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('진입');
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('손절');
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('목표 1');
-    await expect(page.getByTestId('unified-chart-canvas')).toHaveCount(0);
+    await expect(page.getByTestId('ai-chart-mobile-chart')).toBeHidden();
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
@@ -93,25 +93,30 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('mobile tabs mount only the selected heavy surface', async ({ page }) => {
+test('mobile tabs keep the public chart connection mounted while only the selected surface is visible', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await primeSelection(page);
   await page.goto(chartUrl);
 
   await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-mobile-chart')).toBeHidden();
   await page.getByRole('tab', { name: '차트' }).click();
   await expect(page.getByTestId('ai-chart-mobile-chart')).toBeVisible();
   await expect(page.getByTestId('ai-chart-mobile-summary')).toHaveCount(0);
   await expect(page.getByTestId('ai-chart-position-panel')).toBeHidden();
+  await page.getByTestId('ai-chart-mobile-chart').evaluate((node) => node.setAttribute('data-tab-identity-retained', 'yes'));
 
   await page.getByRole('tab', { name: '내 포지션' }).click();
   await expect(page.getByTestId('ai-chart-mobile-position')).toBeVisible();
   await expect(page.getByTestId('ai-chart-position-panel')).toBeVisible();
   await expect(page.getByTestId('ai-chart-position-panel')).toContainText('내 포지션 확인');
-  await expect(page.getByTestId('ai-chart-mobile-chart')).toHaveCount(0);
+  await expect(page.getByTestId('ai-chart-mobile-chart')).toBeHidden();
+  await expect(page.getByTestId('ai-chart-mobile-chart')).toHaveAttribute('data-tab-identity-retained', 'yes');
 
   await page.getByRole('tab', { name: '상세' }).click();
   await expect(page.getByTestId('ai-chart-mobile-details')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-mobile-live-persistent')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-mobile-chart')).toHaveAttribute('data-tab-identity-retained', 'yes');
   await expect(page.getByText('읽기 전용 · 확정된 근거만 표시 · 주문 실행 없음')).toBeVisible();
 });
 
