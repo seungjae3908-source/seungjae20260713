@@ -1,0 +1,281 @@
+name: Telegram Dormant Install Read-Only Recovery (No Start)
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-dormant-installed-readonly.mjs
+      - .github/tests/telegram-dormant-installed-readonly.test.mjs
+      - .github/workflows/telegram-dormant-installed-readonly.yml
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-dormant-installed-readonly.mjs
+          node --test .github/tests/telegram-dormant-installed-readonly.test.mjs
+
+  readback:
+    name: Owner-protected existing sealed bytes readback (zero mutations)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-dormant-readback ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: stock-app-production-live
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require original owner command and exact current-main/package source SHAs
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          node <<'NODE'
+          const fs=require('node:fs');
+          const m=/^\/run-telegram-dormant-readback ([a-f0-9]{40}) ([a-f0-9]{40})$/u.exec(
+            String(process.env.BODY||'').trim());
+          if(!m)throw Error('TELEGRAM_READBACK_TWO_EXACT_SHAS_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'main='+m[1]+'\npackage='+m[2]+'\n');
+          NODE
+      - name: Pin current main and prove package source is an immutable ancestor
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main }}
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$MAIN_SHA"
+          test "$(git rev-parse origin/main)" = "$MAIN_SHA"
+          test "$GITHUB_SHA" = "$MAIN_SHA"
+          git cat-file -e "$PACKAGE_SHA^{commit}"
+          git merge-base --is-ancestor "$PACKAGE_SHA" "$MAIN_SHA"
+          for p in ops/telegram-dormant-installed-readonly.mjs \
+                   ops/telegram-dormant-artifact-extract.py; do
+            test "$(git rev-parse "HEAD:$p")" = "$(git hash-object "$p")"
+          done
+      - name: Authenticate unique original successful exact-package push artifact
+        id: proof
+        env:
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha=process.env.PACKAGE_SHA,owner=context.repo.owner,
+              repo=context.repo.repo,full=owner+'/'+repo;
+            const workflow='.github/workflows/telegram-isolated-dormant-package.yml';
+            const name='Telegram Isolated Dormant Package QA (No Deployment)';
+            const runs=await github.paginate(github.rest.actions.listWorkflowRuns,{
+              owner,repo,workflow_id:'telegram-isolated-dormant-package.yml',
+              branch:'main',event:'push',head_sha:sha,status:'completed',per_page:100,
+            });
+            const found=runs.filter(x=>x.head_sha===sha&&x.head_branch==='main'
+              &&x.event==='push'&&x.path===workflow&&x.name===name
+              &&x.run_attempt===1&&x.status==='completed'&&x.conclusion==='success');
+            if(found.length!==1){
+              core.setFailed('TELEGRAM_READBACK_PUSH_RUN_NOT_UNIQUE');return;
+            }
+            const run=(await github.rest.actions.getWorkflowRun({
+              owner,repo,run_id:found[0].id,
+            })).data;
+            if(run.repository?.full_name!==full||run.head_repository?.full_name!==full
+              ||run.run_attempt!==1||run.head_sha!==sha){
+              core.setFailed('TELEGRAM_READBACK_PUSH_ORIGIN_UNTRUSTED');return;
+            }
+            const artifacts=(await github.rest.actions.listWorkflowRunArtifacts({
+              owner,repo,run_id:run.id,per_page:100,
+            })).data.artifacts||[];
+            const matches=artifacts.filter(a=>a.name==='telegram-dormant-package-'+sha);
+            const artifact=matches[0];
+            if(matches.length!==1||artifact.expired!==false
+              ||!/^sha256:[a-f0-9]{64}$/u.test(String(artifact.digest))
+              ||artifact.workflow_run?.head_sha!==sha
+              ||!Number.isSafeInteger(artifact.id)||artifact.id<=0
+              ||!Number.isSafeInteger(artifact.size_in_bytes)
+              ||artifact.size_in_bytes<=0||artifact.size_in_bytes>16777216){
+              core.setFailed('TELEGRAM_READBACK_ARTIFACT_UNTRUSTED');return;
+            }
+            core.setOutput('id',String(artifact.id));
+            core.setOutput('digest',artifact.digest);
+      - name: Verify ZIP digest and extract only allowlisted immutable package files
+        id: seal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+          ARTIFACT_ID: ${{ steps.proof.outputs.id }}
+          ZIP_DIGEST: ${{ steps.proof.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ZIP_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          zip="$RUNNER_TEMP/telegram-original.zip"
+          curl --fail --silent --show-error --location --max-time 45 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            --output "$zip"
+          test "$(stat -c %s "$zip")" -gt 0
+          test "$(stat -c %s "$zip")" -le 16777216
+          printf '%s  %s\n' "$ZIP_DIGEST" "$zip" | sed 's/^sha256://' | sha256sum --check --quiet
+          source="$RUNNER_TEMP/telegram-package-original"
+          python3 ops/telegram-dormant-artifact-extract.py "$zip" "$source" "$PACKAGE_SHA"
+          (cd "$source" && sha256sum --check --quiet .deploy/telegram-sha256.manifest)
+          manifest="$(sha256sum "$source/.deploy/telegram-sha256.manifest" | cut -d' ' -f1)"
+          [[ "$manifest" =~ ^[a-f0-9]{64}$ ]]
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+      - name: Pin Production SSH host identity
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/telegram-readback-id"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/telegram-readback-id" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/telegram-readback-id" >/dev/null
+      - name: Inspect existing sealed package and current PM2 twice without server writes
+        env:
+          MAIN_SHA: ${{ steps.command.outputs.main }}
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+          MANIFEST_SHA: ${{ steps.seal.outputs.manifest }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PACKAGE_SHA" =~ ^[a-f0-9]{40}$ && "$MANIFEST_SHA" =~ ^[a-f0-9]{64}$ ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$MAIN_SHA"
+          report="$RUNNER_TEMP/telegram-dormant-installed-readonly.json"
+          echo "TELEGRAM_READBACK_REPORT=$report" >> "$GITHUB_ENV"
+          ssh -i "$HOME/.ssh/telegram-readback-id" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "TELEGRAM_DORMANT_READBACK_EXECUTE=true TELEGRAM_DORMANT_READBACK_SHA=$PACKAGE_SHA TELEGRAM_DORMANT_READBACK_MANIFEST=$MANIFEST_SHA node --input-type=module -" \
+            < ops/telegram-dormant-installed-readonly.mjs > "$report"
+      - name: Reject unsanitized readback or invented activation
+        id: validated
+        env:
+          REPORT: ${{ env.TELEGRAM_READBACK_REPORT }}
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const value=JSON.parse(fs.readFileSync(process.env.REPORT,'utf8'));
+          const fields=['schemaVersion','sourceSha','deployedSha','owner','sealed',
+            'pm2Stable','activationReady','classification','observations',
+            'telegramSends','pm2Mutations','databaseWrites','financialMutations',
+            'secretValuesRecorded'];
+          const allowed=new Set(['INVALID_REQUEST','INVALID_READBACK_ARGUMENTS',
+            'DORMANT_ROOT_UNSAFE_OR_MISSING','DORMANT_RELEASE_ABSENT',
+            'DORMANT_RELEASE_UNSAFE','DORMANT_STATE_ROOT_UNSAFE',
+            'DORMANT_STATE_NOT_EMPTY','DORMANT_STATE_UNREADABLE',
+            'DORMANT_MARKER_NOT_EXACT','DORMANT_INCOMPLETE_MARKER_PRESENT',
+            'DORMANT_INCOMPLETE_MARKER_UNVERIFIED',
+            'DORMANT_MANIFEST_PROVENANCE_MISMATCH','DORMANT_MANIFEST_INVALID',
+            'DORMANT_PAYLOAD_INVALID','DORMANT_PREPARATION_INVALID',
+            'DORMANT_INSTALL_RECEIPT_INVALID','SEALED_PRESENT_PM2_UNVERIFIED',
+            'SEALED_PRESENT_PM2_CHANGED_NOW','SEALED_DORMANT_BYTES_PM2_STABLE_NOW']);
+          if(JSON.stringify(Object.keys(value).sort())!==JSON.stringify(fields.sort())
+            ||value.schemaVersion!=='telegram-dormant-install-readback-v1'
+            ||value.sourceSha!==process.env.PACKAGE_SHA
+            ||!(value.deployedSha===null||/^[a-f0-9]{40}$/u.test(value.deployedSha))
+            ||!['embedded','isolated','UNKNOWN'].includes(value.owner)
+            ||typeof value.sealed!=='boolean'||typeof value.pm2Stable!=='boolean'
+            ||value.activationReady!==false||value.observations!==2
+            ||!allowed.has(value.classification)
+            ||!['telegramSends','pm2Mutations','databaseWrites','financialMutations']
+              .every(k=>value[k]===0)
+            ||value.secretValuesRecorded!==false
+            ||(value.classification==='SEALED_DORMANT_BYTES_PM2_STABLE_NOW'
+              &&(!value.sealed||!value.pm2Stable))){
+            throw Error('TELEGRAM_READBACK_UNSAFE_RECEIPT');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'classification='+value.classification+'\n'+
+            'deployed='+(value.deployedSha||'UNKNOWN')+'\n'+
+            'owner='+value.owner+'\n'+
+            'sealed='+String(value.sealed)+'\n'+
+            'stable='+String(value.pm2Stable)+'\n');
+          console.log('TELEGRAM_DORMANT_READBACK_SANITIZED');
+          NODE
+      - name: Record read-only result without claiming running sender or earlier PM2 preservation
+        if: steps.validated.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          PACKAGE_SHA: ${{ steps.command.outputs.package }}
+          CLASSIFICATION: ${{ steps.validated.outputs.classification }}
+          DEPLOYED_SHA: ${{ steps.validated.outputs.deployed }}
+          OWNER: ${{ steps.validated.outputs.owner }}
+          SEALED: ${{ steps.validated.outputs.sealed }}
+          STABLE: ${{ steps.validated.outputs.stable }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                '[TELEGRAM_DORMANT_POSTCHECK_READONLY_EVIDENCE]',
+                '- Original package SHA: '+process.env.PACKAGE_SHA,
+                '- Already installed sealed bytes verified: '+process.env.SEALED,
+                '- Current Production PM2 SHA: '+process.env.DEPLOYED_SHA,
+                '- Current Telegram owner: '+process.env.OWNER,
+                '- Current two-pass PM2 identity stable: '+process.env.STABLE,
+                '- Classification: '+process.env.CLASSIFICATION,
+                '- PM2 preservation DURING earlier failed install: NOT_PROVEN',
+                '- Sender activated: NOT_PROVEN / NOT_AUTHORIZED',
+                '- Server writes, Bot sends, PM2 restarts and financial mutations: ZERO',
+                '- No Replit; protected run: '+context.runId,
+              ].join('\n'),
+            });
+      - name: Fail closed unless sealed bytes and current PM2 stable
+        env:
+          RESULT: ${{ steps.validated.outputs.classification }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RESULT" == SEALED_DORMANT_BYTES_PM2_STABLE_NOW ]] || {
+            echo "TELEGRAM_DORMANT_READBACK_NOT_VERIFIED: $RESULT" >&2
+            exit 1
+          }
+          echo 'TELEGRAM_DORMANT_INSTALLED_BYTES_CONFIRMED_NO_START'
