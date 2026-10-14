@@ -108,6 +108,7 @@ import {
   readRulePackPilotCapitalState,
   rulePackPilotMarketForPlan,
   rulePackPilotInitialCapitalForPolicy,
+  rulePackPilotRoleMaximumForPolicy,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
 import {
@@ -126,6 +127,7 @@ import {
   profitTargetCapitalBaseKrw,
   tradingCapitalChargeKrw,
 } from './auto-trading-capital-allocation.service';
+import { calculateTradingRisk } from './trading-risk-engine.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -734,6 +736,76 @@ export function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: stri
   return finite(rate) && rate >= 0 && rate <= 1 ? rate * 100 : null;
 }
 
+export function sizeExternalStrategyPilotQuantity(input: Readonly<{
+  assetClass: TradingAssetClass;
+  exchange: TradingExchange;
+  symbol: string;
+  direction: 'BUY' | 'SELL' | 'LONG' | 'SHORT';
+  operatingCapitalKrw: number;
+  maxOrderKrw: number;
+  entryPrice: number;
+  stopPrice: number;
+  targetPrices: readonly number[];
+  krwPerQuoteCurrency: number;
+  riskPercent: number;
+  entryFeePercent: number;
+  exitFeePercent: number;
+  slippagePercent: number;
+  estimatedFundingRate?: number | null;
+  minimumOrderKrw: number;
+  leverage: number;
+  openExposureKrw: number;
+  sameDirectionExposureKrw: number;
+  consecutiveLosses: number;
+}>): number {
+  const stock = input.exchange === 'kiwoom' || input.exchange === 'toss';
+  const estimatedFundingRate = input.assetClass === 'crypto_futures'
+    ? input.estimatedFundingRate : 0;
+  if (input.assetClass === 'crypto_futures'
+    && (!finite(estimatedFundingRate) || estimatedFundingRate < -1 || estimatedFundingRate > 1)) {
+    throw new Error('BACKGROUND_FUTURES_FUNDING_RATE_REQUIRED');
+  }
+  const sized = calculateTradingRisk({
+    market: input.assetClass === 'crypto_spot' ? 'crypto-spot'
+      : input.assetClass === 'crypto_futures' ? 'crypto-futures' : 'stock',
+    symbol: input.symbol,
+    side: input.direction === 'SHORT' || input.direction === 'SELL' ? 'short' : 'long',
+    accountBalance: input.operatingCapitalKrw,
+    entryPrice: input.entryPrice,
+    stopLossPrice: input.stopPrice,
+    targetPrice1: input.targetPrices[0],
+    targetPrice2: input.targetPrices[1] ?? null,
+    leverage: input.leverage,
+    riskPercent: input.riskPercent,
+    entryFeeRate: input.entryFeePercent / 100,
+    exitFeeRate: input.exitFeePercent / 100,
+    slippageRate: input.slippagePercent / 100,
+    estimatedFundingRate: estimatedFundingRate ?? 0,
+    quantityStep: stock ? 1 : 1e-8,
+    quantityPrecision: stock ? 0 : 8,
+    minimumQuantity: stock ? 1 : 1e-8,
+    minimumNotional: input.minimumOrderKrw / input.krwPerQuoteCurrency,
+    maximumLeverage: input.leverage,
+    appMaximumLeverage: input.leverage,
+    contractRulesStatus: 'live',
+    dataStatus: 'live',
+    dailyRealizedPnl: 0,
+    weeklyRealizedPnl: 0,
+    consecutiveLosses: input.consecutiveLosses,
+    openExposure: input.openExposureKrw / input.krwPerQuoteCurrency,
+    sameDirectionExposure: input.sameDirectionExposureKrw / input.krwPerQuoteCurrency,
+  }, new Date());
+  if (!sized.allowed || !positive(sized.recommendedQuantity)) {
+    throw new Error(sized.blockCodes[0] ?? 'BACKGROUND_MEMBER_RISK_SIZING_BLOCKED');
+  }
+  const maxQuantity = Math.min(input.maxOrderKrw, input.operatingCapitalKrw)
+    / (input.entryPrice * input.krwPerQuoteCurrency);
+  const bounded = Math.min(sized.recommendedQuantity, maxQuantity);
+  const quantity = stock ? Math.floor(bounded) : Math.floor(bounded * 1e8) / 1e8;
+  if (!positive(quantity)) throw new Error('BACKGROUND_MEMBER_ORDER_LIMIT_UNAVAILABLE');
+  return quantity;
+}
+
 // External-public-strategy Pilot admission is distinct from Research Genuine S.
 // The Worker may serialize a PASS marker only after it verifies every catalog
 // rule flag and binds the upstream AI proof to the exact immutable evidence.
@@ -927,7 +999,6 @@ function validateFormulaAiPilotEntry(
   pilot: RulePackPilotCapitalState,
   estimatedKrw: number,
   nowMs: number,
-  discoveryEntryCapRequired: boolean,
 ) {
   if (member.policy.pilotStage !== 'formula-ai-exception') return;
   const targetMarket = marketMapping(entry.identity.market, member.policy).assetClass;
@@ -942,7 +1013,6 @@ function validateFormulaAiPilotEntry(
     policyTotalCapitalKrw: member.policy.totalCapitalKrw,
     openLivePositions: openAutomaticPlans(runtime, 'live').length,
     nowMs,
-    discoveryEntryCapRequired,
   });
   if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
@@ -1616,13 +1686,8 @@ function buildPlanInput(
     throw new Error('BACKGROUND_MARKET_TIMESTAMP_INVALID');
   }
   const move = recentMovePercent(entry, observedAtMs, quote.midpoint);
-  const quantity = Number(entry.riskEvidence.recommendedQuantity);
-  if (!positive(quantity)) throw new Error('BACKGROUND_RISK_QUANTITY_REQUIRED');
-  if (mapping.exchange === 'kiwoom' && !Number.isSafeInteger(quantity)) {
-    throw new Error('BACKGROUND_STOCK_QUANTITY_MUST_BE_INTEGER');
-  }
-  const estimatedKrw = quantity * quote.executionPrice * fx.krwPerQuoteCurrency;
-  if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
+  const upstreamQuantity = Number(entry.riskEvidence.recommendedQuantity);
+  if (!positive(upstreamQuantity)) throw new Error('BACKGROUND_RISK_QUANTITY_REQUIRED');
 
   const exposure = exposureState(runtime, member.policy, entry, nowMs, accountMode);
   const marketRisk = accountMode === 'paper'
@@ -1630,10 +1695,49 @@ function buildPlanInput(
     : null;
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
+  const entryFee = costPercent(entry, 'entryCommissionRate') ?? fee;
+  const exitFee = costPercent(entry, 'exitCommissionRate') ?? fee;
   const averageSpread = costPercent(entry, 'spreadRate');
-  if (slippage == null || fee == null || averageSpread == null) {
+  if (slippage == null || fee == null || entryFee == null || exitFee == null
+    || averageSpread == null) {
     throw new Error('BACKGROUND_COST_EVIDENCE_REQUIRED');
   }
+  let quantity = upstreamQuantity;
+  const profitEvidence = record(entry.profitEvidence);
+  if (profitEvidence?.source === 'EXTERNAL_STRATEGY_PILOT_LIVE_RULE_EVIDENCE') {
+    const allocation = effectiveCapitalAllocation(member.policy, mapping.assetClass);
+    const costPolicy = record(entry.execution.costPolicy);
+    const minimumOrderKrw = Number(costPolicy?.minimumOrderKrw ?? 5_000);
+    quantity = sizeExternalStrategyPilotQuantity({
+      assetClass: mapping.assetClass,
+      exchange: mapping.exchange,
+      symbol: entry.identity.symbol,
+      direction: entry.identity.direction,
+      operatingCapitalKrw: allocation.operatingCapitalKrw,
+      maxOrderKrw: allocation.maxOrderKrw,
+      entryPrice: quote.executionPrice,
+      stopPrice: exits.stop,
+      targetPrices: exits.targets,
+      krwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+      riskPercent: member.policy.riskPerTradePercent[mapping.exchange],
+      entryFeePercent: entryFee,
+      exitFeePercent: exitFee,
+      slippagePercent: slippage,
+      estimatedFundingRate: mapping.assetClass === 'crypto_futures'
+        ? Number(evidence?.estimatedFundingRate) : 0,
+      minimumOrderKrw: Number.isFinite(minimumOrderKrw) && minimumOrderKrw > 0
+        ? minimumOrderKrw : 5_000,
+      leverage: mapping.exchange === 'bitget' ? member.policy.bitgetLeverage : 1,
+      consecutiveLosses: runtime.consecutiveLosses,
+      openExposureKrw: exposure.accountExposureKrw,
+      sameDirectionExposureKrw: exposure.instrumentExposureKrw,
+    });
+  }
+  if (mapping.exchange === 'kiwoom' && !Number.isSafeInteger(quantity)) {
+    throw new Error('BACKGROUND_STOCK_QUANTITY_MUST_BE_INTEGER');
+  }
+  const estimatedKrw = quantity * quote.executionPrice * fx.krwPerQuoteCurrency;
+  if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
   // Conservative worst-case correlation: treat every existing same-market
   // Paper exposure as fully correlated; missing historical covariance cannot
   // be misreported as low risk. Any upstream risk estimate may only tighten it.
@@ -1752,7 +1856,8 @@ function buildPlanInput(
       source: `${accountMode === 'live' ? 'member-auto-trading-live-candidate-v1' : 'member-auto-trading-paper-handoff-v1'}:${String(evidence?.provider ?? 'PUBLIC')}:TOP_OF_BOOK`,
       availableLiquidityKrw: null,
       estimatedSlippagePercent: slippage,
-      estimatedFeePercent: fee,
+      estimatedFeePercent: entryFee,
+      estimatedExitFeePercent: exitFee,
       correlatedExposurePercent,
       signalState: 'entry_ready',
       signalObservedAt,
@@ -2509,7 +2614,8 @@ export class MemberAutoTradingBackgroundWorker {
           if (cached) return cached;
           const capital = await readRulePackPilotCapitalState(
             repository, member.userId, now,
-            rulePackPilotInitialCapitalForPolicy(member.policy), market,
+            rulePackPilotInitialCapitalForPolicy(member.policy, market), market,
+            rulePackPilotRoleMaximumForPolicy(member.policy),
           );
           formulaAiPilotCapitalByMarket.set(market, capital);
           return capital;
@@ -2759,7 +2865,7 @@ export class MemberAutoTradingBackgroundWorker {
                 formulaAiReviewReasonsForLive(entry, nowMs);
                 const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
                 validateFormulaAiPilotEntry(
-                  member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs, false,
+                  member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs,
                 );
                 paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
                   member.policy, marketPilotCapital, candidateMarket,
@@ -2831,12 +2937,11 @@ export class MemberAutoTradingBackgroundWorker {
                   marketPilotCapital,
                   buildPlanInput(member, entry, runtime, fx, nowMs, 'live').estimatedKrw,
                   nowMs,
-                  true,
                 );
                 liveMember = Object.freeze({
                   ...member,
                   policy: deriveRulePackPilotExecutionPolicy(
-                    member.policy, marketPilotCapital, candidateMarket, true,
+                    member.policy, marketPilotCapital, candidateMarket,
                   ),
                 });
                 if (!this.source.revalidateLiveEnabledMarketReadiness
@@ -2949,10 +3054,10 @@ export class MemberAutoTradingBackgroundWorker {
                 };
               }
               if (member.policy.pilotStage === 'formula-ai-exception') {
-                // The signed receipt also preserves the role-scoped four-
-                // market portfolio ceiling (member 2m / admin 4m) during the
-                // persisted approval and provider pre-submission rechecks,
-                // even when this particular order is below the lane cap.
+                // The signed receipt preserves the user's selected market
+                // allocation and per-order ceiling during persisted approval
+                // and provider pre-submission rechecks. It never restores
+                // unallocated role-level capital.
                 liveInput = issueRulePackPilotDynamicCapReceipt(
                   member.userId, liveInput, nowMs,
                 );

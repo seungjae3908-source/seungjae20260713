@@ -92,7 +92,6 @@ type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
 type Status = {
   policy: Policy;
   initialMaxOrderKrw?: number;
-  discoveryMaxOrderKrw?: number;
   administratorOrderBaseline?: boolean;
   maximumBitgetLeverage?: 3 | 7;
   administratorLeveragePolicy?: boolean;
@@ -686,8 +685,6 @@ export function TradeAutomationSettings({
   const initialMaxOrderKrw = status?.initialMaxOrderKrw
     ?? (canManagePilot ? 1_000_000 : 500_000);
   const initialMaxOrderLabel = initialMaxOrderKrw === 1_000_000 ? '100만원' : '50만원';
-  const discoveryMaxOrderKrw = status?.discoveryMaxOrderKrw
-    ?? (canManagePilot ? 500_000 : 100_000);
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const activeProfitTargets = (Object.keys(MARKET_LABELS) as Market[])
     .filter((market) => draft.dailyProfitTargetByMarket[market].enabled)
@@ -1141,8 +1138,8 @@ export function TradeAutomationSettings({
       <p className="mt-2 leading-5 text-muted-foreground">
         이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 활성화 후에는 주문별 수동 승인 없이
         allowlist 공개전략의 실제 지표·AI VETO·비용·위험검사를 통과한 신호만 자동 처리합니다.
-        Research Genuine S 통과를 주장하거나 재사용하지 않으며, 발견 단계 1회 주문은
-        최대 {discoveryMaxOrderKrw.toLocaleString('ko-KR')}원으로 제한됩니다.
+        Research Genuine S 통과를 주장하거나 재사용하지 않습니다. 주문금액은 사용자가 시장별로 저장한
+        1회 최대 주문금액을 따르며 손실·총 노출·중복 주문·계좌 잔고 보호는 별도로 계속 적용됩니다.
       </p>
     </div> : null}
 

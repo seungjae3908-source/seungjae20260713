@@ -4,11 +4,7 @@ import type {
   TradingAssetClass, TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy,
 } from './trade-automation.types';
 import {
-  PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
-  PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
-  PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
-  PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
@@ -31,6 +27,7 @@ import {
 export type RulePackPilotLossReference = Readonly<{ closedAt: string; signalId: string }>;
 export type RulePackPilotCapitalState = Readonly<{
   initialOperatingCapitalKrw: number;
+  roleMaximumOperatingCapitalKrw?: number;
   operatingCapitalKrw: number;
   reserveKrw: number;
   highWaterMarkKrw: number;
@@ -70,25 +67,37 @@ function finite(value: unknown): value is number {
 function roundKrw(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
-function supportedPilotInitialCapital(value: unknown) {
-  return value === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+function supportedPilotInitialCapital(value: unknown, roleMaximumKrw: number) {
+  return finite(value) && value > 0 && value <= roleMaximumKrw
+    ? roundKrw(value) : 0;
 }
 
-export function rulePackPilotDiscoveryEntryCap(initialOperatingCapitalKrw: number) {
-  return initialOperatingCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    ? PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW
-    : PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW;
+export function rulePackPilotRoleMaximumForPolicy(
+  policy: Pick<TradingPolicy, 'totalCapitalKrw' | 'maxOrderKrw' | 'maxAssetClassKrw'>,
+) {
+  return policy.totalCapitalKrw > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW * 4
+    || policy.maxOrderKrw > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW
+    || Object.values(policy.maxAssetClassKrw).some((value) =>
+      value > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW)
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
 }
 
 export function rulePackPilotInitialCapitalForPolicy(
-  policy: Pick<TradingPolicy, 'totalCapitalKrw' | 'maxOrderKrw'>,
+  policy: Pick<TradingPolicy,
+    'totalCapitalKrw' | 'maxOrderKrw' | 'maxAssetClassKrw' | 'capitalAllocationByMarket'>,
+  targetMarket?: TradingAssetClass,
 ) {
-  return policy.totalCapitalKrw >= PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    && policy.maxOrderKrw >= PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const roleMaximum = rulePackPilotRoleMaximumForPolicy(policy);
+  if (targetMarket) {
+    const allocation = effectiveCapitalAllocation(policy, targetMarket);
+    if (finite(allocation.operatingCapitalKrw)
+      && allocation.operatingCapitalKrw > 0
+      && allocation.operatingCapitalKrw <= roleMaximum) {
+      return roundKrw(allocation.operatingCapitalKrw);
+    }
+  }
+  return roleMaximum;
 }
 function kstDay(value: string | Date) {
   const date = typeof value === 'string' ? new Date(value) : value;
@@ -115,8 +124,15 @@ export function deriveRulePackPilotCapitalFromTrades(
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   targetMarket?: TradingAssetClass,
+  requestedRoleMaximumOperatingCapitalKrw: number = requestedInitialOperatingCapitalKrw
+    > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): RulePackPilotCapitalState {
-  const initialOperatingCapitalKrw = supportedPilotInitialCapital(requestedInitialOperatingCapitalKrw);
+  const roleMaximumOperatingCapitalKrw = requestedRoleMaximumOperatingCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const initialOperatingCapitalKrw = supportedPilotInitialCapital(
+    requestedInitialOperatingCapitalKrw, roleMaximumOperatingCapitalKrw,
+  );
   let operatingCapitalKrw: number = initialOperatingCapitalKrw;
   let reserveKrw = 0;
   let highWaterMarkKrw: number = initialOperatingCapitalKrw;
@@ -162,9 +178,14 @@ export function deriveRulePackPilotCapitalFromTrades(
       const recoveryProfit = Math.max(0, batchPnlKrw - newHighProfit);
       const compound = newHighProfit * RULE_PACK_PILOT_PROFILE.profitCompoundShare;
       const reserve = newHighProfit - compound;
-      operatingCapitalKrw += recoveryProfit + compound;
-      reserveKrw += reserve;
-      compoundedProfitKrw += compound;
+      const requestedOperatingIncrease = recoveryProfit + compound;
+      const operatingIncrease = Math.min(
+        requestedOperatingIncrease,
+        Math.max(0, roleMaximumOperatingCapitalKrw - operatingCapitalKrw),
+      );
+      operatingCapitalKrw += operatingIncrease;
+      reserveKrw += reserve + (requestedOperatingIncrease - operatingIncrease);
+      compoundedProfitKrw += Math.min(compound, operatingIncrease);
       highWaterMarkKrw += newHighProfit;
     }
     // An indistinguishably simultaneous win does not cancel evidence of a
@@ -217,6 +238,7 @@ export function deriveRulePackPilotCapitalFromTrades(
 
   return Object.freeze({
     initialOperatingCapitalKrw,
+    roleMaximumOperatingCapitalKrw,
     operatingCapitalKrw: roundKrw(operatingCapitalKrw),
     reserveKrw: roundKrw(reserveKrw),
     highWaterMarkKrw: roundKrw(highWaterMarkKrw),
@@ -244,7 +266,6 @@ export type RulePackPilotEntryGuardInput = Readonly<{
   policyTotalCapitalKrw: number;
   openLivePositions: number;
   nowMs: number;
-  discoveryEntryCapRequired?: boolean;
 }>;
 
 export type RulePackPilotEntryGuardDecision = Readonly<{
@@ -268,27 +289,23 @@ export function evaluateRulePackPilotEntryGuard(
   const policyMaxOrder = finite(input.policyMaxOrderKrw)
     ? Math.max(0, input.policyMaxOrderKrw)
     : 0;
-  // The role-scoped baseline tracks verified profit: 500k -> 525k for members,
-  // or 1M -> 1.025M for administrators, after 50k net profit. A deliberately
-  // stricter policy (e.g. 30k) must never be silently elevated.
-  const initial = supportedPilotInitialCapital(input.pilot.initialOperatingCapitalKrw);
-  if (input.pilot.initialOperatingCapitalKrw !== initial) add('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
-  const growth = Math.max(0, operatingCapital - initial);
-  const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
-  const discoveryEntryCap = input.discoveryEntryCapRequired === true
-    ? rulePackPilotDiscoveryEntryCap(initial)
-    : Number.POSITIVE_INFINITY;
+  const roleMaximum = input.pilot.roleMaximumOperatingCapitalKrw
+    ?? (input.pilot.initialOperatingCapitalKrw > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW
+      ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW);
+  const initial = supportedPilotInitialCapital(
+    input.pilot.initialOperatingCapitalKrw, roleMaximum,
+  );
+  if (initial <= 0 || (roleMaximum !== PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW
+    && roleMaximum !== PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW)) {
+    add('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
+  }
   const effectiveMaxEntryKrw = Math.min(
-    operatingCapital, pilotMaxEntry, dynamicPolicyCap, discoveryEntryCap,
+    operatingCapital, pilotMaxEntry, policyMaxOrder,
   );
 
   if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
     add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
   }
-  // The role-scoped baseline is a risk floor, NOT a fabricated deposit or an instruction to
-  // draw from the separately earmarked reserve after a loss.
-  if (operatingCapital < initial) add('BACKGROUND_PILOT_BASE_CAPITAL_UNDERFUNDED');
-
   if (!isEvidenceBackedAutoStrategyId(input.strategyId)) add('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED');
   if (!input.pilot.settlementReady || input.pilot.blockers.length > 0) add('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
   if (!(operatingCapital > 0) || !(effectiveMaxEntryKrw > 0)) add('BACKGROUND_PILOT_CAPITAL_UNAVAILABLE');
@@ -337,50 +354,52 @@ export function deriveRulePackPilotExecutionPolicy(
   policy: TradingPolicy,
   pilot: RulePackPilotCapitalState,
   targetMarket?: TradingAssetClass,
-  discoveryEntryCapRequired = false,
 ): TradingPolicy {
-  const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw);
-  if (pilot.initialOperatingCapitalKrw !== initial) {
+  const roleMaximum = pilot.roleMaximumOperatingCapitalKrw
+    ?? (pilot.initialOperatingCapitalKrw > PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW
+      ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW);
+  const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw, roleMaximum);
+  if (initial <= 0) {
     throw new Error('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
   }
   const operating = pilot.operatingCapitalKrw;
   if (!pilot.settlementReady || pilot.blockers.length > 0
-    || !finite(operating) || operating < initial
+    || !finite(operating) || operating <= 0 || operating > roleMaximum
     || !finite(policy.totalCapitalKrw) || policy.totalCapitalKrw < initial) {
     throw new Error('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
   }
-  const growth = Math.max(0, operating - initial);
   const laneCapital = roundKrw(operating);
-  // LIVE capital is authorized independently for all four markets. The
-  // effective account-wide ceiling therefore starts at 4 x the role lane and
-  // only the current market's settlement-backed compound gain is added here.
-  // Other markets can never subsidize this market's per-order/class ceiling.
-  const portfolioInitialCapitalKrw = initial === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
-    ? PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW
-    : PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW;
-  const portfolioCapitalKrw = roundKrw(portfolioInitialCapitalKrw + growth);
-  const discoveryEntryCap = discoveryEntryCapRequired
-    ? rulePackPilotDiscoveryEntryCap(initial)
-    : Number.POSITIVE_INFINITY;
-  const growingCap = (original: number) => roundKrw(Math.min(
-    laneCapital,
-    original >= initial ? original + growth : original,
+  const portfolioCapitalKrw = roundKrw(Math.max(
+    laneCapital, policy.totalCapitalKrw + laneCapital - initial,
   ));
+  const allocation = targetMarket == null ? policy.capitalAllocationByMarket
+    : {
+      ...policy.capitalAllocationByMarket,
+      [targetMarket]: {
+        ...policy.capitalAllocationByMarket[targetMarket],
+        operatingCapitalKrw: laneCapital,
+        maxOrderKrw: Math.min(
+          policy.capitalAllocationByMarket[targetMarket].maxOrderKrw,
+          laneCapital,
+        ),
+      },
+    };
   return {
     ...policy,
     totalCapitalKrw: portfolioCapitalKrw,
-    maxOrderKrw: Math.min(growingCap(policy.maxOrderKrw), discoveryEntryCap),
-    maxInstrumentKrw: growingCap(policy.maxInstrumentKrw),
+    maxOrderKrw: Math.min(policy.maxOrderKrw, laneCapital),
+    maxInstrumentKrw: Math.min(policy.maxInstrumentKrw, laneCapital),
     maxAssetClassKrw: {
       domestic_stock: targetMarket == null || targetMarket === 'domestic_stock'
-        ? growingCap(policy.maxAssetClassKrw.domestic_stock) : policy.maxAssetClassKrw.domestic_stock,
+        ? laneCapital : policy.maxAssetClassKrw.domestic_stock,
       us_stock: targetMarket == null || targetMarket === 'us_stock'
-        ? growingCap(policy.maxAssetClassKrw.us_stock) : policy.maxAssetClassKrw.us_stock,
+        ? laneCapital : policy.maxAssetClassKrw.us_stock,
       crypto_spot: targetMarket == null || targetMarket === 'crypto_spot'
-        ? growingCap(policy.maxAssetClassKrw.crypto_spot) : policy.maxAssetClassKrw.crypto_spot,
+        ? laneCapital : policy.maxAssetClassKrw.crypto_spot,
       crypto_futures: targetMarket == null || targetMarket === 'crypto_futures'
-        ? growingCap(policy.maxAssetClassKrw.crypto_futures) : policy.maxAssetClassKrw.crypto_futures,
+        ? laneCapital : policy.maxAssetClassKrw.crypto_futures,
     },
+    capitalAllocationByMarket: allocation,
   };
 }
 
@@ -544,8 +563,9 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED');
   }
   const pilot = await readRulePackPilotCapitalState(
-    repository, userId, now, rulePackPilotInitialCapitalForPolicy(policy),
-    rulePackPilotMarketForPlan(plan),
+    repository, userId, now,
+    rulePackPilotInitialCapitalForPolicy(policy, rulePackPilotMarketForPlan(plan)),
+    rulePackPilotMarketForPlan(plan), rulePackPilotRoleMaximumForPolicy(policy),
   );
   const targetMarket = rulePackPilotMarketForPlan(plan);
   const targetPolicy = policy.dailyProfitTargetByMarket[targetMarket];
@@ -585,13 +605,12 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     openLivePositions: Number.isSafeInteger(openLivePositions) && openLivePositions >= 0
       ? openLivePositions : Number.POSITIVE_INFINITY,
     nowMs: now.getTime(),
-    discoveryEntryCapRequired: true,
   });
   if (!decision.allowed) {
     throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_DYNAMIC_CAP_RISK_BLOCKED');
   }
   return deriveRulePackPilotExecutionPolicy(
-    policy, pilot, rulePackPilotMarketForPlan(plan), true,
+    policy, pilot, rulePackPilotMarketForPlan(plan),
   );
 }
 
@@ -638,6 +657,7 @@ export async function readRulePackPilotCapitalState(
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   targetMarket?: TradingAssetClass,
+  roleMaximumOperatingCapitalKrw?: number,
 ): Promise<RulePackPilotCapitalState> {
   // One immutable order/plan read per ledger derivation. A second independent
   // journal query could race a closing loss and construct a phantom profit HWM
@@ -769,6 +789,7 @@ export async function readRulePackPilotCapitalState(
 
   const derived = deriveRulePackPilotCapitalFromTrades(
     trades, now, requestedInitialOperatingCapitalKrw, targetMarket,
+    roleMaximumOperatingCapitalKrw,
   );
   const uniqueBlockers = [...new Set([...blockers, ...derived.blockers])].sort();
   return Object.freeze({

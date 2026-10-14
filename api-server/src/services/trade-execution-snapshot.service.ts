@@ -205,6 +205,7 @@ function baseSnapshot(input: {
   existingPositionSide?: TradingPlan['side'] | null;
   liquidationDistancePercent?: number | null;
   estimatedFeePercent?: number | null;
+  estimatedExitFeePercent?: number | null;
   marketStatus?: TradingMarketSnapshot['marketStatus'];
   signal?: SignalSnapshot;
 }): TradingMarketSnapshot {
@@ -229,6 +230,7 @@ function baseSnapshot(input: {
     availableLiquidityKrw: metrics.availableLiquidityKrw,
     estimatedSlippagePercent: metrics.estimatedSlippagePercent,
     estimatedFeePercent: input.estimatedFeePercent ?? null,
+    estimatedExitFeePercent: input.estimatedExitFeePercent ?? null,
     availableBalance: input.availableBalance,
     accountValueKrw: input.accountValueKrw ?? input.plan.marketSnapshot.accountValueKrw,
     assetExposurePercent: input.assetExposurePercent ?? input.plan.marketSnapshot.assetExposurePercent,
@@ -372,6 +374,9 @@ export function buildUpbitExecutionSnapshot(input: {
   const feeRate = absolute(input.plan.side === 'buy'
     ? input.chance.bid_fee ?? (isRecord(input.chance.bid) ? input.chance.bid.fee : null)
     : input.chance.ask_fee ?? (isRecord(input.chance.ask) ? input.chance.ask.fee : null));
+  const exitFeeRate = absolute(input.plan.side === 'buy'
+    ? input.chance.ask_fee ?? (isRecord(input.chance.ask) ? input.chance.ask.fee : null)
+    : input.chance.bid_fee ?? (isRecord(input.chance.bid) ? input.chance.bid.fee : null));
   const marketState = isRecord(input.chance.market) ? String(input.chance.market.state ?? 'active') : 'active';
   return baseSnapshot({
     plan: input.plan,
@@ -383,6 +388,7 @@ export function buildUpbitExecutionSnapshot(input: {
     availableBalance,
     assetExposurePercent,
     estimatedFeePercent: feeRate == null ? null : feeRate * 100,
+    estimatedExitFeePercent: exitFeeRate == null ? null : exitFeeRate * 100,
     marketStatus: marketState === 'active' ? 'OPEN' : 'HALTED',
     signal: input.signal,
   });

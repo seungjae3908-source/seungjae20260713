@@ -24,8 +24,8 @@ test('fail-fast release preflight runs before Staging credentials or deployment'
     'Run fail-fast Automation/Research policy and wiring preflight',
   ]);
   requireAll(releasePreflight, [
-    'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000',
-    'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000',
+    'AUTOMATION_RESEARCH_PREFLIGHT_STALE_DISCOVERY_CAP',
+    'rulePackPilotRoleMaximumForPolicy',
     'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const',
     'dailyLossLimitPercent: 3',
     'maxDailyOrders: 0',
