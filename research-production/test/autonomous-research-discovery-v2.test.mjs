@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 
 const SHA = 'a'.repeat(40);
 const NEXT_SHA = 'd'.repeat(40);
@@ -314,4 +314,88 @@ test('AI locator that is absent from fetched source fails closed before Formula 
   assert.equal(result.reason, 'ENTRY_LOCATOR_NOT_FOUND_IN_SOURCE');
   assert.equal(result.stagedDossierDigest, null);
   assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0 });
+});
+
+test('strategy-file guard rejects reports and plumbing by whole words only', () => {
+  for (const path of ['qstrader/statistics/tearsheet.py', 'lib/performance_report.py', 'src/plotUtils.ts',
+    'tests/test_rsi.py', 'setup.py', 'pkg/__init__.py', 'app/config.py', 'tools/cli.py']) {
+    assert.equal(isNonStrategySourcePathV2(path), true, path);
+  }
+  for (const path of ['strategies/ParticipationBreakout.py', 'strategies/decline_breakout.py',
+    'strategies/setup_breakout.py', 'freqtrade/strategies/RsiReversal.py', 'algo/latest_momentum.py']) {
+    assert.equal(isNonStrategySourcePathV2(path), false, path);
+  }
+});
+
+test('a report file chosen by the AI is rejected before any fetch and is not proposed again', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const reportPlan = aiAnswer({
+    summary: '공개 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+    requiredEvidence: ['SOURCE_PATH=qstrader/statistics/tearsheet.py', 'LICENSE_PATH=LICENSE'],
+  });
+  let fetches = 0;
+  const countingFetch = sourceFetch();
+  const first = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: reportPlan }),
+    fetchImpl: async (url) => { fetches += 1; return countingFetch(url); }, datasetLoader,
+  });
+  assert.equal(first.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(first.reason, 'AI_DISCOVERY_SOURCE_NOT_STRATEGY');
+  assert.deepEqual(first.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0 });
+  assert.equal(fetches, 0);
+
+  // After the semantic back-off, the rejected source is named in the prompt and refused again.
+  const later = '2026-10-14T08:00:00.000Z';
+  const prompts = [];
+  const second = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => later,
+    invoke: async ({ policy, prompt }) => { prompts.push(prompt); return { provider: policy.provider, model: policy.model, answer: reportPlan }; },
+    fetchImpl: sourceFetch(), datasetLoader,
+  });
+  assert.match(prompts[0], /rejectedSources=https:\/\/github\.com\/example\/public-strategies:qstrader\/statistics\/tearsheet\.py/u);
+  assert.equal(second.reason, 'AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
+});
+
+test('verified locators may quote source words that free text may not use', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const quotedSource = `class LeverageAwareBreakout:
+    longEntry = "rvol above baseline then enter long position size small"
+    exit_rule = "take profit at prior high or drawdown guard"
+`;
+  const fetchQuoted = async (url) => {
+    if (String(url).endsWith('/strategies/ParticipationBreakout.py')) return { status: 200, text: async () => quotedSource };
+    return sourceFetch()(url);
+  };
+  const extraction = (summary) => aiAnswer({
+    summary, findings: [],
+    requiredEvidence: [
+      'MARKET=CRYPTO_SPOT', 'TIMEFRAME=1h', 'DIRECTION=LONG', 'FAMILY=PARTICIPATION_BREAKOUT', 'TEMPLATE=RVOL_BREAKOUT_V1',
+      'ENTRY_LOCATOR=longEntry = "rvol above baseline then enter long position size small"',
+      'EXIT_LOCATOR=exit_rule = "take profit at prior high or drawdown guard"', 'RISK_LOCATOR=NONE',
+    ],
+  });
+  let calls = 0;
+  const ok = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model,
+      answer: ++calls === 1 ? planAnswer : extraction('Participation breakout declared variant') }),
+    fetchImpl: fetchQuoted, datasetLoader,
+  });
+  assert.equal(ok.status, 'DOSSIER_STAGED', JSON.stringify(ok));
+
+  // The same words in AI-written free text are still refused.
+  const root2 = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
+  let calls2 = 0;
+  const refused = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model,
+      answer: ++calls2 === 1 ? planAnswer : extraction('High profit with low drawdown') }),
+    fetchImpl: fetchQuoted, datasetLoader,
+  });
+  assert.equal(refused.reason, 'FORBIDDEN_AI_AUTHORITY');
 });
