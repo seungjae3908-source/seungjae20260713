@@ -157,3 +157,34 @@ executes broker operations. Its success is **not** proof that running
 Production's old embedded sender can be quiesced or that live trading
 can be restarted safely. That requires separate protected operational
 proof and explicit owner approval.
+
+
+## Production four-lane cutover audit — honest read-only NO-GO observation
+
+`ops/telegram-cutover-readonly.mjs` plus the strictly owner-protected
+`.github/workflows/telegram-cutover-readonly.yml` add a new, **non-activating**
+preflight that intentionally accepts an older deployed Production SHA for
+diagnosis. It uses the *actual* single `stock-app` PM2 instance, deployed
+SHA marker, and two bounded loopback GETs to `/api/health` separated by
+about one second. All decisions are based on exact process PID, start
+timestamp, restart count, app marker, and four send-capable lane fields.
+
+The exact current-main command, after a future separately approved merge,
+is `/run-telegram-cutover-readonly <current-40-character-main-SHA>` in
+Release Control #1555, followed by protected Production environment review.
+It does not run in a PR and the Draft makes no request for approval.
+
+The receipt has a hard-coded `activationReady=false` even when all four
+existing senders are verified stopped. `LEGACY_EMBEDDED_SENDER_ACTIVE`
+means the observed old app **cannot** be silently handed off merely by
+starting a second process; `PM2_OR_MARKER_UNVERIFIED` and
+`PM2_PROCESS_CHANGED` identify identity or restart races. Only exact
+owner `isolated`, fresh health of the *same running process* twice, four
+lanes NOT_STARTED with inFlight=0, and unrelated background workers
+preserved can return `FOUR_LANES_QUIESCED_ONLY`. This is still NOT
+authorization or proof of one-writer lock, Secret/Vault/Bot GET/POST,
+Signal V3 freshness, member SENT or safe LIVE trading during a restart.
+
+The audit never sends Telegram messages, modifies PM2, changes
+LIVE/Paper/broker authorities, accesses private accounts, writes DB, starts
+systemd, or records token/chat/member data. It requires no Replit.
