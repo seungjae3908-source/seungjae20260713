@@ -188,3 +188,27 @@ Signal V3 freshness, member SENT or safe LIVE trading during a restart.
 The audit never sends Telegram messages, modifies PM2, changes
 LIVE/Paper/broker authorities, accesses private accounts, writes DB, starts
 systemd, or records token/chat/member data. It requires no Replit.
+
+
+## Independently launched worker state-root precondition fixed
+
+A real dormant-install defect was found: `ops/run-telegram-isolated-worker.sh`
+requires the private `/opt/stock-app-data/telegram-isolated-v1/state` directory
+before it can acquire its exclusive owner lock or launch. The protected
+installation path formerly prepared only `release` and `incoming`, so a
+perfectly sealed bundle could later be non-startable on a fresh host.
+
+The install script now creates `state` as mode `0700` while it holds the
+shared deployment and Telegram owner locks, **after** verifying old PM2
+identity but before materializing an executable release marker. It refuses
+existing symlinks, non-directories, group/world-accessible directories, and
+unwritable directories, rather than changing or deleting existing operator
+data. The directory remains EMPTY: no sender is started and no delivery
+ledger is migrated or written. Fake-PM2 full shell regressions verify
+positive mode 0700 and both unsafe existing-directory cases. This is
+source-level and hermetic QA only; the actual Production directory has not
+been inspected or changed.
+
+Real live deployment still requires an independently authorized
+LIVE-preserving old-app owner switch and two same-process stopped-lane
+proofs. A dormant directory is NOT cutover authorization.

@@ -26,7 +26,10 @@ test('remote script is create-only and proves old PM2 remained unchanged',()=>{
    '/var/lock/stock-app-deploy.lock','flock -n 8','flock -n 9',
    'pm2_digest','before="$(pm2_digest)"','after="$(pm2_digest)"',
    'telegram-dormant-payload.tar','installation-receipt.json','STAGED_INACTIVE',
-   'TELEGRAM_DORMANT_INSTALLER_SOURCE_MISMATCH','INSTALLER_SHA="$3"'])
+   'TELEGRAM_DORMANT_INSTALLER_SOURCE_MISMATCH','INSTALLER_SHA="$3"',
+   'TELEGRAM_DORMANT_STATE_SYMLINK_FORBIDDEN',
+   'TELEGRAM_DORMANT_STATE_DIRECTORY_UNSAFE',
+   'STATE="$BASE/state"','mkdir -m 700 -- "$STATE"'])
   assert.ok(script.includes(marker),marker);
  for(const forbid of ['pm2 restart','pm2 reload','pm2 stop',
    'systemctl start','systemctl restart','sendMessage(',
