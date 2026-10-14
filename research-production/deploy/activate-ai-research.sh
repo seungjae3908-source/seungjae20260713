@@ -1078,13 +1078,18 @@ activate() {
   local snapshot_root="$ISOLATED_BASELINE_SNAPSHOT_ROOT"
 
   local activated=false
-  local cutover_started=true
+  # EXIT traps run after this function's local scope can be unwound. Keep the
+  # rollback boundary and its immutable snapshot path shell-global so `set -u`
+  # can never replace the original activation failure with an unbound-local
+  # error.
+  AI_RESEARCH_CUTOVER_STARTED=true
+  AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT="$snapshot_root"
   fail_safe() {
     local status=$?
     if (( status != 0 )); then
-      if [[ "$cutover_started" == true ]]; then
+      if [[ "${AI_RESEARCH_CUTOVER_STARTED:-false}" == true ]]; then
         local rollback_status=0
-        restore_runtime_snapshot "$snapshot_root" || rollback_status=$?
+        restore_runtime_snapshot "$AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT" || rollback_status=$?
         if (( rollback_status == 0 )); then
           printf '%s\n' "AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true" "TARGET_SHA=$TARGET_SHA" >&2
         else

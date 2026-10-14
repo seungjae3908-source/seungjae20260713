@@ -98,9 +98,9 @@ grep -Fxq 'new-research-env' "$RESEARCH_ENV"
 printf 'ROLLBACK_HARNESS=PASS\n'
 `.replaceAll('__DL__', '${')
     .replace('__SHA__', 'a'.repeat(40))
-    .replace('__HELPERS__', helpers)
+    .replace('__HELPERS__', () => helpers)
     .replaceAll('__SHA__', 'a'.repeat(40))
-    .replace('__DAMAGE__', damageBackup ? 'rm -f "$snapshot/units/research-production-old.timer"' : ':');
+    .replace('__DAMAGE__', () => damageBackup ? 'rm -f "$snapshot/units/research-production-old.timer"' : ':');
   const result = spawnSync('bash', ['-s'], {
     input: script,
     encoding: 'utf8',

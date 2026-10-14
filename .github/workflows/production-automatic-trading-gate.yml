@@ -91,6 +91,14 @@ on:
       - api-server/src/services/trade-automation-integration.test.ts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+      # Formula research candidates can feed the prospective Paper boundary.
+      # Changes stay validation-only here and never activate Paper or LIVE.
+      - market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js
+      - market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/src/registered-formula-prospective-watch-v1.js
+      - market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js
+      - market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+      - market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
       - signal-intelligence-v3/ARCHITECTURE.md
       - signal-intelligence-v3/README.md
       - signal-intelligence-v3/scripts/diagnose-public-providers.ts
