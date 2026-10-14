@@ -28,9 +28,17 @@ test('AI and video services reuse one provider-only Research environment file', 
 
 test('AI service marks timer contract but does not self-claim timer proof', async () => {
   const unit=await readFile(new URL('../deploy/research-production-ai-review.service', import.meta.url),'utf8');
+  const coordinator=await readFile(new URL('../bin/autonomous-research-coordinator-v2.mjs', import.meta.url),'utf8');
   assert.match(unit,/Environment=RESEARCH_AI_INVOCATION_MODE=SYSTEMD_TIMER/);
-  assert.ok(unit.indexOf('autonomous-research-closed-loop.mjs') < unit.indexOf('research-ai-review.mjs run'));
-  assert.ok(unit.includes('ExecStart=-/usr/bin/env node research-production/bin/autonomous-research-closed-loop.mjs'));
+  assert.ok(unit.includes('ExecStart=/usr/bin/env node research-production/bin/autonomous-research-coordinator-v2.mjs'));
+  assert.ok(!unit.includes('ExecStart=-'));
+  assert.match(coordinator,/runAutonomousResearchCycleV2/);
+  assert.match(coordinator,/runResearchAiReviewScan/);
+  assert.match(coordinator,/WAITING_OR_PARTIAL_AI/);
+  assert.match(unit,/CPUQuota=80%/);
+  assert.match(unit,/MemoryMax=2G/);
+  assert.match(unit,/TasksMax=64/);
+  assert.match(unit,/TimeoutStartSec=8m/);
   assert.doesNotMatch(unit,/scheduledInvocationObserved=true/);
 });
 

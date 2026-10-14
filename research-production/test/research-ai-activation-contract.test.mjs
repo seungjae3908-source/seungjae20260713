@@ -256,15 +256,19 @@ test('approved-job intake and workspace heartbeat are proven before activation c
 
 
 test('AI review business failures are visible to systemd instead of exiting success', async () => {
-  const [cli, service] = await Promise.all([
+  const [cli, service, coordinator] = await Promise.all([
     readFile(aiCliUrl, 'utf8'),
     readFile(aiServiceUrl, 'utf8'),
+    readFile(new URL('../bin/autonomous-research-coordinator-v2.mjs', import.meta.url), 'utf8'),
   ]);
   assert.match(cli, /PARTIAL_AI_UNAVAILABLE/);
   assert.match(cli, /WAITING_FOR_FREE_AI/);
   assert.match(cli, /DEFERRED_RETRY/);
   assert.match(cli, /process\.exitCode = 75/);
-  assert.match(service, /ExecStart=.*research-ai-review\.mjs run/);
+  assert.match(coordinator, /runResearchAiReviewScan/);
+  assert.match(coordinator, /WAITING_OR_PARTIAL_AI/);
+  assert.match(coordinator, /process\.exitCode = failed \? 1 : unavailable \? 75 : 0/);
+  assert.match(service, /ExecStart=.*autonomous-research-coordinator-v2\.mjs/);
   assert.doesNotMatch(service, /SuccessExitStatus=.*75/);
 });
 
