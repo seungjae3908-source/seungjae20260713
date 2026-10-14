@@ -70,14 +70,14 @@ export default defineConfig({
       registerType: 'autoUpdate',
       // The Replit dev preview is proxied under a sub-path with HMR; a service
       // worker there conflicts with tooling, so PWA is production-only.
-      disable: process.env.NODE_ENV !== 'production',
+      disable: process.env.NODE_ENV !== 'production' || process.env.VITE_UI_VNEXT_PREVIEW === 'true',
       manifest: {
         name: '지식정보',
         short_name: '지식정보',
         description: '주식·코인 정보, 분석, 알림과 승인형 자동매매',
         lang: 'ko-KR',
-        theme_color: '#0b1220',
-        background_color: '#0b1220',
+        theme_color: '#f8fafc',
+        background_color: '#f8fafc',
         display: 'standalone',
         orientation: 'portrait',
         id: '/',

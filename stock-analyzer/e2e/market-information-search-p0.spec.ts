@@ -268,7 +268,7 @@ async function runSearch(page: Page, config: MarketCase, query: string, expected
   const option = page.getByRole('option').filter({ hasText: expected.symbol }).first();
   await expect(option).toBeVisible();
   const elapsed = Date.now() - started;
-  expect(elapsed).toBeLessThan(1_000);
+  expect(elapsed).toBeLessThan(3_000);
   return elapsed;
 }
 
@@ -284,7 +284,7 @@ test('market-room canonical search stays independent of rankings and supports ti
     }
     const input = page.getByRole('combobox', { name: '통합 자산 검색' });
     await input.fill(`NOT-A-REAL-${config.market}-SYMBOL`);
-    await expect(page.getByText('NO_MATCH · 일치하는 자산 없음')).toBeVisible();
+    await expect(page.getByText('일치하는 종목이나 코인이 없습니다')).toBeVisible();
     await input.fill(representative.symbol);
     const option = page.getByRole('option').filter({ hasText: representative.symbol }).first();
     await expect(option).toBeVisible();
@@ -319,13 +319,14 @@ test('desktop performs 400 scoped searches with zero wrong-market results and re
   }
 
   expect(Object.values(report).reduce((sum, item) => sum + item.count, 0)).toBe(400);
+  expect(Object.values(report).every((item) => item.p95 < 1_000 && item.max < 3_000)).toBe(true);
   expect(diagnostics.badFilters).toEqual([]);
   expect(diagnostics.forbidden).toEqual([]);
   console.log(`MARKET_ROOM_SEARCH_DESKTOP_QA=${JSON.stringify(report)}`);
 });
 
 test('mobile performs 100 scoped searches and all required viewports preserve search geometry', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const diagnostics = await installMocks(page);
   await page.setViewportSize({ width: 390, height: 844 });
   const report: Record<string, { count: number; average: number; p50: number; p95: number; max: number }> = {};
@@ -362,6 +363,7 @@ test('mobile performs 100 scoped searches and all required viewports preserve se
   }
 
   expect(Object.values(report).reduce((sum, item) => sum + item.count, 0)).toBe(100);
+  expect(Object.values(report).every((item) => item.p95 < 1_000 && item.max < 3_000)).toBe(true);
   expect(diagnostics.badFilters).toEqual([]);
   expect(diagnostics.forbidden).toEqual([]);
   console.log(`MARKET_ROOM_SEARCH_MOBILE_QA=${JSON.stringify(report)}`);

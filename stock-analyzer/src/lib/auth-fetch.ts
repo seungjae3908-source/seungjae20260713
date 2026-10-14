@@ -38,6 +38,8 @@ import {
 // first paint after 4 seconds. Keep the client transport guard outside that
 // server budget so the browser cannot abort before the fail-closed fallback.
 const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
+const CONFIGURED_APP_API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || null;
 
 let pageReadLifecycleController: AbortController | null = null;
 let pageReadLifecycleListenersBound = false;
@@ -84,10 +86,36 @@ function requestPath(input: RequestInfo | URL): string {
   return requestUrl(input)?.pathname ?? '';
 }
 
+function resolveConfiguredAppApiInput(input: RequestInfo | URL): RequestInfo | URL {
+  if (!CONFIGURED_APP_API_BASE || typeof window === 'undefined') return input;
+  const parsed = requestUrl(input);
+  if (!parsed || parsed.origin !== window.location.origin || !parsed.pathname.startsWith('/api/')) return input;
+
+  const configured = new URL(CONFIGURED_APP_API_BASE, window.location.origin);
+  const configuredPath = configured.pathname.replace(/\/$/, '');
+  const suffix = parsed.pathname.slice('/api'.length);
+  const target = `${configured.origin}${configuredPath}${suffix}${parsed.search}${parsed.hash}`;
+  return typeof Request !== 'undefined' && input instanceof Request
+    ? new Request(target, input)
+    : target;
+}
+
 function requestMethod(input: RequestInfo | URL, init: RequestInit): string {
   if (init.method) return init.method.toUpperCase();
   if (typeof Request !== 'undefined' && input instanceof Request) return input.method.toUpperCase();
   return 'GET';
+}
+
+function assertUiVnextPreviewMutationBoundary(
+  input: RequestInfo | URL,
+  init: RequestInit,
+): void {
+  if (!UI_VNEXT_PREVIEW) return;
+  const method = requestMethod(input, init);
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+  const path = requestPath(input);
+  if (!path.startsWith('/api/trade-automation')) return;
+  throw new Error('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED');
 }
 
 function marketMoversRequestedMarket(input: RequestInfo | URL): 'KR' | 'US' | null {
@@ -234,6 +262,8 @@ export async function authorizedFetch(
   init: RequestInit = {},
   options: AuthorizedFetchOptions = {},
 ): Promise<Response> {
+  assertUiVnextPreviewMutationBoundary(input, init);
+  const resolvedInput = resolveConfiguredAppApiInput(input);
   const headers = new Headers(init.headers);
   const resolvedAccessToken = options.accessToken?.trim();
   if (!headers.has('Authorization') && resolvedAccessToken) {
@@ -242,11 +272,11 @@ export async function authorizedFetch(
   const signal = init.signal ?? getActiveQuerySignal();
   if (signal?.aborted) throw abortReason(signal);
 
-  const method = requestMethod(input, init);
+  const method = requestMethod(resolvedInput, init);
   const pageReadSignal = method === 'GET' ? pageReadLifecycleSignal() : undefined;
   if (pageReadSignal?.aborted) throw abortReason(pageReadSignal);
 
-  const marketInformationRequest = requestPath(input).startsWith('/api/market-information/');
+  const marketInformationRequest = requestPath(resolvedInput).startsWith('/api/market-information/');
   const timeoutMs = options.timeoutMs === undefined
     ? marketInformationRequest
       ? MARKET_INFORMATION_REQUEST_TIMEOUT_MS
@@ -290,8 +320,8 @@ export async function authorizedFetch(
       );
 
     try {
-      const response = await fetch(input, { ...init, headers, signal: controller.signal });
-      return await validateInvestmentResponse(input, init, response);
+      const response = await fetch(resolvedInput, { ...init, headers, signal: controller.signal });
+      return await validateInvestmentResponse(resolvedInput, init, response);
     } catch (error) {
       if (marketInformationRequest && timedOut && !signal?.aborted && !pageReadSignal?.aborted) {
         return new Response(JSON.stringify({

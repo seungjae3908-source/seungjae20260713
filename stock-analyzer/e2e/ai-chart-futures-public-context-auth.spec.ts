@@ -20,7 +20,7 @@ test('AI Chart Bitget public context uses the authenticated app API transport', 
   expect(panel).toContain('data-testid="stock-flow-evidence"');
 
   expect(authFetch).toContain("headers.set('Authorization', `Bearer ${token}`)");
-  expect(authFetch).toContain('fetch(input, { ...init, headers, signal: controller.signal });');
+  expect(authFetch).toContain('fetch(resolvedInput, { ...init, headers, signal: controller.signal });');
 });
 
 test('futures market status panel does not prefetch protected data without futures capability', () => {

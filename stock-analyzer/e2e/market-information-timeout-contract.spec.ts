@@ -24,7 +24,7 @@ test('Market Information client timeout cannot preempt the server first-paint fa
   expect(clientTimeout).toBe(6_000);
   expect(clientTimeout).toBeGreaterThan(serverFirstPaintTimeout);
   expect(5_000 - serverFirstPaintTimeout).toBeGreaterThanOrEqual(2_500);
-  expect(clientSource).toContain("requestPath(input).startsWith('/api/market-information/')");
+  expect(clientSource).toContain("requestPath(resolvedInput).startsWith('/api/market-information/')");
   expect(clientSource).toContain("errorCode: 'MARKET_INFORMATION_TIMEOUT'");
   expect(clientSource).not.toContain('MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500');
 

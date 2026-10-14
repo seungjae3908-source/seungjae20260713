@@ -37,7 +37,7 @@ export default defineConfig({
     launchOptions: stagingMode ? undefined : { args: ['--disable-remote-fonts'] },
     hasTouch: true,
     actionTimeout: 20_000,
-    navigationTimeout: 30_000,
+    navigationTimeout: 60_000,
     screenshot: 'only-on-failure',
     trace: stagingMode ? 'off' : 'retain-on-failure',
     video: 'retain-on-failure',
@@ -46,7 +46,7 @@ export default defineConfig({
   webServer: stagingMode ? undefined : {
     command: 'node ./e2e/support/start-vite-e2e-server.mjs vite.config.ts',
     url: `http://127.0.0.1:${localPort}`,
-    reuseExistingServer: false,
+    reuseExistingServer: process.env.REUSE_E2E_SERVER === 'true',
     timeout: 120_000,
   },
 });

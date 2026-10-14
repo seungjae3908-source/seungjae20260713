@@ -11,7 +11,7 @@ test('scanner mobile detail sheet overrides translucent card alpha with raw them
   const settings = source('src/lib/settings.tsx');
   const scanner = source('src/pages/signal-scanner.tsx');
 
-  expect(settings).toContain("root.style.setProperty('--card-alpha', '0.72')");
+  expect(settings).toContain("root.style.setProperty('--card-alpha', effectiveTheme === 'light' ? '1' : '0.72')");
   expect(scanner).toContain('data-testid="scanner-mobile-sheet"');
 
   const start = css.lastIndexOf("[data-testid='scanner-mobile-sheet'] {");

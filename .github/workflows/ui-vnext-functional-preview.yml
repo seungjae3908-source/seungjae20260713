@@ -1,0 +1,186 @@
+name: UI vNext Functional Preview
+# Functional preview only. Publishes the real app build to a dedicated preview branch.
+
+on:
+  push:
+    branches:
+      - drift/ui-vnext-functional-preview-20261001
+    paths:
+      - stock-analyzer/**
+      - .github/workflows/ui-vnext-functional-preview.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ui-vnext-functional-preview
+  cancel-in-progress: true
+
+jobs:
+  publish-preview:
+    name: Build and publish functional preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    env:
+      TARGET_SHA: ${{ github.sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+      LIVE_DIR: /opt/stock-app
+      SITE_BRANCH: ui-vnext-functional-site
+      SITE_BASE_PATH: /seungjae3908-source/seungjae20260713/ui-vnext-functional-site/
+      PUBLIC_API_BASE: https://lsj119.com/api
+      PREVIEW_URL: https://raw.githack.com/seungjae3908-source/seungjae20260713/ui-vnext-functional-site/index.html
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+
+      - name: Verify functional preview contract
+        run: |
+          set -Eeuo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const app = fs.readFileSync('stock-analyzer/src/App.tsx', 'utf8');
+          const runtime = fs.readFileSync('stock-analyzer/src/app-runtime.tsx', 'utf8');
+          const authFetch = fs.readFileSync('stock-analyzer/src/lib/auth-fetch.ts', 'utf8');
+          const css = fs.readFileSync('stock-analyzer/src/ui-vnext-preview.css', 'utf8');
+          if (!app.includes('usePreviewHashLocation')) throw new Error('preview hash router missing');
+          if (!app.includes('<WouterRouter hook={usePreviewHashLocation}>')) throw new Error('preview hash router is defined but not mounted');
+          if (!runtime.includes("VITE_UI_VNEXT_PREVIEW === 'true'")) throw new Error('preview runtime flag missing');
+          if (!runtime.includes("import './ui-vnext-preview.css'")) throw new Error('preview stylesheet missing');
+          if (!authFetch.includes('UI_VNEXT_PREVIEW_FINANCIAL_MUTATION_BLOCKED')) throw new Error('preview mutation guard missing');
+          if (!authFetch.includes('resolveConfiguredAppApiInput')) throw new Error('configured preview API resolver missing');
+          if (!css.includes("[data-testid='unified-analysis-chart']")) throw new Error('real chart styling contract missing');
+          NODE
+
+      - name: Configure SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Build exact branch frontend using existing public browser configuration
+        run: |
+          set -Eeuo pipefail
+          remote_archive="/tmp/ui-vnext-githack-${TARGET_SHA}.tar.gz"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q LIVE_DIR=%q SITE_BASE_PATH=%q PUBLIC_API_BASE=%q REMOTE_ARCHIVE=%q' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$LIVE_DIR" "$SITE_BASE_PATH" "$PUBLIC_API_BASE" "$remote_archive")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          SOURCE_DIR="$(mktemp -d /tmp/ui-vnext-githack-source.XXXXXX)"
+          cleanup() { rm -rf -- "$SOURCE_DIR"; }
+          trap cleanup EXIT
+
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          RESOLVED="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$RESOLVED" == "$TARGET_SHA" ]] || { echo 'Preview SHA mismatch' >&2; exit 10; }
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+
+          for relative_env in stock-analyzer/.env stock-analyzer/.env.production; do
+            source_env="$LIVE_DIR/$relative_env"
+            target_env="$SOURCE_DIR/$relative_env"
+            if [[ -f "$source_env" && ! -e "$target_env" ]]; then
+              mkdir -p "$(dirname "$target_env")"
+              ln -s "$source_env" "$target_env"
+            fi
+          done
+
+          (
+            cd "$SOURCE_DIR"
+            pnpm install --frozen-lockfile
+            BASE_PATH="$SITE_BASE_PATH" \
+            VITE_API_BASE_URL="$PUBLIC_API_BASE" \
+            VITE_UI_VNEXT_PREVIEW=true \
+            NODE_ENV=production \
+            pnpm --filter @workspace/stock-analyzer run typecheck
+            BASE_PATH="$SITE_BASE_PATH" \
+            VITE_API_BASE_URL="$PUBLIC_API_BASE" \
+            VITE_UI_VNEXT_PREVIEW=true \
+            NODE_ENV=production \
+            pnpm --filter @workspace/stock-analyzer run build
+          )
+
+          DIST="$SOURCE_DIR/stock-analyzer/dist/public"
+          [[ -f "$DIST/index.html" ]] || { echo 'Preview build output missing' >&2; exit 11; }
+          rm -f "$DIST/sw.js" "$DIST/registerSW.js"
+          node - "$DIST/index.html" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, sha] = process.argv.slice(2);
+          let html = fs.readFileSync(file, 'utf8');
+          html = html.replace('</head>', `<meta name="ui-vnext-preview" content="${sha}"></head>`);
+          fs.writeFileSync(file, html);
+          NODE
+          printf '%s\n' "$TARGET_SHA" > "$DIST/ui-vnext-preview-sha.txt"
+          rm -f -- "$REMOTE_ARCHIVE"
+          tar -C "$DIST" -czf "$REMOTE_ARCHIVE" .
+          chmod 600 "$REMOTE_ARCHIVE"
+          echo '[preview] isolated site artifact built; production files and PM2 unchanged'
+          REMOTE
+
+          rm -rf site-preview
+          mkdir -p site-preview
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST:$remote_archive" ./ui-vnext-site.tar.gz
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
+            "$SSH_USER@$SSH_HOST" "rm -f -- $(printf '%q' "$remote_archive")"
+          tar -xzf ./ui-vnext-site.tar.gz -C site-preview
+          rm -f ./ui-vnext-site.tar.gz
+          grep -q "ui-vnext-preview" site-preview/index.html
+          grep -q "$TARGET_SHA" site-preview/ui-vnext-preview-sha.txt
+
+      - name: Publish preview artifact to dedicated branch
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan "$SITE_BRANCH"
+          git rm -rf . >/dev/null 2>&1 || true
+          cp -a site-preview/. .
+          rm -rf site-preview
+          git add -A
+          git commit -m "preview(ui): functional vNext ${TARGET_SHA}"
+          git push --force origin "HEAD:$SITE_BRANCH"
+
+      - name: Verify raw.githack functional preview
+        run: |
+          set -Eeuo pipefail
+          for attempt in $(seq 1 18); do
+            body="$(mktemp)"
+            if curl --fail --silent --show-error --max-time 20 "${PREVIEW_URL}?sha=${TARGET_SHA}" > "$body" \
+              && grep -q "ui-vnext-preview" "$body" \
+              && grep -q "$TARGET_SHA" "$body"; then
+              rm -f "$body"
+              {
+                echo '## UI vNext functional preview ready'
+                echo
+                echo "- Source SHA: \`$TARGET_SHA\`"
+                echo "- Preview: ${PREVIEW_URL}#/"
+                echo '- Real React routes/components: `preserved`'
+                echo '- AI chart renderer: `preserved`'
+                echo '- Service worker collision: `not applicable (separate origin)`'
+                echo '- Production root files / PM2 / DB / Secret mutation: `none`'
+                echo '- Replit / Replit Agent: `not used`'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            rm -f "$body"
+            sleep 5
+          done
+          echo 'raw.githack preview did not expose the exact preview marker in time.' >&2
+          exit 1

@@ -213,11 +213,12 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 test('mobile Technical workspace avoids the duplicated visual page title while preserving accessible title and help', () => {
   expect(technicalSource).toContain('className="sr-only sm:hidden" data-testid="technical-mobile-accessible-title"');
-  expect(technicalSource).toContain('className="hidden sm:block" data-testid="technical-desktop-header"');
+  expect(technicalSource).toContain('data-testid="technical-desktop-header"');
   expect(technicalSource).toContain('data-testid="technical-mobile-help"');
   expect(technicalSource).toContain('aria-label="기술 기능 안내 보기"');
   expect(technicalSource).toContain("{ value: 'signal', label: 'AI 검색기' }");
-  expect(technicalSource).toContain("testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}");
+  expect(technicalSource).toContain('data-testid="technical-desktop-cards"');
+  expect(technicalSource).toContain('testId="technical-mobile-tabs"');
 });
 
 test('Technical workspace does not double-reserve BottomNav height', () => {

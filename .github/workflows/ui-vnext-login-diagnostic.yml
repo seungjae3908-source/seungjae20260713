@@ -1,0 +1,41 @@
+name: UI vNext Login Diagnostic
+
+on:
+  push:
+    branches:
+      - drift/ui-vnext-functional-preview-20261001
+    paths:
+      - .github/workflows/ui-vnext-login-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cors-auth-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe production API CORS from preview origin
+        run: |
+          set -Eeuo pipefail
+          origin='https://raw.githack.com'
+          headers="$(mktemp)"
+          curl --silent --show-error --max-time 20 -o /dev/null -D "$headers"             -X OPTIONS 'https://lsj119.com/api/auth/profile'             -H "Origin: $origin"             -H 'Access-Control-Request-Method: GET'             -H 'Access-Control-Request-Headers: authorization'
+          echo '--- lsj119 auth/profile preflight ---'
+          cat "$headers"
+          grep -i '^access-control-allow-origin:' "$headers"
+          grep -i '^access-control-allow-methods:' "$headers"
+          grep -i '^access-control-allow-headers:' "$headers"
+
+      - name: Probe Supabase password-auth CORS from preview origin
+        run: |
+          set -Eeuo pipefail
+          origin='https://raw.githack.com'
+          headers="$(mktemp)"
+          curl --silent --show-error --max-time 20 -o /dev/null -D "$headers"             -X OPTIONS 'https://bawcbkoyovbeajkrnduq.supabase.co/auth/v1/token?grant_type=password'             -H "Origin: $origin"             -H 'Access-Control-Request-Method: POST'             -H 'Access-Control-Request-Headers: apikey,authorization,content-type,x-client-info'
+          echo '--- supabase password-auth preflight ---'
+          cat "$headers"
+          grep -i '^access-control-allow-origin:' "$headers"
+          grep -i '^access-control-allow-methods:' "$headers"
+          grep -i '^access-control-allow-headers:' "$headers"

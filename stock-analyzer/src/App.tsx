@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState, type ComponentType } from 'react';
 import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
@@ -30,6 +30,33 @@ import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 import RecommendationsPage from '@/pages/recommendations';
 
+const CHUNK_RECOVERY_PREFIX = 'stock-ai:chunk-recovery:';
+const CHUNK_LOAD_FAILURE = /ChunkLoadError|Loading chunk .+ failed|Failed to fetch dynamically imported module|Importing a module script failed/i;
+
+function lazyWithChunkRecovery<T extends ComponentType<any>>(
+  key: string,
+  importer: () => Promise<{ default: T }>,
+) {
+  return lazy<T>(async () => {
+    try {
+      const loaded = await importer();
+      if (typeof window !== 'undefined') window.sessionStorage.removeItem(`${CHUNK_RECOVERY_PREFIX}${key}`);
+      return loaded;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (typeof window !== 'undefined' && CHUNK_LOAD_FAILURE.test(message)) {
+        const recoveryKey = `${CHUNK_RECOVERY_PREFIX}${key}`;
+        if (!window.sessionStorage.getItem(recoveryKey)) {
+          window.sessionStorage.setItem(recoveryKey, 'reloading');
+          window.location.reload();
+          return new Promise<never>(() => undefined);
+        }
+      }
+      throw error;
+    }
+  });
+}
+
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
 const loadAlertsPage = () => import('@/pages/alerts');
@@ -40,14 +67,14 @@ const loadSignalScannerPage = () => import('@/pages/signal-scanner');
 const SignalScannerPage = lazy(loadSignalScannerPage);
 const TelegramSignalOrderPage = lazy(() => import('@/pages/telegram-signal-order'));
 const loadStockInfoPage = () => import('@/pages/stock-info');
-const StockInfoPage = lazy(loadStockInfoPage);
+const StockInfoPage = lazyWithChunkRecovery('stock-info', loadStockInfoPage);
 const loadDetailPage = () => import('@/pages/detail');
-const DetailPage = lazy(loadDetailPage);
+const DetailPage = lazyWithChunkRecovery('stock-analysis', loadDetailPage);
 const loadMarketInformationPage = () => import('@/pages/market-information');
-const MarketInformationPage = lazy(loadMarketInformationPage);
+const MarketInformationPage = lazyWithChunkRecovery('market-information', loadMarketInformationPage);
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
-const StocksPage = lazy(() => import('@/pages/stocks'));
-const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
+const StocksPage = lazyWithChunkRecovery('market-browser', () => import('@/pages/stocks'));
+const UnifiedAssetSearchPage = lazyWithChunkRecovery('asset-search', () => import('@/pages/unified-asset-search'));
 const loadThemesPage = () => import('@/pages/themes');
 const ThemesPage = lazy(loadThemesPage);
 const loadLearnPage = () => import('@/pages/learn');
@@ -133,6 +160,35 @@ function retryUnifiedChartBootstrap(failureCount: number, error: unknown): boole
   if (failureCount >= 1) return false;
   if (error instanceof UnifiedChartDataError) return error.retryable && error.kind !== 'aborted';
   return true;
+}
+
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
+
+function usePreviewHashLocation(): [string, (to: string, options?: { replace?: boolean }) => void] {
+  const readHashPath = () => {
+    const raw = window.location.hash.replace(/^#/, '').trim();
+    if (!raw) return '/';
+    return raw.startsWith('/') ? raw : `/${raw}`;
+  };
+  const [path, setPath] = useState(readHashPath);
+
+  useEffect(() => {
+    const handleHashChange = () => setPath(readHashPath());
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const navigate = useCallback((to: string, options?: { replace?: boolean }) => {
+    const normalized = to.startsWith('/') ? to : `/${to}`;
+    if (options?.replace) {
+      window.history.replaceState(window.history.state, '', `#${normalized}`);
+      setPath(normalized);
+      return;
+    }
+    window.location.hash = normalized;
+  }, []);
+
+  return [path, navigate];
 }
 
 const queryClient = new QueryClient({
@@ -482,7 +538,12 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RootRouter /></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  const routedApp = <AppShell><RootRouter /></AppShell>;
+  const router = UI_VNEXT_PREVIEW
+    ? <WouterRouter hook={usePreviewHashLocation}>{routedApp}</WouterRouter>
+    : <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>{routedApp}</WouterRouter>;
+
+  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider>{router}<Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
 }
 
 export default App;

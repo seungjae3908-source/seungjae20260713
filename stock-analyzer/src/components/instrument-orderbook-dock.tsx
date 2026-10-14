@@ -8,6 +8,7 @@ import {
   type MouseEvent,
 } from 'react';
 import { AlertTriangle, BookOpen, RefreshCw, X } from 'lucide-react';
+import { useLocation } from 'wouter';
 
 import { authorizedFetch } from '@/lib/auth-fetch';
 
@@ -259,19 +260,31 @@ function formatTime(value: string | null | undefined): string {
 }
 
 function providerLabel(provider: Provider): string {
-  if (provider === 'kiwoom') return 'Kiwoom read-only';
-  if (provider === 'upbit') return 'Upbit public REST';
-  if (provider === 'bitget') return 'Bitget public REST';
-  return 'Provider unavailable';
+  if (provider === 'kiwoom') return '키움증권 시세';
+  if (provider === 'upbit') return '업비트 공개 시세';
+  if (provider === 'bitget') return '비트겟 공개 시세';
+  return '시세 제공기관 연결 안 됨';
 }
 
 function statusLabel(data: Payload | null): string {
   if (!data) return '확인 전';
-  if (data.status === 'ready') return 'Fresh';
-  if (data.status === 'partial') return 'Partial';
-  if (data.status === 'stale') return 'Stale';
-  if (data.status === 'invalid') return 'Invalid';
-  return 'Unavailable';
+  if (data.status === 'ready') return '최신';
+  if (data.status === 'partial') return '일부 제공';
+  if (data.status === 'stale') return '지연';
+  if (data.status === 'invalid') return '표시 차단';
+  return '조회 불가';
+}
+
+function diagnosticLabel(value: string | null): string | null {
+  if (!value) return null;
+  if (value === 'ORDERBOOK_REQUEST_TIMEOUT') return '호가 조회가 지연되고 있습니다. 잠시 후 다시 시도해 주세요.';
+  if (value === 'ORDERBOOK_PROVIDER_UNAVAILABLE') return '현재 호가 제공기관에 연결할 수 없습니다.';
+  if (value === 'ORDERBOOK_IDENTITY_MISMATCH') return '요청한 종목과 다른 호가가 반환되어 표시하지 않았습니다.';
+  if (value === 'ORDERBOOK_LEVELS_CORRUPT' || value === 'ORDERBOOK_CROSSED') return '호가 데이터의 가격 순서가 올바르지 않아 안전하게 표시를 차단했습니다.';
+  if (value.startsWith('HTTP_401')) return '로그인이 만료되었습니다. 다시 로그인해 주세요.';
+  if (value.startsWith('HTTP_403')) return '이 호가를 조회할 권한이 없습니다.';
+  if (/^[A-Z0-9_:-]+$/.test(value)) return '호가를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  return value;
 }
 
 function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Level[]; currency: Currency }) {
@@ -284,7 +297,7 @@ function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Le
           key={`${side}-${level.price}`}
           className="grid min-h-10 grid-cols-[54px_1fr_1fr_1fr] items-center gap-1 border-b border-border/50 px-3 text-xs last:border-b-0"
         >
-          <span className="text-muted-foreground">{side === 'ask' ? 'Ask' : 'Bid'} {level.rank}</span>
+          <span className="text-muted-foreground">{side === 'ask' ? '매도' : '매수'} {level.rank}</span>
           <span className="text-right font-semibold tabular-nums">{formatPrice(level.price, currency)}</span>
           <span className="text-right tabular-nums">{formatQuantity(level.quantity)}</span>
           <span className="text-right tabular-nums">{formatQuantity(level.cumulativeQuantity)}</span>
@@ -305,6 +318,7 @@ export function InstrumentOrderbookDock({
   assetClass: OrderbookAssetClass;
   defaultOpen?: boolean;
 }) {
+  const [, navigate] = useLocation();
   const symbol = ticker.trim().toUpperCase();
   const targetKey = `${assetClass}:${market}:${symbol}`;
   const titleId = useId();
@@ -470,7 +484,20 @@ export function InstrumentOrderbookDock({
 
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
-  const diagnostic = error ?? (data?.status === 'invalid' ? data.reason : null);
+  const diagnostic = diagnosticLabel(error ?? (data?.status === 'invalid' ? data.reason : null));
+  const tradingMarket = market === 'KR'
+    ? 'domestic_stock'
+    : market === 'US'
+      ? 'us_stock'
+      : market === 'UPBIT'
+        ? 'crypto_spot'
+        : 'crypto_futures';
+  const openTrading = useCallback((paper: boolean) => {
+    setOpen(false);
+    stop();
+    const target = paper ? '/paper-trading?kind=manual' : '/auto-trading';
+    navigate(`${target}${target.includes('?') ? '&' : '?'}market=${tradingMarket}&section=orders`);
+  }, [navigate, stop, tradingMarket]);
 
   return (
     <>
@@ -481,18 +508,18 @@ export function InstrumentOrderbookDock({
         aria-label="읽기 전용 호가창 열기"
         className="fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] right-4 z-40 inline-flex min-h-11 items-center gap-2 rounded-full border border-border bg-background/95 px-4 py-2 text-sm font-semibold shadow-lg"
       >
-        <BookOpen className="h-4 w-4" aria-hidden />호가
+        <BookOpen className="h-4 w-4" aria-hidden />호가 보기
       </button>
 
       {open ? (
-        <div data-testid="instrument-orderbook-backdrop" onMouseDown={backdrop} className="fixed inset-0 z-[90] flex items-end justify-center bg-black/50 sm:items-center sm:p-4">
+        <div data-testid="instrument-orderbook-backdrop" onMouseDown={backdrop} className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/35 sm:items-center sm:p-4">
           <section
             ref={dialog}
             role="dialog"
             aria-modal="true"
             aria-labelledby={titleId}
             data-testid="instrument-orderbook-dialog"
-            className="flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-2xl sm:rounded-2xl"
+            className="flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-card shadow-2xl sm:h-auto sm:max-h-[92dvh] sm:max-w-3xl sm:rounded-2xl sm:border sm:border-border"
           >
             <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
               <div>
@@ -501,7 +528,7 @@ export function InstrumentOrderbookDock({
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px]">읽기 전용</span>
                   <span className="rounded-full border border-border px-2 py-0.5 text-[11px]">{statusLabel(data)}</span>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{providerLabel(data?.provider ?? null)} · 주문/취소/정정 기능 없음</p>
+                <p className="mt-1 text-xs text-muted-foreground">{providerLabel(data?.provider ?? null)} · 호가는 조회 전용 · 주문은 하단의 별도 확인 화면에서 진행</p>
               </div>
               <div className="flex gap-1">
                 <button type="button" aria-label="호가 새로고침" disabled={loading} onClick={() => void loadRef.current()} className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50">
@@ -515,17 +542,17 @@ export function InstrumentOrderbookDock({
 
             <div className="min-h-0 overflow-y-auto overscroll-contain">
               <div className="grid grid-cols-2 gap-2 border-b border-border p-3 text-xs sm:grid-cols-4">
-                <div><span className="text-muted-foreground">Best Ask</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.bestAsk ?? null, currency)}</strong></div>
-                <div><span className="text-muted-foreground">Best Bid</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.bestBid ?? null, currency)}</strong></div>
-                <div><span className="text-muted-foreground">Spread</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.spread ?? null, currency)}</strong></div>
-                <div><span className="text-muted-foreground">Spread %</span><strong className="mt-1 block tabular-nums">{data?.spreadPct == null ? '-' : `${data.spreadPct.toFixed(4)}%`}</strong></div>
+                <div><span className="text-muted-foreground">최우선 매도</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.bestAsk ?? null, currency)}</strong></div>
+                <div><span className="text-muted-foreground">최우선 매수</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.bestBid ?? null, currency)}</strong></div>
+                <div><span className="text-muted-foreground">호가 차이</span><strong className="mt-1 block tabular-nums">{formatPrice(data?.spread ?? null, currency)}</strong></div>
+                <div><span className="text-muted-foreground">차이 비율</span><strong className="mt-1 block tabular-nums">{data?.spreadPct == null ? '-' : `${data.spreadPct.toFixed(4)}%`}</strong></div>
               </div>
 
               <div className="grid grid-cols-2 gap-x-3 border-b border-border px-3 py-2 text-[11px] text-muted-foreground">
-                <span>Provider Update: {formatTime(data?.providerTimestamp)}</span>
-                <span className="text-right">Received: {formatTime(data?.receivedAt)}</span>
-                <span>Freshness: {data?.freshness ?? 'unknown'}</span>
-                <span className="text-right">Depth imbalance: {imbalance}</span>
+                <span>시세 기준 {formatTime(data?.providerTimestamp)}</span>
+                <span className="text-right">수신 {formatTime(data?.receivedAt)}</span>
+                <span>상태 {statusLabel(data)}</span>
+                <span className="text-right">매수·매도 잔량차 {imbalance}</span>
               </div>
 
               {diagnostic ? (
@@ -540,7 +567,7 @@ export function InstrumentOrderbookDock({
               ))}
 
               <div className="grid grid-cols-[54px_1fr_1fr_1fr] gap-1 border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-semibold">
-                <span>Side</span><span className="text-right">Price</span><span className="text-right">Quantity</span><span className="text-right">Cumulative</span>
+                <span>구분</span><span className="text-right">가격</span><span className="text-right">수량</span><span className="text-right">누적</span>
               </div>
               <LevelList side="ask" levels={data?.asks ?? []} currency={currency} />
               <LevelList side="bid" levels={data?.bids ?? []} currency={currency} />
@@ -551,8 +578,26 @@ export function InstrumentOrderbookDock({
               {!data && loading ? <p className="px-4 py-8 text-center text-sm text-muted-foreground">호가를 불러오는 중입니다.</p> : null}
             </div>
 
-            <footer className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
-              Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다. ORDERBOOK_IMBALANCE != TRADE_SIGNAL
+            <footer className="border-t border-border bg-card px-4 py-3">
+              <p className="text-[11px] text-muted-foreground">
+                매수·매도 잔량 차이는 참고용 통계이며 매수·매도 신호가 아닙니다. 호가를 눌러 바로 주문하지 않으며 별도 화면에서 계좌·금액·위험한도를 다시 확인합니다.
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => openTrading(true)}
+                  className="min-h-11 rounded-xl border border-border px-3 text-sm font-semibold"
+                >
+                  모의주문
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openTrading(false)}
+                  className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground"
+                >
+                  실전 주문 화면
+                </button>
+              </div>
             </footer>
           </section>
         </div>
