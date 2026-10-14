@@ -11,6 +11,8 @@ on:
       - 'api-server/src/services/upbit-external-pilot-public-data.service.test.ts'
       - 'api-server/src/services/external-strategy-pilot-producer.service.ts'
       - 'api-server/src/services/external-strategy-pilot-producer.service.test.ts'
+      - 'api-server/src/services/external-strategy-pilot-statistics.service.ts'
+      - 'api-server/src/services/external-strategy-pilot-statistics.service.test.ts'
       - 'api-server/src/services/member-auto-trading-ai-review-evidence.service.ts'
       - 'api-server/src/services/member-auto-trading-background-worker.service.ts'
       - 'api-server/src/providers/yahoo.ts'
@@ -199,6 +201,7 @@ jobs:
           SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           EXTERNAL_PILOT_QA_OUTPUT_FILE: ${{ runner.temp }}/external-pilot/upbit-public-qa.json
           MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH: ${{ runner.temp }}/external-pilot/member-auto-trading-latest.json
+          EXTERNAL_PILOT_STATISTICS_HISTORY_PATH: ${{ runner.temp }}/external-pilot/public-signal-history-v1.json
           EXTERNAL_PILOT_UPBIT_SYMBOLS: KRW-BTC,KRW-ETH,KRW-XRP
           EXTERNAL_PILOT_AI_REVIEW_ENABLED: 'false'
           LIVE_TRADING: 'false'
@@ -208,10 +211,11 @@ jobs:
           set -Eeuo pipefail
           mkdir -p "$RUNNER_TEMP/external-pilot"
           node .signal-intelligence/upbit-external-pilot-qa.mjs | tee "$RUNNER_TEMP/external-pilot/upbit-public-qa.log"
-          node - <<'NODE' "$EXTERNAL_PILOT_QA_OUTPUT_FILE" "$MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH"
+          node - <<'NODE' "$EXTERNAL_PILOT_QA_OUTPUT_FILE" "$MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH" "$EXTERNAL_PILOT_STATISTICS_HISTORY_PATH"
           const fs = require('node:fs');
           const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const persisted = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const history = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
           if (report.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
             || report.actualPublicData !== true || report.completePublicData !== true
             || report.observationKind !== 'LIVE_PUBLIC_MARKET'
@@ -233,6 +237,10 @@ jobs:
             || persisted.envelope?.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
             || persisted.handoff?.safety?.orderSubmitted !== false) process.exit(1);
           if (report.totals.handoffEntryCount !== report.totals.workerContractAdmissionCount) process.exit(1);
+          if (history.schemaVersion !== 'external-strategy-pilot-statistics-history-v1'
+            || history.observations?.length !== 1
+            || history.observations[0]?.observationKind !== 'LIVE_PUBLIC_MARKET'
+            || history.observations[0]?.naturalSignals !== report.totals.naturalCandidateCount) process.exit(1);
           NODE
       - name: Run full Upbit and Bitget cursor rotations with restart evidence
         if: ${{ github.base_ref == 'main' }}
@@ -333,6 +341,7 @@ jobs:
             ${{ runner.temp }}/signal-intelligence-provider-diagnostic.json
             ${{ runner.temp }}/external-pilot/upbit-public-qa.json
             ${{ runner.temp }}/external-pilot/upbit-public-qa.log
+            ${{ runner.temp }}/external-pilot/public-signal-history-v1.json
             ${{ runner.temp }}/external-pilot/member-auto-trading-latest.json
             ${{ runner.temp }}/signal-intelligence-crypto-rotation/full-rotation-evidence.json
             ${{ runner.temp }}/signal-intelligence-crypto-rotation/cycle-state.json

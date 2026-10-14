@@ -23,6 +23,10 @@ import {
   parseDailyProfitTargetEvidenceReason,
   tradingDayKeyForMarket,
 } from './daily-profit-target.service';
+import {
+  effectiveCapitalAllocation,
+  profitTargetCapitalBaseKrw,
+} from './auto-trading-capital-allocation.service';
 
 export type RulePackPilotLossReference = Readonly<{ closedAt: string; signalId: string }>;
 export type RulePackPilotCapitalState = Readonly<{
@@ -554,7 +558,9 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     const target = evaluateDailyProfitTarget({
       market: targetMarket,
       policy: targetPolicy,
-      baseCapitalKrw: pilot.initialOperatingCapitalKrw,
+      baseCapitalKrw: profitTargetCapitalBaseKrw(
+        policy, targetMarket, pilot.initialOperatingCapitalKrw,
+      ),
       realizedNetProfitKrw: pilot.dailyRealizedPnlKrw,
       unrealizedPnlKrw: evidence.unrealizedPnlKrw,
       cumulativeHighNetProfitKrw: Math.max(0,
@@ -574,7 +580,7 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     symbol: plan.symbol,
     signalId: plan.signalId,
     estimatedKrw: plan.estimatedKrw,
-    policyMaxOrderKrw: policy.maxOrderKrw,
+    policyMaxOrderKrw: effectiveCapitalAllocation(policy, targetMarket).maxOrderKrw,
     policyTotalCapitalKrw: policy.totalCapitalKrw,
     openLivePositions: Number.isSafeInteger(openLivePositions) && openLivePositions >= 0
       ? openLivePositions : Number.POSITIVE_INFINITY,

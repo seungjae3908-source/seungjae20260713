@@ -24,6 +24,8 @@ on:
       - api-server/supabase/test/automatic_live_atomic_budget_integration.sql
       - .github/tests/production-auto-live-budget-contract.test.mjs
       - api-server/src/services/automatic-live-budget.service.test.ts
+      - api-server/src/services/auto-trading-capital-allocation.service.test.ts
+      - api-server/src/services/auto-trading-capital-allocation.service.ts
       - ops/verify-production-paper-forward-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
@@ -93,6 +95,8 @@ on:
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/external-strategy-pilot-producer.service.test.ts
       - api-server/src/services/external-strategy-pilot-producer.service.ts
+      - api-server/src/services/external-strategy-pilot-statistics.service.test.ts
+      - api-server/src/services/external-strategy-pilot-statistics.service.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
       - api-server/src/services/forward-observer-canonical-metadata.service.ts
       - api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts

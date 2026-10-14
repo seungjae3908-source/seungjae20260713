@@ -16,6 +16,8 @@ const entries = [
   'trade-recovery-worker.test.ts',
   'trade-automation-repository-compatibility.test.ts',
   'trade-rule-pack-pilot-capital.service.test.ts',
+  'auto-trading-capital-allocation.service.test.ts',
+  'external-strategy-pilot-statistics.service.test.ts',
   'trade-automation-integration.test.ts',
   'trade-kiwoom-readonly-contract.test.ts',
   'kiwoom-readonly-order-recovery.service.test.ts',

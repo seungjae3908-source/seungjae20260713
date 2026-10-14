@@ -6,13 +6,16 @@ import {
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  USER_MARKET_CAPITAL_POLICY_VERSION,
   type TradingAssetClass,
+  type TradingCapitalAllocationPolicy,
   type DailyProfitTargetAction,
   type TradingMarketSnapshot,
   type TradingPlanInput,
   type TradingPolicy,
   type TradingRiskDecision,
 } from './trade-automation.types';
+import { effectiveCapitalAllocation, tradingCapitalChargeKrw } from './auto-trading-capital-allocation.service';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 
 const MAX_DATA_DELAY_MS = 5_000;
@@ -70,6 +73,56 @@ function dailyProfitTarget(value: unknown) {
     afterTargetAction: dailyProfitTargetAction(source.afterTargetAction),
   } as const;
 }
+function capitalAllocation(
+  value: unknown,
+  maximumSingleEntryKrw: number,
+  policyMaxOrderKrw: number,
+): TradingCapitalAllocationPolicy {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const configured = source.configured === true;
+  const operatingCapitalKrw = configured
+    ? clampNumber(source.operatingCapitalKrw, 1_000, maximumSingleEntryKrw, maximumSingleEntryKrw)
+    : 0;
+  const maxOrderKrw = configured
+    ? clampNumber(source.maxOrderKrw, 1_000,
+      Math.min(operatingCapitalKrw, maximumSingleEntryKrw, policyMaxOrderKrw),
+      Math.min(operatingCapitalKrw, maximumSingleEntryKrw, policyMaxOrderKrw))
+    : Math.min(maximumSingleEntryKrw, policyMaxOrderKrw);
+  const updatedAt = typeof source.updatedAt === 'string'
+    && Number.isFinite(Date.parse(source.updatedAt)) ? source.updatedAt : null;
+  const accountScopeId = typeof source.accountScopeId === 'string'
+    && /^[0-9a-f]{24}$/u.test(source.accountScopeId) ? source.accountScopeId : null;
+  return {
+    configured, operatingCapitalKrw, maxOrderKrw,
+    compoundAboveAllocation: false,
+    policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION,
+    updatedAt, accountScopeId,
+  };
+}
+function capitalAllocationAuditTrail(value: unknown): TradingPolicy['capitalAllocationAuditTrail'] {
+  if (!Array.isArray(value)) return [];
+  const markets = new Set<TradingAssetClass>(['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']);
+  return value.slice(-100).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    const market = row.market as TradingAssetClass;
+    const changedAt = typeof row.changedAt === 'string' ? row.changedAt : '';
+    if (!markets.has(market) || !Number.isFinite(Date.parse(changedAt))
+      || typeof row.userScopeDigest !== 'string' || !/^[0-9a-f]{24}$/u.test(row.userScopeDigest)
+      || typeof row.operatingCapitalKrw !== 'number' || !Number.isFinite(row.operatingCapitalKrw)
+      || typeof row.maxOrderKrw !== 'number' || !Number.isFinite(row.maxOrderKrw)) return [];
+    return [{
+      market, configured: row.configured === true,
+      operatingCapitalKrw: Math.max(0, row.operatingCapitalKrw),
+      maxOrderKrw: Math.max(0, row.maxOrderKrw), changedAt,
+      userScopeDigest: row.userScopeDigest,
+      accountScopeId: typeof row.accountScopeId === 'string' && /^[0-9a-f]{24}$/u.test(row.accountScopeId)
+        ? row.accountScopeId : null,
+      policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION,
+    }];
+  });
+}
 function planReferencePrice(plan: TradingPlanInput) {
   const candidates = [
     plan.marketSnapshot.currentPrice,
@@ -124,6 +177,12 @@ export function normalizeTradingPolicy(
     crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
     crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
   };
+  const capitalAllocationByMarket: Record<TradingAssetClass, TradingCapitalAllocationPolicy> = {
+    domestic_stock: capitalAllocation(input.capitalAllocationByMarket?.domestic_stock, maximumSingleEntryKrw, maxOrderKrw),
+    us_stock: capitalAllocation(input.capitalAllocationByMarket?.us_stock, maximumSingleEntryKrw, maxOrderKrw),
+    crypto_spot: capitalAllocation(input.capitalAllocationByMarket?.crypto_spot, maximumSingleEntryKrw, maxOrderKrw),
+    crypto_futures: capitalAllocation(input.capitalAllocationByMarket?.crypto_futures, maximumSingleEntryKrw, maxOrderKrw),
+  };
   const marketEnabled: Record<TradingAssetClass, boolean> = {
     domestic_stock: input.marketEnabled?.domestic_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.domestic_stock,
     us_stock: input.marketEnabled?.us_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.us_stock,
@@ -148,6 +207,8 @@ export function normalizeTradingPolicy(
       crypto_spot: dailyProfitTarget(input.dailyProfitTargetByMarket?.crypto_spot),
       crypto_futures: dailyProfitTarget(input.dailyProfitTargetByMarket?.crypto_futures),
     },
+    capitalAllocationByMarket,
+    capitalAllocationAuditTrail: capitalAllocationAuditTrail(input.capitalAllocationAuditTrail),
     marketEnabled,
     stockBrokerByMarket,
     exchangeEnabled: {
@@ -231,11 +292,14 @@ export function evaluateTradingPlan(
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
   const riskReducing = isRiskReducingExitPlan(plan);
+  const assetClass = assetClassForPlan(plan);
+  const allocation = effectiveCapitalAllocation(policy, assetClass);
+  const capitalChargeKrw = tradingCapitalChargeKrw(plan);
   if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
   if (policy.newEntriesStopped && !riskReducing) add(blockCodes, 'NEW_ENTRIES_STOPPED');
-  if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
+  if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > allocation.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
   if (!riskReducing && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
   if (!riskReducing && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
   if (!riskReducing && snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
@@ -249,9 +313,23 @@ export function evaluateTradingPlan(
   const strategyExposureKrw = finiteNonNegative(snapshot.strategyExposureKrw) ? snapshot.strategyExposureKrw : null;
   const strategyLimitKrw = capitalBase * policy.maxAssetPercent / 100;
   if (!riskReducing && strategyExposureKrw != null && strategyExposureKrw + plan.estimatedKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
-  const assetClass = assetClassForPlan(plan);
   const classExposure = finiteNonNegative(snapshot.assetClassExposureKrw) ? snapshot.assetClassExposureKrw : 0;
-  if (!riskReducing && classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+  // The user allocation is cash/margin authority. Futures exposure is a
+  // separate leveraged notional, while the capital check below still charges
+  // only isolated margin. Conflating the two silently reduced a 100k margin
+  // allocation to 100k notional even when the policy allowed 3x.
+  const allocationNotionalLimit = assetClass === 'crypto_futures' && allocation.configured
+    ? allocation.operatingCapitalKrw * Math.max(1, Number(plan.leverage ?? 1))
+    : allocation.operatingCapitalKrw;
+  const classLimit = Math.min(policy.maxAssetClassKrw[assetClass], allocationNotionalLimit);
+  if (!riskReducing && classExposure + plan.estimatedKrw > classLimit) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+  const committedCapital = finiteNonNegative(snapshot.assetClassCapitalCommittedKrw)
+    ? snapshot.assetClassCapitalCommittedKrw : classExposure;
+  if (!riskReducing && allocation.configured
+    && (!finiteNonNegative(capitalChargeKrw)
+      || committedCapital + capitalChargeKrw > allocation.operatingCapitalKrw)) {
+    add(blockCodes, 'OPERATING_CAPITAL_ALLOCATION_LIMIT');
+  }
 
   const openRiskKrw = finiteNonNegative(snapshot.openRiskKrw) ? snapshot.openRiskKrw : null;
   const thisPlanRiskKrw = plannedOpenRiskKrw(plan);

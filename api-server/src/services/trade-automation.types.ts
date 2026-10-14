@@ -15,6 +15,31 @@ export type DailyProfitTargetPolicy = Readonly<{
   targetPercent: number;
   afterTargetAction: DailyProfitTargetAction;
 }>;
+export const USER_MARKET_CAPITAL_POLICY_VERSION = 'user-market-capital-v1' as const;
+export type TradingCapitalAllocationPolicy = Readonly<{
+  /** False preserves the legacy policy and grants no new capital authority. */
+  configured: boolean;
+  /** User-selected absolute cash/margin ceiling for this market. */
+  operatingCapitalKrw: number;
+  /** Separate per-entry notional ceiling; Risk may always choose less. */
+  maxOrderKrw: number;
+  /** Reserved for a future explicit opt-in. V1 must remain false. */
+  compoundAboveAllocation: false;
+  policyVersion: typeof USER_MARKET_CAPITAL_POLICY_VERSION;
+  /** Server-authored audit fields. Browser values are never trusted. */
+  updatedAt: string | null;
+  accountScopeId: string | null;
+}>;
+export type TradingCapitalAllocationAudit = Readonly<{
+  market: TradingAssetClass;
+  configured: boolean;
+  operatingCapitalKrw: number;
+  maxOrderKrw: number;
+  changedAt: string;
+  userScopeDigest: string;
+  accountScopeId: string | null;
+  policyVersion: typeof USER_MARKET_CAPITAL_POLICY_VERSION;
+}>;
 
 export type TradingOrderState =
   | 'PLANNED'
@@ -116,6 +141,13 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
     crypto_spot: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
     crypto_futures: { enabled: false, targetPercent: 5, afterTargetAction: 'PROFIT_PROTECTION' },
   } as Record<TradingAssetClass, DailyProfitTargetPolicy>,
+  capitalAllocationByMarket: {
+    domestic_stock: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, compoundAboveAllocation: false, policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION, updatedAt: null, accountScopeId: null },
+    us_stock: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, compoundAboveAllocation: false, policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION, updatedAt: null, accountScopeId: null },
+    crypto_spot: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, compoundAboveAllocation: false, policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION, updatedAt: null, accountScopeId: null },
+    crypto_futures: { configured: false, operatingCapitalKrw: 0, maxOrderKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, compoundAboveAllocation: false, policyVersion: USER_MARKET_CAPITAL_POLICY_VERSION, updatedAt: null, accountScopeId: null },
+  } as Record<TradingAssetClass, TradingCapitalAllocationPolicy>,
+  capitalAllocationAuditTrail: [] as TradingCapitalAllocationAudit[],
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: false } as Record<TradingAssetClass, boolean>,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' } as Record<StockTradingAssetClass, StockBroker>,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
@@ -160,6 +192,9 @@ export type TradingPolicy = {
   emergencyStopped: boolean;
   newEntriesStopped: boolean;
   dailyProfitTargetByMarket: Record<TradingAssetClass, DailyProfitTargetPolicy>;
+  capitalAllocationByMarket: Record<TradingAssetClass, TradingCapitalAllocationPolicy>;
+  /** Bounded, server-authored history. The policy row itself remains user-scoped. */
+  capitalAllocationAuditTrail: TradingCapitalAllocationAudit[];
   marketEnabled: Record<TradingAssetClass, boolean>;
   stockBrokerByMarket?: Record<StockTradingAssetClass, StockBroker>;
   exchangeEnabled: Record<TradingExchange, boolean>;
@@ -238,6 +273,8 @@ export type TradingMarketSnapshot = {
   instrumentExposureKrw?: number | null;
   strategyExposureKrw?: number | null;
   assetClassExposureKrw?: number | null;
+  /** Cash or isolated-margin commitment, distinct from futures notional. */
+  assetClassCapitalCommittedKrw?: number | null;
   openRiskKrw?: number | null;
   openPositionCount: number;
   dailyOrderCount: number;
