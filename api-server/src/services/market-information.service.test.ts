@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import './four-market-auto-readiness.test';
 import {
+  assetFromQuote,
   dedupeMarketNews,
   fetchPublicMarketJson,
   MarketInformationError,
@@ -232,4 +233,17 @@ test('news deduplication rejects empty, duplicate, and future items and sorts ne
   assert.equal(rows.length, 2);
   assert.equal(rows[0].id, '1');
   assert.equal(rows[0].url, 'https://example.com/story');
+});
+
+test('stock quote rows with an empty exchange fall back to the market default instead of an empty string', () => {
+  const base = { ticker: 'abc', name: 'ABC', price: 100, changePercent: 1, volume: 10, tradingValue: 1000 };
+  const kr = assetFromQuote({ ...base, market: 'KR', exchange: '' } as never, 'KRW');
+  assert.equal(kr?.exchange, 'KRX');
+  const us = assetFromQuote({ ...base, market: 'US', exchange: '   ' } as never, 'USD');
+  assert.equal(us?.exchange, 'US');
+  const missing = assetFromQuote({ ...base, market: 'US' } as never, 'USD');
+  assert.equal(missing?.exchange, 'US');
+  const real = assetFromQuote({ ...base, market: 'US', exchange: 'NASDAQ' } as never, 'USD');
+  assert.equal(real?.exchange, 'NASDAQ');
+  assert.equal(assetFromQuote({ ...base, ticker: '' } as never, 'KRW'), null);
 });
