@@ -134,3 +134,26 @@ These are controls for a dormant, *not running* artifact. They do not prove
 that the old embedded Telegram workers have stopped, that live trading can
 tolerate a shared API restart, or that Telegram Bot POST and personal
 notifications are accepted. None of those actions are authorized here.
+
+
+## Full real-shell offline installation rehearsal
+
+The protected install contract now runs the actual
+`ops/telegram-protected-dormant-install.sh` through a hermetic local
+simulation instead of relying only on source-string assertions.
+`telegram-protected-dormant-install-e2e.test.mjs` creates a disposable
+Git checkout, seals a real six-file package with the packager, creates
+a tarball, rewrites absolute paths **only in isolated test copies**, and
+runs the protected Bash installer with a deliberately fake PM2 command.
+The fake PM2 declares manual LIVE flags *true* and an embedded sender;
+installation must leave those flags and the existing app SHA unchanged.
+It tests the actual Node create-only installer, archive checks, locks,
+receipt, and duplicate target handling; rejects tampered installer bytes,
+wrong tar checksum, missing approval and PM2 SHA/status mismatch.
+
+This rehearsal never connects to the Production host, never calls a
+real PM2, never sends to Telegram, never uses DB credentials, and never
+executes broker operations. Its success is **not** proof that running
+Production's old embedded sender can be quiesced or that live trading
+can be restarted safely. That requires separate protected operational
+proof and explicit owner approval.
