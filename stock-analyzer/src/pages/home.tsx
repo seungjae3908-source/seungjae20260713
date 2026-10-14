@@ -7,7 +7,7 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
-import { useAnalysisSelection, type AnalysisTradeAction } from '@/lib/analysis-selection';
+import { useAnalysisSelection, selectionQuery, type AnalysisTradeAction } from '@/lib/analysis-selection';
 import { apiGet, type SummaryItem } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
 import {
@@ -241,7 +241,7 @@ export default function HomePage() {
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
       <HomeSectionHeader icon={<Radar className="h-4 w-4" />} title="최근 신호" actionLabel="검색기" onAction={() => navigate('/scanner')} />
       {selection && signalIsCurrent && selection.signalScore != null ? (
-        <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
+        <button type="button" aria-label="선택한 신호를 실제 AI차트에서 보기" onClick={() => navigate(`/ai-chart?${selectionQuery(selection)}`)} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
           <div className="min-w-0">
             <p className="truncate text-sm font-bold">{selection.displayName}</p>
             <p className="mt-1 truncate text-xs font-medium text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p>
