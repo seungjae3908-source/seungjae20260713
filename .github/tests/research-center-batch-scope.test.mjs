@@ -235,6 +235,20 @@ test('bounded AI provider recovery tests are scoped exactly without adding execu
   }
 });
 
+test('autonomous research loop scope is exact and grants no deployment or order path', () => {
+  for (const path of [
+    'research-production/bin/autonomous-research-closed-loop.mjs',
+    'research-production/deploy/research-production-ai-review.service',
+    'research-production/src/autonomous-research-closed-loop-v1.mjs',
+    'research-production/test/autonomous-research-closed-loop-v1.test.mjs',
+  ]) assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes(path), true, path);
+  for (const path of [
+    'ops/deploy-production.sh',
+    'research-production/deploy/activate-autonomous-live.sh',
+    'api-server/src/services/trade-execution.service.ts.new',
+  ]) assert.equal(RESEARCH_CENTER_BATCH_PATHS.includes(path), false, path);
+});
+
 test('separately approved Paper supplement is exactly 19 immutable paths without broadening either original set', () => {
   const paths = PAPER_FORWARD_AUTO_SAFETY_SUPPLEMENTAL_PATHS;
   assert.equal(paths.length, 19);
