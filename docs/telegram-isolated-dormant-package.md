@@ -304,8 +304,9 @@ or guarantee a stalled remote POST was accepted. The current running
 app has not been updated and remains a production NO-GO for automatic
 delivery until a separate live-trading-preserving release is approved.
 
-New isolated node:test coverage is registered in BOTH Telegram-dedicated
-QA and canonical application phase9. It verifies time-bound stall
+Stall regression assertions are consolidated into the existing Telegram
+notification test (already in dedicated QA AND canonical application phase9).
+They verify time-bound stall
 detection and a pending original Bot POST whose durable unconfirmed
 reservation prevents a second invocation. No network, Bot, PM2,
 database or real trading mutation occurs in these tests.
