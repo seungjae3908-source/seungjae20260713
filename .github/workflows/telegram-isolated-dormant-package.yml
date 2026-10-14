@@ -1,0 +1,103 @@
+name: Telegram Isolated Dormant Package QA (No Deployment)
+
+on:
+  pull_request:
+    paths:
+      - ops/prepare-telegram-isolated-release.mjs
+      - .github/tests/prepare-telegram-isolated-release.test.mjs
+      - .github/workflows/telegram-isolated-dormant-package.yml
+      - docs/telegram-isolated-dormant-package.md
+      - api-server/src/telegram-isolated-worker.ts
+      - api-server/build.mjs
+      - .github/workflows/telegram-isolated-protected-install.yml
+      - ops/telegram-dormant-artifact-provenance.mjs
+      - .github/tests/telegram-dormant-artifact-provenance.test.mjs
+      - ops/telegram-dormant-artifact-extract.py
+      - .github/tests/telegram_dormant_artifact_extract_test.py
+      - ops/telegram-protected-dormant-install.sh
+      - .github/tests/telegram-isolated-protected-install-contract.test.mjs
+      - ops/install-telegram-isolated-dormant-package.mjs
+      - .github/tests/install-telegram-isolated-dormant-package.test.mjs
+  push:
+    branches: [main]
+    paths:
+      - ops/prepare-telegram-isolated-release.mjs
+      - .github/tests/prepare-telegram-isolated-release.test.mjs
+      - .github/workflows/telegram-isolated-dormant-package.yml
+      - docs/telegram-isolated-dormant-package.md
+      - api-server/src/telegram-isolated-worker.ts
+      - api-server/build.mjs
+      - .github/workflows/telegram-isolated-protected-install.yml
+      - ops/telegram-dormant-artifact-provenance.mjs
+      - .github/tests/telegram-dormant-artifact-provenance.test.mjs
+      - ops/telegram-dormant-artifact-extract.py
+      - .github/tests/telegram_dormant_artifact_extract_test.py
+      - ops/telegram-protected-dormant-install.sh
+      - .github/tests/telegram-isolated-protected-install-contract.test.mjs
+      - ops/install-telegram-isolated-dormant-package.mjs
+      - .github/tests/install-telegram-isolated-dormant-package.test.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-isolated-dormant-package-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  offline-package:
+    name: Build, seal and test dormant Telegram worker only
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify checkout identity and source-safe offline unit tests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          node --check ops/prepare-telegram-isolated-release.mjs
+          node --check ops/install-telegram-isolated-dormant-package.mjs
+          node --test .github/tests/prepare-telegram-isolated-release.test.mjs .github/tests/install-telegram-isolated-dormant-package.test.mjs .github/tests/telegram-dormant-artifact-provenance.test.mjs .github/tests/telegram-isolated-protected-install-contract.test.mjs
+          bash -n ops/telegram-protected-dormant-install.sh
+          python3 -m unittest discover -s .github/tests -p telegram_dormant_artifact_extract_test.py -v
+      - name: Install pinned workspace and build standalone worker
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --dir api-server run build
+          node --test .github/tests/telegram-isolated-bundle.test.mjs
+      - name: Prepare exact-SHA create-only package outside checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          target="$RUNNER_TEMP/telegram-dormant-$EXPECTED_HEAD"
+          node ops/prepare-telegram-isolated-release.mjs "$EXPECTED_HEAD" "$GITHUB_WORKSPACE" "$target"
+          test "$(cat "$target/.deploy/current-sha")" = "$EXPECTED_HEAD"
+          (cd "$target" && sha256sum --check --quiet .deploy/telegram-sha256.manifest)
+          test ! -L "$target"
+          test -s "$target/api-server/dist/telegram-isolated-worker.mjs"
+          echo "TELEGRAM_DORMANT_PACKAGE_DIR=$target" >> "$GITHUB_ENV"
+      - name: Publish inert files for separate reviewed preparation
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-dormant-package-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ env.TELEGRAM_DORMANT_PACKAGE_DIR }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+# Deliberately NO environment: production, SSH, systemd, PM2, DB, broker,
+# Bot API, webhook, secret, runtime install, start or trading-flag mutation.
