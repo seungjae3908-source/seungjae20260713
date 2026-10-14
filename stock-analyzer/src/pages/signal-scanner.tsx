@@ -782,13 +782,12 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const openInAiChart = (card: ScannerSignalCard) => {
     const selection = selectionFor(card);
     analysisSelection.select(selection);
-    if (!embedded) {
-      const params = new URLSearchParams(selectionQuery(selection));
-      params.set('signalId', card.signalId);
-      const chartStrategyMode = card.strategyMode ?? strategy;
-      params.set('strategyMode', toAiChartStrategyMode(chartStrategyMode));
-      navigate(`/ai-chart?${params.toString()}`);
-    }
+    // Embedded scanner must not display an inert AI Chart button. This only navigates to a read-only chart.
+    const params = new URLSearchParams(selectionQuery(selection));
+    params.set('signalId', card.signalId);
+    const chartStrategyMode = card.strategyMode ?? strategy;
+    params.set('strategyMode', toAiChartStrategyMode(chartStrategyMode));
+    navigate(`/ai-chart?${params.toString()}`);
   };
 
   const openOrderPreparation = (card: ScannerSignalCard) => {

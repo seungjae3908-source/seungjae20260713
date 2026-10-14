@@ -2,6 +2,7 @@ import {
   normalizeChartCandles,
   type ChartCandleNormalizationResult,
   type ChartCandleTimeframe,
+  type NormalizedChartCandle,
 } from './chart-candle-normalizer';
 import type { AnalysisAssetType, AnalysisMarket } from './analysis-selection';
 import { type UnifiedChartTimeframe } from './unified-chart-metadata';
@@ -507,4 +508,103 @@ export function unifiedChartDataStatus(
   if (age > staleAfter) return 'stale';
   if (age > delayedAfter) return 'delayed';
   return 'ok';
+}
+
+// UI-only historical read adapter: existing primary/hedged candles stay unchanged.
+export function buildUnifiedChartHistoryUrl(input: {
+  market: AnalysisMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  beforeTime: number;
+}): string {
+  const symbol = normalizeUnifiedSymbol(input.market, input.symbol);
+  if (!symbol || !Number.isSafeInteger(input.beforeTime) || input.beforeTime <= 0) {
+    throw new UnifiedChartDataError('과거 캔들 요청 정보가 올바르지 않습니다.', 'client', 400, false);
+  }
+  const beforeMs = input.beforeTime * 1_000;
+  if (input.market === 'UPBIT') {
+    const params = new URLSearchParams({ symbol, count: '200', before: new Date(beforeMs).toISOString() });
+    const unit = upbitUnit(input.timeframe);
+    if (unit == null) params.set('tf', '1D');
+    else params.set('unit', String(unit));
+    return `/api/crypto/spot/candles?${params.toString()}`;
+  }
+  if (input.market === 'BITGET') {
+    const params = new URLSearchParams({ symbol, granularity: input.timeframe, limit: '200', before: String(beforeMs) });
+    return `/api/crypto/futures/candles?${params.toString()}`;
+  }
+  return `/api/stocks/${encodeURIComponent(symbol)}/history-candles?tf=${encodeURIComponent(input.timeframe)}&before=${beforeMs}`;
+}
+
+/** Strict history identity. */
+export function assertUnifiedChartResponseIdentity(
+  payload: Record<string, unknown>,
+  input: { market: AnalysisMarket; symbol: string; timeframe: UnifiedChartTimeframe },
+): void {
+  const symbol = normalizeUnifiedSymbol(input.market, input.symbol);
+  const matches = (value: unknown, expected: string): boolean =>
+    value === undefined || (typeof value === 'string' && value.trim().toUpperCase() === expected.toUpperCase());
+  const marketTag = typeof payload.market === 'string' ? payload.market.trim().toUpperCase() : '';
+  let valid = (payload.ok === undefined || payload.ok === true)
+    && matches(payload.ticker, symbol)
+    && matches(payload.symbol, symbol)
+    && matches(payload.timeframe, input.timeframe)
+    && matches(payload.granularity, input.timeframe);
+  if (['KR', 'US', 'UPBIT', 'BITGET'].includes(marketTag) && marketTag !== input.market) valid = false;
+  if (input.market === 'UPBIT') {
+    const unit = upbitUnit(input.timeframe);
+    const expectedUnit = unit === null ? '1D' : `${unit}m`;
+    valid = valid && matches(payload.market, `KRW-${symbol}`) && matches(payload.unit, expectedUnit);
+  } else if (input.market === 'BITGET') {
+    valid = valid && matches(payload.exchange, 'BITGET');
+  }
+  if (!valid) {
+    throw new UnifiedChartDataError(
+      '차트 공급원의 시장·종목·시간봉 정보가 요청과 일치하지 않아 데이터를 차단했습니다.',
+      'malformed-response', null, false,
+    );
+  }
+}
+
+export async function fetchUnifiedChartHistoryPage(input: {
+  market: AnalysisMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  beforeTime: number;
+  signal?: AbortSignal;
+  fetcher?: UnifiedChartFetch;
+}): Promise<NormalizedChartCandle[]> {
+  // The existing main backend does not expose the stock history-candles route.
+  // Do not send knowingly unsupported GETs or invent prior bars.
+  if (input.market === 'KR' || input.market === 'US') {
+    throw new UnifiedChartDataError('주식 과거봉 추가 조회는 서버 원본 공급원 연결 전까지 미지원입니다.', 'not-found', 404, false);
+  }
+  const url = buildUnifiedChartHistoryUrl(input);
+  const fetcher = input.fetcher ?? configuredUnifiedChartFetch ?? globalThis.fetch.bind(globalThis);
+  const controller = createLinkedSignal(input.signal, 12_000);
+  try {
+    const response = await fetcher(url, { cache: 'no-store', signal: controller.signal });
+    const payload = await parsePayload(response);
+    if (!response.ok) throw httpError(response.status, payload);
+    if (payload.ok !== true || !Array.isArray(payload.candles)) {
+      throw new UnifiedChartDataError('과거 캔들 응답 형식이 올바르지 않습니다.', 'malformed-response', response.status, false);
+    }
+    assertUnifiedChartResponseIdentity(payload, input);
+    const rawRows = candleRows(payload);
+    const normalized = normalizeChartCandles(rawRows, input.timeframe as ChartCandleTimeframe);
+    const older = normalized.candles.filter((candle) => candle.time < input.beforeTime);
+    // A nonempty provider page that consists solely of invalid/overlapping
+    // rows is NOT proof of history exhaustion. Keep the retry path open.
+    if (rawRows.length > 0 && older.length === 0) {
+      throw new UnifiedChartDataError(
+        '과거 캔들 응답에 요청 시점보다 오래된 유효 봉이 없습니다. 공급자 데이터를 다시 확인하세요.',
+        'malformed-response',
+        response.status,
+        true,
+      );
+    }
+    return older;
+  } finally {
+    controller.cleanup();
+  }
 }
