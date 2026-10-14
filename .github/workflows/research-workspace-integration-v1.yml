@@ -113,11 +113,13 @@ on:
       - api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts
       - api-server/src/services/kiwoom-readonly-order-recovery.service.ts
       - api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts
+      - api-server/src/services/member-auto-trading-readiness.service.test.ts
       - api-server/src/services/public-live-plan-origin.service.test.ts
       - api-server/src/services/public-live-plan-origin.service.ts
       - api-server/src/services/trade-automation-repository-compatibility.test.ts
       - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/trade-execution-snapshot.service.ts
+      - api-server/src/services/trade-pre-submission-risk.service.ts
       - api-server/src/services/trade-history-completeness.service.test.ts
       - api-server/src/services/trade-history-completeness.service.ts
       - api-server/src/services/trade-kiwoom-readonly-contract.test.ts
