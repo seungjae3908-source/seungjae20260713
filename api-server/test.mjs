@@ -125,6 +125,8 @@ const groups = {
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-ai-review-evidence.service.test.ts'),
+    path.join(root, 'src/services/upbit-external-pilot-public-data.service.test.ts'),
+    path.join(root, 'src/services/external-strategy-pilot-producer.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-readiness.service.test.ts'),
     path.join(root, 'src/services/admin-four-market-paper-capital.service.test.ts'),
     path.join(root, 'src/services/admin-four-market-paper-readback.service.test.ts'),

@@ -7,6 +7,12 @@ on:
       - 'api-server/src/services/stock-signal-scanner.service.ts'
       - 'api-server/src/services/crypto-signal-scanner.service.ts'
       - 'api-server/src/services/scanner-*.service.ts'
+      - 'api-server/src/services/upbit-external-pilot-public-data.service.ts'
+      - 'api-server/src/services/upbit-external-pilot-public-data.service.test.ts'
+      - 'api-server/src/services/external-strategy-pilot-producer.service.ts'
+      - 'api-server/src/services/external-strategy-pilot-producer.service.test.ts'
+      - 'api-server/src/services/member-auto-trading-ai-review-evidence.service.ts'
+      - 'api-server/src/services/member-auto-trading-background-worker.service.ts'
       - 'api-server/src/providers/yahoo.ts'
       - 'market-prediction-lab/src/public-coverage-audit-v1.js'
       - '.github/workflows/signal-intelligence-v3-validation.yml'
@@ -130,14 +136,20 @@ jobs:
             --bundle --platform=node --format=esm --target=node20 \
             --banner:js="$BANNER" \
             --outfile=./.signal-intelligence/four-market-live-qa.mjs
+          pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-upbit-external-pilot-qa.ts \
+            --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
+            --outfile=./.signal-intelligence/upbit-external-pilot-qa.mjs
           node --check api-server/.signal-intelligence/public-cycle.mjs
           node --check api-server/.signal-intelligence/provider-diagnostic.mjs
           node --check api-server/.signal-intelligence/four-market-live-qa.mjs
+          node --check api-server/.signal-intelligence/upbit-external-pilot-qa.mjs
       - name: Assert producer has no private/order imports
         run: |
           ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
           ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/diagnose-public-providers.ts
           ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-four-market-live-qa.ts
+          ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-upbit-external-pilot-qa.ts
           grep -q 'public-only' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
       - name: Run one fresh public Scanner cycle
         working-directory: api-server
@@ -181,7 +193,49 @@ jobs:
             if (row.blockReason !== 'YAHOO_USAGE_TERMS_NOT_CONFIRMED' || row.pageExecution?.startedCount !== 0) process.exit(1);
           }
           NODE
+      - name: Run actual Upbit Trend Pullback External Pilot producer QA
+        working-directory: api-server
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXTERNAL_PILOT_QA_OUTPUT_FILE: ${{ runner.temp }}/external-pilot/upbit-public-qa.json
+          MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH: ${{ runner.temp }}/external-pilot/member-auto-trading-latest.json
+          EXTERNAL_PILOT_UPBIT_SYMBOLS: KRW-BTC,KRW-ETH,KRW-XRP
+          EXTERNAL_PILOT_AI_REVIEW_ENABLED: 'false'
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/external-pilot"
+          node .signal-intelligence/upbit-external-pilot-qa.mjs | tee "$RUNNER_TEMP/external-pilot/upbit-public-qa.log"
+          node - <<'NODE' "$EXTERNAL_PILOT_QA_OUTPUT_FILE" "$MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH"
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const persisted = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          if (report.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || report.actualPublicData !== true || report.completePublicData !== true
+            || report.observationKind !== 'LIVE_PUBLIC_MARKET'
+            || report.market !== 'CRYPTO_SPOT' || report.provider !== 'UPBIT_PUBLIC'
+            || report.rows.length !== report.symbolsRequested.length
+            || report.safety.executionAuthority !== 'NONE'
+            || report.safety.privateTradingApiAllowed !== false
+            || report.safety.accountReadbackPerformed !== false
+            || report.safety.orderSubmitted !== false
+            || report.safety.liveArmChanged !== false) process.exit(1);
+          if (report.totals.providerSuccessCount !== report.symbolsRequested.length
+            || report.totals.providerFailureCount !== 0) process.exit(1);
+          if (report.rows.some((row) => row.observationKind !== 'LIVE_PUBLIC_MARKET'
+            || typeof row.metrics?.observedAtMs !== 'number'
+            || !['BLOCKED_DATA','NO_SIGNAL','BLOCKED_COST','BLOCKED_RISK','BLOCKED_AI','READY'].includes(row.state))) process.exit(1);
+          if (persisted.schemaVersion !== 'external-strategy-pilot-handoff-file-v1'
+            || persisted.envelope?.admissionPath !== 'EXTERNAL_STRATEGY_PILOT'
+            || persisted.envelope?.researchGenuineSClaimed !== false
+            || persisted.envelope?.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || persisted.handoff?.safety?.orderSubmitted !== false) process.exit(1);
+          if (report.totals.handoffEntryCount !== report.totals.workerContractAdmissionCount) process.exit(1);
+          NODE
       - name: Run full Upbit and Bitget cursor rotations with restart evidence
+        if: ${{ github.base_ref == 'main' }}
         working-directory: api-server
         env:
           SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -263,9 +317,12 @@ jobs:
           TARGET_SHA="${{ github.event.pull_request.head.sha || github.sha }}"
           mkdir -p "$RUNNER_TEMP/deploy"
           cp api-server/.signal-intelligence/public-cycle.mjs "$RUNNER_TEMP/deploy/public-cycle.mjs"
+          cp api-server/.signal-intelligence/upbit-external-pilot-qa.mjs "$RUNNER_TEMP/deploy/upbit-external-pilot-cycle.mjs"
           printf '%s\n' "$TARGET_SHA" > "$RUNNER_TEMP/deploy/SERVICE_SHA"
           sha256sum "$RUNNER_TEMP/deploy/public-cycle.mjs" > "$RUNNER_TEMP/deploy/public-cycle.sha256"
+          sha256sum "$RUNNER_TEMP/deploy/upbit-external-pilot-cycle.mjs" > "$RUNNER_TEMP/deploy/upbit-external-pilot-cycle.sha256"
       - name: Upload fresh-public runtime evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: signal-intelligence-v3-public-cycle-${{ github.event.pull_request.head.sha || github.sha }}
@@ -274,6 +331,9 @@ jobs:
             ${{ runner.temp }}/signal-intelligence-live/cycle-state.json
             ${{ runner.temp }}/signal-intelligence-live-cycle.log
             ${{ runner.temp }}/signal-intelligence-provider-diagnostic.json
+            ${{ runner.temp }}/external-pilot/upbit-public-qa.json
+            ${{ runner.temp }}/external-pilot/upbit-public-qa.log
+            ${{ runner.temp }}/external-pilot/member-auto-trading-latest.json
             ${{ runner.temp }}/signal-intelligence-crypto-rotation/full-rotation-evidence.json
             ${{ runner.temp }}/signal-intelligence-crypto-rotation/cycle-state.json
             ${{ runner.temp }}/signal-intelligence-crypto-rotation/latest-snapshot.json

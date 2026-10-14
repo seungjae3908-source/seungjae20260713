@@ -576,12 +576,12 @@ const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.se
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 65
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 65
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 70
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 70
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== 'a504a03bedfcb13a97c65fa1270473fdb6009d3af5a0c45c02a4f682534bf56a') {
+    !== '1763a04aff064ce09b7424dca7ad36f0cf1d8e6c9e3f2615d68c7cdab20bd3ed') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {

@@ -70,6 +70,7 @@ on:
       - signal-intelligence-v3/scripts/run-four-market-live-qa.ts
       - signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
       - signal-intelligence-v3/scripts/run-representative-search-matrix.ts
+      - signal-intelligence-v3/scripts/run-upbit-external-pilot-qa.ts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
       - signal-intelligence-v3/src/canonical-adapter.mjs
@@ -429,6 +430,10 @@ on:
       - api-server/src/services/trade-execution-pre-submission.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/external-strategy-pilot-producer.service.test.ts
+      - api-server/src/services/external-strategy-pilot-producer.service.ts
+      - api-server/src/services/upbit-external-pilot-public-data.service.test.ts
+      - api-server/src/services/upbit-external-pilot-public-data.service.ts
       - .github/tests/trading-ops-consolidated-preflight.test.mjs
       - market-prediction-lab/src/formula-paper-registry-readback-v1.js
       - market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
@@ -528,8 +533,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 65 or len(set(auto_signal)) != 65:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_65')
+          if len(auto_signal) != 70 or len(set(auto_signal)) != 70:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_70')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -565,7 +570,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 65
+          test "${#auto_signal[@]}" -eq 70
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
