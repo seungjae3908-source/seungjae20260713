@@ -18,7 +18,7 @@ const shellPath = (path) => process.platform === 'win32'
 // Run the complete activation script with filesystem roots relocated and all
 // host/network/mutating commands replaced by strict, sandbox-only shims.
 const shim = String.raw`
-import { appendFileSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolve, relative, isAbsolute, dirname } from 'node:path';
 const root = process.env.HARNESS_ROOT_NATIVE;
 const [name, ...args] = process.argv.slice(2);
@@ -49,6 +49,18 @@ switch (name) {
     else { mkdirSync(dirname(paths[1]), { recursive: true }); copyFileSync(paths[0], paths[1]); }
     break;
   }
+  case 'cp': {
+    const paths = args.filter(a => !a.startsWith('-'));
+    mkdirSync(dirname(safe(paths[1])), { recursive: true });
+    copyFileSync(safe(paths[0]), safe(paths[1]));
+    break;
+  }
+  case 'cmp': {
+    const paths = args.filter(a => !a.startsWith('-'));
+    if (readFileSync(safe(paths[0])).equals(readFileSync(safe(paths[1])))) break;
+    process.exitCode = 1;
+    break;
+  }
   case 'rm': for (const a of args.filter(a => !a.startsWith('-'))) rmSync(safe(a), { force: true, recursive: true }); break;
   case 'ln': case 'mv': for (const a of args.filter(a => !a.startsWith('-'))) safe(a); break;
   case 'runuser':
@@ -69,14 +81,14 @@ switch (name) {
 }
 `;
 
-function activate(value, { mode = 'activate', legacy, supplemental, decision, workloadState } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental, decision, workloadState, missingPreviousEnv = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
     const bin = join(root, 'bin');
     mkdirSync(bin);
     writeFileSync(join(root, 'shim.mjs'), shim);
-    for (const command of ['id', 'git', 'awk', 'nproc', 'mktemp', 'readlink', 'install', 'rm', 'ln', 'mv', 'runuser', 'df', 'systemctl', 'systemd-analyze']) {
+    for (const command of ['id', 'git', 'awk', 'nproc', 'mktemp', 'readlink', 'install', 'cp', 'cmp', 'rm', 'ln', 'mv', 'runuser', 'df', 'systemctl', 'systemd-analyze']) {
       writeFileSync(join(bin, command), '#!/usr/bin/env bash\nexec "$REAL_NODE" "$HARNESS_ROOT/shim.mjs" ' + command + ' "$@"\n', { mode: 0o755 });
     }
     for (const prefix of [`research/releases/${SHA}`, 'research/current']) {
@@ -90,6 +102,13 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision, wo
         mkdirSync(resolve(path, '..'), { recursive: true });
         writeFileSync(path, 'sandbox release fixture\n');
       }
+    }
+    // The running server has a pinned prior Research release environment.
+    // Mirror it instead of treating a cold start as proven rollback continuity.
+    const previousEnv = join(root, 'etc/research/research-production.env');
+    if (!missingPreviousEnv) {
+      mkdirSync(resolve(previousEnv, '..'), { recursive: true });
+      writeFileSync(previousEnv, 'LEGACY_BASELINE_PRODUCTION_ENV=true\n');
     }
     const decisionFixture = join(root, 'research', 'releases', SHA, 'market-prediction-lab',
       'config', 'paper-risk-policy', 'natural-paper-btcusdt-v1.json');
@@ -120,7 +139,8 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision, wo
     const envPath = join(root, 'etc/research/research-production.env');
     const eventsPath = join(root, 'events.jsonl');
     return { ...result, sentinelPresent: existsSync(join(root, 'sentinel')),
-      environment: existsSync(envPath) ? readFileSync(envPath, 'utf8') : null,
+      environment: existsSync(envPath) && !readFileSync(envPath, 'utf8').includes('LEGACY_BASELINE_PRODUCTION_ENV=true')
+         ? readFileSync(envPath, 'utf8') : null,
       events: existsSync(eventsPath) ? readFileSync(eventsPath, 'utf8').trim().split('\n').map(JSON.parse) : [] };
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -140,17 +160,24 @@ test('missing, empty and legacy-only paths remain absent in the installed Enviro
   }
 });
 
-test('full activation harness blocks a still-running workload before installing the new environment', () => {
+test('full activation harness refuses in-flight Research without stopping it or changing current release', () => {
   const result = activate(undefined, { workloadState: 'active' });
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
-  assert.match(result.stderr, /RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true/u);
+  assert.match(result.stderr, /RESEARCH_CUTOVER_BUSY/u);
+  assert.match(result.stderr, /RESEARCH_PRODUCTION_PRE_CUTOVER_FAILURE_RUNTIME_UNCHANGED=true/u);
   assert.equal(result.environment, null);
-  assert.ok(result.events.some(event => event[0] === 'systemctl' && event[1] === 'stop'));
-  assert.ok(result.events.filter(event => event[0] === 'systemctl' && event[1] === 'stop')
-    .every(event => event.includes('research-production@fast-historical.service')));
+  assert.equal(result.events.some(event => event[0] === 'systemctl' && event[1] === 'stop'), false);
   assert.equal(result.events.some(event => ['ln', 'mv'].includes(event[0])), false);
   assert.equal(result.events.some(event => event[0] === 'install' && event.at(-1).endsWith('/research-production.env')), false);
+});
+
+test('missing previous env is rejected before timers and release pointer are changed', () => {
+  const result = activate(undefined, { missingPreviousEnv: true });
+  assert.equal(result.status, 69, result.stderr);
+  assert.match(result.stderr, /RESEARCH_CORE_PREVIOUS_ENV_MISSING/u);
+  assert.equal(result.environment, null);
+  assert.equal(result.events.some(event => event[0] === 'systemctl' && event[1] === 'disable'), false);
+  assert.equal(result.events.some(event => ['ln', 'mv'].includes(event[0])), false);
 });
 
 test('explicit paths are escaped as systemd quoted data, never evaluated or used as files', () => {
