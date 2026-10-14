@@ -116,12 +116,6 @@ export type TradingProtectionOrder = {
 
 export const PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW = 500_000 as const;
 export const PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW = 1_000_000 as const;
-// Formula+AI automatic LIVE begins with a smaller, role-scoped discovery cap.
-// This is an order ceiling, not a deposit and not a change to the four-market
-// capital allocation. Promotion may raise it later, but discovery can never
-// silently inherit the full role ceiling.
-export const PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000 as const;
-export const PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000 as const;
 export const PRODUCTION_LIVE_MARKET_COUNT = 4 as const;
 export const PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW =
   PRODUCTION_LIVE_MARKET_COUNT * PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
@@ -290,6 +284,8 @@ export type TradingMarketSnapshot = {
   availableLiquidityKrw?: number | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
+  /** Opposite-side fee required to validate the complete entry/exit cost plan. */
+  estimatedExitFeePercent?: number | null;
   // Optional, prospective Paper-only source fields. A UI snapshot alone is
   // never settlement authority; the durable server-owned order receipt must
   // independently attest every component before capital can compound.

@@ -10,7 +10,7 @@
     { "id": "FRESH_QA_ARTIFACTS", "phase": "release", "evidence": "AUTO-only UI, four-provider accounts, credential reuse, position isolation and readiness artifacts after this deploy" },
     { "id": "EXACT_MANUAL_RECEIPTS", "phase": "activation", "evidence": "Authentic successful spot and futures workflow runs, exact SHA, after deploy, whole-field 2..7 isolated receipt" },
     { "id": "NO_GATE_CONFLICT", "phase": "activation", "evidence": "No queued, waiting, in_progress or requested competing trading gate" },
-    { "id": "OWNER_POLICY", "phase": "preflight", "evidence": "Approved per-market capital, discovery cap, 50% net-profit compounding, daily -3%, role leverage and all-four switches" },
+    { "id": "OWNER_POLICY", "phase": "preflight", "evidence": "Approved user-selected per-market capital and per-order ceiling, 50% settled net-profit compounding within role ceiling, daily -3%, role leverage and market switches; no separate discovery order cap" },
     { "id": "MEMBER_AND_GLOBAL_STOPS", "phase": "preflight", "evidence": "Current owner capability and explicit current policy; no implicit resume, role grant or emergency-stop removal" },
     { "id": "FOUR_PROVIDER_CREDENTIALS", "phase": "preflight", "evidence": "All four fresh configured/verified/decrypted credentials and current auth, permissions and IP allowlist" },
     { "id": "SCANNER_PRODUCER_CONNECTED", "phase": "preflight", "evidence": "Actual four-market formula scanner invocation and valid no-trade decision, not a quotes-only empty handoff" },

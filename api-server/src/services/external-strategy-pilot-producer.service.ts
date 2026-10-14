@@ -26,7 +26,9 @@ const STRATEGY_ID = 'TREND_PULLBACK_REACCEL_V1' as const;
 const STRATEGY_VERSION = 'TREND_PULLBACK_REACCEL_V1@1' as const;
 const COST_MAX_AGE_MS = 24 * 60 * 60_000;
 const DATA_MAX_AGE_MS = 30_000;
-const DISCOVERY_NOTIONAL_KRW = 100_000;
+// This amount is used only to measure observed public orderbook depth. It is
+// never an order-size authority; member sizing is applied later by the Worker.
+const LIQUIDITY_REFERENCE_NOTIONAL_KRW = 100_000;
 
 export type ExternalPilotAiDecision = Readonly<{
   status: 'PASS' | 'VETO' | 'ABSTAIN' | 'UNAVAILABLE';
@@ -50,10 +52,20 @@ export type ExternalPilotAiReviewer = Readonly<{
 export type UpbitExternalPilotCostPolicy = Readonly<{
   version: string;
   commissionRate: number;
+  entryCommissionRate?: number;
+  exitCommissionRate?: number;
+  minimumOrderKrw?: number;
   observedAtMs: number;
   maxAgeMs?: number;
   provenance: string;
   quality: 'ACCOUNT_READBACK' | 'DOCUMENTED_CURRENT_POLICY';
+}>;
+
+export type ExternalPilotFreeAiPolicy = Readonly<{
+  configured: boolean;
+  provider: 'google-gemini' | 'groq' | null;
+  model: string | null;
+  reason: string;
 }>;
 
 export type UpbitExternalPilotProducerInput = Readonly<{
@@ -105,6 +117,84 @@ function finite(value: unknown): value is number {
 
 function validRate(value: unknown): value is number {
   return finite(value) && value >= 0 && value < 0.1;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+function numeric(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Pure parser for an already-authorized Upbit /v1/orders/chance response. */
+export function upbitExternalPilotCostPolicyFromOrderChance(
+  raw: unknown,
+  observedAtMs: number,
+  provenance = 'UPBIT_READ_ONLY_ORDERS_CHANCE',
+): UpbitExternalPilotCostPolicy {
+  const root = record(raw);
+  const market = record(root?.market);
+  const bid = record(market?.bid);
+  const ask = record(market?.ask);
+  const entryCommissionRate = numeric(root?.bid_fee);
+  const exitCommissionRate = numeric(root?.ask_fee);
+  const minimumOrderKrw = numeric(bid?.min_total) ?? numeric(ask?.min_total);
+  if (!validRate(entryCommissionRate) || !validRate(exitCommissionRate)
+    || minimumOrderKrw == null || minimumOrderKrw <= 0
+    || !finite(observedAtMs) || observedAtMs <= 0 || !provenance.trim()) {
+    throw new Error('UPBIT_PILOT_ACCOUNT_COST_READBACK_INVALID');
+  }
+  return Object.freeze({
+    version: `upbit-account-readback-v1:${observedAtMs}`,
+    commissionRate: Math.max(entryCommissionRate, exitCommissionRate),
+    entryCommissionRate,
+    exitCommissionRate,
+    minimumOrderKrw,
+    observedAtMs,
+    provenance,
+    quality: 'ACCOUNT_READBACK' as const,
+  });
+}
+
+export function resolveExternalPilotFreeAiPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): ExternalPilotFreeAiPolicy {
+  const blocked = (reason: string): ExternalPilotFreeAiPolicy => Object.freeze({
+    configured: false, provider: null, model: null, reason,
+  });
+  if (env.EXTERNAL_PILOT_AI_FREE_TIER_CONFIRMED !== 'true') {
+    return blocked('EXTERNAL_PILOT_AI_FREE_TIER_CONFIRMATION_REQUIRED');
+  }
+  const explicit = env.AI_CHAT_PROVIDER?.trim().toLowerCase() ?? '';
+  if (explicit === 'openai-compatible') return blocked('EXTERNAL_PILOT_AI_PAID_OR_UNVERIFIED_PROVIDER_BLOCKED');
+  const geminiKey = env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim();
+  const groqKey = env.GROQ_API_KEY?.trim();
+  if (geminiKey && groqKey) return blocked('EXTERNAL_PILOT_AI_MULTI_PROVIDER_FALLBACK_BLOCKED');
+  const geminiSelected = ['google', 'gemini', 'google-gemini'].includes(explicit)
+    || (!explicit && Boolean(geminiKey));
+  const groqSelected = explicit === 'groq' || (!explicit && Boolean(groqKey));
+  if (geminiSelected) {
+    if (groqKey) return blocked('EXTERNAL_PILOT_AI_MULTI_PROVIDER_FALLBACK_BLOCKED');
+    const key = explicit ? env.AI_CHAT_API_KEY?.trim() || geminiKey : geminiKey;
+    const model = env.AI_CHAT_MODEL?.trim() || env.GEMINI_MODEL?.trim() || 'gemini-3.1-flash-lite';
+    return key && model === 'gemini-3.1-flash-lite'
+      ? Object.freeze({ configured: true, provider: 'google-gemini', model, reason: 'FREE_TIER_EXACT_MODEL_CONFIGURED' })
+      : blocked(key ? 'EXTERNAL_PILOT_AI_FREE_MODEL_REQUIRED' : 'EXTERNAL_PILOT_AI_KEY_REQUIRED');
+  }
+  if (groqSelected) {
+    if (geminiKey) return blocked('EXTERNAL_PILOT_AI_MULTI_PROVIDER_FALLBACK_BLOCKED');
+    const key = explicit ? env.AI_CHAT_API_KEY?.trim() || groqKey : groqKey;
+    const model = env.AI_CHAT_MODEL?.trim() || env.GROQ_MODEL?.trim() || 'openai/gpt-oss-20b';
+    return key && model === 'openai/gpt-oss-20b'
+      ? Object.freeze({ configured: true, provider: 'groq', model, reason: 'FREE_TIER_EXACT_MODEL_CONFIGURED' })
+      : blocked(key ? 'EXTERNAL_PILOT_AI_FREE_MODEL_REQUIRED' : 'EXTERNAL_PILOT_AI_KEY_REQUIRED');
+  }
+  return blocked(explicit ? 'EXTERNAL_PILOT_AI_PROVIDER_UNSUPPORTED' : 'EXTERNAL_PILOT_AI_NOT_CONFIGURED');
 }
 
 export function buildEmptyExternalPilotHandoffFile(serviceSha: string, evaluatedAtMs: number, cycleId: string) {
@@ -275,6 +365,16 @@ function costPolicyBlockers(policy: UpbitExternalPilotCostPolicy | null, nowMs: 
   const blockers: string[] = [];
   if (!policy.version.trim()) blockers.push('UPBIT_PILOT_COST_POLICY_VERSION_REQUIRED');
   if (!validRate(policy.commissionRate)) blockers.push('UPBIT_PILOT_COMMISSION_RATE_INVALID');
+  if (policy.entryCommissionRate != null && !validRate(policy.entryCommissionRate)) {
+    blockers.push('UPBIT_PILOT_ENTRY_COMMISSION_RATE_INVALID');
+  }
+  if (policy.exitCommissionRate != null && !validRate(policy.exitCommissionRate)) {
+    blockers.push('UPBIT_PILOT_EXIT_COMMISSION_RATE_INVALID');
+  }
+  if (policy.minimumOrderKrw != null
+    && (!finite(policy.minimumOrderKrw) || policy.minimumOrderKrw <= 0)) {
+    blockers.push('UPBIT_PILOT_MINIMUM_ORDER_INVALID');
+  }
   if (!finite(policy.observedAtMs) || policy.observedAtMs <= 0 || policy.observedAtMs > nowMs) {
     blockers.push('UPBIT_PILOT_COST_TIMESTAMP_INVALID');
   } else if (nowMs - policy.observedAtMs > (policy.maxAgeMs ?? COST_MAX_AGE_MS)) {
@@ -325,7 +425,11 @@ function riskEvidence(risk: RiskEngineResult, evaluatedAtMs: number) {
     actualRiskPercent: risk.actualRiskPercent,
     riskReward1: risk.riskReward1,
     riskReward2: risk.riskReward2,
-    policyIdentity: Object.freeze({ policy: 'TRADING_RISK_POLICY', discoveryNotionalKrw: DISCOVERY_NOTIONAL_KRW }),
+    policyIdentity: Object.freeze({
+      policy: 'TRADING_RISK_POLICY',
+      liquidityReferenceNotionalKrw: LIQUIDITY_REFERENCE_NOTIONAL_KRW,
+      memberSizingRequiredAtWorker: true,
+    }),
     executionAuthority: 'NONE',
   });
 }
@@ -334,9 +438,14 @@ export class ExistingMarketAiExternalPilotReviewer implements ExternalPilotAiRev
   constructor(
     private readonly analyzer = new MarketIntelligenceAiAnalyzer({ timeoutMs: 6_000, maxInFlight: 2, maxCacheEntries: 64 }),
     private readonly now: () => number = Date.now,
+    private readonly policy: ExternalPilotFreeAiPolicy = resolveExternalPilotFreeAiPolicy(),
   ) {}
 
   async review(input: Parameters<ExternalPilotAiReviewer['review']>[0], signal?: AbortSignal): Promise<ExternalPilotAiDecision> {
+    if (!this.policy.configured || !this.policy.provider || !this.policy.model) {
+      return Object.freeze({ status: 'UNAVAILABLE', provider: null, model: null,
+        reviewedAtMs: this.now(), reason: this.policy.reason });
+    }
     const analyzed = await this.analyzer.analyze({
       analysisKey: input.evidenceDigest,
       aiMode: 'CHEAP_AI',
@@ -353,9 +462,11 @@ export class ExistingMarketAiExternalPilotReviewer implements ExternalPilotAiRev
       evidenceFacts: [...input.facts],
     }, signal);
     const reviewedAtMs = this.now();
-    if (analyzed.status !== 'ANALYZED' || !analyzed.analysis || !analyzed.model) {
+    if (analyzed.status !== 'ANALYZED' || !analyzed.analysis || !analyzed.model
+      || analyzed.model !== this.policy.model) {
       return Object.freeze({ status: 'UNAVAILABLE', provider: null, model: analyzed.model,
-        reviewedAtMs, reason: analyzed.reason ?? 'AI_ANALYSIS_UNAVAILABLE' });
+        reviewedAtMs, reason: analyzed.model && analyzed.model !== this.policy.model
+          ? 'AI_MODEL_POLICY_DRIFT' : analyzed.reason ?? 'AI_ANALYSIS_UNAVAILABLE' });
     }
     const opposing = analyzed.analysis.sentiment === 'NEGATIVE';
     const riskFlagged = analyzed.analysis.riskFlags.length > 0;
@@ -363,7 +474,7 @@ export class ExistingMarketAiExternalPilotReviewer implements ExternalPilotAiRev
     const status = opposing || riskFlagged ? 'VETO' : ambiguous ? 'ABSTAIN' : 'PASS';
     return Object.freeze({
       status,
-      provider: 'EXISTING_MARKET_INTELLIGENCE_AI',
+      provider: this.policy.provider,
       model: analyzed.model,
       reviewedAtMs,
       reason: opposing ? 'AI_DIRECTION_CONFLICT' : riskFlagged ? 'AI_RISK_FLAGGED'
@@ -380,7 +491,7 @@ export async function produceUpbitTrendPullbackExternalPilot(
   const cycleId = `external-pilot:${input.snapshot.symbol}:${nowMs}`;
   const blank = buildEmptyExternalPilotHandoffFile(input.serviceSha, nowMs, cycleId);
   const strategy = strategyEvidence(input.snapshot, nowMs);
-  const execution = orderbookExecution(input.snapshot, DISCOVERY_NOTIONAL_KRW);
+  const execution = orderbookExecution(input.snapshot, LIQUIDITY_REFERENCE_NOTIONAL_KRW);
   const spreadPercent = execution.spreadRate * 100;
   const slippagePercent = execution.slippageRate == null ? null : execution.slippageRate * 100;
   const baseMetrics: Record<string, number | string | boolean | null> = {
@@ -395,8 +506,9 @@ export async function produceUpbitTrendPullbackExternalPilot(
     volumeAccelerationReady: strategy.evidence.volumeAccelerationReady,
     entryTriggerReady: strategy.evidence.entryTriggerReady,
     spreadPercent,
-    discoverySlippagePercent: slippagePercent,
-    discoveryNotionalFillable: execution.fillable,
+    liquidityReferenceNotionalKrw: LIQUIDITY_REFERENCE_NOTIONAL_KRW,
+    liquidityReferenceSlippagePercent: slippagePercent,
+    liquidityReferenceFillable: execution.fillable,
     rvol20: strategy.five.relativeVolume20,
     rsi14: strategy.five.rsi14,
     previousRsi14: strategy.previousRsi,
@@ -447,21 +559,24 @@ export async function produceUpbitTrendPullbackExternalPilot(
     market: 'crypto-spot',
     symbol: input.snapshot.symbol,
     side: 'long',
-    accountBalance: Math.min(DISCOVERY_NOTIONAL_KRW, input.riskAccountBalanceKrw ?? DISCOVERY_NOTIONAL_KRW),
+    accountBalance: Math.min(
+      LIQUIDITY_REFERENCE_NOTIONAL_KRW,
+      input.riskAccountBalanceKrw ?? LIQUIDITY_REFERENCE_NOTIONAL_KRW,
+    ),
     entryPrice: entry,
     stopLossPrice: stopLoss,
     targetPrice1: target1,
     targetPrice2: target2,
     leverage: 1,
     riskPercent: 0.5,
-    entryFeeRate: input.costPolicy.commissionRate,
-    exitFeeRate: input.costPolicy.commissionRate,
+    entryFeeRate: input.costPolicy.entryCommissionRate ?? input.costPolicy.commissionRate,
+    exitFeeRate: input.costPolicy.exitCommissionRate ?? input.costPolicy.commissionRate,
     slippageRate: execution.slippageRate,
     estimatedFundingRate: 0,
     quantityStep: 1e-8,
     quantityPrecision: 8,
     minimumQuantity: 1e-8,
-    minimumNotional: 5_000,
+    minimumNotional: input.costPolicy.minimumOrderKrw ?? 5_000,
     maximumLeverage: 1,
     appMaximumLeverage: 1,
     contractRulesStatus: 'live',
@@ -635,13 +750,20 @@ export async function produceUpbitTrendPullbackExternalPilot(
       costPolicy: {
         version: input.costPolicy.version,
         commissionRate: input.costPolicy.commissionRate,
+        entryCommissionRate: input.costPolicy.entryCommissionRate ?? input.costPolicy.commissionRate,
+        exitCommissionRate: input.costPolicy.exitCommissionRate ?? input.costPolicy.commissionRate,
+        minimumOrderKrw: input.costPolicy.minimumOrderKrw ?? 5_000,
         taxRate: 0,
         spreadRate: execution.spreadRate,
         slippageRate: execution.slippageRate,
         source: input.costPolicy.provenance,
         quality: input.costPolicy.quality,
       },
-      executionPolicy: { orderType: 'market', discoveryNotionalKrw: DISCOVERY_NOTIONAL_KRW },
+      executionPolicy: {
+        orderType: 'market',
+        liquidityReferenceNotionalKrw: LIQUIDITY_REFERENCE_NOTIONAL_KRW,
+        memberSizingRequiredAtWorker: true,
+      },
       dataEvidence,
     },
     order: { side: 'BUY', orderType: 'market', simulatedOnly: true },

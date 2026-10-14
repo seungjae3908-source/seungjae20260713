@@ -92,7 +92,7 @@ test('Paper-only worker readiness is member-scoped and never grants real order a
   assert.equal('balance' in result, false);
 });
 
-test('1m Paper wallet readiness stays independent from a 100k LIVE discovery cap', () => {
+test('1m Paper wallet readiness stays independent from user-selected LIVE capital', () => {
   const underfunded = normalizeTradingPolicy({ ...policy(), totalCapitalKrw: 100_000 });
   const result = memberAutomaticPaperReadiness(input({ policy: underfunded }));
   assert.equal(result.paperWalletReady, true);

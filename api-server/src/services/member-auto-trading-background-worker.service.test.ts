@@ -47,6 +47,7 @@ import {
   liveEnabledMarketConnectionVerificationReady,
   liveEnabledMarketProviders,
   selectAutomaticPaperAccountEquity,
+  sizeExternalStrategyPilotQuantity,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
@@ -72,6 +73,49 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('external Pilot Worker sizes from member capital and saved per-order ceiling', () => {
+  const base = {
+    assetClass: 'crypto_spot' as const,
+    exchange: 'upbit' as const,
+    symbol: 'KRW-BTC',
+    direction: 'BUY' as const,
+    operatingCapitalKrw: 250_000,
+    maxOrderKrw: 100_000,
+    entryPrice: 100_000,
+    stopPrice: 99_900,
+    targetPrices: [110_000, 120_000],
+    krwPerQuoteCurrency: 1,
+    riskPercent: 0.2,
+    entryFeePercent: 0.05,
+    exitFeePercent: 0.05,
+    slippagePercent: 0.05,
+    minimumOrderKrw: 5_000,
+    leverage: 1,
+    openExposureKrw: 0,
+    sameDirectionExposureKrw: 0,
+    consecutiveLosses: 0,
+  };
+  assert.equal(sizeExternalStrategyPilotQuantity(base), 1);
+  assert.equal(sizeExternalStrategyPilotQuantity({ ...base, maxOrderKrw: 30_000 }), 0.3);
+  const reducedCapitalQuantity = sizeExternalStrategyPilotQuantity({
+    ...base, operatingCapitalKrw: 50_000, maxOrderKrw: 100_000,
+  });
+  assert.ok(reducedCapitalQuantity > 0 && reducedCapitalQuantity <= 0.5);
+  assert.throws(() => sizeExternalStrategyPilotQuantity({
+    ...base,
+    assetClass: 'crypto_futures',
+    exchange: 'bitget',
+    direction: 'LONG',
+  }), /BACKGROUND_FUTURES_FUNDING_RATE_REQUIRED/);
+  assert.ok(sizeExternalStrategyPilotQuantity({
+    ...base,
+    assetClass: 'crypto_futures',
+    exchange: 'bitget',
+    direction: 'LONG',
+    estimatedFundingRate: 0.0001,
+  }) > 0);
+});
 
 test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
   const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };

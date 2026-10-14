@@ -187,6 +187,7 @@ function marketSnapshot(now: Date): TradingMarketSnapshot {
     availableLiquidityKrw: 1_000_000,
     estimatedSlippagePercent: 0.1,
     estimatedFeePercent: 0.05,
+    estimatedExitFeePercent: 0.05,
     correlatedExposurePercent: 0,
     signalState: 'entry_ready',
     signalObservedAt: now.toISOString(),
@@ -289,7 +290,11 @@ async function setup() {
   return { repository, approved, order: orderResult.order };
 }
 
-function installUpbitMock(currentPrice: number, openOrders: Record<string, unknown>[] = []) {
+function installUpbitMock(
+  currentPrice: number,
+  openOrders: Record<string, unknown>[] = [],
+  fees: { bid: string; ask: string } = { bid: '0.0005', ask: '0.0005' },
+) {
   let actualOrderPosts = 0;
   let orderTestPosts = 0;
   let totalProviderRequests = 0;
@@ -313,8 +318,8 @@ function installUpbitMock(currentPrice: number, openOrders: Record<string, unkno
         market: { state: 'active' },
         bid: { min_total: '5000' },
         ask: { min_total: '5000' },
-        bid_fee: '0.0005',
-        ask_fee: '0.0005',
+        bid_fee: fees.bid,
+        ask_fee: fees.ask,
       });
     }
     if (url.pathname === '/v1/orders/open') {
@@ -434,6 +439,20 @@ test('approval price drift blocks before order test, intent, and actual order PO
   assert.equal(provider.counts().actualOrderPosts, 0);
   const expiredPlan = await repository.getPlan(USER_ID, approved.id);
   assert.equal(expiredPlan?.state, 'EXPIRED');
+});
+
+test('Upbit account fee drift blocks before order test, intent, and actual order POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], { bid: '0.0006', ask: '0.0007' });
+  const execution = new TradeExecutionService(repository);
+
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'PRE_SUBMISSION_RISK_RECHECK_FAILED');
+  assert.ok(result.preSubmissionDecision?.blockCodes.includes('ENTRY_FEE_POLICY_DRIFT'));
+  assert.ok(result.preSubmissionDecision?.blockCodes.includes('EXIT_FEE_POLICY_DRIFT'));
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().actualOrderPosts, 0);
 });
 
 
