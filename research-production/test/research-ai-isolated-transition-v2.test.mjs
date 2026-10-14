@@ -28,6 +28,11 @@ async function fixture(t) {
     schemaVersion: 'research-production-cycle-v1', profile: 'forward', researchSha: SOURCE_SHA,
     status: 'blocked_data', results: [],
   })}\n`, { mode: 0o600 });
+  // Real fast-historical producer (historical-pipelines.mjs) writes historical-cycle-v2.
+  await writeFile(join(source, 'latest', 'fast-historical.json'), `${JSON.stringify({
+    schemaVersion: 'research-production-historical-cycle-v2', profile: 'fast-historical', researchSha: SOURCE_SHA,
+    status: 'blocked_data', results: [],
+  })}\n`, { mode: 0o600 });
   const providerEnvPath = join(envRoot, 'providers.env');
   const aiPolicyEnvPath = join(envRoot, 'ai.env');
   const videoPolicyEnvPath = join(envRoot, 'video.env');
@@ -125,4 +130,28 @@ test('isolated transition retains a bounded provider blocker instead of touching
   }), /ISOLATED_TRANSITION_NATURAL_CYCLE_NOT_PROVEN:FREE_AI_RATE_LIMITED/);
   const sourceDirective = JSON.parse(await readFile(join(x.source, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
   assert.equal(sourceDirective.researchCodeSha, SOURCE_SHA);
+});
+
+test('isolated transition still rejects an unknown fast-historical schema', async (t) => {
+  const x = await fixture(t);
+  await writeFile(join(x.source, 'latest', 'fast-historical.json'), `${JSON.stringify({
+    schemaVersion: 'something-else', profile: 'fast-historical', researchSha: SOURCE_SHA, status: 'complete', results: [],
+  })}\n`, { mode: 0o600 });
+  await assert.rejects(runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: x.source, isolatedStateRoot: x.isolated, repoRoot: x.repo, researchSha: TARGET_SHA,
+    providerEnvPath: x.providerEnvPath, aiPolicyEnvPath: x.aiPolicyEnvPath, videoPolicyEnvPath: x.videoPolicyEnvPath,
+    runCycle: async () => cycle(1), runReview: async () => ({}), runVideo: async () => ({}),
+  }), /ISOLATED_TRANSITION_PROFILE_INVALID:fast-historical/);
+});
+
+test('forward evidence must keep the cycle-v1 schema', async (t) => {
+  const x = await fixture(t);
+  await writeFile(join(x.source, 'latest', 'forward.json'), `${JSON.stringify({
+    schemaVersion: 'research-production-historical-cycle-v2', profile: 'forward', researchSha: SOURCE_SHA, status: 'complete', results: [],
+  })}\n`, { mode: 0o600 });
+  await assert.rejects(runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: x.source, isolatedStateRoot: x.isolated, repoRoot: x.repo, researchSha: TARGET_SHA,
+    providerEnvPath: x.providerEnvPath, aiPolicyEnvPath: x.aiPolicyEnvPath, videoPolicyEnvPath: x.videoPolicyEnvPath,
+    runCycle: async () => cycle(1), runReview: async () => ({}), runVideo: async () => ({}),
+  }), /ISOLATED_TRANSITION_PROFILE_INVALID:forward/);
 });
