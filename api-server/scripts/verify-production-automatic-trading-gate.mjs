@@ -270,7 +270,9 @@ for (const [input, token, code] of [
   [fourMarketPaperCapital, 'MEMBER_MARKET_INITIAL_KRW = 1_000_000', 'MEMBER_PAPER_MARKET_1M_BASELINE_MISSING'],
   [fourMarketPaperCapital, 'compoundShare: 0.5, reserveShare: 0.5', 'FOUR_MARKET_PAPER_COMPOUND_SPLIT_MISSING'],
   [fourMarketPaperCapital, 'reserveWithdrawalAutomatic: false', 'FOUR_MARKET_PAPER_WITHDRAWAL_GUARD_MISSING'],
-  [pilotCapital, 'portfolioInitialCapitalKrw', 'LIVE_FOUR_MARKET_PORTFOLIO_PROJECTION_MISSING'],
+  [pilotCapital, 'policy.totalCapitalKrw + laneCapital - initial', 'LIVE_SELECTED_CAPITAL_PORTFOLIO_PROJECTION_MISSING'],
+  [pilotCapital, 'Math.min(policy.maxOrderKrw, laneCapital)', 'LIVE_SAVED_ORDER_LIMIT_PROJECTION_MISSING'],
+  [pilotCapital, 'capitalAllocationByMarket: allocation', 'LIVE_MARKET_ALLOCATION_PROJECTION_MISSING'],
   [pilotCapital, 'rulePackPilotMarketForPlan(plan)', 'LIVE_MARKET_LOCAL_COMPOUND_READBACK_MISSING'],
   [memberPaperMigration, 'member_four_market_paper_seed_contract', 'MEMBER_PAPER_DATABASE_SEED_GUARD_MISSING'],
   [memberPaperMigration, 'four_market_paper_wallet_rls_guard_ready()', 'MEMBER_PAPER_DATABASE_READINESS_GUARD_MISSING'],
@@ -960,8 +962,8 @@ for (const token of [
 ]) {
   requireText(pilotCapital, token, 'AUTO_PILOT_CAPITAL_BLOCKER_MISSING');
 }
-requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
-requireText(pilotCapitalTest, 'administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'configured 250k + 10% net profit yields 262.5k operating / 12.5k reserve', 'AUTO_PILOT_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'administrator role ceiling keeps verified profit out of order authority', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -15_000", 'AUTO_PILOT_DAILY_LOSS_PERCENT_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');

@@ -170,11 +170,13 @@ on:
       - api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts
       - api-server/src/services/kiwoom-readonly-order-recovery.service.ts
       - api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts
+      - api-server/src/services/member-auto-trading-readiness.service.test.ts
       - api-server/src/services/public-live-plan-origin.service.test.ts
       - api-server/src/services/public-live-plan-origin.service.ts
       - api-server/src/services/trade-automation-repository-compatibility.test.ts
       - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/trade-execution-snapshot.service.ts
+      - api-server/src/services/trade-pre-submission-risk.service.ts
       - api-server/src/services/trade-history-completeness.service.test.ts
       - api-server/src/services/trade-history-completeness.service.ts
       - api-server/src/services/trade-kiwoom-readonly-contract.test.ts
@@ -536,8 +538,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 67 or len(set(auto_safety)) != 67:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_67')
+          if len(auto_safety) != 69 or len(set(auto_safety)) != 69:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_69')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -577,7 +579,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 67
+          test "${#auto_safety[@]}" -eq 69
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
@@ -594,7 +596,7 @@ jobs:
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
           # Precise staging-only automatic Paper holdings GET fix. The owner
-          # registered 67 AUTO + 19 supplemental safety scopes remain exact.
+          # registered 69 AUTO + 19 supplemental safety scopes remain exact.
           # These three source/test blobs and BOTH Trading guards are pinned.
           paper_holdings_readonly=(
             stock-analyzer/src/pages/auto-trading.tsx
