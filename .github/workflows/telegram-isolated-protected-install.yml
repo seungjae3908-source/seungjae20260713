@@ -1,0 +1,314 @@
+name: Telegram Isolated Dormant Install (Owner Protected, No Start)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/telegram-isolated-protected-install.yml
+      - ops/telegram-dormant-artifact-provenance.mjs
+      - .github/tests/telegram-dormant-artifact-provenance.test.mjs
+      - ops/telegram-dormant-artifact-extract.py
+      - .github/tests/telegram_dormant_artifact_extract_test.py
+      - ops/telegram-protected-dormant-install.sh
+      - .github/tests/telegram-isolated-protected-install-contract.test.mjs
+      - .github/tests/telegram-protected-dormant-install-e2e.test.mjs
+      - .github/tests/telegram-isolated-launcher-real-shell-e2e.test.mjs
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-dormant-artifact-provenance.mjs
+          bash -n ops/telegram-protected-dormant-install.sh
+          node --test .github/tests/telegram-dormant-artifact-provenance.test.mjs \
+            .github/tests/telegram-isolated-protected-install-contract.test.mjs \
+            .github/tests/telegram-protected-dormant-install-e2e.test.mjs \
+            .github/tests/telegram-isolated-launcher-real-shell-e2e.test.mjs
+          python3 -m unittest discover -s .github/tests \
+            -p telegram_dormant_artifact_extract_test.py -v
+
+  dormant-install:
+    name: Protected create-only dormant package; no process starts
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-dormant-install ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    concurrency:
+      group: stock-app-production-live
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      statuses: read
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Checkout main without saved credentials
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse exact single owner approval
+        id: request
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const match=/^\/run-telegram-dormant-install ([0-9a-f]{40})$/u.exec(
+            String(process.env.COMMENT||'').trim());
+          if(!match)throw Error('TELEGRAM_DORMANT_OWNER_EXACT_SHA_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+match[1]+'\n');
+          NODE
+      - name: Require current-main Required6, postmerge and genuine original push package
+        id: proof
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {pathToFileURL}=require('node:url');
+            const {inspectRequiredStatusEvidence,evaluateProductionCiProvenance}=
+              require(process.env.GITHUB_WORKSPACE+'/api-server/scripts/production-ci-provenance.cjs');
+            const helper=await import(pathToFileURL(process.env.GITHUB_WORKSPACE
+              +'/ops/telegram-dormant-artifact-provenance.mjs').href);
+            const sha=process.env.TARGET_SHA;
+            const main=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            if(sha!==main||context.sha!==main){
+              core.setFailed('TELEGRAM_DORMANT_STALE_MAIN');return;
+            }
+            const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{
+              owner:context.repo.owner,repo:context.repo.repo,ref:sha,per_page:100,
+            });
+            const evidence=inspectRequiredStatusEvidence(statuses);
+            if(!evidence.ok){core.setFailed('TELEGRAM_DORMANT_REQUIRED6_MISSING');return;}
+            const ci=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:evidence.runId,
+            })).data;
+            if(!evaluateProductionCiProvenance({
+              targetSha:sha,currentMainSha:sha,statuses,run:ci,
+            }).ok){core.setFailed('TELEGRAM_DORMANT_FULL_CI_UNTRUSTED');return;}
+            // A green context alone is not sufficient; tie the newest status
+            // to its authenticated exact-main push run and expected workflow.
+            const {inspectPostMergeStatusEvidence,evaluatePostMergeStatusProvenance}=
+              require(process.env.GITHUB_WORKSPACE+'/api-server/scripts/release-candidate-provenance.cjs');
+            const postEvidence=inspectPostMergeStatusEvidence(statuses);
+            if(!postEvidence.ok){
+              core.setFailed('TELEGRAM_DORMANT_POSTMERGE_PROVENANCE_MISSING');return;
+            }
+            const postRun=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:postEvidence.runId,
+            })).data;
+            if(!evaluatePostMergeStatusProvenance({
+              targetSha:sha,currentMainSha:sha,statuses,run:postRun,
+            }).ok){
+              core.setFailed('TELEGRAM_DORMANT_POSTMERGE_RUN_UNTRUSTED');return;
+            }
+            const runs=await github.paginate(github.rest.actions.listWorkflowRuns,{
+              owner:context.repo.owner,repo:context.repo.repo,
+              workflow_id:'telegram-isolated-dormant-package.yml',
+              branch:'main',event:'push',head_sha:sha,status:'completed',per_page:100,
+            });
+            const candidates=runs.filter(r=>r.head_sha===sha
+              &&r.head_branch==='main'
+              &&r.event==='push'&&r.run_attempt===1
+              &&r.path===helper.TELEGRAM_DORMANT_WORKFLOW
+              &&r.name===helper.TELEGRAM_DORMANT_WORKFLOW_NAME
+              &&r.status==='completed'&&r.conclusion==='success');
+            if(candidates.length!==1){
+              core.setFailed('TELEGRAM_DORMANT_ORIGINAL_PUSH_RUN_NOT_UNIQUE');return;
+            }
+            const run=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,
+              run_id:candidates[0].id,
+            })).data;
+            const res=await github.rest.actions.listWorkflowRunArtifacts({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:run.id,per_page:100,
+            });
+            const proof=helper.attestTelegramDormantArtifact({
+              targetSha:sha,currentMainSha:main,
+              repository:context.repo.owner+'/'+context.repo.repo,
+              run,artifacts:res.data.artifacts,
+            });
+            if(!proof.ok){core.setFailed(proof.code);return;}
+            core.setOutput('artifact_id',String(proof.artifactId));
+            core.setOutput('digest',proof.digest);
+            core.setOutput('run_id',String(proof.runId));
+            core.info('TELEGRAM_DORMANT_AUTHENTIC_PUSH_PROVEN; sha='+sha);
+      - name: Fetch zip and verify Github-provided SHA256 before any SSH
+        id: extracted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          ARTIFACT_ID: ${{ steps.proof.outputs.artifact_id }}
+          ZIP_DIGEST: ${{ steps.proof.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ && "$ZIP_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/telegram-dormant.zip"
+          curl --fail --silent --show-error --location --max-time 45 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            --output "$archive"
+          [[ "$(stat -c %s "$archive")" -gt 0 && "$(stat -c %s "$archive")" -le 16777216 ]]
+          printf '%s  %s\n' "$ZIP_DIGEST" "$archive" | sed 's/^sha256://' | \
+            sha256sum --check --quiet
+          source="$RUNNER_TEMP/telegram-dormant-source"
+          python3 ops/telegram-dormant-artifact-extract.py "$archive" "$source" "$TARGET_SHA"
+          tar -C "$source" -cf "$RUNNER_TEMP/telegram-dormant-payload.tar" \
+            api-server/dist/telegram-isolated-worker.mjs \
+            ops/telegram-legacy-owner-runtime-proof.mjs \
+            ops/run-telegram-isolated-worker.sh \
+            .deploy/telegram-sha256.manifest \
+            .deploy/preparation.json .deploy/current-sha
+          printf 'tar_sha=%s\n' \
+            "$(sha256sum "$RUNNER_TEMP/telegram-dormant-payload.tar" | cut -d' ' -f1)" \
+            >> "$GITHUB_OUTPUT"
+      - name: Pin unchanged main and audited local transfer scripts
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]]
+          for p in ops/install-telegram-isolated-dormant-package.mjs \
+                   ops/telegram-protected-dormant-install.sh; do
+            [[ "$(git rev-parse "HEAD:$p")" == "$(git hash-object "$p")" ]]
+          done
+      - name: Establish pinned Production SSH host identity
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/telegram-id"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/telegram-id" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/telegram-id" >/dev/null
+      - name: Prepare only separate, non-running upload directory
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i "$HOME/.ssh/telegram-id" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "TELEGRAM_DORMANT_SHA=$TARGET_SHA bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          [[ "$TELEGRAM_DORMANT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          BASE=/opt/stock-app-data/telegram-isolated-v1
+          [[ -d /opt/stock-app-data && ! -L /opt/stock-app-data ]]
+          for folder in "$BASE" "$BASE/release" "$BASE/incoming"; do
+            if [[ -e "$folder" || -L "$folder" ]]; then
+              [[ -d "$folder" && ! -L "$folder" ]] || exit 23
+            else
+              mkdir -m 700 -- "$folder"
+            fi
+          done
+          [[ ! -e "$BASE/release/current" && ! -L "$BASE/release/current" ]] || exit 23
+          mkdir -m 700 -- "$BASE/incoming/$TELEGRAM_DORMANT_SHA"
+          echo 'TELEGRAM_DORMANT_INGRESS_CREATED_NO_WORKER'
+          REMOTE
+      - name: Transfer sealed package and exact-main inert installer only
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          scp -i "$HOME/.ssh/telegram-id" -P "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$RUNNER_TEMP/telegram-dormant-payload.tar" \
+            ops/install-telegram-isolated-dormant-package.mjs \
+            "$SSH_USER@$SSH_HOST:/opt/stock-app-data/telegram-isolated-v1/incoming/$TARGET_SHA/"
+      - name: Re-check main just before irreversible create-only operation
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD:ops/telegram-protected-dormant-install.sh)" == \
+             "$(git hash-object ops/telegram-protected-dormant-install.sh)" ]]
+          [[ "$(git rev-parse HEAD:ops/install-telegram-isolated-dormant-package.mjs)" == \
+             "$(git hash-object ops/install-telegram-isolated-dormant-package.mjs)" ]]
+      - name: Install sealed bytes inactive and compare PM2/Trading owner fingerprint
+        id: install
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          TAR_SHA: ${{ steps.extracted.outputs.tar_sha }}
+        run: |
+          set -Eeuo pipefail
+          INSTALLER_SHA="$(sha256sum ops/install-telegram-isolated-dormant-package.mjs | cut -d' ' -f1)"
+          [[ "$INSTALLER_SHA" =~ ^[a-f0-9]{64}$ ]]
+          # Read the audited runner guard over authenticated SSH stdin.
+          # Never execute a potentially swapped copy uploaded to the host.
+          ssh -i "$HOME/.ssh/telegram-id" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "TELEGRAM_DORMANT_PROTECTED_REVIEW=true bash -s -- $TARGET_SHA $TAR_SHA $INSTALLER_SHA" \
+            < ops/telegram-protected-dormant-install.sh
+      - name: Record sanitized inert-only installation, never claim activation
+        if: steps.install.outcome == 'success'
+        env:
+          TARGET_SHA: ${{ steps.request.outputs.sha }}
+          PACKAGE_RUN: ${{ steps.proof.outputs.run_id }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const latest=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                '[TELEGRAM_DORMANT_INSTALLED_NO_START]',
+                '- Package source SHA: '+process.env.TARGET_SHA,
+                '- Exact-main remained stable: '+String(latest===process.env.TARGET_SHA),
+                '- Authenticated push package run: '+process.env.PACKAGE_RUN,
+                '- Mode: STAGED_INACTIVE (not activated)',
+                '- PM2 process, trade/Paper flags and current deployed marker: unchanged on readback',
+                '- Worker starts / Telegram sends / orders / DB / secret writes: 0',
+                '- Production cutover, Signal V3 freshness, personal SENT: unproven',
+                '- No Replit',
+                '- Protected run: '+context.runId,
+              ].join('\n'),
+            });
+            if(latest!==process.env.TARGET_SHA)
+              core.setFailed('TELEGRAM_DORMANT_MAIN_MOVED_AFTER_INSTALL');
