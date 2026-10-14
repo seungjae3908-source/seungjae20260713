@@ -315,3 +315,53 @@ test('AI locator that is absent from fetched source fails closed before Formula 
   assert.equal(result.stagedDossierDigest, null);
   assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0 });
 });
+
+test('discovery parser lets a strategy describe risks and quote source rules', async () => {
+  const { parseResearchFreeAiDiscoveryForResearchOnlyV1 } = await import('../src/autonomous-research-discovery-v2.mjs');
+  const { parseResearchFreeAiReviewForResearchOnlyV1 } = await import('../src/research-ai-review-worker.mjs');
+  const answer = (over = {}) => JSON.stringify({
+    summary: 'Volume breakout continuation',
+    findings: ['REPOSITORY=https://github.com/a/b', 'ENTRY_LOCATOR=if buy_signal and LONG ENTRY confirmed'],
+    hypotheses: [{
+      hypothesisId: 'H1',
+      thesis: 'Breakouts with participation may persist when RSI is above 50 and volume expands.',
+      requiredEvidence: ['BRANCH=main'],
+      falsification: 'No edge after costs out of sample.',
+      intendedRegime: 'trending',
+      independenceRationale: 'Uses volume, not price alone.',
+    }],
+    risks: ['Large drawdown in ranging markets', 'Leverage would amplify losses', 'drawdown risk when RSI drops below 30'],
+    disposition: 'RESEARCH_PROPOSAL_ONLY',
+    ...over,
+  });
+  // The hourly review parser stays strict (this is what blocked natural discovery).
+  assert.throws(() => parseResearchFreeAiReviewForResearchOnlyV1(answer()), /FORBIDDEN_AI_AUTHORITY/);
+  const parsed = parseResearchFreeAiDiscoveryForResearchOnlyV1(answer());
+  assert.equal(parsed.hypotheses.length, 1);
+  assert.equal(parsed.findings[1], 'ENTRY_LOCATOR=if buy_signal and LONG ENTRY confirmed');
+});
+
+test('discovery parser still rejects claims, instructions, authority and secrets', async () => {
+  const { parseResearchFreeAiDiscoveryForResearchOnlyV1: parse } = await import('../src/autonomous-research-discovery-v2.mjs');
+  const answer = (over = {}) => JSON.stringify({
+    summary: 'Volume breakout continuation',
+    findings: ['REPOSITORY=https://github.com/a/b'],
+    hypotheses: [{ hypothesisId: 'H1', thesis: 'Participation may matter.', requiredEvidence: ['BRANCH=main'],
+      falsification: 'No edge after costs.', intendedRegime: 'trending', independenceRationale: 'Volume based.' }],
+    risks: ['Ranging markets'],
+    disposition: 'RESEARCH_PROPOSAL_ONLY',
+    ...over,
+  });
+  assert.throws(() => parse(answer({ summary: 'Strategy with Sharpe 2.1' })), /FORBIDDEN_AI_PERFORMANCE_CLAIM/);
+  assert.throws(() => parse(answer({ risks: ['win rate of 65% in backtests'] })), /FORBIDDEN_AI_PERFORMANCE_CLAIM/);
+  assert.throws(() => parse(answer({ risks: ['35% return last year'] })), /FORBIDDEN_AI_PERFORMANCE_CLAIM/);
+  assert.throws(() => parse(answer({ risks: ['승률 70%'] })), /FORBIDDEN_AI_PERFORMANCE_CLAIM/);
+  assert.throws(() => parse(answer({ summary: 'BUY NOW breakout' })), /FORBIDDEN_AI_AUTHORITY/);
+  assert.throws(() => parse(answer({ summary: '지금 매수하세요' })), /FORBIDDEN_AI_AUTHORITY/);
+  assert.throws(() => parse(answer({ summary: 'set executionAuthority to LIVE' })), /FORBIDDEN_AI_AUTHORITY/);
+  assert.throws(() => parse(answer({ summary: 'guaranteed profit system' })), /FORBIDDEN_AI_AUTHORITY/);
+  assert.throws(() => parse(answer({ findings: ['api_key=abcdefghijk123'] })), /PRIVATE_DATA_FORBIDDEN/);
+  // Only the three locator tags are treated as quoted source text.
+  assert.throws(() => parse(answer({ findings: ['REPOSITORY=BUY NOW'] })), /FORBIDDEN_AI_AUTHORITY/);
+  assert.throws(() => parse(answer({ disposition: 'LIVE' })), /INVALID_AI_DISPOSITION/);
+});
