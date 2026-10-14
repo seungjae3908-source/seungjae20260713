@@ -138,8 +138,16 @@ async function verifySourceRoot(path) {
 async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, researchSha }) {
   const source = await boundedJson(join(sourceStateRoot, 'latest', `${profile}.json`), { optional: true });
   if (source == null) return Object.freeze({ profile, state: 'MISSING' });
-  if (source?.schemaVersion !== 'research-production-cycle-v1' || source?.profile !== profile
-    || !SHA40.test(String(source?.researchSha ?? ''))) throw new Error(`ISOLATED_TRANSITION_PROFILE_INVALID:${profile}`);
+  // The production fast-historical lane uses the independent v2 historical
+  // pipeline writer; forward and long-history use the canonical v1 writer.
+  // Preserve the original evidence schema and SHA when seeding isolated state.
+  const schemaSupported = source?.schemaVersion === 'research-production-cycle-v1'
+    || (profile === 'fast-historical' && source?.schemaVersion === 'research-production-historical-cycle-v2');
+  if (!schemaSupported || source?.profile !== profile
+    || !SHA40.test(String(source?.researchSha ?? ''))
+    || !['complete', 'partial_failure', 'blocked_data'].includes(source?.status)) {
+    throw new Error(`ISOLATED_TRANSITION_PROFILE_INVALID:${profile}`);
+  }
   await atomicJson(join(isolatedStateRoot, 'latest', `${profile}.json`), source);
   return Object.freeze({
     profile,
@@ -149,11 +157,44 @@ async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, resear
   });
 }
 
+function safeProfilePreflightReason(error) {
+  const message = String(error?.message ?? '');
+  if (/^ISOLATED_TRANSITION_[A-Z0-9_]+(?::[a-z-]+)?$/u.test(message)) return message;
+  if (['EACCES', 'ELOOP', 'EPERM'].includes(error?.code)) return `PROFILE_SOURCE_${error.code}`;
+  return 'ISOLATED_TRANSITION_PROFILE_SOURCE_READ_ERROR';
+}
+
+// Examine *all* current profile snapshots before a live provider request.
+// Keep original SHA, status and schema unchanged; fail closed with one
+// bounded, sanitized aggregate instead of discovering one missing contract
+// after each production-environment approval.
+async function seedAllResearchProfilesV2({ sourceStateRoot, isolatedStateRoot, researchSha }) {
+  const profiles = [];
+  const blockers = [];
+  for (const profile of PROFILE_NAMES) {
+    try {
+      profiles.push(await seedProfile({ sourceStateRoot, isolatedStateRoot, profile, researchSha }));
+    } catch (error) {
+      blockers.push(`${profile}=${safeProfilePreflightReason(error)}`);
+    }
+  }
+  if (blockers.length !== 0) {
+    throw new Error(`ISOLATED_TRANSITION_PROFILE_PREFLIGHT_BLOCKERS:${blockers.join('|')}`);
+  }
+  return profiles;
+}
+
 function verifyCycle(cycle) {
   if (cycle?.status !== 'COMPLETE' || cycle?.directiveConsumed !== true || cycle?.discoveryStatus !== 'DOSSIER_STAGED'
     || cycle?.actualProviderCalls?.attempted !== 2 || cycle?.actualProviderCalls?.succeeded !== 2
     || cycle?.actualProviderCalls?.failed !== 0 || cycle?.actualSourceFetches?.attempted !== 3
     || cycle?.actualSourceFetches?.succeeded !== 3 || cycle?.actualSourceFetches?.failed !== 0
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.attempted)
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.succeeded)
+    || cycle.actualCatalogRequests.succeeded < 2
+    || cycle.actualCatalogRequests.attempted < cycle.actualCatalogRequests.succeeded
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.failed)
+    || cycle.actualCatalogRequests.failed < 0
     || !Number.isSafeInteger(cycle?.formulaGeneratedCount) || cycle.formulaGeneratedCount < 1
     || !Number.isSafeInteger(cycle?.actualBacktestCount) || cycle.actualBacktestCount < 1
     || cycle?.safety?.executionAuthority !== 'NONE' || cycle?.safety?.realOrder !== false) {
@@ -224,10 +265,9 @@ export async function runResearchAiIsolatedTransitionV2({
       blockedStrategiesPreserved: rebound.blockedStrategyIdentityDigests.length,
     });
   }
-  const profiles = [];
-  for (const profile of PROFILE_NAMES) profiles.push(await seedProfile({
-    sourceStateRoot, isolatedStateRoot, profile, researchSha,
-  }));
+  const profiles = await seedAllResearchProfilesV2({
+    sourceStateRoot, isolatedStateRoot, researchSha,
+  });
   const reviewSeed = profiles.find((row) => row.profile === 'forward' && row.sourceResearchSha)
     ?? profiles.find((row) => row.sourceResearchSha);
   if (!reviewSeed) throw new Error('ISOLATED_TRANSITION_REVIEW_EVIDENCE_MISSING');
@@ -292,6 +332,7 @@ export async function runResearchAiIsolatedTransitionV2({
     nextDirectiveGenerated: true,
     actualProviderCalls: cycles.reduce((sum, cycle) => sum + cycle.actualProviderCalls.succeeded, 0),
     actualSourceFetches: cycles.reduce((sum, cycle) => sum + cycle.actualSourceFetches.succeeded, 0),
+    actualCatalogRequests: cycles.reduce((sum, cycle) => sum + cycle.actualCatalogRequests.succeeded, 0),
     aiReview: Object.freeze({ status: review.status, evidenceResearchSha: reviewSeed.sourceResearchSha,
       exactTargetEvidence: reviewSeed.sourceResearchSha === researchSha, provider: review.provider, model: review.model,
       providerNetworkCalls: review.providerNetworkCalls, cacheHits: review.cacheHits, reviewCount: review.reviews.length }),
