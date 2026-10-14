@@ -9,7 +9,7 @@ export const EVIDENCE_BACKED_FORMULA_ENTRY_EVALUATOR_VERSION = 1;
 
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 const SUPPORTED_MARKETS = new Set([...CASH_MARKETS, "CRYPTO_FUTURES"]);
-const SUPPORTED_INDICATORS = new Set(["EMA", "ADX", "ROC", "RVOL", "BREAKOUT", "RSI"]);
+const SUPPORTED_INDICATORS = new Set(["SMA", "EMA", "ADX", "ROC", "RVOL", "BREAKOUT", "RSI"]);
 const SUPPORTED_OPERATORS = new Set(["GT", "LT", "CROSSOVER"]);
 const REQUIRED_EXIT_TYPES = Object.freeze(["ATR_STOP", "TARGET", "TIME_EXIT"]);
 const HASH64 = /^[0-9a-f]{64}$/u;
@@ -191,7 +191,11 @@ function extendSeries(state, candles, targetIndex) {
   const period = state.period;
   for (let index = state.builtThrough + 1; index <= targetIndex; index += 1) {
     let value = null;
-    if (state.name === "EMA") {
+    if (state.name === "SMA") {
+      if (index >= period - 1) {
+        value = mean(candles.slice(index - period + 1, index + 1).map((candle) => candle.close));
+      }
+    } else if (state.name === "EMA") {
       if (index < period) state.emaSeedSum += candles[index].close;
       if (index === period - 1) {
         state.emaCurrent = state.emaSeedSum / period;
