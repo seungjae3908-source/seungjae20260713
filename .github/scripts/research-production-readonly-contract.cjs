@@ -21,6 +21,7 @@ const MUTATING_WORKFLOWS = ['production-deploy.yml', 'production-live-trading-ga
   'production-futures-live-trading-gate.yml', 'production-automatic-trading-gate.yml',
   'production-automatic-paper-only-gate.yml', 'telegram-production-code-only-deploy.yml',
   'research-production-activation.yml', 'research-ai-production-activation.yml',
+  'research-ai-isolated-validation.yml',
   'research-market-watch-activation.yml', 'research-dashboard-activation.yml'];
 
 function assertResearchQaAuthorization({ researchSha, currentMain, appSha, workflowSha,

@@ -1,0 +1,261 @@
+name: Research AI Isolated Validation
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: research-ai-isolated-validation
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    if: >-
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/validate-research-ai-isolated ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      cycles: ${{ steps.gate.outputs.cycles }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Require exact main and coherent Required CI
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = /^\/validate-research-ai-isolated ([0-9a-f]{40})( --two-cycles)?$/u.exec(body);
+            if (!match) {
+              core.setFailed('Expected /validate-research-ai-isolated <40-char-current-main-sha> [--two-cycles]');
+              return;
+            }
+            const target = match[1].toLowerCase();
+            const hubIssue = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isSafeInteger(hubIssue) || hubIssue <= 0 || Number(context.issue.number) !== hubIssue) {
+              core.setFailed('Isolated validation must be requested on the canonical Hub.');
+              return;
+            }
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha.toLowerCase();
+            if (main !== target) {
+              core.setFailed('AI_RESEARCH_ISOLATED_MAIN_SHA_MISMATCH:target=' + target + ':main=' + main);
+              return;
+            }
+            const required = [
+              'application-ci/verified', 'browser-ui/verified', 'database-rls/verified',
+              'security-integration/verified', 'ai-privacy/verified', 'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            statuses.sort((a, b) => Number(b.id) - Number(a.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed('AI_RESEARCH_ISOLATED_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const runIds = new Set(required.map((name) =>
+              /\/actions\/runs\/(\d+)/u.exec(String(latest.get(name)?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('AI_RESEARCH_ISOLATED_REQUIRED_CI_NOT_COHERENT');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: runId,
+            })).data;
+            if (run.name !== 'Application CI'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml'
+              || run.head_sha.toLowerCase() !== target || run.head_branch !== 'main'
+              || !['push', 'workflow_dispatch'].includes(run.event)
+              || run.status !== 'completed' || run.conclusion !== 'success') {
+              core.setFailed('AI_RESEARCH_ISOLATED_REQUIRED_CI_PROVENANCE_REJECTED:' + runId);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: hubIssue, per_page: 100,
+            });
+            const duplicate = [...comments].reverse().find((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
+              const text = String(comment.body ?? '');
+              return text.includes('[RESEARCH_AI_ISOLATED_VALIDATION]')
+                && text.includes('status: success') && text.includes('target_sha: ' + target);
+            });
+            if (duplicate) {
+              core.setFailed('AI_RESEARCH_ISOLATED_DUPLICATE_TARGET_BLOCKED:' + target);
+              return;
+            }
+            core.setOutput('target_sha', target);
+            core.setOutput('cycles', match[2] ? '2' : '1');
+
+  validate:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      RESEARCH_AI_ISOLATED_CYCLES: ${{ needs.authorize.outputs.cycles }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Configure protected SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Re-check exact main after approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$TARGET_SHA"
+
+      - name: Run isolated natural-cycle validation without systemd changes
+        id: isolated
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q RESEARCH_AI_ISOLATED_CYCLES=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$RESEARCH_AI_ISOLATED_CYCLES" "$REPOSITORY_URL")"
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- validate-isolated" \
+            < research-production/deploy/activate-ai-research.sh \
+            2>&1 | tee "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          remote_status=${pipeline_status[0]}
+          capture_status=${pipeline_status[1]}
+          if (( remote_status != 0 || capture_status != 0 )); then
+            printf 'status=failed\n' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          grep -Fxq 'AI_RESEARCH_ISOLATED_VALIDATION=PASS' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq "TARGET_SHA=$TARGET_SHA" "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq 'PRODUCTION_STATE_MUTATED=false' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq 'LIVE_TRADING=false' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq 'PRIVATE_TRADING_API_ALLOWED=false' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq 'REAL_ORDER_ENABLED=false' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          grep -Fxq 'executionAuthority=NONE' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+          printf 'status=success\n' >> "$GITHUB_OUTPUT"
+          for mapping in \
+            natural_cycle_count:AI_RESEARCH_ACTUAL_STRATEGY_SEARCH_COUNT \
+            source_count:AI_RESEARCH_ORIGINAL_SOURCE_VERIFIED_COUNT \
+            formula_count:AI_RESEARCH_FORMULA_CANDIDATE_COUNT \
+            backtest_count:AI_RESEARCH_ACTUAL_BACKTEST_COUNT \
+            failure_memory_count:AI_RESEARCH_FAILURE_MEMORY_COUNT \
+            compatibility_review_sha:AI_RESEARCH_COMPATIBILITY_REVIEW_SHA \
+            target_sha_review:AI_RESEARCH_TARGET_SHA_REVIEW; do
+            output_name="${mapping%%:*}"
+            marker_name="${mapping#*:}"
+            value="$(awk -F= -v key="$marker_name" '$1 == key {print $2}' "$RUNNER_TEMP/research-ai-isolated-validation.txt" | tail -1)"
+            test -n "$value"
+            printf '%s=%s\n' "$output_name" "$value" >> "$GITHUB_OUTPUT"
+          done
+          grep -Fxq 'AI_RESEARCH_NEXT_DIRECTIVE_GENERATED=true' "$RUNNER_TEMP/research-ai-isolated-validation.txt"
+
+      - name: Upload sanitized isolated validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-ai-isolated-validation-${{ env.TARGET_SHA }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/research-ai-isolated-validation.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record isolated validation failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              body: [
+                '[RESEARCH_AI_ISOLATED_VALIDATION]', 'status: failed_closed',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'production_state_mutated: false', 'systemd_changed: false',
+                'provider_secret_values_exposed: false', 'live_trading: false',
+                'private_api: false', 'order_authority: false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
+
+      - name: Record isolated validation success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              body: [
+                '[RESEARCH_AI_ISOLATED_VALIDATION]', 'status: success',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'natural_cycle_proven: true',
+                'natural_cycle_count: ${{ steps.isolated.outputs.natural_cycle_count }}',
+                'actual_strategy_search_count: ${{ steps.isolated.outputs.natural_cycle_count }}',
+                'original_source_verified_count: ${{ steps.isolated.outputs.source_count }}',
+                'formula_candidate_count: ${{ steps.isolated.outputs.formula_count }}',
+                'actual_backtest_count: ${{ steps.isolated.outputs.backtest_count }}',
+                'failure_memory_count: ${{ steps.isolated.outputs.failure_memory_count }}',
+                'next_directive_generated: true',
+                'compatibility_review_sha: ${{ steps.isolated.outputs.compatibility_review_sha }}',
+                'target_sha_review: ${{ steps.isolated.outputs.target_sha_review }}',
+                'target_sha_review_required_after_cutover: true',
+                'production_state_mutated: false', 'systemd_changed: false',
+                'provider_secret_values_exposed: false', 'live_trading: false',
+                'private_api: false', 'order_authority: false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
