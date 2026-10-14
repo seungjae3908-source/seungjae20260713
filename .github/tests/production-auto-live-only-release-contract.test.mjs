@@ -42,6 +42,50 @@ test('Automatic LIVE-only release lane excludes Paper and Telegram while preserv
   assert.equal(sourceOnly.includes('bash ops/disable-paper-forward-schedule.sh'), false);
   assert.equal(sourceOnly.includes('pm2 restart'), false);
 
+  // When deployed app SHA is older than main, a separate sealed checkout of
+  // reviewed public-only source must be verified; never silently deploy app.
+  for (const proof of [
+    'PUBLIC_BUNDLE_SHA256',
+    'PUBLIC_MANIFEST_SHA256',
+    'PUBLIC_HELPER_SHA256',
+    'PUBLIC_SOURCE_STAGE',
+    'AUTO_LIVE_PUBLIC_INSTALL_SOURCE_CONTENT_SHA_MISMATCH',
+    'AUTO_LIVE_PUBLIC_INSTALL_MAIN_CHANGED_BEFORE_CRON',
+    'AUTO_LIVE_PUBLIC_INSTALL_REQUIRED_STATUS_PROVENANCE_INVALID',
+    'application-ci/verified',
+    'browser-ui/verified',
+    'database-rls/verified',
+    'security-integration/verified',
+    'ai-privacy/verified',
+    'futures-public-network-smoke/verified',
+    'sha256sum --status -c SHA256SUMS',
+    'AUTO_LIVE_INDEPENDENT_SOURCE_SEAL_DIR',
+    'AUTO_LIVE_INDEPENDENT_SOURCE_MANIFEST_HASH',
+    'AUTO_LIVE_INDEPENDENT_SOURCE_HELPER_HASH',
+    'production-auto-live-signal-identity.cjs',
+    'AUTO_LIVE_PUBLIC_INSTALL_CLEANUP_SCOPE_INVALID',
+    'AUTO_LIVE_PUBLIC_INSTALL_LATE_OPERATION_CONFLICT',
+    'AUTO_LIVE_PUBLIC_INSTALL_HOST_DEPENDENCY_MISSING',
+    'AUTO_LIVE_PUBLIC_INSTALL_CRON_DAEMON_MISSING',
+    'AUTO_LIVE_PUBLIC_INSTALL_PARENT_NOT_WRITABLE',
+    'AUTO_LIVE_PUBLIC_INSTALL_NODE_UNSUPPORTED',
+    "steps.public_install.outcome == 'success'",
+    "steps.source_readback.outcome != 'success'",
+    'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_SCOPE_INVALID',
+    'AUTO_LIVE_PUBLIC_INSTALL_READBACK_RUN_ID_MISMATCH',
+    'AUTO_LIVE_PUBLIC_INSTALL_ROLLBACK_NO_OWNED_ROOT',
+    'AUTO_LIVE_INDEPENDENT_INSTALL_RUN_ID=%q',
+    'String(value.installRunId)!==String(process.argv[4])',
+    "steps.public_install.outcome == 'failure'",
+    'AUTO_LIVE_PUBLIC_INSTALL_POSTAUDIT_FAILED_CLOSED_DISABLED',
+  ]) assert.ok(sourceOnly.includes(proof), 'sealed standalone public source missing: '+proof);
+  assert.equal(sourceOnly.includes('/opt/stock-app/.deploy/current-sha'),false);
+  assert.equal(sourceOnly.includes('cd /opt/stock-app &&'),false);
+  assert.equal(sourceOnly.includes("if: failure() && steps.public_install.outcome == 'success' &&"),false,
+    'receipt parse failure after Cron mutation must trigger bounded rollback');
+  assert.ok(isolatedPlan.includes('sealed public source manifest mismatch'));
+  assert.ok(isolatedPlan.includes('sealed helper source content mismatch'));
+  assert.ok(isolatedPlan.includes('bin/production-auto-live-signal-identity.cjs'));
   const autoPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 
   assert.ok(command.includes('/run-production-auto-live-release '));
