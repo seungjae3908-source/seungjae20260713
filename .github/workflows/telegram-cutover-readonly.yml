@@ -1,0 +1,209 @@
+name: Telegram Four-Lane Cutover Read-Only Audit (No Start)
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-cutover-readonly.mjs
+      - .github/tests/telegram-cutover-readonly.test.mjs
+      - .github/tests/telegram-cutover-readonly-workflow.test.mjs
+      - .github/workflows/telegram-cutover-readonly.yml
+      - docs/telegram-isolated-dormant-package.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-cutover-readonly.mjs
+          node --test .github/tests/telegram-cutover-readonly.test.mjs \
+            .github/tests/telegram-cutover-readonly-workflow.test.mjs
+
+  observe:
+    name: Owner-approved Production Telegram owner health only (NO SEND)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-cutover-readonly ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: stock-app-production-live
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse exact owner command; no historical SHA substitution
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const match=/^\/run-telegram-cutover-readonly ([0-9a-f]{40})$/u.exec(
+            String(process.env.BODY||'').trim());
+          if(!match)throw Error('TELEGRAM_CUTOVER_READONLY_EXACT_MAIN_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+match[1]+'\n');
+          NODE
+      - name: Recheck immutable current-main before any host read
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD:ops/telegram-cutover-readonly.mjs)" = \
+               "$(git hash-object ops/telegram-cutover-readonly.mjs)"
+      - name: Pin Production SSH host without logging private values
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/telegram-audit-id"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/telegram-audit-id" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/telegram-audit-id" >/dev/null
+      - name: Two same-process observations of PM2 and localhost health only
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          evidence="$RUNNER_TEMP/telegram-cutover-readonly.json"
+          {
+            cat ops/telegram-cutover-readonly.mjs
+            cat <<'EOF'
+          const observed = await observeTelegramHandoff({
+            mainSha: process.env.TELEGRAM_HANDOFF_MAIN_SHA,
+          });
+          process.stdout.write(JSON.stringify(observed) + '\n');
+          EOF
+          } | ssh -i "$HOME/.ssh/telegram-audit-id" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "TELEGRAM_HANDOFF_MAIN_SHA=$TARGET_SHA node --input-type=module -" \
+            > "$evidence"
+          echo "HANDOFF_EVIDENCE_PATH=$evidence" >> "$GITHUB_ENV"
+      - name: Validate sanitized, NO-GO-only readout
+        id: validated
+        env:
+          EXPECTED_SHA: ${{ steps.command.outputs.sha }}
+          RECEIPT: ${{ env.HANDOFF_EVIDENCE_PATH }}
+        run: |
+          set -Eeuo pipefail
+          node - "$RECEIPT" <<'NODE'
+          const fs=require('node:fs');
+          const value=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const required=[
+            'schemaVersion','mainSha','deployedSha','pm2Online',
+            'stableProcess','owner','manualFinancialAuthorityObserved',
+            'fourLanesQuiesced','probes','activationReady','classification',
+            'telegramSends','pm2Restarts','databaseWrites','financialMutations',
+            'privateValuesRecorded',
+          ];
+          const code=new Set([
+            'INVALID_MAIN','PM2_OR_MARKER_UNVERIFIED','PM2_PROCESS_CHANGED',
+            'LEGACY_EMBEDDED_SENDER_ACTIVE','OWNER_SWITCH_INVALID',
+            'IN_PROCESS_OWNER_UNVERIFIED','FOUR_LANES_NOT_QUIESCED',
+            'FOUR_LANES_QUIESCED_ONLY',
+          ]);
+          if(JSON.stringify(Object.keys(value).sort())!==JSON.stringify(required.sort())
+            ||value.schemaVersion!=='telegram-handoff-readonly-v1'
+            ||value.mainSha!==process.env.EXPECTED_SHA
+            ||!(value.deployedSha===null||/^[0-9a-f]{40}$/u.test(value.deployedSha))
+            ||!['embedded','isolated','UNKNOWN'].includes(value.owner)
+            ||!code.has(value.classification)
+            ||!['pm2Online','stableProcess','fourLanesQuiesced'].every(k=>typeof value[k]==='boolean')
+            ||!(value.manualFinancialAuthorityObserved===null
+              ||typeof value.manualFinancialAuthorityObserved==='boolean')
+            ||value.probes!==2 ||value.activationReady!==false
+            ||value.telegramSends!==0 ||value.pm2Restarts!==0
+            ||value.databaseWrites!==0 ||value.financialMutations!==0
+            ||value.privateValuesRecorded!==false
+            ||(value.classification==='FOUR_LANES_QUIESCED_ONLY'&&!value.fourLanesQuiesced)){
+            throw Error('TELEGRAM_CUTOVER_UNSAFE_OR_UNTRUSTED_RECEIPT');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'classification='+value.classification+'\n'+
+            'deployed_sha='+(value.deployedSha||'UNKNOWN')+'\n'+
+            'owner='+value.owner+'\n'+
+            'quiesced='+String(value.fourLanesQuiesced)+'\n'+
+            'live_authority='+String(value.manualFinancialAuthorityObserved)+'\n');
+          console.log('TELEGRAM_CUTOVER_READONLY_EVIDENCE_VALID; NEVER ACTIVATED');
+          NODE
+      - name: Publish sanitized blocker receipt, never dispatch activation
+        if: steps.validated.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          CLASSIFICATION: ${{ steps.validated.outputs.classification }}
+          DEPLOYED_SHA: ${{ steps.validated.outputs.deployed_sha }}
+          OWNER: ${{ steps.validated.outputs.owner }}
+          QUIESCED: ${{ steps.validated.outputs.quiesced }}
+          LIVE_AUTHORITY: ${{ steps.validated.outputs.live_authority }}
+        with:
+          script: |
+            const latest=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                '[TELEGRAM_FOUR_LANE_CUTOVER_READONLY_NO_ACTIVATION]',
+                '- Current source SHA: '+process.env.TARGET_SHA,
+                '- Current main unchanged after read: '+String(latest===process.env.TARGET_SHA),
+                '- Actual deployed PM2 SHA: '+process.env.DEPLOYED_SHA,
+                '- Actual owner: '+process.env.OWNER,
+                '- Two-pass four-lane stopped: '+process.env.QUIESCED,
+                '- Manual financial authority observed (left unchanged): '+process.env.LIVE_AUTHORITY,
+                '- Classification: '+process.env.CLASSIFICATION,
+                '- Activation: NO-GO; a quiescence-only classification is NOT complete release proof',
+                '- Bot POST / PM2 restart / DB / Orders / Secrets: 0 / 0 / 0 / 0 / 0',
+                '- Existing orders and LIVE/Paper state preserved',
+                '- NO Replit',
+                '- Protected run: '+context.runId,
+              ].join('\n'),
+            });
+            if(latest!==process.env.TARGET_SHA){
+              core.setFailed('TELEGRAM_CUTOVER_MAIN_CHANGED_AFTER_HOST_READ');
+            }
