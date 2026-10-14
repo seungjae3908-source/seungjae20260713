@@ -96,11 +96,17 @@ function activation({workerReady=true,unsafeEvidence=false,oldCleanup=false,oneS
 RESEARCH_ROOT="$HARNESS_ROOT/release"; STATE_ROOT="$HARNESS_ROOT/state"
 ENV_ROOT="$HARNESS_ROOT/env"; PROVIDER_ENV="$ENV_ROOT/providers.env"
 AI_POLICY_ENV="$ENV_ROOT/ai.env"; VIDEO_POLICY_ENV="$ENV_ROOT/video.env"
+TRANSITION_ROOT="$HARNESS_ROOT/transition"
 require_exact_research_release() { :; }
 require_research_safety_env() { :; }
 require_runtime_policy_env() { :; }
 provider_env_ready() { :; }
+require_existing_provider_env() { :; }
 verify_unit_sources() { :; }
+verify_installed_unit_ownership() { :; }
+require_isolated_validation() { ISOLATED_BASELINE_SNAPSHOT_ROOT="$HARNESS_ROOT/baseline"; }
+capture_runtime_snapshot() { :; }
+restore_runtime_snapshot() { printf 'AI_RESEARCH_ROLLBACK=RESTORED\n' >&2; }
 print_forward_runtime_diagnostic() { :; }
 verify_v2_operational_transition() {
   "$REAL_NODE" "$TEST_OPERATIONAL_CLI" --state-root "$STATE_ROOT" --research-sha "$TARGET_SHA" --started-at-ms "$1"
@@ -166,7 +172,7 @@ test('workspace failure preserves the parent fail-safe rather than replacing it 
   const r=activation({workerReady:false});
   assert.notEqual(r.status,0);
   assert.match(r.stderr,/AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE/u);
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/u);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/u);
   assert.doesNotMatch(r.stdout,/AI_RESEARCH_ACTIVATED=true/u);
   assert.equal(r.temporaryFiles.length,0);
 });
@@ -175,7 +181,7 @@ test('unsafe one-shot fixture cannot reach timer enable or success finalization'
   const r=activation({unsafeEvidence:true});
   assert.notEqual(r.status,0);
   assert.match(r.stderr,/AI_RESEARCH_ONE_SHOT_SAFETY_INVALID/u);
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/u);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/u);
   assert.doesNotMatch(r.events,/^enable /mu);
 });
 
@@ -184,7 +190,7 @@ test('all already-started one-shot results are reported, then failures keep ever
   for(const unit of ['ai-review','video-discovery','approved-job-intake']){
     assert.match(r.stdout,new RegExp('AI_RESEARCH_ONE_SHOT_RESULT:research-production-'+unit+'[.]service:result=exit-code:status=75'));
   }
-  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/);
+  assert.match(r.stderr,/AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
   assert.doesNotMatch(r.events,/^enable /mu);assert.doesNotMatch(r.stdout,/AI_RESEARCH_ACTIVATED=true/);
 });
 

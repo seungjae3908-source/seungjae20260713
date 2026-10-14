@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { adaptCrossrefMetadata } from '../../packages/external-research/src/index.js';
@@ -456,9 +456,19 @@ async function readJsonOptional(path) {
 }
 
 async function priorGithubSourceIds(root) {
-  const state = await readJsonOptional(join(root, 'autonomous-research', 'state.json'));
-  if (!Array.isArray(state?.records)) return Object.freeze([]);
-  return Object.freeze([...new Set(state.records.map((row) => String(row?.sourceId ?? '').trim())
+  const autonomousRoot = join(root, 'autonomous-research');
+  const states = [];
+  const legacy = await readJsonOptional(join(autonomousRoot, 'state.json'));
+  if (legacy != null) states.push(legacy);
+  let releases = [];
+  try { releases = (await readdir(join(autonomousRoot, 'releases'))).filter((name) => /^[a-f0-9]{40}$/u.test(name)).sort().slice(-100); }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  for (const release of releases) {
+    const state = await readJsonOptional(join(autonomousRoot, 'releases', release, 'state.json'));
+    if (state != null) states.push(state);
+  }
+  return Object.freeze([...new Set(states.flatMap((state) => Array.isArray(state?.records) ? state.records : [])
+    .map((row) => String(row?.sourceId ?? '').trim())
     .filter((sourceId) => /^github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+:[a-f0-9]{40}:[A-Za-z0-9_.@+/-]{1,240}$/u.test(sourceId)))]
     .sort().slice(-20));
 }
