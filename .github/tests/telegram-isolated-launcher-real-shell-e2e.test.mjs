@@ -96,7 +96,12 @@ function fixture(){
    .replaceAll('__TG_QA_DEPLOY_LOCK__',lock);
  assert.ok(runner.includes('readonly RELEASE='+path.join(root,'release','current')));
  assert.ok(runner.includes('readonly LIVE_APP='+app));
- assert.ok(!runner.includes('/opt/stock-app-data/telegram-isolated-v1'));
+ // The temporary owner root intentionally CONTAINS the suffix /opt/stock-app-data.
+ // Assert no placeholder or nested double-replacement remains instead.
+ assert.ok(!runner.includes('__TG_QA_OWNER_ROOT__'));
+ assert.ok(!runner.includes('__TG_QA_APP_ROOT__'));
+ assert.ok(!runner.includes('__TG_QA_DEPLOY_LOCK__'));
+ assert.ok(!runner.includes(temp+temp));
  const runnerFile=path.join(temp,'run-approved-test-copy.sh');
  fs.writeFileSync(runnerFile,runner,{mode:0o700});
  const launch=(patch={})=>spawnSync('bash',[runnerFile],{
