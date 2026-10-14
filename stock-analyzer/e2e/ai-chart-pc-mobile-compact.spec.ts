@@ -82,6 +82,8 @@ for (const width of [360, 390, 412, 430]) {
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('손절');
     await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('목표 1');
     await expect(page.getByTestId('ai-chart-mobile-chart')).toBeHidden();
+    // The retained connection is lazy until the first explicit chart visit.
+    await expect(page.getByTestId('unified-chart-canvas')).toHaveCount(0);
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
@@ -100,6 +102,7 @@ test('mobile tabs keep the public chart connection mounted while only the select
 
   await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
   await expect(page.getByTestId('ai-chart-mobile-chart')).toBeHidden();
+  await expect(page.getByTestId('unified-analysis-chart')).toHaveCount(0);
   await page.getByRole('tab', { name: '차트' }).click();
   await expect(page.getByTestId('ai-chart-mobile-chart')).toBeVisible();
   await expect(page.getByTestId('ai-chart-mobile-summary')).toHaveCount(0);
