@@ -4,6 +4,7 @@ import ResearchCenterPage, { type ResearchTab } from './research-center';
 import { ResearchCenterGeneral } from '@/components/research-center-general';
 import { ResearchCopilotPanel } from '@/components/research-copilot-panel';
 import { ResearchVideoPanel } from '@/components/research-video-panel';
+import { ResearchRuleValidationPanel } from '@/components/research-rule-validation-panel';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 
@@ -42,6 +43,7 @@ const WORKSPACE_TABS = [
 export default function ResearchCenterWorkspace() {
   const { isAdmin } = useAuth();
   const [view, setView] = useState<ResearchWorkspaceView>('general');
+  const [rulesOpen, setRulesOpen] = useState(false);
   const selectedView = view === 'ai-lab' ? 'copilot' : view;
 
   return (
@@ -86,6 +88,21 @@ export default function ResearchCenterWorkspace() {
           })}
         </div>
       </div>
+
+      {view === 'evidence' && isAdmin ? (
+        <details
+          className="shrink-0 border-b border-border bg-background px-3 py-2 sm:px-4"
+          data-testid="research-rule-validation-toggle"
+          onToggle={(event) => setRulesOpen(event.currentTarget.open)}
+        >
+          <summary className="mx-auto min-h-11 w-full max-w-5xl cursor-pointer py-3 text-sm font-bold">규칙 검증 결과 (관리자)</summary>
+          {rulesOpen ? (
+            <div className="mx-auto max-h-[60vh] w-full max-w-5xl overflow-y-auto pb-2">
+              <ResearchRuleValidationPanel />
+            </div>
+          ) : null}
+        </details>
+      ) : null}
 
       <div className="min-h-0 flex-1">
         {view === 'general' ? <ResearchCenterGeneral onOpenExpert={() => setView('expert')} /> : null}
