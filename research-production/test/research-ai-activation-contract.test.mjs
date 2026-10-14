@@ -13,24 +13,55 @@ const workflowUrl = new URL('../../.github/workflows/research-ai-production-acti
 const aiCliUrl = new URL('../bin/research-ai-review.mjs', import.meta.url);
 const aiServiceUrl = new URL('../deploy/research-production-ai-review.service', import.meta.url);
 
-test('AI Research activation is fail-closed and exact-SHA bound', async () => {
+test('AI Research activation is fail-closed, exact-SHA bound and rollback-first', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   assert.match(script, /TARGET_SHA must be an exact lowercase 40-character SHA/);
   assert.match(script, /AI_RESEARCH_CURRENT_SHA_MISMATCH/);
   assert.match(script, /\/opt\/investment-research\/releases\/[^\n]*\$TARGET_SHA/);
-  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=\$safe_disabled/);
+  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
+  assert.match(script, /ROLLBACK_FAILED=true/);
+  assert.match(script, /restore_runtime_snapshot "\$snapshot_root"/);
+  assert.match(script, /capture_runtime_snapshot "\$baseline"/);
   assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
   assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
   assert.match(script, /systemctl disable --now/);
 });
 
-test('AI cutover stops active one-shots, not just their timers', async () => {
+test('AI cutover refuses to kill an in-flight previous-release one-shot', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const freeze = script.slice(script.indexOf('disable_timers()'), script.indexOf('research_sha()'));
-  assert.match(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
-  assert.match(freeze, /AI_RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  const freeze = script.slice(script.indexOf('require_idle_one_shots()'), script.indexOf('capture_runtime_snapshot()'));
+  assert.doesNotMatch(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
+  assert.match(freeze, /AI_RESEARCH_CUTOVER_BUSY/u);
   const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.ok(activation.indexOf('require_isolated_validation') < activation.indexOf('disable_timers'));
   assert.ok(activation.indexOf('disable_timers') < activation.indexOf('install-ai-research-units.sh'));
+});
+
+test('isolated validation uses a disjoint state root and no systemd mutation', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const isolated = script.slice(script.indexOf('validate_isolated()'), script.indexOf('require_isolated_validation()'));
+  assert.match(isolated, /research-ai-isolated-transition-v2\.mjs/u);
+  assert.match(isolated, /--source-state-root "\$STATE_ROOT"/u);
+  assert.match(isolated, /--isolated-state-root "\$isolated_root"/u);
+  assert.match(isolated, /stage_isolated_release/u);
+  assert.match(isolated, /capture_runtime_snapshot "\$baseline"/u);
+  assert.match(isolated, /PRODUCTION_STATE_MUTATED=false/u);
+  assert.doesNotMatch(isolated, /systemctl/u);
+});
+
+test('rollback restores SHA-pinned prior units, isolated env, enablement and active state', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const rollback = script.slice(script.indexOf('restore_runtime_snapshot()'), script.indexOf('research_sha()'));
+  assert.match(rollback, /runtime-before\.tsv/u);
+  assert.match(rollback, /install -o root -g root -m 0644/u);
+  assert.match(rollback, /restore-units\/\$name/u);
+  assert.match(rollback, /env\/research-production\.env/u);
+  assert.match(rollback, /systemctl enable/u);
+  assert.match(rollback, /systemctl start/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK=RESTORED/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_UNIT_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH/u);
 });
 
 test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
@@ -42,15 +73,16 @@ test('free confirmation binds to the deployed app SHA without app writes or rest
 
 test('provider readiness is proven before timer activation and secrets are not printed', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const preflight = script.indexOf('provider_preflight');
-  const materialize = script.indexOf('research-provider-bootstrap.mjs" materialize');
+  const preflight = script.indexOf('require_existing_provider_env');
   const enable = script.indexOf('systemctl enable --now');
-  assert.ok(preflight >= 0 && materialize > preflight && enable > materialize);
+  assert.ok(preflight >= 0 && enable > preflight);
   assert.match(script, /fullStackReady !== true/);
   assert.match(script, /providers\.youtube !== 'PRESENT'/);
   assert.match(script, /providers\.gemini !== 'PRESENT'/);
   assert.match(script, /providers\.groq !== 'PRESENT'/);
   assert.doesNotMatch(script, /echo .*API_KEY|printf .*API_KEY/);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(activation, /materialize_or_reuse_provider_env|chown root:investment-research|chmod 0640/u);
 });
 
 

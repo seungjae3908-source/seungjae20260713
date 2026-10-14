@@ -312,7 +312,13 @@ export async function stageAutonomousResearchDossierV1({ stateRoot: rawRoot, dos
   assertAutonomousResearchDossierV1(dossier);
   const root = stateRoot(rawRoot);
   await secureDirectory(root, { create: true, shared: true });
-  const inbox = join(root, 'autonomous-research', 'inbox');
+  const autonomousRoot = join(root, 'autonomous-research');
+  const releasesRoot = join(autonomousRoot, 'releases');
+  const releaseRoot = join(releasesRoot, dossier.researchCodeSha);
+  await secureDirectory(autonomousRoot, { create: true });
+  await secureDirectory(releasesRoot, { create: true });
+  await secureDirectory(releaseRoot, { create: true });
+  const inbox = join(releaseRoot, 'inbox');
   await secureDirectory(inbox, { create: true });
   const created = await writeOnce(join(inbox, `${dossier.dossierDigest}.json`), dossier);
   return deepFreeze({ status: created ? 'STAGED' : 'ALREADY_STAGED', dossierDigest: dossier.dossierDigest, executionAuthority: 'NONE' });
@@ -521,6 +527,20 @@ export function assertAutonomousResearchNextDirectiveV1(value, { researchCodeSha
   return value;
 }
 
+export function rebindAutonomousResearchNextDirectiveV1({
+  directive,
+  researchCodeSha,
+  observedAt,
+} = {}) {
+  const source = assertAutonomousResearchNextDirectiveV1(directive);
+  const core = directiveCore({
+    ...source,
+    researchCodeSha: exactSha(researchCodeSha),
+    observedAt: iso(observedAt, 'observedAt'),
+  });
+  return deepFreeze({ ...core, directiveDigest: digest(core) });
+}
+
 export async function loadAutonomousResearchNextDirectiveV1({ stateRoot: rawRoot, researchCodeSha } = {}) {
   const root = stateRoot(rawRoot);
   const value = await safeJson(join(root, 'latest', 'autonomous-research-next-directive.json'), { optional: true, maximumBytes: 256 * 1024 });
@@ -528,8 +548,8 @@ export async function loadAutonomousResearchNextDirectiveV1({ stateRoot: rawRoot
   return assertAutonomousResearchNextDirectiveV1(value, { researchCodeSha });
 }
 
-async function loadDossiers(root, researchCodeSha) {
-  const inbox = join(root, 'autonomous-research', 'inbox');
+async function loadDossiers(releaseRoot, researchCodeSha) {
+  const inbox = join(releaseRoot, 'inbox');
   await secureDirectory(inbox, { create: true });
   const names = (await readdir(inbox)).filter((name) => name.endsWith('.json')).sort();
   if (names.length > 10_000 || names.some((name) => !SAFE_JSON.test(name))) throw new Error('AUTONOMOUS_RESEARCH_INBOX_INVALID');
@@ -545,8 +565,8 @@ async function loadDossiers(root, researchCodeSha) {
   return dossiers;
 }
 
-async function stageProducerInput(root, dossier) {
-  const outbox = join(root, 'formula-backtest', 'producer-outbox');
+async function stageProducerInput(releaseRoot, dossier) {
+  const outbox = join(releaseRoot, 'formula-backtest', 'producer-outbox');
   await secureDirectory(outbox, { create: true });
   const path = join(outbox, `${dossier.producerInput.itemDigest}.json`);
   return writeOnce(path, dossier.producerInput);
@@ -594,8 +614,12 @@ export async function runAutonomousResearchClosedLoopV1({
   if (typeof processQueue !== 'function') throw new TypeError('processQueue must be a function');
   await secureDirectory(root, { create: true, shared: true });
   const observedAt = iso(now(), 'now');
-  const loopRoot = join(root, 'autonomous-research');
+  const autonomousRoot = join(root, 'autonomous-research');
+  const releasesRoot = join(autonomousRoot, 'releases');
+  const loopRoot = join(releasesRoot, researchCodeSha);
   const latestRoot = join(root, 'latest');
+  await secureDirectory(autonomousRoot, { create: true });
+  await secureDirectory(releasesRoot, { create: true });
   await secureDirectory(loopRoot, { create: true });
   await secureDirectory(latestRoot, { create: true });
   const statePath = join(loopRoot, 'state.json');
@@ -610,7 +634,7 @@ export async function runAutonomousResearchClosedLoopV1({
     if (error?.code === 'ENOENT') failureMemory = createResearchFailureMemoryV1({ researchSha: researchCodeSha });
     else throw error;
   }
-  const dossiers = await loadDossiers(root, researchCodeSha);
+  const dossiers = await loadDossiers(loopRoot, researchCodeSha);
   const completed = new Set(state.records.map((row) => row.dossierDigest));
   const failedFamilies = new Set(state.records.filter((row) => ['IMPROVE', 'REJECT'].includes(row.disposition)).map((row) => row.family));
   const candidates = dossiers.filter((row) => !completed.has(row.dossierDigest)).sort(candidateSort(failedFamilies));
@@ -644,11 +668,11 @@ export async function runAutonomousResearchClosedLoopV1({
       if (failureDecision.automaticSameStrategyRetryAllowed === false) {
         record = recordForBlockedDuplicate(dossier, failureDecision, observedAt);
       } else {
-        await stageProducerInput(root, dossier);
-        await processQueue({ stateRoot: root, researchCodeSha, maximumItems: 50 });
+        await stageProducerInput(loopRoot, dossier);
+        await processQueue({ stateRoot: loopRoot, researchCodeSha, maximumItems: 50 });
         queueExecutions += 1;
         const storedResult = await safeJson(
-          join(root, 'formula-backtest', 'results', `${dossier.producerInput.itemDigest}.json`),
+          join(loopRoot, 'formula-backtest', 'results', `${dossier.producerInput.itemDigest}.json`),
           { optional: true },
         );
         // The shared bounded queue may contain more than one batch. Preserve
@@ -661,7 +685,7 @@ export async function runAutonomousResearchClosedLoopV1({
         }
         const result = validateResult(storedResult, dossier);
         const metrics = historicalMetrics(result);
-        const registry = await registryDisposition(root, result.itemDigest);
+        const registry = await registryDisposition(loopRoot, result.itemDigest);
         const disposition = resultDisposition(result, registry);
         record = recordForResult(dossier, result, disposition, metrics, observedAt);
         if (disposition !== 'BACKTEST_CANDIDATE') {
@@ -685,7 +709,13 @@ export async function runAutonomousResearchClosedLoopV1({
   if (failureMemory.observations.length === 0) {
     await persistResearchFailureMemoryV1({ memoryPath, summaryPath: memorySummaryPath, memory: failureMemory });
   }
+  // Persist an empty exact-release state too. Without it, a release that has
+  // only produced its first directive has no durable restart identity.
+  await atomicJson(statePath, state);
   const directive = buildDirective({ researchCodeSha, observedAt, records: state.records, failureMemory });
+  await secureDirectory(join(loopRoot, 'directives'), { create: true });
+  await writeOnce(join(loopRoot, 'directives', `${directive.directiveDigest}.json`), directive);
+  await atomicJson(join(loopRoot, 'latest-directive.json'), directive);
   await atomicJson(join(latestRoot, 'autonomous-research-next-directive.json'), directive);
   const report = summary(state, dossiers, failureMemory, observedAt);
   const result = deepFreeze({
@@ -698,5 +728,11 @@ export async function runAutonomousResearchClosedLoopV1({
     directiveDigest: directive.directiveDigest,
   });
   await atomicJson(join(latestRoot, 'autonomous-research-closed-loop.json'), result);
+  await atomicJson(join(loopRoot, 'latest-summary.json'), result);
+  for (const name of ['formula-backtest-queue.json', 'formula-paper-strategy-registry.json',
+    'formula-research-paper-experiment-registry.json']) {
+    const value = await safeJson(join(loopRoot, 'latest', name), { optional: true });
+    if (value != null) await atomicJson(join(latestRoot, name), value);
+  }
   return result;
 }
