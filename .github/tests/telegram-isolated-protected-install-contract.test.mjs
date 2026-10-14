@@ -14,7 +14,8 @@ test('only owner-issued comment with a protected Production environment can inst
 test('authentic main push artifact, immutable CI and cryptographic zip verify are mandatory',()=>{
  for(const marker of ['listWorkflowRuns',"event:'push'","run_attempt===1",
    'attestTelegramDormantArtifact','inspectRequiredStatusEvidence',
-   'evaluateProductionCiProvenance','post-merge-provenance/verified',
+   'evaluateProductionCiProvenance','evaluatePostMergeStatusProvenance',
+   'inspectPostMergeStatusEvidence','TELEGRAM_DORMANT_POSTMERGE_RUN_UNTRUSTED',
    'sha256sum --check --quiet','telegram-dormant-artifact-extract.py',
    'TELEGRAM_DORMANT_STALE_MAIN'])
   assert.ok(workflow.includes(marker),marker);
@@ -24,7 +25,8 @@ test('remote script is create-only and proves old PM2 remained unchanged',()=>{
    '/opt/stock-app-data/telegram-isolated-v1',
    '/var/lock/stock-app-deploy.lock','flock -n 8','flock -n 9',
    'pm2_digest','before="$(pm2_digest)"','after="$(pm2_digest)"',
-   'telegram-dormant-payload.tar','installation-receipt.json','STAGED_INACTIVE'])
+   'telegram-dormant-payload.tar','installation-receipt.json','STAGED_INACTIVE',
+   'TELEGRAM_DORMANT_INSTALLER_SOURCE_MISMATCH','INSTALLER_SHA="$3"'])
   assert.ok(script.includes(marker),marker);
  for(const forbid of ['pm2 restart','pm2 reload','pm2 stop',
    'systemctl start','systemctl restart','sendMessage(',
@@ -35,4 +37,13 @@ test('remote script is create-only and proves old PM2 remained unchanged',()=>{
 test('PR contract job cannot run protected install',()=>{
  assert.match(workflow,/contract:\n\s+if: github\.event_name == 'pull_request'/u);
  assert.ok(workflow.includes("startsWith(github.event.comment.body, '/run-telegram-dormant-install ')"));
+});
+
+test('runner guards cannot be substituted after protected SSH transport',()=>{
+ assert.ok(workflow.includes('Re-check main just before irreversible create-only operation'));
+ assert.ok(workflow.includes('"$(git rev-parse origin/main)" == "$TARGET_SHA"'));
+ assert.ok(workflow.includes('bash -s -- $TARGET_SHA $TAR_SHA $INSTALLER_SHA'));
+ assert.ok(workflow.includes('< ops/telegram-protected-dormant-install.sh'));
+ assert.ok(!workflow.includes('incoming/$TARGET_SHA/telegram-protected-dormant-install.sh'));
+ assert.ok(script.includes('sha256sum "$INPUT/install-telegram-isolated-dormant-package.mjs"'));
 });

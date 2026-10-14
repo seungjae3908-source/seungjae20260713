@@ -7,7 +7,9 @@ umask 077
 }
 SHA="$1"
 TAR_SHA="$2"
-[[ "$SHA" =~ ^[0-9a-f]{40}$ && "$TAR_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 21
+INSTALLER_SHA="$3"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ && "$TAR_SHA" =~ ^[0-9a-f]{64}$
+   && "$INSTALLER_SHA" =~ ^[0-9a-f]{64}$ ]] || exit 21
 BASE=/opt/stock-app-data/telegram-isolated-v1
 INPUT="$BASE/incoming/$SHA"
 [[ -d "$INPUT" && ! -L "$INPUT" && -d "$BASE/release" && ! -L "$BASE/release" ]] || exit 22
@@ -16,6 +18,10 @@ for part in telegram-dormant-payload.tar install-telegram-isolated-dormant-packa
   [[ -f "$INPUT/$part" && ! -L "$INPUT/$part" ]] || exit 22
 done
 [[ "$(sha256sum "$INPUT/telegram-dormant-payload.tar" | cut -d' ' -f1)" == "$TAR_SHA" ]] || exit 22
+# Pin the exact installer copied over SSH, before ever executing its JavaScript.
+[[ "$(sha256sum "$INPUT/install-telegram-isolated-dormant-package.mjs" | cut -d' ' -f1)" == "$INSTALLER_SHA" ]] || {
+  echo 'TELEGRAM_DORMANT_INSTALLER_SOURCE_MISMATCH' >&2; exit 22;
+}
 [[ ! -L /var/lock/stock-app-deploy.lock && ! -L "$BASE/telegram-owner.lock" ]] || exit 23
 exec 8>/var/lock/stock-app-deploy.lock
 flock -n 8 || exit 23
