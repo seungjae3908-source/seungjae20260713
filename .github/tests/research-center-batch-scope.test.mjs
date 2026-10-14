@@ -146,13 +146,13 @@ test('Paper run expressions stay below the GitHub 21000 character limit', () => 
   assert.ok(workflow.includes('mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)'));
 });
 
-test('AUTO safety registration is exactly 67 reviewable paths, separate from legacy Paper', () => {
+test('AUTO safety registration is exactly 69 reviewable paths, separate from legacy Paper', () => {
   const paths = AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS;
-  assert.equal(paths.length, 67);
-  assert.equal(new Set(paths).size, 67);
+  assert.equal(paths.length, 69);
+  assert.equal(new Set(paths).size, 69);
   assert.deepEqual(paths, [...paths].sort());
   assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
-    '6e47970aa4cc7ab15684cbadec2da09609613f31a8e9fa749a963dc2d3f8fa51');
+    '85a6bf71b97cd8a8465e61421a896bbef38a67197b449a2ca6b102003a17ba07');
   assert.equal(Object.isFrozen(paths), true);
   for (const path of paths) {
     assert.ok(!path.includes('*') && !path.includes('..') && !path.startsWith('/'));
@@ -216,7 +216,7 @@ test('registered AUTO paths retain Trading, protected-main and Paper assertions 
     ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS, '.github/scripts/paper-forward-reviewed-paths.mjs']) {
     assert.ok(researchTrigger.includes(path), path);
   }
-  for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 67',
+  for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 69',
     "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 72',
     'allowed+=("${auto_safety[@]}")', 'allowed+=("${auto_signal[@]}")',
     'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
