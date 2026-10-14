@@ -149,7 +149,8 @@ test('REST freshness and visible data age are derived from authoritative candle 
   expect(unified).toContain('function latestCandleSourceTimeMs');
   expect(unified).toContain('latest.time * 1_000');
   expect(unified).toContain('function sourceAwareChartDataStatus');
-  expect(unified).toContain('const dataStatus = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError, freshnessClockMs);');
+  expect(unified).toContain('const dataState = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError, freshnessClockMs);');
+  expect(unified).toContain('const dataStatus = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError);');
   expect(unified).toContain('latestCandleSourceTimeMs(effectiveChartData)');
   expect(unified).not.toContain('sourceAwareChartDataStatus({ ...chartQuery.data, updatedAt: new Date().toISOString() }');
   expect(unified).not.toContain('const value = data?.updatedAt ?? data?.fetchedAt;');

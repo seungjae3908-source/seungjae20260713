@@ -345,7 +345,7 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
   const market = ['KR', 'US', 'UPBIT', 'BITGET'].includes(analysis?.market ?? '') ? analysis!.market as AnalysisSelection['market'] : 'KR';
   const current = typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null;
   return <section data-testid="ai-chart-current-judgment" className="rounded-2xl border border-card-border bg-card p-4">
-    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 기술 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
+    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
     {analysis ? <><div className="mt-3 flex items-center gap-2"><BiasIcon bias={analysis.bias} /><strong className="text-sm">{analysis.bias === 'bullish' ? '상승 우세' : analysis.bias === 'bearish' ? '하락 우세' : '판단 보류'}</strong></div>
       <p className="mt-2 text-xl font-black tabular-nums">{format(current, market)}</p>
       <div className="mt-3 grid grid-cols-2 gap-2">{analysis.priceLevels.slice(0, 4).map((level, i) => <div key={level.role + i} className="rounded-xl bg-background p-2"><p className="text-[11px] text-muted-foreground">{level.role === 'support' ? '지지' : level.role === 'resistance' ? '저항' : level.role === 'target' ? '참고 목표' : level.role === 'invalidation' ? '무효화' : level.role}</p><p className="mt-1 text-xs font-bold tabular-nums">{format(level.price, market)}</p></div>)}</div>
@@ -893,7 +893,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           </main>
         </>
       ) : (
-        <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <main data-testid="ai-chart-workspace" style={{ maxWidth: '1680px' }} className="mx-auto grid w-full max-w-7xl items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
           <section className="min-w-0">{chart}</section>
           <aside className="min-w-0 space-y-3 lg:sticky lg:top-20 lg:self-start">
             {details}
