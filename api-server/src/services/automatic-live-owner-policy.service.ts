@@ -46,8 +46,9 @@ export function approvedAdministratorAutomaticLivePolicy(current: TradingPolicy)
       us_stock: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW, crypto_spot: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
       crypto_futures: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW },
     dailyLossLimitPercent: 3, maxDailyOrders: 0, riskOptimizationEnabled: true,
-    // Discovery is independently capped at 500k by the canonical capital
-    // guard. This does NOT invent the genuine formula + AI proof it requires.
+    // Discovery has no separate order cap. The canonical capital guard applies
+    // the user's saved allocation/per-order ceiling and all loss/exposure limits.
+    // This does NOT invent the genuine formula + AI proof it requires.
     pilotStage: 'formula-ai-exception', enabledStrategies: strategies,
   };
 }
