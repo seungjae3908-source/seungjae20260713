@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compiledMomentumFormula, compiledFuturesMomentumFormula } from './research-bundle-formula-fixture.js';
-import { buildFormulaPaperStrategyRegistryV1 } from '../src/formula-auto-backtest-queue-v1.js';
+import {
+  buildFormulaPaperStrategyRegistryV1,
+  buildFormulaResearchPaperExperimentRegistryV1,
+} from '../src/formula-auto-backtest-queue-v1.js';
 import { observeRegisteredFormulaClosedCandleV1 } from '../src/registered-formula-prospective-watch-v1.js';
 
 const NOW=Date.UTC(2026,9,11,8,0,0);
@@ -29,6 +32,38 @@ function registered({futures=false,direction='LONG'}={}) {
   const registry=buildFormulaPaperStrategyRegistryV1([{
     state:'PASS',itemDigest:'f'.repeat(64),tournament:{candidates:[candidate]},
     evaluatedAt:new Date(NOW-24*60*60_000).toISOString(),
+  }],{researchCodeSha:SHA});
+  assert.equal(registry.entries.length,1);
+  return registry.entries[0];
+}
+function researchRegistered() {
+  const {formula,generated}=compiledMomentumFormula();
+  const candidate={
+    formulaCandidate:formula,generatedCandidate:generated,
+    formulaCandidateId:formula.candidateId,
+    generatedCandidateId:generated.generatedCandidateId,
+    parameterIdentity:generated.parameterIdentity,
+    strategyHash:formula.formulaHash,strategyFamily:formula.strategyFamily,
+    market:formula.market,timeframe:formula.timeframe,direction:formula.direction,
+    researchSurvivor:false,tradingAuthority:false,safety:{executionAuthority:'NONE'},
+    failure:{failureCode:'INSUFFICIENT_SAMPLE'},
+    stageRecords:[{
+      stage:'HISTORICAL_BACKTEST',status:'MISSING_EVIDENCE',
+      evidenceId:'tournament-evidence:sha256:'+'1'.repeat(64),
+      evidence:{metrics:{trades:42,return:0.07,winRate:0.45,profitFactor:1.2,
+        expectancy:12,maximumDrawdown:0.1,finalCapital:10_700}},
+    }],
+  };
+  const registry=buildFormulaResearchPaperExperimentRegistryV1([{
+    state:'HOLD',freshEvaluation:true,itemDigest:'e'.repeat(64),
+    evaluatedAt:new Date(NOW-24*60*60_000).toISOString(),
+    tournament:{candidates:[candidate]},
+    researchPaperAssumptions:{
+      cost:{entryFeeRate:0.001,exitFeeRate:0.001,taxRate:0,slippageRate:0.0005,
+        spreadRate:0.0002,latencyDriftRate:0,latencyBars:0,
+        evidenceClass:'MODEL_ASSUMPTION_NOT_PROVIDER_ATTESTED',liquidityImpact:null},
+      risk:{riskPerTrade:0.01,maximumCapitalFraction:0.5,leverage:1,basicRiskCheck:'PASS'},
+    },
   }],{researchCodeSha:SHA});
   assert.equal(registry.entries.length,1);
   return registry.entries[0];
@@ -67,6 +102,22 @@ test('real registry DSL on new closed candle may report observation but never Pa
   assert.equal(JSON.stringify(row).includes('selectedParameters'),false);
   noAuthority(row);
 });
+test('inactive pre-Genuine-S research registry may observe only a future signal',()=>{
+  const entry=researchRegistered();
+  const row=observeRegisteredFormulaClosedCandleV1(input({entry}));
+  assert.equal(row.status,'OBSERVED_CLOSED_CANDLE_SIGNAL');
+  assert.equal(row.registryTier,'RESEARCH_EXPERIMENT');
+  assert.equal(row.researchPaperCandidate,true);
+  assert.equal(row.genuineS,false);
+  noAuthority(row);
+  const tampered=observeRegisteredFormulaClosedCandleV1(input({
+    entry:{...entry,historicalEvidence:{...entry.historicalEvidence,
+      metrics:{...entry.historicalEvidence.metrics,return:0.7}}},
+  }));
+  assert.equal(tampered.status,'BLOCKED_DATA');
+  assert.equal(tampered.reason,'FORMULA_WATCH_REGISTRY_IDENTITY_INVALID');
+  noAuthority(tampered);
+});
 test('same closed bar keeps one ID across quote repoll, provider failover and warmup corrections',()=>{
   const original=input({
     evaluatedAtMs:NOW+90_000,
@@ -103,6 +154,15 @@ test('no rules matched means NO_SIGNAL instead of positive simulated profitabili
   assert.equal(row.status,'NO_SIGNAL');
   assert.equal(row.observationId,null);
   noAuthority(row);
+});
+test('compiler-canonical lowercase hourly, four-hour and daily timeframes reach identity validation',()=>{
+  for(const timeframe of ['1h','4h','1d']){
+    const row=observeRegisteredFormulaClosedCandleV1(input({timeframe}));
+    assert.equal(row.reason,'FORMULA_WATCH_REGISTRY_IDENTITY_INVALID',timeframe);
+    noAuthority(row);
+  }
+  assert.equal(observeRegisteredFormulaClosedCandleV1(input({timeframe:'4H'})).reason,
+    'FORMULA_WATCH_SCOPE_INVALID');
 });
 test('old pre-registration bars, stale quotes, future/open bars and bad OHLC block',()=>{
   const params=input();
