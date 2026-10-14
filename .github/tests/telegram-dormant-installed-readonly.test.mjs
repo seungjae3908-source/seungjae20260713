@@ -42,12 +42,13 @@ function fixture(){
   manifestSha256:hash(Buffer.from(manifest)),
  })+'\n');
  const marker=path.join(release,'.deploy','current-sha');
- return {root,release,marker,sha:SHA,manifestSha:hash(Buffer.from(manifest)),
+ const prepSha=hash(fs.readFileSync(path.join(release,'.deploy','preparation.json')));
+ return {root,release,marker,sha:SHA,prepSha,manifestSha:hash(Buffer.from(manifest)),
   clean:()=>fs.rmSync(temp,{recursive:true,force:true})};
 }
 function snapshot(options={}){
  const env={
-  status:'online',DEPLOY_SHA:OLD,pm_uptime:1728700000000,restart_time:0,
+  status:'online',DEPLOY_SHA:options.marker??OLD,pm_uptime:1728700000000,restart_time:0,
   pm_cwd:'/opt/stock-app',pm_exec_path:'/opt/stock-app/api-server/dist/index.mjs',
   LIVE_TRADING:'true',TOSS_LIVE_ORDER_ENABLED:'true',
   TELEGRAM_WORKER_OWNER:'embedded',
@@ -56,13 +57,15 @@ function snapshot(options={}){
  };
  return sanitizePm2ForDormantReadback([
   {name:'stock-app',pid:options.pid??9922,pm2_env:env},
- ],OLD);
+ ],options.marker??OLD);
 }
 const inspect=x=>inspectSealedDormant({
  root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+ expectedPreparationSha:x.prepSha,
 });
 const audit=(x,reads)=>auditTelegramDormantReadback({
  root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+ expectedPreparationSha:x.prepSha,expectedDeployedSha:OLD,
  readPm2Impl:()=>reads.shift()??null,waitImpl:async()=>{},
 });
 
@@ -172,6 +175,7 @@ test('a stale manifest digest is rejected even if local files and receipt match'
  try{
   const proof=inspectSealedDormant({
    root:x.root,sha:x.sha,expectedManifestSha:'a'.repeat(64),
+   expectedPreparationSha:x.prepSha,
   });
   assert.equal(proof.code,'DORMANT_MANIFEST_PROVENANCE_MISMATCH');
  }finally{x.clean();}
@@ -210,6 +214,7 @@ test('an already verified binary changed while reading PM2 is never reported sea
   let reads=0;
   const report=await auditTelegramDormantReadback({
    root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+   expectedPreparationSha:x.prepSha,expectedDeployedSha:OLD,
    waitImpl:async()=>{},
    readPm2Impl:()=>{
     reads++;
@@ -240,4 +245,55 @@ test('configured-app fingerprint matches protected installer inclusion rules',()
  }));
  assert.notEqual(first,safeApplicationPm2Digest({...config,NODE_ENV:'test'}));
  assert.notEqual(first,safeApplicationPm2Digest({...config,TELEGRAM_BOT_TOKEN:'rotated'}));
+});
+
+
+test('original preparation receipt digest rejects semantically identical tampered JSON',()=>{
+ const x=fixture();
+ try{
+  const file=path.join(x.release,'.deploy','preparation.json');
+  const original=JSON.parse(fs.readFileSync(file,'utf8'));
+  fs.appendFileSync(file,' ');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),original);
+  assert.equal(inspect(x).code,'DORMANT_PREPARATION_PROVENANCE_MISMATCH');
+ }finally{x.clean();}
+});
+
+test('different valid deployed revision fails even when PM2 is stable at observation time',async()=>{
+ const x=fixture();
+ try{
+  const altered=snapshot({marker:'a'.repeat(40)});
+  const report=await audit(x,[altered,altered]);
+  assert.equal(report.classification,'SEALED_PRESENT_DEPLOYED_SHA_UNEXPECTED');
+  assert.equal(report.deployedSha,'a'.repeat(40));
+  assert.equal(report.pm2Stable,true);
+  assert.equal(report.activationReady,false);
+ }finally{x.clean();}
+});
+
+test('missing authentic preparation or expected deployed SHA fails before PM2 access',async()=>{
+ const x=fixture();
+ try{
+  assert.equal(inspectSealedDormant({
+   root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+  }).code,'INVALID_READBACK_ARGUMENTS');
+  let probes=0;
+  const missing=await auditTelegramDormantReadback({
+   root:x.root,sha:x.sha,expectedManifestSha:x.manifestSha,
+   expectedPreparationSha:x.prepSha,
+   readPm2Impl:()=>{probes++;return snapshot();},
+   waitImpl:async()=>{},
+  });
+  assert.equal(missing.classification,'INVALID_REQUEST');
+  assert.equal(missing.activationReady,false);
+  assert.equal(probes,0);
+ }finally{x.clean();}
+});
+
+test('unsafe ancestor of private release root rejects readback',()=>{
+ const x=fixture();
+ try{
+  fs.chmodSync(path.dirname(x.root),0o777);
+  assert.equal(inspect(x).code,'DORMANT_PARENT_ROOT_UNSAFE');
+ }finally{x.clean();}
 });
