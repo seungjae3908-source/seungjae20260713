@@ -92,14 +92,13 @@ const LazyAiChartPositionPanel = lazy(() =>
     default: AiChartPositionPanel,
   })),
 );
-type MobileChartTab = 'summary' | 'chart' | 'position' | 'details' | 'live';
+type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
 
 const MOBILE_CHART_TABS = [
   { value: 'summary', label: '요약' },
   { value: 'chart', label: '차트' },
   { value: 'position', label: '내 포지션' },
-  { value: 'details', label: '상세분석' },
-  { value: 'live', label: 'AI 생중계' },
+  { value: 'details', label: '상세' },
 ] as const;
 
 function emptySelection(): AnalysisSelection {
@@ -418,7 +417,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     if (evidenceFrameRef.current != null) window.cancelAnimationFrame(evidenceFrameRef.current);
   }, []);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
-  const [mobileTab, setMobileTab] = useState<MobileChartTab>('chart');
+  const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -774,7 +773,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const details = hasSelection ? (
     <div className="space-y-3">
-      {!desktop && !embedded && !externalMode && <MobileSummary selection={selection} analysis={currentAnalysis} />}
       {visibleLiveSnapshot && !currentEvidenceUsable ? <p role="status" data-testid="ai-chart-current-halted" className="rounded-2xl border border-warning/30 bg-warning/5 p-3 text-xs font-bold text-warning">{visibleLiveSnapshot.status} · 이전 방향·가격·진입/손절/목표와 근거 점수를 현재 판단으로 표시하지 않습니다. 생중계의 과거 관측 기록은 보존됩니다.</p> : null}
       <DecisionCard analysis={currentAnalysis} />
       <AiChartDrawingSummary snapshot={visibleLiveSnapshot} />
@@ -848,30 +846,60 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         )}
       </header>
 
-      {mobile && <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl">
-        <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
-      </div>}
-      <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_340px]">
-        <section data-testid="ai-chart-mobile-chart" hidden={hasSelection && mobile && mobileTab !== 'chart'} className="min-w-0 space-y-3">{chart}</section>
-        <aside hidden={!hasSelection} className="min-w-0 space-y-3 lg:sticky lg:top-20">
-          <div data-testid="ai-chart-mobile-judgment" hidden={mobile && mobileTab !== 'summary' && mobileTab !== 'details'}>{mobile && mobileTab === 'summary' ? <MobileSummary selection={selection} analysis={currentAnalysis} /> : details}</div>
-          <div data-testid="ai-chart-mobile-live" hidden={mobile && mobileTab !== 'live'}><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div>
-          {mobile && mobileTab === 'position' && hasSelection ? (
-            <section data-testid="ai-chart-mobile-position" className="min-w-0">
-              <Suspense fallback={<p role="status" className="rounded-xl border border-card-border bg-card p-4 text-sm">포지션 조회 준비 중</p>}>
-                <LazyAiChartPositionPanel
-                  selection={selection}
-                  market={selection.market}
-                  symbol={selection.symbol || selection.ticker}
-                  chartPrice={null}
-                  pricePlan={selection.pricePlan}
-                  onOverlayChange={() => undefined}
-                />
-              </Suspense>
-            </section>
-          ) : null}
-        </aside>
-      </main>
+      {mobile ? (
+        <>
+          <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl sm:top-[61px]">
+            <div className="mx-auto max-w-7xl">
+              <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
+            </div>
+          </div>
+          <main data-testid="ai-chart-workspace" className="mx-auto w-full max-w-7xl p-3 sm:p-4">
+            {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={currentAnalysis} /> : emptyState) : null}
+            {mobileTab === 'chart' ? (
+              <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
+                {chart}
+                {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
+              </section>
+            ) : null}
+            {mobileTab === 'position' ? (
+              <section data-testid="ai-chart-mobile-position" className="min-w-0">
+                {hasSelection ? (
+                  <Suspense fallback={<p role="status" className="rounded-xl border border-card-border bg-card p-4 text-sm">포지션 조회 준비 중</p>}>
+                    <LazyAiChartPositionPanel
+                      selection={selection}
+                      market={selection.market}
+                      symbol={selection.symbol || selection.ticker}
+                      chartPrice={null}
+                      pricePlan={selection.pricePlan}
+                      onOverlayChange={() => undefined}
+                    />
+                  </Suspense>
+                ) : emptyState}
+              </section>
+            ) : null}
+            {mobileTab === 'details' ? (
+              <section data-testid="ai-chart-mobile-details" className="min-w-0 space-y-3">
+                {details}
+                {hasSelection ? (
+                  <details className="rounded-2xl border border-card-border bg-card p-3" data-testid="ai-chart-mobile-live-disclosure">
+                    <summary className="min-h-11 cursor-pointer text-sm font-bold">AI 생중계 · 기술 이벤트 보기</summary>
+                    <p className="mb-2 mt-1 text-xs text-muted-foreground">관측 기록은 읽기 전용이며, 차트 탭에서 검증된 현재봉을 확인한 뒤 표시합니다.</p>
+                    <AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} />
+                  </details>
+                ) : null}
+              </section>
+            ) : null}
+          </main>
+        </>
+      ) : (
+        <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+          <section className="min-w-0">{chart}</section>
+          <aside className="min-w-0 space-y-3 lg:sticky lg:top-20 lg:self-start">
+            {details}
+            {hasSelection ? <div data-testid="ai-chart-desktop-live"><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div> : null}
+          </aside>
+        </main>
+      )}
 
     </div>{!embedded && !externalMode && <BottomNav />}
     </div></ChartCurrencyProvider>
