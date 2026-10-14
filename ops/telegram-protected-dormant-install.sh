@@ -31,11 +31,35 @@ pm2_digest() {
   pm2 jlist | node -e '
     const fs=require("node:fs"),crypto=require("node:crypto");
     try {
-      const rows=JSON.parse(fs.readFileSync(0,"utf8")).filter(x=>x.name==="stock-app");
-      if(rows.length!==1||rows[0].pm2_env?.status!=="online")throw Error("pm2");
-      const sha=fs.readFileSync("/opt/stock-app/.deploy/current-sha","utf8").trim();
-      if(!/^[0-9a-f]{40}$/.test(sha)||rows[0].pm2_env.DEPLOY_SHA!==sha)throw Error("sha");
-      const input=JSON.stringify({pid:rows[0].pid,marker:sha,env:rows[0].pm2_env});
+      const list=JSON.parse(fs.readFileSync(0,"utf8"));
+      if(!Array.isArray(list))throw Error("rows");
+      const rows=list.filter(x=>x?.name==="stock-app");
+      if(rows.length!==1)throw Error("process");
+      const row=rows[0],env=row.pm2_env;
+      if(!env||env.status!=="online")throw Error("online");
+      const marker=fs.readFileSync("/opt/stock-app/.deploy/current-sha","utf8").trim();
+      if(!/^[0-9a-f]{40}$/.test(marker)||env.DEPLOY_SHA!==marker)
+        throw Error("marker");
+      if(!Number.isSafeInteger(row.pid)||row.pid<=0
+         ||!Number.isSafeInteger(env.pm_uptime)||env.pm_uptime<=0
+         ||!Number.isSafeInteger(env.restart_time)||env.restart_time<0
+         ||env.pm_cwd!=="/opt/stock-app"
+         ||env.pm_exec_path!=="/opt/stock-app/api-server/dist/index.mjs")
+        throw Error("runtime");
+      // Only actual application config (all uppercase keys + lower-case
+      // executionAuthority) is hashed; PM2 runtime telemetry is not app config.
+      // All Telegram, LIVE, AUTO, PAPER, broker and token flags remain covered.
+      const keys=Object.keys(env)
+        .filter(k=>(/^[A-Z][A-Z0-9_]*$/u.test(k)
+          &&!k.startsWith("PM2_")&&!k.startsWith("AXM_"))
+          ||k==="executionAuthority")
+        .sort();
+      const configured=keys.map(k=>[k,env[k]]);
+      const input=JSON.stringify({
+        pid:row.pid,started:env.pm_uptime,restarts:env.restart_time,
+        marker,pmCwd:env.pm_cwd,exec:env.pm_exec_path,
+        owner:env.TELEGRAM_WORKER_OWNER??"embedded",configured,
+      });
       process.stdout.write(crypto.createHash("sha256").update(input).digest("hex"));
     }catch {
       console.error("TELEGRAM_DORMANT_PM2_READBACK_INVALID");
