@@ -108,6 +108,7 @@ export async function runAutonomousResearchCycleV2({
     discoveryStatus: discovery.status,
     actualProviderCalls: discovery.actualProviderCalls,
     actualSourceFetches: discovery.actualSourceFetches,
+    actualCatalogRequests: discovery.actualCatalogRequests ?? { attempted: 0, succeeded: 0, failed: 0 },
     selectedNextStrategy: discovery.candidate,
     stagedDossierDigest: discovery.stagedDossierDigest,
     discoveredStrategyCount: summary.discoveredStrategyCount,
