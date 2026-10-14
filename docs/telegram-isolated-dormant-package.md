@@ -311,3 +311,30 @@ detection and a pending original Bot POST whose durable unconfirmed
 reservation prevents a second invocation. No network, Bot, PM2,
 database or real trading mutation occurs in these tests.
 Replit and Replit Agent remain prohibited.
+
+
+## Telegram scheduled-brief bounded PRE-SEND reads (no Bot replay)
+
+Post-audit `http://127.0.0.1:8790/v1/signals` remained HTTP503/stale V3;
+the old API briefing's last completion was one minute before October 13
+KR closing. Stage telemetry cannot prove which old await hung.
+
+The new source now prevents indefinite waits during ONLY harmless
+pre-send operations: optional public brief collection is bounded to
+8.5 seconds, and read-only durable dedupe lookups are bounded to 15
+seconds. A timeout ends the caller *before* any reservation or Bot POST.
+A late completion of the underlying read cannot resume alert delivery.
+An optional public brief timeout falls back to a clearly unverified
+N/A status; a dedupe read timeout fails the entire tick closed and
+does not send anything. The existing watchdog reports the failure.
+
+Critically, do NOT time out or restart the caller for durable
+markUnconfirmed, Bot POST, markDelivered or uncertain-outcome writes:
+an accepted but unanswered Telegram POST could otherwise replay.
+The original process remains the sole writer. Negative tests verify
+that an asynchronous read finishing after its deadline cannot create
+any send reservation or call Telegram.
+
+These are source-only changes on Draft #1882: Production still uses
+the old PM2 revision, and safe isolated-owner rollout remains NO-GO.
+No Replit, PM2 restart, real Bot send, DB writes, or orders.
