@@ -168,6 +168,7 @@ on:
       - api-server/src/services/public-live-plan-origin.service.test.ts
       - api-server/src/services/public-live-plan-origin.service.ts
       - api-server/src/services/trade-automation-repository-compatibility.test.ts
+      - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/trade-execution-snapshot.service.ts
       - api-server/src/services/trade-history-completeness.service.test.ts
       - api-server/src/services/trade-history-completeness.service.ts
@@ -176,6 +177,7 @@ on:
       - api-server/src/services/trade-order-recovery.test.ts
       - api-server/src/services/trade-recovery-worker.service.ts
       - api-server/src/services/trade-recovery-worker.test.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts
       - api-server/src/services/trading-provider-response.service.test.ts
       - api-server/src/services/trading-provider-response.service.ts
       - api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql
@@ -187,6 +189,7 @@ on:
       - stock-analyzer/e2e/phase12-trade-automation.spec.ts
       - stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts
       - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx
       # Frozen read-only automatic Paper holdings Staging repair, no new LIVE scope.
       - stock-analyzer/src/pages/auto-trading.tsx
       - stock-analyzer/src/components/trading-holdings-panel.tsx
@@ -526,8 +529,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 59 or len(set(auto_safety)) != 59:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_59')
+          if len(auto_safety) != 62 or len(set(auto_safety)) != 62:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_62')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -567,7 +570,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 59
+          test "${#auto_safety[@]}" -eq 62
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
@@ -584,7 +587,7 @@ jobs:
           mapfile -t scanner_repair < <(node .github/scripts/scanner-readonly-repair-scope.mjs --list-paths)
           allowed+=("${scanner_repair[@]}")
           # Precise staging-only automatic Paper holdings GET fix. The owner
-          # registered 59 AUTO + 19 supplemental safety scopes remain exact.
+          # registered 62 AUTO + 19 supplemental safety scopes remain exact.
           # These three source/test blobs and BOTH Trading guards are pinned.
           paper_holdings_readonly=(
             stock-analyzer/src/pages/auto-trading.tsx
