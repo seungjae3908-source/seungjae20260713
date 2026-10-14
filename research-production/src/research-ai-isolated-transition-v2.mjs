@@ -15,6 +15,13 @@ const SHA40 = /^[a-f0-9]{40}$/u;
 const MAX_ENV_BYTES = 64 * 1024;
 const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const PROFILE_NAMES = Object.freeze(['forward', 'fast-historical', 'long-history']);
+// fast-historical is produced by historical-pipelines.mjs, which writes the
+// historical-cycle-v2 summary. forward/long-history still use cycle-v1.
+const PROFILE_SCHEMAS = Object.freeze({
+  forward: Object.freeze(['research-production-cycle-v1']),
+  'fast-historical': Object.freeze(['research-production-cycle-v1', 'research-production-historical-cycle-v2']),
+  'long-history': Object.freeze(['research-production-cycle-v1']),
+});
 const PROVIDER_KEYS = new Set([
   'YOUTUBE_DATA_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_MODEL', 'GROQ_API_KEY', 'GROQ_MODEL',
 ]);
@@ -138,7 +145,7 @@ async function verifySourceRoot(path) {
 async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, researchSha }) {
   const source = await boundedJson(join(sourceStateRoot, 'latest', `${profile}.json`), { optional: true });
   if (source == null) return Object.freeze({ profile, state: 'MISSING' });
-  if (source?.schemaVersion !== 'research-production-cycle-v1' || source?.profile !== profile
+  if (!PROFILE_SCHEMAS[profile]?.includes(source?.schemaVersion) || source?.profile !== profile
     || !SHA40.test(String(source?.researchSha ?? ''))) throw new Error(`ISOLATED_TRANSITION_PROFILE_INVALID:${profile}`);
   await atomicJson(join(isolatedStateRoot, 'latest', `${profile}.json`), source);
   return Object.freeze({
