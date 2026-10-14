@@ -1,0 +1,230 @@
+name: Telegram Owner Personal One-Shot Test (Protected No Trades)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/telegram-owner-personal-test-send.yml
+      - ops/telegram-owner-personal-test-send.mjs
+      - .github/tests/telegram-owner-personal-test-send.test.mjs
+      - .github/tests/telegram-owner-personal-workflow-contract.test.mjs
+      - docs/telegram-isolated-dormant-package.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-owner-personal-test-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Owner personal one-shot test contract (no network)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-owner-personal-test-send.mjs
+          node --test .github/tests/telegram-owner-personal-test-send.test.mjs \
+            .github/tests/telegram-owner-personal-workflow-contract.test.mjs
+
+  owner-personal-test:
+    name: Protected Production 1:1 owner TEST send (at most one Bot POST)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-owner-personal-test-send ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require one original owner request for exact current main
+        id: requested
+        env:
+          OWNER_COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          node <<'NODE'
+          const fs=require('node:fs');
+          const match=/^\/run-telegram-owner-personal-test-send ([a-f0-9]{40})$/u.exec(
+            String(process.env.OWNER_COMMAND||'').trim());
+          if(!match)throw Error('OWNER_PERSONAL_EXACT_MAIN_COMMAND_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+match[1]+'\n');
+          NODE
+      - name: Pin source checkout and exact current main before host access
+        env:
+          TARGET_SHA: ${{ steps.requested.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD:ops/telegram-owner-personal-test-send.mjs)" = \
+               "$(git hash-object ops/telegram-owner-personal-test-send.mjs)"
+      - name: Establish pinned Production SSH identity and readonly SQL secret
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          [[ -n "$SSH_KNOWN_HOSTS" && -n "$PROD_DATABASE_URL" ]]
+          [[ "$PROD_DATABASE_URL" != *$'\n'* ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+      - name: Query unique verified owner only, then at most one explicit 1:1 TEST Bot POST
+        env:
+          TARGET_SHA: ${{ steps.requested.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          evidence="$RUNNER_TEMP/telegram-owner-personal-sanitary.json"
+          echo "OWNER_PERSONAL_RECEIPT=$evidence" >> "$GITHUB_ENV"
+          command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; TELEGRAM_OWNER_PERSONAL_MAIN_SHA=%q TELEGRAM_OWNER_PERSONAL_RUN_ID=%q TELEGRAM_OWNER_PERSONAL_TEST_EXECUTE=true node --input-type=module -' "$TARGET_SHA" "$GITHUB_RUN_ID")"
+          {
+            printf '%s\n' "$PROD_DATABASE_URL"
+            cat ops/telegram-owner-personal-test-send.mjs
+          } | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$command" > "$evidence" \
+            2> "$RUNNER_TEMP/telegram-owner-personal-private-stderr"
+      - name: Strict sanitized receipt checks, 0 financial/DB writes
+        id: verified
+        env:
+          TARGET_SHA: ${{ steps.requested.outputs.sha }}
+          RECEIPT: ${{ env.OWNER_PERSONAL_RECEIPT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$RECEIPT" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const fields=[
+            'schemaVersion','mainSha','pm2Sha','markerSha','pm2Online',
+            'activationApproved','ownerVerified','privateChatVerified',
+            'botIdentityVerified','telegramSends','telegramAccepted',
+            'dbWrites','connectionMutations','webhookMutations',
+            'financialMutations','secretValuesRecorded','classification',
+          ];
+          const labels=new Set([
+            'NOT_STARTED','PM2_IDENTITY_BLOCKED','PM2_OR_ACTIVATION_BLOCKED',
+            'TELEGRAM_ACTIVATION_DISABLED','PERSONAL_OWNER_BINDING_BLOCKED',
+            'BOT_IDENTITY_UNCONFIGURED','INVALID_RUN_ID','BOT_IDENTITY_UNVERIFIED',
+            'PERSONAL_CHAT_UNVERIFIED','PERSONAL_SEND_UNCONFIRMED',
+            'PERSONAL_BOT_API_ACCEPTED','INVALID_OWNER_COMMAND',
+            'PM2_NOT_UNIQUE','PERSONAL_PREFLIGHT_FAILED',
+          ]);
+          const sha=v=>v===null||/^[a-f0-9]{40}$/u.test(v);
+          if(JSON.stringify(Object.keys(r).sort())!==JSON.stringify(fields.sort())
+            ||r.schemaVersion!=='telegram-owner-personal-one-shot-test-v1'
+            ||r.mainSha!==process.env.TARGET_SHA
+            ||!sha(r.pm2Sha)||!sha(r.markerSha)
+            ||!labels.has(r.classification)
+            ||!['pm2Online','activationApproved','ownerVerified',
+              'privateChatVerified','botIdentityVerified'].every(k=>typeof r[k]==='boolean')
+            ||!Number.isSafeInteger(r.telegramSends)
+            ||!Number.isSafeInteger(r.telegramAccepted)
+            ||r.telegramSends<0||r.telegramSends>1||r.telegramAccepted<0
+            ||r.telegramAccepted>r.telegramSends
+            ||![r.dbWrites,r.connectionMutations,r.webhookMutations,r.financialMutations]
+              .every(n=>n===0)
+            ||r.secretValuesRecorded!==false
+            ||(r.classification==='PERSONAL_BOT_API_ACCEPTED'&&(
+              r.telegramSends!==1||r.telegramAccepted!==1
+              ||!r.ownerVerified||!r.privateChatVerified||!r.botIdentityVerified))){
+            throw Error('PERSONAL_OWNER_TEST_UNSAFE_OR_UNTRUSTED_RECEIPT');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'classification='+r.classification+'\n'+
+            'attempted='+r.telegramSends+'\n'+
+            'accepted='+r.telegramAccepted+'\n'+
+            'owner_verified='+String(r.ownerVerified)+'\n'+
+            'private_verified='+String(r.privateChatVerified)+'\n'+
+            'bot_verified='+String(r.botIdentityVerified)+'\n'+
+            'pm2_sha='+(r.pm2Sha||'UNKNOWN')+'\n');
+          console.log('OWNER_PERSONAL_TEST_RECEIPT_SANITIZED; no raw chat or member ID');
+          NODE
+      - name: Report owner-only personal Bot API result, no fabricated SENT row
+        if: steps.verified.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.requested.outputs.sha }}
+          SOURCE_COMMENT: ${{ github.event.comment.id }}
+          CLASSIFICATION: ${{ steps.verified.outputs.classification }}
+          ATTEMPTED: ${{ steps.verified.outputs.attempted }}
+          ACCEPTED: ${{ steps.verified.outputs.accepted }}
+          OWNER_VERIFIED: ${{ steps.verified.outputs.owner_verified }}
+          PRIVATE_VERIFIED: ${{ steps.verified.outputs.private_verified }}
+          BOT_VERIFIED: ${{ steps.verified.outputs.bot_verified }}
+          PM2_SHA: ${{ steps.verified.outputs.pm2_sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                '[TELEGRAM_PERSONAL_OWNER_ONE_SHOT_PROOF]',
+                '- Source main SHA: '+process.env.TARGET_SHA,
+                '- Observed deployed PM2 SHA: '+process.env.PM2_SHA,
+                '- Only connected admin owner verified: '+process.env.OWNER_VERIFIED,
+                '- Private chat verified / bot verified: '+process.env.PRIVATE_VERIFIED+
+                    ' / '+process.env.BOT_VERIFIED,
+                '- Classification: '+process.env.CLASSIFICATION,
+                '- One personal TEST Bot POST attempts / accepted: '+process.env.ATTEMPTED+
+                    ' / '+process.env.ACCEPTED,
+                '- No fake trading signal, fill, durable notification_deliveries SENT or journal record',
+                '- Connection revoked/changed: false; DB writes / broker or financial mutations: 0 / 0',
+                '- No raw bot token/chat ID/member ID, no PM2 restart, no Replit',
+                '- Source owner command comment: '+process.env.SOURCE_COMMENT,
+                '- Protected workflow run: '+String(context.runId),
+                '- Bot API acceptance is not a human read receipt.',
+              ].join('\n'),
+            });
+      - name: Fail closed unless exactly one owner personal TEST Bot POST was accepted
+        env:
+          CLASSIFICATION: ${{ steps.verified.outputs.classification }}
+          ATTEMPTED: ${{ steps.verified.outputs.attempted }}
+          ACCEPTED: ${{ steps.verified.outputs.accepted }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$CLASSIFICATION" != PERSONAL_BOT_API_ACCEPTED ||
+                "$ATTEMPTED" != 1 || "$ACCEPTED" != 1 ]]; then
+            echo "PERSONAL_OWNER_BOT_API_DELIVERY_UNCONFIRMED: $CLASSIFICATION" >&2
+            exit 1
+          fi
+          echo 'PERSONAL_OWNER_SINGLE_TEST_BOT_API_ACCEPTED'
