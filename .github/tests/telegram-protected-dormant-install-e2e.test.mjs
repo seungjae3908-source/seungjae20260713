@@ -118,6 +118,10 @@ test('real protected shell installs only dormant bytes and preserves live PM2 id
     assert.equal(fs.readFileSync(path.join(x.release,'.deploy/current-sha'),'utf8'),x.sha+'\n');
     assert.equal(fs.readFileSync(x.pm2Json,'utf8'),pm2Before);
     assert.equal(fs.readFileSync(path.join(x.app,'.deploy/current-sha'),'utf8'),markerBefore);
+    const state=path.join(x.base,'state');
+    assert.equal(fs.statSync(state).mode&0o777,0o700);
+    assert.equal(fs.readdirSync(state).length,0,
+      'dormant install must not write sender state or any ledger');
   } finally { x.clean(); }
 });
 
@@ -173,4 +177,22 @@ test('approval missing, duplicate current release and incorrect install SHA fail
     const second=x.execute();
     assert.equal(second.status,22,second.stderr||second.stdout);
   }finally{x.clean();}
+});
+
+test('symlinked and permissive pre-existing sender state directory block install',()=>{
+  for(const unsafe of ['symlink','permissive']){
+    const x=fixture();
+    try {
+      const state=path.join(x.base,'state');
+      if(unsafe==='symlink')fs.symlinkSync(x.temp,state);
+      else fs.mkdirSync(state,{mode:0o755});
+      const run=x.execute();
+      assert.equal(run.status,22,run.stderr||run.stdout);
+      assert.equal(fs.existsSync(x.release),false);
+      assert.equal(fs.readFileSync(path.join(x.app,'.deploy/current-sha'),'utf8'),OLD_SHA+'\\n');
+      if(unsafe==='permissive')
+        assert.equal(fs.statSync(state).mode&0o777,0o755,
+          'must not silently chmod operator-owned directory');
+    }finally{x.clean();}
+  }
 });
