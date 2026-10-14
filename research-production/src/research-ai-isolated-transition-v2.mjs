@@ -189,6 +189,12 @@ function verifyCycle(cycle) {
     || cycle?.actualProviderCalls?.attempted !== 2 || cycle?.actualProviderCalls?.succeeded !== 2
     || cycle?.actualProviderCalls?.failed !== 0 || cycle?.actualSourceFetches?.attempted !== 3
     || cycle?.actualSourceFetches?.succeeded !== 3 || cycle?.actualSourceFetches?.failed !== 0
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.attempted)
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.succeeded)
+    || cycle.actualCatalogRequests.succeeded < 2
+    || cycle.actualCatalogRequests.attempted < cycle.actualCatalogRequests.succeeded
+    || !Number.isSafeInteger(cycle?.actualCatalogRequests?.failed)
+    || cycle.actualCatalogRequests.failed < 0
     || !Number.isSafeInteger(cycle?.formulaGeneratedCount) || cycle.formulaGeneratedCount < 1
     || !Number.isSafeInteger(cycle?.actualBacktestCount) || cycle.actualBacktestCount < 1
     || cycle?.safety?.executionAuthority !== 'NONE' || cycle?.safety?.realOrder !== false) {
@@ -326,6 +332,7 @@ export async function runResearchAiIsolatedTransitionV2({
     nextDirectiveGenerated: true,
     actualProviderCalls: cycles.reduce((sum, cycle) => sum + cycle.actualProviderCalls.succeeded, 0),
     actualSourceFetches: cycles.reduce((sum, cycle) => sum + cycle.actualSourceFetches.succeeded, 0),
+    actualCatalogRequests: cycles.reduce((sum, cycle) => sum + cycle.actualCatalogRequests.succeeded, 0),
     aiReview: Object.freeze({ status: review.status, evidenceResearchSha: reviewSeed.sourceResearchSha,
       exactTargetEvidence: reviewSeed.sourceResearchSha === researchSha, provider: review.provider, model: review.model,
       providerNetworkCalls: review.providerNetworkCalls, cacheHits: review.cacheHits, reviewCount: review.reviews.length }),
