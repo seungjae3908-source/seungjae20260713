@@ -272,7 +272,9 @@ test('current AI evidence fails closed when the shared chart provider is unavail
   await expect(evidence).toContainText('WAIT');
   await expect(evidence).toContainText('UNAVAILABLE');
   await expect(page.getByTestId('insufficient-data-evidence')).toBeVisible();
-  await expect.poll(() => totalChartCalls(mock.calls)).toBe(2);
+  // A direct 503 from the primary stock endpoint is terminal by current main policy:
+  // do not double a provider outage with another automatic GET.
+  await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   expect(mock.privateTradingRequests).toEqual([]);
 });
 
