@@ -84,3 +84,36 @@ No migration of the old embedded sender is possible merely by preparing or
 installing a dormant bundle. The existing running app lacks the ownership
 switch. A separately reviewed LIVE-preserving rollout and two independent
 same-process quiescence proofs must come **before any isolated worker start**.
+
+
+## Owner-protected dormant installation path (source-only, never a cutover)
+
+A *separate*, strictly scoped, owner-protected workflow now exists at
+`.github/workflows/telegram-isolated-protected-install.yml`. It is inert
+until **merged into the exact current main** and invoked from Release Control
+#1555 by the repository owner with an exact-main 40-byte SHA. A protected
+Production environment review is an additional requirement; no comment
+or approval has been issued by this Draft work.
+
+Before any server mutation, the workflow checks current-main, successful
+Required6/6 Full CI, post-merge provenance and exactly one **original**
+successful current-main `push` run of the dormant package workflow.
+A PR artifact, stale SHA, failed/retried run, expired/doubled artifact,
+missing `sha256:` digest or untrusted repository is denied. It fetches the
+original ZIP, verifies the GitHub-reported SHA256, and extracts only the six
+allowlisted files with size, symlink, duplicate, manifest, SHA and inert-receipt
+checks. A new immutable tar digest is checked again on the host.
+
+The protected host operation holds the shared deployment lock and exclusive
+Telegram owner lock, validates PM2 online/marker, copies only to the separate
+`/opt/stock-app-data/telegram-isolated-v1/release/current` directory, and
+requires an unchanged PM2 deployment/flags fingerprint before and after.
+It never restarts PM2, changes trading/Paper state, starts a Telegram process,
+sends a Bot POST, accesses a broker order route or alters a DB/secret.
+Ambiguous provenance or partial installation fails closed.
+
+**THIS DOES NOT ACTIVATE TELEGRAM.** Even if dormant installation later
+succeeds, Production still contains legacy embedded senders. A separate
+owner-reviewed live-trading-preserving application rollout and two-pass
+actual legacy sender quiescence proof are needed before the standalone worker
+can be started. No Replit / Replit Agent is used.
