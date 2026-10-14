@@ -232,3 +232,42 @@ The test uses only disposable temporary paths and does not touch PM2,
 Telegram Bot API, providers, orders, Production secrets, or databases.
 A mock success is NOT real live sender startup or Bot acceptance; actual
 host cutover remains a separately protected, owner-authorized operation.
+
+## Independent owner-only 1:1 Telegram TEST (read-only database)
+
+The October 14 human-confirmed six-room test (#38496644075) proved six
+group messages accepted and received. It did NOT prove personal 1:1 delivery
+or generate a durable notification_deliveries.SENT event. A read-only
+production SQL preflight verified exactly one Vault-bound approved owner,
+one ACTIVE private owner connection and zero personal SENT rows.
+
+The Draft now contains an independent protected workflow:
+- ops/telegram-owner-personal-test-send.mjs
+- .github/workflows/telegram-owner-personal-test-send.yml
+- .github/tests/telegram-owner-personal-test-send.test.mjs
+- .github/tests/telegram-owner-personal-workflow-contract.test.mjs
+
+AFTER a separately authorized merge onto exact current main, the verified
+repository owner can request exactly once on Release Control #1555:
+
+    /run-telegram-owner-personal-test-send <exact-current-main-SHA>
+
+It additionally requires an independent protected Production approval.
+The workflow requires exact source identity, first attempt only, actual
+unchanged PM2+marker, Telegram activation flag, Vault-bound owner/approved
+active connection and no other ACTIVE member connection, bot getMe and a
+private getChat with exactly the matched chat ID. SQL is BEGIN READ ONLY
+with default_transaction_read_only=on and project-identity verification.
+
+Only after all gates it can POST a single non-trading personal TEST.
+There is no timeout retry, no auto-revocation of Telegram connection,
+no DB/user execution event/notification SENT insertion, no PM2 restart,
+no broker orders, no activation of the isolated standalone worker.
+GitHub receives only sanitized status and 0/1 attempt/accept counts.
+Bot API acceptance is not a human read receipt or a genuine trade alert.
+
+This source-only PR does NOT send or deploy anything. The live job must
+be SKIPPED for pull_request. The existing user UI also has a TEST button
+at POST /api/user-integrations/telegram/test but may revoke on 403;
+this independent one-shot route deliberately leaves the link intact.
+Replit and Replit Agent remain prohibited.
