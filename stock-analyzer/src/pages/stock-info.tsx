@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
+import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { readOnlyChartTarget } from '@/lib/ui-chart-navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
 	Archive,
@@ -162,6 +164,7 @@ function groupUnique<T extends AnyObj>(rows: T[], titleOf: (row: T) => unknown):
 
 export default function StockInfoPage() {
 	const [location, navigate] = useLocation();
+	const { select: selectChart } = useAnalysisSelection();
 	const appMode = useAssetMode();
 	const initial = queryState(location);
 	const [asset, setAsset] = useState<AssetTab>(initial.asset);
@@ -406,6 +409,7 @@ export default function StockInfoPage() {
 											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={changeTone(quote.data.changePercent)} />
 										</div>
 										<button type="button" onClick={openDetailedAnalysis} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
+										<button type="button" data-testid="stock-info-open-ai-chart" onClick={() => { const target = readOnlyChartTarget(market, ticker, selectedName); if (!target) return; selectChart(target.selection); navigate(target.href); }} className="mt-2 flex min-h-11 w-full items-center justify-center rounded-2xl border border-primary/40 bg-primary/10 px-4 text-sm font-black text-primary">AI차트에서 보기</button>
 									</>
 								)}
 							</section>
@@ -933,6 +937,7 @@ function formatDate(value: unknown) {
 
 export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; basePath?: string }) {
 	const [location, navigate] = useLocation();
+	const { select: selectChart } = useAnalysisSelection();
 	const appMode = useAssetMode();
 	const locationQuery = location.includes('?') ? location.split('?')[1] ?? '' : '';
 	const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
@@ -1076,6 +1081,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 							</div>
 							<button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
 						</div>
+						<button type="button" data-testid="coin-info-open-ai-chart" onClick={() => { const target = readOnlyChartTarget(coinMarket === 'spot' ? 'UPBIT' : 'BITGET', symbol); if (!target) return; selectChart(target.selection); navigate(target.href); }} className="mt-3 min-h-11 w-full rounded-2xl border border-primary/40 bg-primary/10 px-3 text-sm font-black text-primary">AI차트에서 보기</button>
 						{coinMarket === 'spot' && (
 							<div className="mt-3 grid grid-cols-4 gap-1">
 								{(['15m', '1D', '1W', '1M'] as const).map((tf) => (

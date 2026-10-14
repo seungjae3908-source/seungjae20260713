@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth';
+import { useLocation } from 'wouter';
+import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { readOnlyChartTarget } from '@/lib/ui-chart-navigation';
 import { AlertTriangle, BarChart3, BookOpenCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { JournalPaperLinkageSummary } from '@/components/journal-paper-linkage-summary';
 import {
@@ -132,6 +135,9 @@ function Grade({ trade }: { trade: UnifiedTradeCycle }) {
 }
 
 function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
+  const [, navigate] = useLocation();
+  const { select: selectChart } = useAnalysisSelection();
+  const target = readOnlyChartTarget(trade.market, trade.symbol);
   const snapshot = trade.technicalSnapshot;
   return <article className="min-w-0 space-y-4 rounded-2xl border border-border bg-card p-4" data-testid="unified-journal-detail">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -141,7 +147,9 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
         </div>
         <h3 className="mt-1 break-words text-lg font-extrabold">{trade.symbol}</h3>
       </div>
-      <Grade trade={trade} />
+      <div className="flex shrink-0 flex-wrap items-center gap-2"><Grade trade={trade} />
+        {target ? <button type="button" data-testid="unified-journal-open-ai-chart" onClick={() => { selectChart(target.selection); navigate(target.href); }} className="min-h-10 rounded-lg border border-primary/40 bg-primary/10 px-3 text-xs font-bold text-primary">AI차트에서 보기</button> : null}
+      </div>
     </div>
 
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
