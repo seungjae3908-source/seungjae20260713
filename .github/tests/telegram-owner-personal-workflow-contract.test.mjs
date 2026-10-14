@@ -22,7 +22,7 @@ test('personal owner send only runs with immutable main, author owner and Produc
  }
 });
 test('personal owner protected workflow is single Bot attempt not trade or shared PM2 deploy',()=>{
- for(const expected of ['OWNER_PERSONAL_SINGLE_TEST_BOT_API_ACCEPTED',
+ for(const expected of ['PERSONAL_OWNER_SINGLE_TEST_BOT_API_ACCEPTED',
   'telegram-owner-personal-test-send.mjs',
   'TELEGRAM_OWNER_PERSONAL_TEST_EXECUTE=true',
   'PERSONAL_BOT_API_ACCEPTED',
