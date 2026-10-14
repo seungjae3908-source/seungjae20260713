@@ -321,6 +321,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const crosshairLegendRef = useRef<HTMLDivElement | null>(null);
   const crosshairActiveRef = useRef(false);
   const latestCandleRef = useRef<NormalizedChartCandle | null>(candles.at(-1) ?? null);
+  const observedCandlesRef = useRef(candles);
+  observedCandlesRef.current = candles;
   const instanceRef = useRef<ChartInstance | null>(null);
   const storedViewportRef = useRef<StoredViewport | null>(null);
   const previouslyRenderedOldestTimeRef = useRef<number | null>(null);
@@ -534,6 +536,20 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         olderCallbackRef.current();
       }
     };
+    const onPointerMove = (event: PointerEvent) => {
+      const bounds = container.getBoundingClientRect();
+      const coordinate = event.clientX - bounds.left;
+      if (coordinate < 0 || coordinate > bounds.width) return;
+      const logical = chart.timeScale().coordinateToLogical(coordinate);
+      if (logical == null || !Number.isFinite(logical)) return;
+      const index = Math.round(logical);
+      const current = observedCandlesRef.current[index];
+      // A pointer over whitespace must never become a synthetic candle.
+      if (!current || !Number.isFinite(current.time) || current.time <= 0) return;
+      crosshairActiveRef.current = true;
+      updateCrosshairLegend(crosshairLegendRef.current, current, timeframe, moneyRef.current);
+    };
+    container.addEventListener('pointermove', onPointerMove, { passive: true });
     chart.subscribeClick(handleClick);
     chart.subscribeCrosshairMove(handleCrosshairMove);
     chart.timeScale().subscribeVisibleLogicalRangeChange(publishVisibleRange);
@@ -553,6 +569,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       observer.disconnect();
       chart.unsubscribeClick(handleClick);
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      container.removeEventListener('pointermove', onPointerMove);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(publishVisibleRange);
       instanceRef.current = null;
       drawingLinesRef.current = [];

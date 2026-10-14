@@ -258,14 +258,15 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
-          {analysis ? contextualActionLabel(selection, analysis) : '판단 대기'}
+          {analysis ? contextualActionLabel(selection, analysis) : selection.action && !['NO_TRADE','UNKNOWN','NONE'].includes(selection.action) ? `이전 검색 신호 · ${actionLabel(selection.action)} · 현재 판단 대기` : '판단 대기'}
         </span>
       </div>
 
+      {selection.signalScore != null && !analysis ? <p className="rounded-lg bg-background px-3 py-2 text-[11px] text-muted-foreground">아래 신호점수는 이전 검색 결과입니다. 최신 차트 근거로 확인되기 전에는 현재 진입 신호가 아닙니다.</p> : null}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">신호점수</p>
-          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(analysis ? selection.signalScore : null)}</strong>
+          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(selection.signalScore)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">근거 강도</p>
@@ -344,7 +345,7 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
   const market = ['KR', 'US', 'UPBIT', 'BITGET'].includes(analysis?.market ?? '') ? analysis!.market as AnalysisSelection['market'] : 'KR';
   const current = typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null;
   return <section data-testid="ai-chart-current-judgment" className="rounded-2xl border border-card-border bg-card p-4">
-    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
+    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 기술 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
     {analysis ? <><div className="mt-3 flex items-center gap-2"><BiasIcon bias={analysis.bias} /><strong className="text-sm">{analysis.bias === 'bullish' ? '상승 우세' : analysis.bias === 'bearish' ? '하락 우세' : '판단 보류'}</strong></div>
       <p className="mt-2 text-xl font-black tabular-nums">{format(current, market)}</p>
       <div className="mt-3 grid grid-cols-2 gap-2">{analysis.priceLevels.slice(0, 4).map((level, i) => <div key={level.role + i} className="rounded-xl bg-background p-2"><p className="text-[11px] text-muted-foreground">{level.role === 'support' ? '지지' : level.role === 'resistance' ? '저항' : level.role === 'target' ? '참고 목표' : level.role === 'invalidation' ? '무효화' : level.role}</p><p className="mt-1 text-xs font-bold tabular-nums">{format(level.price, market)}</p></div>)}</div>

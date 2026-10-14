@@ -141,7 +141,7 @@ async function installMocks(page: Page) {
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
   await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
-  await expect(page.getByText('context-reset-kr-5m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-5m');
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();
 }
