@@ -46,6 +46,7 @@ import {
 } from './public-market-http';
 
 export {
+  assetFromQuote,
   dedupeMarketNews,
   fetchPublicMarketJson,
   isMarketInformationRoomId,
@@ -142,7 +143,7 @@ function assetFromQuote(row: QuoteRow, currency: MarketInformationCurrency): Mar
   return {
     symbol,
     name: String(row.name ?? symbol).trim() || symbol,
-    exchange: String(row.exchange ?? (row.market === 'US' ? 'US' : 'KRX')).trim(),
+    exchange: String(row.exchange ?? '').trim() || (row.market === 'US' ? 'US' : 'KRX'),
     currency,
     price,
     changePercent: finite(row.changePercent),
