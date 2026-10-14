@@ -170,6 +170,51 @@ test('historical v2 rejects malformed SHA, wrong profile, and unsupported status
   }
 });
 
+test('real canonical profile writers remain bound to the reader schema identifiers', async () => {
+  const [historicalWriter, forwardWriter, isolatedReader] = await Promise.all([
+    readFile(new URL('../src/historical-pipelines.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../src/engine.mjs', import.meta.url), 'utf8'),
+    readFile(new URL('../src/research-ai-isolated-transition-v2.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(historicalWriter, /schemaVersion:\s*'research-production-historical-cycle-v2'/u);
+  assert.match(forwardWriter, /schemaVersion:\s*'research-production-cycle-v1'/u);
+  assert.match(isolatedReader, /profile === 'fast-historical' && source\?\.schemaVersion === 'research-production-historical-cycle-v2'/u);
+});
+
+test('aggregates independently invalid forward and fast-historical snapshots before any AI calls', async (t) => {
+  const x = await fixture(t);
+  const forward = join(x.source, 'latest', 'forward.json');
+  const historical = join(x.source, 'latest', 'fast-historical.json');
+  const badForward = {
+    schemaVersion: 'research-production-historical-cycle-v2', profile: 'forward',
+    researchSha: SOURCE_SHA, status: 'complete', results: [],
+  };
+  const badHistorical = {
+    schemaVersion: 'research-production-historical-cycle-v2', profile: 'fast-historical',
+    researchSha: 'INVALID_SHA', status: 'complete', results: [],
+  };
+  await Promise.all([
+    writeFile(forward, `${JSON.stringify(badForward)}\n`, { mode: 0o600 }),
+    writeFile(historical, `${JSON.stringify(badHistorical)}\n`, { mode: 0o600 }),
+  ]);
+  let networkStagesReached = 0;
+  await assert.rejects(runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: x.source, isolatedStateRoot: x.isolated, repoRoot: x.repo, researchSha: TARGET_SHA,
+    providerEnvPath: x.providerEnvPath, aiPolicyEnvPath: x.aiPolicyEnvPath, videoPolicyEnvPath: x.videoPolicyEnvPath,
+    runCycle: async () => { networkStagesReached++; throw new Error('NETWORK_MUST_NOT_RUN'); },
+    runReview: async () => { networkStagesReached++; throw new Error('NETWORK_MUST_NOT_RUN'); },
+    runVideo: async () => { networkStagesReached++; throw new Error('NETWORK_MUST_NOT_RUN'); },
+  }), (error) => {
+    assert.match(error.message, /^ISOLATED_TRANSITION_PROFILE_PREFLIGHT_BLOCKERS:/u);
+    assert.match(error.message, /forward=ISOLATED_TRANSITION_PROFILE_INVALID:forward/u);
+    assert.match(error.message, /fast-historical=ISOLATED_TRANSITION_PROFILE_INVALID:fast-historical/u);
+    return true;
+  });
+  assert.equal(networkStagesReached, 0);
+  assert.deepEqual(JSON.parse(await readFile(forward, 'utf8')), badForward);
+  assert.deepEqual(JSON.parse(await readFile(historical, 'utf8')), badHistorical);
+});
+
 test('isolated transition rejects a state root nested in the production ledger', async (t) => {
   const x = await fixture(t);
   await assert.rejects(runResearchAiIsolatedTransitionV2({
