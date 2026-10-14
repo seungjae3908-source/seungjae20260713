@@ -63,6 +63,7 @@ on:
       - stock-analyzer/src/components/trading-holdings-panel.tsx
       - stock-analyzer/src/components/trade-automation-settings.tsx
       - stock-analyzer/e2e/phase12-trade-automation.spec.ts
+      - stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx
       - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml

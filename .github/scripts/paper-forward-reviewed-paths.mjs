@@ -314,6 +314,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/public-live-plan-origin.service.ts",
   "api-server/src/services/trade-automation-optimization.service.ts",
   "api-server/src/services/trade-automation-repository-compatibility.test.ts",
+  "api-server/src/services/trade-automation-risk.service.ts",
   "api-server/src/services/trade-execution-snapshot.service.ts",
   "api-server/src/services/trade-history-completeness.service.test.ts",
   "api-server/src/services/trade-history-completeness.service.ts",
@@ -322,6 +323,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/trade-order-recovery.test.ts",
   "api-server/src/services/trade-recovery-worker.service.ts",
   "api-server/src/services/trade-recovery-worker.test.ts",
+  "api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts",
   "api-server/src/services/trading-provider-response.service.test.ts",
   "api-server/src/services/trading-provider-response.service.ts",
   "api-server/supabase/migrations/20261012010706_automatic_live_atomic_budget.down.sql",
@@ -333,6 +335,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/e2e/phase12-trade-automation.spec.ts",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
   "stock-analyzer/src/components/trade-automation-settings.tsx",
+  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx",
 ]);
 // Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
 // admission bridge. Paths that previously belonged to the immutable Scanner
