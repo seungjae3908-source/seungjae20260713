@@ -17,6 +17,7 @@ const MUTATIONS = new Set([
   'production-futures-live-trading-gate.yml', 'production-automatic-trading-gate.yml',
   'production-automatic-paper-only-gate.yml', 'telegram-production-code-only-deploy.yml',
   'research-production-activation.yml', 'research-ai-production-activation.yml',
+  'research-ai-isolated-validation.yml',
   'research-market-watch-activation.yml', 'research-dashboard-activation.yml',
   'research-isolated-release.yml',
 ].map(name => '.github/workflows/' + name));

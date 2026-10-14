@@ -162,6 +162,12 @@ export async function runResearchVideoDiscoveryScan({
       sourceCount: null,
       snapshotDigest: null,
       providerNetworkCalls: 0,
+      requestOrder: 'date',
+      publishedAfter,
+      publishedAfterHours: policy.publishedAfterHours,
+      regionCode: policy.regionCode,
+      relevanceLanguage: policy.relevanceLanguage,
+      zeroResultReason: null,
       invocationMode,
       scheduledInvocationObserved: false,
       reason: policy.reason,
@@ -256,6 +262,9 @@ export async function runResearchVideoDiscoveryScan({
       queryCount: policy.queries.length,
     }, env);
 
+    const zeroResultReason = sourceCount === 0
+      ? 'ACTIVE_QUERY_AND_FILTERS_RETURNED_NO_PUBLIC_VIDEO'
+      : null;
     const result = Object.freeze({
       schemaVersion: 'research-video-discovery-scan-v1',
       status: 'COMPLETE',
@@ -266,15 +275,23 @@ export async function runResearchVideoDiscoveryScan({
       queryIndex,
       queryCount: policy.queries.length,
       nextQueryIndex,
-      sourceCount: Number(snapshot.sourceCount ?? 0),
+      sourceCount,
       snapshotDigest,
       sourceReviewDigest,
       reviewInboxCreated: inboxCreated,
       providerNetworkCalls,
+      requestOrder: 'date',
+      publishedAfter,
+      publishedAfterHours: policy.publishedAfterHours,
+      regionCode: policy.regionCode,
+      relevanceLanguage: policy.relevanceLanguage,
+      zeroResultReason,
       invocationMode,
       scheduledInvocationObserved: false,
       reason: null,
-      nextRequiredStep: 'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',
+      nextRequiredStep: sourceCount === 0
+        ? 'ADVANCE_TO_NEXT_QUERY_ON_NEXT_SCHEDULED_SCAN'
+        : 'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',
       safety: RESEARCH_VIDEO_DISCOVERY_SAFETY,
     });
     await atomicJson(latestPath, result, env);
@@ -293,6 +310,12 @@ export async function runResearchVideoDiscoveryScan({
       sourceCount: null,
       snapshotDigest: null,
       providerNetworkCalls,
+      requestOrder: 'date',
+      publishedAfter,
+      publishedAfterHours: policy.publishedAfterHours,
+      regionCode: policy.regionCode,
+      relevanceLanguage: policy.relevanceLanguage,
+      zeroResultReason: null,
       invocationMode,
       scheduledInvocationObserved: false,
       reason: safeError(error),
