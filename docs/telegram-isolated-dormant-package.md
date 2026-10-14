@@ -212,3 +212,23 @@ been inspected or changed.
 Real live deployment still requires an independently authorized
 LIVE-preserving old-app owner switch and two same-process stopped-lane
 proofs. A dormant directory is NOT cutover authorization.
+
+
+## Launch-time fail-closed shell rehearsal (source-only)
+
+The same protected-install PR now tests the ACTUAL dormant launcher shell,
+`ops/run-telegram-isolated-worker.sh`, with a sealed manifest, mock PM2,
+mock loopback health, and a fake Node executable that **never imports or
+runs Telegram production worker code**. It proves:
+
+- With a verified same-process isolated owner and two fresh stopped-lane
+  health checks, the shell reaches the final mocked Node boundary only.
+- Old `TELEGRAM_WORKER_OWNER=embedded`, an in-flight sender, altered
+  sealed bytes, missing private state root, missing owner approval and
+  a mismatched release SHA block before any sender is launched.
+- Real LIVE trading flags in the fake PM2 remain intact throughout.
+
+The test uses only disposable temporary paths and does not touch PM2,
+Telegram Bot API, providers, orders, Production secrets, or databases.
+A mock success is NOT real live sender startup or Bot acceptance; actual
+host cutover remains a separately protected, owner-authorized operation.

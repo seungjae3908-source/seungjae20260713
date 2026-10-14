@@ -11,6 +11,7 @@ on:
       - ops/telegram-protected-dormant-install.sh
       - .github/tests/telegram-isolated-protected-install-contract.test.mjs
       - .github/tests/telegram-protected-dormant-install-e2e.test.mjs
+      - .github/tests/telegram-isolated-launcher-real-shell-e2e.test.mjs
   issue_comment:
     types: [created]
 
@@ -36,7 +37,8 @@ jobs:
           bash -n ops/telegram-protected-dormant-install.sh
           node --test .github/tests/telegram-dormant-artifact-provenance.test.mjs \
             .github/tests/telegram-isolated-protected-install-contract.test.mjs \
-            .github/tests/telegram-protected-dormant-install-e2e.test.mjs
+            .github/tests/telegram-protected-dormant-install-e2e.test.mjs \
+            .github/tests/telegram-isolated-launcher-real-shell-e2e.test.mjs
           python3 -m unittest discover -s .github/tests \
             -p telegram_dormant_artifact_extract_test.py -v
 
