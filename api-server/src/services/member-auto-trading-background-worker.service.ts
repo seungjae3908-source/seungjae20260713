@@ -688,6 +688,10 @@ export function externalStrategyPilotReasonsForLive(
     || !review || nowMs >= review.expiresAtMs || nowMs < review.reviewedAtMs) {
     throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED');
   }
+  const dataEvidence = record(entry.execution.dataEvidence);
+  if (dataEvidence?.observationKind !== 'LIVE_PUBLIC_MARKET') {
+    throw new Error('BACKGROUND_EXTERNAL_STRATEGY_LIVE_OBSERVATION_REQUIRED');
+  }
   const gateInput = {
     strategyId: entry.identity.strategyId,
     market: entry.identity.market,
@@ -746,6 +750,24 @@ export function validateExternalStrategyPilotHandoffEnvelope(
   // every actual entry the same proof used at order construction must pass now.
   for (const entry of handoff.entries) externalStrategyPilotReasonsForLive(entry, nowMs);
   return handoff;
+}
+
+/**
+ * External Pilot metadata is deliberately outside the immutable canonical
+ * Paper handoff. Appending fields directly to that handoff invalidates its
+ * digest, so the persisted file is a two-part container and each part is
+ * validated independently before the Worker can see an entry.
+ */
+export function parseExternalStrategyPilotHandoffFile(raw: unknown, nowMs: number) {
+  const container = record(raw);
+  if (!container
+    || container.schemaVersion !== 'external-strategy-pilot-handoff-file-v1'
+    || !record(container.envelope)
+    || !record(container.handoff)) {
+    throw new Error('BACKGROUND_EXTERNAL_STRATEGY_HANDOFF_FILE_INVALID');
+  }
+  const handoff = validateMemberAutoTradingPaperHandoff(container.handoff, nowMs);
+  return validateExternalStrategyPilotHandoffEnvelope(container.envelope, handoff, nowMs);
 }
 
 function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
@@ -2905,10 +2927,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
       throw error;
     }
-    const handoff = validateMemberAutoTradingPaperHandoff(parsed, nowMs);
-    return this.externalPilotHandoffPath
-      ? validateExternalStrategyPilotHandoffEnvelope(parsed, handoff, nowMs)
-      : handoff;
+    if (this.externalPilotHandoffPath) {
+      return parseExternalStrategyPilotHandoffFile(parsed, nowMs);
+    }
+    return validateMemberAutoTradingPaperHandoff(parsed, nowMs);
   }
 
   async admitHandoffEntries(handoff: MemberAutoTradingPaperHandoff, nowMs: number) {
