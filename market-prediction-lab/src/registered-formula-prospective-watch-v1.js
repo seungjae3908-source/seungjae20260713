@@ -7,7 +7,7 @@ const CASH = new Set(['KR_STOCK','US_STOCK','CRYPTO_SPOT']);
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA64 = /^[a-f0-9]{64}$/u;
 const SYMBOL = /^[A-Z0-9][A-Z0-9._-]{0,31}$/u;
-const DURATIONS = {'1m':60_000,'3m':180_000,'5m':300_000,'15m':900_000,'60m':3_600_000,'4H':14_400_000,'1D':86_400_000};
+const DURATIONS = {'1m':60_000,'3m':180_000,'5m':300_000,'15m':900_000,'30m':1_800_000,'1h':3_600_000,'4h':14_400_000,'1d':86_400_000,'1wk':604_800_000};
 const obj = x => x != null && typeof x === 'object' && !Array.isArray(x);
 const time = x => Number.isSafeInteger(x) && x > 0;
 const digest = x => createHash('sha256').update(JSON.stringify(x)).digest('hex');
@@ -22,6 +22,7 @@ function directionAllowed(market, direction) {
     market === 'CRYPTO_FUTURES' && ['LONG','SHORT'].includes(direction);
 }
 function result(input,status,reason,signal=null) {
+  const researchPaperCandidate=input?.entry?.source==='FORMULA_RESEARCH_BACKTEST_CANDIDATE';
   return Object.freeze({
     contract:REGISTERED_FORMULA_PROSPECTIVE_WATCH_VERSION,status,reason,
     market:MARKETS.has(input?.market)?input.market:null,
@@ -30,6 +31,8 @@ function result(input,status,reason,signal=null) {
     registryId:SHA64.test(input?.entry?.registryId??'')?input.entry.registryId:null,
     observedSignalAtMs:signal?.atMs??null,observationId:signal?.id??null,
     observedClosedCandleSignal:status==='OBSERVED_CLOSED_CANDLE_SIGNAL',
+    registryTier:researchPaperCandidate?'RESEARCH_EXPERIMENT':'CANONICAL_PASS',
+    researchPaperCandidate,genuineS:researchPaperCandidate?false:null,
     // This pure diagnostic does not attest registry file ownership, market
     // source rights, forward profit, canonical admission or any order.
     independentRegistryProvenanceVerified:false,independentProviderProvenanceVerified:false,
@@ -40,10 +43,35 @@ function result(input,status,reason,signal=null) {
     candidateCredit:0,economicEvidenceCredit:0,executionAuthority:'NONE',
   });
 }
+function researchEvidenceValid(entry) {
+  const metrics=entry?.historicalEvidence?.metrics;
+  const cost=entry?.modeledCostEvidence;
+  const risk=entry?.basicRiskEvidence;
+  return obj(metrics)&&Number.isSafeInteger(metrics.trades)&&metrics.trades>=30
+    &&positive(metrics.return)&&typeof metrics.profitFactor==='number'&&metrics.profitFactor>=1.05
+    &&positive(metrics.expectancy)&&typeof metrics.maximumDrawdown==='number'
+    &&Number.isFinite(metrics.maximumDrawdown)&&metrics.maximumDrawdown>=0&&metrics.maximumDrawdown<=0.2
+    &&obj(cost)&&cost.evidenceClass==='MODEL_ASSUMPTION_NOT_PROVIDER_ATTESTED'
+    &&['entryFeeRate','exitFeeRate','taxRate','slippageRate','spreadRate','latencyDriftRate']
+      .every(k=>typeof cost[k]==='number'&&Number.isFinite(cost[k])&&cost[k]>=0)
+    &&Number.isSafeInteger(cost.latencyBars)&&cost.latencyBars>=0&&cost.liquidityImpact===null
+    &&obj(risk)&&risk.basicRiskCheck==='PASS'&&positive(risk.riskPerTrade)&&risk.riskPerTrade<=0.05
+    &&positive(risk.maximumCapitalFraction)&&risk.maximumCapitalFraction<=1
+    &&(entry.market==='CRYPTO_FUTURES'
+      ?positive(risk.leverage)&&risk.leverage<=3
+      :risk.leverage===1);
+}
 function registryEntryValid(entry,sha,market,direction,timeframe) {
+  const canonical=entry?.source==='FORMULA_AUTO_BACKTEST_PASS'
+    &&entry.paperState==='REGISTERED_WAITING_FUTURE_SIGNAL';
+  const research=entry?.source==='FORMULA_RESEARCH_BACKTEST_CANDIDATE'
+    &&entry.paperState==='RESEARCH_REGISTERED_WAITING_FUTURE_SIGNAL'
+    &&entry.researchStatus==='BACKTEST_CANDIDATE'
+    &&entry.experimentalResearchOnly===true&&entry.genuineS===false
+    &&entry.activationRequired===true&&entry.actualPaperOperationActive===false
+    &&entry.paperDispatchAllowed===false&&researchEvidenceValid(entry);
   if (!obj(entry)||!SHA40.test(sha??'')||entry.researchCodeSha!==sha
-    ||entry.source!=='FORMULA_AUTO_BACKTEST_PASS'
-    ||entry.paperState!=='REGISTERED_WAITING_FUTURE_SIGNAL'
+    ||(!canonical&&!research)
     ||entry.futureSignalRequired!==true||entry.freshPublicEvidenceRequired!==true
     ||entry.canonicalPaperAdmissionRequired!==true||entry.simulationAuthorityRequired!==true
     ||entry.directTradeOnBacktestPass!==false||entry.enabledForPaperEvaluation!==true
@@ -66,6 +94,10 @@ function registryEntryValid(entry,sha,market,direction,timeframe) {
   return digest(sorted({
     itemDigest:entry.itemDigest,formulaCandidateId:entry.formulaCandidateId,
     generatedCandidateId:entry.generatedCandidateId,parameterIdentity:entry.parameterIdentity,
+    ...(research?{
+      registryTier:'RESEARCH_EXPERIMENT',historicalEvidence:entry.historicalEvidence,
+      modeledCostEvidence:entry.modeledCostEvidence,basicRiskEvidence:entry.basicRiskEvidence,
+    }:{}),
   }))===entry.registryId;
 }
 /** Causal observation only: the last candle must close strictly AFTER
