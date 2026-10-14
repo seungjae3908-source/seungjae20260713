@@ -271,3 +271,42 @@ be SKIPPED for pull_request. The existing user UI also has a TEST button
 at POST /api/user-integrations/telegram/test but may revoke on 403;
 this independent one-shot route deliberately leaves the link intact.
 Replit and Replit Agent remain prohibited.
+
+
+## Production October 14 source-backed delivery diagnosis and NO-REPLAY watchdog
+
+An owner-approved, GET/read-only Production Telegram audit #38498750929
+completed successfully at 2026-10-14 02:07 UTC, using main c9ed902e
+and actual older app deployed marker 3e104bbe. It proved PM2/marker
+match and Bot activation flags true, but NOT continuous sending.
+
+- The scheduled brief worker remains RUNNING in health, while last completed
+  tick was 2026-10-13 06:49 UTC (15:49 KST); the KR closing due window
+  begins 15:50 KST. This is a possible in-flight stall, NOT a proven cause.
+- Brief ledger 16 entries, none added in the preceding 24h; last due
+  report was DEDUPED_ONLY (attempted0, accepted0), not a new send.
+- Personal worker last tick was fresh but no genuine member SENT receipt.
+- Signal V3 localhost returned HTTP503 with older-than-60m public snapshot.
+  Its systemd server/timer were active, but cycle last exit was NOT_OBSERVED.
+  Subscriber Telegram ledger was ABSENT. Never invent source freshness.
+
+New code in api-server/src/services/telegram-intelligence-worker.service.ts
+adds a bounded no-replay health watchdog: timestamp and fixed-safe stage
+codes PLAN, PUBLIC_BRIEF_READ, LEDGER_LOOKUP, RESERVE_UNCONFIRMED,
+BOT_POST, DURABLE_RECEIPT_WRITE, IDLE. A tick still in flight more than
+ten minutes is marked stalled, tickOk=false with safe code
+TELEGRAM_BRIEF_IN_FLIGHT_STALLED. It does not alter in-flight promises,
+unlock a reservation, issue a second Bot POST, or restart PM2. Once the
+original tick finishes normally, the health status can recover by result.
+The watchdog helps determine WHAT is stalled on a newly deployed app
+but cannot magically fix the previous server revision, its source data,
+or guarantee a stalled remote POST was accepted. The current running
+app has not been updated and remains a production NO-GO for automatic
+delivery until a separate live-trading-preserving release is approved.
+
+New isolated node:test coverage is registered in BOTH Telegram-dedicated
+QA and canonical application phase9. It verifies time-bound stall
+detection and a pending original Bot POST whose durable unconfirmed
+reservation prevents a second invocation. No network, Bot, PM2,
+database or real trading mutation occurs in these tests.
+Replit and Replit Agent remain prohibited.

@@ -25,6 +25,19 @@ import {
 const DEFAULT_INTERVAL_MS = 60_000;
 const MAX_STATE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_LEDGER_BYTES = 1_048_576;
+// A stuck tick could have been accepted by Bot API already. This watchdog
+// only marks health degraded; it NEVER retries or releases dedupe reservations.
+const BRIEF_STALL_AFTER_MS = 10 * 60_000;
+export type TelegramBriefStage =
+  | 'IDLE' | 'PLAN' | 'PUBLIC_BRIEF_READ' | 'LEDGER_LOOKUP'
+  | 'RESERVE_UNCONFIRMED' | 'BOT_POST' | 'DURABLE_RECEIPT_WRITE';
+export function telegramBriefTickStalled(
+  startedAt: string | null, nowMs: number = Date.now(),
+): boolean {
+  const at = Date.parse(startedAt ?? '');
+  return Number.isFinite(nowMs) && Number.isFinite(at) && at > 0
+    && nowMs >= at && nowMs - at > BRIEF_STALL_AFTER_MS;
+}
 
 export interface TelegramIntelligenceStateStore {
   has(key: string): Promise<boolean>;
@@ -284,6 +297,7 @@ export class TelegramIntelligenceWorker {
     private readonly deliver: TelegramIntelligenceDelivery = sendTelegramAlert,
     private readonly resolveChatId: (destination: TelegramReportDestination) => string | null = telegramDestinationChatId,
     private readonly collectBrief: TelegramBriefCollector = collectTelegramMarketBrief,
+    private readonly stageObserver: (stage: TelegramBriefStage) => void = () => {},
   ) {}
 
   async runOnce(now = new Date()): Promise<TelegramIntelligenceRunResult> {
@@ -301,6 +315,7 @@ export class TelegramIntelligenceWorker {
     if (this.running) return result;
     this.running = true;
     try {
+      this.stageObserver('PLAN');
       const plans = dueTelegramIntelligenceReports(now, {
         membership: 'admin',
         portfolioRelevant: false,
@@ -313,6 +328,7 @@ export class TelegramIntelligenceWorker {
       let briefSnapshot: TelegramMarketBriefSnapshot | null = null;
       if (plans.length > 0 && process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED === 'true') {
         try {
+          this.stageObserver('PUBLIC_BRIEF_READ');
           briefSnapshot = await this.collectBrief();
         } catch (error) {
           logger.warn(
@@ -335,6 +351,7 @@ export class TelegramIntelligenceWorker {
 
         for (const [chatId, destination] of uniqueChats) {
           const deliveryKey = `${plan.dedupeKey}:${destination}:${chatId}`;
+          this.stageObserver('LEDGER_LOOKUP');
           if (await this.store.has(deliveryKey)) {
             result.deduped += 1;
             continue;
@@ -366,18 +383,23 @@ export class TelegramIntelligenceWorker {
           // Checkpoint an UNKNOWN outcome *before* the non-idempotent Bot API
           // POST, not after it. A crash following remote acceptance must not
           // cause the next process to retransmit this report.
+          this.stageObserver('RESERVE_UNCONFIRMED');
           await this.store.markUnconfirmed(deliveryKey, now);
           result.attempted += 1;
+          this.stageObserver('BOT_POST');
           const delivered = await this.deliver(alert);
           if (delivered.ok) {
+            this.stageObserver('DURABLE_RECEIPT_WRITE');
             await this.store.markDelivered(deliveryKey, now);
             result.delivered += 1;
           } else if (delivered.attempts === 0
             && delivered.skipped === 'NOT_CONFIGURED') {
+            this.stageObserver('DURABLE_RECEIPT_WRITE');
             await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.notConfigured += 1;
           } else if (delivered.attempts === 0
             && delivered.skipped === 'COOLDOWN') {
+            this.stageObserver('DURABLE_RECEIPT_WRITE');
             await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.deduped += 1;
           } else if (delivered.skipped === 'DELIVERY_FAILED'
@@ -386,6 +408,7 @@ export class TelegramIntelligenceWorker {
                 .test(delivered.errorCode ?? ''))) {
             // A specific rejection proves that Telegram did not accept this
             // POST. Other transport errors must retain the reservation.
+            this.stageObserver('DURABLE_RECEIPT_WRITE');
             await this.store.releaseExplicitNoSend(deliveryKey, now);
             result.failed += 1;
           } else {
@@ -397,6 +420,7 @@ export class TelegramIntelligenceWorker {
       }
       return result;
     } finally {
+      this.stageObserver('IDLE');
       this.running = false;
     }
   }
@@ -425,6 +449,11 @@ export type TelegramIntelligenceWorkerHealth = Readonly<{
   lastDueCode: 'NOT_OBSERVED' | 'BOT_API_ACCEPTED' | 'DEDUPED_ONLY'
     | 'NOT_CONFIGURED' | 'DELIVERY_FAILED' | 'NO_ATTEMPTS'
     | 'LEDGER_UNREADABLE' | 'TICK_FAILED';
+  inFlight: boolean;
+  activeStage: TelegramBriefStage;
+  tickStartedAt: string | null;
+  stageStartedAt: string | null;
+  stalled: boolean;
 }>;
 
 function emptyTelegramIntelligenceWorkerHealth(): TelegramIntelligenceWorkerHealth {
@@ -434,6 +463,8 @@ function emptyTelegramIntelligenceWorkerHealth(): TelegramIntelligenceWorkerHeal
     lastDuePlans: 0, lastDueAttempted: 0, lastDueDelivered: 0,
     lastDueDeduped: 0, lastDueNotConfigured: 0, lastDueFailed: 0,
     lastDueCode: 'NOT_OBSERVED',
+    inFlight: false, activeStage: 'IDLE', tickStartedAt: null,
+    stageStartedAt: null, stalled: false,
   });
 }
 
@@ -484,13 +515,26 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
 
   const statePath = process.env.TELEGRAM_INTELLIGENCE_STATE_PATH?.trim()
     || path.resolve(process.cwd(), '.runtime/telegram-intelligence-delivery-state.json');
-  const worker = new TelegramIntelligenceWorker(new FileTelegramIntelligenceStateStore(statePath));
+  const observeStage = (stage: TelegramBriefStage) => {
+    putTelegramIntelligenceHealth({
+      activeStage: stage,
+      stageStartedAt: stage === 'IDLE' ? null : new Date().toISOString(),
+    });
+  };
+  const worker = new TelegramIntelligenceWorker(
+    new FileTelegramIntelligenceStateStore(statePath),
+    sendTelegramAlert, telegramDestinationChatId, collectTelegramMarketBrief, observeStage,
+  );
   putTelegramIntelligenceHealth({ enabled: true, state: 'RUNNING' });
   let inFlight = false;
   const tick = async () => {
     if (inFlight) return;
     inFlight = true;
     const observedAt = new Date();
+    putTelegramIntelligenceHealth({
+      inFlight: true, tickStartedAt: observedAt.toISOString(),
+      activeStage: 'PLAN', stageStartedAt: observedAt.toISOString(), stalled: false,
+    });
     const dueExpected = dueTelegramIntelligenceReports(observedAt, {
       membership: 'admin', portfolioRelevant: false, watchlistRelevant: false,
       includeStocks: true, includeCrypto: true,
@@ -536,11 +580,27 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
       logger.warn({ code }, 'telegram intelligence worker tick failed');
     } finally {
       inFlight = false;
+      putTelegramIntelligenceHealth({
+        inFlight: false, tickStartedAt: null, activeStage: 'IDLE',
+        stageStartedAt: null, stalled: false,
+      });
     }
   };
 
   void tick();
-  const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.TELEGRAM_INTELLIGENCE_INTERVAL_MS));
+  const timer = setInterval(() => {
+    if (!inFlight) { void tick(); return; }
+    if (!runtimeHealth.stalled
+      && telegramBriefTickStalled(runtimeHealth.tickStartedAt)) {
+      putTelegramIntelligenceHealth({
+        tickOk: false, stalled: true, lastDueCode: 'TICK_FAILED',
+      });
+      logger.warn({
+        code: 'TELEGRAM_BRIEF_IN_FLIGHT_STALLED',
+        stage: runtimeHealth.activeStage,
+      }, 'telegram brief blocked by unresolved in-flight work; never retry POST');
+    }
+  }, boundedInterval(process.env.TELEGRAM_INTELLIGENCE_INTERVAL_MS));
   timer.unref?.();
   console.log('[telegram-intelligence-worker] started');
   return {
