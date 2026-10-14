@@ -138,8 +138,16 @@ async function verifySourceRoot(path) {
 async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, researchSha }) {
   const source = await boundedJson(join(sourceStateRoot, 'latest', `${profile}.json`), { optional: true });
   if (source == null) return Object.freeze({ profile, state: 'MISSING' });
-  if (source?.schemaVersion !== 'research-production-cycle-v1' || source?.profile !== profile
-    || !SHA40.test(String(source?.researchSha ?? ''))) throw new Error(`ISOLATED_TRANSITION_PROFILE_INVALID:${profile}`);
+  // The production fast-historical lane uses the independent v2 historical
+  // pipeline writer; forward and long-history use the canonical v1 writer.
+  // Preserve the original evidence schema and SHA when seeding isolated state.
+  const schemaSupported = source?.schemaVersion === 'research-production-cycle-v1'
+    || (profile === 'fast-historical' && source?.schemaVersion === 'research-production-historical-cycle-v2');
+  if (!schemaSupported || source?.profile !== profile
+    || !SHA40.test(String(source?.researchSha ?? ''))
+    || !['complete', 'partial_failure', 'blocked_data'].includes(source?.status)) {
+    throw new Error(`ISOLATED_TRANSITION_PROFILE_INVALID:${profile}`);
+  }
   await atomicJson(join(isolatedStateRoot, 'latest', `${profile}.json`), source);
   return Object.freeze({
     profile,
