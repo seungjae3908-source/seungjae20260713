@@ -52,6 +52,7 @@ function cycle(index) {
     observedAt: AT, researchCodeSha: TARGET_SHA, directiveConsumed: true, discoveryStatus: 'DOSSIER_STAGED',
     actualProviderCalls: { attempted: 2, succeeded: 2, failed: 0 },
     actualSourceFetches: { attempted: 3, succeeded: 3, failed: 0 },
+    actualCatalogRequests: { attempted: 2, succeeded: 2, failed: 0 },
     selectedNextStrategy: { repository: 'https://github.com/example/public', sourcePath: `strategy-${index}.py`,
       sourceRevision: String(index).repeat(40), family: `FAMILY_${index}`, templateId: 'RVOL_BREAKOUT_V1' },
     stagedDossierDigest: String(index).repeat(64),
@@ -100,6 +101,7 @@ test('isolated transition rebinds the existing directive and proves two distinct
   assert.equal(result.naturalCycleCount, 2);
   assert.equal(result.formulaCandidateCount, 2);
   assert.equal(result.actualBacktestCount, 2);
+  assert.equal(result.actualCatalogRequests, 4);
   assert.equal(new Set(result.strategies.map((row) => `${row.sourceRevision}:${row.sourcePath}`)).size, 2);
   assert.equal(result.youtube.zeroResult, true);
   const historicalSeed = result.seededProfiles.find((row) => row.profile === 'fast-historical');

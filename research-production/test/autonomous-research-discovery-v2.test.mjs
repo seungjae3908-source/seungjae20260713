@@ -76,6 +76,20 @@ function provider() {
 
 function sourceFetch() {
   return async (url) => {
+    if (String(url).startsWith('https://api.github.com/search/repositories?')) return {
+      status: 200,
+      text: async () => JSON.stringify({ items: [{
+        html_url: 'https://github.com/example/public-strategies',
+        default_branch: 'main', fork: false, archived: false, private: false,
+      }] }),
+    };
+    if (String(url).startsWith('https://api.github.com/repos/example/public-strategies/git/trees/main?recursive=1')) return {
+      status: 200,
+      text: async () => JSON.stringify({ truncated: false, tree: [
+        { type: 'blob', path: 'LICENSE' },
+        { type: 'blob', path: 'strategies/ParticipationBreakout.py' },
+      ] }),
+    };
     if (String(url).endsWith('/commits/main.atom')) return {
       status: 200,
       text: async () => `<?xml version="1.0"?><feed><updated>2026-10-01T00:00:00Z</updated><entry><id>tag:github.com,2008:Grit::Commit/${SOURCE_SHA}</id><updated>2026-10-01T00:00:00Z</updated><author><name>public-author</name></author></entry></feed>`,
@@ -164,6 +178,7 @@ test('directive drives two actual-provider stages, exact public source verificat
   assert.equal(result.directiveConsumed, true);
   assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0 });
   assert.deepEqual(result.actualSourceFetches, { attempted: 3, succeeded: 3, failed: 0 });
+  assert.deepEqual(result.actualCatalogRequests, { attempted: 2, succeeded: 2, failed: 0 });
   assert.equal(result.formulaGeneratedCount, 1);
   assert.equal(result.actualBacktestCount, 1, JSON.stringify(result));
   assert.equal(result.paperRegisteredCount, 0);
@@ -175,6 +190,8 @@ test('directive drives two actual-provider stages, exact public source verificat
   });
   assert.equal(ai.count(), 2);
   assert.match(ai.prompts[0], /failedFamilies=NONE/u);
+  assert.match(ai.prompts[0], /PUBLIC_GITHUB_TREE_PATH_CATALOG=/u);
+  assert.match(ai.prompts[0], /ParticipationBreakout\.py/u);
   assert.match(ai.prompts[1], /BEGIN UNTRUSTED SOURCE/u);
   assert.equal(result.selectedNextStrategy.sourceRevision, SOURCE_SHA);
 });
@@ -290,6 +307,65 @@ test('a later release preserves prior state and cannot rediscover the same sourc
   assert.equal(await readFile(oldStatePath, 'utf8'), oldState);
   const nextState = JSON.parse(await readFile(join(root, 'autonomous-research', 'releases', NEXT_SHA, 'state.json'), 'utf8'));
   assert.equal(nextState.researchCodeSha, NEXT_SHA);
+});
+
+
+test('AI cannot invent a strategy path not present in a verified public GitHub tree', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const mismatchedPlan = aiAnswer({
+    summary: 'Invented strategy path',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+    requiredEvidence: ['SOURCE_PATH=strategies/ThisFileDoesNotExist.py', 'LICENSE_PATH=LICENSE'],
+  });
+  let providerCalls = 0;
+  const result = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    fetchImpl: sourceFetch(), datasetLoader,
+    invoke: async ({ policy }) => {
+      providerCalls++;
+      return { provider: policy.provider, model: policy.model, answer: mismatchedPlan };
+    },
+  });
+  assert.equal(result.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(result.reason, 'AI_DISCOVERY_PLAN_NOT_IN_VERIFIED_PUBLIC_CATALOG');
+  assert.equal(providerCalls, 1);
+  assert.deepEqual(result.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0 });
+  assert.deepEqual(result.actualCatalogRequests, { attempted: 2, succeeded: 2, failed: 0 });
+  assert.deepEqual(result.actualSourceFetches, { attempted: 0, succeeded: 0, failed: 0 });
+  assert.equal(result.stagedDossierDigest, null);
+});
+
+test('empty public search fails closed before free AI calls without fabricating a source', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  let calls = 0;
+  const result = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT, datasetLoader,
+    fetchImpl: async () => ({ status: 200, text: async () => JSON.stringify({ items: [] }) }),
+    invoke: async () => { calls++; throw new Error('FREE_AI_MUST_NOT_BE_CALLED'); },
+  });
+  assert.equal(result.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(result.reason, 'PUBLIC_CATALOG_NO_VERIFIED_STRATEGY_PATHS');
+  assert.deepEqual(result.actualCatalogRequests, { attempted: 1, succeeded: 1, failed: 0 });
+  assert.equal(calls, 0);
+  assert.equal(result.actualSourceFetches.succeeded, 0);
+  assert.equal(result.retryAfterAt, Date.parse(AT) + 15 * 60_000);
+});
+
+test('public GitHub API throttling preserves free provider quota and uses bounded transient backoff', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  let calls = 0;
+  const result = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT, datasetLoader,
+    fetchImpl: async () => ({ status: 403, text: async () => 'rate limited' }),
+    invoke: async () => { calls++; throw new Error('FREE_AI_MUST_NOT_BE_CALLED'); },
+  });
+  assert.equal(result.reason, 'PUBLIC_CATALOG_HTTP_403');
+  assert.equal(calls, 0);
+  assert.deepEqual(result.actualCatalogRequests, { attempted: 1, succeeded: 0, failed: 1 });
+  assert.equal(result.retryAfterAt, Date.parse(AT) + 15 * 60_000);
 });
 
 test('AI locator that is absent from fetched source fails closed before Formula or backtest', async (t) => {

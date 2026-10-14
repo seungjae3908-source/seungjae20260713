@@ -153,17 +153,59 @@ activate() {
     research-production-video-discovery.service
     research-production-approved-job-intake.service
   )
+  # Capture the *installed* unit bytes and previous active/enabled flags.
+  # Comparing against prior source code alone cannot verify host rollback.
   declare -gA WAS_ENABLED=()
+  declare -gA WAS_ACTIVE=()
+  declare -gA WAS_INSTALLED=()
+  declare -gA WAS_LOAD_STATE=()
+  declare -ga CORE_UNIT_DEFINITIONS=(
+    research-production@.service
+    research-production-temporal-evidence.service
+    research-production-factory-status.service
+    research-production-maintenance.service
+    research-production-fast-historical.timer
+    research-production-long-history.timer
+    research-production-forward.timer
+    research-production-temporal-evidence.timer
+    research-production-factory-status.timer
+    research-production-maintenance.timer
+  )
+  ROLLBACK_UNITS="$ROOT/.research-production-units-rollback-$$"
+  CUTOVER_MUTATION_STARTED=false
+  CUTOVER_POINTER_SWITCHED=false
+  ROLLBACK_VERIFIED=false
+  PREVIOUS_SHA="$("${SUDO[@]}" git -C "$PREVIOUS_CURRENT" rev-parse HEAD 2>/dev/null || true)"
+  [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ && "$PREVIOUS_CURRENT" == "$RELEASES/$PREVIOUS_SHA" ]] || {
+    echo "RESEARCH_CORE_PREVIOUS_RELEASE_UNVERIFIED" >&2; exit 69;
+  }
+  "${SUDO[@]}" test -f "$ENV_FILE" || { echo "RESEARCH_CORE_PREVIOUS_ENV_MISSING" >&2; exit 69; }
   for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
-    if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
-      WAS_ENABLED["$timer"]=1
+    local load_state
+    load_state="$("${SUDO[@]}" systemctl show "$timer" -p LoadState --value 2>/dev/null || true)"
+    case "$load_state" in
+      loaded|not-found) ;;
+      *) echo "RESEARCH_CORE_UNIT_LOAD_STATE_UNSAFE:$timer:$load_state" >&2; exit 69 ;;
+    esac
+    WAS_LOAD_STATE["$timer"]="$load_state"
+    if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then WAS_ENABLED["$timer"]=1
+    else WAS_ENABLED["$timer"]=0; fi
+    if "${SUDO[@]}" systemctl is-active --quiet "$timer" 2>/dev/null; then WAS_ACTIVE["$timer"]=1
+    else WAS_ACTIVE["$timer"]=0; fi
+  done
+  [[ ! -e "$ROLLBACK_UNITS" && ! -L "$ROLLBACK_UNITS" ]] || {
+    echo "RESEARCH_CORE_ROLLBACK_SNAPSHOT_ALREADY_EXISTS" >&2; exit 69;
+  }
+  "${SUDO[@]}" install -d -o root -g root -m 0700 "$ROLLBACK_UNITS"
+  for unit in "${CORE_UNIT_DEFINITIONS[@]}"; do
+    if "${SUDO[@]}" test -f "/etc/systemd/system/$unit"; then
+      "${SUDO[@]}" cp -p "/etc/systemd/system/$unit" "$ROLLBACK_UNITS/$unit"
+      WAS_INSTALLED["$unit"]=1
     else
-      WAS_ENABLED["$timer"]=0
+      WAS_INSTALLED["$unit"]=0
     fi
   done
-  if "${SUDO[@]}" test -f "$ENV_FILE"; then
-    "${SUDO[@]}" cp -p "$ENV_FILE" "$ROLLBACK_ENV"
-  fi
+  "${SUDO[@]}" cp -p "$ENV_FILE" "$ROLLBACK_ENV"
 
   cleanup_transient() {
     "${SUDO[@]}" rm -rf -- "$STAGED_RELEASE" >/dev/null 2>&1 || true
@@ -190,76 +232,196 @@ activate() {
     done
   }
 
-  stop_oneshot_workloads() {
-    # Stopping a timer does not stop the service it already activated.
-    # Stop only the fixed Research unit list, before switching /current.
-    "${SUDO[@]}" systemctl stop "${ONESHOT_SERVICES[@]}" >/dev/null 2>&1 || true
+  freeze_research_schedules() {
+    # Optional units may not exist on this host. Skip only verified
+    # not-found/masked units; never swallow a real disable failure.
+    local unit load_state failed=false
+    for unit in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
+      load_state="$("${SUDO[@]}" systemctl show "$unit" -p LoadState --value 2>/dev/null || true)"
+      case "$load_state" in
+        not-found|masked) ;;
+        loaded)
+          "${SUDO[@]}" systemctl disable --now "$unit" >/dev/null 2>&1 || {
+            echo "RESEARCH_SCHEDULE_FREEZE_FAILED:$unit" >&2
+            failed=true
+          }
+          ;;
+        *)
+          echo "RESEARCH_SCHEDULE_FREEZE_UNKNOWN:$unit:$load_state" >&2
+          failed=true
+          ;;
+      esac
+    done
+    [[ "$failed" == false ]]
+  }
+
+  require_idle_one_shots() {
+    # Refuse a busy release; never kill in-flight Research to force a cutover.
     local service active_state load_state
     for service in "${ONESHOT_SERVICES[@]}"; do
       active_state="$("${SUDO[@]}" systemctl show "$service" -p ActiveState --value 2>/dev/null || true)"
       load_state="$("${SUDO[@]}" systemctl show "$service" -p LoadState --value 2>/dev/null || true)"
       [[ "$load_state" == 'loaded' || "$load_state" == 'masked' || "$load_state" == 'not-found' ]] || {
-        echo "RESEARCH_WORKLOAD_STATE_UNKNOWN:$service" >&2; return 1
+        echo "RESEARCH_WORKLOAD_STATE_UNKNOWN:$service" >&2; return 1;
       }
       case "$active_state" in
         inactive|failed) ;;
-        *) echo "RESEARCH_WORKLOAD_NOT_STOPPED:$service:$active_state" >&2; return 1 ;;
+        *) echo "RESEARCH_CUTOVER_BUSY:$service:$active_state" >&2; return 1 ;;
       esac
     done
   }
 
-  restore_previous_runtime() {
-    if [[ -n "$PREVIOUS_CURRENT" && -d "$PREVIOUS_CURRENT" ]]; then
-      local rollback_link="$ROOT/.rollback-current-$$"
-      "${SUDO[@]}" rm -f -- "$rollback_link"
-      "${SUDO[@]}" ln -s -- "$PREVIOUS_CURRENT" "$rollback_link"
-      "${SUDO[@]}" mv -Tf -- "$rollback_link" "$CURRENT"
-    fi
-    if "${SUDO[@]}" test -f "$ROLLBACK_ENV"; then
-      "${SUDO[@]}" cp -p "$ROLLBACK_ENV" "$ENV_FILE"
-    fi
-    if [[ -n "$PREVIOUS_CURRENT" && -d "$PREVIOUS_CURRENT/research-production/deploy" ]]; then
-      local source unit timer_name
-      source="$PREVIOUS_CURRENT/research-production/deploy"
-      for unit in research-production@.service research-production-temporal-evidence.service research-production-factory-status.service research-production-maintenance.service; do
-        if "${SUDO[@]}" test -f "$source/$unit"; then
-          "${SUDO[@]}" install -o root -g root -m 0644 "$source/$unit" "/etc/systemd/system/$unit"
-        fi
-      done
-      for timer_name in fast-historical long-history forward temporal-evidence factory-status maintenance; do
-        if "${SUDO[@]}" test -f "$source/research-production-$timer_name.timer"; then
-          "${SUDO[@]}" install -o root -g root -m 0644 "$source/research-production-$timer_name.timer" "/etc/systemd/system/research-production-$timer_name.timer"
-        fi
-      done
-      "${SUDO[@]}" systemctl daemon-reload
-    fi
+  restore_previous_schedules_only() {
+    # Before the /current pointer moves, existing one-shots still use the
+    # previous release. Do not stop them, reload their units, or rewrite env.
     local timer
     for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
-      if [[ "${WAS_ENABLED[$timer]:-0}" == "1" ]]; then
-        "${SUDO[@]}" systemctl enable --now "$timer" >/dev/null 2>&1 || true
+      if [[ "${WAS_LOAD_STATE[$timer]:-}" == not-found ]]; then continue; fi
+      if [[ "${WAS_ENABLED[$timer]:-0}" == 1 ]]; then
+        "${SUDO[@]}" systemctl enable "$timer" >/dev/null 2>&1 || return 1
+      else
+        "${SUDO[@]}" systemctl disable "$timer" >/dev/null 2>&1 || return 1
+      fi
+      if [[ "${WAS_ACTIVE[$timer]:-0}" == 1 ]]; then
+        "${SUDO[@]}" systemctl start "$timer" >/dev/null 2>&1 || return 1
+      else
+        "${SUDO[@]}" systemctl stop "$timer" >/dev/null 2>&1 || return 1
       fi
     done
+    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
+      local enabled=0 active=0 load_state
+      load_state="$("${SUDO[@]}" systemctl show "$timer" -p LoadState --value 2>/dev/null || true)"
+      [[ "$load_state" == "${WAS_LOAD_STATE[$timer]:-}" ]] || {
+        echo "RESEARCH_PRE_CUTOVER_UNIT_LOAD_STATE_MISMATCH:$timer" >&2; return 1;
+      }
+      if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then enabled=1; fi
+      if "${SUDO[@]}" systemctl is-active --quiet "$timer" 2>/dev/null; then active=1; fi
+      [[ "$enabled" == "${WAS_ENABLED[$timer]:-0}" && "$active" == "${WAS_ACTIVE[$timer]:-0}" ]] || {
+        echo "RESEARCH_PRE_CUTOVER_UNIT_STATE_MISMATCH:$timer" >&2; return 1;
+      }
+    done
+    [[ "$(readlink -f "$CURRENT")" == "$PREVIOUS_CURRENT" ]] || {
+      echo "RESEARCH_PRE_CUTOVER_POINTER_CHANGED" >&2; return 1;
+    }
+    echo "RESEARCH_PRODUCTION_PRE_CUTOVER_SCHEDULES_RESTORED=true" >&2
+  }
+
+  restore_pre_cutover_state() {
+    if [[ "${CUTOVER_POINTER_SWITCHED:-false}" == false ]]; then
+      restore_previous_schedules_only
+    else
+      require_idle_one_shots && restore_previous_runtime
+    fi
+  }
+
+  restore_previous_runtime() {
+    [[ -d "$PREVIOUS_CURRENT" && "$PREVIOUS_CURRENT" == "$RELEASES/$PREVIOUS_SHA" ]] || {
+      echo "RESEARCH_ROLLBACK_RELEASE_MISSING" >&2; return 1;
+    }
+    [[ "$("${SUDO[@]}" git -C "$PREVIOUS_CURRENT" rev-parse HEAD 2>/dev/null || true)" == "$PREVIOUS_SHA" ]] || {
+      echo "RESEARCH_ROLLBACK_PREVIOUS_SHA_MISMATCH" >&2; return 1;
+    }
+    "${SUDO[@]}" test -f "$ROLLBACK_ENV" || { echo "RESEARCH_ROLLBACK_ENV_BACKUP_MISSING" >&2; return 1; }
+    local unit
+    for unit in "${CORE_UNIT_DEFINITIONS[@]}"; do
+      if [[ "${WAS_INSTALLED[$unit]:-0}" == 1 ]]; then
+        "${SUDO[@]}" test -f "$ROLLBACK_UNITS/$unit" || {
+          echo "RESEARCH_ROLLBACK_UNIT_BACKUP_MISSING:$unit" >&2; return 1;
+        }
+      fi
+    done
+    local rollback_link="$ROOT/.rollback-current-$$"
+    "${SUDO[@]}" rm -f -- "$rollback_link" || return 1
+    "${SUDO[@]}" ln -s -- "$PREVIOUS_CURRENT" "$rollback_link" || return 1
+    "${SUDO[@]}" mv -Tf -- "$rollback_link" "$CURRENT" || return 1
+    "${SUDO[@]}" cp -p "$ROLLBACK_ENV" "$ENV_FILE" || return 1
+    for unit in "${CORE_UNIT_DEFINITIONS[@]}"; do
+      if [[ "${WAS_INSTALLED[$unit]:-0}" == 1 ]]; then
+        "${SUDO[@]}" install -o root -g root -m 0644 "$ROLLBACK_UNITS/$unit" "/etc/systemd/system/$unit" || return 1
+      else
+        "${SUDO[@]}" rm -f -- "/etc/systemd/system/$unit" || return 1
+      fi
+    done
+    "${SUDO[@]}" systemctl daemon-reload || return 1
+    local timer
+    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
+      # Previously absent optional units must remain absent after rollback.
+      if [[ "${WAS_LOAD_STATE[$timer]:-}" == not-found ]]; then continue; fi
+      if [[ "${WAS_ENABLED[$timer]:-0}" == 1 ]]; then
+        "${SUDO[@]}" systemctl enable "$timer" >/dev/null 2>&1 || return 1
+      else
+        "${SUDO[@]}" systemctl disable "$timer" >/dev/null 2>&1 || return 1
+      fi
+      if [[ "${WAS_ACTIVE[$timer]:-0}" == 1 ]]; then
+        "${SUDO[@]}" systemctl start "$timer" >/dev/null 2>&1 || return 1
+      else
+        "${SUDO[@]}" systemctl stop "$timer" >/dev/null 2>&1 || return 1
+      fi
+    done
+    [[ "$(readlink -f "$CURRENT")" == "$PREVIOUS_CURRENT" ]] || {
+      echo "RESEARCH_ROLLBACK_CURRENT_PATH_MISMATCH" >&2; return 1;
+    }
+    [[ "$("${SUDO[@]}" git -C "$CURRENT" rev-parse HEAD 2>/dev/null || true)" == "$PREVIOUS_SHA" ]] || {
+      echo "RESEARCH_ROLLBACK_CURRENT_SHA_MISMATCH" >&2; return 1;
+    }
+    "${SUDO[@]}" cmp -s "$ROLLBACK_ENV" "$ENV_FILE" || {
+      echo "RESEARCH_ROLLBACK_ENV_MISMATCH" >&2; return 1;
+    }
+    for unit in "${CORE_UNIT_DEFINITIONS[@]}"; do
+      if [[ "${WAS_INSTALLED[$unit]:-0}" == 1 ]]; then
+        "${SUDO[@]}" cmp -s "$ROLLBACK_UNITS/$unit" "/etc/systemd/system/$unit" || {
+          echo "RESEARCH_ROLLBACK_UNIT_BYTES_MISMATCH:$unit" >&2; return 1;
+        }
+      else
+        "${SUDO[@]}" test ! -e "/etc/systemd/system/$unit" || {
+          echo "RESEARCH_ROLLBACK_UNIT_UNEXPECTED:$unit" >&2; return 1;
+        }
+      fi
+    done
+    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
+      local restored_enabled=0 restored_active=0 restored_load_state
+      restored_load_state="$("${SUDO[@]}" systemctl show "$timer" -p LoadState --value 2>/dev/null || true)"
+      [[ "$restored_load_state" == "${WAS_LOAD_STATE[$timer]:-}" ]] || {
+        echo "RESEARCH_ROLLBACK_UNIT_LOAD_STATE_MISMATCH:$timer" >&2; return 1;
+      }
+      if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then restored_enabled=1; fi
+      if "${SUDO[@]}" systemctl is-active --quiet "$timer" 2>/dev/null; then restored_active=1; fi
+      [[ "$restored_enabled" == "${WAS_ENABLED[$timer]:-0}" && "$restored_active" == "${WAS_ACTIVE[$timer]:-0}" ]] || {
+        echo "RESEARCH_ROLLBACK_UNIT_STATE_MISMATCH:$timer" >&2; return 1;
+      }
+    done
+    printf '%s\n' "RESEARCH_PRODUCTION_ROLLBACK=RESTORED_VERIFIED" >&2
   }
 
   fail_safe() {
     local status=$?
-    if (( status != 0 )); then
-      "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
-      if stop_oneshot_workloads; then
-        restore_previous_runtime || true
-        echo "RESEARCH_PRODUCTION_ROLLBACK_ATTEMPTED=true" >&2
+    if (( status != 0 )) && [[ "${CUTOVER_MUTATION_STARTED:-false}" == true ]]; then
+      local freeze_failed=false
+      freeze_research_schedules || freeze_failed=true
+      if [[ "$freeze_failed" == false ]] && restore_pre_cutover_state; then
+        ROLLBACK_VERIFIED=true
+        echo "RESEARCH_PRODUCTION_ACTIVATION_FAILED_ROLLED_BACK=true" >&2
       else
-        echo "RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true" >&2
+        status=86
+        echo "RESEARCH_PRODUCTION_ROLLBACK_FAILED=true" >&2
+        echo "RESEARCH_PRODUCTION_MANUAL_RECOVERY_REQUIRED=true" >&2
       fi
+    elif (( status != 0 )); then
+      echo "RESEARCH_PRODUCTION_PRE_CUTOVER_FAILURE_RUNTIME_UNCHANGED=true" >&2
     fi
     cleanup_transient
-    if (( status != 0 )) && "${SUDO[@]}" test -f "$ROLLBACK_ENV"; then
-      echo "RESEARCH_PRODUCTION_ENV_BACKUP_RETAINED=true" >&2
-    else
+    if (( status == 0 )) || [[ "${ROLLBACK_VERIFIED:-false}" == true ]]; then
       "${SUDO[@]}" rm -f -- "$ROLLBACK_ENV" >/dev/null 2>&1 || true
+      "${SUDO[@]}" rm -rf -- "$ROLLBACK_UNITS" >/dev/null 2>&1 || true
+    else
+      echo "RESEARCH_PRODUCTION_RECOVERY_BACKUPS_RETAINED=true" >&2
     fi
-    return "$status"
+    # Bash ignores a plain return value as the process status of an EXIT
+    # trap. Disarm and exit explicitly so ROLLBACK_FAILED propagates as 86.
+    trap - EXIT
+    exit "$status"
   }
+
   trap fail_safe EXIT
 
   release_is_valid() {
@@ -288,13 +450,8 @@ activate() {
   "${SUDO[@]}" install -d -o investment-research -g investment-research -m 0750 "$STATE"
   "${SUDO[@]}" install -d -o root -g investment-research -m 0750 "$ENV_DIR"
 
-  # Freeze every Research scheduler before changing /current or its SHA-bound environment.
-  # AI/Video and public Watch stay disabled after a successful core cutover
-  # until their own protected exact-SHA gates run. An old watch process keeps
-  # its old module/environment identity even after /current is switched.
-  "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}" >/dev/null 2>&1 || true
-  verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"
-  stop_oneshot_workloads
+  # Stage and verify the pinned release before freezing any old timers.
+  # External checkout failures do not mutate the working Research runtime.
 
   if release_is_valid "$RELEASE"; then
     echo "RESEARCH_RELEASE_REUSED=true"
@@ -327,9 +484,18 @@ activate() {
     exit 76
   fi
 
+  # Never interrupt an active Research one-shot for a release.
+  require_idle_one_shots
+  CUTOVER_MUTATION_STARTED=true
+  # AI/YouTube and Market Watch stay disabled until their separately approved gates.
+  freeze_research_schedules
+  verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"
+  require_idle_one_shots
+
   "${SUDO[@]}" rm -f -- "$NEXT_CURRENT"
   "${SUDO[@]}" ln -s -- "$RELEASE" "$NEXT_CURRENT"
   "${SUDO[@]}" mv -Tf -- "$NEXT_CURRENT" "$CURRENT"
+  CUTOVER_POINTER_SWITCHED=true
   local resolved_current
   resolved_current="$(readlink -f "$CURRENT")"
   [[ "$resolved_current" == "$RELEASE" ]] || {

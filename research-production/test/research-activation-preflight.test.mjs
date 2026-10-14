@@ -154,9 +154,12 @@ test('probe has no mutation, arbitrary execution, PM2 bootstrap, or provider net
 test('core cutover freezes and rolls back every research watcher before switching SHA, never shared app units', () => {
   const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n','\n');
   assert.match(source, /declare -ga WATCH_SERVICES=\(\s*research-production-market-watch\.service\s*\)/u);
-  for (const line of source.split('\n').filter(line=>line.includes('systemctl disable --now')&&line.includes('CORE_TIMERS'))) {
-    assert.ok(line.includes('"${WATCH_SERVICES[@]}"'));
-  }
+  const freeze = source.slice(source.indexOf('freeze_research_schedules() {'), source.indexOf('require_idle_one_shots() {'));
+  assert.match(freeze, /systemctl disable --now/u);
+  assert.match(freeze, /RESEARCH_SCHEDULE_FREEZE_FAILED/u);
+  assert.match(freeze, /RESEARCH_SCHEDULE_FREEZE_UNKNOWN/u);
+  assert.match(freeze, /WATCH_SERVICES/u);
+  assert.doesNotMatch(freeze, /systemctl disable --now .*\|\| true/u);
   assert.match(source, /verify_timers_stopped .*"\$\{WATCH_SERVICES\[@\]\}"/u);
   assert.match(source, /for timer in .*"\$\{WATCH_SERVICES\[@\]\}"/u);
   assert.ok(source.indexOf('verify_timers_stopped "${CORE_TIMERS[@]}"') < source.indexOf('mv -Tf -- "$NEXT_CURRENT" "$CURRENT"'));
@@ -164,24 +167,104 @@ test('core cutover freezes and rolls back every research watcher before switchin
   assert.match(source, /RESEARCH_NODE_ENV_PARSER_REQUIRED/u);
   assert.doesNotMatch(source, /systemctl (?:restart|stop|disable|start).*stock-app|pm2 (?:restart|stop|start)/u);
 });
-test('core cutover stops in-flight research one-shots before any release switch or rollback', () => {
+test('core Research release defers active workloads, stages first, and never masks rollback failures', () => {
   const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
-  assert.match(source, /systemctl stop "\$\{ONESHOT_SERVICES\[@\]\}"/u);
-  assert.match(source, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
-  for (const name of ['CORE_TIMERS', 'AI_TIMERS', 'AI_DAEMONS', 'WATCH_SERVICES', 'ONESHOT_SERVICES']) {
-    assert.ok(source.includes('declare -ga ' + name + '=('), 'EXIT handler must retain ' + name);
+  assert.match(source, /RESEARCH_CUTOVER_BUSY/u);
+  assert.doesNotMatch(source, /systemctl stop "\$\{ONESHOT_SERVICES\[@\]\}"/u);
+  for (const name of ['CORE_TIMERS', 'AI_TIMERS', 'AI_DAEMONS', 'WATCH_SERVICES', 'ONESHOT_SERVICES', 'CORE_UNIT_DEFINITIONS']) {
+    assert.ok(source.includes('declare -ga ' + name + '=('), 'EXIT trap must retain ' + name);
   }
-  assert.ok(source.includes('declare -gA WAS_ENABLED=()'), 'EXIT handler must retain previous enabled state');
-  const freeze = source.indexOf('verify_timers_stopped "${CORE_TIMERS[@]}"');
-  const stop = source.indexOf('stop_oneshot_workloads', freeze);
+  for (const name of ['WAS_ENABLED', 'WAS_ACTIVE', 'WAS_INSTALLED', 'WAS_LOAD_STATE']) {
+    assert.ok(source.includes('declare -gA ' + name + '=()'), 'rollback must snapshot ' + name);
+  }
+  const clone = source.indexOf('git clone --quiet --filter=blob:none');
+  const freeze = source.indexOf('CUTOVER_MUTATION_STARTED=true');
   const cutover = source.indexOf('mv -Tf -- "$NEXT_CURRENT" "$CURRENT"');
-  assert.ok(freeze > 0 && stop > freeze && cutover > stop);
+  assert.ok(clone > 0 && freeze > clone && cutover > freeze);
+  assert.match(source.slice(clone, freeze), /require_idle_one_shots/u);
+  const beforeSwitch = source.slice(freeze, cutover);
+  assert.match(beforeSwitch, /verify_timers_stopped/u);
+  assert.match(beforeSwitch, /require_idle_one_shots/u);
   const rollback = source.slice(source.indexOf('fail_safe() {'), source.indexOf('trap fail_safe EXIT'));
-  assert.ok(rollback.indexOf('stop_oneshot_workloads') < rollback.indexOf('restore_previous_runtime'));
-  assert.match(rollback, /status != 0.*test -f "\$ROLLBACK_ENV"/u);
-  assert.match(rollback, /RESEARCH_PRODUCTION_ENV_BACKUP_RETAINED=true/u);
+  assert.match(source, /require_idle_one_shots && restore_previous_runtime/u);
+  assert.match(rollback, /restore_pre_cutover_state/u);
+  assert.match(source, /RESEARCH_PRODUCTION_PRE_CUTOVER_SCHEDULES_RESTORED=true/u);
+  assert.match(rollback, /RESEARCH_PRODUCTION_ROLLBACK_FAILED=true/u);
+  assert.match(rollback, /status=86/u);
+  assert.match(rollback, /trap - EXIT/u);
+  assert.match(rollback, /exit "\$status"/u);
+  assert.doesNotMatch(rollback, /restore_previous_runtime \|\| true/u);
+  assert.match(rollback, /RESEARCH_PRODUCTION_PRE_CUTOVER_FAILURE_RUNTIME_UNCHANGED=true/u);
   for (const profile of ['fast-historical', 'long-history', 'forward']) {
     assert.ok(source.includes('research-production@' + profile + '.service'));
+  }
+});
+
+test('core Research rollback validates previous SHA, original unit bytes, env and timer state', () => {
+  const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
+  const restore = source.slice(source.indexOf('restore_previous_runtime() {'), source.indexOf('fail_safe() {'));
+  for (const code of ['RESEARCH_ROLLBACK_CURRENT_SHA_MISMATCH', 'RESEARCH_ROLLBACK_UNIT_BYTES_MISMATCH',
+    'RESEARCH_ROLLBACK_ENV_MISMATCH', 'RESEARCH_ROLLBACK_UNIT_LOAD_STATE_MISMATCH', 'RESEARCH_ROLLBACK_UNIT_STATE_MISMATCH',
+    'RESEARCH_PRODUCTION_ROLLBACK=RESTORED_VERIFIED']) {
+    assert.ok(restore.includes(code), code);
+  }
+  assert.doesNotMatch(restore, /systemctl (?:stop|kill) "\$\{ONESHOT_SERVICES\[@\]\}"/u);
+});
+
+test('actual rollback shell reports failure instead of pretending it restored the prior runtime', () => {
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
+  const rollback = source.slice(source.indexOf('fail_safe() {'), source.indexOf('trap fail_safe EXIT'));
+  for (const [mutationStarted, pointerSwitched, busy, restoreResult, expectedStatus, expectedMarker] of [
+    ['false', 'false', 0, 0, 1, 'RESEARCH_PRODUCTION_PRE_CUTOVER_FAILURE_RUNTIME_UNCHANGED=true'],
+    ['true', 'false', 1, 0, 1, 'RESEARCH_PRODUCTION_ACTIVATION_FAILED_ROLLED_BACK=true'],
+    ['true', 'true', 0, 0, 1, 'RESEARCH_PRODUCTION_ACTIVATION_FAILED_ROLLED_BACK=true'],
+    ['true', 'true', 1, 0, 86, 'RESEARCH_PRODUCTION_ROLLBACK_FAILED=true'],
+    ['true', 'true', 0, 1, 86, 'RESEARCH_PRODUCTION_ROLLBACK_FAILED=true'],
+  ]) {
+    const script = [
+      'SUDO=(); CORE_TIMERS=(core.timer); AI_TIMERS=(); AI_DAEMONS=(); WATCH_SERVICES=()',
+      'ROLLBACK_ENV=/not-a-real-file; ROLLBACK_UNITS=/not-a-real-directory',
+      'CUTOVER_MUTATION_STARTED=' + mutationStarted,
+      'CUTOVER_POINTER_SWITCHED=' + pointerSwitched,
+      'ROLLBACK_VERIFIED=false',
+      'systemctl() { return 0; }',
+      'freeze_research_schedules() { return 0; }',
+      'require_idle_one_shots() { return ' + busy + '; }',
+      'restore_previous_runtime() { return ' + restoreResult + '; }',
+      'restore_previous_schedules_only() { return 0; }',
+      'restore_pre_cutover_state() { if [[ "$CUTOVER_POINTER_SWITCHED" == false ]]; then restore_previous_schedules_only; else require_idle_one_shots && restore_previous_runtime; fi; }',
+      'cleanup_transient() { :; }',
+      rollback,
+      'trap fail_safe EXIT; false',
+    ].join('\n');
+    const result = spawnSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, expectedStatus, result.stderr || String(result.error));
+    assert.match(result.stderr, new RegExp(expectedMarker, 'u'));
+    if (expectedStatus === 86) assert.doesNotMatch(result.stderr, /ROLLBACK=RESTORED_VERIFIED/u);
+  }
+});
+
+test('actual Research schedule freeze skips only absent units and surfaces real disable errors', () => {
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
+  const freeze = source.slice(source.indexOf('freeze_research_schedules() {'), source.indexOf('require_idle_one_shots() {'));
+  for (const [loadState, failedDisable, expectedStatus, expectedCalls] of [
+    ['not-found', 0, 0, 0], ['loaded', 0, 0, 1],
+    ['loaded', 1, 1, 1], ['mystery', 0, 1, 0],
+  ]) {
+    const script = [
+      'SUDO=(); CORE_TIMERS=(core.timer); AI_TIMERS=(); AI_DAEMONS=(); WATCH_SERVICES=()',
+      'LOAD_STATE=' + loadState + '; FAIL_DISABLE=' + failedDisable + '; DISABLE_COUNT=0',
+      'systemctl() { if [[ "$1" == show ]]; then printf "%s" "$LOAD_STATE"; return 0; fi;',
+      '  if [[ "$1" == disable ]]; then DISABLE_COUNT=$((DISABLE_COUNT + 1)); return "$FAIL_DISABLE"; fi; return 0; }',
+      freeze,
+      'freeze_research_schedules; code=$?; printf "FINAL=%s DISABLE_COUNT=%s\n" "$code" "$DISABLE_COUNT"; exit "$code"',
+    ].join('\n');
+    const result = spawnSync(bash, ['--noprofile', '--norc', '-c', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, expectedStatus, result.stderr || String(result.error));
+    assert.match(result.stdout, new RegExp('DISABLE_COUNT=' + expectedCalls, 'u'));
+    if (expectedStatus !== 0) assert.match(result.stderr, /RESEARCH_SCHEDULE_FREEZE_(?:FAILED|UNKNOWN)/u);
   }
 });
 test('real shell freeze guards reject running and unknown workloads without switching releases', () => {
@@ -189,7 +272,7 @@ test('real shell freeze guards reject running and unknown workloads without swit
   const core = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const ai = readFileSync(new URL('../deploy/activate-ai-research.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   const guards = [
-    [core.slice(core.indexOf('\n  stop_oneshot_workloads() {'), core.indexOf('\n  restore_previous_runtime() {')), 'stop_oneshot_workloads', 1],
+    [core.slice(core.indexOf('\n  require_idle_one_shots() {'), core.indexOf('\n  restore_previous_runtime() {')), 'require_idle_one_shots', 0],
     [ai.slice(ai.indexOf('\nrequire_idle_one_shots() {'), ai.indexOf('\nresearch_sha() {')), 'disable_timers', 0],
   ];
   for (const [helper, invoke, expectedStops] of guards) {
