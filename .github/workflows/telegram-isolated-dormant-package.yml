@@ -9,6 +9,13 @@ on:
       - docs/telegram-isolated-dormant-package.md
       - api-server/src/telegram-isolated-worker.ts
       - api-server/build.mjs
+      - .github/workflows/telegram-isolated-protected-install.yml
+      - ops/telegram-dormant-artifact-provenance.mjs
+      - .github/tests/telegram-dormant-artifact-provenance.test.mjs
+      - ops/telegram-dormant-artifact-extract.py
+      - .github/tests/telegram_dormant_artifact_extract_test.py
+      - ops/telegram-protected-dormant-install.sh
+      - .github/tests/telegram-isolated-protected-install-contract.test.mjs
       - ops/install-telegram-isolated-dormant-package.mjs
       - .github/tests/install-telegram-isolated-dormant-package.test.mjs
   push:
@@ -20,6 +27,13 @@ on:
       - docs/telegram-isolated-dormant-package.md
       - api-server/src/telegram-isolated-worker.ts
       - api-server/build.mjs
+      - .github/workflows/telegram-isolated-protected-install.yml
+      - ops/telegram-dormant-artifact-provenance.mjs
+      - .github/tests/telegram-dormant-artifact-provenance.test.mjs
+      - ops/telegram-dormant-artifact-extract.py
+      - .github/tests/telegram_dormant_artifact_extract_test.py
+      - ops/telegram-protected-dormant-install.sh
+      - .github/tests/telegram-isolated-protected-install-contract.test.mjs
       - ops/install-telegram-isolated-dormant-package.mjs
       - .github/tests/install-telegram-isolated-dormant-package.test.mjs
 
@@ -55,7 +69,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           node --check ops/prepare-telegram-isolated-release.mjs
           node --check ops/install-telegram-isolated-dormant-package.mjs
-          node --test .github/tests/prepare-telegram-isolated-release.test.mjs .github/tests/install-telegram-isolated-dormant-package.test.mjs
+          node --test .github/tests/prepare-telegram-isolated-release.test.mjs .github/tests/install-telegram-isolated-dormant-package.test.mjs .github/tests/telegram-dormant-artifact-provenance.test.mjs .github/tests/telegram-isolated-protected-install-contract.test.mjs
+          bash -n ops/telegram-protected-dormant-install.sh
+          python3 -m unittest discover -s .github/tests -p telegram_dormant_artifact_extract_test.py -v
       - name: Install pinned workspace and build standalone worker
         run: |
           set -Eeuo pipefail
