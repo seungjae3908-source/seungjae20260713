@@ -117,3 +117,20 @@ succeeds, Production still contains legacy embedded senders. A separate
 owner-reviewed live-trading-preserving application rollout and two-pass
 actual legacy sender quiescence proof are needed before the standalone worker
 can be started. No Replit / Replit Agent is used.
+
+
+## Exact host-transfer authenticity hardening (follow-up)
+
+The protected installer now verifies the latest main and exact tracked Git
+blobs **again after SCP and directly before installing**. Its runner-side
+guard executes over the authenticated SSH input stream rather than by running
+an uploaded shell script from the host's writable ingress directory. The
+host-side JavaScript installer is checked against the exact checkout's
+SHA256 before execution. Any mismatch blocks installation. The post-merge
+success context is also tied to the genuine exact-SHA post-merge GitHub
+Actions workflow run, not a context name alone.
+
+These are controls for a dormant, *not running* artifact. They do not prove
+that the old embedded Telegram workers have stopped, that live trading can
+tolerate a shared API restart, or that Telegram Bot POST and personal
+notifications are accepted. None of those actions are authorized here.
