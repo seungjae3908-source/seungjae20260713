@@ -93,12 +93,23 @@ function requiredCapabilities(capability: SpotLiveCapability): SpotLiveCapabilit
   return [capability];
 }
 
-export function liveExecutionAuthority(environment: Environment = process.env): LiveExecutionAuthority {
-  const authority = String(environment.executionAuthority ?? 'NONE').trim().toUpperCase();
-  if (authority === 'MANUAL' || authority === 'AUTOMATIC' || authority === 'SPOT_LIVE_LIMITED') {
-    return authority;
-  }
+// The authority is configured by the camelCase key `executionAuthority`. Every
+// other live setting uses UPPER_SNAKE_CASE (for example
+// FUTURES_LIVE_EXECUTION_AUTHORITY), so the UPPER_SNAKE_CASE alias
+// SPOT_LIVE_EXECUTION_AUTHORITY is accepted as well. Setting the two keys to
+// different values is ambiguous and fails closed to NONE.
+function parseLiveExecutionAuthority(value: string | undefined): LiveExecutionAuthority | null {
+  const text = String(value ?? '').trim().toUpperCase();
+  if (text === '') return null;
+  if (text === 'MANUAL' || text === 'AUTOMATIC' || text === 'SPOT_LIVE_LIMITED') return text;
   return 'NONE';
+}
+
+export function liveExecutionAuthority(environment: Environment = process.env): LiveExecutionAuthority {
+  const legacy = parseLiveExecutionAuthority(environment.executionAuthority);
+  const named = parseLiveExecutionAuthority(environment.SPOT_LIVE_EXECUTION_AUTHORITY);
+  if (legacy !== null && named !== null && legacy !== named) return 'NONE';
+  return named ?? legacy ?? 'NONE';
 }
 
 export function spotLiveMarketForPlan(
@@ -236,11 +247,18 @@ export function spotLiveRuntimeStatus(environment: Environment = process.env) {
       spotLiveCapabilityEnabled(exchange, capability, environment),
     ])),
   ]);
+  // Block codes explain exactly which server setting keeps order creation off.
+  // They contain setting names only, never setting values or credentials.
+  const orderCreateBlockCodes = Object.fromEntries((['bitget', 'upbit', 'kiwoom', 'toss'] as const).map((exchange) => [
+    exchange,
+    spotLiveCapabilityDecision({ exchange, capability: 'ORDER_CREATE', environment }).blockCodes,
+  ]));
   return {
     executionAuthority: liveExecutionAuthority(environment),
     capabilityAllowlist: [...csvSet(environment.SPOT_LIVE_CAPABILITY_ALLOWLIST)].sort(),
     marketAllowlist: [...csvSet(environment.SPOT_LIVE_MARKET_ALLOWLIST)].sort(),
     providerCapabilities: Object.fromEntries(exchanges),
+    orderCreateBlockCodes,
     hardDeniedCapabilities: Object.fromEntries(
       SPOT_LIVE_HARD_DENIED_CAPABILITIES.map((capability) => [capability, false]),
     ),
