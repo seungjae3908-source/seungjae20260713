@@ -40,8 +40,8 @@ const DAY = 24 * 3_600_000;
 // Five symbols per data source. Long-lived liquid names/ETFs, chosen before
 // seeing any result; the list is part of the trial identity.
 export const COMBINATION_UNIVERSE_V1 = Object.freeze({
-  UPBIT_1H: Object.freeze({ timeframe: '1h', lookbackDays: 540, symbols: Object.freeze(['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE']) }),
-  BITGET_1H: Object.freeze({ timeframe: '1h', lookbackDays: 540, symbols: Object.freeze(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']) }),
+  UPBIT_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze(['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE']) }),
+  BITGET_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']) }),
   YAHOO_KR_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze(['069500', '229200', '005930', '000660', '035420']) }),
   YAHOO_US_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze(['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT']) }),
 });
@@ -117,7 +117,7 @@ async function fetchSourceCandles({ source, symbol, startTime, endTime, fetchImp
   }
   if (source === 'BITGET_1H') {
     const history = await collectBitgetCandles({ client: new BitgetPublicClient({ fetchImpl }), market: 'CRYPTO_FUTURES', symbol,
-      timeframe: '1h', startTime, endTime, maxCandles: 14_000, productType: 'usdt-futures' });
+      timeframe: '1h', startTime, endTime, maxCandles: 20_000, productType: 'usdt-futures' });
     return history.candles;
   }
   const history = await collectYahooStockHistory({ market: source === 'YAHOO_KR_1D' ? 'KR_STOCK' : 'US_STOCK', symbol, startTime, endTime, fetchImpl });
@@ -427,14 +427,14 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     const path = join(root, 'combination-research', 'datasets', source, `${symbol}.json`);
     let cached = await readJson(path);
     const failurePath = join(root, 'combination-research', 'datasets', source, `${symbol}.failure.json`);
-    if (!cached?.candles?.length) {
+    if (!cached?.candles?.length || cached.lookbackDays !== spec.lookbackDays) {
       const failure = await readJson(failurePath);
       if (Number(failure?.retryAfter) > observedAtMs) { log.push(`${source}:${symbol}:RETRY_LATER`); continue; }
       if (fetchBudget.remaining <= 0) { log.push(`${source}:${symbol}:FETCH_BUDGET_NEXT_TICK`); continue; }
       fetchBudget.remaining -= 1;
       try {
         const data = await loader({ source, symbol, fetchImpl });
-        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, fetchedAt: observedAtMs, candles: data.candles };
+        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles };
         await atomicJson(path, cached);
         log.push(`${source}:${symbol}:FETCHED:${data.candles.length}`);
       } catch (error) {
@@ -526,7 +526,7 @@ export async function runCombinationSearchLaneV1({
     const datasets = sourceCache.get(source);
     const statePath = join(root, 'combination-research', 'lanes', lane.id, 'state.json');
     const prior = await readJson(statePath);
-    const symbolKey = datasets.map((row) => row.symbol).join(',');
+    const symbolKey = `${datasets.map((row) => row.symbol).join(',')}|${COMBINATION_UNIVERSE_V1[source].lookbackDays}d`;
     // A different atom library or symbol set is a different experiment.
     const fresh = prior?.atomLibraryVersion !== COMBINATION_ATOM_LIBRARY_VERSION || prior?.symbolKey !== symbolKey;
     const trials = fresh ? {} : { ...(prior?.trials ?? {}) };
