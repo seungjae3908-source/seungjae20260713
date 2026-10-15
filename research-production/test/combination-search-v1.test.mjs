@@ -190,3 +190,41 @@ test('Korean report explains progress, verdicts and data problems in plain words
   assert.match(text, /AI 사용 0회/);
   assert.match(text, /기준선\(조건 없이 아무 때나 진입\)/);
 });
+
+test('survivors get exactly one sealed-2026 holdout check, cached and reported in Korean', async (t) => {
+  const root = await tempRoot(t);
+  const lane = LANE('US_STOCK_LONG');
+  const drift = (seed, start, n) => {
+    let s = seed; const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    const out = []; let price = 100;
+    for (let i = 0; i < n; i += 1) {
+      const open = price; const close = Math.max(1, open * (1 + ((rnd() - 0.45) * 0.03)));
+      out.push({ timestamp: start + (i * 86_400_000), open, close, high: Math.max(open, close) * 1.004, low: Math.min(open, close) * 0.996, volume: 100 + (rnd() * 100) });
+      price = close;
+    }
+    return out;
+  };
+  let holdoutCalls = 0;
+  const datasetLoader = async ({ source, symbol }) => ({ source, symbol, timeframe: '1d', candles: drift(symbol.length * 7 + 3, Date.UTC(2021, 0, 4), 1_700).filter((row) => row.timestamp < Date.UTC(2026, 0, 1)) });
+  const holdoutLoader = async ({ source, symbol }) => { holdoutCalls += 1; return { source, symbol, timeframe: '1d', candles: drift(symbol.length * 11 + 5, Date.UTC(2026, 0, 1), 200) }; };
+  // Loose policy so pure drift produces survivors; the holdout path is what is tested.
+  const policy = { ...(await import('../src/combination-search-lane-v1.mjs')).COMBINATION_POLICY_V1,
+    falseDiscoveryRate: 1, minimumProfitFactor: 0, minimumSymbolBreadth: 0, minimumPositiveWindows: 0 };
+  const run = (at) => runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, holdoutLoader, policy,
+    maximumFetchesPerTick: 20, budgetMs: 600_000, now: () => at });
+  const statePath = join(root, 'combination-research', 'lanes', lane.id, 'state.json');
+  const first = await run('2026-10-15T00:00:00.000Z');
+  const afterFirst = JSON.parse(await readFile(statePath, 'utf8')).holdout;
+  assert.ok(Object.keys(afterFirst).length > 0);
+  const second = await run('2026-10-15T00:10:00.000Z');
+  assert.equal(holdoutCalls, 5, 'holdout candles fetched once per symbol');
+  const afterSecond = JSON.parse(await readFile(statePath, 'utf8')).holdout;
+  for (const [id, check] of Object.entries(afterFirst)) {
+    assert.equal(check.oneTimeOnly, true);
+    assert.equal(check.period.start, '2026-01-01');
+    assert.deepEqual(afterSecond[id], check, 'a checked survivor is never re-evaluated');
+  }
+  const text = formatCombinationReportKoV1(second);
+  assert.match(text, /2026 봉인 데이터 1회 확인/);
+  assert.ok(first.lanes[0].holdoutChecked > 0);
+});
