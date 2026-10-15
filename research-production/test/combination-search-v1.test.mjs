@@ -108,11 +108,17 @@ test('classification requires FDR, breadth, walk-forward and enough symbols', ()
   const base = { status: 'WATCH', atoms: ['T_CLOSE_ABOVE_SMA50'], validation: { profitFactor: 1.5 }, symbolBreadth: 0.8, walkForward: { positiveWindows: 4 } };
   const trials = { a: { ...base, trialId: 'a', pValue: 0.0001 }, b: { ...base, trialId: 'b', pValue: 0.0001, symbolBreadth: 0.4 } };
   for (let k = 0; k < 20; k += 1) trials[`r${k}`] = { ...base, trialId: `r${k}`, status: 'REJECT', pValue: 1 };
-  const out = Object.fromEntries(classifyLaneTrialsV1(trials, { symbolCount: 5 }).map((row) => [row.trialId, row.finalStatus]));
+  const baselines = { X1: { validation: { meanReturn: 0.001 } } };
+  base.exitId = 'X1';
+  for (const row of Object.values(trials)) { row.exitId = 'X1'; row.validation = { profitFactor: 1.5, meanReturn: 0.004 }; }
+  const out = Object.fromEntries(classifyLaneTrialsV1(trials, { symbolCount: 5, baselines }).map((row) => [row.trialId, row.finalStatus]));
   assert.equal(out.a, 'SURVIVOR');
   assert.equal(out.b, 'WATCH');
-  const few = Object.fromEntries(classifyLaneTrialsV1(trials, { symbolCount: 2 }).map((row) => [row.trialId, row.finalStatus]));
+  const few = Object.fromEntries(classifyLaneTrialsV1(trials, { symbolCount: 2, baselines }).map((row) => [row.trialId, row.finalStatus]));
   assert.equal(few.a, 'WATCH');
+  // A bull market lifts every long entry: not beating "just be in the market" is not a pass.
+  const bull = Object.fromEntries(classifyLaneTrialsV1(trials, { symbolCount: 5, baselines: { X1: { validation: { meanReturn: 0.01 } } } }).map((row) => [row.trialId, row.finalStatus]));
+  assert.equal(bull.a, 'WATCH');
 });
 
 test('lane runner is bounded per tick, persists progress, seals 2026 and finds no survivor in pure noise', async (t) => {
@@ -182,4 +188,5 @@ test('Korean report explains progress, verdicts and data problems in plain words
   assert.match(text, /합격 \d+ · 관찰 \d+ · 탈락 \d+/);
   assert.match(text, /035420: 실패 \(YAHOO_HTTP_404\)/);
   assert.match(text, /AI 사용 0회/);
+  assert.match(text, /기준선\(조건 없이 아무 때나 진입\)/);
 });
