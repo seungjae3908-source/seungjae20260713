@@ -268,7 +268,11 @@ export async function runResearchAiIsolatedTransitionV2({
     maxCalls: Number(env.RESEARCH_AI_MAX_CALLS_PER_SCAN ?? 3),
   });
   verifyReview(review);
-  const video = await runVideo({ repoRoot, stateRoot: isolatedStateRoot, researchSha, env });
+  // The isolated release is cloned and verified at the exact TARGET_SHA by the
+  // root-run activation script (isolated_release_is_valid). Re-reading its git
+  // HEAD here as the research user hits git's ownership guard on the root-owned
+  // clone, exactly as the review step above already avoids.
+  const video = await runVideo({ repoRoot, stateRoot: isolatedStateRoot, researchSha, env, verifyGitHead: false });
   verifyVideo(video);
 
   const result = Object.freeze({
