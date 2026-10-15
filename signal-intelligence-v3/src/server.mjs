@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
 import { currentPublicCyclePublication } from './public-cycle-progress-v2.mjs';
 
@@ -10,7 +10,6 @@ const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA || '').trim().toLowerCase();
 const STATE_FILE = resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE || './state/latest-snapshot.json');
 const MAX_STATE_AGE_MS = Number(process.env.SIGNAL_INTELLIGENCE_MAX_STATE_AGE_MS || 15 * 60_000);
-const SCORECARD_FILE = join(dirname(STATE_FILE), 'forward-scorecard.json');
 const PRODUCER_PATH = String(process.env.SIGNAL_INTELLIGENCE_PRODUCER_PATH || '').trim();
 
 if (!/^([0-9a-f]{40})$/.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
@@ -158,16 +157,6 @@ const server = createServer(async (req, res) => {
       realOrderAllowed: false,
       liveTrading: false,
     });
-  }
-
-  // Forward paper track record: virtual positions only, written by the cycle.
-  if (url.pathname === '/v1/scorecard') {
-    try {
-      const card = JSON.parse(await readFile(SCORECARD_FILE, 'utf8'));
-      return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, scorecard: card, executionAuthority: 'NONE', realOrderAllowed: false });
-    } catch {
-      return json(res, 503, { ok: false, error: 'SCORECARD_NOT_READY', executionAuthority: 'NONE' });
-    }
   }
 
   const state = await loadSnapshot();
