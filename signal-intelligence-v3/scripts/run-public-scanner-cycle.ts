@@ -442,8 +442,11 @@ async function runForwardLedger(snapshot, nowMs) {
       ledger: opened.ledger, nowMs, fetchCandles, concurrency: 4, deadlineMs: 45_000,
     }));
     await atomicJson(LEDGER_FILE, updated.ledger);
-    await atomicJson(SCORECARD_FILE, buildScorecard(updated.ledger, nowMs));
+    const scorecard = buildScorecard(updated.ledger, nowMs);
+    await atomicJson(SCORECARD_FILE, scorecard);
     return {
+      scorecard,
+      summary: {
       ok: true,
       opened: opened.opened.length,
       skippedNow: opened.skipped.length,
@@ -452,10 +455,11 @@ async function runForwardLedger(snapshot, nowMs) {
       closedTotal: updated.ledger.closed.length,
       fetchErrors: updated.errors.length,
       executionAuthority: 'NONE',
+      },
     };
   } catch (error) {
     // The ledger is an observer: it must never break the signal cycle.
-    return { ok: false, error: error instanceof Error ? error.message.split(':')[0].slice(0, 80) : 'LEDGER_FAILED', executionAuthority: 'NONE' };
+    return { scorecard: null, summary: { ok: false, error: error instanceof Error ? error.message.split(':')[0].slice(0, 80) : 'LEDGER_FAILED', executionAuthority: 'NONE' } };
   }
 }
 
@@ -689,11 +693,15 @@ async function main() {
         + (row.error ? 1 : 0), 0),
     }];
   }));
+  // Virtual positions only; served to readers inside the snapshot (GET /v1/signals).
+  const forwardLedgerRun = await runForwardLedger(snapshot, Date.now());
+  const forwardLedger = forwardLedgerRun.summary;
+  snapshot.forwardLedger = forwardLedger;
+  snapshot.forwardScorecard = forwardLedgerRun.scorecard;
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
   await atomicJson(CYCLE_STATE_FILE, state);
   await atomicJson(SNAPSHOT_FILE, snapshot);
-  const forwardLedger = await runForwardLedger(snapshot, Date.now());
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
