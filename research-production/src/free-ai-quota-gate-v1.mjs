@@ -9,7 +9,8 @@ import { dirname, join, resolve } from 'node:path';
 
 export const FREE_AI_QUOTA_GATE_CONTRACT_V1 = 'free-ai-quota-gate/v1';
 const MINUTE = 60_000;
-const RATE_LIMIT_PATTERN = /RATE_LIMITED|HTTP_429|QUOTA|RESOURCE_EXHAUSTED/u;
+// Only real provider limits. Policy labels such as CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN are not limits.
+const RATE_LIMIT_PATTERN = /RATE_LIMITED|HTTP_429|RESOURCE_EXHAUSTED|QUOTA_EXCEEDED/u;
 
 export function freeAiQuotaGatePathV1(stateRoot) {
   return join(resolve(String(stateRoot)), 'latest', 'free-ai-quota-gate-v1.json');
@@ -69,6 +70,8 @@ export function decideFreeAiRunV1({ gate, nowMs, researchCodeSha, intervalMinute
   }
   // A newly activated release always gets one AI pass (activation one-shot proof).
   if (gate?.lastResearchCodeSha !== researchCodeSha) return Object.freeze({ run: true, reason: 'NEW_RELEASE', nextAiAt: nowMs });
+  // A rate-limited attempt did no useful AI work: retry as soon as its pause ends.
+  if (Number(gate?.consecutiveRateLimits ?? 0) > 0) return Object.freeze({ run: true, reason: 'RETRY_AFTER_PAUSE', nextAiAt: nowMs });
   const last = Number(gate?.lastAiRunAt ?? 0);
   const due = last + (intervalMinutes * MINUTE);
   if (!(last > 0) || due <= nowMs + MINUTE) return Object.freeze({ run: true, reason: 'DUE', nextAiAt: nowMs });
