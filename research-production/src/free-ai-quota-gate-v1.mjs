@@ -69,6 +69,8 @@ export function decideFreeAiRunV1({ gate, nowMs, researchCodeSha, intervalMinute
   }
   // A newly activated release always gets one AI pass (activation one-shot proof).
   if (gate?.lastResearchCodeSha !== researchCodeSha) return Object.freeze({ run: true, reason: 'NEW_RELEASE', nextAiAt: nowMs });
+  // A rate-limited attempt did no useful AI work: retry as soon as its pause ends.
+  if (Number(gate?.consecutiveRateLimits ?? 0) > 0) return Object.freeze({ run: true, reason: 'RETRY_AFTER_PAUSE', nextAiAt: nowMs });
   const last = Number(gate?.lastAiRunAt ?? 0);
   const due = last + (intervalMinutes * MINUTE);
   if (!(last > 0) || due <= nowMs + MINUTE) return Object.freeze({ run: true, reason: 'DUE', nextAiAt: nowMs });
