@@ -7,6 +7,7 @@
 // real filing to back it. The overall score is the average of the per-item
 // scores. If the live feed can't be loaded, risk degrades to the LOW default.
 import { getCatalogEntry, type Market } from '../data/catalog';
+import { logProviderFailure } from '../lib/provider-failure-log';
 import {
   FilingService,
   type FilingItem,
@@ -325,7 +326,7 @@ export const RiskAnalysisService = {
         feedOk = true;
       }
     } catch (err) {
-      console.error('risk filing feed unavailable:', err);
+      logProviderFailure('risk filing feed unavailable:', err);
     }
 
     const items =
