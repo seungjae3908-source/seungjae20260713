@@ -90,6 +90,7 @@ export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
   "research-production/bin/stock-source-preflight.mjs",
   "research-production/deploy/activate-ai-research.sh",
   "research-production/deploy/research-production-ai-review.service",
+  "research-production/deploy/research-production-ai-review.timer",
   "research-production/src/autonomous-research-cycle-v2.mjs",
   "research-production/src/autonomous-research-discovery-v2.mjs",
   "research-production/src/autonomous-research-closed-loop-v1.mjs",
