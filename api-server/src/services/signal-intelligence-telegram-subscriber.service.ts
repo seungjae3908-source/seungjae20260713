@@ -9,7 +9,8 @@ import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
 } from './telegram-market-room.service';
-import { sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
+import { normalizeTelegramHttpUrl, sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
+import { renderSignalMessageV2, signalMessageInputFromV3Row } from './telegram-signal-message-v2.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
   type MemberWatchlistTelegramProducerResult,
@@ -277,10 +278,34 @@ export function buildSignalIntelligenceTelegramInput(
   serviceSha: string,
   now = new Date(),
   episodeKey?: string,
+  row?: Record<string, any> | null,
 ): TelegramAlertInput | null {
   const type = alertType(event);
   const destinationChatId = chatIdForMarket(event.market);
   if (!type || !destinationChatId) return null;
+  if (row !== undefined) {
+    // Owner-approved v2 layout (2026-10-15). A candidate whose plan or
+    // evidence is incomplete is not sent at all rather than sent partially.
+    if (event.type !== 'NEW_CANDIDATE' || !row) return null;
+    const input = signalMessageInputFromV3Row(row);
+    const message = input ? renderSignalMessageV2(input, {
+      appBaseUrl: normalizeTelegramHttpUrl(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL),
+      nowMs: now.getTime(),
+    }) : null;
+    if (!message) return null;
+    return {
+      type,
+      title: message.title,
+      symbol: event.symbol,
+      market: event.market,
+      details: message.details,
+      buttons: message.buttons.length ? message.buttons : undefined,
+      destinationChatId,
+      dedupeKey: episodeKey ?? `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
+      duplicateWindowMs: 14 * 24 * 60 * 60 * 1000,
+      cooldownMs: 0,
+    };
+  }
   return {
     type,
     title: alertTitle(event),
@@ -609,7 +634,7 @@ export class SignalIntelligenceTelegramSubscriber {
           result.failed += 1;
         }
 
-        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now, episodeKey);
+        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now, episodeKey, row ?? null);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
         if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
         if (await this.store.hasUnconfirmed(alert.dedupeKey, now)) {
