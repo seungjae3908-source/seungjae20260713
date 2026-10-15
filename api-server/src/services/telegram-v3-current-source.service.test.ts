@@ -385,6 +385,25 @@ test('Telegram V3 separately rejects expired candidates and fabricated page/card
  }
 });
 
+test('holdout-passed research rule replaces the scanner backtest artifact only for its own research identity',()=>{
+ const research:any=fixture();
+ const origin=research.rows[0].provenance;
+ origin.backtestQualityStatus='missing';
+ assert.equal(validTelegramV3CurrentSource(research,NOW),false);
+ origin.researchEvidence={source:'RESEARCH_COMBINATION_HOLDOUT_PASSED',ruleId:'r1'};
+ origin.paperIdentity.strategyId='COMBINATION_RESEARCH';
+ assert.equal(validTelegramV3CurrentSource(research,NOW),true);
+ for(const change of [
+   (s:any)=>{s.rows[0].provenance.researchEvidence.source='RESEARCH_SURVIVOR_ONLY';},
+   (s:any)=>{s.rows[0].provenance.paperIdentity.strategyId='scanner-swing-v1';},
+   (s:any)=>{s.rows[0].validationTier='FORWARD_VALIDATED';s.events[0].validationTier='FORWARD_VALIDATED';},
+   (s:any)=>{s.rows[0].provenance.profitBlockers=['PAPER_IDENTITY_REQUIRED'];},
+ ]){
+   const forged:any=structuredClone(research);change(forged);
+   assert.equal(validTelegramV3CurrentSource(forged,NOW),false);
+ }
+});
+
 test('stable source-day episode identity is independent of release SHA and duplicate polls',()=>{
  const s:any=fixture();
  const key=verifiedTelegramV3EpisodeKey(s.rows[0],NOW);
