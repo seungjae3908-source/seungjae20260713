@@ -29,6 +29,7 @@ import {
   selectSignalAdmittedHandoffEntries,
 } from '../src/auto-trading-handoff-bridge.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
+import { DEFAULT_RESEARCH_EVIDENCE_FILE, readResearchEvidence, researchInputsForCards } from '../src/research-evidence-bridge.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { validateMemberAutoTradingPaperHandoff } from '../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 
@@ -39,6 +40,8 @@ const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ??
 const HANDOFF_FILE = String(process.env.SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE
   ?? '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json').trim();
 const QUALITY_ROOT = String(process.env.SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT ?? '').trim();
+// Read-only research export: holdout-passed combination rules. Empty string disables.
+const RESEARCH_EVIDENCE_FILE = String(process.env.SIGNAL_INTELLIGENCE_RESEARCH_EVIDENCE_FILE ?? DEFAULT_RESEARCH_EVIDENCE_FILE).trim();
 // These are the existing public-only producer identities used by the canonical
 // Paper observer. Signal IDs include memberId, so a different value makes an
 // exact canonical handoff join structurally impossible.
@@ -158,6 +161,33 @@ async function canonicalScannerQuality() {
         : String(error?.message ?? 'SCANNER_QUALITY_ARTIFACT_INVALID').split(':')[0],
     };
   }
+}
+
+function finitePrice(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Display-only plan for Telegram/app: copied facts, never execution input. */
+function signalPlanForCard(card) {
+  if (!card) return null;
+  const evidence = Array.isArray(card.evidence) ? card.evidence : [];
+  const reasons = evidence.flatMap((item) => (typeof item === 'string' ? [item]
+    : item?.status === 'matched' && Array.isArray(item.reasons) ? item.reasons : []))
+    .filter((text) => typeof text === 'string' && text.trim()).map((text) => text.trim().slice(0, 120)).slice(0, 5);
+  return {
+    name: typeof card.name === 'string' ? card.name.slice(0, 80) : null,
+    price: finitePrice(card.price),
+    entryZone: card.pricePlan?.entryZone
+      ? { from: finitePrice(card.pricePlan.entryZone.from), to: finitePrice(card.pricePlan.entryZone.to) } : null,
+    stopLoss: finitePrice(card.pricePlan?.stopLoss),
+    targets: (Array.isArray(card.pricePlan?.targets) ? card.pricePlan.targets : []).map(finitePrice).filter(Boolean).slice(0, 3),
+    reasons,
+    dataSources: Array.isArray(card.dataSources) ? card.dataSources.slice(0, 5) : [],
+    signalGrade: card.signalGrade ?? null,
+    observedAt: card.observedAt ?? null,
+    executionAuthority: 'NONE',
+  };
 }
 
 function retainedKey(input) {
@@ -367,6 +397,7 @@ async function main() {
   const nowMs = Date.now();
   let handoffState = await canonicalHandoff(nowMs);
   const scannerQualityState = await canonicalScannerQuality();
+  const researchState = await readResearchEvidence(RESEARCH_EVIDENCE_FILE, nowMs);
   const sourceCycleId = randomUUID();
   pruneRetained(state, nowMs);
 
@@ -385,6 +416,7 @@ async function main() {
       const status = decision.status;
       const executionEvidence = publicExecutionEvidence(response.execution, response.failures);
       let adapted = [];
+      let researchByCard = new Map();
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       let bridgeDiagnostics = { scanned: response.cards.length, joined: 0,
         blocked: response.cards.length, sGradeScanned: response.cards.filter((card) => card.signalGrade === 'S').length,
@@ -394,9 +426,17 @@ async function main() {
         handoffState = await canonicalHandoff(laneNowMs);
         clearScannedWindow(state, lane.id, cursor);
         const bridge = canonicalAdapterInputsForCards(response.cards, lane.timeframe, handoffState.handoff);
-        const admissionInputs = bridge.inputs.filter((input) => input.paperIdentity && input.card?.signalGrade === 'S');
+        // Forward-validated handoff evidence wins; otherwise a holdout-passed
+        // research rule that fires on this symbol's latest closed candle.
+        const research = await researchInputsForCards(response.cards, {
+          market: lane.market, timeframe: lane.timeframe, evidence: researchState, nowMs: laneNowMs,
+        });
+        researchByCard = research.inputs;
+        const merged = bridge.inputs.map((input) => (input.paperIdentity ? input : (research.inputs.get(input.card?.signalId) ?? input)));
+        const admissionInputs = merged.filter((input) => input.paperIdentity && input.card?.signalGrade === 'S');
         bridgeDiagnostics = {
           ...bridge.diagnostics,
+          research: research.diagnostics,
           handoffStatus: handoffState.status,
           sGradeScanned: response.cards.filter((card) => card.signalGrade === 'S').length,
           joinedSGrade: admissionInputs.length,
@@ -418,6 +458,7 @@ async function main() {
           state.retained[retainedKey(input)] = {
             card,
             timeframe: lane.timeframe,
+            research: card ? researchByCard.get(card.signalId) ?? null : null,
             leverageEvidence: input.leverageEvidence,
             provenance: { laneId: lane.id, cursor, sourceCycleId, rosterId },
             expiresAt: card?.expiresAt ?? fallbackExpiry(lane, laneNowMs),
@@ -442,6 +483,21 @@ async function main() {
           insufficientDataCount: executionEvidence.insufficientDataCount,
           filteredByStrategyCount: executionEvidence.filteredByStrategyCount,
           staleCount: executionEvidence.staleCount },
+        // Exact page proof consumed by the Telegram V3 current-source barrier.
+        publicExecutionDiagnostic: {
+          state: response.execution.completedCount === response.execution.requestedCount
+            && response.execution.partial === false && response.execution.timedOut === false
+            && response.execution.cancelled !== true
+            ? 'PAGE_EXECUTION_COMPLETE' : 'PAGE_EXECUTION_INCOMPLETE',
+          requested: response.execution.requestedCount,
+          started: response.execution.startedCount,
+          completed: response.execution.completedCount,
+          partial: response.execution.partial,
+          timedOut: response.execution.timedOut,
+          providerErrors: response.execution.providerErrorCount,
+          timeouts: response.execution.timeoutCount,
+          failuresObserved: response.failures.length,
+        },
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -495,9 +551,16 @@ async function main() {
   handoffState = await canonicalHandoff(publicationNowMs);
   const inputs = Object.values(state.retained)
     .map((row) => {
-      const rebound = canonicalAdapterInputForCard(row.card, row.timeframe, handoffState.handoff);
+      const handoffInput = canonicalAdapterInputForCard(row.card, row.timeframe, handoffState.handoff);
+      // A research-backed row stays joinable only while its rule is still exported.
+      const researchStillValid = row.research?.researchEvidence?.ruleId
+        && researchState.rules.some((rule) => rule.ruleId === row.research.researchEvidence.ruleId);
+      const rebound = handoffInput.paperIdentity || !researchStillValid ? handoffInput : row.research;
       const adapted = adaptCanonicalScannerCard({ ...rebound, leverageEvidence: row.leverageEvidence }, { nowMs: publicationNowMs });
-      return adapted ? { ...adapted, provenance: { ...adapted.provenance, ...row.provenance } } : null;
+      return adapted ? { ...adapted, provenance: { ...adapted.provenance, ...row.provenance,
+        sourceExpiresAt: row.expiresAt ?? null,
+        signalPlan: signalPlanForCard(row.card),
+        researchEvidence: rebound === row.research ? row.research.researchEvidence : null } } : null;
     })
     .filter(Boolean);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
@@ -514,6 +577,8 @@ async function main() {
       entryCount: handoffState.handoff?.entryCount ?? 0 },
     scannerQuality: { status: scannerQualityState.status, blocker: scannerQualityState.blocker,
       entryCount: scannerQualityState.artifact?.entries?.length ?? 0 },
+    researchEvidence: { status: researchState.status, blocker: researchState.blocker,
+      ruleCount: researchState.rules.length, generatedAt: researchState.generatedAt ?? null },
     releaseStateReset: releaseChanged,
   };
   const publication = currentPublicCyclePublication(snapshot);

@@ -58,6 +58,8 @@ function fixture(){
        laneId:'US_SWING_60M',cursor:0,sourceCycleId:EPOCH,
        scannerSignalId:'signal-aapl-1',
        sourceExpiresAt:new Date(NOW+60_000).toISOString(),
+       signalPlan:{name:'Apple',price:230,entryZone:{from:229,to:231},stopLoss:224,
+         targets:[238,245],reasons:['20일 고점 돌파'],executionAuthority:'NONE'},
        edgeSource:'CANONICAL_PROFIT_EVIDENCE_READY',
        profitEvidenceStatus:'READY',backtestQualityStatus:'verified',
        costPolicyId:'runtime-cost-v1',profitBlockers:[] as string[],
@@ -382,6 +384,59 @@ test('Telegram V3 separately rejects expired candidates and fabricated page/card
  ]){
    const forged:any=fixture();change(forged);
    assert.equal(validTelegramV3CurrentSource(forged,NOW),false);
+ }
+});
+
+test('holdout-passed research rule replaces the scanner backtest artifact only for its own research identity',()=>{
+ const research:any=fixture();
+ const origin=research.rows[0].provenance;
+ origin.backtestQualityStatus='missing';
+ assert.equal(validTelegramV3CurrentSource(research,NOW),false);
+ origin.researchEvidence={source:'RESEARCH_COMBINATION_HOLDOUT_PASSED',ruleId:'r1'};
+ origin.paperIdentity.strategyId='COMBINATION_RESEARCH';
+ assert.equal(validTelegramV3CurrentSource(research,NOW),true);
+ for(const change of [
+   (s:any)=>{s.rows[0].provenance.researchEvidence.source='RESEARCH_SURVIVOR_ONLY';},
+   (s:any)=>{s.rows[0].provenance.paperIdentity.strategyId='scanner-swing-v1';},
+   (s:any)=>{s.rows[0].validationTier='FORWARD_VALIDATED';s.events[0].validationTier='FORWARD_VALIDATED';},
+   (s:any)=>{s.rows[0].provenance.profitBlockers=['PAPER_IDENTITY_REQUIRED'];},
+ ]){
+   const forged:any=structuredClone(research);change(forged);
+   assert.equal(validTelegramV3CurrentSource(forged,NOW),false);
+ }
+});
+
+test('a verified candidate is sent in the owner v2 layout; a row without a plan is not sent',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'telegram-v3-layout-'));
+ const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL,beforeUs=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const beforeApp=process.env.PUBLIC_APP_URL;
+ const sent:any[]=[];let shot:any=fixture();
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   process.env.PUBLIC_APP_URL='https://lsj119.com';
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(path.join(dir,'layout.json')),
+     async(input:any)=>{sent.push(input);return {ok:true as const,attempts:1};},
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:SHA,executionAuthority:'NONE',snapshot:shot}),{status:200}),
+     async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const}),
+   );
+   let result=await subscriber.runOnce(new Date(NOW));
+   assert.equal(result.publicDelivered,1);
+   assert.equal(sent[0].title,'🟢 [해외주식] Apple (AAPL) · 매수 신호');
+   assert.match(sent[0].details,/📌 근거\n· 20일 고점 돌파 \(검색기\)/u);
+   assert.match(sent[0].details,/🎯 계획\n· 매수 1·2·3차 30\/30\/40%/u);
+   assert.deepEqual(sent[0].buttons[0].map((b:any)=>b.text),['🛒 구매','📊 차트']);
+   shot=fixture();delete shot.rows[0].provenance.signalPlan;
+   shot.rows[0].sourceAsOf=new Date(NOW-4_000).toISOString();
+   result=await subscriber.runOnce(new Date(NOW));
+   assert.equal(sent.length,1);
+   assert.equal(result.publicDelivered,0);
+ }finally{
+   for(const [k,v] of [['SIGNAL_INTELLIGENCE_URL',beforeUrl],['TELEGRAM_US_STOCK_CHAT_ID',beforeUs],['PUBLIC_APP_URL',beforeApp]] as const){
+     if(v===undefined)delete process.env[k];else process.env[k]=v;
+   }
+   await rm(dir,{recursive:true,force:true});
  }
 });
 
