@@ -161,3 +161,27 @@ test('NaN, Infinity and nonpositive freshness limits are rejected', async () => 
     assert.match(stderr, /SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID/);
   }
 });
+
+test('server serves the forward paper scorecard read-only and reports not-ready without it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'signal-v3-score-'));
+  const state = join(dir, 'snapshot.json');
+  const port = 19000 + Math.floor(Math.random() * 1000);
+  await writeFile(state, `${JSON.stringify(runSignalIntelligenceV3([candidate()]))}\n`);
+  const server = await startServer(state, port);
+  try {
+    const missing = await fetch(`http://127.0.0.1:${port}/v1/scorecard`);
+    assert.equal(missing.status, 503);
+    assert.equal((await missing.json()).error, 'SCORECARD_NOT_READY');
+    await writeFile(join(dir, 'forward-scorecard.json'), `${JSON.stringify({ schemaVersion: 1, overall: { trades: 3 }, executionAuthority: 'NONE' })}\n`);
+    const ready = await fetch(`http://127.0.0.1:${port}/v1/scorecard`);
+    assert.equal(ready.status, 200);
+    const body = await ready.json();
+    assert.equal(body.scorecard.overall.trades, 3);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.realOrderAllowed, false);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/v1/scorecard`, { method: 'POST' })).status, 405);
+  } finally {
+    server.child.kill('SIGTERM');
+    await rm(dir, { recursive: true, force: true });
+  }
+});
