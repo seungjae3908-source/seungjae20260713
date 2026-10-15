@@ -14,5 +14,5 @@ console.log(JSON.stringify({
   proxyConfigured: Boolean(process.env.HTTPS_PROXY || process.env.HTTP_PROXY),
   exactHosts: [...new Set(PUBLIC_PROVIDER_ENDPOINTS.map((row) => new URL(row.url).hostname))],
   rows,
-  safety: { privateApiUsed: false, credentialsRead: false, orderSubmitted: false },
+  safety: { authenticatedAccountApiUsed: false, credentialsRead: false, orderSubmitted: false },
 }, null, 2));

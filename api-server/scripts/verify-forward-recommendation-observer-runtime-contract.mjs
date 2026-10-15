@@ -36,7 +36,8 @@ for (const marker of [
   'profitabilityClaimAllowed: false',
   'publicDataOnly: true',
   'artifactOnly: true',
-  "fullStrategyCoverage: false",
+  "strategies: ['SCALPING', 'SWING', 'MID_LONG']",
+  'fullStrategyCoverage: true',
 ]) {
   assert(runtime.includes(marker), `runtime safety marker missing: ${marker}`);
 }
@@ -44,6 +45,11 @@ assert(runtime.includes('latestCardEvidenceTimestamp'), 'runtime must derive dat
 assert(runtime.includes('DATA_TIMESTAMP_FROM_MATCHED_EVIDENCE_REQUIRED'), 'missing evidence timestamp must fail closed');
 assert(runtime.includes('futureOnlyBars'), 'settlement must filter pre-signal bars');
 assert(runtime.includes('buildForwardObservationProfitCalibration'), 'runtime must use canonical calibration builder');
+assert(runtime.includes("id: 'KR_SCALPING_5M'") && runtime.includes("id: 'FUTURES_MID_LONG_4H'"),
+  'runtime must declare all twelve canonical market/horizon lane endpoints');
+assert(runtime.includes('Object.keys(state.cursors).length !== expectedLaneIds.size'),
+  'runtime state must enforce the exact current lane cursor set');
+assert(runtime.includes('migrateForwardObserverRuntimeState'), 'legacy four-lane restart state must use the explicit migration path');
 assert(observer.includes("source: FORWARD_OBSERVATION_SOURCE"), 'canonical observer source contract must remain in use');
 
 for (const publicMarker of [
@@ -93,6 +99,8 @@ assert(
   'temporary stock adapter must restore getCandles/getCandlesMeta/getQuote defaults',
 );
 assert(tests.includes('missing matched evidence timestamps are blocked'), 'missing evidence timestamp regression test required');
+assert(tests.includes('covers four markets times three independent canonical strategy horizons'),
+  'twelve-lane topology regression test required');
 assert(tests.includes('ignores pre-signal bars'), 'future-only settlement regression test required');
 assert(tests.includes('idempotent'), 'idempotency regression test required');
 

@@ -3,6 +3,7 @@ import { computeScores } from '../sample/scores';
 import { scoreToRating } from '../sample/rating';
 import { classifyAssetType, type AssetType } from '../data/asset-type';
 import { getKiwoomRankings, isKiwoomConfigured, type KiwoomRankingRow } from '../providers/kiwoom';
+import { getGovernedYahooJson } from '../providers/yahoo';
 import type {
   MarketKey,
   MarketListings,
@@ -397,17 +398,6 @@ function includeUsRow(row: QuoteRow, market: MarketKey): boolean {
   return false;
 }
 
-// Yahoo's query1/query2 hosts intermittently rate-limit or 5xx. Retry across
-// both hosts with a short backoff before giving up on a screener.
-const YAHOO_HOSTS = [
-  'https://query1.finance.yahoo.com',
-  'https://query2.finance.yahoo.com',
-];
-
-async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function fetchYahooScreener(scrId: string): Promise<QuoteRow[]> {
   const suffix =
     `/v1/finance/screener/predefined/saved` +
@@ -417,27 +407,11 @@ async function fetchYahooScreener(scrId: string): Promise<QuoteRow[]> {
     `&lang=en-US` +
     `&region=US`;
 
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt < YAHOO_HOSTS.length * 2; attempt += 1) {
-    const host = YAHOO_HOSTS[attempt % YAHOO_HOSTS.length];
-
-    try {
-      const json = await fetchJson<YahooScreenerResponse>(`${host}${suffix}`);
-      const quotes = json.finance?.result?.[0]?.quotes ?? [];
-
-      return quotes
-        .map(yahooRowToQuote)
-        .filter((row): row is QuoteRow => row !== null);
-    } catch (error) {
-      lastError = error;
-      await sleep(250 * (attempt + 1));
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`yahoo screener ${scrId} failed`);
+  const json = await getGovernedYahooJson<YahooScreenerResponse>(suffix, 30_000);
+  const quotes = json.finance?.result?.[0]?.quotes ?? [];
+  return quotes
+    .map(yahooRowToQuote)
+    .filter((row): row is QuoteRow => row !== null);
 }
 
 // Screener ids chosen for the broadest mover coverage. Stocks/ETFs are pulled
