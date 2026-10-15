@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
+import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
 import {
   aiIntervalMinutesV1,
   decideFreeAiRunV1,
@@ -90,6 +91,16 @@ try {
   combinationError = safeError(error);
 }
 
+// Read-only evidence for the Signal V3 scanner: only holdout-passed survivors.
+let signalEvidence = null;
+let signalEvidenceError = null;
+try {
+  signalEvidence = await buildCombinationSignalEvidenceV1({ stateRoot, researchCodeSha, observedAt: new Date().toISOString() });
+  await writeCombinationSignalEvidenceV1(stateRoot, signalEvidence);
+} catch (error) {
+  signalEvidenceError = safeError(error);
+}
+
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
@@ -119,6 +130,7 @@ const result = Object.freeze({
       trialsEvaluated: lane.trialsEvaluated ?? 0, survivors: lane.survivors ?? 0, watch: lane.watch ?? 0 })),
     aiProviderCalls: 0,
   },
+  scannerEvidence: signalEvidence == null ? { error: signalEvidenceError } : { rules: signalEvidence.rules.length },
   liveTrading: false,
   privateTradingApi: false,
   realOrder: false,
