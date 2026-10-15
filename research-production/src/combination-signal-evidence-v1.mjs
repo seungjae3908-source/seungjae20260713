@@ -82,6 +82,8 @@ export function combinationSignalRulesForLaneV1({ lane, laneState, policy = COMB
   for (const row of classified) {
     const holdout = laneState.holdout?.[row.trialId];
     if (row.finalStatus !== 'SURVIVOR' || holdout?.pass !== true) continue;
+    // Rules must also have held up on symbols that never took part in selection.
+    if (policy.requireUnseenSymbolPass && laneState.unseenChecks?.[row.trialId]?.pass !== true) continue;
     const exit = COMBINATION_EXIT_PROFILES_V1.find((profile) => profile.id === row.exitId);
     if (!exit) continue;
     const conservativeMean = Math.min(Number(row.validation?.meanReturn), Number(holdout.result?.meanReturn));
