@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, rotateCatalogWindowV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 import { readdir as readdirForLanes } from 'node:fs/promises';
 import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 
@@ -653,4 +653,13 @@ test('a missing or filtered source retries soon; same-revision repeats keep the 
   assert.equal(isSourceSpecificReasonV2('FORBIDDEN_AI_AUTHORITY'), true);
   assert.equal(isSourceSpecificReasonV2('AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'), false);
   assert.equal(isSourceSpecificReasonV2('FREE_AI_RATE_LIMITED'), false);
+});
+
+test('the offered catalog window rotates so a retry starts from a different source', () => {
+  const items = Array.from({ length: 12 }, (_, i) => ({ sourcePath: `s${i}.py` }));
+  const first = rotateCatalogWindowV2(items, 0).map((row) => row.sourcePath);
+  const next = rotateCatalogWindowV2(items, 1).map((row) => row.sourcePath);
+  assert.equal(first.length, 5);
+  assert.notEqual(first[0], next[0]);
+  assert.deepEqual(rotateCatalogWindowV2(items.slice(0, 3), 7).map((row) => row.sourcePath), ['s0.py', 's1.py', 's2.py']);
 });
