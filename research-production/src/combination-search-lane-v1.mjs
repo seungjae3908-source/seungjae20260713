@@ -46,7 +46,7 @@ export const COMBINATION_UNIVERSE_V1 = Object.freeze({
   YAHOO_US_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze(['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT']) }),
 });
 
-const LANE_DATA_SOURCE = Object.freeze({
+export const LANE_DATA_SOURCE_V1 = Object.freeze({
   CRYPTO_SPOT_LONG: 'UPBIT_1H',
   CRYPTO_FUTURES_LONG: 'BITGET_1H',
   CRYPTO_FUTURES_SHORT: 'BITGET_1H',
@@ -514,7 +514,7 @@ export async function runCombinationSearchLaneV1({
   const ordered = lanes.map((_, k) => lanes[(cursor + k) % lanes.length]);
 
   for (const lane of ordered) {
-    const source = LANE_DATA_SOURCE[lane.id];
+    const source = LANE_DATA_SOURCE_V1[lane.id];
     if (!source) continue;
     if (!sourceCache.has(source)) {
       const raw = await loadSourceDatasets({ root, source, fetchImpl, loader: datasetLoader, observedAtMs, fetchBudget, log });
