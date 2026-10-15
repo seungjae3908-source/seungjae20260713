@@ -175,6 +175,9 @@ test('directive drives two actual-provider stages, exact public source verificat
   });
   assert.equal(ai.count(), 2);
   assert.match(ai.prompts[0], /failedFamilies=NONE/u);
+  assert.match(ai.prompts[0], /Write each TAG exactly once/u);
+  assert.match(ai.prompts[0], /freqtrade\/freqtrade-strategies/u);
+  assert.match(ai.prompts[1], /never repeat a TAG in findings/u);
   assert.match(ai.prompts[1], /BEGIN UNTRUSTED SOURCE/u);
   assert.equal(result.selectedNextStrategy.sourceRevision, SOURCE_SHA);
 });
@@ -398,4 +401,35 @@ test('verified locators may quote source words that free text may not use', asyn
     fetchImpl: fetchQuoted, datasetLoader,
   });
   assert.equal(refused.reason, 'FORBIDDEN_AI_AUTHORITY');
+});
+
+test('an identical repeated tag is accepted but conflicting repeats still fail closed', async (t) => {
+  const repeated = aiAnswer({
+    summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+    requiredEvidence: ['REPOSITORY=https://github.com/example/public-strategies', 'SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'],
+  });
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  let calls = 0;
+  const ok = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? repeated : extractionAnswer }),
+    fetchImpl: sourceFetch(), datasetLoader,
+  });
+  assert.equal(ok.status, 'DOSSIER_STAGED', JSON.stringify(ok));
+
+  const conflicting = aiAnswer({
+    summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/other-strategies', 'BRANCH=main'],
+    requiredEvidence: ['REPOSITORY=https://github.com/example/public-strategies', 'SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'],
+  });
+  const root2 = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
+  const refused = await runAutonomousResearchDiscoveryV2({
+    stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: conflicting }),
+    fetchImpl: sourceFetch(), datasetLoader,
+  });
+  assert.equal(refused.reason, 'AI_DISCOVERY_DUPLICATE_TAG:REPOSITORY');
 });
