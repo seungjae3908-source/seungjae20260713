@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
+import { GuardedSignalOrder } from '@/components/guarded-signal-order';
 import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
 import {
   fetchSignalScanner,
@@ -201,7 +201,14 @@ export default function TelegramSignalOrderPage() {
               </p>
             </section>
 
-            <ScannerApprovalComposer selection={state.selection} />
+            <GuardedSignalOrder
+              market={intent?.market ?? null}
+              symbol={state.card.symbol}
+              name={state.card.name}
+              action={state.card.action}
+              pricePlan={state.card.pricePlan}
+              selection={state.selection}
+            />
           </>
         ) : null}
       </div>
