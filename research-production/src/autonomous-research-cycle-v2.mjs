@@ -51,6 +51,7 @@ export async function runAutonomousResearchCycleV2({
   runDiscovery = runAutonomousResearchDiscoveryV2,
   runShockLane = runMarketShockReverseLaneV1,
   runProviderLane = runPublicProviderResearchLaneV1,
+  verifiedSourceCatalog,
 } = {}) {
   const observedAt = now();
   const loopOptions = { stateRoot, researchCodeSha, maximumStrategiesPerCycle, now: () => observedAt };
@@ -78,6 +79,7 @@ export async function runAutonomousResearchCycleV2({
   if (invoke) discoveryOptions.invoke = invoke;
   if (fetchImpl) discoveryOptions.fetchImpl = fetchImpl;
   if (datasetLoader) discoveryOptions.datasetLoader = datasetLoader;
+  if (verifiedSourceCatalog) discoveryOptions.verifiedSourceCatalog = verifiedSourceCatalog;
   const [discovery, shockLane, providerLane] = await Promise.all([
     runDiscovery(discoveryOptions),
     runShockLane({ stateRoot, researchCodeSha, now: () => observedAt, fetchImpl }),
