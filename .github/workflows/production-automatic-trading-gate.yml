@@ -88,6 +88,9 @@ on:
       - api-server/src/services/stock-signal-scanner.service.ts
       - api-server/src/services/telegram-v3-current-source.service.test.ts
       - api-server/src/services/telegram-v3-current-source.service.ts
+      - api-server/src/services/signal-intelligence-telegram-subscriber.service.ts
+      - api-server/src/services/telegram-signal-message-v2.service.test.ts
+      - api-server/src/services/telegram-signal-message-v2.service.ts
       - api-server/src/services/trade-automation-integration.test.ts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
