@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BoundedTtlCache } from "../lib/bounded-ttl-cache";
+import { logProviderFailure } from "../lib/provider-failure-log";
 import { MarketDataService } from "../services/market-data.service";
 import {
 	getKiwoomShortSellingRaw,
@@ -1488,7 +1489,7 @@ router.get("/:ticker/financials", async (req, res) => {
 			summary: "실제 공개 재무 데이터를 불러왔습니다.",
 		});
 	} catch (error) {
-		console.error("stock financials route error:", error);
+		logProviderFailure("stock financials route error:", error);
 		res.status(503).json({
 			ticker,
 			annual: [],
@@ -1535,7 +1536,7 @@ router.get("/:ticker/filings", async (req, res) => {
 					: ""),
 		});
 	} catch (error) {
-		console.error("stock filings route error:", error);
+		logProviderFailure("stock filings route error:", error);
 		const items: any[] = [];
 		res.json({
 			ticker,

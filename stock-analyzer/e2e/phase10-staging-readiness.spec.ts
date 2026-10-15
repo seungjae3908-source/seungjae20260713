@@ -1826,7 +1826,9 @@ async function auditAuthenticatedViewport(
         } catch {
           return false;
         }
-      }, { timeout: 15_000 }),
+        // The window covers cold page boot plus the scan itself. The product
+        // contract is still enforced below: HTTP 200 and elapsedMs <= 12s.
+      }, { timeout: 30_000 }),
     );
   } else {
     await expectHealthyRoute(page, route);
