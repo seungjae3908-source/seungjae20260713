@@ -167,11 +167,11 @@ test('owner-approved AUTO safety registration is exactly the 50 approved paths, 
 
 test('automatic signal pipeline scope is exact and receives full Trading review instead of Scanner repair status', () => {
   const paths = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS;
-  assert.equal(paths.length, 41);
-  assert.equal(new Set(paths).size, 41);
+  assert.equal(paths.length, 44);
+  assert.equal(new Set(paths).size, 44);
   assert.deepEqual(paths, [...paths].sort());
   assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
-    '38d85bdc6a6a34dfe38b81c53c92f2a9da9aad0a2e36d3b772074e3bb17a2328');
+    '1b0d42bd93e5a8022264696bc368bdd133f12d802e42540bf7318a43788b5c61');
   assert.equal(Object.isFrozen(paths), true);
   const generatedRuntimeOutputs = new Set([
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
@@ -217,7 +217,7 @@ test('registered AUTO paths retain Trading, protected-main and Paper assertions 
     assert.ok(researchTrigger.includes(path), path);
   }
   for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 50',
-    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 41',
+    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 44',
     'allowed+=("${auto_safety[@]}")', 'allowed+=("${auto_signal[@]}")',
     'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
     assert.ok(workflow.includes(token), token);
