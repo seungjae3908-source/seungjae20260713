@@ -474,3 +474,43 @@ test('the default verified catalog holds real strategy files, not reports', () =
   }
   assert.equal(new Set(DEFAULT_VERIFIED_SOURCE_CATALOG_V2.map((entry) => entry.sourcePath)).size, DEFAULT_VERIFIED_SOURCE_CATALOG_V2.length);
 });
+
+test('common harmless tag spellings and numbered locators are normalized, then still verified', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const loose = aiAnswer({
+    summary: 'Participation Breakout declared variant', findings: [],
+    requiredEvidence: [
+      'MARKET=crypto spot', 'TIMEFRAME=60m', 'DIRECTION=long', 'FAMILY=participation-breakout', 'TEMPLATE=`RVOL_BREAKOUT_V1`',
+      'ENTRY_LOCATOR=0002: entry_rule = "rvol above baseline and close above prior highest close"',
+      'EXIT_LOCATOR=`exit_rule = "close below trend average"`', 'RISK_LOCATOR=NONE',
+    ],
+  });
+  let calls = 0;
+  const ok = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? planAnswer : loose }),
+    fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(ok.status, 'DOSSIER_STAGED', JSON.stringify(ok));
+  assert.equal(ok.candidate.templateId, 'RVOL_BREAKOUT_V1');
+
+  const root2 = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
+  const wrongTimeframe = loose.replace('TIMEFRAME=60m', 'TIMEFRAME=5m');
+  let calls2 = 0;
+  const refused = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls2 === 1 ? planAnswer : wrongTimeframe }),
+    fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(refused.reason, 'AI_DISCOVERY_CURRENT_DATASET_UNSUPPORTED');
+});
+
+test('prompts ask for short answers so the provider output budget is not exceeded', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  for (const prompt of ai.prompts) assert.match(prompt, /Be brief: summary under 12 words/u);
+  assert.match(ai.prompts[1], /without the line-number prefix/u);
+});
