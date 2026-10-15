@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 import { readdir as readdirForLanes } from 'node:fs/promises';
 import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 
@@ -636,4 +636,21 @@ test('lanes rotate across attempts and an operator filter narrows them', async (
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: badPlan }), fetchImpl: sourceFetch(), datasetLoader });
   const latest = JSON.parse(await readFile(join(filtered, 'latest', 'autonomous-research-discovery-v2.json'), 'utf8'));
   assert.equal(latest.candidate.researchLane, 'US_STOCK_LONG');
+});
+
+test('expanded verified catalog has unique strategy files and no lookahead-bias examples', () => {
+  const paths = DEFAULT_VERIFIED_SOURCE_CATALOG_V2.map((row) => row.sourcePath);
+  assert.ok(paths.length >= 40);
+  assert.equal(new Set(paths).size, paths.length);
+  for (const path of paths) {
+    assert.equal(isNonStrategySourcePathV2(path), false, path);
+    assert.doesNotMatch(path, /lookahead_bias|DoesNothing|Sample|backtest_validation/u);
+  }
+});
+
+test('a missing or filtered source retries soon; same-revision repeats keep the long back-off', () => {
+  assert.equal(isSourceSpecificReasonV2('PUBLIC_SOURCE_HTTP_404'), true);
+  assert.equal(isSourceSpecificReasonV2('FORBIDDEN_AI_AUTHORITY'), true);
+  assert.equal(isSourceSpecificReasonV2('AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'), false);
+  assert.equal(isSourceSpecificReasonV2('FREE_AI_RATE_LIMITED'), false);
 });

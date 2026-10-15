@@ -127,6 +127,44 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   'user_data/strategies/Strategy004.py',
   'user_data/strategies/Strategy005.py',
   'user_data/strategies/berlinguyinca/AdxSmas.py',
+  // Expanded 2026-10-15 from a real tree listing of freqtrade-strategies
+  // (commit f3340ce). Lookahead-bias examples and non-strategy samples excluded.
+  'user_data/strategies/Bandtastic.py',
+  'user_data/strategies/Diamond.py',
+  'user_data/strategies/Heracles.py',
+  'user_data/strategies/MultiMa.py',
+  'user_data/strategies/PatternRecognition.py',
+  'user_data/strategies/PowerTower.py',
+  'user_data/strategies/Supertrend.py',
+  'user_data/strategies/SwingHighToSky.py',
+  'user_data/strategies/TrendRiderStrategy.py',
+  'user_data/strategies/UniversalMACD.py',
+  'user_data/strategies/hlhb.py',
+  'user_data/strategies/berlinguyinca/ADXMomentum.py',
+  'user_data/strategies/berlinguyinca/ASDTSRockwellTrading.py',
+  'user_data/strategies/berlinguyinca/AverageStrategy.py',
+  'user_data/strategies/berlinguyinca/AwesomeMacd.py',
+  'user_data/strategies/berlinguyinca/BbandRsi.py',
+  'user_data/strategies/berlinguyinca/BinHV45.py',
+  'user_data/strategies/berlinguyinca/CCIStrategy.py',
+  'user_data/strategies/berlinguyinca/CMCWinner.py',
+  'user_data/strategies/berlinguyinca/ClucMay72018.py',
+  'user_data/strategies/berlinguyinca/CofiBitStrategy.py',
+  'user_data/strategies/berlinguyinca/CombinedBinHAndCluc.py',
+  'user_data/strategies/berlinguyinca/EMASkipPump.py',
+  'user_data/strategies/berlinguyinca/Low_BB.py',
+  'user_data/strategies/berlinguyinca/MACDStrategy.py',
+  'user_data/strategies/berlinguyinca/MACDStrategy_crossed.py',
+  'user_data/strategies/berlinguyinca/MultiRSI.py',
+  'user_data/strategies/berlinguyinca/Quickie.py',
+  'user_data/strategies/berlinguyinca/Scalp.py',
+  'user_data/strategies/berlinguyinca/Simple.py',
+  'user_data/strategies/berlinguyinca/SmoothOperator.py',
+  'user_data/strategies/berlinguyinca/TDSequentialStrategy.py',
+  'user_data/strategies/futures/FAdxSmaStrategy.py',
+  'user_data/strategies/futures/FSupertrendStrategy.py',
+  'user_data/strategies/futures/TrendFollowingStrategy.py',
+  'user_data/strategies/futures/VolatilitySystem.py',
 ].map((sourcePath) => Object.freeze({ repository: FREQTRADE_STRATEGIES, branch: 'main', licensePath: 'LICENSE', sourcePath })));
 
 const SAFETY = Object.freeze({
@@ -715,6 +753,13 @@ function isTransientReason(reason) {
   return /(?:RATE_LIMITED|TIMEOUT|NETWORK|HTTP_(?:408|425|429|5\d\d)|PROVIDER_UNAVAILABLE)/u.test(String(reason ?? ''));
 }
 
+// Failures tied to one chosen source (missing file, non-strategy file, filtered
+// wording, bad locator). That source is remembered and excluded next time, so a
+// different source can be tried soon instead of blocking the directive for 6h.
+export function isSourceSpecificReasonV2(reason) {
+  return /(?:PUBLIC_SOURCE_HTTP_|NON_STRATEGY|FORBIDDEN_AI_AUTHORITY|LOCATOR|DUPLICATE_TAG)/u.test(String(reason ?? ''));
+}
+
 // Sources that already failed for a non-transient reason (wrong file type,
 // unsafe wording, missing locator...) are never proposed or accepted again.
 async function priorFailedSources(root) {
@@ -763,8 +808,8 @@ async function priorGithubSourceIds(root) {
 }
 
 function retryAfterForReason(reason, observedAt) {
-  const transient = isTransientReason(reason);
-  return Date.parse(observedAt) + (transient ? TRANSIENT_RETRY_MS : SEMANTIC_RETRY_MS);
+  const short = isTransientReason(reason) || isSourceSpecificReasonV2(reason);
+  return Date.parse(observedAt) + (short ? TRANSIENT_RETRY_MS : SEMANTIC_RETRY_MS);
 }
 
 async function persistResult(root, result) {
@@ -826,7 +871,12 @@ export async function runAutonomousResearchDiscoveryV2({
     return Object.freeze({ ...prior, status: 'ALREADY_DISCOVERED', actualProviderCalls: { attempted: 0, succeeded: 0, failed: 0 },
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 }, nextAction: 'RUN_EXISTING_CLOSED_LOOP' });
   }
-  if (prior?.directiveDigest === directive.directiveDigest && Number(prior?.retryAfterAt) > Date.parse(observedAt)) {
+  // Recompute from the reason so an older long deferral for a source-specific
+  // failure (written by an earlier release) does not keep blocking discovery.
+  const priorRetryAt = isSourceSpecificReasonV2(prior?.reason)
+    ? Math.min(Number(prior?.retryAfterAt) || 0, Date.parse(prior?.observedAt ?? '') + TRANSIENT_RETRY_MS)
+    : Number(prior?.retryAfterAt);
+  if (prior?.directiveDigest === directive.directiveDigest && priorRetryAt > Date.parse(observedAt)) {
     return Object.freeze({ ...prior, status: 'DEFERRED_RETRY', actualProviderCalls: { attempted: 0, succeeded: 0, failed: 0 },
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 } });
   }
