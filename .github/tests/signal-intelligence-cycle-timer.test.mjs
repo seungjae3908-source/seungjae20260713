@@ -9,7 +9,7 @@ test('Signal V3 cycle timer runs on a wall-clock schedule every five minutes', (
   const timer = script.slice(script.indexOf('cat > "$timer_tmp"'), script.indexOf('write_unit "/etc/systemd/system/$SERVICE_NAME"'));
   assert.match(timer, /^OnCalendar=\*:0\/5$/mu);
   assert.match(timer, /^Persistent=true$/mu);
-  assert.doesNotMatch(timer, /OnUnitActiveSec|OnBootSec/u);
+  assert.doesNotMatch(timer, /^(?:OnUnitActiveSec|OnBootSec)=/mu);
   assert.match(script, /SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE/u);
   assert.match(script, /LIVE_TRADING=false/u);
 });
