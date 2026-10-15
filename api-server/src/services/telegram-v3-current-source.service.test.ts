@@ -11,8 +11,12 @@ import {
 } from './signal-intelligence-telegram-subscriber.service';
 const SHA='a'.repeat(40),EPOCH='d0b3f7c2-9be7-4a1f-bd93-2d8e9b8e1d6a';
 const NOW=Date.parse('2026-10-11T06:00:00.000Z');
-const LANE_IDS=['KR','US','SPOT','FUTURES'].flatMap(m=>
- ['SCALPING_15M',m==='SPOT'?'SWING_4H':'SWING_60M','MID_LONG_1D'].map(t=>m+'_'+t));
+const LANE_IDS=[
+ 'KR_SCALPING_5M','KR_SWING_60M','KR_MID_LONG_1D',
+ 'US_SCALPING_5M','US_SWING_60M','US_MID_LONG_1D',
+ 'SPOT_SCALPING_15M','SPOT_SWING_4H','SPOT_MID_LONG_4H',
+ 'FUTURES_SCALPING_5M','FUTURES_SWING_60M','FUTURES_MID_LONG_4H',
+];
 const ID='US_STOCK|AAPL|SWING|60m|BUY';
 function fixture(){
  const coverage=LANE_IDS.map(laneId=>{
@@ -22,7 +26,7 @@ function fixture(){
    return {
      laneId,sourceCycleId:EPOCH,market,
      strategy:laneId.split('_').slice(1,-1).join('_'),
-     timeframe:laneId.endsWith('15M')?'15m':laneId.endsWith('60M')?'60m':laneId.endsWith('4H')?'4H':'1D',
+     timeframe:laneId.endsWith('5M')?'5m':laneId.endsWith('15M')?'15m':laneId.endsWith('60M')?'60m':laneId.endsWith('4H')?'4H':'1D',
      universeSource:market==='US_STOCK'?'nasdaq-trader-public-directory'
        :market==='KR_STOCK'?'krx-symbol-master':
          market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',

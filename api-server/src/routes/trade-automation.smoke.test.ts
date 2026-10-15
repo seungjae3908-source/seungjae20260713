@@ -11,6 +11,7 @@ import router, {
   setTradePaperRuntimeAdminGuardReaderForTests,
   setTradeExitPreviewReadersFactoryForTests,
   setTradeReadonlyCredentialRepositoryFactoryForTests,
+  setTradeCapitalReadinessReaderForTests,
 } from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
@@ -662,6 +663,7 @@ test.after(() => {
   setTradePaperRuntimeAdminGuardReaderForTests(null);
   setTradeReadonlyCredentialRepositoryFactoryForTests(null);
   setTradeExitPreviewReadersFactoryForTests(null);
+  setTradeCapitalReadinessReaderForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
@@ -1875,6 +1877,10 @@ test('status is authenticated, automatic execution defaults off, and never retur
         readyForAutomaticOrderEvaluation: boolean;
         blockers: string[];
       }>;
+      externalPilotSignalStatistics: {
+        replayAndFixtureExcluded: boolean;
+        byMarket: Record<string, Record<'1d', { naturalSignals: number | null; workerAdmissions: number }>>;
+      };
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
@@ -1886,6 +1892,9 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.equal(body.liveAutomaticReadinessByMarket.domestic_stock.readyForAutomaticOrderEvaluation, false);
     assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('MEMBER_ORDER_CAPABILITY_REQUIRED'));
     assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('AUTOMATIC_POLICY_OFF'));
+    assert.equal(body.externalPilotSignalStatistics.replayAndFixtureExcluded, true);
+    assert.equal(body.externalPilotSignalStatistics.byMarket.crypto_spot['1d'].naturalSignals, null);
+    assert.equal(body.externalPilotSignalStatistics.byMarket.crypto_spot['1d'].workerAdmissions, 0);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
@@ -2132,6 +2141,116 @@ test('member order baseline stays 500k while an administrator may save the 1M ba
   }
 });
 
+test('daily profit targets preserve decimal per-market choices without expanding role risk limits', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const regular = await startServer(true, 'regular');
+  try {
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...DEFAULT_TRADING_POLICY,
+        mode: 'approval',
+        automaticEnabled: false,
+        maxDailyOrders: 0,
+        maxOrderKrw: 9_999_999,
+        bitgetLeverage: 3,
+        dailyProfitTargetByMarket: {
+          domestic_stock: { enabled: true, targetPercent: 3, afterTargetAction: 'STOP_NEW_ENTRIES' },
+          us_stock: { enabled: true, targetPercent: 100, afterTargetAction: 'NOTIFY_ONLY' },
+          crypto_spot: { enabled: true, targetPercent: 3.75, afterTargetAction: 'PROFIT_PROTECTION' },
+          crypto_futures: { enabled: false, targetPercent: 10.5, afterTargetAction: 'PROFIT_PROTECTION' },
+        },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    const body = await saved.json() as { policy: typeof DEFAULT_TRADING_POLICY };
+    assert.equal(body.policy.dailyProfitTargetByMarket.domestic_stock.targetPercent, 3);
+    assert.equal(body.policy.dailyProfitTargetByMarket.us_stock.targetPercent, 100);
+    assert.equal(body.policy.dailyProfitTargetByMarket.crypto_spot.targetPercent, 3.75);
+    assert.equal(body.policy.dailyProfitTargetByMarket.crypto_futures.enabled, false);
+    assert.equal(body.policy.maxDailyOrders, 0, '0 remains opportunity-driven rather than a daily quota');
+    assert.equal(body.policy.maxOrderKrw, 500_000, 'a high target cannot expand the member order cap');
+    assert.equal(body.policy.bitgetLeverage, 3);
+
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as { policy: typeof DEFAULT_TRADING_POLICY };
+    assert.deepEqual(statusBody.policy.dailyProfitTargetByMarket,
+      body.policy.dailyProfitTargetByMarket, 'all four market choices must round-trip independently');
+  } finally {
+    await close(regular.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('verified per-market capital allocation round-trips exact member amounts and replaces forged audit fields', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  setTradeCapitalReadinessReaderForTests(async ({ policy, roleMaximumPerMarketKrw }) => Object.fromEntries(
+    (['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures'] as const).map((market) => [market, {
+      market, provider: market === 'crypto_spot' ? 'upbit' : market === 'crypto_futures' ? 'bitget' : 'kiwoom',
+      currency: market === 'us_stock' ? 'USD' : market === 'crypto_futures' ? 'USDT' : 'KRW',
+      verified: true, actualAvailableKrw: 500_000, roleMaximumKrw: roleMaximumPerMarketKrw,
+      currentlyAllocatedKrw: policy.capitalAllocationByMarket[market].configured
+        ? policy.capitalAllocationByMarket[market].operatingCapitalKrw : 0,
+      currentMaximumConfigurableKrw: roleMaximumPerMarketKrw,
+      excludedKrw: 500_000, accountScopeId: 'a'.repeat(24), reason: null,
+      observedAt: '2026-10-14T02:00:00.000Z',
+      futuresMarginAllocationKrw: market === 'crypto_futures' ? 0 : null,
+      futuresNominalCeilingKrw: market === 'crypto_futures' ? 0 : null,
+    }]),
+  ) as any);
+  const regular = await startServer(true, 'regular');
+  try {
+    for (const [index, amount] of [100_000, 250_000, 500_000].entries()) {
+      const current = await isolated.getPolicy(USER);
+      const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...current, mode: 'approval', automaticEnabled: false,
+          capitalAllocationAuditTrail: [{ market: 'crypto_spot', configured: true,
+            operatingCapitalKrw: 999_999_999, maxOrderKrw: 999_999_999,
+            changedAt: '2099-01-01T00:00:00.000Z', userScopeDigest: 'f'.repeat(24),
+            accountScopeId: 'f'.repeat(24), policyVersion: 'user-market-capital-v1' }],
+          capitalAllocationByMarket: { ...current.capitalAllocationByMarket,
+            crypto_spot: { ...current.capitalAllocationByMarket.crypto_spot,
+              configured: true, operatingCapitalKrw: amount, maxOrderKrw: 50_000,
+              updatedAt: '2099-01-01T00:00:00.000Z', accountScopeId: 'f'.repeat(24),
+              compoundAboveAllocation: false } } }),
+      });
+      const body = await saved.json() as Record<string, any>;
+      assert.equal(saved.status, 200, JSON.stringify(body));
+      assert.equal(body.policy.capitalAllocationByMarket.crypto_spot.operatingCapitalKrw, amount);
+      assert.equal(body.policy.capitalAllocationByMarket.crypto_spot.maxOrderKrw, 50_000);
+      assert.equal(body.policy.capitalAllocationByMarket.crypto_spot.accountScopeId, 'a'.repeat(24));
+      assert.notEqual(body.policy.capitalAllocationByMarket.crypto_spot.updatedAt, '2099-01-01T00:00:00.000Z');
+      assert.equal(body.policy.capitalAllocationByMarket.crypto_spot.compoundAboveAllocation, false);
+      assert.equal(body.policy.capitalAllocationAuditTrail.length, index + 1);
+      assert.equal(body.policy.capitalAllocationAuditTrail.at(-1).operatingCapitalKrw, amount);
+      assert.equal(body.policy.capitalAllocationAuditTrail.at(-1).market, 'crypto_spot');
+      assert.notEqual(body.policy.capitalAllocationAuditTrail.at(-1).userScopeDigest, 'f'.repeat(24));
+    }
+    const rejected = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...(await isolated.getPolicy(USER)), mode: 'approval', automaticEnabled: false,
+        capitalAllocationByMarket: { ...(await isolated.getPolicy(USER)).capitalAllocationByMarket,
+          crypto_spot: { configured: true, operatingCapitalKrw: 500_001, maxOrderKrw: 50_000,
+            compoundAboveAllocation: false } } }),
+    });
+    assert.equal(rejected.status, 409);
+    assert.equal((await rejected.json() as Record<string, any>).error, 'CAPITAL_ALLOCATION_ROLE_OR_ORDER_LIMIT');
+
+    const readiness = await fetch(`${regular.baseUrl}/api/trade-automation/capital-allocation-readiness`);
+    const readinessBody = await readiness.json() as Record<string, any>;
+    assert.equal(readiness.status, 200);
+    assert.equal(readinessBody.orderSubmitted, false);
+    assert.equal(readinessBody.byMarket.crypto_spot.currentMaximumConfigurableKrw, 500_000);
+  } finally {
+    await close(regular.server);
+    setTradeCapitalReadinessReaderForTests(null);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('member Bitget leverage stops at 3x while an administrator can save exact 7x', async () => {
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);
@@ -2309,11 +2428,17 @@ test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off wi
     assert.equal(prepared.status, 200);
     const body = await prepared.json() as {
       pilotStage: string;
+      admissionPath: string;
+      admissionPolicyVersion: string;
+      researchGenuineSClaimed: boolean;
       automaticTradingEnabledByThisRequest: boolean;
       liveTradingEnabledByThisRequest: boolean;
       policy: { pilotStage: string; automaticEnabled: boolean };
     };
     assert.equal(body.pilotStage, 'formula-ai-exception');
+    assert.equal(body.admissionPath, 'EXTERNAL_STRATEGY_PILOT');
+    assert.equal(body.admissionPolicyVersion, 'EXTERNAL_STRATEGY_PILOT_V1');
+    assert.equal(body.researchGenuineSClaimed, false);
     assert.equal(body.policy.pilotStage, 'formula-ai-exception');
     assert.equal(body.policy.automaticEnabled, false);
     assert.equal(body.automaticTradingEnabledByThisRequest, false);

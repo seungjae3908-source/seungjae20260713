@@ -11,10 +11,13 @@ const repositoryRoot = path.resolve(apiRoot, '..');
 // All provider/execution dependencies in these tests are fake transports.
 // This runner neither loads Production credentials nor calls Production APIs.
 const entries = [
+  'daily-profit-target.service.test.ts',
   'member-auto-trading-background-worker.service.test.ts',
   'trade-recovery-worker.test.ts',
   'trade-automation-repository-compatibility.test.ts',
   'trade-rule-pack-pilot-capital.service.test.ts',
+  'auto-trading-capital-allocation.service.test.ts',
+  'external-strategy-pilot-statistics.service.test.ts',
   'trade-automation-integration.test.ts',
   'trade-kiwoom-readonly-contract.test.ts',
   'kiwoom-readonly-order-recovery.service.test.ts',

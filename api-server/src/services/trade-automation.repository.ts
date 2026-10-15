@@ -249,7 +249,8 @@ export class InMemoryTradingRepository implements TradingRepository {
       projection.releases.forEach((id) => this.budgetHolds.delete(id));
       this.budgetHolds.set(order.id, { orderId: projection.orderId, market: projection.market,
         instrument: projection.instrument, strategy: projection.strategy,
-        amountKrw: projection.amountKrw, riskKrw: projection.riskKrw });
+        amountKrw: projection.amountKrw, capitalKrw: projection.capitalKrw,
+        riskKrw: projection.riskKrw });
       return claimed;
     });
   }

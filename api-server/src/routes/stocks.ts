@@ -20,6 +20,7 @@ import {
 	getCorpCode as getDartProviderCorpCode,
 	getFinancials as getDartProviderFinancials,
 } from "../providers/dart";
+import { getGovernedYahooJson } from "../providers/yahoo";
 
 const router: IRouter = Router();
 
@@ -1263,13 +1264,8 @@ async function fetchDartCompanyOverview(ticker: string) {
 // Yahoo quoteSummary(assetProfile)에서 실제 사업 요약/섹터/산업/홈페이지를 가져옵니다.
 async function fetchYahooAssetProfile(ticker: string) {
 	if (/^\d{6}$/.test(ticker)) return null;
-	const url =
-		`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
-	const response = await fetch(url, {
-		headers: { "User-Agent": "seungjae-stock-app/1.0", Accept: "application/json" },
-	});
-	if (!response.ok) return null;
-	const data: any = await response.json();
+	const resource = `/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=assetProfile`;
+	const data: any = await getGovernedYahooJson(resource, 6 * 60 * 60_000);
 	const p = data?.quoteSummary?.result?.[0]?.assetProfile;
 	if (!p || typeof p !== "object") return null;
 	const summary = String(p?.longBusinessSummary ?? "").trim();

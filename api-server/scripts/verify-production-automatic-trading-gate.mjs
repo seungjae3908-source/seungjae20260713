@@ -38,8 +38,16 @@ const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts
 const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
 const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
+const strategyCatalog = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
 const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts');
 const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
+const dailyProfitTarget = read('api-server/src/services/daily-profit-target.service.ts');
+const dailyProfitTargetTest = read('api-server/src/services/daily-profit-target.service.test.ts');
+const capitalAllocation = read('api-server/src/services/auto-trading-capital-allocation.service.ts');
+const capitalAllocationTest = read('api-server/src/services/auto-trading-capital-allocation.service.test.ts');
+const externalPilotStatistics = read('api-server/src/services/external-strategy-pilot-statistics.service.ts');
+const externalPilotStatisticsTest = read('api-server/src/services/external-strategy-pilot-statistics.service.test.ts');
+const upbitExternalPilotQa = read('signal-intelligence-v3/scripts/run-upbit-external-pilot-qa.ts');
 const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
@@ -85,6 +93,102 @@ requireText(paperWorkerTest,
 requireText(automaticLiveBudgetTest,
   'a fresh signal may re-enter the same instrument only after a confirmed full canonical exit',
   'AUTO_GATE_CONFIRMED_EXIT_REENTRY_REGRESSION_MISSING');
+
+// A desired return is display/admission policy, never profit authority. Only
+// full-cost settled PnL reaches it; high inputs cannot expand size, leverage or
+// loss limits, and stop mode applies to new entries while exit supervision is
+// kept on the independent reducing path above.
+for (const token of ["'STOP_NEW_ENTRIES'", "'PROFIT_PROTECTION'", "'NOTIFY_ONLY'"]) {
+  requireText(tradeTypes, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_ACTION_MISSING');
+}
+for (const token of [
+  "domestic_stock: 'Asia/Seoul'", "us_stock: 'America/New_York'",
+  "crypto_futures: 'UTC'", 'compoundProfitShare: 0.5', 'reserveProfitShare: 0.5',
+  'targetIsGuarantee: false', 'riskLimitsExpanded: false',
+  'DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_REQUIRED',
+  'DAILY_PROFIT_TARGET_STRENGTHENED_SIGNAL_REQUIRED',
+  'DAILY_PROFIT_TARGET_PROTECTION_RISK_BUDGET_EXCEEDED',
+]) requireText(dailyProfitTarget, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_CONTRACT_MISSING');
+for (const token of [
+  '3% target is decided from settled net profit',
+  '100% desired target never expands risk',
+  'profit protection requires a strengthened signal',
+  'market day keys are isolated across Seoul, New York and UTC',
+  'policy normalization preserves decimal 3% and 100% targets independently across four markets',
+  'short-lived target evidence is exact-market, exact-day and tamper evident',
+]) requireText(dailyProfitTargetTest, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_REGRESSION_MISSING');
+for (const token of [
+  'evaluateDailyProfitTarget({', 'dailyProfitTargetEvidenceReason({',
+  'rememberDailyProfitTargetRuntime(', 'notifyDailyProfitTarget',
+  'Observe settlement-backed targets even on a quiet market tick.',
+]) requireText(paperWorker, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_WORKER_WIRING_MISSING');
+for (const token of [
+  'parseDailyProfitTargetEvidenceReason(plan.signalReasons',
+  'DAILY_PROFIT_TARGET_SETTLEMENT_EVIDENCE_DRIFT',
+]) requireText(pilotCapital, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_SIGNED_BOUNDARY_MISSING');
+for (const token of [
+  '시장별 일일 희망 수익률·수익 보호', '수익 보호 모드 (추천)',
+  '복리 50% / 적립 50%', '기존 포지션의 보호주문·손절·익절·청산은 계속 관리합니다.',
+]) requireText(autoTradingSettings, token, 'AUTO_GATE_DAILY_PROFIT_TARGET_UI_MISSING');
+requireText(tradeAutomationSmoke,
+  'daily profit targets preserve decimal per-market choices without expanding role risk limits',
+  'AUTO_GATE_DAILY_PROFIT_TARGET_API_REGRESSION_MISSING');
+
+// User-entered capital is a server-audited cash/margin ceiling, independent
+// from the per-order limit. It must never become browser-authored balance
+// evidence or allow compounding to silently raise the selected allocation.
+for (const token of [
+  "USER_MARKET_CAPITAL_POLICY_VERSION = 'user-market-capital-v1'",
+  'compoundAboveAllocation: false', 'capitalAllocationByMarket', 'capitalAllocationAuditTrail',
+]) requireText(tradeTypes, token, 'AUTO_GATE_USER_CAPITAL_POLICY_MISSING');
+for (const token of [
+  'buildCapitalAllocationReadiness', 'serverAuthoredCapitalAllocation',
+  "'ACCOUNT_READBACK_REQUIRED'", "'CAPITAL_ALLOCATION_AVAILABLE_BALANCE_EXCEEDED'",
+  'tradingCapitalChargeKrw', 'accountScopeId',
+]) requireText(capitalAllocation, token, 'AUTO_GATE_USER_CAPITAL_READBACK_CONTRACT_MISSING');
+for (const token of [
+  'OPERATING_CAPITAL_ALLOCATION_LIMIT', 'allocationNotionalLimit',
+  'assetClassCapitalCommittedKrw',
+]) requireText(tradeRisk, token, 'AUTO_GATE_USER_CAPITAL_RISK_WIRING_MISSING');
+for (const token of [
+  'member can configure exact 100k, 250k, and 500k allocations',
+  'administrator role ceiling allows 1m',
+  'two stock lanes sharing one provider cannot allocate the same cash twice',
+  'futures risk uses allocation as isolated margin and keeps leveraged notional separate',
+  'reducing exit remains eligible',
+]) requireText(capitalAllocationTest, token, 'AUTO_GATE_USER_CAPITAL_REGRESSION_MISSING');
+for (const token of [
+  "router.get('/capital-allocation-readiness'", 'serverAuthoredCapitalAllocation(',
+  'roleMaximumFourMarketKrw', 'candidate.capitalAllocationAuditTrail = [',
+  'userScopeDigest', 'orderSubmitted: false',
+]) requireText(tradeAutomationRoute, token, 'AUTO_GATE_USER_CAPITAL_API_MISSING');
+for (const token of [
+  '시장별 자동매매 운용금액', '현재 설정 가능 최대', '1회 최대 주문금액',
+  '사용자 설정은 절대 투입 상한입니다.', '잔고 확인 필요',
+]) requireText(autoTradingSettings, token, 'AUTO_GATE_USER_CAPITAL_UI_MISSING');
+
+// Natural public observations are not interchangeable with fixtures or
+// replay. Missing history stays N/A, while worker/trade counts come only from
+// the member's durable Plan/Order ledger.
+for (const token of [
+  "naturalObservationSource: 'LIVE_PUBLIC_PRODUCER_HISTORY'",
+  "userAdmissionSource: 'DURABLE_PLAN_ORDER_LEDGER'", 'replayAndFixtureExcluded: true',
+  "report.observationKind !== 'LIVE_PUBLIC_MARKET'", 'naturalSignals: available ? sum',
+]) requireText(externalPilotStatistics, token, 'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_CONTRACT_MISSING');
+for (const token of [
+  'only genuine live public observations enter the 30-day signal history',
+  'distinguish missing observations from a measured zero',
+]) requireText(externalPilotStatisticsTest, token, 'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_REGRESSION_MISSING');
+requireText(upbitExternalPilotQa, 'appendPublicQaCycle(previousHistory, report)',
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_PRODUCER_WIRING_MISSING');
+for (const token of [
+  'EXTERNAL_PILOT_STATISTICS_HISTORY_PATH',
+  'external-strategy-pilot-statistics-history-v1',
+  'public-signal-history-v1.json',
+]) requireText(read('.github/workflows/signal-intelligence-v3-validation.yml'), token,
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_WORKFLOW_MISSING');
+requireText(autoTradingSettings, '테스트·Fixture·과거 재생은 제외',
+  'AUTO_GATE_EXTERNAL_PILOT_STATISTICS_UI_MISSING');
 
 // A migration proof must install under hosted non-superuser privileges without
 // replacing definition-drift verification with a caller-controlled parameter.
@@ -166,7 +270,9 @@ for (const [input, token, code] of [
   [fourMarketPaperCapital, 'MEMBER_MARKET_INITIAL_KRW = 1_000_000', 'MEMBER_PAPER_MARKET_1M_BASELINE_MISSING'],
   [fourMarketPaperCapital, 'compoundShare: 0.5, reserveShare: 0.5', 'FOUR_MARKET_PAPER_COMPOUND_SPLIT_MISSING'],
   [fourMarketPaperCapital, 'reserveWithdrawalAutomatic: false', 'FOUR_MARKET_PAPER_WITHDRAWAL_GUARD_MISSING'],
-  [pilotCapital, 'portfolioInitialCapitalKrw', 'LIVE_FOUR_MARKET_PORTFOLIO_PROJECTION_MISSING'],
+  [pilotCapital, 'policy.totalCapitalKrw + laneCapital - initial', 'LIVE_SELECTED_CAPITAL_PORTFOLIO_PROJECTION_MISSING'],
+  [pilotCapital, 'Math.min(policy.maxOrderKrw, laneCapital)', 'LIVE_SAVED_ORDER_LIMIT_PROJECTION_MISSING'],
+  [pilotCapital, 'capitalAllocationByMarket: allocation', 'LIVE_MARKET_ALLOCATION_PROJECTION_MISSING'],
   [pilotCapital, 'rulePackPilotMarketForPlan(plan)', 'LIVE_MARKET_LOCAL_COMPOUND_READBACK_MISSING'],
   [memberPaperMigration, 'member_four_market_paper_seed_contract', 'MEMBER_PAPER_DATABASE_SEED_GUARD_MISSING'],
   [memberPaperMigration, 'four_market_paper_wallet_rls_guard_ready()', 'MEMBER_PAPER_DATABASE_READINESS_GUARD_MISSING'],
@@ -565,17 +671,22 @@ const scannerCandidateRanking = read('api-server/src/services/scanner-candidate-
 const scannerCandidateRankingTest = read('api-server/src/services/scanner-candidate-ranking.service.test.ts');
 const scannerQualityConsumer = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.ts');
 const scannerQualityConsumerTest = read('api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts');
+const forwardCanonicalMetadata = read('api-server/src/services/forward-observer-canonical-metadata.service.ts');
+const forwardRuntime = read('api-server/src/services/forward-recommendation-observer-runtime.service.ts');
+const forwardRuntimeTest = read('api-server/src/services/forward-recommendation-observer-runtime.service.test.ts');
+const forwardCycleRunner = read('api-server/src/scripts/run-forward-recommendation-observer-cycle.ts');
+const fourMarketLiveQa = read('signal-intelligence-v3/scripts/run-four-market-live-qa.ts');
 const scannerIndicators = read('api-server/src/services/scanner-indicator-library.service.ts');
 const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.service.test.ts');
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 39
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 39
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 72
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 72
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== '413c463c6c11d762643d558d778bd3d1ba635a213ef83fa44448898ee3f8cbdc') {
+    !== '80766729b0003a8d4e84fc0fb2413fdf59f2d36067b186563a6d29ed8750eb7e') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
@@ -615,7 +726,8 @@ for (const token of [
   "const STOCK_MEMBER_ID = 'signal-intelligence-forward-observer-public-only'",
   "const CRYPTO_MEMBER_ID = 'forward-observer-public-only'",
   "input.paperIdentity && input.card?.signalGrade === 'S'",
-  "market.prefix === 'SPOT' && profile.label === 'SWING'",
+  'FORWARD_OBSERVER_LANES.map((lane)',
+  'entry.identity.strategyHorizon === lane.strategyHorizon',
   'selectSignalAdmittedHandoffEntries({',
   'canonicalWorkerHandoff',
   'handoffState = await canonicalHandoff(laneNowMs)',
@@ -639,10 +751,36 @@ requireText(scannerQualityConsumer, "input.lane.market === 'CRYPTO_FUTURES' ? ra
 requireText(scannerQualityConsumerTest,
   'same-symbol mixed LONG and SHORT keep direction-isolated quality keys',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_SELECTION_REGRESSION_MISSING');
-requireText(signalPublicProgress, "m === 'SPOT' ? 'SWING_4H' : 'SWING_60M'",
-  'AUTO_GATE_SPOT_CANONICAL_TIMEFRAME_MISSING');
-requireText(telegramV3CurrentSource, "event.timeframe==='4H'?'SWING_4H'",
-  'AUTO_GATE_TELEGRAM_SPOT_CANONICAL_TIMEFRAME_MISSING');
+for (const token of ['KR_SCALPING_5M', 'SPOT_SCALPING_15M', 'SPOT_MID_LONG_4H', 'FUTURES_MID_LONG_4H']) {
+  requireText(signalPublicProgress, token, 'AUTO_GATE_TWELVE_LANE_PUBLIC_CYCLE_MISSING');
+  requireText(telegramV3CurrentSource, token, 'AUTO_GATE_TWELVE_LANE_TELEGRAM_MISSING');
+}
+for (const token of [
+  "strategyHorizon: 'SCALP'", "strategyHorizon: 'SWING'", "strategyHorizon: 'POSITION'",
+  'migrateForwardObserverRuntimeState(', "strategies: ['SCALPING', 'SWING', 'MID_LONG']",
+]) requireText(forwardRuntime, token, 'AUTO_GATE_TWELVE_LANE_FORWARD_RUNTIME_MISSING');
+requireText(forwardRuntimeTest,
+  'legacy four-lane restart state migrates without losing SWING cursors or observations',
+  'AUTO_GATE_TWELVE_LANE_RESTART_REGRESSION_MISSING');
+for (const token of [
+  'input.lane.strategyHorizon', 'input.lane.strategyMode', 'style: input.lane.style',
+]) requireText(forwardCanonicalMetadata, token, 'AUTO_GATE_TWELVE_LANE_CANONICAL_METADATA_MISSING');
+for (const token of [
+  "strategyMode: lane.strategyMode", "strategy: lane.strategyMode",
+  "SIGNAL_INTELLIGENCE_YAHOO_USAGE_CONFIRMED !== 'true'",
+  "{ '5m': '5m', '60m': '1H', '4H': '4H' }",
+]) requireText(forwardCycleRunner, token, 'AUTO_GATE_TWELVE_LANE_FORWARD_RUNNER_MISSING');
+requireText(scannerQualityConsumer, 'identity.strategyHorizon === input.lane.strategyHorizon',
+  'AUTO_GATE_TWELVE_LANE_QUALITY_BINDING_MISSING');
+requireText(scannerQualityConsumerTest,
+  'all twelve market and horizon lanes select only an exact independent quality identity',
+  'AUTO_GATE_TWELVE_LANE_QUALITY_REGRESSION_MISSING');
+requireText(scannerCandidateRanking, 'Math.max(40, summary.minimumTradeCount ?? 40)',
+  'AUTO_GATE_SCANNER_QUALITY_SAMPLE_FLOOR_MISSING');
+for (const token of [
+  '/api/v2/mix/market/current-fund-rate', '/api/v2/mix/market/open-interest',
+  '/api/v2/mix/market/merge-depth', 'BITGET_DEPTH_INVALID',
+]) requireText(fourMarketLiveQa, token, 'AUTO_GATE_BITGET_PUBLIC_QUALITY_QA_MISSING');
 for (const token of [
   'data.krx.co.kr', 'query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.nasdaqtrader.com',
   'api.upbit.com', 'api.bitget.com', 'MANAGED_PROXY_CONNECT_403', 'PROVIDER_HTTP_403',
@@ -663,7 +801,11 @@ requireText(tradeService, 'input.signalOccurrenceId.trim()', 'AUTO_GATE_SIGNAL_O
 requireText(tradeIntegrationTest,
   'validated signal occurrences are idempotent within one event and allow a later repeat opportunity',
   'AUTO_GATE_REPEAT_OPPORTUNITY_REGRESSION_MISSING');
-requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
+for (const token of [
+  'this.liveCycleAllFourPolicyReadySeen || this.liveCycleMarketScopedPolicyReadySeen',
+  "member.policy.pilotStage === 'formula-ai-exception'",
+  'automaticPolicyHasAllFourMarkets(member.policy)',
+]) requireText(paperWorker, token, 'AUTO_GATE_WORKER_SCOPED_OR_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
@@ -761,12 +903,50 @@ requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exac
 requireText(tradeTypes, "'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_STAGE_TYPE_MISSING');
 requireText(tradeRisk, "input.pilotStage === 'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_NORMALIZATION_MISSING');
 requireText(tradeOptimization, "'PILOT_FORMULA_AI_EXCEPTION_REQUIRED'", 'AUTO_FORMULA_AI_PILOT_RISK_BINDING_MISSING');
+requireText(tradeOptimization, "'EXTERNAL_STRATEGY_PILOT_V1:RESEARCH_GENUINE_S_NOT_CLAIMED'", 'AUTO_EXTERNAL_PILOT_RESEARCH_DISCLAIMER_MISSING');
 requireText(tradeAutomationRoute, "router.post('/admin/pilot-stage'", 'AUTO_FORMULA_AI_PILOT_ROUTE_MISSING');
 requireText(tradeAutomationRoute, "'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT'", 'AUTO_FORMULA_AI_PILOT_CONFIRMATION_MISSING');
 requireText(tradeAutomationRoute, "'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF'", 'AUTO_FORMULA_AI_PILOT_AUTO_OFF_GUARD_MISSING');
+for (const token of [
+  'admissionPath: EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH',
+  'admissionPolicyVersion: EXTERNAL_STRATEGY_PILOT_POLICY_VERSION',
+  'researchGenuineSClaimed: false',
+]) requireText(tradeAutomationRoute, token, 'AUTO_EXTERNAL_PILOT_PREPARATION_RESPONSE_MISSING');
 requireText(tradeAutomationSmoke, 'formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', 'AUTO_FORMULA_AI_PILOT_SMOKE_MISSING');
 requireText(formulaAiException, "'AI_REVIEW_DECISION:PASS'", 'AUTO_FORMULA_AI_PASS_EVIDENCE_MISSING');
 requireText(formulaAiException, "'CANONICAL_PAPER_HANDOFF'", 'AUTO_FORMULA_AI_CANONICAL_HANDOFF_REQUIRED');
+for (const token of [
+  "EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH = 'EXTERNAL_STRATEGY_PILOT'",
+  "'EXTERNAL_STRATEGY_PILOT_SOURCE_SET_MISMATCH'",
+  'researchGenuineSClaimed: false',
+]) requireText(formulaAiException, token, 'AUTO_EXTERNAL_PILOT_ADMISSION_SEPARATION_MISSING');
+for (const token of [
+  'externalStrategyPilotAllowed: true',
+  'EXTERNAL_STRATEGY_SOURCE_SET_DIGEST',
+  'reportedReturn: null',
+  '현재 스냅샷만으로 과거 CVD·Taker·ML 증거를 만들 수 없다.',
+  '현재 OI 한 점은 OI 증가 추세가 아니며 체결 CVD/Taker flow를 대체하지 않는다.',
+]) requireText(strategyCatalog, token, 'AUTO_EXTERNAL_PILOT_SOURCE_CONTRACT_MISSING');
+for (const token of [
+  'evaluateStrategyRulePackDeterministicGate(gateInput)',
+  'strategyRulePackAiEvidenceDigest(gateInput)',
+  "'BACKGROUND_EXTERNAL_STRATEGY_RULE_PROOF_REQUIRED'",
+  "'BACKGROUND_EXTERNAL_STRATEGY_AI_EVIDENCE_MISMATCH'",
+  "liveEntryArmPresent(Date.now(), 'EXTERNAL_STRATEGY_PILOT')",
+  'liveEnabledMarketConnectionVerificationReady(',
+  'revalidateLiveEnabledMarketReadiness',
+  'MEMBER_AUTO_TRADING_EXTERNAL_PILOT_HANDOFF_PATH',
+  'validateExternalStrategyPilotHandoffEnvelope(',
+  "if (this.externalPilotHandoffPath) return handoff.entries",
+]) requireText(paperWorker, token, 'AUTO_EXTERNAL_PILOT_WORKER_BINDING_MISSING');
+for (const token of [
+  'external Pilot catalog is an explicit sourced allowlist and adopts no public performance claim',
+  'external Pilot readiness is market-scoped and a blocked stock provider cannot poison Upbit',
+  'ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT',
+]) requireText(formulaAiExceptionTest + paperWorkerTest, token, 'AUTO_EXTERNAL_PILOT_REGRESSION_MISSING');
+requireText(liveEntryArm, 'requiredAdmissionPath?: LiveAutomaticAdmissionPath', 'AUTO_EXTERNAL_PILOT_SCOPED_ARM_MISSING');
+requireText(liveExecution, "'ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT'", 'AUTO_EXTERNAL_PILOT_PRESUBMIT_ARM_MISSING');
+requireText(workflow, "admissionPaths: ['RESEARCH_GENUINE_S']", 'AUTO_RESEARCH_ARM_PATH_SCOPE_MISSING');
 requireText(formulaAiExceptionTest, 'dedicated formula-ai pilot stage allows only a valid formula+AI live exception', 'AUTO_FORMULA_AI_PILOT_TEST_MISSING');
 requireText(paperWorker, 'readRulePackPilotCapitalState', 'AUTO_PILOT_CAPITAL_WORKER_BINDING_MISSING');
 requireText(paperWorker, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_GUARD_WORKER_MISSING');
@@ -782,8 +962,8 @@ for (const token of [
 ]) {
   requireText(pilotCapital, token, 'AUTO_PILOT_CAPITAL_BLOCKER_MISSING');
 }
-requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
-requireText(pilotCapitalTest, 'administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'configured 250k + 10% net profit yields 262.5k operating / 12.5k reserve', 'AUTO_PILOT_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'administrator role ceiling keeps verified profit out of order authority', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -15_000", 'AUTO_PILOT_DAILY_LOSS_PERCENT_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
@@ -877,5 +1057,10 @@ console.log(JSON.stringify({
   stickyMemberStopRequiresConfirmedResume: true,
   externalEmergencyStopReflectedInSettings: true,
   automaticExitClosedLoop: true,
+  dailyProfitTargetUsesSettledNetProfit: true,
+  dailyProfitTargetDoesNotExpandRisk: true,
+  dailyProfitTargetStopsNewEntriesOnly: true,
+  dailyProfitTargetMarketDayIsolated: true,
+  dailyProfitTargetCompoundReserveSplit: '50/50',
   accountQaSchemaVersion: 'v3',
 }));

@@ -38,12 +38,16 @@ import {
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
+  validateExternalStrategyPilotHandoffEnvelope,
   automaticTradingStoredEntryReasons,
   assertCanonicalLiveProviderPositions,
   liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
   liveAllFourConnectionVerificationReady,
+  liveEnabledMarketConnectionVerificationReady,
+  liveEnabledMarketProviders,
   selectAutomaticPaperAccountEquity,
+  sizeExternalStrategyPilotQuantity,
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
@@ -60,11 +64,58 @@ import {
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import {
+  EXTERNAL_STRATEGY_SOURCE_SET_DIGEST,
+  strategyRulePackAiEvidenceDigest,
+} from './evidence-backed-auto-strategy-catalog.service';
+import {
   buildAdminFourMarketPaperBootstrap,
   ADMIN_MARKET_INITIAL_KRW,
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('external Pilot Worker sizes from member capital and saved per-order ceiling', () => {
+  const base = {
+    assetClass: 'crypto_spot' as const,
+    exchange: 'upbit' as const,
+    symbol: 'KRW-BTC',
+    direction: 'BUY' as const,
+    operatingCapitalKrw: 250_000,
+    maxOrderKrw: 100_000,
+    entryPrice: 100_000,
+    stopPrice: 99_900,
+    targetPrices: [110_000, 120_000],
+    krwPerQuoteCurrency: 1,
+    riskPercent: 0.2,
+    entryFeePercent: 0.05,
+    exitFeePercent: 0.05,
+    slippagePercent: 0.05,
+    minimumOrderKrw: 5_000,
+    leverage: 1,
+    openExposureKrw: 0,
+    sameDirectionExposureKrw: 0,
+    consecutiveLosses: 0,
+  };
+  assert.equal(sizeExternalStrategyPilotQuantity(base), 1);
+  assert.equal(sizeExternalStrategyPilotQuantity({ ...base, maxOrderKrw: 30_000 }), 0.3);
+  const reducedCapitalQuantity = sizeExternalStrategyPilotQuantity({
+    ...base, operatingCapitalKrw: 50_000, maxOrderKrw: 100_000,
+  });
+  assert.ok(reducedCapitalQuantity > 0 && reducedCapitalQuantity <= 0.5);
+  assert.throws(() => sizeExternalStrategyPilotQuantity({
+    ...base,
+    assetClass: 'crypto_futures',
+    exchange: 'bitget',
+    direction: 'LONG',
+  }), /BACKGROUND_FUTURES_FUNDING_RATE_REQUIRED/);
+  assert.ok(sizeExternalStrategyPilotQuantity({
+    ...base,
+    assetClass: 'crypto_futures',
+    exchange: 'bitget',
+    direction: 'LONG',
+    estimatedFundingRate: 0.0001,
+  }) > 0);
+});
 
 test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
   const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
@@ -204,6 +255,32 @@ test('all-four live readiness requires fresh verified Toss, Kiwoom, Upbit, and B
     connection('upbit'),
     connection('bitget', { lastErrorCode: 'AUTH_REVOKED' }),
   ], nowMs), false);
+});
+
+test('external Pilot readiness is market-scoped and a blocked stock provider cannot poison Upbit', () => {
+  const nowMs = Date.now();
+  const spotOnly = normalizeTradingPolicy({
+    ...policy(),
+    pilotStage: 'formula-ai-exception',
+  });
+  const connection = (exchange: ExchangeConnection['exchange'], lastErrorCode: string | null = null): ExchangeConnection => ({
+    userId: USER,
+    exchange,
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: 'encrypted',
+    lastVerifiedAt: new Date(nowMs - 60_000).toISOString(),
+    lastErrorCode,
+    updatedAt: new Date(nowMs - 60_000).toISOString(),
+  });
+  assert.deepEqual(liveEnabledMarketProviders(spotOnly), ['upbit']);
+  assert.equal(liveEnabledMarketConnectionVerificationReady(spotOnly, [
+    connection('upbit'), connection('kiwoom', 'AUTH_REVOKED'),
+  ], nowMs), true);
+  assert.equal(liveEnabledMarketConnectionVerificationReady(spotOnly, [
+    connection('upbit', 'AUTH_REVOKED'),
+  ], nowMs), false);
+  assert.equal(liveAllFourConnectionVerificationReady(spotOnly, [connection('upbit')], nowMs), false);
 });
 
 
@@ -2113,6 +2190,17 @@ test('exact SHA entry arm is invalid after revocation even if an earlier check s
       activateNotBeforeAt: new Date(nowMs - 1_000).toISOString(),
     }), { mode: 0o600 });
     assert.equal(await liveEntryArmPresent(nowMs), true);
+    assert.equal(await liveEntryArmPresent(nowMs, 'EXTERNAL_STRATEGY_PILOT'), false);
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true,
+      targetSha: 'c'.repeat(40),
+      armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString(),
+      admissionPaths: ['EXTERNAL_STRATEGY_PILOT'],
+    }), { mode: 0o600 });
+    assert.equal(await liveEntryArmPresent(nowMs, 'EXTERNAL_STRATEGY_PILOT'), true);
+    assert.equal(await liveEntryArmPresent(nowMs, 'RESEARCH_GENUINE_S'), false);
     await rm(armPath);
     assert.equal(await liveEntryArmPresent(nowMs), false);
   } finally {
@@ -2153,7 +2241,35 @@ test('a broken handoff is fail-closed for entries without terminating the member
 test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper handoff', () => {
   const nowMs = Date.now();
   const entry = handoff(nowMs).entries[0] as any;
+  entry.identity.strategyId = 'TREND_PULLBACK_REACCEL_V1';
+  entry.signal.strategyIdentity.strategyId = entry.identity.strategyId;
+  entry.signal.learningSnapshot.strategyRulePackEvidence = {
+    strategyId: entry.identity.strategyId,
+    dataReady: true,
+    formulaReady: true,
+    waveStructureReady: true,
+    indicatorReady: true,
+    entryTriggerReady: true,
+    liquidityReady: true,
+    costEvidenceReady: true,
+    riskReady: true,
+    trendRegimeReady: true,
+    pullbackReady: true,
+    reaccelerationReady: true,
+    volumeAccelerationReady: true,
+  };
   assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
+  const evidenceDigest = strategyRulePackAiEvidenceDigest({
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    signalId: entry.identity.signalId,
+    symbol: entry.identity.symbol,
+    timeframe: entry.identity.timeframe,
+    learningSnapshot: entry.signal.learningSnapshot,
+    dataEvidence: entry.execution.dataEvidence,
+    publicQuote: entry.publicQuote,
+  });
   const immutable = {
     schemaVersion: 'canonical-signal-ai-review-v1',
     source: 'CANONICAL_SIGNAL_AI_REVIEW',
@@ -2164,7 +2280,7 @@ test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper ha
     researchCodeSha: entry.identity.researchCodeSha,
     decision: 'PASS',
     liveEligibility: 'PASS_ONLY_ELIGIBLE',
-    evidenceDigest: 'f'.repeat(64),
+    evidenceDigest,
     reviewedAtMs: nowMs - 2_000,
     expiresAtMs: nowMs + 60_000,
   };
@@ -2177,11 +2293,56 @@ test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper ha
     ...immutable,
     reviewDigest: createHash('sha256').update(canonical(immutable)).digest('hex'),
   };
+  assert.throws(
+    () => formulaAiReviewReasonsForLive(entry, nowMs),
+    /BACKGROUND_EXTERNAL_STRATEGY_LIVE_OBSERVATION_REQUIRED/,
+  );
+  entry.execution.dataEvidence = {
+    ...entry.execution.dataEvidence,
+    observationKind: 'LIVE_PUBLIC_MARKET',
+  };
+  const liveEvidenceDigest = strategyRulePackAiEvidenceDigest({
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    signalId: entry.identity.signalId,
+    symbol: entry.identity.symbol,
+    timeframe: entry.identity.timeframe,
+    learningSnapshot: entry.signal.learningSnapshot,
+    dataEvidence: entry.execution.dataEvidence,
+    publicQuote: entry.publicQuote,
+  });
+  const liveImmutable = { ...immutable, evidenceDigest: liveEvidenceDigest };
+  entry.aiReviewEvidence = {
+    ...liveImmutable,
+    reviewDigest: createHash('sha256').update(canonical(liveImmutable)).digest('hex'),
+  };
   const reasons = formulaAiReviewReasonsForLive(entry, nowMs);
   assert.ok(reasons.includes('AI_REVIEW_DECISION:PASS'));
   assert.ok(reasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
   assert.ok(reasons.includes('STRATEGY_RULE_PACK:' + entry.identity.strategyId));
-  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + 'f'.repeat(64)));
+  assert.ok(reasons.includes('ADMISSION_PATH:EXTERNAL_STRATEGY_PILOT'));
+  assert.ok(reasons.includes('EXTERNAL_STRATEGY_SOURCE_SET:' + EXTERNAL_STRATEGY_SOURCE_SET_DIGEST));
+  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + liveEvidenceDigest));
+  const externalEnvelope = {
+    admissionPath: 'EXTERNAL_STRATEGY_PILOT',
+    researchGenuineSClaimed: false,
+    sourceSetDigest: EXTERNAL_STRATEGY_SOURCE_SET_DIGEST,
+    serviceSha: entry.identity.researchCodeSha,
+  };
+  assert.equal(validateExternalStrategyPilotHandoffEnvelope(
+    externalEnvelope, { ...handoff(nowMs), entries: [entry] } as any, nowMs,
+  ).entries.length, 1);
+  assert.throws(() => validateExternalStrategyPilotHandoffEnvelope(
+    { ...externalEnvelope, researchGenuineSClaimed: true },
+    { ...handoff(nowMs), entries: [entry] } as any, nowMs,
+  ), /BACKGROUND_EXTERNAL_STRATEGY_HANDOFF_ENVELOPE_INVALID/);
+  entry.signal.learningSnapshot.strategyRulePackEvidence.pullbackReady = false;
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs), /BACKGROUND_EXTERNAL_STRATEGY_RULE_PROOF_REQUIRED/);
+  entry.signal.learningSnapshot.strategyRulePackEvidence.pullbackReady = true;
+  entry.publicQuote.ask += 1;
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs), /BACKGROUND_EXTERNAL_STRATEGY_AI_EVIDENCE_MISMATCH/);
+  entry.publicQuote.ask -= 1;
   assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs + 60_001), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
 });
 

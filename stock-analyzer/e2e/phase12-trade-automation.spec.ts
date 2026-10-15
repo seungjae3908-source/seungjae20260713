@@ -153,6 +153,83 @@ test('automatic trading keeps standing authorization while settings follow one s
   expectNoBrowserFailures(failures);
 });
 
+test('per-market desired returns accept 3%, 100% and decimals without changing unlimited opportunity policy', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+
+  const domesticTarget = page.getByLabel('국내주식 일일 희망 수익률');
+  await expect(domesticTarget).toHaveValue('5');
+  await page.getByRole('button', { name: '국내주식 희망 수익률 사용' }).click();
+  await domesticTarget.fill('3');
+  await page.getByLabel('국내주식 목표 달성 후 동작').selectOption('STOP_NEW_ENTRIES');
+
+  await page.getByTestId('trading-market-us_stock').click();
+  await page.getByRole('button', { name: '미국주식 희망 수익률 사용' }).click();
+  await page.getByLabel('미국주식 일일 희망 수익률').fill('100');
+  await page.getByLabel('미국주식 목표 달성 후 동작').selectOption('NOTIFY_ONLY');
+
+  await page.getByTestId('trading-market-crypto_spot').click();
+  await expect(page.getByLabel('코인현물 일일 희망 수익률')).toHaveValue('5');
+  await page.getByLabel('코인현물 일일 희망 수익률').fill('3.75');
+  await expect(page.getByTestId('profit-protection-state-crypto_spot')).toContainText('작동 중');
+  await expect(page.getByTestId('profit-protection-state-crypto_spot')).toContainText('복리 50% / 적립 50%');
+  await expect(page.getByTestId('profit-target-block-crypto_spot')).toContainText('강화');
+  await expect(page.getByTestId('current-exit-plan-crypto_spot')).toContainText('TREND_PULLBACK_REACCEL_V1');
+  await expect(page.getByTestId('current-exit-plan-crypto_spot')).toContainText('SL 98,000');
+
+  await page.getByTestId('trading-market-domestic_stock').click();
+  await expect(domesticTarget).toHaveValue('3');
+  await expect(page.getByLabel('국내주식 목표 달성 후 동작')).toHaveValue('STOP_NEW_ENTRIES');
+  await expect(page.getByLabel('일일 주문 수 (0=기회 기반)')).toHaveValue('0');
+  expectNoBrowserFailures(failures);
+});
+
+test('member selects exact 100k, 250k, 500k or verified maximum independently from per-order size', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('trading-market-crypto_spot').click();
+  const card = page.getByTestId('capital-allocation-crypto_spot');
+  await expect(card).toContainText('실제 계좌 가용잔고');
+  await expect(card).toContainText('500,000원');
+  await expect(card).toContainText('현재 설정 가능 최대');
+  const operating = page.getByLabel('코인현물 자동매매 운용금액');
+  const perOrder = page.getByLabel('코인현물 1회 최대 주문금액');
+  await expect(operating).toHaveValue('250000');
+  await expect(perOrder).toHaveValue('50000');
+  for (const amount of ['100,000원', '250,000원', '500,000원']) {
+    await card.getByRole('button', { name: amount, exact: true }).click();
+    await expect(operating).toHaveValue(amount.replace(/[^0-9]/g, ''));
+    await expect(perOrder).toHaveValue('50000');
+  }
+  await operating.fill('100000');
+  await card.getByTestId('capital-maximum-crypto_spot').click();
+  await expect(operating).toHaveValue('500000');
+  await expect(perOrder).toHaveValue('50000');
+  await expect(card).toContainText('실제 투자 가능 상한');
+  await expect(card).toContainText('명시적 추가 동의 전에는 이 상한을 늘리지 않습니다');
+  expectNoBrowserFailures(failures);
+});
+
+test('actual natural-signal history is distinct from absent observations and fixture/replay counts', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('trading-market-crypto_spot').click();
+  const observed = page.getByTestId('external-pilot-statistics-crypto_spot');
+  await expect(observed).toContainText('3 / 3');
+  await expect(observed).toContainText('0 / 0');
+  await expect(observed).toContainText('UPBIT_PILOT_NO_SIGNAL');
+
+  await page.getByTestId('trading-market-crypto_futures').click();
+  const missing = page.getByTestId('external-pilot-statistics-crypto_futures');
+  await expect(missing).toContainText('N/A / N/A');
+  await expect(missing).toContainText('실제 Producer 관측 이력 없음');
+  await expect(page.getByTestId('external-pilot-signal-statistics')).toContainText('테스트·Fixture·과거 재생은 제외');
+  expectNoBrowserFailures(failures);
+});
+
 test('automatic trading surface never exposes per-order approval actions', async ({ page }) => {
   const approvalRequests: string[] = [];
   page.on('request', (request) => {

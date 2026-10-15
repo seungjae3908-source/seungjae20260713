@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH,
+  EXTERNAL_STRATEGY_PILOT_POLICY_VERSION,
   FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION,
   evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
 } from './formula-ai-live-exception.service';
+import {
+  EXTERNAL_STRATEGY_PILOT_IDS,
+  EXTERNAL_STRATEGY_SOURCE_SET_DIGEST,
+  STRATEGY_RULE_PACKS,
+} from './evidence-backed-auto-strategy-catalog.service';
 import { evaluateTradingPlan, normalizeTradingPolicy } from './trade-automation-risk.service';
 import {
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
@@ -11,6 +18,27 @@ import {
 } from './trade-automation.types';
 
 const HEX64 = 'a'.repeat(64);
+
+test('external Pilot catalog is an explicit sourced allowlist and adopts no public performance claim', () => {
+  assert.deepEqual([...EXTERNAL_STRATEGY_PILOT_IDS].sort(), [
+    'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    'KR_PRESSURE_BREAKOUT_V1',
+    'TREND_PULLBACK_REACCEL_V1',
+    'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+  ]);
+  assert.match(EXTERNAL_STRATEGY_SOURCE_SET_DIGEST, /^[0-9a-f]{64}$/);
+  for (const definition of STRATEGY_RULE_PACKS.filter((row) => row.externalStrategyPilotAllowed)) {
+    assert.ok(definition.externalSources.length >= 2, definition.strategyId);
+    for (const source of definition.externalSources) {
+      assert.match(source.url, /^https:\/\//);
+      assert.equal(source.reportedReturn, null);
+      assert.equal(source.reportedWinRate, null);
+      assert.equal(source.reportedMaxDrawdown, null);
+      assert.ok(source.adoptionCaveat.length > 0);
+    }
+  }
+});
 
 function policy() {
   return normalizeTradingPolicy({
@@ -65,6 +93,8 @@ function policy() {
 function reasons(strategyId: string) {
   return [
     'CANONICAL_PAPER_HANDOFF',
+    'ADMISSION_PATH:' + EXTERNAL_STRATEGY_PILOT_ADMISSION_PATH,
+    'EXTERNAL_STRATEGY_SOURCE_SET:' + EXTERNAL_STRATEGY_SOURCE_SET_DIGEST,
     'STRATEGY_RULE_PACK:' + strategyId,
     'STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE',
     'AI_REVIEW_DECISION:PASS',
@@ -198,6 +228,9 @@ test('formula+AI exception bypasses research promotion but preserves operational
   for (const plan of [krPlan(), usPlan(), spotPlan(), futuresPlan('long'), futuresPlan('short')]) {
     const exception = evaluateFormulaAiLiveException(plan);
     assert.equal(exception.policyVersion, FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION);
+    assert.equal(exception.admissionPolicyVersion, EXTERNAL_STRATEGY_PILOT_POLICY_VERSION);
+    assert.equal(exception.admissionPath, 'EXTERNAL_STRATEGY_PILOT');
+    assert.equal(exception.researchGenuineSClaimed, false);
     assert.equal(exception.allowed, true, plan.strategyId + ':' + exception.blockers.join(','));
     assert.equal(exception.researchPromotionBypassed, true);
     assert.deepEqual(exception.bypassedResearchGates, [
@@ -210,6 +243,7 @@ test('formula+AI exception bypasses research promotion but preserves operational
     assert.equal(risk.allowed, true, plan.strategyId + ':' + risk.blockCodes.join(','));
     assert.equal(risk.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'), false);
     assert.ok(risk.warnings.includes('FORMULA_AI_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED'));
+    assert.ok(risk.warnings.includes('EXTERNAL_STRATEGY_PILOT_V1:RESEARCH_GENUINE_S_NOT_CLAIMED'));
   }
 });
 
@@ -267,6 +301,20 @@ test('exception fails closed when AI PASS identity is missing', () => {
   const exception = evaluateFormulaAiLiveException(plan);
   assert.equal(exception.allowed, false);
   assert.ok(exception.blockers.includes('FORMULA_AI_EXCEPTION_AI_PASS_REQUIRED'));
+});
+
+test('external Pilot cannot reuse an unapproved strategy or stale source catalog identity', () => {
+  const unapproved = { ...usPlan(), strategyId: 'US_EVENT_RVOL_FIRST_PULLBACK_V1' };
+  unapproved.signalReasons = reasons(unapproved.strategyId);
+  assert.equal(evaluateFormulaAiLiveException(unapproved).allowed, false);
+
+  const staleCatalog = spotPlan();
+  staleCatalog.signalReasons = staleCatalog.signalReasons.map((reason) =>
+    reason.startsWith('EXTERNAL_STRATEGY_SOURCE_SET:')
+      ? 'EXTERNAL_STRATEGY_SOURCE_SET:' + '0'.repeat(64) : reason);
+  const decision = evaluateFormulaAiLiveException(staleCatalog);
+  assert.equal(decision.allowed, false);
+  assert.ok(decision.blockers.includes('EXTERNAL_STRATEGY_PILOT_SOURCE_SET_MISMATCH'));
 });
 
 test('exception never bypasses isolated margin, leverage, or cash-market direction policy', () => {

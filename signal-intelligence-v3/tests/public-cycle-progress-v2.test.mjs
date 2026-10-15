@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   publicCyclePageDecision,
   currentPublicCyclePublication,
+  publicDataQualityDiagnostic,
   publicExecutionEvidence,
+  publicMarketSummary,
+  mergePublicCryptoRotationEvidence,
 } from '../src/public-cycle-progress-v2.mjs';
 
 function page(overrides = {}) {
@@ -89,11 +92,52 @@ test('explicit producer counters take precedence and malformed counters fail to 
   });
 });
 
+test('public quality diagnostics retain rejection codes after ranking removes cards', () => {
+  const result = publicDataQualityDiagnostic([
+    { dataQuality: { state: 'DATA_UNTRUSTED', issues: [{ code: 'MISSING_CANDLE' }, { code: 'MISSING_CANDLE' }] } },
+    { dataQuality: { state: 'DEGRADED', issues: [{ code: 'ABNORMAL_SPIKE' }] } },
+    { dataQuality: { state: 'TRUSTED', issues: [] } },
+  ], 'provider evidence');
+  assert.deepEqual(result, {
+    evaluatedCards: 3,
+    trustedCards: 1,
+    degradedCards: 1,
+    untrustedCards: 1,
+    issueCounts: { MISSING_CANDLE: 2, ABNORMAL_SPIKE: 1 },
+    message: 'provider evidence',
+  });
+});
+
+test('market summary distinguishes provider-gated rosters and quality-blocked completed pages', () => {
+  const providerPages = ['A', 'B', 'C'].map(() => ({ status: 'BLOCKED_PROVIDER', totalUniverse: 4007,
+    pageExecution: { requestedCount: 0, dataSuccessCount: 0 }, scannedCards: 0 }));
+  assert.deepEqual(publicMarketSummary(providerPages).providerGatedCount, 4007);
+  assert.deepEqual(publicMarketSummary(providerPages).dataBlockedCount, 4007);
+
+  const qualityPages = [
+    { status: 'VALID_NO_TRADE', totalUniverse: 295, pageExecution: { requestedCount: 5, dataSuccessCount: 5 }, scannedCards: 0 },
+    { status: 'BLOCKED_DATA', totalUniverse: 295, pageExecution: { requestedCount: 5, dataSuccessCount: 5 }, scannedCards: 0 },
+  ];
+  const summary = publicMarketSummary(qualityPages);
+  assert.equal(summary.queriedCount, 5);
+  assert.equal(summary.dataSuccessCount, 5);
+  assert.equal(summary.qualityBlockedCount, 5);
+  assert.equal(summary.dataBlockedCount, 5);
+  assert.equal(summary.normalNoSignalLaneCount, 1);
+  assert.equal(summary.blockedLaneCount, 1);
+});
+
 function snapshot() {
   const markets = { KR: ['KR_STOCK', 'krx-symbol-master'], US: ['US_STOCK', 'nasdaq-trader-public-directory'],
     SPOT: ['CRYPTO_SPOT', 'upbit-public'], FUTURES: ['CRYPTO_FUTURES', 'bitget-public'] };
+  const profiles = {
+    KR: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_1D'],
+    US: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_1D'],
+    SPOT: ['SCALPING_15M', 'SWING_4H', 'MID_LONG_4H'],
+    FUTURES: ['SCALPING_5M', 'SWING_60M', 'MID_LONG_4H'],
+  };
   const coverage = Object.entries(markets).flatMap(([prefix, [market, source]]) =>
-    ['SCALPING_15M', prefix === 'SPOT' ? 'SWING_4H' : 'SWING_60M', 'MID_LONG_1D'].map(p => ({
+    profiles[prefix].map(p => ({
       laneId: `${prefix}_${p}`, market, sourceCycleId: 'now', status: 'VALID_NO_TRADE', universeSource: source,
       rosterId: 'a'.repeat(64),
       universePartial: false, universeStale: false, universeProviderErrors: 0, responseDataState: 'complete',
@@ -102,7 +146,7 @@ function snapshot() {
         partial: false, timedOut: false, cancelled: false },
     })));
   const rows = ['now', 'old'].map(cycle => ({ id: cycle, market: 'KR_STOCK',
-    provenance: { laneId: 'KR_SCALPING_15M', cursor: 0, sourceCycleId: cycle, rosterId: 'a'.repeat(64) } }));
+    provenance: { laneId: 'KR_SCALPING_5M', cursor: 0, sourceCycleId: cycle, rosterId: 'a'.repeat(64) } }));
   return { rosterBindingVersion: 1, sourceCycleId: 'now', coverage, rows, lists: { krBuy: rows }, events: rows.map(r => ({ id: r.id })) };
 }
 
@@ -137,4 +181,136 @@ test('current publication requires current roster binding, not just matching cyc
   delete s.rosterBindingVersion;
   assert.equal(currentPublicCyclePublication(s).currentPageReady, false);
   assert.deepEqual(currentPublicCyclePublication(s).lists.krBuy, []);
+});
+
+function cryptoRotationPage(laneId, cursor, totalUniverse = 10) {
+  const market = laneId.startsWith('SPOT_') ? 'CRYPTO_SPOT' : 'CRYPTO_FUTURES';
+  const requestedCount = Math.min(5, totalUniverse - cursor);
+  return {
+    laneId,
+    market,
+    strategy: laneId.includes('SCALPING') ? 'SCALPING' : laneId.includes('SWING') ? 'SWING' : 'MID_LONG',
+    timeframe: laneId.split('_').at(-1),
+    rosterId: (market === 'CRYPTO_SPOT' ? 'a' : 'b').repeat(64),
+    cursorRotationReason: 'VERIFIED_BATCH',
+    cursorBefore: cursor,
+    cursorAfter: cursor + requestedCount === totalUniverse ? 0 : cursor + requestedCount,
+    totalUniverse,
+    responseDataState: 'complete',
+    responseDiagnostic: { trustedCards: requestedCount, degradedCards: 0, untrustedCards: 0,
+      issueCounts: cursor === 0 ? { MISSING_CANDLE: 1 } : {} },
+    scannedCards: 1,
+    sGradeCards: 0,
+    status: 'CANDIDATES_AVAILABLE',
+    providerErrors: 0,
+    universeProviderErrors: 0,
+    timeouts: 0,
+    failureReasonCounts: {},
+    priceTickErrorCount: 0,
+    pageExecution: { requestedCount, startedCount: requestedCount, completedCount: requestedCount,
+      dataSuccessCount: requestedCount, failuresObserved: 0, elapsedMs: 100 },
+    scannerQuality: { selectionStatus: 'DISABLED', matchedSymbols: 0, blockerCount: 0 },
+    canonicalHandoffJoin: { joinedSGrade: 0 },
+  };
+}
+
+test('crypto rotation evidence proves exact roster coverage and cursor continuity across process restarts', () => {
+  const laneIds = [
+    'SPOT_SCALPING_15M', 'SPOT_SWING_4H', 'SPOT_MID_LONG_4H',
+    'FUTURES_SCALPING_5M', 'FUTURES_SWING_60M', 'FUTURES_MID_LONG_4H',
+  ];
+  const sha = 'c'.repeat(40);
+  const first = mergePublicCryptoRotationEvidence({
+    serviceSha: sha,
+    nowMs: Date.parse('2026-10-13T00:00:00Z'),
+    coverage: laneIds.map(laneId => cryptoRotationPage(laneId, 0)),
+    networkTelemetry: { requestAttemptCount: 60, retryCount: 1, retry429Count: 1 },
+  });
+  assert.equal(first.rotationComplete, false);
+  assert.equal(first.processRestartTransitions, 0);
+  const second = mergePublicCryptoRotationEvidence({
+    previous: first,
+    serviceSha: sha,
+    nowMs: Date.parse('2026-10-13T00:01:00Z'),
+    coverage: laneIds.map(laneId => cryptoRotationPage(laneId, 5)),
+    networkTelemetry: { requestAttemptCount: 60, retryCount: 2, retry503Count: 2 },
+  });
+  assert.equal(second.rotationComplete, true);
+  assert.equal(second.processRestartTransitions, 1);
+  assert.equal(second.networkTelemetry.requestAttemptCount, 120);
+  assert.equal(second.networkTelemetry.retryCount, 3);
+  for (const lane of Object.values(second.lanes)) {
+    assert.equal(lane.uniqueAttemptedCount, 10);
+    assert.equal(lane.uniqueSuccessCount, 10);
+    assert.equal(lane.missingAttemptCount, 0);
+    assert.equal(lane.duplicateAttemptCount, 0);
+    assert.equal(lane.cursorContinuityFailures, 0);
+    assert.equal(lane.dataQualityIssueCounts.MISSING_CANDLE, 1);
+  }
+});
+
+test('crypto rotation evidence resets unsafe positions on roster drift and never claims failed-page coverage', () => {
+  const sha = 'd'.repeat(40);
+  const first = mergePublicCryptoRotationEvidence({
+    serviceSha: sha,
+    coverage: [cryptoRotationPage('SPOT_SCALPING_15M', 0)],
+  });
+  const changed = cryptoRotationPage('SPOT_SCALPING_15M', 5);
+  changed.rosterId = 'e'.repeat(64);
+  changed.cursorRotationReason = 'ROSTER_CHANGED_RESTART';
+  changed.status = 'BLOCKED_DATA';
+  changed.cursorAfter = 0;
+  const second = mergePublicCryptoRotationEvidence({ previous: first, serviceSha: sha, coverage: [changed] });
+  const lane = second.lanes.SPOT_SCALPING_15M;
+  assert.equal(lane.rosterChangeCount, 1);
+  assert.equal(lane.uniqueAttemptedCount, 0);
+  assert.equal(lane.fullCursorRotationComplete, false);
+  assert.equal(lane.expectedNextCursor, 0);
+});
+
+test('crypto rotation evidence retains each exact provider failure instead of treating a blocked page as bad symbols', () => {
+  const sha = 'f'.repeat(40);
+  const row = cryptoRotationPage('FUTURES_SWING_60M', 0);
+  row.status = 'BLOCKED_DATA';
+  row.cursorRotationReason = 'BLOCKED_RESEARCH_ROTATION_ONLY';
+  row.pageExecution.dataSuccessCount = 4;
+  row.pageExecution.failuresObserved = 1;
+  row.failureReasonCounts = { invalid_data: 1 };
+  row.failureDetails = [{
+    symbol: 'NEWCOINUSDT',
+    reason: 'invalid_data',
+    message: '유효한 캔들·시세를 만들지 못했습니다.',
+    market: 'CRYPTO_FUTURES',
+    timeframe: '60m',
+    cursorBefore: 0,
+    cursorAfter: 5,
+    rosterId: 'b'.repeat(64),
+    sourceCycleId: 'cycle-one',
+  }];
+  const report = mergePublicCryptoRotationEvidence({ serviceSha: sha, coverage: [row] });
+  const lane = report.lanes.FUTURES_SWING_60M;
+  assert.equal(lane.failureCount, 1);
+  assert.equal(lane.failureDetailCount, 1);
+  assert.equal(lane.failureUnattributedCount, 0);
+  assert.deepEqual(lane.failureDetails, row.failureDetails);
+  assert.equal(lane.uniqueAttemptedCount, 5);
+  assert.equal(lane.uniqueSuccessCount, 0, 'page-level success remains deliberately conservative');
+  assert.equal(lane.dataBlockedUniqueCount, 5);
+});
+
+test('missing or malformed per-symbol failure evidence is counted as unattributed and cannot look complete', () => {
+  const sha = '1'.repeat(40);
+  const row = cryptoRotationPage('FUTURES_MID_LONG_4H', 0);
+  row.status = 'BLOCKED_DATA';
+  row.cursorRotationReason = 'BLOCKED_RESEARCH_ROTATION_ONLY';
+  row.pageExecution.dataSuccessCount = 3;
+  row.pageExecution.failuresObserved = 2;
+  row.failureReasonCounts = { invalid_data: 2 };
+  row.failureDetails = [{ symbol: 'BAD', reason: 'invalid_data', message: '', market: 'CRYPTO_FUTURES' }];
+  const report = mergePublicCryptoRotationEvidence({ serviceSha: sha, coverage: [row] });
+  const lane = report.lanes.FUTURES_MID_LONG_4H;
+  assert.equal(lane.failureCount, 2);
+  assert.equal(lane.failureDetailCount, 0);
+  assert.equal(lane.failureUnattributedCount, 2);
+  assert.deepEqual(lane.failureDetails, []);
 });

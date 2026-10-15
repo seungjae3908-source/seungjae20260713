@@ -3,10 +3,15 @@ import type { TradingOrder, TradingPlan, TradingPolicy } from './trade-automatio
 import { canonicalAutomaticLivePositions } from './automatic-live-position-isolation.service';
 import { completeTradingHistory } from './trade-history-completeness.service';
 import { resolveRulePackPilotDynamicCapPolicy, rulePackPilotMarketForPlan } from './trade-rule-pack-pilot-capital.service';
+import { effectiveCapitalAllocation, tradingCapitalChargeKrw } from './auto-trading-capital-allocation.service';
 
 export type AutomaticLiveBudgetCharge = {
   orderId: string; market: string; instrument: string; strategy: string;
-  amountKrw: number; riskKrw: number;
+  /** Full order notional. */
+  amountKrw: number;
+  /** Cash/isolated-margin commitment; legacy holds conservatively fall back to amountKrw. */
+  capitalKrw?: number;
+  riskKrw: number;
 };
 /** Raw, single-MVCC database snapshot. It is never supplied by a browser. */
 export type AutomaticLiveBudgetSnapshot = {
@@ -17,7 +22,7 @@ export type AutomaticLiveBudgetSnapshot = {
 export type AutomaticLiveBudgetProjection = AutomaticLiveBudgetCharge & {
   userId: string; planId: string; expectedVersion: number;
   releases: string[]; baseCharges: AutomaticLiveBudgetCharge[];
-  limits: { total: number; market: number; instrument: number; strategy: number;
+  limits: { total: number; market: number; capital: number; instrument: number; strategy: number;
     risk: number; positions: number; order: number };
 };
 
@@ -47,6 +52,7 @@ function charge(plan: TradingPlan, orderId: string, fraction = 1): AutomaticLive
   }
   return { orderId, market: rulePackPilotMarketForPlan(plan), instrument: instrument(plan),
     strategy: plan.strategyId, amountKrw: Math.ceil(plan.estimatedKrw * fraction * 100) / 100,
+    capitalKrw: Math.ceil(tradingCapitalChargeKrw(plan) * fraction * 100) / 100,
     riskKrw: Math.ceil(plan.estimatedKrw * fraction * Math.abs(reference - plan.stopPrice) / reference * 100) / 100 };
 }
 
@@ -107,7 +113,10 @@ function filledCharge(plan: TradingPlan, order: TradingOrder, remainingQuantity:
   const actualAmount = remainingQuantity * order.averageFillPrice * fx + paidCosts;
   const actualRisk = remainingQuantity * Math.abs(order.averageFillPrice - plan.stopPrice) * fx + paidCosts;
   if (!positive(actualAmount) || !nonnegative(actualRisk)) throw new Error('AUTOMATIC_LIVE_BUDGET_FILL_INVALID');
+  const actualCapital = plan.exchange === 'bitget'
+    ? actualAmount / Math.max(1, Number(plan.leverage) || 1) : actualAmount;
   return { ...baseline, amountKrw: Math.ceil(Math.max(baseline.amountKrw, actualAmount) * 100) / 100,
+    capitalKrw: Math.ceil(Math.max(baseline.capitalKrw ?? baseline.amountKrw, actualCapital) * 100) / 100,
     riskKrw: Math.ceil(Math.max(baseline.riskKrw, actualRisk) * 100) / 100 };
 }
 
@@ -222,12 +231,18 @@ export async function projectAutomaticLiveBudget(
       baseCharges.push(charge(parent, row.id));
     }
   }
+  const allocation = effectiveCapitalAllocation(effective, rulePackPilotMarketForPlan(plan));
+  const marketNotionalCeiling = allocation.configured
+    ? allocation.operatingCapitalKrw * (plan.exchange === 'bitget'
+      ? Math.max(1, Number(plan.leverage) || 1) : 1)
+    : effective.maxAssetClassKrw[rulePackPilotMarketForPlan(plan)];
   const limits = { total: effective.totalCapitalKrw,
-    market: effective.maxAssetClassKrw[rulePackPilotMarketForPlan(plan)],
+    market: Math.min(effective.maxAssetClassKrw[rulePackPilotMarketForPlan(plan)], marketNotionalCeiling),
+    capital: allocation.operatingCapitalKrw,
     instrument: Math.min(effective.maxInstrumentKrw, effective.totalCapitalKrw * effective.maxAssetPercent / 100),
     strategy: effective.totalCapitalKrw * effective.maxAssetPercent / 100,
     risk: effective.totalCapitalKrw * effective.totalDailyLossLimitPercent / 100,
-    positions: effective.maxOpenPositions, order: effective.maxOrderKrw };
+    positions: effective.maxOpenPositions, order: allocation.maxOrderKrw };
   if (Object.values(limits).some((value) => !positive(value)) || !Number.isSafeInteger(limits.positions)) {
     throw new Error('AUTOMATIC_LIVE_BUDGET_LIMITS_INVALID');
   }
@@ -248,15 +263,20 @@ export function assertAutomaticLiveBudgetProjection(
       throw new Error('AUTOMATIC_LIVE_BUDGET_CHARGE_LINEAGE_DRIFT');
     }
     byOrder.set(row.orderId, prior ? { ...prior, amountKrw: Math.max(prior.amountKrw, row.amountKrw),
+      capitalKrw: Math.max(prior.capitalKrw ?? prior.amountKrw, row.capitalKrw ?? row.amountKrw),
       riskKrw: Math.max(prior.riskKrw, row.riskKrw) } : row);
   }
   const charges = [...byOrder.values()];
   const sum = (predicate: (row: AutomaticLiveBudgetCharge) => boolean, key: 'amountKrw' | 'riskKrw') =>
     charges.filter(predicate).reduce((total, row) => total + Math.round(row[key] * 100), 0) / 100;
+  const capitalSum = (predicate: (row: AutomaticLiveBudgetCharge) => boolean) => charges
+    .filter(predicate).reduce((total, row) => total
+      + Math.round((row.capitalKrw ?? row.amountKrw) * 100), 0) / 100;
   const checks: [boolean, string][] = [
     [projection.amountKrw <= projection.limits.order, 'ORDER'],
     [sum(() => true, 'amountKrw') <= projection.limits.total, 'TOTAL'],
     [sum((row) => row.market === projection.market, 'amountKrw') <= projection.limits.market, 'MARKET'],
+    [capitalSum((row) => row.market === projection.market) <= projection.limits.capital, 'OPERATING_CAPITAL'],
     [sum((row) => row.instrument === projection.instrument, 'amountKrw') <= projection.limits.instrument, 'INSTRUMENT'],
     [charges.filter((row) => row.instrument === projection.instrument).length === 1, 'DUPLICATE_INSTRUMENT'],
     [sum((row) => row.strategy === projection.strategy, 'amountKrw') <= projection.limits.strategy, 'STRATEGY'],

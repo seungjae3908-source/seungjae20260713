@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getIndexQuote, getQuote } from './yahoo';
+import {
+  getIndexQuote,
+  getQuote,
+  resetYahooProviderRuntimeForTests,
+} from './yahoo';
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
@@ -20,6 +24,7 @@ function updatedAtOf(value: unknown): string | undefined {
 }
 
 function chartResult(options: {
+  symbol?: string;
   regularMarketTime?: number;
   timestamp?: number;
   price?: number;
@@ -30,7 +35,7 @@ function chartResult(options: {
     chart: {
       result: [{
         meta: {
-          symbol: 'AAPL',
+          symbol: options.symbol ?? 'AAPL',
           currency: 'USD',
           regularMarketPrice: price,
           regularMarketTime: options.regularMarketTime,
@@ -54,6 +59,11 @@ function chartResult(options: {
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
+  resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
+});
+
+test.beforeEach(() => {
+  resetYahooProviderRuntimeForTests({ minimumStartIntervalMs: 0 });
 });
 
 test('preserves Yahoo regularMarketTime instead of request wall clock', async () => {
@@ -69,7 +79,10 @@ test('preserves Yahoo regularMarketTime instead of request wall clock', async ()
 test('uses the timestamp aligned with the last valid Yahoo candle when meta time is absent', async () => {
   Date.now = () => Date.parse('2026-09-10T10:00:00.000Z');
   const candleTime = Math.floor(Date.parse('2026-09-10T09:31:00.000Z') / 1000);
-  globalThis.fetch = async () => response(chartResult({ timestamp: candleTime }));
+  globalThis.fetch = async (input) => response(chartResult({
+    symbol: String(input).includes('%5EGSPC') || String(input).includes('^GSPC') ? '^GSPC' : 'MSFT',
+    timestamp: candleTime,
+  }));
 
   const quote = await getQuote('MSFT');
   const index = await getIndexQuote('^GSPC');
@@ -80,7 +93,7 @@ test('uses the timestamp aligned with the last valid Yahoo candle when meta time
 test('fails closed on materially future Yahoo provider time', async () => {
   Date.now = () => Date.parse('2026-09-10T10:00:00.000Z');
   const futureTime = Math.floor(Date.parse('2026-09-10T10:10:01.000Z') / 1000);
-  globalThis.fetch = async () => response(chartResult({ regularMarketTime: futureTime }));
+  globalThis.fetch = async () => response(chartResult({ symbol: 'NVDA', regularMarketTime: futureTime }));
 
   await assert.rejects(getQuote('NVDA'), /YAHOO_PROVIDER_TIMESTAMP_INVALID/);
 });

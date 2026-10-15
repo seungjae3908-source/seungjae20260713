@@ -16,12 +16,14 @@ import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types'
 import type { SignalOutcomeBar } from './signal-performance-learning.service';
 
 export const FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION = 1 as const;
-export const FORWARD_OBSERVER_DEFAULT_TIMEFRAME = '60m' as const;
-export const FORWARD_OBSERVER_SPOT_TIMEFRAME = '4H' as const;
-export type ForwardObserverTimeframe = typeof FORWARD_OBSERVER_DEFAULT_TIMEFRAME | typeof FORWARD_OBSERVER_SPOT_TIMEFRAME;
+export type ForwardObserverTimeframe = '5m' | '15m' | '60m' | '4H' | '1D';
 export const FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1000;
 
-export type ForwardObserverLaneId = 'KR_SWING_60M' | 'US_SWING_60M' | 'SPOT_SWING_4H' | 'FUTURES_SWING_60M';
+export type ForwardObserverLaneId =
+  | 'KR_SCALPING_5M' | 'KR_SWING_60M' | 'KR_MID_LONG_1D'
+  | 'US_SCALPING_5M' | 'US_SWING_60M' | 'US_MID_LONG_1D'
+  | 'SPOT_SCALPING_15M' | 'SPOT_SWING_4H' | 'SPOT_MID_LONG_4H'
+  | 'FUTURES_SCALPING_5M' | 'FUTURES_SWING_60M' | 'FUTURES_MID_LONG_4H';
 export type ForwardObserverMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 
 export type ForwardObserverLane = Readonly<{
@@ -30,13 +32,24 @@ export type ForwardObserverLane = Readonly<{
   scannerMarket: 'KR' | 'US' | 'spot' | 'futures';
   batchSize: number;
   timeframe: ForwardObserverTimeframe;
+  strategyMode: 'scalping' | 'swing' | 'position';
+  strategyHorizon: 'SCALP' | 'SWING' | 'POSITION';
+  style: 'SCALPING' | 'SWING' | 'MID_LONG';
 }>;
 
 export const FORWARD_OBSERVER_LANES: readonly ForwardObserverLane[] = Object.freeze([
-  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
-  { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
-  { id: 'SPOT_SWING_4H', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME },
-  { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: 'KR_SWING_60M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: '60m', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
+  { id: 'US_SWING_60M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: '60m', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
+  { id: 'SPOT_SWING_4H', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: '4H', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
+  { id: 'FUTURES_SWING_60M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: '60m', strategyMode: 'swing', strategyHorizon: 'SWING', style: 'SWING' },
+  { id: 'KR_SCALPING_5M', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: '5m', strategyMode: 'scalping', strategyHorizon: 'SCALP', style: 'SCALPING' },
+  { id: 'KR_MID_LONG_1D', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20, timeframe: '1D', strategyMode: 'position', strategyHorizon: 'POSITION', style: 'MID_LONG' },
+  { id: 'US_SCALPING_5M', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: '5m', strategyMode: 'scalping', strategyHorizon: 'SCALP', style: 'SCALPING' },
+  { id: 'US_MID_LONG_1D', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20, timeframe: '1D', strategyMode: 'position', strategyHorizon: 'POSITION', style: 'MID_LONG' },
+  { id: 'SPOT_SCALPING_15M', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: '15m', strategyMode: 'scalping', strategyHorizon: 'SCALP', style: 'SCALPING' },
+  { id: 'SPOT_MID_LONG_4H', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20, timeframe: '4H', strategyMode: 'position', strategyHorizon: 'POSITION', style: 'MID_LONG' },
+  { id: 'FUTURES_SCALPING_5M', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: '5m', strategyMode: 'scalping', strategyHorizon: 'SCALP', style: 'SCALPING' },
+  { id: 'FUTURES_MID_LONG_4H', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20, timeframe: '4H', strategyMode: 'position', strategyHorizon: 'POSITION', style: 'MID_LONG' },
 ]);
 
 export type ForwardObserverRuntimeState = {
@@ -44,7 +57,7 @@ export type ForwardObserverRuntimeState = {
   researchCodeSha: string;
   createdAt: string;
   updatedAt: string;
-  cursors: Record<ForwardObserverLaneId, number>;
+  cursors: Partial<Record<ForwardObserverLaneId, number>>;
   observations: ForwardRecommendationObservation[];
   safety: {
     publicDataOnly: true;
@@ -75,9 +88,9 @@ export type ForwardObserverRuntimeSummary = {
   generatedAt: string;
   coverage: {
     markets: ForwardObserverMarket[];
-    strategies: ['SWING'];
-    timeframes: ['60m', '4H'];
-    fullStrategyCoverage: false;
+    strategies: ['SCALPING', 'SWING', 'MID_LONG'];
+    timeframes: ['5m', '15m', '60m', '4H', '1D'];
+    fullStrategyCoverage: true;
   };
   counts: {
     total: number;
@@ -220,7 +233,7 @@ export function canonicalForwardStrategyIdentityFromCard(
   if (!nonEmpty(timeframe)) blockers.push('PAPER_TIMEFRAME_REQUIRED');
   else if (timeframe !== lane.timeframe) blockers.push('PAPER_TIMEFRAME_MISMATCH');
   if (!positiveInteger(horizon)) blockers.push('PAPER_HORIZON_REQUIRED');
-  if (style != null && String(style).toUpperCase() !== 'SWING') blockers.push('PAPER_STRATEGY_STYLE_MISMATCH');
+  if (style != null && String(style).toUpperCase() !== lane.style) blockers.push('PAPER_STRATEGY_STYLE_MISMATCH');
   if (!['BUY', 'SELL', 'LONG', 'SHORT'].includes(String(direction ?? ''))) blockers.push('PAPER_DIRECTION_REQUIRED');
   if (!nonEmpty(strategyId)) blockers.push('STRATEGY_ID_REQUIRED');
   if (!nonEmpty(strategyVersion)) blockers.push('STRATEGY_VERSION_REQUIRED');
@@ -316,10 +329,43 @@ export function createForwardObserverRuntimeState(researchCodeSha: string, now =
     researchCodeSha: sha,
     createdAt: at,
     updatedAt: at,
-    cursors: { KR_SWING_60M: 0, US_SWING_60M: 0, SPOT_SWING_4H: 0, FUTURES_SWING_60M: 0 },
+    cursors: Object.fromEntries(FORWARD_OBSERVER_LANES.map((lane) => [lane.id, 0])) as Record<ForwardObserverLaneId, number>,
     observations: [],
     safety: { ...SAFETY },
   };
+}
+
+export function migrateForwardObserverRuntimeState(
+  input: unknown,
+  researchCodeSha: string,
+): ForwardObserverRuntimeState {
+  const raw = input as Partial<ForwardObserverRuntimeState> & { schemaVersion?: unknown; cursors?: unknown };
+  const currentLaneIds = new Set(FORWARD_OBSERVER_LANES.map((lane) => lane.id));
+  const cursorKeys = raw?.cursors && typeof raw.cursors === 'object' && !Array.isArray(raw.cursors)
+    ? Object.keys(raw.cursors) : [];
+  if (raw?.schemaVersion === FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION
+    && cursorKeys.length === currentLaneIds.size && cursorKeys.every((key) => currentLaneIds.has(key as ForwardObserverLaneId))) {
+    validateForwardObserverRuntimeState(raw as ForwardObserverRuntimeState, researchCodeSha);
+    return raw as ForwardObserverRuntimeState;
+  }
+  if (raw?.schemaVersion !== FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION || raw.researchCodeSha !== researchCodeSha.trim().toLowerCase()
+    || !raw.cursors || typeof raw.cursors !== 'object' || Array.isArray(raw.cursors)) {
+    throw new Error('FORWARD_OBSERVER_STATE_SCHEMA_UNSUPPORTED');
+  }
+  const legacyLaneIds = new Set(['KR_SWING_60M', 'US_SWING_60M', 'SPOT_SWING_4H', 'FUTURES_SWING_60M']);
+  if (Object.keys(raw.cursors).some((key) => !legacyLaneIds.has(key))) {
+    throw new Error('FORWARD_OBSERVER_LEGACY_CURSOR_SCOPE_INVALID');
+  }
+  const createdAtMs = Date.parse(String(raw.createdAt ?? ''));
+  if (!Number.isFinite(createdAtMs)) throw new Error('FORWARD_OBSERVER_LEGACY_CREATED_AT_INVALID');
+  const fresh = createForwardObserverRuntimeState(researchCodeSha, new Date(createdAtMs));
+  const migrated = {
+    ...raw,
+    schemaVersion: FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION,
+    cursors: { ...fresh.cursors, ...(raw.cursors as Record<string, number>) },
+  } as ForwardObserverRuntimeState;
+  validateForwardObserverRuntimeState(migrated, researchCodeSha);
+  return migrated;
 }
 
 export function validateForwardObserverRuntimeState(state: ForwardObserverRuntimeState, researchCodeSha: string): void {
@@ -332,9 +378,14 @@ export function validateForwardObserverRuntimeState(state: ForwardObserverRuntim
     || state.safety.profitabilityClaimAllowed !== false) {
     throw new Error('FORWARD_OBSERVER_STATE_SAFETY_CONTRACT_VIOLATION');
   }
+  const expectedLaneIds = new Set(FORWARD_OBSERVER_LANES.map((lane) => lane.id));
+  if (Object.keys(state.cursors).length !== expectedLaneIds.size
+    || Object.keys(state.cursors).some((laneId) => !expectedLaneIds.has(laneId as ForwardObserverLaneId))) {
+    throw new Error('FORWARD_OBSERVER_CURSOR_SCOPE_INVALID');
+  }
   for (const lane of FORWARD_OBSERVER_LANES) {
     const cursor = state.cursors[lane.id];
-    if (!Number.isInteger(cursor) || cursor < 0) throw new Error('FORWARD_OBSERVER_CURSOR_INVALID');
+    if (!Number.isInteger(cursor) || Number(cursor) < 0) throw new Error('FORWARD_OBSERVER_CURSOR_INVALID');
   }
   const ids = new Set<string>();
   for (const observation of state.observations) {
@@ -553,11 +604,12 @@ export async function runForwardRecommendationObserverCycle(input: {
         replayedThisCycle += 1;
       }
     }
-    cursors[lane.id] = holdCursorForIdentity ? cursorBefore : candidateCursor;
+    const cursorAfter = holdCursorForIdentity ? cursorBefore : candidateCursor;
+    cursors[lane.id] = cursorAfter;
     lanes.push({
       laneId: lane.id,
       cursorBefore,
-      cursorAfter: cursors[lane.id],
+      cursorAfter,
       scannerOutcome: scannerOutcome(response),
       scannedCards: response.cards.length,
       readyObservations,
@@ -583,10 +635,10 @@ export async function runForwardRecommendationObserverCycle(input: {
     researchCodeSha,
     generatedAt: evaluatedAt,
     coverage: {
-      markets: FORWARD_OBSERVER_LANES.map((lane) => lane.market),
-      strategies: ['SWING'],
-      timeframes: ['60m', '4H'],
-      fullStrategyCoverage: false,
+      markets: [...new Set(FORWARD_OBSERVER_LANES.map((lane) => lane.market))],
+      strategies: ['SCALPING', 'SWING', 'MID_LONG'],
+      timeframes: ['5m', '15m', '60m', '4H', '1D'],
+      fullStrategyCoverage: true,
     },
     counts: {
       total: observations.length,
