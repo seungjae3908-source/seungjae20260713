@@ -108,11 +108,22 @@ function activeLanes(lanes, env) {
   return selected;
 }
 
+async function discoveryAttemptCount(root) {
+  try { return (await readdir(join(root, 'autonomous-research', 'discovery'))).filter((name) => name.endsWith('.json')).length; }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; return 0; }
+}
+
 async function selectResearchLane(root, lanes) {
-  let attempts = 0;
-  try { attempts = (await readdir(join(root, 'autonomous-research', 'discovery'))).filter((name) => name.endsWith('.json')).length; }
-  catch (error) { if (error?.code !== 'ENOENT') throw error; }
-  return lanes[attempts % lanes.length];
+  return lanes[(await discoveryAttemptCount(root)) % lanes.length];
+}
+
+// Offer a small rotating window of the untried catalog. A short prompt is
+// cheaper for the free model, and a source that failed transiently (for
+// example a provider 5xx on its extraction) is not offered first again.
+export function rotateCatalogWindowV2(catalog, attempts, size = 5) {
+  if (!Array.isArray(catalog) || catalog.length <= size) return Object.freeze([...(catalog ?? [])]);
+  const start = ((attempts % catalog.length) + catalog.length) % catalog.length;
+  return Object.freeze(Array.from({ length: size }, (_, k) => catalog[(start + k) % catalog.length]));
 }
 // Public strategy files whose existence, OSI license and entry/exit logic were
 // verified by hand (raw.githubusercontent.com, 2026-10-15). While any entry is
@@ -890,7 +901,7 @@ export async function runAutonomousResearchDiscoveryV2({
   let candidate = null;
   try {
     calls.attempted += 1;
-    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, catalog), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, rotateCatalogWindowV2(catalog, (await discoveryAttemptCount(root)) + Math.floor(Date.parse(observedAt) / 600_000))), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (planned?.provider !== policy.provider || planned?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const plan = parseSourcePlan(planned.answer);
