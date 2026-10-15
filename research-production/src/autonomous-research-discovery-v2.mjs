@@ -144,10 +144,13 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   'user_data/strategies/berlinguyinca/AdxSmas.py',
   // Expanded 2026-10-15 from a real tree listing of freqtrade-strategies
   // (commit f3340ce). Lookahead-bias examples and non-strategy samples excluded.
+  // Excluded 2026-10-16 after reading each file at f3340ce: Heracles.py and
+  // BinHV45.py set exit_long = 0, Low_BB.py has an empty exit condition and
+  // PatternRecognition.py has its exit conditions commented out. They exit only
+  // through minimal_roi/stoploss, so no exit rule line exists to quote and
+  // EXIT_LOCATOR extraction always fails closed on them.
   'user_data/strategies/Bandtastic.py',
-  'user_data/strategies/Heracles.py',
   'user_data/strategies/MultiMa.py',
-  'user_data/strategies/PatternRecognition.py',
   'user_data/strategies/PowerTower.py',
   'user_data/strategies/Supertrend.py',
   'user_data/strategies/SwingHighToSky.py',
@@ -159,14 +162,12 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   'user_data/strategies/berlinguyinca/AverageStrategy.py',
   'user_data/strategies/berlinguyinca/AwesomeMacd.py',
   'user_data/strategies/berlinguyinca/BbandRsi.py',
-  'user_data/strategies/berlinguyinca/BinHV45.py',
   'user_data/strategies/berlinguyinca/CCIStrategy.py',
   'user_data/strategies/berlinguyinca/CMCWinner.py',
   'user_data/strategies/berlinguyinca/ClucMay72018.py',
   'user_data/strategies/berlinguyinca/CofiBitStrategy.py',
   'user_data/strategies/berlinguyinca/CombinedBinHAndCluc.py',
   'user_data/strategies/berlinguyinca/EMASkipPump.py',
-  'user_data/strategies/berlinguyinca/Low_BB.py',
   'user_data/strategies/berlinguyinca/MACDStrategy.py',
   'user_data/strategies/berlinguyinca/MACDStrategy_crossed.py',
   'user_data/strategies/berlinguyinca/MultiRSI.py',
