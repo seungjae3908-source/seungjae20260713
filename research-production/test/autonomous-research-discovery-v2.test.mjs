@@ -164,7 +164,7 @@ test('directive drives two actual-provider stages, exact public source verificat
   assert.equal(result.status, 'COMPLETE', JSON.stringify(result));
   assert.equal(result.discoveryStatus, 'DOSSIER_STAGED');
   assert.equal(result.directiveConsumed, true);
-  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0 });
+  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0, retried: 0 });
   assert.deepEqual(result.actualSourceFetches, { attempted: 3, succeeded: 3, failed: 0 });
   assert.equal(result.formulaGeneratedCount, 1);
   assert.equal(result.actualBacktestCount, 1, JSON.stringify(result));
@@ -267,7 +267,7 @@ test('a new failure directive cannot spend a second extraction call on the same 
   const repeated = await runAutonomousResearchDiscoveryV2(options);
   assert.equal(repeated.status, 'AI_DISCOVERY_UNAVAILABLE');
   assert.equal(repeated.reason, 'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED');
-  assert.deepEqual(repeated.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0 });
+  assert.deepEqual(repeated.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0, retried: 0 });
   assert.deepEqual(repeated.actualSourceFetches, { attempted: 3, succeeded: 3, failed: 0 });
   assert.equal(repeated.retryAfterAt, Date.parse(AT) + 6 * 60 * 60 * 1_000);
   assert.equal(ai.count(), 3);
@@ -318,7 +318,7 @@ test('AI locator that is absent from fetched source fails closed before Formula 
   assert.equal(result.status, 'AI_DISCOVERY_UNAVAILABLE');
   assert.equal(result.reason, 'ENTRY_LOCATOR_NOT_FOUND_IN_SOURCE');
   assert.equal(result.stagedDossierDigest, null);
-  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0 });
+  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0, retried: 0 });
 });
 
 test('strategy-file guard rejects reports and plumbing by whole words only', () => {
@@ -349,7 +349,7 @@ test('a report file chosen by the AI is rejected before any fetch and is not pro
   });
   assert.equal(first.status, 'AI_DISCOVERY_UNAVAILABLE');
   assert.equal(first.reason, 'AI_DISCOVERY_SOURCE_NOT_STRATEGY');
-  assert.deepEqual(first.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0 });
+  assert.deepEqual(first.actualProviderCalls, { attempted: 1, succeeded: 1, failed: 0, retried: 0 });
   assert.equal(fetches, 0);
 
   // After the semantic back-off, the rejected source is named in the prompt and refused again.
@@ -663,4 +663,39 @@ test('the offered catalog window rotates so a retry starts from a different sour
   assert.equal(first.length, 5);
   assert.notEqual(first[0], next[0]);
   assert.deepEqual(rotateCatalogWindowV2(items.slice(0, 3), 7).map((row) => row.sourcePath), ['s0.py', 's1.py', 's2.py']);
+});
+
+test('a provider 503 is retried within the same stage and still counts two logical stages', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  let failedOnce = false;
+  const waits = [];
+  const result = await runAutonomousResearchDiscoveryV2({
+    verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    fetchImpl: sourceFetch(), datasetLoader,
+    invoke: async (request) => {
+      if (!failedOnce) { failedOnce = true; throw new Error('FREE_AI_PROVIDER_UNAVAILABLE'); }
+      return ai.invoke(request);
+    },
+    providerRetryDelaysMs: [1, 2], sleep: async (ms) => { waits.push(ms); },
+  });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0, retried: 1 });
+  assert.deepEqual(waits, [1]);
+});
+
+test('a non-transient provider error is not retried', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  let calls = 0;
+  const result = await runAutonomousResearchDiscoveryV2({
+    verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    fetchImpl: sourceFetch(), datasetLoader,
+    invoke: async () => { calls += 1; throw new Error('FREE_AI_AUTH_REJECTED'); },
+    providerRetryDelaysMs: [1, 2], sleep: async () => {},
+  });
+  assert.equal(result.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(calls, 1);
+  assert.equal(result.actualProviderCalls.retried, 0);
 });
