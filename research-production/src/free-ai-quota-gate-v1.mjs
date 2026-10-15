@@ -9,7 +9,8 @@ import { dirname, join, resolve } from 'node:path';
 
 export const FREE_AI_QUOTA_GATE_CONTRACT_V1 = 'free-ai-quota-gate/v1';
 const MINUTE = 60_000;
-const RATE_LIMIT_PATTERN = /RATE_LIMITED|HTTP_429|QUOTA|RESOURCE_EXHAUSTED/u;
+// Only real provider limits. Policy labels such as CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN are not limits.
+const RATE_LIMIT_PATTERN = /RATE_LIMITED|HTTP_429|RESOURCE_EXHAUSTED|QUOTA_EXCEEDED/u;
 
 export function freeAiQuotaGatePathV1(stateRoot) {
   return join(resolve(String(stateRoot)), 'latest', 'free-ai-quota-gate-v1.json');

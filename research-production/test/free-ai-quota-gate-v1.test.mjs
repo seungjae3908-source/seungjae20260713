@@ -75,3 +75,9 @@ test('after a rate-limit pause ends, AI retries immediately instead of waiting a
   const after = decideFreeAiRunV1({ gate: limited, nowMs: NOW + (21 * MIN), researchCodeSha: SHA });
   assert.deepEqual([after.run, after.reason], [true, 'RETRY_AFTER_PAUSE']);
 });
+
+test('a free-only policy label is not mistaken for a provider rate limit', () => {
+  assert.equal(isRateLimitedV1({ review: { reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' } }), false);
+  assert.equal(isRateLimitedV1({ cycle: { reason: 'PUBLIC_SOURCE_HTTP_404' }, review: { reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' } }), false);
+  assert.equal(isRateLimitedV1({ cycle: { reason: 'GEMINI_RESOURCE_EXHAUSTED' } }), true);
+});
