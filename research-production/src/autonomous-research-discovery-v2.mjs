@@ -53,6 +53,20 @@ export function isNonStrategySourcePathV2(path) {
   return words.some((word) => NON_STRATEGY_WORDS.has(word));
 }
 const MAX_FAILED_SOURCE_FILES = 500;
+// Public strategy files whose existence, OSI license and entry/exit logic were
+// verified by hand (raw.githubusercontent.com, 2026-10-15). While any entry is
+// untried, discovery must choose from this list so the free model cannot
+// invent a repository, branch or path (PUBLIC_SOURCE_HTTP_404). Once all are
+// tried, open discovery resumes under the same safety checks.
+const FREQTRADE_STRATEGIES = 'https://github.com/freqtrade/freqtrade-strategies';
+export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
+  'user_data/strategies/Strategy001.py',
+  'user_data/strategies/Strategy002.py',
+  'user_data/strategies/Strategy003.py',
+  'user_data/strategies/Strategy004.py',
+  'user_data/strategies/Strategy005.py',
+  'user_data/strategies/berlinguyinca/AdxSmas.py',
+].map((sourcePath) => Object.freeze({ repository: FREQTRADE_STRATEGIES, branch: 'main', licensePath: 'LICENSE', sourcePath })));
 
 const SAFETY = Object.freeze({
   researchOnly: true,
@@ -226,7 +240,7 @@ function parseRuleExtraction(answer, sourceText) {
   });
 }
 
-function discoveryPrompt(directive, priorSourceIds = [], failedSources = []) {
+function discoveryPrompt(directive, priorSourceIds = [], failedSources = [], catalog = []) {
   return [
     'ROLE: AUTONOMOUS_PUBLIC_STRATEGY_SOURCE_DISCOVERY_V2',
     `directiveDigest=${directive.directiveDigest}`,
@@ -243,7 +257,10 @@ function discoveryPrompt(directive, priorSourceIds = [], failedSources = []) {
     'Return exactly the existing bounded qualitative JSON schema. Include exactly one hypothesis.',
     'Put these exact TAG=value records in hypotheses[0].requiredEvidence: REPOSITORY=https://github.com/owner/repo, BRANCH=branch, SOURCE_PATH=path, LICENSE_PATH=path.',
     'Write each TAG exactly once and propose exactly one source; never list alternatives or repeat a TAG in findings.',
-    'Only name a repository, branch and file path you are certain exist. A verified public option: REPOSITORY=https://github.com/freqtrade/freqtrade-strategies, BRANCH=main, LICENSE_PATH=LICENSE (GPL-3.0), strategy files under user_data/strategies/ (for example user_data/strategies/Strategy001.py). If unsure, pick a different, not yet attempted file from that folder.',
+    ...(catalog.length
+      ? ['You MUST choose exactly one of these verified sources and copy its REPOSITORY, BRANCH, SOURCE_PATH and LICENSE_PATH exactly:',
+        ...catalog.map((entry) => `- REPOSITORY=${entry.repository} | BRANCH=${entry.branch} | SOURCE_PATH=${entry.sourcePath} | LICENSE_PATH=${entry.licensePath}`)]
+      : ['Only name a repository, branch and file path you are certain exist.']),
     'The thesis must say what makes this source materially different from failed families. No numeric performance claims.',
     'In summary, thesis, findings and risks use neutral research wording. Do not use the words profit, profitability, drawdown, Sharpe, PnL, ROI, expectancy, leverage, position size, champion or promotion, and do not write buy/sell/long/short instructions.',
   ].join('\n');
@@ -543,6 +560,16 @@ async function priorFailedSources(root) {
   return Object.freeze([...failed].sort().slice(-40));
 }
 
+function untriedCatalog(catalog, priorSourceIds, failedSources) {
+  return Object.freeze(catalog.filter((entry) => {
+    const match = SAFE_REPOSITORY.exec(entry.repository);
+    if (!match) return false;
+    const prefix = `github:${match[1]}/${match[2]}:`;
+    const tried = priorSourceIds.some((id) => id.startsWith(prefix) && id.endsWith(`:${entry.sourcePath}`));
+    return !tried && !failedSources.includes(`${entry.repository}:${entry.sourcePath}`);
+  }));
+}
+
 async function priorGithubSourceIds(root) {
   const autonomousRoot = join(root, 'autonomous-research');
   const states = [];
@@ -591,6 +618,7 @@ export async function runAutonomousResearchDiscoveryV2({
   invoke = invokeResearchFreeAi,
   fetchImpl = globalThis.fetch,
   datasetLoader = defaultDatasetLoader,
+  verifiedSourceCatalog = DEFAULT_VERIFIED_SOURCE_CATALOG_V2,
 } = {}) {
   const root = resolve(String(rawRoot ?? ''));
   const researchCodeSha = exactSha(rawSha);
@@ -632,10 +660,11 @@ export async function runAutonomousResearchDiscoveryV2({
   const fetches = { attempted: 0, succeeded: 0, failed: 0 };
   const priorSourceIds = await priorGithubSourceIds(root);
   const failedSources = await priorFailedSources(root);
+  const catalog = untriedCatalog(Array.isArray(verifiedSourceCatalog) ? verifiedSourceCatalog : [], priorSourceIds, failedSources);
   let candidate = null;
   try {
     calls.attempted += 1;
-    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, catalog), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (planned?.provider !== policy.provider || planned?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const plan = parseSourcePlan(planned.answer);
@@ -643,6 +672,10 @@ export async function runAutonomousResearchDiscoveryV2({
       strategyId: plan.proposedStrategyId, family: null, templateId: null, sourceRevision: null, sourceSha256: null };
     if (failedSources.includes(`${plan.repository}:${plan.sourcePath}`)) throw new Error('AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
     if (isNonStrategySourcePathV2(plan.sourcePath)) throw new Error('AI_DISCOVERY_SOURCE_NOT_STRATEGY');
+    if (catalog.length && !catalog.some((entry) => entry.repository === plan.repository && entry.branch === plan.branch
+      && entry.sourcePath === plan.sourcePath && entry.licensePath === plan.licensePath)) {
+      throw new Error('AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG');
+    }
 
     fetches.attempted += 3;
     let source;
