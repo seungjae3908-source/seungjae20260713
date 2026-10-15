@@ -163,6 +163,33 @@ async function canonicalScannerQuality() {
   }
 }
 
+function finitePrice(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Display-only plan for Telegram/app: copied facts, never execution input. */
+function signalPlanForCard(card) {
+  if (!card) return null;
+  const evidence = Array.isArray(card.evidence) ? card.evidence : [];
+  const reasons = evidence.flatMap((item) => (typeof item === 'string' ? [item]
+    : item?.status === 'matched' && Array.isArray(item.reasons) ? item.reasons : []))
+    .filter((text) => typeof text === 'string' && text.trim()).map((text) => text.trim().slice(0, 120)).slice(0, 5);
+  return {
+    name: typeof card.name === 'string' ? card.name.slice(0, 80) : null,
+    price: finitePrice(card.price),
+    entryZone: card.pricePlan?.entryZone
+      ? { from: finitePrice(card.pricePlan.entryZone.from), to: finitePrice(card.pricePlan.entryZone.to) } : null,
+    stopLoss: finitePrice(card.pricePlan?.stopLoss),
+    targets: (Array.isArray(card.pricePlan?.targets) ? card.pricePlan.targets : []).map(finitePrice).filter(Boolean).slice(0, 3),
+    reasons,
+    dataSources: Array.isArray(card.dataSources) ? card.dataSources.slice(0, 5) : [],
+    signalGrade: card.signalGrade ?? null,
+    observedAt: card.observedAt ?? null,
+    executionAuthority: 'NONE',
+  };
+}
+
 function retainedKey(input) {
   return [input.market, input.symbol, input.strategy, input.timeframe, input.direction].join('|');
 }
@@ -456,6 +483,21 @@ async function main() {
           insufficientDataCount: executionEvidence.insufficientDataCount,
           filteredByStrategyCount: executionEvidence.filteredByStrategyCount,
           staleCount: executionEvidence.staleCount },
+        // Exact page proof consumed by the Telegram V3 current-source barrier.
+        publicExecutionDiagnostic: {
+          state: response.execution.completedCount === response.execution.requestedCount
+            && response.execution.partial === false && response.execution.timedOut === false
+            && response.execution.cancelled !== true
+            ? 'PAGE_EXECUTION_COMPLETE' : 'PAGE_EXECUTION_INCOMPLETE',
+          requested: response.execution.requestedCount,
+          started: response.execution.startedCount,
+          completed: response.execution.completedCount,
+          partial: response.execution.partial,
+          timedOut: response.execution.timedOut,
+          providerErrors: response.execution.providerErrorCount,
+          timeouts: response.execution.timeoutCount,
+          failuresObserved: response.failures.length,
+        },
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -516,6 +558,8 @@ async function main() {
       const rebound = handoffInput.paperIdentity || !researchStillValid ? handoffInput : row.research;
       const adapted = adaptCanonicalScannerCard({ ...rebound, leverageEvidence: row.leverageEvidence }, { nowMs: publicationNowMs });
       return adapted ? { ...adapted, provenance: { ...adapted.provenance, ...row.provenance,
+        sourceExpiresAt: row.expiresAt ?? null,
+        signalPlan: signalPlanForCard(row.card),
         researchEvidence: rebound === row.research ? row.research.researchEvidence : null } } : null;
     })
     .filter(Boolean);
