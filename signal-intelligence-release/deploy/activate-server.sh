@@ -192,8 +192,9 @@ EOF
 Description=Run Signal Intelligence V3 public Scanner every five minutes
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=5min
+# Wall-clock schedule: unlike OnUnitActiveSec it cannot stop re-arming after
+# a missed or failed run (the cycle stalled from 2026-09-28 that way).
+OnCalendar=*:0/5
 AccuracySec=15s
 Persistent=true
 Unit=$CYCLE_SERVICE
