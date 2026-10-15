@@ -6,7 +6,8 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 
 const SHA = 'a'.repeat(40);
 const NEXT_SHA = 'd'.repeat(40);
@@ -513,4 +514,31 @@ test('prompts ask for short answers so the provider output budget is not exceede
     invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
   for (const prompt of ai.prompts) assert.match(prompt, /Be brief: summary under 12 words/u);
   assert.match(ai.prompts[1], /without the line-number prefix/u);
+});
+
+test('the fixed answer wording passes the unchanged shared filter', () => {
+  const text = DISCOVERY_FIXED_TEXT_V2;
+  for (const summary of [text.planSummary, text.extractionSummary]) {
+    const parsed = parseResearchFreeAiReviewForResearchOnlyV1(JSON.stringify({
+      summary, findings: [],
+      hypotheses: [{ hypothesisId: 'AdxSmasVariant', thesis: text.thesis,
+        requiredEvidence: ['MARKET=CRYPTO_SPOT', 'TIMEFRAME=1h', 'DIRECTION=LONG', 'FAMILY=ADX_SMA_TREND', 'TEMPLATE=ADX_ROC_CONTINUATION_V1'],
+        falsification: text.falsification, intendedRegime: text.intendedRegime, independenceRationale: text.independenceRationale }],
+      risks: [text.risk], disposition: 'RESEARCH_PROPOSAL_ONLY',
+    }));
+    assert.equal(parsed.summary, summary);
+  }
+});
+
+test('both prompts carry a fill-in answer template with the fixed wording', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  for (const prompt of ai.prompts) {
+    assert.match(prompt, /Return exactly this JSON and nothing else/u);
+    assert.ok(prompt.includes(DISCOVERY_FIXED_TEXT_V2.thesis));
+  }
+  assert.ok(ai.prompts[1].includes('ENTRY_LOCATOR=<exact source line>'));
 });
