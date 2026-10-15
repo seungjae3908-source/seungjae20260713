@@ -141,7 +141,6 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   // Expanded 2026-10-15 from a real tree listing of freqtrade-strategies
   // (commit f3340ce). Lookahead-bias examples and non-strategy samples excluded.
   'user_data/strategies/Bandtastic.py',
-  'user_data/strategies/Diamond.py',
   'user_data/strategies/Heracles.py',
   'user_data/strategies/MultiMa.py',
   'user_data/strategies/PatternRecognition.py',
@@ -423,8 +422,12 @@ function discoveryPrompt(directive, priorSourceIds = [], failedSources = [], cat
 }
 
 function extractionPrompt({ plan, revision, sourceSha256, sourceText, lane = RESEARCH_LANES_V2[0] }) {
+  // Comment-only lines are blanked in the prompt (line numbers kept). They
+  // carry no executable rule, often hold performance claims or decorative
+  // Unicode, and have made the free provider fail with 5xx. Locators are still
+  // verified against the full original source text.
   const numbered = sourceText.slice(0, MAX_PROMPT_SOURCE_CHARS).split(/\r?\n/u)
-    .map((line, index) => `${String(index + 1).padStart(4, '0')}: ${line}`).join('\n');
+    .map((line, index) => `${String(index + 1).padStart(4, '0')}: ${/^\s*#/u.test(line) ? '#' : line}`).join('\n');
   return [
     'ROLE: AUTONOMOUS_PUBLIC_STRATEGY_RULE_EXTRACTION_V2',
     `repository=${plan.repository}`,
