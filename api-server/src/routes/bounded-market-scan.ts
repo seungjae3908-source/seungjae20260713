@@ -389,6 +389,7 @@ export function createBoundedMarketScanRouter(
       );
       void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
+      console.info(`[scanner-route] market=${market} timeframe=${timeframe} elapsedMs=${Date.now() - scanStartedAt} partial=${result.execution.partial} timedOut=${result.execution.timedOut} cards=${visibleResult.cards.length}`);
       return res.json({
         ...visibleResult,
         providerHealth: providerHealthFrom(result),
@@ -402,6 +403,7 @@ export function createBoundedMarketScanRouter(
       // Promise.race, so key the fallback on the timer state rather than the
       // specific rejection type. Client disconnects never set this flag.
       if (routeDeadlineExceeded && !res.writableEnded) {
+        console.info(`[scanner-route] market=${market} timeframe=${timeframe} elapsedMs=${Date.now() - scanStartedAt} routeDeadline=true`);
         const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
         res.setHeader('X-Scanner-Request-Id', fallback.requestId);
         return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
