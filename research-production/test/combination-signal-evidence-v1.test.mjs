@@ -39,7 +39,7 @@ test('only holdout-passed survivors become scanner rules, with the conservative 
   assert.equal(rule.scannerTimeframe, '1D');
   assert.equal(rule.edgeR, 0.4); // min(0.6%, 0.4%) / 1% risk
   assert.equal(rule.sampleSize, 75);
-  assert.equal(rule.costPolicy.taxPercent, 0.15);
+  assert.equal(rule.costPolicy.taxPercent, 0.2);
   assert.equal(rule.executionAuthority, 'NONE');
   assert.equal(combinationSignalRulesForLaneV1({ lane: KR, laneState: laneState({ holdoutPass: false }) }).length, 0);
   assert.equal(combinationSignalRulesForLaneV1({ lane: KR, laneState: { ...laneState(), holdout: {} } }).length, 0);

@@ -12,6 +12,7 @@ import {
 import {
   benjaminiHochbergV1,
   classifyLaneTrialsV1,
+  evaluateCombinationTrialV1,
   formatCombinationReportKoV1,
   planBaseTrialsV1,
   planTripleTrialsV1,
@@ -227,4 +228,27 @@ test('survivors get exactly one sealed-2026 holdout check, cached and reported i
   const text = formatCombinationReportKoV1(second);
   assert.match(text, /2026 봉인 데이터 1회 확인/);
   assert.ok(first.lanes[0].holdoutChecked > 0);
+});
+
+test('futures backtests charge funding: heavy positive funding lowers long and raises short returns', () => {
+  const candles = randomWalk(3_000, { seed: 7 });
+  const atoms = computeCombinationAtomsV1(candles, { timeframe: '1h' });
+  const first = candles[0].timestamp; const last = candles.at(-1).timestamp;
+  const dataset = { symbol: 'BTCUSDT', candles, atoms, splitTime: first + Math.floor((last - first) * 0.6),
+    windowEdges: [1, 2, 3].map((k) => first + Math.floor(((last - first) * k) / 4)) };
+  const funding = [];
+  for (let t = first; t <= last; t += 8 * 3_600_000) funding.push({ timestamp: t, rate: 0.003 });
+  for (const [laneId, direction] of [['CRYPTO_FUTURES_LONG', 1], ['CRYPTO_FUTURES_SHORT', -1]]) {
+    const lane = LANE(laneId);
+    const trial = planBaseTrialsV1(lane).find((row) => {
+      const r = evaluateCombinationTrialV1({ lane, trial: row, datasets: [dataset] });
+      return r.discovery.trades >= 30;
+    });
+    assert.ok(trial, `${laneId}: a trial with enough trades exists on the synthetic series`);
+    const without = evaluateCombinationTrialV1({ lane, trial, datasets: [dataset] });
+    const withFunding = evaluateCombinationTrialV1({ lane, trial, datasets: [{ ...dataset, fundingRates: funding }] });
+    assert.equal(withFunding.discovery.trades, without.discovery.trades);
+    const delta = withFunding.discovery.meanReturn - without.discovery.meanReturn;
+    assert.ok(direction * delta < 0, `${laneId}: funding must hurt the paying side and help the receiving side (delta ${delta})`);
+  }
 });
