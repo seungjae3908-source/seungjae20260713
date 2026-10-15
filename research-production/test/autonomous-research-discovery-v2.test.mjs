@@ -6,7 +6,8 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 
 const SHA = 'a'.repeat(40);
 const NEXT_SHA = 'd'.repeat(40);
@@ -140,7 +141,7 @@ async function fixture(t) {
 
 test('missing free provider persists WAITING_FREE_AI_CONFIGURATION with zero calls while research remains resumable', async (t) => {
   const root = await fixture(t);
-  const result = await runAutonomousResearchCycleV2({ stateRoot: root, researchCodeSha: SHA, env: {}, now: () => AT,
+  const result = await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: {}, now: () => AT,
     runShockLane: shockLaneStub, runProviderLane: providerLaneStub });
   assert.equal(result.status, 'WAITING_FREE_AI_CONFIGURATION');
   assert.equal(result.directiveConsumed, true);
@@ -154,7 +155,7 @@ test('missing free provider persists WAITING_FREE_AI_CONFIGURATION with zero cal
 test('directive drives two actual-provider stages, exact public source verification, FormulaCandidate and existing backtest queue', async (t) => {
   const root = await fixture(t);
   const ai = provider();
-  const result = await runAutonomousResearchCycleV2({
+  const result = await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader,
     runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
@@ -176,7 +177,6 @@ test('directive drives two actual-provider stages, exact public source verificat
   assert.equal(ai.count(), 2);
   assert.match(ai.prompts[0], /failedFamilies=NONE/u);
   assert.match(ai.prompts[0], /Write each TAG exactly once/u);
-  assert.match(ai.prompts[0], /freqtrade\/freqtrade-strategies/u);
   assert.match(ai.prompts[1], /never repeat a TAG in findings/u);
   assert.match(ai.prompts[1], /BEGIN UNTRUSTED SOURCE/u);
   assert.equal(result.selectedNextStrategy.sourceRevision, SOURCE_SHA);
@@ -186,7 +186,7 @@ test('successful directive receipt is restart-idempotent and does not call provi
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
   const ai = provider();
-  const options = { stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+  const options = { verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader };
   const first = await runAutonomousResearchDiscoveryV2(options);
   const second = await runAutonomousResearchDiscoveryV2(options);
@@ -201,7 +201,7 @@ test('cycle consumes a persisted directive before any closed-loop rewrite', asyn
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
   let loopCalls = 0;
-  const result = await runAutonomousResearchCycleV2({
+  const result = await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [],
     stateRoot: root,
     researchCodeSha: SHA,
     env: env(),
@@ -228,7 +228,7 @@ test('cycle rebinds a prior-release directive before discovery and archives both
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
   const prior = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
   let discoveryCalls = 0;
-  const result = await runAutonomousResearchCycleV2({
+  const result = await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: NEXT_SHA, env: env(), now: () => AT,
     runLoop: async () => { throw new Error('REBIND_MUST_PRECEDE_LOOP'); },
     runDiscovery: async ({ stateRoot }) => {
@@ -257,6 +257,7 @@ test('a new failure directive cannot spend a second extraction call on the same 
   const root = await fixture(t);
   const ai = provider();
   const options = {
+    verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader,
     runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
@@ -274,7 +275,7 @@ test('a new failure directive cannot spend a second extraction call on the same 
 test('a later release preserves prior state and cannot rediscover the same source revision', async (t) => {
   const root = await fixture(t);
   const firstAi = provider();
-  await runAutonomousResearchCycleV2({
+  await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: firstAi.invoke, fetchImpl: sourceFetch(), datasetLoader,
     runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
@@ -283,7 +284,7 @@ test('a later release preserves prior state and cannot rediscover the same sourc
   const oldState = await readFile(oldStatePath, 'utf8');
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: NEXT_SHA, now: () => AT });
   const nextAi = provider();
-  const repeated = await runAutonomousResearchDiscoveryV2({
+  const repeated = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: NEXT_SHA, env: env(), now: () => AT,
     invoke: nextAi.invoke, fetchImpl: sourceFetch(), datasetLoader,
   });
@@ -308,7 +309,7 @@ test('AI locator that is absent from fetched source fails closed before Formula 
     ],
   });
   let calls = 0;
-  const result = await runAutonomousResearchDiscoveryV2({
+  const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? planAnswer : badExtraction }),
     fetchImpl: sourceFetch(), datasetLoader,
@@ -340,7 +341,7 @@ test('a report file chosen by the AI is rejected before any fetch and is not pro
   });
   let fetches = 0;
   const countingFetch = sourceFetch();
-  const first = await runAutonomousResearchDiscoveryV2({
+  const first = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: reportPlan }),
     fetchImpl: async (url) => { fetches += 1; return countingFetch(url); }, datasetLoader,
@@ -353,7 +354,7 @@ test('a report file chosen by the AI is rejected before any fetch and is not pro
   // After the semantic back-off, the rejected source is named in the prompt and refused again.
   const later = '2026-10-14T08:00:00.000Z';
   const prompts = [];
-  const second = await runAutonomousResearchDiscoveryV2({
+  const second = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => later,
     invoke: async ({ policy, prompt }) => { prompts.push(prompt); return { provider: policy.provider, model: policy.model, answer: reportPlan }; },
     fetchImpl: sourceFetch(), datasetLoader,
@@ -382,7 +383,7 @@ test('verified locators may quote source words that free text may not use', asyn
     ],
   });
   let calls = 0;
-  const ok = await runAutonomousResearchDiscoveryV2({
+  const ok = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model,
       answer: ++calls === 1 ? planAnswer : extraction('Participation breakout declared variant') }),
@@ -394,7 +395,7 @@ test('verified locators may quote source words that free text may not use', asyn
   const root2 = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
   let calls2 = 0;
-  const refused = await runAutonomousResearchDiscoveryV2({
+  const refused = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model,
       answer: ++calls2 === 1 ? planAnswer : extraction('High profit with low drawdown') }),
@@ -412,7 +413,7 @@ test('an identical repeated tag is accepted but conflicting repeats still fail c
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
   let calls = 0;
-  const ok = await runAutonomousResearchDiscoveryV2({
+  const ok = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? repeated : extractionAnswer }),
     fetchImpl: sourceFetch(), datasetLoader,
@@ -426,10 +427,118 @@ test('an identical repeated tag is accepted but conflicting repeats still fail c
   });
   const root2 = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
-  const refused = await runAutonomousResearchDiscoveryV2({
+  const refused = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
     stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: conflicting }),
     fetchImpl: sourceFetch(), datasetLoader,
   });
   assert.equal(refused.reason, 'AI_DISCOVERY_DUPLICATE_TAG:REPOSITORY');
+});
+
+test('while verified sources remain, discovery lists them and refuses anything else', async (t) => {
+  const catalog = [
+    { repository: 'https://github.com/example/public-strategies', branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/ParticipationBreakout.py' },
+    { repository: 'https://github.com/example/public-strategies', branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/Second.py' },
+  ];
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  const ok = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: catalog,
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(ok.status, 'DOSSIER_STAGED', JSON.stringify(ok));
+  assert.match(ai.prompts[0], /You MUST choose exactly one of these verified sources/u);
+  assert.match(ai.prompts[0], /SOURCE_PATH=strategies\/Second\.py/u);
+
+  const invented = aiAnswer({
+    summary: '공개 전략 저장소 후보',
+    findings: [],
+    requiredEvidence: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main', 'SOURCE_PATH=strategies/Invented.py', 'LICENSE_PATH=LICENSE'],
+  });
+  const root2 = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
+  let fetches = 0;
+  const refused = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: catalog,
+    stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: invented }),
+    fetchImpl: async (url) => { fetches += 1; return sourceFetch()(url); }, datasetLoader });
+  assert.equal(refused.reason, 'AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG');
+  assert.equal(fetches, 0);
+});
+
+test('the default verified catalog holds real strategy files, not reports', () => {
+  assert.ok(DEFAULT_VERIFIED_SOURCE_CATALOG_V2.length >= 2);
+  for (const entry of DEFAULT_VERIFIED_SOURCE_CATALOG_V2) {
+    assert.equal(entry.repository, 'https://github.com/freqtrade/freqtrade-strategies');
+    assert.equal(entry.branch, 'main');
+    assert.equal(isNonStrategySourcePathV2(entry.sourcePath), false, entry.sourcePath);
+  }
+  assert.equal(new Set(DEFAULT_VERIFIED_SOURCE_CATALOG_V2.map((entry) => entry.sourcePath)).size, DEFAULT_VERIFIED_SOURCE_CATALOG_V2.length);
+});
+
+test('common harmless tag spellings and numbered locators are normalized, then still verified', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const loose = aiAnswer({
+    summary: 'Participation Breakout declared variant', findings: [],
+    requiredEvidence: [
+      'MARKET=crypto spot', 'TIMEFRAME=60m', 'DIRECTION=long', 'FAMILY=participation-breakout', 'TEMPLATE=`RVOL_BREAKOUT_V1`',
+      'ENTRY_LOCATOR=0002: entry_rule = "rvol above baseline and close above prior highest close"',
+      'EXIT_LOCATOR=`exit_rule = "close below trend average"`', 'RISK_LOCATOR=NONE',
+    ],
+  });
+  let calls = 0;
+  const ok = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? planAnswer : loose }),
+    fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(ok.status, 'DOSSIER_STAGED', JSON.stringify(ok));
+  assert.equal(ok.candidate.templateId, 'RVOL_BREAKOUT_V1');
+
+  const root2 = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root2, researchCodeSha: SHA, now: () => AT });
+  const wrongTimeframe = loose.replace('TIMEFRAME=60m', 'TIMEFRAME=5m');
+  let calls2 = 0;
+  const refused = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root2, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls2 === 1 ? planAnswer : wrongTimeframe }),
+    fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(refused.reason, 'AI_DISCOVERY_CURRENT_DATASET_UNSUPPORTED');
+});
+
+test('prompts ask for short answers so the provider output budget is not exceeded', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  for (const prompt of ai.prompts) assert.match(prompt, /Be brief: summary under 12 words/u);
+  assert.match(ai.prompts[1], /without the line-number prefix/u);
+});
+
+test('the fixed answer wording passes the unchanged shared filter', () => {
+  const text = DISCOVERY_FIXED_TEXT_V2;
+  for (const summary of [text.planSummary, text.extractionSummary]) {
+    const parsed = parseResearchFreeAiReviewForResearchOnlyV1(JSON.stringify({
+      summary, findings: [],
+      hypotheses: [{ hypothesisId: 'AdxSmasVariant', thesis: text.thesis,
+        requiredEvidence: ['MARKET=CRYPTO_SPOT', 'TIMEFRAME=1h', 'DIRECTION=LONG', 'FAMILY=ADX_SMA_TREND', 'TEMPLATE=ADX_ROC_CONTINUATION_V1'],
+        falsification: text.falsification, intendedRegime: text.intendedRegime, independenceRationale: text.independenceRationale }],
+      risks: [text.risk], disposition: 'RESEARCH_PROPOSAL_ONLY',
+    }));
+    assert.equal(parsed.summary, summary);
+  }
+});
+
+test('both prompts carry a fill-in answer template with the fixed wording', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const ai = provider();
+  await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  for (const prompt of ai.prompts) {
+    assert.match(prompt, /Return exactly this JSON and nothing else/u);
+    assert.ok(prompt.includes(DISCOVERY_FIXED_TEXT_V2.thesis));
+  }
+  assert.ok(ai.prompts[1].includes('ENTRY_LOCATOR=<exact source line>'));
 });
