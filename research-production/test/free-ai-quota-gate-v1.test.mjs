@@ -68,3 +68,10 @@ test('interval is bounded and the gate round-trips on disk', async (t) => {
   await writeFreeAiQuotaGateV1(root, gate);
   assert.deepEqual(await readFreeAiQuotaGateV1(root), JSON.parse(JSON.stringify(gate)));
 });
+
+test('after a rate-limit pause ends, AI retries immediately instead of waiting a full interval', () => {
+  const limited = recordFreeAiOutcomeV1({ gate: null, nowMs: NOW, researchCodeSha: SHA, provider: 'gemini', rateLimited: true });
+  assert.equal(decideFreeAiRunV1({ gate: limited, nowMs: NOW + (10 * MIN), researchCodeSha: SHA }).reason, 'QUOTA_PAUSED_UNTIL_RESET');
+  const after = decideFreeAiRunV1({ gate: limited, nowMs: NOW + (21 * MIN), researchCodeSha: SHA });
+  assert.deepEqual([after.run, after.reason], [true, 'RETRY_AFTER_PAUSE']);
+});
