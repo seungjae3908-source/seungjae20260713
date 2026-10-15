@@ -23,6 +23,7 @@ import { RESEARCH_BACKTEST_PERIOD } from '../../market-prediction-lab/src/multi-
 import { collectUpbitSpotHistory } from '../../market-prediction-lab/src/upbit-spot-history.js';
 import { collectBitgetCandles } from '../../market-prediction-lab/src/bitget-candle-collector.js';
 import { BitgetPublicClient } from '../../market-prediction-lab/src/bitget-public-client.js';
+import { collectFundingRateHistory } from '../../market-prediction-lab/src/derivatives-history.js';
 import { collectYahooStockHistory } from '../../market-prediction-lab/src/yahoo-stock-history.js';
 import { RESEARCH_LANES_V2 } from './autonomous-research-discovery-v2.mjs';
 import {
@@ -55,9 +56,11 @@ export const LANE_DATA_SOURCE_V1 = Object.freeze({
 });
 
 // KR ETFs are exempt from the securities transaction tax; single stocks are not.
+// Sell-side securities transaction tax for KR single stocks (0.20% from 2026; was 0.15%).
+const KR_STOCK_SELL_TAX_RATE = 0.002;
 const KR_ETF = new Set(['069500', '229200']);
 function symbolCost(lane, symbol) {
-  if (lane.market === 'KR_STOCK' && !KR_ETF.has(symbol)) return { ...lane.cost, taxRate: 0.0015 };
+  if (lane.market === 'KR_STOCK' && !KR_ETF.has(symbol)) return { ...lane.cost, taxRate: KR_STOCK_SELL_TAX_RATE };
   return { ...lane.cost };
 }
 
@@ -124,6 +127,21 @@ async function fetchSourceCandles({ source, symbol, startTime, endTime, fetchImp
   return history.candles;
 }
 
+// Perpetual futures pay or receive funding while a position is open, so a
+// futures backtest without it overstates long returns in bull runs and short
+// returns in bear runs. Fail closed: incomplete funding history is an error,
+// never a silent zero.
+async function fetchFundingRates({ source, symbol, startTime, endTime, fetchImpl, minimumRecords }) {
+  if (source !== 'BITGET_1H') return [];
+  const history = await collectFundingRateHistory({
+    client: new BitgetPublicClient({ fetchImpl }), symbol, startTime, endTime, maxPages: 80,
+  });
+  const rows = history.records.map((row) => ({ timestamp: row.timestamp, rate: row.rate }))
+    .filter((row) => Number.isSafeInteger(row.timestamp) && Number.isFinite(row.rate));
+  if (!history.exhausted || rows.length < minimumRecords) throw new Error(`COMBINATION_FUNDING_INCOMPLETE:${rows.length}`);
+  return rows;
+}
+
 /** Public candles only, capped before the sealed 2026 holdout. */
 export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = globalThis.fetch }) {
   const spec = COMBINATION_UNIVERSE_V1[source];
@@ -133,7 +151,9 @@ export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = glo
   const candles = cleanCandles(await fetchSourceCandles({ source, symbol, startTime, endTime, fetchImpl }) ?? []);
   const minimum = spec.timeframe === '1d' ? 500 : 2_000;
   if (candles.length < minimum) throw new Error(`COMBINATION_DATASET_INSUFFICIENT:${candles.length}`);
-  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles });
+  // About 3 funding payments per day; require two thirds of that as coverage.
+  const fundingRates = await fetchFundingRates({ source, symbol, startTime, endTime, fetchImpl, minimumRecords: Math.floor(spec.lookbackDays * 2) });
+  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates });
 }
 
 export const HOLDOUT_END_V1 = RESEARCH_BACKTEST_PERIOD.defaultEndTime;
@@ -147,7 +167,8 @@ export async function loadCombinationHoldoutDatasetV1({ source, symbol, fetchImp
   const candles = cleanCandles(rows ?? [], { allowHoldout: true }).filter((row) => row.timestamp >= HOLDOUT_START && row.timestamp <= HOLDOUT_END_V1);
   const minimum = spec.timeframe === '1d' ? 60 : 1_000;
   if (candles.length < minimum) throw new Error(`COMBINATION_HOLDOUT_INSUFFICIENT:${candles.length}`);
-  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles });
+  const fundingRates = await fetchFundingRates({ source, symbol, startTime: HOLDOUT_START, endTime, fetchImpl, minimumRecords: 10 });
+  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates });
 }
 
 // ---------- trial plan ----------
@@ -260,12 +281,12 @@ export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COM
   const windows = Array.from({ length: policy.walkForwardWindows }, () => []);
   const perSymbol = [];
   for (const data of datasets) {
-    const { candles, atoms, symbol, splitTime, windowEdges } = data;
+    const { candles, atoms, symbol, splitTime, windowEdges, fundingRates = [] } = data;
     const arrays = trial.atoms.map((id) => atoms.get(id));
     const signalEvaluator = ({ index }) => (arrays.every((array) => array[index] === 1) ? { combination: trial.trialId } : null);
     const result = runIndependentSignalBacktest({
       backtestInput: {
-        market: lane.market, side, symbol, timeframe: lane.timeframe, candles,
+        market: lane.market, side, symbol, timeframe: lane.timeframe, candles, fundingRates,
         initialCapital: lane.initialCapital, costModel: symbolCost(lane, symbol), riskModel: { riskPerTrade: 0.01, leverage: 1 },
       },
       strategy: 'combination_search_v1', strategyVersion: `COMBINATION:${trial.trialId}`,
@@ -339,7 +360,7 @@ function holdoutReturns({ lane, atomIds, exitId, data }) {
   const arrays = atomIds.map((id) => data.atoms.get(id));
   const result = runIndependentSignalFinalHoldout({
     backtestInput: {
-      market: lane.market, side, symbol: data.symbol, timeframe: lane.timeframe, candles: data.candles,
+      market: lane.market, side, symbol: data.symbol, timeframe: lane.timeframe, candles: data.candles, fundingRates: data.fundingRates ?? [],
       initialCapital: lane.initialCapital, costModel: symbolCost(lane, data.symbol), riskModel: { riskPerTrade: 0.01, leverage: 1 },
     },
     strategy: 'combination_search_v1', strategyVersion: `COMBINATION_HOLDOUT:${atomIds.join('+') || 'BASELINE'}`,
@@ -385,7 +406,7 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
   for (const data of warm) {
     const path = join(root, 'combination-research', 'holdout-datasets', source, `${data.symbol}.json`);
     let cached = await readJson(path);
-    if (!cached?.candles?.length) {
+    if (!cached?.candles?.length || (source === 'BITGET_1H' && !Array.isArray(cached.fundingRates))) {
       const failurePath = `${path.slice(0, -5)}.failure.json`;
       const failure = await readJson(failurePath);
       if (Number(failure?.retryAfter) > observedAtMs) { log.push(`HOLDOUT_${source}:${data.symbol}:RETRY_LATER`); continue; }
@@ -393,7 +414,7 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
       fetchBudget.remaining -= 1;
       try {
         const fetched = await loader({ source, symbol: data.symbol, fetchImpl, nowMs: observedAtMs });
-        cached = { contract: 'combination-holdout-dataset/v1', source, symbol: data.symbol, fetchedAt: observedAtMs, candles: fetched.candles };
+        cached = { contract: 'combination-holdout-dataset/v1', source, symbol: data.symbol, fetchedAt: observedAtMs, candles: fetched.candles, fundingRates: fetched.fundingRates ?? [] };
         await atomicJson(path, cached);
         log.push(`HOLDOUT_${source}:${data.symbol}:FETCHED:${fetched.candles.length}`);
       } catch (error) {
@@ -405,7 +426,7 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
     }
     const future = cached.candles.filter((row) => row.timestamp >= HOLDOUT_START && row.timestamp <= HOLDOUT_END_V1);
     const candles = [...data.candles.slice(-policy.warmupBars), ...future];
-    out.push({ symbol: data.symbol, candles, atoms: computeCombinationAtomsV1(candles, { timeframe: data.timeframe }) });
+    out.push({ symbol: data.symbol, candles, fundingRates: cached.fundingRates ?? [], atoms: computeCombinationAtomsV1(candles, { timeframe: data.timeframe }) });
   }
   return out;
 }
@@ -427,14 +448,15 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     const path = join(root, 'combination-research', 'datasets', source, `${symbol}.json`);
     let cached = await readJson(path);
     const failurePath = join(root, 'combination-research', 'datasets', source, `${symbol}.failure.json`);
-    if (!cached?.candles?.length || cached.lookbackDays !== spec.lookbackDays) {
+    // Datasets cached before funding was recorded are refetched for futures.
+    if (!cached?.candles?.length || cached.lookbackDays !== spec.lookbackDays || (source === 'BITGET_1H' && !Array.isArray(cached.fundingRates))) {
       const failure = await readJson(failurePath);
       if (Number(failure?.retryAfter) > observedAtMs) { log.push(`${source}:${symbol}:RETRY_LATER`); continue; }
       if (fetchBudget.remaining <= 0) { log.push(`${source}:${symbol}:FETCH_BUDGET_NEXT_TICK`); continue; }
       fetchBudget.remaining -= 1;
       try {
         const data = await loader({ source, symbol, fetchImpl });
-        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles };
+        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles, fundingRates: data.fundingRates ?? [] };
         await atomicJson(path, cached);
         log.push(`${source}:${symbol}:FETCHED:${data.candles.length}`);
       } catch (error) {
@@ -447,7 +469,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     // Defence in depth: never let a cached/injected 2026 candle into selection.
     const candles = cached.candles.filter((row) => row.timestamp < HOLDOUT_START);
     if (candles.length < 300) { log.push(`${source}:${symbol}:TOO_FEW_CANDLES:${candles.length}`); continue; }
-    ready.push({ symbol, timeframe: cached.timeframe, candles });
+    ready.push({ symbol, timeframe: cached.timeframe, candles, fundingRates: (cached.fundingRates ?? []).filter((row) => row.timestamp < HOLDOUT_START) });
   }
   return ready;
 }

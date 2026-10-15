@@ -52,7 +52,7 @@ function costPolicyFor(lane) {
   const cost = lane.cost ?? {};
   // KR single stocks pay 0.15% transaction tax; scanner cards are mostly single
   // stocks, so the KR policy always carries it (conservative for ETFs).
-  const taxRate = lane.market === 'KR_STOCK' ? 0.0015 : Number(cost.taxRate ?? 0);
+  const taxRate = lane.market === 'KR_STOCK' ? 0.002 : Number(cost.taxRate ?? 0);
   return Object.freeze({
     id: `COMBINATION_${lane.market}_COST_V1`,
     market: lane.market,
