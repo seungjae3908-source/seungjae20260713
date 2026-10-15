@@ -365,10 +365,12 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   "signal-intelligence-v3/src/canonical-adapter.mjs",
   "signal-intelligence-v3/src/public-cycle-progress-v2.mjs",
   "signal-intelligence-v3/src/public-provider-diagnostics.mjs",
+  "signal-intelligence-v3/src/research-evidence-bridge.mjs",
   "signal-intelligence-v3/tests/auto-trading-handoff-bridge.test.mjs",
   "signal-intelligence-v3/tests/canonical-adapter.test.mjs",
   "signal-intelligence-v3/tests/public-cycle-progress-v2.test.mjs",
   "signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs",
+  "signal-intelligence-v3/tests/research-evidence-bridge.test.mjs",
 ]);
 // Separately owner-approved on 2026-10-12: these 19 paths were already
 // Research-reviewed but missing from Paper's independent bounded scope.
