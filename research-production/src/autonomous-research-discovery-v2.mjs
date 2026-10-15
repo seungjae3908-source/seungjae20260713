@@ -182,6 +182,21 @@ function exactLocator(source, value, label, { optional = false } = {}) {
 }
 
 const LOCATOR_PLACEHOLDER = 'VERIFIED_SOURCE_QUOTE';
+// The provider output budget is small (frozen review worker). Keep answers short
+// so the JSON is never truncated mid-object.
+const BREVITY_RULE = 'Be brief: summary under 12 words; thesis, falsification, intendedRegime and independenceRationale each under 25 words; findings an empty list; risks exactly one item under 15 words.';
+const TIMEFRAME_ALIASES = Object.freeze({ '1h': '1h', '60m': '1h', '60min': '1h', '1hr': '1h', '1hour': '1h', h1: '1h' });
+const DIRECTION_ALIASES = Object.freeze({ LONG: 'LONG', LONG_ONLY: 'LONG', BUY: 'LONG' });
+
+function normalizeTagWord(value) {
+  return String(value ?? '').trim().replace(/^[`'"]+|[`'"]+$/gu, '').trim();
+}
+
+// Models sometimes keep the numbered-line prefix or wrap a quote in backticks.
+// Only the cleaned text is accepted, and it must still occur in the source.
+function cleanLocator(value) {
+  return String(value ?? '').trim().replace(/^\d{1,5}:\s*/u, '').replace(/^`+|`+$/gu, '').trim();
+}
 
 function liftVerifiedLocators(answer) {
   if (typeof answer !== 'string' || answer.length > 16_000) return { answer, locators: new Map() };
@@ -215,11 +230,11 @@ function parseRuleExtraction(answer, sourceText) {
     if (parsed.tags.get(name) !== LOCATOR_PLACEHOLDER) throw new Error(`AI_DISCOVERY_LOCATOR_BINDING_INVALID:${name}`);
     parsed.tags.set(name, safeTagValue(value, `AI_DISCOVERY_${name}`, 500));
   }
-  const market = requiredTag(parsed, 'MARKET').toUpperCase();
-  const timeframe = requiredTag(parsed, 'TIMEFRAME').toLowerCase();
-  const direction = requiredTag(parsed, 'DIRECTION').toUpperCase();
-  const family = requiredTag(parsed, 'FAMILY').toUpperCase();
-  const templateId = requiredTag(parsed, 'TEMPLATE').toUpperCase();
+  const market = normalizeTagWord(requiredTag(parsed, 'MARKET')).toUpperCase().replace(/[\s-]+/gu, '_');
+  const timeframe = TIMEFRAME_ALIASES[normalizeTagWord(requiredTag(parsed, 'TIMEFRAME')).toLowerCase().replace(/\s+/gu, '')] ?? 'UNSUPPORTED';
+  const direction = DIRECTION_ALIASES[normalizeTagWord(requiredTag(parsed, 'DIRECTION')).toUpperCase().replace(/[\s-]+/gu, '_')] ?? 'UNSUPPORTED';
+  const family = normalizeTagWord(requiredTag(parsed, 'FAMILY')).toUpperCase().replace(/[\s-]+/gu, '_');
+  const templateId = normalizeTagWord(requiredTag(parsed, 'TEMPLATE')).toUpperCase().replace(/[\s-]+/gu, '_');
   if (market !== 'CRYPTO_SPOT' || timeframe !== '1h' || direction !== 'LONG') {
     throw new Error('AI_DISCOVERY_CURRENT_DATASET_UNSUPPORTED');
   }
@@ -234,9 +249,9 @@ function parseRuleExtraction(answer, sourceText) {
     market,
     timeframe,
     direction,
-    entryLocator: exactLocator(sourceText, requiredTag(parsed, 'ENTRY_LOCATOR'), 'ENTRY_LOCATOR'),
-    exitLocator: exactLocator(sourceText, requiredTag(parsed, 'EXIT_LOCATOR'), 'EXIT_LOCATOR'),
-    riskLocator: exactLocator(sourceText, requiredTag(parsed, 'RISK_LOCATOR'), 'RISK_LOCATOR', { optional: true }),
+    entryLocator: exactLocator(sourceText, cleanLocator(requiredTag(parsed, 'ENTRY_LOCATOR')), 'ENTRY_LOCATOR'),
+    exitLocator: exactLocator(sourceText, cleanLocator(requiredTag(parsed, 'EXIT_LOCATOR')), 'EXIT_LOCATOR'),
+    riskLocator: exactLocator(sourceText, cleanLocator(requiredTag(parsed, 'RISK_LOCATOR')), 'RISK_LOCATOR', { optional: true }),
   });
 }
 
@@ -257,6 +272,7 @@ function discoveryPrompt(directive, priorSourceIds = [], failedSources = [], cat
     'Return exactly the existing bounded qualitative JSON schema. Include exactly one hypothesis.',
     'Put these exact TAG=value records in hypotheses[0].requiredEvidence: REPOSITORY=https://github.com/owner/repo, BRANCH=branch, SOURCE_PATH=path, LICENSE_PATH=path.',
     'Write each TAG exactly once and propose exactly one source; never list alternatives or repeat a TAG in findings.',
+    BREVITY_RULE,
     ...(catalog.length
       ? ['You MUST choose exactly one of these verified sources and copy its REPOSITORY, BRANCH, SOURCE_PATH and LICENSE_PATH exactly:',
         ...catalog.map((entry) => `- REPOSITORY=${entry.repository} | BRANCH=${entry.branch} | SOURCE_PATH=${entry.sourcePath} | LICENSE_PATH=${entry.licensePath}`)]
@@ -283,6 +299,8 @@ function extractionPrompt({ plan, revision, sourceSha256, sourceText }) {
     'Required TAG=value records: MARKET=CRYPTO_SPOT, TIMEFRAME=1h, DIRECTION=LONG, FAMILY=UPPER_SNAKE_CASE, TEMPLATE=one allowed template, ENTRY_LOCATOR=exact source substring, EXIT_LOCATOR=exact source substring, RISK_LOCATOR=exact source substring or NONE.',
     'Each locator must be a contiguous exact substring from the source after whitespace is collapsed. Do not include line-number prefixes.',
     'Write each TAG exactly once, in hypotheses[0].requiredEvidence; never repeat a TAG in findings.',
+    'Locators: copy one short single line (under 160 characters) verbatim from the source, without the line-number prefix, quotes or backticks around it.',
+    BREVITY_RULE,
     'Summary is the strategy name. Thesis is a cautious, falsifiable statement. No profitability claims.',
     'Outside the three *_LOCATOR values, use neutral research wording: do not use the words profit, profitability, drawdown, Sharpe, PnL, ROI, expectancy, leverage, position size, champion or promotion, and do not write buy/sell/long/short instructions. Locators are quoted source text and may contain any source words.',
     '--- BEGIN UNTRUSTED SOURCE ---',
