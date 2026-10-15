@@ -68,3 +68,16 @@ test('interval is bounded and the gate round-trips on disk', async (t) => {
   await writeFreeAiQuotaGateV1(root, gate);
   assert.deepEqual(await readFreeAiQuotaGateV1(root), JSON.parse(JSON.stringify(gate)));
 });
+
+test('after a rate-limit pause ends, AI retries immediately instead of waiting a full interval', () => {
+  const limited = recordFreeAiOutcomeV1({ gate: null, nowMs: NOW, researchCodeSha: SHA, provider: 'gemini', rateLimited: true });
+  assert.equal(decideFreeAiRunV1({ gate: limited, nowMs: NOW + (10 * MIN), researchCodeSha: SHA }).reason, 'QUOTA_PAUSED_UNTIL_RESET');
+  const after = decideFreeAiRunV1({ gate: limited, nowMs: NOW + (21 * MIN), researchCodeSha: SHA });
+  assert.deepEqual([after.run, after.reason], [true, 'RETRY_AFTER_PAUSE']);
+});
+
+test('a free-only policy label is not mistaken for a provider rate limit', () => {
+  assert.equal(isRateLimitedV1({ review: { reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' } }), false);
+  assert.equal(isRateLimitedV1({ cycle: { reason: 'PUBLIC_SOURCE_HTTP_404' }, review: { reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' } }), false);
+  assert.equal(isRateLimitedV1({ cycle: { reason: 'GEMINI_RESOURCE_EXHAUSTED' } }), true);
+});

@@ -36,6 +36,10 @@ const MAX_PROMPT_SOURCE_CHARS = 24_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const TRANSIENT_RETRY_MS = 15 * 60 * 1_000;
 const SEMANTIC_RETRY_MS = 6 * 60 * 60 * 1_000;
+// Free Gemini returns 503 "high demand" during busy hours. Retry the same
+// logical stage a little later instead of failing the whole cycle.
+const PROVIDER_RETRY_DELAYS_MS = Object.freeze([20_000, 40_000]);
+const RETRYABLE_PROVIDER_ERROR = /^(?:FREE_AI_PROVIDER_UNAVAILABLE|FREE_AI_TIMEOUT)$/u;
 const VERIFIED_LOCATOR_TAGS = Object.freeze(['ENTRY_LOCATOR', 'EXIT_LOCATOR', 'RISK_LOCATOR']);
 // A strategy source must hold trading rules. Reports, statistics, plots,
 // tests and plumbing are rejected before any fetch or second AI call.
@@ -108,11 +112,22 @@ function activeLanes(lanes, env) {
   return selected;
 }
 
+async function discoveryAttemptCount(root) {
+  try { return (await readdir(join(root, 'autonomous-research', 'discovery'))).filter((name) => name.endsWith('.json')).length; }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; return 0; }
+}
+
 async function selectResearchLane(root, lanes) {
-  let attempts = 0;
-  try { attempts = (await readdir(join(root, 'autonomous-research', 'discovery'))).filter((name) => name.endsWith('.json')).length; }
-  catch (error) { if (error?.code !== 'ENOENT') throw error; }
-  return lanes[attempts % lanes.length];
+  return lanes[(await discoveryAttemptCount(root)) % lanes.length];
+}
+
+// Offer a small rotating window of the untried catalog. A short prompt is
+// cheaper for the free model, and a source that failed transiently (for
+// example a provider 5xx on its extraction) is not offered first again.
+export function rotateCatalogWindowV2(catalog, attempts, size = 5) {
+  if (!Array.isArray(catalog) || catalog.length <= size) return Object.freeze([...(catalog ?? [])]);
+  const start = ((attempts % catalog.length) + catalog.length) % catalog.length;
+  return Object.freeze(Array.from({ length: size }, (_, k) => catalog[(start + k) % catalog.length]));
 }
 // Public strategy files whose existence, OSI license and entry/exit logic were
 // verified by hand (raw.githubusercontent.com, 2026-10-15). While any entry is
@@ -127,6 +142,43 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   'user_data/strategies/Strategy004.py',
   'user_data/strategies/Strategy005.py',
   'user_data/strategies/berlinguyinca/AdxSmas.py',
+  // Expanded 2026-10-15 from a real tree listing of freqtrade-strategies
+  // (commit f3340ce). Lookahead-bias examples and non-strategy samples excluded.
+  'user_data/strategies/Bandtastic.py',
+  'user_data/strategies/Heracles.py',
+  'user_data/strategies/MultiMa.py',
+  'user_data/strategies/PatternRecognition.py',
+  'user_data/strategies/PowerTower.py',
+  'user_data/strategies/Supertrend.py',
+  'user_data/strategies/SwingHighToSky.py',
+  'user_data/strategies/TrendRiderStrategy.py',
+  'user_data/strategies/UniversalMACD.py',
+  'user_data/strategies/hlhb.py',
+  'user_data/strategies/berlinguyinca/ADXMomentum.py',
+  'user_data/strategies/berlinguyinca/ASDTSRockwellTrading.py',
+  'user_data/strategies/berlinguyinca/AverageStrategy.py',
+  'user_data/strategies/berlinguyinca/AwesomeMacd.py',
+  'user_data/strategies/berlinguyinca/BbandRsi.py',
+  'user_data/strategies/berlinguyinca/BinHV45.py',
+  'user_data/strategies/berlinguyinca/CCIStrategy.py',
+  'user_data/strategies/berlinguyinca/CMCWinner.py',
+  'user_data/strategies/berlinguyinca/ClucMay72018.py',
+  'user_data/strategies/berlinguyinca/CofiBitStrategy.py',
+  'user_data/strategies/berlinguyinca/CombinedBinHAndCluc.py',
+  'user_data/strategies/berlinguyinca/EMASkipPump.py',
+  'user_data/strategies/berlinguyinca/Low_BB.py',
+  'user_data/strategies/berlinguyinca/MACDStrategy.py',
+  'user_data/strategies/berlinguyinca/MACDStrategy_crossed.py',
+  'user_data/strategies/berlinguyinca/MultiRSI.py',
+  'user_data/strategies/berlinguyinca/Quickie.py',
+  'user_data/strategies/berlinguyinca/Scalp.py',
+  'user_data/strategies/berlinguyinca/Simple.py',
+  'user_data/strategies/berlinguyinca/SmoothOperator.py',
+  'user_data/strategies/berlinguyinca/TDSequentialStrategy.py',
+  'user_data/strategies/futures/FAdxSmaStrategy.py',
+  'user_data/strategies/futures/FSupertrendStrategy.py',
+  'user_data/strategies/futures/TrendFollowingStrategy.py',
+  'user_data/strategies/futures/VolatilitySystem.py',
 ].map((sourcePath) => Object.freeze({ repository: FREQTRADE_STRATEGIES, branch: 'main', licensePath: 'LICENSE', sourcePath })));
 
 const SAFETY = Object.freeze({
@@ -374,8 +426,12 @@ function discoveryPrompt(directive, priorSourceIds = [], failedSources = [], cat
 }
 
 function extractionPrompt({ plan, revision, sourceSha256, sourceText, lane = RESEARCH_LANES_V2[0] }) {
+  // Comment-only lines are blanked in the prompt (line numbers kept). They
+  // carry no executable rule, often hold performance claims or decorative
+  // Unicode, and have made the free provider fail with 5xx. Locators are still
+  // verified against the full original source text.
   const numbered = sourceText.slice(0, MAX_PROMPT_SOURCE_CHARS).split(/\r?\n/u)
-    .map((line, index) => `${String(index + 1).padStart(4, '0')}: ${line}`).join('\n');
+    .map((line, index) => `${String(index + 1).padStart(4, '0')}: ${/^\s*#/u.test(line) ? '#' : line}`).join('\n');
   return [
     'ROLE: AUTONOMOUS_PUBLIC_STRATEGY_RULE_EXTRACTION_V2',
     `repository=${plan.repository}`,
@@ -715,6 +771,13 @@ function isTransientReason(reason) {
   return /(?:RATE_LIMITED|TIMEOUT|NETWORK|HTTP_(?:408|425|429|5\d\d)|PROVIDER_UNAVAILABLE)/u.test(String(reason ?? ''));
 }
 
+// Failures tied to one chosen source (missing file, non-strategy file, filtered
+// wording, bad locator). That source is remembered and excluded next time, so a
+// different source can be tried soon instead of blocking the directive for 6h.
+export function isSourceSpecificReasonV2(reason) {
+  return /(?:PUBLIC_SOURCE_HTTP_|NON_STRATEGY|FORBIDDEN_AI_AUTHORITY|LOCATOR|DUPLICATE_TAG)/u.test(String(reason ?? ''));
+}
+
 // Sources that already failed for a non-transient reason (wrong file type,
 // unsafe wording, missing locator...) are never proposed or accepted again.
 async function priorFailedSources(root) {
@@ -763,8 +826,8 @@ async function priorGithubSourceIds(root) {
 }
 
 function retryAfterForReason(reason, observedAt) {
-  const transient = isTransientReason(reason);
-  return Date.parse(observedAt) + (transient ? TRANSIENT_RETRY_MS : SEMANTIC_RETRY_MS);
+  const short = isTransientReason(reason) || isSourceSpecificReasonV2(reason);
+  return Date.parse(observedAt) + (short ? TRANSIENT_RETRY_MS : SEMANTIC_RETRY_MS);
 }
 
 async function persistResult(root, result) {
@@ -793,6 +856,8 @@ export async function runAutonomousResearchDiscoveryV2({
   fetchImpl = globalThis.fetch,
   datasetLoader = loadResearchLaneHistoryV2,
   verifiedSourceCatalog = DEFAULT_VERIFIED_SOURCE_CATALOG_V2,
+  providerRetryDelaysMs = PROVIDER_RETRY_DELAYS_MS,
+  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   researchLanes = RESEARCH_LANES_V2,
 } = {}) {
   const root = resolve(String(rawRoot ?? ''));
@@ -826,12 +891,30 @@ export async function runAutonomousResearchDiscoveryV2({
     return Object.freeze({ ...prior, status: 'ALREADY_DISCOVERED', actualProviderCalls: { attempted: 0, succeeded: 0, failed: 0 },
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 }, nextAction: 'RUN_EXISTING_CLOSED_LOOP' });
   }
-  if (prior?.directiveDigest === directive.directiveDigest && Number(prior?.retryAfterAt) > Date.parse(observedAt)) {
+  // Recompute from the reason so an older long deferral for a source-specific
+  // failure (written by an earlier release) does not keep blocking discovery.
+  const priorRetryAt = isSourceSpecificReasonV2(prior?.reason)
+    ? Math.min(Number(prior?.retryAfterAt) || 0, Date.parse(prior?.observedAt ?? '') + TRANSIENT_RETRY_MS)
+    : Number(prior?.retryAfterAt);
+  if (prior?.directiveDigest === directive.directiveDigest && priorRetryAt > Date.parse(observedAt)) {
     return Object.freeze({ ...prior, status: 'DEFERRED_RETRY', actualProviderCalls: { attempted: 0, succeeded: 0, failed: 0 },
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 } });
   }
 
-  const calls = { attempted: 0, succeeded: 0, failed: 0 };
+  const calls = { attempted: 0, succeeded: 0, failed: 0, retried: 0 };
+  // One logical stage = one attempted call; transient 503/timeout retries of
+  // the same stage are counted separately in calls.retried.
+  const invokeWithRetry = async (request) => {
+    for (let retry = 0; ; retry += 1) {
+      try { return await invoke(request); }
+      catch (error) {
+        const code = String(error?.message ?? '');
+        if (!RETRYABLE_PROVIDER_ERROR.test(code) || retry >= providerRetryDelaysMs.length) throw error;
+        calls.retried += 1;
+        await sleep(providerRetryDelaysMs[retry]);
+      }
+    }
+  };
   const fetches = { attempted: 0, succeeded: 0, failed: 0 };
   const priorSourceIds = await priorGithubSourceIds(root);
   const failedSources = await priorFailedSources(root);
@@ -840,7 +923,7 @@ export async function runAutonomousResearchDiscoveryV2({
   let candidate = null;
   try {
     calls.attempted += 1;
-    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, catalog), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const planned = await invokeWithRetry({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, rotateCatalogWindowV2(catalog, (await discoveryAttemptCount(root)) + Math.floor(Date.parse(observedAt) / 600_000))), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (planned?.provider !== policy.provider || planned?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const plan = parseSourcePlan(planned.answer);
@@ -868,7 +951,7 @@ export async function runAutonomousResearchDiscoveryV2({
     if (priorSourceIds.includes(verifiedSourceId)) throw new Error('AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED');
 
     calls.attempted += 1;
-    const extracted = await invoke({ policy, prompt: extractionPrompt({ plan, revision: source.revision, sourceSha256: source.sourceSha256, sourceText: source.sourceText, lane }), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const extracted = await invokeWithRetry({ policy, prompt: extractionPrompt({ plan, revision: source.revision, sourceSha256: source.sourceSha256, sourceText: source.sourceText, lane }), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (extracted?.provider !== policy.provider || extracted?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const extraction = parseRuleExtraction(extracted.answer, source.sourceText, lane);
