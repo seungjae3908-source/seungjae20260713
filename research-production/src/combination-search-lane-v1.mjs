@@ -461,3 +461,72 @@ export async function runCombinationSearchLaneV1({
   await atomicJson(join(root, 'latest', 'combination-research-v1.json'), result);
   return result;
 }
+
+// ---------- Korean report ----------
+
+const LANE_NAME_KO = Object.freeze({
+  CRYPTO_SPOT_LONG: '코인현물 매수',
+  CRYPTO_FUTURES_LONG: '코인선물 롱',
+  CRYPTO_FUTURES_SHORT: '코인선물 숏',
+  KR_STOCK_LONG: '국내주식 매수',
+  US_STOCK_LONG: '해외주식 매수',
+});
+const STATUS_KO = Object.freeze({ SURVIVOR: '합격', WATCH: '관찰', REJECT: '탈락' });
+const EXIT_KO = Object.freeze({
+  X1: '손절 ATR×1.5 · 목표 손절폭×2 · 기본 보유기간',
+  X2: '손절 ATR×2.5 · 목표 손절폭×1.5 · 보유기간 2배',
+});
+
+function pct(value, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return '-';
+  const v = value * 100;
+  return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`;
+}
+
+function datasetLineKo(line) {
+  const [source, symbol, code, ...rest] = String(line).split(':');
+  const detail = rest.join(':');
+  const what = {
+    FETCHED: `받음 (${detail}개 캔들)`,
+    FAILED: `실패 (${detail}) → 1시간 뒤 다시 시도`,
+    RETRY_LATER: '전에 실패해서 잠시 대기 중',
+    FETCH_BUDGET_NEXT_TICK: '이번 회차 다운로드 한도 초과 → 다음 회차에 받음',
+    TOO_FEW_CANDLES: `캔들 부족 (${detail}개)`,
+  }[code] ?? code;
+  return `  - ${source} ${symbol}: ${what}`;
+}
+
+/** Plain-Korean summary of one combination-search tick for the owner. */
+export function formatCombinationReportKoV1(result) {
+  const lines = [];
+  lines.push(`[조합 연구 결과] ${result.observedAt}`);
+  lines.push(`이번 실행: 조합 ${result.evaluatedThisTick}개 시험 · ${Math.round((result.elapsedMs ?? 0) / 1000)}초 · AI 사용 ${result.aiProviderCalls}회 · 실거래/주문 없음`);
+  if (result.datasetLog?.length) {
+    lines.push('데이터:');
+    for (const line of result.datasetLog) lines.push(datasetLineKo(line));
+  }
+  for (const lane of result.lanes ?? []) {
+    const name = LANE_NAME_KO[lane.laneId] ?? lane.laneId;
+    if (lane.status === 'WAITING_FOR_DATA') {
+      lines.push('');
+      lines.push(`■ ${name}: 데이터 대기 중 (준비된 종목 ${lane.symbols?.length ?? 0}개, 최소 3개 필요)`);
+      continue;
+    }
+    lines.push('');
+    lines.push(`■ ${name} — 종목 ${lane.symbols.length}개 (${lane.symbols.join(', ')})`);
+    lines.push(`  진행: ${lane.trialsEvaluated} / ${lane.trialsPlanned}개 시험 ${lane.searchExhausted ? '(이번 재료로는 탐색 완료)' : '(다음 회차에 계속)'}`);
+    lines.push(`  판정: 합격 ${lane.survivors} · 관찰 ${lane.watch} · 탈락 ${lane.rejected}`);
+    lane.top.slice(0, 5).forEach((row, index) => {
+      lines.push(`  ${index + 1}) [${STATUS_KO[row.finalStatus] ?? row.finalStatus}] ${row.labels.join(' + ')}`);
+      lines.push(`     청산: ${EXIT_KO[row.exitId] ?? row.exitId}`);
+      lines.push(`     검증구간(처음 보는 뒤 40%): 거래 ${row.validation.trades}회 · 거래당 평균 ${pct(row.validation.meanReturn, 3)} · 승률 ${pct(row.validation.winRate, 0).replace('+', '')} · 손익비 ${row.validation.profitFactor ?? '-'}`);
+      lines.push(`     탐색구간(앞 60%): 거래 ${row.discovery.trades}회 · 거래당 평균 ${pct(row.discovery.meanReturn, 3)}`);
+      lines.push(`     일관성: 검증구간 플러스 종목 ${Math.round((row.symbolBreadth ?? 0) * 100)}% · 전체 4구간 중 ${row.positiveWindows}구간 플러스 · 우연 보정 q=${row.qValue} (0.10 이하면 통과)`);
+    });
+    if (lane.top.length === 0) lines.push('  아직 관찰할 만한 조합 없음 (모두 탈락)');
+  }
+  lines.push('');
+  lines.push('용어: 합격 = 검증구간에서도 수익, 우연 보정(q ≤ 0.10) 통과, 종목 60% 이상·4구간 중 3구간 이상 플러스, 손익비 1.1 이상.');
+  lines.push('      관찰 = 탐색·검증 둘 다 플러스지만 합격 기준은 아직 못 넘음. 2026년 데이터는 봉인(나중에 합격 조합만 1회 확인).');
+  return lines.join('\n');
+}
