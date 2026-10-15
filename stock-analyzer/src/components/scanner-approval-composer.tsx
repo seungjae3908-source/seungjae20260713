@@ -46,6 +46,8 @@ type CreateResponse = {
 type ScannerApprovalComposerProps = {
   selection: AnalysisSelection;
   testOnlyCanPlaceOrders?: boolean;
+  /** Live entry guard from the order window; when blocked the Paper button is disabled. */
+  entryGuard?: { allowed: boolean; message: string } | null;
 };
 
 const CREATE_PLAN_TIMEOUT_MS = 10_000;
@@ -86,7 +88,7 @@ function marketDirectionSupported(selection: AnalysisSelection) {
   return false;
 }
 
-export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = false }: ScannerApprovalComposerProps) {
+export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = false, entryGuard = null }: ScannerApprovalComposerProps) {
   const auth = useAuth();
   const fixtureCanPlaceOrders = import.meta.env.DEV
     && testOnlyCanPlaceOrders
@@ -130,6 +132,10 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
 
   async function createPlan() {
     if (!canAccessPaperTrading || creating) return;
+    if (entryGuard && !entryGuard.allowed) {
+      setMessage(entryGuard.message);
+      return;
+    }
     if (!supported) {
       setMessage('이 시장의 Paper 진입 방향이 명시되지 않았거나 지원 계약과 일치하지 않습니다.');
       return;
@@ -241,7 +247,7 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
         KR·US·현물은 BUY, 선물은 LONG/SHORT만 허용합니다. 수량·레버리지·진입가격은 client가 지정하지 않고 서버 canonical risk/simulation owner가 결정합니다.
       </div>
 
-      <section data-testid="scanner-staged-order-draft" className="mt-3 rounded-2xl border border-primary/25 bg-primary/5 p-3">
+      {entryGuard ? null : <section data-testid="scanner-staged-order-draft" className="mt-3 rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h3 className="text-xs font-black">분할 주문 초안 · 최신 Scanner 기준</h3>
@@ -288,12 +294,12 @@ export function ScannerApprovalComposer({ selection, testOnlyCanPlaceOrders = fa
             유효한 최신 진입구간과 투자금이 있어야 초안을 계산합니다. 신호가 무효화되면 과거 가격으로 대체하지 않습니다.
           </p>
         )}
-      </section>
+      </section>}
 
       <button
         type="button"
         onClick={() => void createPlan()}
-        disabled={creating || !supported || !conditions.length}
+        disabled={creating || !supported || !conditions.length || (entryGuard != null && !entryGuard.allowed)}
         className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
         {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
