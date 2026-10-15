@@ -291,7 +291,7 @@ export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COM
 }
 
 /** Final classification needs the lane-wide FDR, so it runs over all trials. */
-export function classifyLaneTrialsV1(trials, { symbolCount, policy = COMBINATION_POLICY_V1 } = {}) {
+export function classifyLaneTrialsV1(trials, { symbolCount, baselines = {}, policy = COMBINATION_POLICY_V1 } = {}) {
   const rows = Object.values(trials);
   const q = benjaminiHochbergV1(rows.map((row) => row.pValue ?? 1));
   const out = rows.map((row, index) => {
@@ -301,7 +301,12 @@ export function classifyLaneTrialsV1(trials, { symbolCount, policy = COMBINATION
       && row.symbolBreadth >= policy.minimumSymbolBreadth
       && symbolCount >= policy.minimumSymbols
       && row.walkForward.positiveWindows >= policy.minimumPositiveWindows;
-    return { ...row, qValue: round(q[index], 6), finalStatus: survivor ? 'SURVIVOR' : 'WATCH' };
+    // Must beat simply being in the market (same exits, enter whenever flat).
+    // Without this, a bull-market period makes almost any long entry look good.
+    const baseline = baselines[row.exitId]?.validation?.meanReturn;
+    const beatsBaseline = Number.isFinite(baseline) && row.validation.meanReturn > baseline;
+    return { ...row, qValue: round(q[index], 6), baselineValidationMean: Number.isFinite(baseline) ? baseline : null,
+      beatsBaseline, finalStatus: survivor && beatsBaseline ? 'SURVIVOR' : 'WATCH' };
   });
   return out;
 }
@@ -348,7 +353,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
   return ready;
 }
 
-function laneSummary(lane, classified, planned, symbols, policy) {
+function laneSummary(lane, classified, planned, symbols, policy, baselines = {}) {
   const count = (status) => classified.filter((row) => row.finalStatus === status).length;
   const top = classified.filter((row) => row.finalStatus !== 'REJECT')
     .sort((a, b) => (a.qValue - b.qValue) || (b.validation.meanReturn - a.validation.meanReturn))
@@ -358,6 +363,7 @@ function laneSummary(lane, classified, planned, symbols, policy) {
       labels: row.atoms.map((id) => combinationAtomV1(id).label), families: row.atoms.map((id) => combinationAtomV1(id).family),
       exitId: row.exitId, qValue: row.qValue, validation: row.validation, discovery: row.discovery,
       positiveWindows: row.walkForward.positiveWindows, symbolBreadth: row.symbolBreadth,
+      baselineValidationMean: row.baselineValidationMean, beatsBaseline: row.beatsBaseline,
     }));
   const evaluated = classified.length;
   return Object.freeze({
@@ -365,6 +371,7 @@ function laneSummary(lane, classified, planned, symbols, policy) {
     symbols, trialsEvaluated: evaluated, trialsPlanned: planned,
     survivors: count('SURVIVOR'), watch: count('WATCH'), rejected: count('REJECT'),
     searchExhausted: evaluated >= Math.min(planned, policy.maximumTrialsPerLane),
+    baselines: Object.fromEntries(Object.entries(baselines).map(([exitId, row]) => [exitId, { validation: row.validation, discovery: row.discovery }])),
     top,
   });
 }
@@ -421,6 +428,12 @@ export async function runCombinationSearchLaneV1({
       summaries.push({ laneId: lane.id, status: 'WAITING_FOR_DATA', symbols: datasets.map((row) => row.symbol) });
       continue;
     }
+    // Market baseline per exit profile: no condition, enter whenever flat.
+    const baselines = fresh ? {} : { ...(prior?.baselines ?? {}) };
+    for (const exit of COMBINATION_EXIT_PROFILES_V1) {
+      if (baselines[exit.id]) continue;
+      baselines[exit.id] = evaluateCombinationTrialV1({ lane, trial: { trialId: `baseline-${exit.id}`, atoms: [], exitId: exit.id, stage: 'BASELINE' }, datasets, policy });
+    }
     const base = planBaseTrialsV1(lane);
     let pending = base.filter((trial) => !trials[trial.trialId]);
     let stage = 'BASE';
@@ -434,12 +447,12 @@ export async function runCombinationSearchLaneV1({
       evaluatedThisTick += 1;
     }
     const planned = base.length + planTripleTrialsV1(lane, Object.fromEntries(Object.entries(trials).filter(([, row]) => row.atoms.length === 2)), policy).length;
-    const classified = classifyLaneTrialsV1(trials, { symbolCount: datasets.length, policy });
+    const classified = classifyLaneTrialsV1(trials, { symbolCount: datasets.length, baselines, policy });
     await atomicJson(statePath, {
       contract: COMBINATION_SEARCH_CONTRACT_V1, atomLibraryVersion: COMBINATION_ATOM_LIBRARY_VERSION,
-      laneId: lane.id, symbolKey, updatedAt: observedAt, researchCodeSha, trials,
+      laneId: lane.id, symbolKey, updatedAt: observedAt, researchCodeSha, baselines, trials,
     });
-    summaries.push({ ...laneSummary(lane, classified, planned, datasets.map((row) => row.symbol), policy), stage, status: 'SEARCHING' });
+    summaries.push({ ...laneSummary(lane, classified, planned, datasets.map((row) => row.symbol), policy, baselines), stage, status: 'SEARCHING' });
     if (clock() >= deadline) break;
   }
   await atomicJson(cursorPath, { next: (cursor + 1) % Math.max(lanes.length, 1) });
@@ -516,17 +529,20 @@ export function formatCombinationReportKoV1(result) {
     lines.push(`■ ${name} — 종목 ${lane.symbols.length}개 (${lane.symbols.join(', ')})`);
     lines.push(`  진행: ${lane.trialsEvaluated} / ${lane.trialsPlanned}개 시험 ${lane.searchExhausted ? '(이번 재료로는 탐색 완료)' : '(다음 회차에 계속)'}`);
     lines.push(`  판정: 합격 ${lane.survivors} · 관찰 ${lane.watch} · 탈락 ${lane.rejected}`);
+    const b1 = lane.baselines?.X1?.validation; const b2 = lane.baselines?.X2?.validation;
+    if (b1 || b2) lines.push(`  기준선(조건 없이 아무 때나 진입) 검증구간 거래당 평균: 청산1 ${pct(b1?.meanReturn, 3)} · 청산2 ${pct(b2?.meanReturn, 3)} — 합격하려면 이것보다 높아야 함`);
     lane.top.slice(0, 5).forEach((row, index) => {
       lines.push(`  ${index + 1}) [${STATUS_KO[row.finalStatus] ?? row.finalStatus}] ${row.labels.join(' + ')}`);
       lines.push(`     청산: ${EXIT_KO[row.exitId] ?? row.exitId}`);
       lines.push(`     검증구간(처음 보는 뒤 40%): 거래 ${row.validation.trades}회 · 거래당 평균 ${pct(row.validation.meanReturn, 3)} · 승률 ${pct(row.validation.winRate, 0).replace('+', '')} · 손익비 ${row.validation.profitFactor ?? '-'}`);
       lines.push(`     탐색구간(앞 60%): 거래 ${row.discovery.trades}회 · 거래당 평균 ${pct(row.discovery.meanReturn, 3)}`);
+      if (row.beatsBaseline === false) lines.push('     ※ 기준선(그냥 시장에 있기)보다 낮아서 합격 아님');
       lines.push(`     일관성: 검증구간 플러스 종목 ${Math.round((row.symbolBreadth ?? 0) * 100)}% · 전체 4구간 중 ${row.positiveWindows}구간 플러스 · 우연 보정 q=${row.qValue} (0.10 이하면 통과)`);
     });
     if (lane.top.length === 0) lines.push('  아직 관찰할 만한 조합 없음 (모두 탈락)');
   }
   lines.push('');
-  lines.push('용어: 합격 = 검증구간에서도 수익, 우연 보정(q ≤ 0.10) 통과, 종목 60% 이상·4구간 중 3구간 이상 플러스, 손익비 1.1 이상.');
+  lines.push('용어: 합격 = 검증구간에서도 수익, 기준선(그냥 시장에 있기)보다 높음, 우연 보정(q ≤ 0.10) 통과, 종목 60% 이상·4구간 중 3구간 이상 플러스, 손익비 1.1 이상.');
   lines.push('      관찰 = 탐색·검증 둘 다 플러스지만 합격 기준은 아직 못 넘음. 2026년 데이터는 봉인(나중에 합격 조합만 1회 확인).');
   return lines.join('\n');
 }
