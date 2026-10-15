@@ -81,6 +81,7 @@ export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
   "research-production/bin/autonomous-research-coordinator-v2.mjs",
   "research-production/bin/autonomous-research-cycle-v2.mjs",
   "research-production/bin/autonomous-research-closed-loop.mjs",
+  "research-production/bin/combination-research-report-ko.mjs",
   "research-production/bin/research-ai-operational-transition-v2.mjs",
   "research-production/bin/research-ai-isolated-transition-v2.mjs",
   "research-production/bin/confirm-research-free-policy.mjs",
