@@ -8,6 +8,7 @@ import * as sec from '../providers/sec-edgar';
 import * as dart from '../providers/dart';
 import * as finnhub from '../providers/finnhub';
 import * as naver from '../providers/naver';
+import { logProviderFailure } from '../lib/provider-failure-log';
 import type { FinancialsRaw } from '../providers/sec-edgar';
 import type {
   Financials,
@@ -135,7 +136,7 @@ async function getFinancials(ticker: string): Promise<Financials | null> {
   try {
     return await getLive(entry);
   } catch (err) {
-    console.error(`live financials failed for ${ticker}:`, err);
+    logProviderFailure(`live financials failed for ${ticker}:`, err);
     const sample = getSampleFinancials(ticker);
     // 추천 엔진 등이 실데이터와 구분할 수 있도록 출처를 명시한다.
     return sample ? { ...sample, source: 'sample' as const } : sample;
