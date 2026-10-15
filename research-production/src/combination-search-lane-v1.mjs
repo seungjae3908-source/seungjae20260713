@@ -41,11 +41,22 @@ const DAY = 24 * 3_600_000;
 // Five symbols per data source. Long-lived liquid names/ETFs, chosen before
 // seeing any result; the list is part of the trial identity.
 export const COMBINATION_UNIVERSE_V1 = Object.freeze({
-  UPBIT_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze(['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE']) }),
-  BITGET_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze(['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT']) }),
-  YAHOO_KR_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze(['069500', '229200', '005930', '000660', '035420']) }),
-  YAHOO_US_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze(['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT']) }),
+  UPBIT_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze([
+    'KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE', 'KRW-ADA', 'KRW-AVAX', 'KRW-LINK', 'KRW-DOT', 'KRW-TRX',
+    'KRW-BCH', 'KRW-ETC', 'KRW-ATOM', 'KRW-NEAR', 'KRW-LTC', 'KRW-XLM', 'KRW-AAVE', 'KRW-UNI', 'KRW-EOS', 'KRW-SAND']) }),
+  BITGET_1H: Object.freeze({ timeframe: '1h', lookbackDays: 820, symbols: Object.freeze([
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'DOTUSDT', 'LTCUSDT',
+    'BCHUSDT', 'ATOMUSDT', 'NEARUSDT', 'UNIUSDT', 'AAVEUSDT', 'TRXUSDT', 'ETCUSDT', 'XLMUSDT', 'FILUSDT', 'APTUSDT']) }),
+  YAHOO_KR_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze([
+    '069500', '229200', '005930', '000660', '035420', '005380', '000270', '051910', '006400', '035720',
+    '068270', '105560', '055550', '012330', '066570', '003550', '028260', '096770', '017670', '030200']) }),
+  YAHOO_US_1D: Object.freeze({ timeframe: '1d', lookbackDays: 5 * 365, symbols: Object.freeze([
+    'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'DIA', 'XLK', 'XLF', 'XLE', 'XLV',
+    'NVDA', 'AMZN', 'GOOGL', 'META', 'TSLA', 'JPM', 'XOM', 'JNJ', 'WMT', 'KO']) }),
 });
+// Survivorship note: these are large, long-lived names that still trade today,
+// so history looks slightly better than a universe that included delisted ones.
+
 
 export const LANE_DATA_SOURCE_V1 = Object.freeze({
   CRYPTO_SPOT_LONG: 'UPBIT_1H',
@@ -59,8 +70,21 @@ export const LANE_DATA_SOURCE_V1 = Object.freeze({
 // Sell-side securities transaction tax for KR single stocks (0.20% from 2026; was 0.15%).
 const KR_STOCK_SELL_TAX_RATE = 0.002;
 const KR_ETF = new Set(['069500', '229200']);
+// Retail overseas-stock friction the base lane cost (0.01% fee) does not cover:
+// broker commission of about 0.10% per side and a KRW/USD conversion spread of
+// about 0.10% per side. Assumptions, to be replaced with the broker's real rates.
+const US_RETAIL_COMMISSION_RATE = 0.001;
+const US_RETAIL_FX_SPREAD_RATE = 0.001;
 function symbolCost(lane, symbol) {
   if (lane.market === 'KR_STOCK' && !KR_ETF.has(symbol)) return { ...lane.cost, taxRate: KR_STOCK_SELL_TAX_RATE };
+  if (lane.market === 'US_STOCK') {
+    return {
+      ...lane.cost,
+      entryFeeRate: lane.cost.entryFeeRate + US_RETAIL_COMMISSION_RATE,
+      exitFeeRate: lane.cost.exitFeeRate + US_RETAIL_COMMISSION_RATE,
+      slippageRate: lane.cost.slippageRate + US_RETAIL_FX_SPREAD_RATE,
+    };
+  }
   return { ...lane.cost };
 }
 
@@ -81,6 +105,12 @@ export const COMBINATION_POLICY_V1 = Object.freeze({
   falseDiscoveryRate: 0.10,
   maximumTriplePairs: 15,
   maximumTrialsPerLane: 4_000,
+  // Every fourth symbol of the universe never takes part in selection. A
+  // survivor must also beat the market baseline on those unseen symbols before
+  // the sealed 2026 holdout is spent on it.
+  unseenSymbolStride: 4,
+  minimumUnseenTrades: 15,
+  requireUnseenSymbolPass: true,
 });
 
 function sha256(value) {
@@ -441,9 +471,10 @@ function splitEdges(candles, policy) {
   return { splitTime, windowEdges };
 }
 
-async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtMs, fetchBudget, log }) {
-  const spec = COMBINATION_UNIVERSE_V1[source];
+async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtMs, fetchBudget, log, universe = COMBINATION_UNIVERSE_V1 }) {
+  const spec = universe[source];
   const ready = [];
+  let pending = 0;
   for (const symbol of spec.symbols) {
     const path = join(root, 'combination-research', 'datasets', source, `${symbol}.json`);
     let cached = await readJson(path);
@@ -452,7 +483,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     if (!cached?.candles?.length || cached.lookbackDays !== spec.lookbackDays || (source === 'BITGET_1H' && !Array.isArray(cached.fundingRates))) {
       const failure = await readJson(failurePath);
       if (Number(failure?.retryAfter) > observedAtMs) { log.push(`${source}:${symbol}:RETRY_LATER`); continue; }
-      if (fetchBudget.remaining <= 0) { log.push(`${source}:${symbol}:FETCH_BUDGET_NEXT_TICK`); continue; }
+      if (fetchBudget.remaining <= 0) { log.push(`${source}:${symbol}:FETCH_BUDGET_NEXT_TICK`); pending += 1; continue; }
       fetchBudget.remaining -= 1;
       try {
         const data = await loader({ source, symbol, fetchImpl });
@@ -461,7 +492,9 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
         log.push(`${source}:${symbol}:FETCHED:${data.candles.length}`);
       } catch (error) {
         const reason = String(error?.message ?? error).slice(0, 160);
-        await atomicJson(failurePath, { reason, retryAfter: observedAtMs + 3_600_000 });
+        // A short listing history will not grow within a day; do not churn the symbol set.
+        const retryMs = reason.startsWith('COMBINATION_DATASET_INSUFFICIENT') ? 24 * 3_600_000 : 3_600_000;
+        await atomicJson(failurePath, { reason, retryAfter: observedAtMs + retryMs });
         log.push(`${source}:${symbol}:FAILED:${reason}`);
         continue;
       }
@@ -471,7 +504,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     if (candles.length < 300) { log.push(`${source}:${symbol}:TOO_FEW_CANDLES:${candles.length}`); continue; }
     ready.push({ symbol, timeframe: cached.timeframe, candles, fundingRates: (cached.fundingRates ?? []).filter((row) => row.timestamp < HOLDOUT_START) });
   }
-  return ready;
+  return { ready, pending };
 }
 
 function laneSummary(lane, classified, planned, symbols, policy, baselines = {}) {
@@ -485,9 +518,10 @@ function laneSummary(lane, classified, planned, symbols, policy, baselines = {})
       exitId: row.exitId, qValue: row.qValue, validation: row.validation, discovery: row.discovery,
       positiveWindows: row.walkForward.positiveWindows, symbolBreadth: row.symbolBreadth,
       baselineValidationMean: row.baselineValidationMean, beatsBaseline: row.beatsBaseline,
-      holdout: row.holdout ?? null,
+      holdout: row.holdout ?? null, unseen: row.unseen ?? null,
     }));
-  const paperCandidates = classified.filter((row) => row.finalStatus === 'SURVIVOR' && row.holdout?.pass === true)
+  const paperCandidates = classified.filter((row) => row.finalStatus === 'SURVIVOR' && row.holdout?.pass === true
+      && (!policy.requireUnseenSymbolPass || row.unseen?.pass === true))
     .map((row) => ({ trialId: row.trialId, atoms: row.atoms, labels: row.atoms.map((id) => combinationAtomV1(id).label),
       exitId: row.exitId, holdout: row.holdout }));
   const evaluated = classified.length;
@@ -500,6 +534,29 @@ function laneSummary(lane, classified, planned, symbols, policy, baselines = {})
     searchExhausted: evaluated >= Math.min(planned, policy.maximumTrialsPerLane),
     baselines: Object.fromEntries(Object.entries(baselines).map(([exitId, row]) => [exitId, { validation: row.validation, discovery: row.discovery }])),
     top,
+  });
+}
+
+function pooled(a, b) {
+  const trades = a.trades + b.trades;
+  return { trades, meanReturn: trades === 0 ? 0 : ((a.meanReturn * a.trades) + (b.meanReturn * b.trades)) / trades };
+}
+
+/** Survivor check on symbols that never took part in discovery or selection. */
+export function evaluateUnseenSymbolsV1({ lane, trial, unseenDatasets, unseenBaselines, policy = COMBINATION_POLICY_V1 }) {
+  const symbols = unseenDatasets.map((row) => row.symbol);
+  const baseline = unseenBaselines?.[trial.exitId];
+  if (unseenDatasets.length === 0 || !baseline) return Object.freeze({ pass: false, reason: 'NO_UNSEEN_SYMBOLS', symbols, trades: 0, meanReturn: 0, baselineMeanReturn: 0 });
+  const result = evaluateCombinationTrialV1({ lane, trial, datasets: unseenDatasets, policy });
+  const own = pooled(result.discovery, result.validation);
+  const base = pooled(baseline.discovery, baseline.validation);
+  let reason = 'PASS';
+  if (own.trades < policy.minimumUnseenTrades) reason = 'UNSEEN_TRADES_TOO_FEW';
+  else if (!(own.meanReturn > 0)) reason = 'UNSEEN_RETURN_NOT_POSITIVE';
+  else if (!(own.meanReturn > base.meanReturn)) reason = 'UNSEEN_NOT_BETTER_THAN_BASELINE';
+  return Object.freeze({
+    pass: reason === 'PASS', reason, symbols, trades: own.trades,
+    meanReturn: round(own.meanReturn), baselineMeanReturn: round(base.meanReturn),
   });
 }
 
@@ -519,6 +576,7 @@ export async function runCombinationSearchLaneV1({
   holdoutLoader = loadCombinationHoldoutDatasetV1,
   lanes = RESEARCH_LANES_V2,
   policy = COMBINATION_POLICY_V1,
+  universe = COMBINATION_UNIVERSE_V1,
 } = {}) {
   const root = resolve(String(stateRoot ?? ''));
   if (!stateRoot) throw new Error('COMBINATION_STATE_ROOT_REQUIRED');
@@ -539,16 +597,26 @@ export async function runCombinationSearchLaneV1({
     const source = LANE_DATA_SOURCE_V1[lane.id];
     if (!source) continue;
     if (!sourceCache.has(source)) {
-      const raw = await loadSourceDatasets({ root, source, fetchImpl, loader: datasetLoader, observedAtMs, fetchBudget, log });
-      sourceCache.set(source, raw.map((data) => {
+      const { ready, pending } = await loadSourceDatasets({ root, source, fetchImpl, loader: datasetLoader, observedAtMs, fetchBudget, log, universe });
+      const all = ready.map((data) => {
         const { splitTime, windowEdges } = splitEdges(data.candles, policy);
         return { ...data, atoms: computeCombinationAtomsV1(data.candles, { timeframe: data.timeframe }), splitTime, windowEdges };
-      }));
+      });
+      const universeSymbols = universe[source].symbols;
+      const isUnseen = (symbol) => policy.unseenSymbolStride > 0
+        && universeSymbols.indexOf(symbol) % policy.unseenSymbolStride === policy.unseenSymbolStride - 1;
+      sourceCache.set(source, { pending, seen: all.filter((row) => !isUnseen(row.symbol)), unseen: all.filter((row) => isUnseen(row.symbol)) });
     }
-    const datasets = sourceCache.get(source);
+    const { pending: pendingSymbols, seen: datasets, unseen: unseenDatasets } = sourceCache.get(source);
+    // Never search while the symbol set is still filling up: every change of the
+    // set restarts the experiment and would re-spend the one-time 2026 check.
+    if (pendingSymbols > 0) {
+      summaries.push({ laneId: lane.id, status: 'WAITING_FOR_DATA', reason: 'DATASETS_STILL_DOWNLOADING', pendingSymbols, symbols: datasets.map((row) => row.symbol) });
+      continue;
+    }
     const statePath = join(root, 'combination-research', 'lanes', lane.id, 'state.json');
     const prior = await readJson(statePath);
-    const symbolKey = `${datasets.map((row) => row.symbol).join(',')}|${COMBINATION_UNIVERSE_V1[source].lookbackDays}d`;
+    const symbolKey = `${datasets.map((row) => row.symbol).join(',')}|unseen:${unseenDatasets.map((row) => row.symbol).join(',')}|${universe[source].lookbackDays}d|${policy.unseenSymbolStride}`;
     // A different atom library or symbol set is a different experiment.
     const fresh = prior?.atomLibraryVersion !== COMBINATION_ATOM_LIBRARY_VERSION || prior?.symbolKey !== symbolKey;
     const trials = fresh ? {} : { ...(prior?.trials ?? {}) };
@@ -569,6 +637,14 @@ export async function runCombinationSearchLaneV1({
       pending = planTripleTrialsV1(lane, trials, policy).filter((trial) => !trials[trial.trialId]);
       stage = 'TRIPLE';
     }
+    // Baseline on the unseen symbols, used only for their out-of-sample check.
+    const unseenBaselines = fresh ? {} : { ...(prior?.unseenBaselines ?? {}) };
+    if (unseenDatasets.length > 0) {
+      for (const exit of COMBINATION_EXIT_PROFILES_V1) {
+        if (unseenBaselines[exit.id]) continue;
+        unseenBaselines[exit.id] = evaluateCombinationTrialV1({ lane, trial: { trialId: `baseline-unseen-${exit.id}`, atoms: [], exitId: exit.id, stage: 'BASELINE' }, datasets: unseenDatasets, policy });
+      }
+    }
     for (const trial of pending) {
       if (clock() >= deadline || Object.keys(trials).length >= policy.maximumTrialsPerLane) break;
       trials[trial.trialId] = evaluateCombinationTrialV1({ lane, trial, datasets, policy });
@@ -578,7 +654,15 @@ export async function runCombinationSearchLaneV1({
     const classified = classifyLaneTrialsV1(trials, { symbolCount: datasets.length, baselines, policy });
     // One-time sealed-holdout check, only for survivors not yet checked.
     const holdout = fresh ? {} : { ...(prior?.holdout ?? {}) };
-    const unchecked = classified.filter((row) => row.finalStatus === 'SURVIVOR' && !holdout[row.trialId]);
+    // Survivors must first hold up on symbols that never took part in selection.
+    const unseenChecks = fresh ? {} : { ...(prior?.unseenChecks ?? {}) };
+    for (const row of classified) {
+      if (row.finalStatus !== 'SURVIVOR') continue;
+      if (!unseenChecks[row.trialId]) unseenChecks[row.trialId] = evaluateUnseenSymbolsV1({ lane, trial: row, unseenDatasets, unseenBaselines, policy });
+      row.unseen = unseenChecks[row.trialId];
+    }
+    const unseenOk = (row) => !policy.requireUnseenSymbolPass || row.unseen?.pass === true;
+    const unchecked = classified.filter((row) => row.finalStatus === 'SURVIVOR' && unseenOk(row) && !holdout[row.trialId]);
     if (unchecked.length > 0 && clock() < deadline) {
       const holdoutDatasets = await loadHoldoutSource({ root, source, warm: datasets, fetchImpl, loader: holdoutLoader,
         observedAtMs, fetchBudget, log, policy: HOLDOUT_POLICY_V1 });
@@ -592,7 +676,7 @@ export async function runCombinationSearchLaneV1({
     for (const row of classified) if (holdout[row.trialId]) row.holdout = holdout[row.trialId];
     await atomicJson(statePath, {
       contract: COMBINATION_SEARCH_CONTRACT_V1, atomLibraryVersion: COMBINATION_ATOM_LIBRARY_VERSION,
-      laneId: lane.id, symbolKey, updatedAt: observedAt, researchCodeSha, baselines, holdout, trials,
+      laneId: lane.id, symbolKey, updatedAt: observedAt, researchCodeSha, baselines, unseenBaselines, unseenChecks, holdout, trials,
     });
     summaries.push({ ...laneSummary(lane, classified, planned, datasets.map((row) => row.symbol), policy, baselines), stage, status: 'SEARCHING' });
     if (clock() >= deadline) break;
@@ -679,6 +763,11 @@ export function formatCombinationReportKoV1(result) {
       lines.push(`     검증구간(처음 보는 뒤 40%): 거래 ${row.validation.trades}회 · 거래당 평균 ${pct(row.validation.meanReturn, 3)} · 승률 ${pct(row.validation.winRate, 0).replace('+', '')} · 손익비 ${row.validation.profitFactor ?? '-'}`);
       lines.push(`     탐색구간(앞 60%): 거래 ${row.discovery.trades}회 · 거래당 평균 ${pct(row.discovery.meanReturn, 3)}`);
       if (row.beatsBaseline === false) lines.push('     ※ 기준선(그냥 시장에 있기)보다 낮아서 합격 아님');
+      if (row.unseen) {
+        const u = row.unseen;
+        const whyU = { NO_UNSEEN_SYMBOLS: '처음 보는 종목 데이터 없음', UNSEEN_TRADES_TOO_FEW: '거래 수 부족', UNSEEN_RETURN_NOT_POSITIVE: '손실', UNSEEN_NOT_BETTER_THAN_BASELINE: '기준선보다 낮음' }[u.reason] ?? u.reason;
+        lines.push(`     처음 보는 종목 확인(${u.symbols.join(', ') || '-'}): ${u.pass ? '통과' : `실패(${whyU})`} · 거래 ${u.trades}회 · 거래당 ${pct(u.meanReturn, 3)} · 기준선 ${pct(u.baselineMeanReturn, 3)}`);
+      }
       if (row.holdout) {
         const h = row.holdout;
         const why = { HOLDOUT_TOO_FEW_TRADES: '거래 수 부족', HOLDOUT_NOT_POSITIVE: '손실', HOLDOUT_BELOW_BASELINE: '기준선보다 낮음', HOLDOUT_SYMBOL_BREADTH_LOW: '플러스 종목 부족' }[h.reason] ?? h.reason;
