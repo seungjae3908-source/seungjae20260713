@@ -3,7 +3,7 @@
 // pattern, swing/wave structure or chart pattern). The combination search
 // joins atoms with AND. Nothing here places orders or calls an AI provider.
 
-export const COMBINATION_ATOM_LIBRARY_VERSION = 'combination-atoms-v1.0';
+export const COMBINATION_ATOM_LIBRARY_VERSION = 'combination-atoms-v1.1';
 
 export const ATOM_FAMILIES = Object.freeze(['TREND', 'MOMENTUM', 'VOLATILITY', 'VOLUME', 'CANDLE', 'WAVE', 'PATTERN']);
 
@@ -18,6 +18,12 @@ export const COMBINATION_ATOMS_V1 = Object.freeze([
   ['T_EMA12_CROSS_UP_EMA26', 'TREND', 'LONG', 'EMA12가 EMA26 상향 돌파(골든크로스)'],
   ['T_EMA12_CROSS_DOWN_EMA26', 'TREND', 'SHORT', 'EMA12가 EMA26 하향 돌파(데드크로스)'],
   ['T_ADX14_GT_25', 'TREND', 'BOTH', 'ADX14 > 25(추세 강함)'],
+  ['T_CLOSE_ABOVE_SMA100', 'TREND', 'LONG', '종가 > 100봉 이동평균'],
+  ['T_CLOSE_BELOW_SMA100', 'TREND', 'SHORT', '종가 < 100봉 이동평균'],
+  ['T_EMA50_ABOVE_EMA200', 'TREND', 'LONG', 'EMA50 > EMA200(장기 정배열)'],
+  ['T_EMA50_BELOW_EMA200', 'TREND', 'SHORT', 'EMA50 < EMA200(장기 역배열)'],
+  ['T_CLOSE_ABOVE_VWAP20', 'TREND', 'LONG', '종가 > 20봉 거래량가중평균(VWAP)'],
+  ['T_CLOSE_BELOW_VWAP20', 'TREND', 'SHORT', '종가 < 20봉 거래량가중평균(VWAP)'],
   ['M_RSI14_LT_30', 'MOMENTUM', 'LONG', 'RSI14 < 30(과매도)'],
   ['M_RSI14_GT_70', 'MOMENTUM', 'SHORT', 'RSI14 > 70(과매수)'],
   ['M_RSI14_GT_50', 'MOMENTUM', 'LONG', 'RSI14 > 50'],
@@ -32,11 +38,14 @@ export const COMBINATION_ATOMS_V1 = Object.freeze([
   ['M_ROC10_NEG', 'MOMENTUM', 'SHORT', '10봉 변화율 < 0'],
   ['M_STOCH14_LT_20', 'MOMENTUM', 'LONG', '스토캐스틱 %K14 < 20'],
   ['M_STOCH14_GT_80', 'MOMENTUM', 'SHORT', '스토캐스틱 %K14 > 80'],
+  ['M_RSI2_LT_10', 'MOMENTUM', 'LONG', 'RSI2 < 10(단기 과매도, 코너스 방식)'],
+  ['M_RSI2_GT_90', 'MOMENTUM', 'SHORT', 'RSI2 > 90(단기 과매수)'],
   ['V_BB20_BELOW_LOWER', 'VOLATILITY', 'LONG', '종가가 볼린저 하단 아래'],
   ['V_BB20_ABOVE_UPPER', 'VOLATILITY', 'SHORT', '종가가 볼린저 상단 위'],
   ['V_BB20_SQUEEZE', 'VOLATILITY', 'BOTH', '볼린저 폭이 최근 120봉 하위 20%(수축)'],
   ['V_ATR14_EXPANDING', 'VOLATILITY', 'BOTH', 'ATR14 > ATR14의 50봉 평균 × 1.2(변동성 확대)'],
   ['U_RVOL20_GT_1_5', 'VOLUME', 'BOTH', '거래량 > 직전 20봉 평균 × 1.5'],
+  ['U_RVOL20_GT_2_5', 'VOLUME', 'BOTH', '거래량 > 직전 20봉 평균 × 2.5(거래량 급증)'],
   ['U_OBV_ABOVE_SMA20', 'VOLUME', 'LONG', 'OBV > OBV 20봉 평균'],
   ['U_OBV_BELOW_SMA20', 'VOLUME', 'SHORT', 'OBV < OBV 20봉 평균'],
   ['C_BULLISH_ENGULFING', 'CANDLE', 'LONG', '상승 장악형 캔들'],
@@ -54,6 +63,9 @@ export const COMBINATION_ATOMS_V1 = Object.freeze([
   ['W_LOWER_HIGH_CONFIRMED', 'WAVE', 'SHORT', '직전보다 낮은 스윙 고점 확정'],
   ['P_DONCHIAN20_BREAKOUT', 'PATTERN', 'LONG', '직전 20봉 최고가 돌파'],
   ['P_DONCHIAN20_BREAKDOWN', 'PATTERN', 'SHORT', '직전 20봉 최저가 이탈'],
+  ['P_DONCHIAN55_BREAKOUT', 'PATTERN', 'LONG', '직전 55봉 최고가 돌파(터틀)'],
+  ['P_DONCHIAN55_BREAKDOWN', 'PATTERN', 'SHORT', '직전 55봉 최저가 이탈(터틀)'],
+  ['P_NR7', 'PATTERN', 'BOTH', '최근 7봉 중 변동폭 최소(NR7, 수축)'],
   ['P_DOUBLE_BOTTOM_BREAK', 'PATTERN', 'LONG', '쌍바닥 후 넥라인 돌파'],
   ['P_DOUBLE_TOP_BREAK', 'PATTERN', 'SHORT', '쌍봉 후 넥라인 이탈'],
 ].map(([id, family, side, label]) => Object.freeze({ id, family, side, label })));
@@ -244,7 +256,15 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
   const n = candles.length;
   const close = candles.map((x) => x.close);
   const volume = candles.map((x) => x.volume);
-  const sma20 = sma(close, 20); const sma50 = sma(close, 50); const sma200 = sma(close, 200);
+  const sma20 = sma(close, 20); const sma50 = sma(close, 50); const sma100 = sma(close, 100); const sma200 = sma(close, 200);
+  const ema50 = ema(close, 50); const ema200 = ema(close, 200);
+  const rsi2 = rsi(close, 2);
+  const vwap20 = candles.map((_, i) => {
+    if (i < 19) return null;
+    let pv = 0; let v = 0;
+    for (let j = i - 19; j <= i; j += 1) { pv += ((candles[j].high + candles[j].low + candles[j].close) / 3) * candles[j].volume; v += candles[j].volume; }
+    return v > 0 ? pv / v : null;
+  });
   const ema12 = ema(close, 12); const ema26 = ema(close, 26);
   const macdLine = ema12.map((v, i) => (v == null || ema26[i] == null ? null : v - ema26[i]));
   const macdSignal = ema(macdLine, 9);
@@ -268,6 +288,8 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
   const obvSma20 = sma(obv, 20);
   const priorHigh20 = priorExtreme(candles.map((x) => x.high), 20, Math.max);
   const priorLow20 = priorExtreme(candles.map((x) => x.low), 20, Math.min);
+  const priorHigh55 = priorExtreme(candles.map((x) => x.high), 55, Math.max);
+  const priorLow55 = priorExtreme(candles.map((x) => x.low), 55, Math.min);
   const stochK = candles.map((_, i) => {
     if (i < 13) return null;
     let hi = -Infinity; let lo = Infinity;
@@ -291,6 +313,10 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
       set('T_EMA12_CROSS_DOWN_EMA26', i, ema12[i - 1] >= ema26[i - 1] && ema12[i] < ema26[i]);
     }
     if (ok(adx14[i])) set('T_ADX14_GT_25', i, adx14[i] > 25);
+    if (ok(sma100[i])) { set('T_CLOSE_ABOVE_SMA100', i, close[i] > sma100[i]); set('T_CLOSE_BELOW_SMA100', i, close[i] < sma100[i]); }
+    if (ok(ema50[i], ema200[i])) { set('T_EMA50_ABOVE_EMA200', i, ema50[i] > ema200[i]); set('T_EMA50_BELOW_EMA200', i, ema50[i] < ema200[i]); }
+    if (ok(vwap20[i])) { set('T_CLOSE_ABOVE_VWAP20', i, close[i] > vwap20[i]); set('T_CLOSE_BELOW_VWAP20', i, close[i] < vwap20[i]); }
+    if (ok(rsi2[i])) { set('M_RSI2_LT_10', i, rsi2[i] < 10); set('M_RSI2_GT_90', i, rsi2[i] > 90); }
     if (ok(rsi14[i])) {
       set('M_RSI14_LT_30', i, rsi14[i] < 30); set('M_RSI14_GT_70', i, rsi14[i] > 70);
       set('M_RSI14_GT_50', i, rsi14[i] > 50); set('M_RSI14_LT_50', i, rsi14[i] < 50);
@@ -311,7 +337,10 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
     if (ok(bbLower[i], bbUpper[i])) { set('V_BB20_BELOW_LOWER', i, close[i] < bbLower[i]); set('V_BB20_ABOVE_UPPER', i, close[i] > bbUpper[i]); }
     if (ok(bbWidthRank[i])) set('V_BB20_SQUEEZE', i, bbWidthRank[i] <= 0.2);
     if (ok(atr14[i], atrMean50[i])) set('V_ATR14_EXPANDING', i, atr14[i] > atrMean50[i] * 1.2);
-    if (ok(priorVolMean[i]) && priorVolMean[i] > 0) set('U_RVOL20_GT_1_5', i, volume[i] > priorVolMean[i] * 1.5);
+    if (ok(priorVolMean[i]) && priorVolMean[i] > 0) {
+      set('U_RVOL20_GT_1_5', i, volume[i] > priorVolMean[i] * 1.5);
+      set('U_RVOL20_GT_2_5', i, volume[i] > priorVolMean[i] * 2.5);
+    }
     if (ok(obvSma20[i])) { set('U_OBV_ABOVE_SMA20', i, obv[i] > obvSma20[i]); set('U_OBV_BELOW_SMA20', i, obv[i] < obvSma20[i]); }
 
     // Candles
@@ -368,6 +397,13 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
     }
     if (ok(priorHigh20[i])) set('P_DONCHIAN20_BREAKOUT', i, close[i] > priorHigh20[i]);
     if (ok(priorLow20[i])) set('P_DONCHIAN20_BREAKDOWN', i, close[i] < priorLow20[i]);
+    if (ok(priorHigh55[i])) set('P_DONCHIAN55_BREAKOUT', i, close[i] > priorHigh55[i]);
+    if (ok(priorLow55[i])) set('P_DONCHIAN55_BREAKDOWN', i, close[i] < priorLow55[i]);
+    if (i >= 6) {
+      let narrowest = true;
+      for (let j = i - 6; j < i; j += 1) if (candles[j].high - candles[j].low <= range) narrowest = false;
+      set('P_NR7', i, narrowest);
+    }
   }
   return atoms;
 }

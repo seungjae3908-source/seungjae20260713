@@ -12,6 +12,7 @@ import {
 import {
   benjaminiHochbergV1,
   classifyLaneTrialsV1,
+  formatCombinationReportKoV1,
   planBaseTrialsV1,
   planTripleTrialsV1,
   runCombinationSearchLaneV1,
@@ -165,4 +166,20 @@ test('missing data keeps the lane waiting instead of testing on too few symbols'
   const again = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
     now: () => '2026-10-15T00:10:00.000Z' });
   assert.ok(again.datasetLog.some((line) => line.endsWith('RETRY_LATER')), 'failed symbols back off for an hour');
+});
+
+test('Korean report explains progress, verdicts and data problems in plain words', async (t) => {
+  const root = await tempRoot(t);
+  const lane = LANE('KR_STOCK_LONG');
+  const datasetLoader = async ({ source, symbol }) => {
+    if (symbol === '035420') throw new Error('YAHOO_HTTP_404');
+    return { source, symbol, timeframe: '1d', candles: randomWalk(900, { seed: Number(symbol) % 997 + 1, step: 86_400_000, start: Date.UTC(2021, 0, 4) }) };
+  };
+  const result = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
+    budgetMs: 600_000, now: () => '2026-10-15T00:00:00.000Z' });
+  const text = formatCombinationReportKoV1(result);
+  assert.match(text, /국내주식 매수 — 종목 4개/);
+  assert.match(text, /합격 \d+ · 관찰 \d+ · 탈락 \d+/);
+  assert.match(text, /035420: 실패 \(YAHOO_HTTP_404\)/);
+  assert.match(text, /AI 사용 0회/);
 });
