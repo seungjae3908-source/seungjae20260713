@@ -36,6 +36,10 @@ const MAX_PROMPT_SOURCE_CHARS = 24_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const TRANSIENT_RETRY_MS = 15 * 60 * 1_000;
 const SEMANTIC_RETRY_MS = 6 * 60 * 60 * 1_000;
+// Free Gemini returns 503 "high demand" during busy hours. Retry the same
+// logical stage a little later instead of failing the whole cycle.
+const PROVIDER_RETRY_DELAYS_MS = Object.freeze([20_000, 40_000]);
+const RETRYABLE_PROVIDER_ERROR = /^(?:FREE_AI_PROVIDER_UNAVAILABLE|FREE_AI_TIMEOUT)$/u;
 const VERIFIED_LOCATOR_TAGS = Object.freeze(['ENTRY_LOCATOR', 'EXIT_LOCATOR', 'RISK_LOCATOR']);
 // A strategy source must hold trading rules. Reports, statistics, plots,
 // tests and plumbing are rejected before any fetch or second AI call.
@@ -852,6 +856,8 @@ export async function runAutonomousResearchDiscoveryV2({
   fetchImpl = globalThis.fetch,
   datasetLoader = loadResearchLaneHistoryV2,
   verifiedSourceCatalog = DEFAULT_VERIFIED_SOURCE_CATALOG_V2,
+  providerRetryDelaysMs = PROVIDER_RETRY_DELAYS_MS,
+  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   researchLanes = RESEARCH_LANES_V2,
 } = {}) {
   const root = resolve(String(rawRoot ?? ''));
@@ -895,7 +901,20 @@ export async function runAutonomousResearchDiscoveryV2({
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 } });
   }
 
-  const calls = { attempted: 0, succeeded: 0, failed: 0 };
+  const calls = { attempted: 0, succeeded: 0, failed: 0, retried: 0 };
+  // One logical stage = one attempted call; transient 503/timeout retries of
+  // the same stage are counted separately in calls.retried.
+  const invokeWithRetry = async (request) => {
+    for (let retry = 0; ; retry += 1) {
+      try { return await invoke(request); }
+      catch (error) {
+        const code = String(error?.message ?? '');
+        if (!RETRYABLE_PROVIDER_ERROR.test(code) || retry >= providerRetryDelaysMs.length) throw error;
+        calls.retried += 1;
+        await sleep(providerRetryDelaysMs[retry]);
+      }
+    }
+  };
   const fetches = { attempted: 0, succeeded: 0, failed: 0 };
   const priorSourceIds = await priorGithubSourceIds(root);
   const failedSources = await priorFailedSources(root);
@@ -904,7 +923,7 @@ export async function runAutonomousResearchDiscoveryV2({
   let candidate = null;
   try {
     calls.attempted += 1;
-    const planned = await invoke({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, rotateCatalogWindowV2(catalog, (await discoveryAttemptCount(root)) + Math.floor(Date.parse(observedAt) / 600_000))), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const planned = await invokeWithRetry({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, rotateCatalogWindowV2(catalog, (await discoveryAttemptCount(root)) + Math.floor(Date.parse(observedAt) / 600_000))), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (planned?.provider !== policy.provider || planned?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const plan = parseSourcePlan(planned.answer);
@@ -932,7 +951,7 @@ export async function runAutonomousResearchDiscoveryV2({
     if (priorSourceIds.includes(verifiedSourceId)) throw new Error('AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED');
 
     calls.attempted += 1;
-    const extracted = await invoke({ policy, prompt: extractionPrompt({ plan, revision: source.revision, sourceSha256: source.sourceSha256, sourceText: source.sourceText, lane }), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
+    const extracted = await invokeWithRetry({ policy, prompt: extractionPrompt({ plan, revision: source.revision, sourceSha256: source.sourceSha256, sourceText: source.sourceText, lane }), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (extracted?.provider !== policy.provider || extracted?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
     const extraction = parseRuleExtraction(extracted.answer, source.sourceText, lane);
