@@ -89,7 +89,7 @@ test('isolated transition rebinds the existing directive and proves two distinct
       return { status: 'PARTIAL_COVERAGE_COMPLETE', provider: 'gemini', model: 'gemini-3.1-flash-lite',
         providerNetworkCalls: 1, cacheHits: 0, reviews: [{}], blockedProfiles: [], safety: { executionAuthority: 'NONE' } };
     },
-    runVideo: async () => ({ status: 'COMPLETE', provider: 'YOUTUBE_DATA_API_V3', providerNetworkCalls: 1,
+    runVideo: async ({ verifyGitHead }) => ({ status: verifyGitHead === false ? 'COMPLETE' : 'GIT_HEAD_REVERIFIED', provider: 'YOUTUBE_DATA_API_V3', providerNetworkCalls: 1,
       sourceCount: 0, zeroResultReason: 'ACTIVE_QUERY_AND_FILTERS_RETURNED_NO_PUBLIC_VIDEO', safety: { executionAuthority: 'NONE' } }),
   });
   assert.equal(result.status, 'PASS');
