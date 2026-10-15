@@ -6,7 +6,8 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { readdir as readdirForLanes } from 'node:fs/promises';
 import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 
 const SHA = 'a'.repeat(40);
@@ -541,4 +542,98 @@ test('both prompts carry a fill-in answer template with the fixed wording', asyn
     assert.ok(prompt.includes(DISCOVERY_FIXED_TEXT_V2.thesis));
   }
   assert.ok(ai.prompts[1].includes('ENTRY_LOCATOR=<exact source line>'));
+});
+
+function laneCandles(lane, count = 720) {
+  const step = lane.timeframe === '1d' ? 86_400_000 : 3_600_000;
+  const start = Date.parse('2024-01-01T00:00:00.000Z');
+  const rows = [];
+  let close = 100;
+  for (let index = 0; index < count; index += 1) {
+    const burst = index % 30 === 0 ? (lane.direction === 'SHORT' ? -0.025 : 0.025) : index % 17 === 0 ? 0.012 * (lane.direction === 'SHORT' ? 1 : -1) : 0.0003 * (lane.direction === 'SHORT' ? -1 : 1);
+    const open = close;
+    close = open * (1 + burst);
+    rows.push(Object.freeze({ timestamp: start + index * step, open, high: Math.max(open, close) * 1.002,
+      low: Math.min(open, close) * 0.998, close, volume: index % 30 === 0 ? 500 : 100 + (index % 7) }));
+  }
+  return rows;
+}
+
+async function filesContaining(root, needle) {
+  const hits = [];
+  async function walk(dir) {
+    for (const entry of await readdirForLanes(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.name.endsWith('.json') && (await readFile(path, 'utf8')).includes(needle)) hits.push(path);
+    }
+  }
+  await walk(root);
+  return hits;
+}
+
+for (const lane of RESEARCH_LANES_V2) {
+  test(`lane ${lane.id} runs discovery, formula and the existing backtest queue end to end`, async (t) => {
+    const root = await fixture(t);
+    const extraction = aiAnswer({
+      summary: 'Participation Breakout declared variant', findings: [],
+      requiredEvidence: [
+        `MARKET=${lane.market}`, `TIMEFRAME=${lane.timeframe}`, `DIRECTION=${lane.direction}`, 'FAMILY=PARTICIPATION_BREAKOUT',
+        'TEMPLATE=RVOL_BREAKOUT_V1',
+        'ENTRY_LOCATOR=entry_rule = "rvol above baseline and close above prior highest close"',
+        'EXIT_LOCATOR=exit_rule = "close below trend average"', 'RISK_LOCATOR=NONE',
+      ],
+    });
+    let calls = 0;
+    const loaderLanes = [];
+    const result = await runAutonomousResearchCycleV2({ verifiedSourceCatalog: [], researchLanes: [lane],
+      stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+      invoke: async ({ policy, prompt }) => {
+        calls += 1;
+        if (calls === 2) assert.ok(prompt.includes(`MARKET=${lane.market}`) && prompt.includes(`DIRECTION=${lane.direction}`));
+        return { provider: policy.provider, model: policy.model, answer: calls % 2 === 1 ? planAnswer : extraction };
+      },
+      fetchImpl: sourceFetch(),
+      datasetLoader: async ({ lane: requested }) => {
+        loaderLanes.push(requested.id);
+        const rows = laneCandles(requested);
+        return { candles: rows, candleCount: rows.length, firstTimestamp: rows[0].timestamp, lastTimestamp: rows.at(-1).timestamp };
+      },
+      runShockLane: shockLaneStub, runProviderLane: providerLaneStub,
+    });
+    assert.equal(result.status, 'COMPLETE', JSON.stringify(result));
+    assert.equal(result.discoveryStatus, 'DOSSIER_STAGED');
+    assert.equal(result.formulaGeneratedCount, 1);
+    assert.equal(result.actualBacktestCount, 1, JSON.stringify(result));
+    assert.equal(result.selectedNextStrategy.researchLane, lane.id);
+    assert.deepEqual(loaderLanes, [lane.id]);
+    const side = lane.direction === 'SHORT' ? 'short' : 'long';
+    assert.ok((await filesContaining(root, `"side": "${side}"`)).length > 0, `queued ${side} input`);
+    assert.ok((await filesContaining(root, `"market": "${lane.market}"`)).length > 0);
+    assert.equal(result.safety.executionAuthority, 'NONE');
+  });
+}
+
+test('lanes rotate across attempts and an operator filter narrows them', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const seen = [];
+  const badPlan = aiAnswer({ summary: 'x', findings: [],
+    requiredEvidence: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main', 'SOURCE_PATH=docs/report.py', 'LICENSE_PATH=LICENSE'] });
+  for (let index = 0; index < 3; index += 1) {
+    const at = new Date(Date.parse(AT) + index * 7 * 3_600_000).toISOString();
+    await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: env(), now: () => at,
+      invoke: async ({ policy, prompt }) => { return { provider: policy.provider, model: policy.model, answer: badPlan }; },
+      fetchImpl: sourceFetch(), datasetLoader });
+    const latest = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-discovery-v2.json'), 'utf8'));
+    seen.push(latest.candidate?.researchLane);
+  }
+  assert.deepEqual(seen, RESEARCH_LANES_V2.slice(0, 3).map((lane) => lane.id));
+  const filtered = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: filtered, researchCodeSha: SHA, now: () => AT });
+  await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: filtered, researchCodeSha: SHA,
+    env: { ...env(), RESEARCH_DISCOVERY_LANES: 'US_STOCK_LONG' }, now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: badPlan }), fetchImpl: sourceFetch(), datasetLoader });
+  const latest = JSON.parse(await readFile(join(filtered, 'latest', 'autonomous-research-discovery-v2.json'), 'utf8'));
+  assert.equal(latest.candidate.researchLane, 'US_STOCK_LONG');
 });
