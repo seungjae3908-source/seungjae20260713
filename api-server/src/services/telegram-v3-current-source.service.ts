@@ -60,7 +60,13 @@ function verifiedTelegramV3ProfitLineage(row:Record<string,any>,origin:Record<st
    &&Number.isFinite(edge.expectedNetEdgeR)&&edge.expectedNetEdgeR>0
    &&origin.edgeSource==='CANONICAL_PROFIT_EVIDENCE_READY'
    &&origin.profitEvidenceStatus==='READY'
-   &&origin.backtestQualityStatus==='verified'
+   &&(origin.backtestQualityStatus==='verified'
+     // Owner-approved 2026-10-15: a combination rule that passed multiple-
+     // testing validation and the sealed 2026 holdout, and fired on this
+     // symbol's latest closed candle, is the backtest proof for this row.
+     ||(row.validationTier==='RESEARCH_CANDIDATE'
+       &&OBJ(origin.researchEvidence)?.source==='RESEARCH_COMBINATION_HOLDOUT_PASSED'
+       &&identity?.strategyId==='COMBINATION_RESEARCH'))
    &&origin.blockedPageResearchOnly!==true
    &&origin.publicationEligible!==false
    &&Array.isArray(origin.profitBlockers)&&origin.profitBlockers.length===0
