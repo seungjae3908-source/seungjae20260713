@@ -53,7 +53,7 @@ export function verifiedTelegramV3EpisodeKey(value:unknown,nowMs=Date.now()):str
 function verifiedTelegramV3ProfitLineage(row:Record<string,any>,origin:Record<string,any>,
   market:string,event:Record<string,any>):boolean{
  const identity=OBJ(origin.paperIdentity),edge=OBJ(row.evidence);
- return row.quantEligible===true&&row.profitEligible===true
+ return (row.quantEligible===true||row.researchQuantEligible===true)&&row.profitEligible===true
    &&row.riskReady===true
    &&edge?.source==='CANONICAL_PROFIT_EVIDENCE_READY'
    &&typeof edge.expectedNetEdgeR==='number'

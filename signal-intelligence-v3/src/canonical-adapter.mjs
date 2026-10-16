@@ -67,6 +67,17 @@ function quantReady(card) {
   return grade === 'S';
 }
 
+// Telegram-only eligibility. It never feeds the automatic-trading quant gate:
+// `quantEligible` above stays exact-S. An A-grade card qualifies here only when a
+// combination rule that passed the sealed 2026 holdout backs it.
+function researchQuantReady(card, input) {
+  if (card?.candidateRanking?.hardFilterPassed === false) return false;
+  if (String(card?.signalGrade ?? '').toUpperCase() !== 'A') return false;
+  return input?.validationTier === 'RESEARCH_CANDIDATE'
+    && input?.researchEvidence?.source === 'RESEARCH_COMBINATION_HOLDOUT_PASSED'
+    && input?.profitEvidence?.executionAuthority === 'NONE';
+}
+
 function riskReady(card) {
   if (!['LOW', 'MEDIUM'].includes(String(card?.riskLevel ?? '').toUpperCase())) return false;
   const entry = entryMid(card);
@@ -214,6 +225,7 @@ export function adaptCanonicalScannerCard(input, options = {}) {
     validationTier: String(input?.validationTier ?? 'RESEARCH_CANDIDATE'),
     dataStatus: dataReady(card, nowMs) ? 'READY' : 'BLOCKED',
     quantEligible: quantReady(card),
+    researchQuantEligible: researchQuantReady(card, input),
     profitEligible: Boolean(evidence),
     riskReady: riskReady(card),
     evidence: evidence ?? {},

@@ -367,6 +367,7 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   "signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts",
   "signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs",
   "signal-intelligence-v3/src/canonical-adapter.mjs",
+  "signal-intelligence-v3/src/engine.mjs",
   "signal-intelligence-v3/src/forward-ledger.mjs",
   "signal-intelligence-v3/src/public-cycle-progress-v2.mjs",
   "signal-intelligence-v3/src/public-provider-diagnostics.mjs",
