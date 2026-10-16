@@ -3,6 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import {
   buildScannerQualityEntryV1,
+  buildScannerQualityBatchV1,
   materializeForwardObserverScannerQualityArtifactV1,
 } from "../src/scanner-quality-artifact-producer-v1.js";
 import { TRANSACTION_COST_COMPONENTS } from "../../market-intelligence-sidecar/src/transaction-cost-evidence.mjs";
@@ -68,6 +69,7 @@ const identity = Object.freeze({
   parameterHash: PARAMS,
   researchCodeSha: SHA,
   market: "CRYPTO_FUTURES",
+  strategyHorizon: "SWING",
   symbol: "BTCUSDT",
   timeframe: "60m",
   direction: "LONG",
@@ -290,6 +292,7 @@ test("stock quality requires point-in-time removed-name universe audit", () => {
   });
   const stockIdentity = {
     ...identity,
+    strategyId: "KR_STOCK_SWING_V1_BUY",
     market: "KR_STOCK",
     symbol: "005930",
     direction: "BUY",
@@ -391,6 +394,45 @@ test("Scanner dataset binding rejects hidden 1h reuse and accepts only exact Sca
   assert.equal(exact.reason, "QUALITY_EXACT_BINDING_MISMATCH");
 });
 
+test("all twelve canonical Scanner lanes accept only their independent dataset profile", () => {
+  const lanes = [
+    ["KR_STOCK", "SCALP", "5m", "KR_STOCK:SCANNER_SCALP_5M", "005930", "BUY"],
+    ["KR_STOCK", "SWING", "60m", "KR_STOCK:SCANNER_SWING_60M", "005930", "BUY"],
+    ["KR_STOCK", "POSITION", "1D", "KR_STOCK:SCANNER_POSITION_1D", "005930", "BUY"],
+    ["US_STOCK", "SCALP", "5m", "US_STOCK:SCANNER_SCALP_5M", "AAPL", "BUY"],
+    ["US_STOCK", "SWING", "60m", "US_STOCK:SCANNER_SWING_60M", "AAPL", "BUY"],
+    ["US_STOCK", "POSITION", "1D", "US_STOCK:SCANNER_POSITION_1D", "AAPL", "BUY"],
+    ["CRYPTO_SPOT", "SCALP", "15m", "CRYPTO_SPOT:SCANNER_SCALP_15M", "BTC", "BUY"],
+    ["CRYPTO_SPOT", "SWING", "4H", "CRYPTO_SPOT:SCANNER_SWING_4H", "BTC", "BUY"],
+    ["CRYPTO_SPOT", "POSITION", "4H", "CRYPTO_SPOT:SCANNER_POSITION_4H", "BTC", "BUY"],
+    ["CRYPTO_FUTURES", "SCALP", "5m", "CRYPTO_FUTURES:SCANNER_SCALP_5M", "BTCUSDT", "LONG"],
+    ["CRYPTO_FUTURES", "SWING", "60m", "CRYPTO_FUTURES:SCANNER_SWING_60M", "BTCUSDT", "LONG"],
+    ["CRYPTO_FUTURES", "POSITION", "4H", "CRYPTO_FUTURES:SCANNER_POSITION_4H", "BTCUSDT", "LONG"],
+  ];
+  const f = fold(1, START);
+  for (const [market, strategyHorizon, timeframe, profileId, symbol, direction] of lanes) {
+    const manifest = scannerSnapshot({ profileId, timeframe, symbols: [symbol] });
+    const laneIdentity = {
+      ...identity,
+      strategyId: `${market}_${strategyHorizon}_V1_${direction}`,
+      market, strategyHorizon, timeframe, symbol, direction,
+      datasetSnapshotHash: manifest.datasetSnapshotHash,
+    };
+    const built = buildScannerQualityEntryV1({
+      identity: laneIdentity,
+      folds: [f],
+      foldResults: [{ fold: 1, binding: {} }],
+      datasetAudit: { ...datasetAudit, snapshotManifest: manifest },
+      transactionCostEvidence: costEvidence({ market }),
+      stockUniverseBiasAudit: market.endsWith("STOCK") ? {
+        status: "point_in_time_bias_gate_passed", market,
+        safeguards: { currentConstituentListAloneCannotPass: true, missingHistoriesFailClosed: true },
+      } : null,
+    });
+    assert.equal(built.reason, "QUALITY_EXACT_BINDING_MISMATCH", `${market}/${strategyHorizon}`);
+  }
+});
+
 test("materializer produces consumer-compatible immutable quality and manifest digests", () => {
   const folds = [fold(1, START), fold(2, START + 100_000)];
   const built = buildScannerQualityEntryV1({
@@ -416,6 +458,100 @@ test("materializer produces consumer-compatible immutable quality and manifest d
   assert.equal(materialized.profitabilityClaimAllowed, false);
 });
 
+
+test("batch producer seals two separately evidenced symbols and forbids partial publication", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const first = {
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(),
+  };
+  const secondManifest = scannerSnapshot({
+    profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M",
+    timeframe: "60m", symbols: ["ETHUSDT"],
+  });
+  const secondIdentity = {
+    ...identity, symbol: "ETHUSDT",
+    datasetSnapshotHash: secondManifest.datasetSnapshotHash,
+  };
+  const secondPackets = folds.map((f) => {
+    const p = packet(f);
+    const withEth = (result) => ({
+      ...result, symbol: "ETHUSDT",
+      trades: result.trades.map((trade) => ({ ...trade, symbol: "ETHUSDT" })),
+    });
+    return {
+      ...p, binding: secondIdentity,
+      outOfSampleResult: withEth(p.outOfSampleResult),
+      walkForwardResult: withEth(p.walkForwardResult),
+    };
+  });
+  const second = {
+    identity: secondIdentity, folds, foldResults: secondPackets,
+    datasetAudit: { ...datasetAudit, snapshotManifest: secondManifest },
+    transactionCostEvidence: costEvidence(),
+  };
+  const sealed = buildScannerQualityBatchV1({
+    researchCodeSha: SHA, jobs: [first, second],
+  });
+  assert.equal(sealed.status, "READY");
+  assert.equal(sealed.artifact.entries.length, 2);
+  assert.deepEqual(sealed.artifact.entries.map((row) => row.identity.symbol), ["BTCUSDT", "ETHUSDT"]);
+  assert.equal(sealed.diagnostics.markets.CRYPTO_FUTURES, 2);
+  assert.equal(
+    createHash("sha256").update(sealed.qualityText).digest("hex"),
+    sealed.manifest.qualitySha256,
+  );
+  assert.equal(sealed.executionAuthority, "NONE");
+
+  const blockedBatch = buildScannerQualityBatchV1({
+    researchCodeSha: SHA,
+    jobs: [first, { ...second, transactionCostEvidence: costEvidence({
+      components: {},
+    }) }],
+  });
+  assert.equal(blockedBatch.status, "BLOCKED_DATA");
+  assert.equal(blockedBatch.reason, "QUALITY_BATCH_ENTRY_BLOCKED");
+  assert.equal(blockedBatch.details.index, 1);
+  assert.equal(blockedBatch.entry, null);
+
+  const duplicate = buildScannerQualityBatchV1({
+    researchCodeSha: SHA, jobs: [first, first],
+  });
+  assert.equal(duplicate.status, "BLOCKED_DATA");
+  assert.equal(duplicate.reason, "QUALITY_BATCH_MATERIALIZATION_BLOCKED");
+});
+
+test("operator cannot lower the minimum trade count below forty", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const built = buildScannerQualityEntryV1({
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(), minimumTradeCount: 1,
+  });
+  assert.equal(built.status, "BLOCKED_DATA");
+  assert.equal(built.reason, "QUALITY_MINIMUM_TRADE_COUNT_BELOW_POLICY_FLOOR");
+  assert.equal(built.entry, null);
+});
+
+test("materializer refuses unchecked rows and same active identity in a multi-entry bundle", () => {
+  const folds = [fold(1, START), fold(2, START + 100_000)];
+  const built = buildScannerQualityEntryV1({
+    identity, folds, foldResults: folds.map(packet), datasetAudit,
+    transactionCostEvidence: costEvidence(),
+  });
+  assert.equal(built.status, "READY");
+  assert.throws(
+    () => materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha: SHA, entries: [built.entry],
+    }),
+    /QUALITY_ARTIFACT_ENTRY_INVALID/u,
+  );
+  assert.throws(
+    () => materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha: SHA, entries: [built, built],
+    }),
+    /QUALITY_ARTIFACT_AMBIGUOUS_ACTIVE_IDENTITY/u,
+  );
+});
 
 test("missing trade segment dimensions fail closed before summarization", () => {
   const f = fold(1, START);

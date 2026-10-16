@@ -12,6 +12,11 @@ import { buildResearchDatasetSnapshotManifestV1 } from "../../research-productio
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(new URL("../..", import.meta.url).pathname);
 const CLI = path.join(ROOT, "market-prediction-lab", "scripts", "run-scanner-quality-artifact-producer-v1.js");
+const CLI_ENV = { ...process.env };
+// Node 24 propagates its private test-child marker through execFile. A plain
+// CLI spawned with that marker may route stdout into the parent test protocol,
+// leaving the actual command result empty. The producer is not a nested test.
+delete CLI_ENV.NODE_TEST_CONTEXT;
 const SHA = "a".repeat(40);
 const DATASET_MANIFEST = buildResearchDatasetSnapshotManifestV1({
   researchSha: SHA,
@@ -33,6 +38,7 @@ const identity = {
   parameterHash: "b".repeat(64),
   researchCodeSha: SHA,
   market: "CRYPTO_FUTURES",
+  strategyHorizon: "SWING",
   symbol: "BTCUSDT",
   timeframe: "60m",
   direction: "LONG",
@@ -176,7 +182,7 @@ test("CLI writes create-only quality + manifest and verifies readback digest", a
     "--dataset-audit", files.datasetAudit,
     "--transaction-cost-evidence", files.transactionCostEvidence,
     "--output-dir", output,
-  ]);
+  ], { env: CLI_ENV });
   const status = JSON.parse(stdout);
   assert.equal(status.status, "READY");
   assert.equal(status.qualityArtifactWritten, true);
@@ -195,7 +201,7 @@ test("CLI writes create-only quality + manifest and verifies readback digest", a
       "--dataset-audit", files.datasetAudit,
       "--transaction-cost-evidence", files.transactionCostEvidence,
       "--output-dir", output,
-    ]),
+    ], { env: CLI_ENV }),
   );
 });
 
@@ -213,7 +219,7 @@ test("CLI writes no quality artifact when canonical evidence is blocked", async 
       "--dataset-audit", files.datasetAudit,
       "--transaction-cost-evidence", files.transactionCostEvidence,
       "--output-dir", output,
-    ]);
+    ], { env: CLI_ENV });
   } catch (value) {
     error = value;
   }
@@ -222,4 +228,30 @@ test("CLI writes no quality artifact when canonical evidence is blocked", async 
   assert.equal(status.status, "BLOCKED_DATA");
   assert.equal(status.qualityArtifactWritten, false);
   await assert.rejects(readFile(path.join(output, "quality.json"), "utf8"));
+});
+
+test("approved producer CLI materializes a create-only batch without a second executable path", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "scanner-quality-batch-cli-"));
+  const files = await fixture(root);
+  const index = path.join(root, "batch.json");
+  await writeFile(index, `${JSON.stringify({
+    schemaVersion: 1,
+    researchCodeSha: SHA,
+    jobs: [{
+      identity: path.basename(files.identity),
+      folds: path.basename(files.folds),
+      foldResults: path.basename(files.foldResults),
+      datasetAudit: path.basename(files.datasetAudit),
+      transactionCostEvidence: path.basename(files.transactionCostEvidence),
+    }],
+  }, null, 2)}\n`);
+  const output = path.join(root, "batch-out");
+  const { stdout } = await execFileAsync(process.execPath, [
+    CLI, "--batch-index", index, "--output-dir", output,
+  ], { env: CLI_ENV });
+  const status = JSON.parse(stdout);
+  assert.equal(status.status, "READY");
+  assert.equal(status.entryCount, 1);
+  assert.equal(status.qualityArtifactWritten, true);
+  assert.equal(status.executionAuthority, "NONE");
 });

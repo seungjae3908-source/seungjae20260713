@@ -8,13 +8,22 @@ export const SCANNER_QUALITY_ARTIFACT_PRODUCER_V1 =
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const STOCK_MARKETS = new Set(["KR_STOCK", "US_STOCK"]);
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
+const STRATEGY_HORIZONS = new Set(["SCALP", "SWING", "POSITION"]);
 const SHA40 = /^[0-9a-f]{40}$/iu;
 const SHA64 = /^[0-9a-f]{64}$/iu;
-const SCANNER_DATASET_PROFILE_BY_MARKET = Object.freeze({
-  KR_STOCK: Object.freeze({ profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
-  US_STOCK: Object.freeze({ profileId: "US_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
-  CRYPTO_SPOT: Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H" }),
-  CRYPTO_FUTURES: Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m" }),
+const SCANNER_DATASET_PROFILE_BY_LANE = Object.freeze({
+  "KR_STOCK|SCALP": Object.freeze({ profileId: "KR_STOCK:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "KR_STOCK|SWING": Object.freeze({ profileId: "KR_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  "KR_STOCK|POSITION": Object.freeze({ profileId: "KR_STOCK:SCANNER_POSITION_1D", timeframe: "1D" }),
+  "US_STOCK|SCALP": Object.freeze({ profileId: "US_STOCK:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "US_STOCK|SWING": Object.freeze({ profileId: "US_STOCK:SCANNER_SWING_60M", timeframe: "60m" }),
+  "US_STOCK|POSITION": Object.freeze({ profileId: "US_STOCK:SCANNER_POSITION_1D", timeframe: "1D" }),
+  "CRYPTO_SPOT|SCALP": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SCALP_15M", timeframe: "15m" }),
+  "CRYPTO_SPOT|SWING": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_SWING_4H", timeframe: "4H" }),
+  "CRYPTO_SPOT|POSITION": Object.freeze({ profileId: "CRYPTO_SPOT:SCANNER_POSITION_4H", timeframe: "4H" }),
+  "CRYPTO_FUTURES|SCALP": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SCALP_5M", timeframe: "5m" }),
+  "CRYPTO_FUTURES|SWING": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_SWING_60M", timeframe: "60m" }),
+  "CRYPTO_FUTURES|POSITION": Object.freeze({ profileId: "CRYPTO_FUTURES:SCANNER_POSITION_4H", timeframe: "4H" }),
 });
 
 function deepFreeze(value) {
@@ -74,6 +83,7 @@ function normalizeDirection(identity) {
 function validateIdentity(identity) {
   if (!identity || typeof identity !== "object") return "QUALITY_IDENTITY_REQUIRED";
   if (!MARKETS.has(identity.market)) return "QUALITY_MARKET_UNSUPPORTED";
+  if (!STRATEGY_HORIZONS.has(identity.strategyHorizon)) return "QUALITY_STRATEGY_HORIZON_REQUIRED";
   if (!text(identity.strategyId) || !text(identity.strategyVersion)) return "QUALITY_STRATEGY_IDENTITY_REQUIRED";
   if (!SHA64.test(String(identity.parameterHash ?? ""))) return "QUALITY_PARAMETER_HASH_REQUIRED";
   if (!SHA40.test(String(identity.researchCodeSha ?? ""))) return "QUALITY_RESEARCH_SHA_REQUIRED";
@@ -84,6 +94,10 @@ function validateIdentity(identity) {
       ? "QUALITY_CASH_BUY_ONLY"
       : "QUALITY_DIRECTION_REQUIRED";
   }
+  if (identity.strategyId !== `${identity.market}_${identity.strategyHorizon}_V1_${normalizeDirection(identity)}`
+      || identity.strategyVersion !== "signal-profile-v1") {
+    return "QUALITY_CANONICAL_STRATEGY_IDENTITY_MISMATCH";
+  }
   return null;
 }
 
@@ -91,7 +105,7 @@ function exactBinding(binding, identity) {
   if (!binding || typeof binding !== "object") return false;
   for (const key of [
     "strategyId", "strategyVersion", "parameterHash", "researchCodeSha",
-    "market", "symbol", "timeframe", "datasetSnapshotHash",
+    "market", "strategyHorizon", "symbol", "timeframe", "datasetSnapshotHash",
   ]) {
     if (String(binding[key] ?? "") !== String(identity[key] ?? "")) return false;
   }
@@ -201,7 +215,7 @@ function validateResult(result, identity, window, label) {
 
 function validateScannerDatasetSnapshotBinding(identity, datasetAudit) {
   const blockers = [];
-  const expected = SCANNER_DATASET_PROFILE_BY_MARKET[identity.market];
+  const expected = SCANNER_DATASET_PROFILE_BY_LANE[`${identity.market}|${identity.strategyHorizon}`];
   if (!expected || identity.timeframe !== expected.timeframe) {
     blockers.push("QUALITY_SCANNER_TIMEFRAME_PROFILE_MISMATCH");
   }
@@ -348,6 +362,12 @@ export function buildScannerQualityEntryV1(input = {}) {
   if (!Array.isArray(input.foldResults) || input.foldResults.length !== input.folds.length) {
     return blocked("QUALITY_FOLD_RESULT_COUNT_MISMATCH");
   }
+  // An operator-supplied small sample cannot lower the S-grade policy floor.
+  // All quality reports remain evidence-only until separately admitted.
+  if (input.minimumTradeCount !== undefined
+      && (!Number.isInteger(input.minimumTradeCount) || input.minimumTradeCount < 40)) {
+    return blocked("QUALITY_MINIMUM_TRADE_COUNT_BELOW_POLICY_FLOOR", { policyMinimum: 40 });
+  }
 
   const datasetBlockers = validateDatasetEvidence(
     identity,
@@ -480,11 +500,24 @@ export function materializeForwardObserverScannerQualityArtifactV1(input = {}) {
   if (!Array.isArray(input.entries) || input.entries.length === 0) {
     throw new Error("QUALITY_ARTIFACT_ENTRIES_REQUIRED");
   }
+  const seen = new Set();
   const entries = input.entries.map((value, index) => {
-    const entry = value?.status === "READY" ? value.entry : value?.identity ? value : null;
+    // Raw caller-created rows must not bypass the OOS/WF and full-cost producer.
+    const entry = value?.schemaVersion === SCANNER_QUALITY_ARTIFACT_PRODUCER_V1
+      && value?.status === "READY" ? value.entry : null;
     if (!entry || entry.identity?.researchCodeSha?.toLowerCase() !== researchCodeSha) {
       throw new Error(`QUALITY_ARTIFACT_ENTRY_INVALID:${index}`);
     }
+    const identity = entry.identity;
+    // The scanner consumer matches this key without datasetSnapshotHash;
+    // two otherwise-identical datasets would be ambiguous, not two votes.
+    const key = [
+      identity.strategyId, identity.strategyVersion, identity.parameterHash,
+      identity.researchCodeSha.toLowerCase(), identity.market,
+      identity.strategyHorizon, String(identity.symbol).toUpperCase(), identity.timeframe, identity.direction,
+    ].join("|");
+    if (seen.has(key)) throw new Error(`QUALITY_ARTIFACT_AMBIGUOUS_ACTIVE_IDENTITY:${index}`);
+    seen.add(key);
     return entry;
   });
 
@@ -523,4 +556,56 @@ export function materializeForwardObserverScannerQualityArtifactV1(input = {}) {
     economicSampleCredit: 0,
     executionAuthority: "NONE",
   });
+}
+
+
+/**
+ * Batch materialization is all-or-nothing. Each job must have actual frozen
+ * dataset, OOS, walk-forward and full-cost evidence consumed by the single
+ * entry producer. Unit-test fixtures cannot create operational evidence.
+ */
+export function buildScannerQualityBatchV1(input = {}) {
+  const researchCodeSha = String(input.researchCodeSha ?? "").toLowerCase();
+  if (!SHA40.test(researchCodeSha)) return blocked("QUALITY_BATCH_RESEARCH_SHA_REQUIRED");
+  if (!Array.isArray(input.jobs) || input.jobs.length === 0) {
+    return blocked("QUALITY_BATCH_JOBS_REQUIRED");
+  }
+
+  const ready = [];
+  for (const [index, job] of input.jobs.entries()) {
+    if (String(job?.identity?.researchCodeSha ?? "").toLowerCase() !== researchCodeSha) {
+      return blocked("QUALITY_BATCH_RESEARCH_SHA_MISMATCH", { index });
+    }
+    const result = buildScannerQualityEntryV1(job);
+    if (result.status !== "READY") {
+      return blocked("QUALITY_BATCH_ENTRY_BLOCKED", {
+        index,
+        market: job?.identity?.market ?? null,
+        symbol: job?.identity?.symbol ?? null,
+        reason: result.reason,
+        entryBlockers: result.details?.blockers ?? [],
+      });
+    }
+    ready.push(result);
+  }
+  try {
+    const materialized = materializeForwardObserverScannerQualityArtifactV1({
+      researchCodeSha, entries: ready,
+    });
+    return deepFreeze({
+      ...materialized,
+      diagnostics: {
+        entryCount: ready.length,
+        markets: Object.fromEntries([...MARKETS].map((market) => [
+          market, ready.filter((row) => row.entry.identity.market === market).length,
+        ])),
+        // Evidence generation cannot itself authorize promotion or orders.
+        executionAuthority: "NONE",
+      },
+    });
+  } catch (error) {
+    return blocked("QUALITY_BATCH_MATERIALIZATION_BLOCKED", {
+      reason: String(error?.message ?? error).split(":")[0],
+    });
+  }
 }
