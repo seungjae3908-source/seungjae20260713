@@ -122,23 +122,6 @@ test('only an explicit S grade can cross the automatic-trading quant gate', () =
   assert.equal(adaptCanonicalScannerCard(canonicalInput(card({ signalGrade: 'S' })), { nowMs: NOW }).quantEligible, true);
 });
 
-test('an A-grade card is quant eligible only when a holdout-passed research rule backs it', () => {
-  const base = canonicalInput(card({ signalGrade: 'A', strongSignalEligible: false }));
-  assert.equal(adaptCanonicalScannerCard(base, { nowMs: NOW }).quantEligible, false);
-  const research = {
-    ...base,
-    validationTier: 'RESEARCH_CANDIDATE',
-    researchEvidence: { source: 'RESEARCH_COMBINATION_HOLDOUT_PASSED' },
-  };
-  assert.equal(adaptCanonicalScannerCard(research, { nowMs: NOW }).quantEligible, true);
-  assert.equal(adaptCanonicalScannerCard({ ...research, researchEvidence: { source: 'OTHER' } }, { nowMs: NOW }).quantEligible, false);
-  assert.equal(adaptCanonicalScannerCard({ ...research, validationTier: 'CHAMPION' }, { nowMs: NOW }).quantEligible, false);
-  const blocked = canonicalInput(card({ signalGrade: 'A', strongSignalEligible: false, candidateRanking: { hardFilterPassed: false } }));
-  assert.equal(adaptCanonicalScannerCard({ ...blocked, validationTier: 'RESEARCH_CANDIDATE', researchEvidence: { source: 'RESEARCH_COMBINATION_HOLDOUT_PASSED' } }, { nowMs: NOW }).quantEligible, false);
-  const bGrade = canonicalInput(card({ signalGrade: 'B', strongSignalEligible: false }));
-  assert.equal(adaptCanonicalScannerCard({ ...bGrade, validationTier: 'RESEARCH_CANDIDATE', researchEvidence: { source: 'RESEARCH_COMBINATION_HOLDOUT_PASSED' } }, { nowMs: NOW }).quantEligible, false);
-});
-
 test('canonical READY ProfitEvidence plus exact Paper Identity and explicit runtime cost policy can become candidate input', () => {
   const adapted = adaptCanonicalScannerCard(canonicalInput(), { nowMs: NOW });
   assert.equal(adapted.market, 'KR_STOCK');

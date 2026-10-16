@@ -60,21 +60,11 @@ function dataReady(card, nowMs) {
   return Number.isFinite(observed) && observed <= nowMs + 60_000 && Number.isFinite(expires) && expires > nowMs;
 }
 
-// Owner-approved 2026-10-16: a combination rule that passed multiple-testing
-// validation and the sealed 2026 holdout may also back an A-grade card. The
-// exemption is only for this exact research source; it never applies to
-// automatic trading (the tier stays RESEARCH_CANDIDATE, execution NONE).
-function researchBacked(input) {
-  return input?.validationTier === 'RESEARCH_CANDIDATE'
-    && input?.researchEvidence?.source === 'RESEARCH_COMBINATION_HOLDOUT_PASSED'
-    && input?.profitEvidence?.executionAuthority === 'NONE';
-}
-
-function quantReady(card, input) {
+function quantReady(card) {
+  if (card?.strongSignalEligible !== true) return false;
   if (card?.candidateRanking?.hardFilterPassed === false) return false;
   const grade = String(card?.signalGrade ?? '').toUpperCase();
-  if (grade === 'S') return card?.strongSignalEligible === true;
-  return grade === 'A' && researchBacked(input);
+  return grade === 'S';
 }
 
 function riskReady(card) {
@@ -223,7 +213,7 @@ export function adaptCanonicalScannerCard(input, options = {}) {
     direction,
     validationTier: String(input?.validationTier ?? 'RESEARCH_CANDIDATE'),
     dataStatus: dataReady(card, nowMs) ? 'READY' : 'BLOCKED',
-    quantEligible: quantReady(card, input),
+    quantEligible: quantReady(card),
     profitEligible: Boolean(evidence),
     riskReady: riskReady(card),
     evidence: evidence ?? {},
