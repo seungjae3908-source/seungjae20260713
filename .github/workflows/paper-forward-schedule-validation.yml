@@ -67,6 +67,7 @@ on:
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.d.mts
       - signal-intelligence-v3/src/auto-trading-handoff-bridge.mjs
       - signal-intelligence-v3/src/canonical-adapter.mjs
+      - signal-intelligence-v3/src/engine.mjs
       - signal-intelligence-v3/src/forward-ledger.mjs
       - signal-intelligence-v3/src/public-provider-diagnostics.mjs
       - signal-intelligence-v3/src/research-evidence-bridge.mjs
@@ -512,8 +513,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 47 or len(set(auto_signal)) != 47:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_47')
+          if len(auto_signal) != 48 or len(set(auto_signal)) != 48:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_48')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -549,7 +550,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 47
+          test "${#auto_signal[@]}" -eq 48
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
