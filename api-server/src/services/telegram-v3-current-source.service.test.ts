@@ -225,7 +225,6 @@ test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 pro
  assert.equal(mutate(x=>{(x.events[0] as {leverage:unknown}).leverage={status:'INDICATIVE_ONLY',hardMaximum:125};}),false);
  assert.equal(mutate(x=>{x.rows[0].dataStatus='BLOCKED';}),false);
  assert.equal(mutate(x=>{x.rows[0].quantEligible=false;}),false);
- assert.equal(mutate(x=>{x.rows[0].quantEligible=false;(x.rows[0] as {researchQuantEligible?:boolean}).researchQuantEligible=true;}),true);
  assert.equal(mutate(x=>{x.rows[0].profitEligible=false;}),false);
  assert.equal(mutate(x=>{x.rows[0].riskReady=false;}),false);
  assert.equal(mutate(x=>{x.rows[0].provenance.profitEvidenceStatus='TRAIN_ONLY';}),false);

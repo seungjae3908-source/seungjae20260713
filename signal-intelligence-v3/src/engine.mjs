@@ -226,7 +226,6 @@ function normalizeCandidate(raw) {
     validationTier: normalizeValidationTier(raw?.validationTier),
     dataStatus: String(raw?.dataStatus ?? 'BLOCKED').toUpperCase(),
     quantEligible: raw?.quantEligible === true,
-    researchQuantEligible: raw?.researchQuantEligible === true,
     profitEligible: raw?.profitEligible === true,
     riskReady: raw?.riskReady === true,
     evidence: raw?.evidence ?? {},
@@ -251,7 +250,7 @@ function initialDecision(candidate) {
   const reasons = [];
   if (!candidate.direction) return { state: 'NO_TRADE', reasons: ['DIRECTION_NOT_RECOMMENDABLE'] };
   if (candidate.dataStatus !== 'READY') return { state: 'BLOCKED_DATA', reasons: ['DATA_NOT_READY'] };
-  if (!candidate.quantEligible && !candidate.researchQuantEligible) reasons.push('QUANT_NOT_ELIGIBLE');
+  if (!candidate.quantEligible) reasons.push('QUANT_NOT_ELIGIBLE');
   if (!candidate.profitEligible) reasons.push('PROFIT_GATE_REJECTED');
   if (!candidate.riskReady) reasons.push('RISK_NOT_READY');
   if (candidate.utilityR == null) reasons.push(`UTILITY_EVIDENCE_INCOMPLETE:${candidate.utilityMode}`);
