@@ -3,7 +3,7 @@
 // pattern, swing/wave structure or chart pattern). The combination search
 // joins atoms with AND. Nothing here places orders or calls an AI provider.
 
-export const COMBINATION_ATOM_LIBRARY_VERSION = 'combination-atoms-v1.1';
+export const COMBINATION_ATOM_LIBRARY_VERSION = 'combination-atoms-v1.2';
 
 export const ATOM_FAMILIES = Object.freeze(['TREND', 'MOMENTUM', 'VOLATILITY', 'VOLUME', 'CANDLE', 'WAVE', 'PATTERN']);
 
@@ -68,6 +68,10 @@ export const COMBINATION_ATOMS_V1 = Object.freeze([
   ['P_NR7', 'PATTERN', 'BOTH', '최근 7봉 중 변동폭 최소(NR7, 수축)'],
   ['P_DOUBLE_BOTTOM_BREAK', 'PATTERN', 'LONG', '쌍바닥 후 넥라인 돌파'],
   ['P_DOUBLE_TOP_BREAK', 'PATTERN', 'SHORT', '쌍봉 후 넥라인 이탈'],
+  ['V_BB20_SQUEEZE_RECENT12', 'VOLATILITY', 'BOTH', '최근 12봉 안에 볼린저 수축이 있었음(급등 전조)'],
+  ['U_RVOL20_GT_4', 'VOLUME', 'BOTH', '거래량 > 직전 20봉 평균 × 4(거래량 폭증)'],
+  ['P_SURGE_BREAKOUT_LONG', 'PATTERN', 'LONG', '수축 뒤 거래량 2.5배 이상 동반 20봉 고점 돌파(급등 시작)'],
+  ['P_POST_SURGE_BREAK_SHORT', 'PATTERN', 'SHORT', '72봉 안 15% 이상 급등 뒤 직전 6봉 저점 이탈(급등 후 하락 전환)'],
 ].map(([id, family, side, label]) => Object.freeze({ id, family, side, label })));
 
 const ATOM_BY_ID = new Map(COMBINATION_ATOMS_V1.map((atom) => [atom.id, atom]));
@@ -340,6 +344,22 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
     if (ok(priorVolMean[i]) && priorVolMean[i] > 0) {
       set('U_RVOL20_GT_1_5', i, volume[i] > priorVolMean[i] * 1.5);
       set('U_RVOL20_GT_2_5', i, volume[i] > priorVolMean[i] * 2.5);
+    }
+    if (ok(priorVolMean[i]) && priorVolMean[i] > 0) set('U_RVOL20_GT_4', i, volume[i] > priorVolMean[i] * 4);
+    if (i >= 12) {
+      let recent = false;
+      for (let j = i - 12; j < i; j += 1) if (ok(bbWidthRank[j]) && bbWidthRank[j] <= 0.2) { recent = true; break; }
+      set('V_BB20_SQUEEZE_RECENT12', i, recent);
+      if (recent && ok(priorHigh20[i], priorVolMean[i]) && priorVolMean[i] > 0) {
+        set('P_SURGE_BREAKOUT_LONG', i, close[i] > priorHigh20[i] && volume[i] > priorVolMean[i] * 2.5);
+      }
+    }
+    if (i >= 78) {
+      let peak = -Infinity; let trough = Infinity;
+      for (let j = i - 72; j < i; j += 1) { peak = Math.max(peak, candles[j].high); trough = Math.min(trough, candles[j].low); }
+      let low6 = Infinity;
+      for (let j = i - 6; j < i; j += 1) low6 = Math.min(low6, candles[j].low);
+      set('P_POST_SURGE_BREAK_SHORT', i, trough > 0 && peak / trough >= 1.15 && close[i] < low6);
     }
     if (ok(obvSma20[i])) { set('U_OBV_ABOVE_SMA20', i, obv[i] > obvSma20[i]); set('U_OBV_BELOW_SMA20', i, obv[i] < obvSma20[i]); }
 
