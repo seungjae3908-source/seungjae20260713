@@ -35,6 +35,6 @@ test('staging arms scanner response evidence only after the previous route settl
   expect(audit).toContain('scannerResponse = await expectHealthyRoute(');
   expect(audit).toContain('() => page.waitForResponse((response) => {');
   expect(audit).toContain("url.pathname === '/api/market/scan'");
-  expect(audit).toContain('{ timeout: 15_000 }');
+  expect(audit).toContain('{ timeout: 30_000 }');
   expect(audit).toContain("scanner viewport API returned HTTP ${scannerResponse.status()}");
 });
