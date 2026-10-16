@@ -301,3 +301,40 @@ test('unseen-symbol check demands enough trades, a positive mean and a win over 
     policy: { ...COMBINATION_POLICY_V1, minimumUnseenTrades: 1_000_000 } });
   assert.equal(tooFew.reason, 'UNSEEN_TRADES_TOO_FEW');
 });
+
+function surgeSeries(shape) {
+  const rows = [];
+  let price = 100;
+  for (let i = 0; i < 300; i += 1) {
+    let drift = Math.sin(i / 3) * 0.002; let volume = 100;
+    if (shape === 'up' && i >= 200 && i < 215) { price *= 1.01; volume = 100; }
+    if (shape === 'up' && i === 215) { price *= 1.08; volume = 900; }
+    if (shape === 'down' && i >= 200 && i < 240) price *= 1.006;
+    if (shape === 'down' && i >= 240 && i < 250) price *= 0.985;
+    price *= 1 + drift;
+    const open = price; const close = price * (i % 2 ? 1.0005 : 0.9995);
+    rows.push({ timestamp: 1_600_000_000_000 + (i * 3_600_000), open, high: Math.max(open, close) * 1.001, low: Math.min(open, close) * 0.999, close, volume });
+  }
+  return rows;
+}
+
+test('surge atoms exist for the right directions and fire only on a surge or a post-surge break', () => {
+  const longIds = atomsForDirectionV1('LONG').map((atom) => atom.id);
+  const shortIds = atomsForDirectionV1('SHORT').map((atom) => atom.id);
+  assert.ok(longIds.includes('P_SURGE_BREAKOUT_LONG') && !shortIds.includes('P_SURGE_BREAKOUT_LONG'));
+  assert.ok(shortIds.includes('P_POST_SURGE_BREAK_SHORT') && !longIds.includes('P_POST_SURGE_BREAK_SHORT'));
+  const flat = computeCombinationAtomsV1(surgeSeries('flat'));
+  assert.equal(flat.get('P_POST_SURGE_BREAK_SHORT').some((v) => v === 1), false);
+  const up = computeCombinationAtomsV1(surgeSeries('up'));
+  assert.equal(up.get('U_RVOL20_GT_4')[215], 1);
+  const down = computeCombinationAtomsV1(surgeSeries('down'));
+  assert.ok(down.get('P_POST_SURGE_BREAK_SHORT').some((v) => v === 1));
+  assert.equal(down.get('P_POST_SURGE_BREAK_SHORT').slice(0, 200).some((v) => v === 1), false);
+});
+
+test('coin futures research uses 5x leverage and 2% loss budget, other lanes stay 1x and 1%', async () => {
+  const { combinationRiskModelV1 } = await import('../src/combination-search-lane-v1.mjs');
+  assert.deepEqual(combinationRiskModelV1(LANE('CRYPTO_FUTURES_LONG')), { riskPerTrade: 0.02, leverage: 5 });
+  assert.deepEqual(combinationRiskModelV1(LANE('CRYPTO_FUTURES_SHORT')), { riskPerTrade: 0.02, leverage: 5 });
+  assert.deepEqual(combinationRiskModelV1(LANE('US_STOCK_LONG')), { riskPerTrade: 0.01, leverage: 1 });
+});
