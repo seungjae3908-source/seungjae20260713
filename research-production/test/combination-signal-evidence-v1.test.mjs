@@ -28,9 +28,18 @@ function laneState({ holdoutPass = true, validationMean = 0.006, holdoutMean = 0
     symbolKey: '069500,229200,005930,000660,035420|1825d',
     baselines: { X1: { validation: { meanReturn: 0.001 } } },
     trials,
+    unseenChecks: { a: { pass: true, reason: 'PASS', symbols: ['000660'], trades: 30, meanReturn: 0.004, baselineMeanReturn: 0.001 } },
     holdout: { a: { pass: holdoutPass, result: { trades: 15, meanReturn: holdoutMean, winRate: 0.6 }, period: { start: '2026-01-01', end: '2026-08-09' } } },
   };
 }
+
+test('a survivor that failed on unseen symbols never becomes a scanner rule', () => {
+  const state = laneState();
+  state.unseenChecks.a = { ...state.unseenChecks.a, pass: false, reason: 'UNSEEN_NOT_BETTER_THAN_BASELINE' };
+  assert.deepEqual(combinationSignalRulesForLaneV1({ lane: KR, laneState: state }), []);
+  delete state.unseenChecks;
+  assert.deepEqual(combinationSignalRulesForLaneV1({ lane: KR, laneState: state }), []);
+});
 
 test('only holdout-passed survivors become scanner rules, with the conservative edge', () => {
   const [rule] = combinationSignalRulesForLaneV1({ lane: KR, laneState: laneState() });
@@ -39,7 +48,7 @@ test('only holdout-passed survivors become scanner rules, with the conservative 
   assert.equal(rule.scannerTimeframe, '1D');
   assert.equal(rule.edgeR, 0.4); // min(0.6%, 0.4%) / 1% risk
   assert.equal(rule.sampleSize, 75);
-  assert.equal(rule.costPolicy.taxPercent, 0.15);
+  assert.equal(rule.costPolicy.taxPercent, 0.2);
   assert.equal(rule.executionAuthority, 'NONE');
   assert.equal(combinationSignalRulesForLaneV1({ lane: KR, laneState: laneState({ holdoutPass: false }) }).length, 0);
   assert.equal(combinationSignalRulesForLaneV1({ lane: KR, laneState: { ...laneState(), holdout: {} } }).length, 0);
