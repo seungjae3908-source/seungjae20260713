@@ -31,6 +31,7 @@ import {
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { DEFAULT_RESEARCH_EVIDENCE_FILE, readResearchEvidence, researchInputsForCards } from '../src/research-evidence-bridge.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import { buildScorecard, normalizeLedger, openFromSnapshot, updateOpenPositions } from '../src/forward-ledger.mjs';
 import { validateMemberAutoTradingPaperHandoff } from '../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -39,6 +40,8 @@ const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const HANDOFF_FILE = String(process.env.SIGNAL_INTELLIGENCE_CANONICAL_HANDOFF_FILE
   ?? '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json').trim();
+const LEDGER_FILE = path.join(STATE_DIR, 'forward-ledger.json');
+const SCORECARD_FILE = path.join(STATE_DIR, 'forward-scorecard.json');
 const QUALITY_ROOT = String(process.env.SIGNAL_INTELLIGENCE_SCANNER_QUALITY_ROOT ?? '').trim();
 // Read-only research export: holdout-passed combination rules. Empty string disables.
 const RESEARCH_EVIDENCE_FILE = String(process.env.SIGNAL_INTELLIGENCE_RESEARCH_EVIDENCE_FILE ?? DEFAULT_RESEARCH_EVIDENCE_FILE).trim();
@@ -387,6 +390,79 @@ async function scanCrypto(lane, cursor, scannerQuality) {
   return scanCryptoRaw(lane, cursor, scannerQuality);
 }
 
+// ---------- forward paper ledger (virtual positions only, no orders) ----------
+
+const LEDGER_FRAME_MINUTES = { '15m': 15, '60m': 60, '4H': 240 };
+const BITGET_GRANULARITY = { '15m': '15m', '60m': '1H', '4H': '4H', '1D': '1D' };
+
+async function fetchLedgerJson(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(8_000), headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`LEDGER_HTTP_${response.status}`);
+  return response.json();
+}
+
+async function loadLedgerCandles(position) {
+  if (position.market === 'CRYPTO_SPOT') {
+    const market = encodeURIComponent(`KRW-${position.symbol}`);
+    const url = position.timeframe === '1D'
+      ? `https://api.upbit.com/v1/candles/days?market=${market}&count=60`
+      : `https://api.upbit.com/v1/candles/minutes/${LEDGER_FRAME_MINUTES[position.timeframe] ?? 60}?market=${market}&count=200`;
+    const rows = await fetchLedgerJson(url);
+    return rows.map((row) => ({ time: Date.parse(`${row.candle_date_time_utc}Z`), open: row.opening_price, high: row.high_price, low: row.low_price, close: row.trade_price }));
+  }
+  if (position.market === 'CRYPTO_FUTURES') {
+    const granularity = BITGET_GRANULARITY[position.timeframe] ?? '1H';
+    const payload = await fetchLedgerJson(`https://api.bitget.com/api/v2/mix/market/candles?symbol=${encodeURIComponent(position.symbol)}&productType=USDT-FUTURES&granularity=${granularity}&limit=200`);
+    if (payload?.code !== '00000' || !Array.isArray(payload.data)) throw new Error('LEDGER_BITGET_INVALID');
+    return payload.data.map((raw) => ({ time: Number(raw[0]), open: Number(raw[1]), high: Number(raw[2]), low: Number(raw[3]), close: Number(raw[4]) }));
+  }
+  const ticker = String(position.symbol).toUpperCase();
+  const candidates = position.market === 'KR_STOCK' ? [`${ticker}.KS`, `${ticker}.KQ`] : [ticker.replace(/\./gu, '-')];
+  let lastError = null;
+  for (const symbol of candidates) {
+    try {
+      const rows = await yahoo.getCandles(symbol, position.timeframe, { purpose: 'scanner', signal: AbortSignal.timeout(10_000) });
+      if (rows.length > 0) return rows.map((row) => ({ time: Date.parse(row.time), open: row.open, high: row.high, low: row.low, close: row.close }));
+    } catch (error) { lastError = error; }
+  }
+  throw lastError ?? new Error('LEDGER_STOCK_NO_CANDLES');
+}
+
+async function runForwardLedger(snapshot, nowMs) {
+  try {
+    const stored = normalizeLedger(await readJson(LEDGER_FILE, null), nowMs);
+    const opened = openFromSnapshot({ ledger: stored, snapshot, nowMs });
+    const cache = new Map();
+    const fetchCandles = (position) => {
+      const key = [position.market, position.symbol, position.timeframe].join('|');
+      if (!cache.has(key)) cache.set(key, loadLedgerCandles(position));
+      return cache.get(key);
+    };
+    const updated = await withUpbitPacing(() => updateOpenPositions({
+      ledger: opened.ledger, nowMs, fetchCandles, concurrency: 4, deadlineMs: 45_000,
+    }));
+    await atomicJson(LEDGER_FILE, updated.ledger);
+    const scorecard = buildScorecard(updated.ledger, nowMs);
+    await atomicJson(SCORECARD_FILE, scorecard);
+    return {
+      scorecard,
+      summary: {
+      ok: true,
+      opened: opened.opened.length,
+      skippedNow: opened.skipped.length,
+      closedNow: updated.closedNow.length,
+      open: Object.keys(updated.ledger.positions).length,
+      closedTotal: updated.ledger.closed.length,
+      fetchErrors: updated.errors.length,
+      executionAuthority: 'NONE',
+      },
+    };
+  } catch (error) {
+    // The ledger is an observer: it must never break the signal cycle.
+    return { scorecard: null, summary: { ok: false, error: error instanceof Error ? error.message.split(':')[0].slice(0, 80) : 'LEDGER_FAILED', executionAuthority: 'NONE' } };
+  }
+}
+
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
@@ -617,6 +693,11 @@ async function main() {
         + (row.error ? 1 : 0), 0),
     }];
   }));
+  // Virtual positions only; served to readers inside the snapshot (GET /v1/signals).
+  const forwardLedgerRun = await runForwardLedger(snapshot, Date.now());
+  const forwardLedger = forwardLedgerRun.summary;
+  snapshot.forwardLedger = forwardLedger;
+  snapshot.forwardScorecard = forwardLedgerRun.scorecard;
   assertSignalIntelligenceV3Snapshot(snapshot);
   state.updatedAt = new Date().toISOString();
   await atomicJson(CYCLE_STATE_FILE, state);
@@ -632,6 +713,7 @@ async function main() {
     canonicalHandoff: snapshot.canonicalHandoff,
     canonicalWorkerHandoff: snapshot.canonicalWorkerHandoff,
     scannerQuality: snapshot.scannerQuality,
+    forwardLedger,
     marketSummary: snapshot.marketSummary,
     releaseStateReset: releaseChanged,
     coverage,
