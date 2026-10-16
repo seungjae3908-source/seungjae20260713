@@ -88,6 +88,12 @@ function symbolCost(lane, symbol) {
   return { ...lane.cost };
 }
 
+// Coin futures are researched at 5x leverage with a 2% per-trade loss budget
+// (owner decision 2026-10-16). Every other lane keeps 1x and 1%. Research only.
+export function combinationRiskModelV1(lane) {
+  return lane.market === 'CRYPTO_FUTURES' ? { riskPerTrade: 0.02, leverage: 5 } : { riskPerTrade: 0.01, leverage: 1 };
+}
+
 export const COMBINATION_EXIT_PROFILES_V1 = Object.freeze([
   Object.freeze({ id: 'X1', stopAtrMultiple: 1.5, targetRiskMultiple: 2, timeBarsFactor: 1 }),
   Object.freeze({ id: 'X2', stopAtrMultiple: 2.5, targetRiskMultiple: 1.5, timeBarsFactor: 2 }),
@@ -317,7 +323,7 @@ export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COM
     const result = runIndependentSignalBacktest({
       backtestInput: {
         market: lane.market, side, symbol, timeframe: lane.timeframe, candles, fundingRates,
-        initialCapital: lane.initialCapital, costModel: symbolCost(lane, symbol), riskModel: { riskPerTrade: 0.01, leverage: 1 },
+        initialCapital: lane.initialCapital, costModel: symbolCost(lane, symbol), riskModel: combinationRiskModelV1(lane),
       },
       strategy: 'combination_search_v1', strategyVersion: `COMBINATION:${trial.trialId}`,
       parameters: { atrPeriod: 14, stopAtrMultiple: exit.stopAtrMultiple, targetRiskMultiple: exit.targetRiskMultiple, timeBars: lane.timeBars * exit.timeBarsFactor },
@@ -391,7 +397,7 @@ function holdoutReturns({ lane, atomIds, exitId, data }) {
   const result = runIndependentSignalFinalHoldout({
     backtestInput: {
       market: lane.market, side, symbol: data.symbol, timeframe: lane.timeframe, candles: data.candles, fundingRates: data.fundingRates ?? [],
-      initialCapital: lane.initialCapital, costModel: symbolCost(lane, data.symbol), riskModel: { riskPerTrade: 0.01, leverage: 1 },
+      initialCapital: lane.initialCapital, costModel: symbolCost(lane, data.symbol), riskModel: combinationRiskModelV1(lane),
     },
     strategy: 'combination_search_v1', strategyVersion: `COMBINATION_HOLDOUT:${atomIds.join('+') || 'BASELINE'}`,
     parameters: { atrPeriod: 14, stopAtrMultiple: exit.stopAtrMultiple, targetRiskMultiple: exit.targetRiskMultiple, timeBars: lane.timeBars * exit.timeBarsFactor },
