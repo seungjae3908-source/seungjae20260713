@@ -52,7 +52,7 @@ function costPolicyFor(lane) {
   const cost = lane.cost ?? {};
   // KR single stocks pay 0.15% transaction tax; scanner cards are mostly single
   // stocks, so the KR policy always carries it (conservative for ETFs).
-  const taxRate = lane.market === 'KR_STOCK' ? 0.0015 : Number(cost.taxRate ?? 0);
+  const taxRate = lane.market === 'KR_STOCK' ? 0.002 : Number(cost.taxRate ?? 0);
   return Object.freeze({
     id: `COMBINATION_${lane.market}_COST_V1`,
     market: lane.market,
@@ -82,6 +82,8 @@ export function combinationSignalRulesForLaneV1({ lane, laneState, policy = COMB
   for (const row of classified) {
     const holdout = laneState.holdout?.[row.trialId];
     if (row.finalStatus !== 'SURVIVOR' || holdout?.pass !== true) continue;
+    // Rules must also have held up on symbols that never took part in selection.
+    if (policy.requireUnseenSymbolPass && laneState.unseenChecks?.[row.trialId]?.pass !== true) continue;
     const exit = COMBINATION_EXIT_PROFILES_V1.find((profile) => profile.id === row.exitId);
     if (!exit) continue;
     const conservativeMean = Math.min(Number(row.validation?.meanReturn), Number(holdout.result?.meanReturn));
