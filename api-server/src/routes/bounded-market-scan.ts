@@ -346,6 +346,24 @@ export function createBoundedMarketScanRouter(
     let routeDeadlineExceeded = false;
     const cursor = finite(req.query.cursor, 0, 1_000_000) ?? 0;
     const scanStartedAt = Date.now();
+    // Diagnostic only (no member, token or query data): records that the
+    // request reached the route and flags it when no response was written
+    // within 12s, together with the event-loop delay at that moment.
+    const diagnosticWatchdog = setTimeout(() => {
+      if (res.writableEnded || res.destroyed) return;
+      const loopCheckAt = Date.now();
+      setImmediate(() => {
+        console.warn(`[scan-stall] market=${market} pendingMs=${loopCheckAt - scanStartedAt} loopDelayMs=${Date.now() - loopCheckAt} aborted=${controller.signal.aborted}`);
+      });
+    }, 12_000);
+    diagnosticWatchdog.unref?.();
+    res.once('close', () => {
+      clearTimeout(diagnosticWatchdog);
+      const totalMs = Date.now() - scanStartedAt;
+      if (totalMs >= 5_000 || !res.writableFinished) {
+        console.warn(`[scan-timing] market=${market} totalMs=${totalMs} status=${res.statusCode} finished=${res.writableFinished}`);
+      }
+    });
 
     try {
       lease = guard.acquire(req.member!.id, requestKey(req));
