@@ -238,4 +238,24 @@ fs.mkdirSync(artifactDir, { recursive: true });
 fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify(result, null, 2));
 
+// Surface failed checks as GitHub annotations so the failing test names are
+// readable from the run page and API without downloading the artifact.
+// Only the check name and a short, single-line, length-bounded detail are shown.
+if (process.env.GITHUB_ACTIONS === 'true') {
+  const annotate = (value, max, isProperty = false) => {
+    const text = String(value ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, max)
+    .replace(/%/g, '%25')
+    .replace(/\r/g, '%0D')
+    .replace(/\n/g, '%0A');
+    return isProperty ? text.replace(/:/g, '%3A').replace(/,/g, '%2C') : text;
+  };
+  for (const check of checks.filter((item) => item.status === 'failed').slice(0, 10)) {
+    console.log(`::error title=${annotate(`staging check failed: ${check.name}`, 200, true)}::${annotate(check.detail, 600)}`);
+  }
+}
+
 if (!releaseReady) process.exitCode = 1;
