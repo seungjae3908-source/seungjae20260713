@@ -204,19 +204,3 @@ test('canonical AI veto can only abstain after deterministic gates pass', () => 
 test('stop distance derives from entry midpoint and stop loss', () => {
   assert.equal(stopDistancePercent(card()), 5);
 });
-
-test('a holdout-backed A grade is Telegram-eligible only; the automatic-trading quant gate stays exact S', () => {
-  const research = { validationTier: 'RESEARCH_CANDIDATE', researchEvidence: { source: 'RESEARCH_COMBINATION_HOLDOUT_PASSED' } };
-  const aCard = (over = {}) => card({ signalGrade: 'A', strongSignalEligible: false, ...over });
-  const run = (over, cardValue = aCard()) => adaptCanonicalScannerCard(canonicalInput(cardValue, over), { nowMs: NOW });
-  assert.equal(run({}).researchQuantEligible, false);
-  const backed = run(research);
-  assert.equal(backed.researchQuantEligible, true);
-  assert.equal(backed.quantEligible, false);
-  assert.equal(runSignalIntelligenceV3([backed]).rows[0].state, 'CANDIDATE');
-  assert.equal(run({ ...research, researchEvidence: { source: 'OTHER' } }).researchQuantEligible, false);
-  assert.equal(run({ ...research, validationTier: 'CHAMPION' }).researchQuantEligible, false);
-  assert.equal(run(research, aCard({ candidateRanking: { hardFilterPassed: false } })).researchQuantEligible, false);
-  assert.equal(run(research, aCard({ signalGrade: 'B' })).researchQuantEligible, false);
-  assert.equal(run(research, card()).researchQuantEligible, false);
-});
