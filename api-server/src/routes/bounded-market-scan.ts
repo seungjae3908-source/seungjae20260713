@@ -41,7 +41,7 @@ import {
 import { withScannerOutcome } from '../services/scanner-signal.types';
 import { ScannerAiReviewError, scannerAiEvidenceReviewer, type ScannerAiEvidenceReviewer } from '../services/scanner-ai-evidence-review.service';
 
-export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
+export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 8_000;
 
 const PROVIDER_HEALTH_STATES = new Set<ScannerProviderHealthState>([
   'READY',

@@ -339,6 +339,7 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   ".github/workflows/production-automatic-trading-gate.yml",
   ".github/workflows/research-workspace-integration-v1.yml",
   "api-server/scripts/verify-production-automatic-trading-gate.mjs",
+  "api-server/src/routes/bounded-market-scan.ts",
   "api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts",
   "api-server/src/services/forward-observer-scanner-quality-consumer.service.ts",
   "api-server/src/services/member-auto-trading-background-worker.service.test.ts",
