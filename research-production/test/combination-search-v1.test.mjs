@@ -10,8 +10,12 @@ import {
   computeCombinationAtomsV1,
 } from '../src/combination-atoms-v1.mjs';
 import {
+  COMBINATION_POLICY_V1,
   benjaminiHochbergV1,
   classifyLaneTrialsV1,
+  COMBINATION_UNIVERSE_V1,
+  evaluateCombinationTrialV1,
+  evaluateUnseenSymbolsV1,
   formatCombinationReportKoV1,
   planBaseTrialsV1,
   planTripleTrialsV1,
@@ -19,6 +23,9 @@ import {
 } from '../src/combination-search-lane-v1.mjs';
 import { RESEARCH_LANES_V2 } from '../src/autonomous-research-discovery-v2.mjs';
 
+// The first five symbols of each source: small fixtures, same structure.
+const UNIVERSE = Object.freeze(Object.fromEntries(Object.entries(COMBINATION_UNIVERSE_V1)
+  .map(([key, spec]) => [key, Object.freeze({ ...spec, symbols: Object.freeze(spec.symbols.slice(0, 5)) })])));
 const LANE = (id) => RESEARCH_LANES_V2.find((lane) => lane.id === id);
 
 function randomWalk(n, { seed = 1, start = Date.UTC(2024, 6, 1), step = 3_600_000 } = {}) {
@@ -133,7 +140,7 @@ test('lane runner is bounded per tick, persists progress, seals 2026 and finds n
   };
   let fakeNow = 0;
   const clock = () => { fakeNow += 25; return fakeNow; };
-  const first = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, clock, budgetMs: 2_000,
+  const first = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, clock, budgetMs: 2_000,
     maximumFetchesPerTick: 5, now: () => '2026-10-15T00:00:00.000Z' });
   assert.equal(calls, 5);
   const summary = first.lanes[0];
@@ -146,7 +153,7 @@ test('lane runner is bounded per tick, persists progress, seals 2026 and finds n
 
   let last = first;
   for (let tick = 0; tick < 40 && !last.lanes[0].searchExhausted; tick += 1) {
-    last = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, budgetMs: 600_000,
+    last = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, budgetMs: 600_000,
       now: () => '2026-10-15T00:10:00.000Z' });
   }
   assert.equal(calls, 5, 'datasets are cached, not re-downloaded');
@@ -165,11 +172,11 @@ test('missing data keeps the lane waiting instead of testing on too few symbols'
     if (!['SPY', 'QQQ'].includes(symbol)) throw new Error('YAHOO_HTTP_404');
     return { source, symbol, timeframe: '1d', candles: randomWalk(800, { seed: symbol.length, step: 86_400_000, start: Date.UTC(2021, 0, 4) }) };
   };
-  const result = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
+  const result = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
     now: () => '2026-10-15T00:00:00.000Z' });
   assert.equal(result.lanes[0].status, 'WAITING_FOR_DATA');
   assert.ok(result.datasetLog.some((line) => line.includes('FAILED:YAHOO_HTTP_404')));
-  const again = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
+  const again = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
     now: () => '2026-10-15T00:10:00.000Z' });
   assert.ok(again.datasetLog.some((line) => line.endsWith('RETRY_LATER')), 'failed symbols back off for an hour');
 });
@@ -181,10 +188,10 @@ test('Korean report explains progress, verdicts and data problems in plain words
     if (symbol === '035420') throw new Error('YAHOO_HTTP_404');
     return { source, symbol, timeframe: '1d', candles: randomWalk(900, { seed: Number(symbol) % 997 + 1, step: 86_400_000, start: Date.UTC(2021, 0, 4) }) };
   };
-  const result = await runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
+  const result = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, maximumFetchesPerTick: 10,
     budgetMs: 600_000, now: () => '2026-10-15T00:00:00.000Z' });
   const text = formatCombinationReportKoV1(result);
-  assert.match(text, /국내주식 매수 — 종목 4개/);
+  assert.match(text, /국내주식 매수 — 종목 3개/);
   assert.match(text, /합격 \d+ · 관찰 \d+ · 탈락 \d+/);
   assert.match(text, /035420: 실패 \(YAHOO_HTTP_404\)/);
   assert.match(text, /AI 사용 0회/);
@@ -209,15 +216,15 @@ test('survivors get exactly one sealed-2026 holdout check, cached and reported i
   const holdoutLoader = async ({ source, symbol }) => { holdoutCalls += 1; return { source, symbol, timeframe: '1d', candles: drift(symbol.length * 11 + 5, Date.UTC(2026, 0, 1), 200) }; };
   // Loose policy so pure drift produces survivors; the holdout path is what is tested.
   const policy = { ...(await import('../src/combination-search-lane-v1.mjs')).COMBINATION_POLICY_V1,
-    falseDiscoveryRate: 1, minimumProfitFactor: 0, minimumSymbolBreadth: 0, minimumPositiveWindows: 0 };
-  const run = (at) => runCombinationSearchLaneV1({ stateRoot: root, lanes: [lane], datasetLoader, holdoutLoader, policy,
+    falseDiscoveryRate: 1, minimumProfitFactor: 0, minimumSymbolBreadth: 0, minimumPositiveWindows: 0, requireUnseenSymbolPass: false };
+  const run = (at) => runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader, holdoutLoader, policy,
     maximumFetchesPerTick: 20, budgetMs: 600_000, now: () => at });
   const statePath = join(root, 'combination-research', 'lanes', lane.id, 'state.json');
   const first = await run('2026-10-15T00:00:00.000Z');
   const afterFirst = JSON.parse(await readFile(statePath, 'utf8')).holdout;
   assert.ok(Object.keys(afterFirst).length > 0);
   const second = await run('2026-10-15T00:10:00.000Z');
-  assert.equal(holdoutCalls, 5, 'holdout candles fetched once per symbol');
+  assert.equal(holdoutCalls, 4, 'holdout candles fetched once per selection symbol (the unseen one is not used)');
   const afterSecond = JSON.parse(await readFile(statePath, 'utf8')).holdout;
   for (const [id, check] of Object.entries(afterFirst)) {
     assert.equal(check.oneTimeOnly, true);
@@ -227,4 +234,70 @@ test('survivors get exactly one sealed-2026 holdout check, cached and reported i
   const text = formatCombinationReportKoV1(second);
   assert.match(text, /2026 봉인 데이터 1회 확인/);
   assert.ok(first.lanes[0].holdoutChecked > 0);
+});
+
+test('futures backtests charge funding: heavy positive funding lowers long and raises short returns', () => {
+  const candles = randomWalk(3_000, { seed: 7 });
+  const atoms = computeCombinationAtomsV1(candles, { timeframe: '1h' });
+  const first = candles[0].timestamp; const last = candles.at(-1).timestamp;
+  const dataset = { symbol: 'BTCUSDT', candles, atoms, splitTime: first + Math.floor((last - first) * 0.6),
+    windowEdges: [1, 2, 3].map((k) => first + Math.floor(((last - first) * k) / 4)) };
+  const funding = [];
+  for (let t = first; t <= last; t += 8 * 3_600_000) funding.push({ timestamp: t, rate: 0.003 });
+  for (const [laneId, direction] of [['CRYPTO_FUTURES_LONG', 1], ['CRYPTO_FUTURES_SHORT', -1]]) {
+    const lane = LANE(laneId);
+    const trial = planBaseTrialsV1(lane).find((row) => {
+      const r = evaluateCombinationTrialV1({ lane, trial: row, datasets: [dataset] });
+      return r.discovery.trades >= 30;
+    });
+    assert.ok(trial, `${laneId}: a trial with enough trades exists on the synthetic series`);
+    const without = evaluateCombinationTrialV1({ lane, trial, datasets: [dataset] });
+    const withFunding = evaluateCombinationTrialV1({ lane, trial, datasets: [{ ...dataset, fundingRates: funding }] });
+    assert.equal(withFunding.discovery.trades, without.discovery.trades);
+    const delta = withFunding.discovery.meanReturn - without.discovery.meanReturn;
+    assert.ok(direction * delta < 0, `${laneId}: funding must hurt the paying side and help the receiving side (delta ${delta})`);
+  }
+});
+
+test('universe has at least 15 unique symbols per source and keeps unseen symbols reserved', () => {
+  for (const [source, spec] of Object.entries(COMBINATION_UNIVERSE_V1)) {
+    assert.ok(spec.symbols.length >= 15, `${source} has ${spec.symbols.length} symbols`);
+    assert.equal(new Set(spec.symbols).size, spec.symbols.length, `${source} symbols are unique`);
+    const unseen = spec.symbols.filter((_, index) => index % 4 === 3);
+    assert.ok(unseen.length >= 3, `${source} reserves at least 3 unseen symbols`);
+  }
+});
+
+test('lane waits while datasets are still downloading and spends nothing', async (t) => {
+  const root = await tempRoot(t);
+  const lane = LANE('US_STOCK_LONG');
+  const datasetLoader = async ({ source, symbol }) => ({ source, symbol, timeframe: '1d',
+    candles: randomWalk(800, { seed: symbol.length + 3, step: 86_400_000, start: Date.UTC(2021, 0, 4) }) });
+  const partial = await runCombinationSearchLaneV1({ stateRoot: root, universe: UNIVERSE, lanes: [lane], datasetLoader,
+    maximumFetchesPerTick: 2, now: () => '2026-10-15T00:00:00.000Z' });
+  assert.equal(partial.lanes[0].status, 'WAITING_FOR_DATA');
+  assert.equal(partial.lanes[0].reason, 'DATASETS_STILL_DOWNLOADING');
+  assert.equal(partial.evaluatedThisTick, 0);
+  await assert.rejects(readFile(join(root, 'combination-research', 'lanes', lane.id, 'state.json'), 'utf8'), { code: 'ENOENT' });
+});
+
+test('unseen-symbol check demands enough trades, a positive mean and a win over the unseen baseline', () => {
+  const lane = LANE('US_STOCK_LONG');
+  const trial = planBaseTrialsV1(lane)[0];
+  const candles = randomWalk(900, { seed: 11, step: 86_400_000, start: Date.UTC(2021, 0, 4) });
+  const atoms = computeCombinationAtomsV1(candles, { timeframe: '1d' });
+  const first = candles[0].timestamp; const last = candles.at(-1).timestamp;
+  const dataset = { symbol: 'SPY', candles, atoms, splitTime: first + Math.floor((last - first) * 0.6),
+    windowEdges: [1, 2, 3].map((k) => first + Math.floor(((last - first) * k) / 4)) };
+  const none = evaluateUnseenSymbolsV1({ lane, trial, unseenDatasets: [], unseenBaselines: {} });
+  assert.equal(none.pass, false);
+  assert.equal(none.reason, 'NO_UNSEEN_SYMBOLS');
+  const base = { discovery: { trades: 50, meanReturn: 0.5 }, validation: { trades: 50, meanReturn: 0.5 } };
+  const lost = evaluateUnseenSymbolsV1({ lane, trial, unseenDatasets: [dataset], unseenBaselines: { [trial.exitId]: base },
+    policy: { ...COMBINATION_POLICY_V1, minimumUnseenTrades: 0 } });
+  assert.equal(lost.pass, false);
+  assert.ok(['UNSEEN_RETURN_NOT_POSITIVE', 'UNSEEN_NOT_BETTER_THAN_BASELINE'].includes(lost.reason), lost.reason);
+  const tooFew = evaluateUnseenSymbolsV1({ lane, trial, unseenDatasets: [dataset], unseenBaselines: { [trial.exitId]: base },
+    policy: { ...COMBINATION_POLICY_V1, minimumUnseenTrades: 1_000_000 } });
+  assert.equal(tooFew.reason, 'UNSEEN_TRADES_TOO_FEW');
 });
