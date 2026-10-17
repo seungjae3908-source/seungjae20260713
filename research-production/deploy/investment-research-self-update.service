@@ -1,0 +1,15 @@
+[Unit]
+Description=Investment Research server self-update (research only, no trading authority)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/investment-research-self-update
+TimeoutStartSec=2h
+Nice=10
+Environment=LIVE_TRADING=false
+Environment=PRIVATE_API_ENABLED=false
+Environment=ORDER_AUTHORITY=false

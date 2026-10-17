@@ -35,6 +35,7 @@ const tradeAutomationPolicyGuardTest = read('api-server/src/services/trade-autom
 const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.test.ts');
 const tradeTypes = read('api-server/src/services/trade-automation.types.ts');
 const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts');
+const benchmarkRegime = read('api-server/src/services/crypto-benchmark-regime.service.ts');
 const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
 const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
@@ -119,6 +120,14 @@ requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_A
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_ADMIN_FOUR_MARKET_LIVE_TOTAL_MISSING');
 requireText(tradeRisk, 'Math.min(leverage, maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_NORMALIZATION_MISSING');
+// BTC benchmark drawdown blocks only NEW crypto long/buy entries; unknown data never blocks.
+requireText(tradeRisk, "add(blockCodes, 'BENCHMARK_DRAWDOWN_LONG_BLOCKED')", 'AUTO_GATE_BENCHMARK_DRAWDOWN_BLOCK_MISSING');
+requireText(tradeRisk, 'isNewCryptoLongEntry(plan, riskReducing)', 'AUTO_GATE_BENCHMARK_DRAWDOWN_SCOPE_MISSING');
+requireText(benchmarkRegime, 'export const BENCHMARK_DRAWDOWN_LONG_BLOCK_PERCENT = 6;', 'AUTO_GATE_BENCHMARK_DRAWDOWN_THRESHOLD_MISSING');
+requireText(benchmarkRegime, 'if (riskReducing) return false;', 'AUTO_GATE_BENCHMARK_DRAWDOWN_EXIT_EXEMPTION_MISSING');
+requireText(benchmarkRegime, 'value = null;', 'AUTO_GATE_BENCHMARK_DRAWDOWN_FAIL_OPEN_MISSING');
+requireText(paperWorker, 'withBenchmarkDrawdown(buildPlanInput(', 'AUTO_GATE_BENCHMARK_DRAWDOWN_LIVE_WIRING_MISSING');
+requireText(tradeIntegrationTest, 'BTC benchmark drawdown blocks only new crypto long/buy entries', 'AUTO_GATE_BENCHMARK_DRAWDOWN_REGRESSION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
