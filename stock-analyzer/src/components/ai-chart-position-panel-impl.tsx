@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calculator, Eye, EyeOff, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
@@ -1944,9 +1945,22 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
                   <p className="text-[10px] font-black">새 진입 계획</p>
                   <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
-                    모의매매 진입은 자동모의매매만 만듭니다. 이 화면에서는 수동 모의 진입계획을 만들지 않습니다.
+                    Scanner 근거가 있는 경우에만 기존 canonical Paper owner를 재사용합니다. 이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.
                     실전 신규진입은 브라우저에서 임의 생성하지 않으며, 서버가 이미 만든 live 승인계획이 있을 때만 아래 승인 큐에서 서버 live gate를 거쳐 처리합니다.
                   </p>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[8px] font-black">
+                    <span className="rounded-lg bg-positive/10 px-2 py-1.5 text-positive">Paper 신규진입 · 연결됨</span>
+                    <span className="rounded-lg bg-primary/10 px-2 py-1.5 text-primary">Live 진입초안 · 서버검증 연결</span>
+                  </div>
+                  {entryContextReady ? (
+                    <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
+                      <ScannerApprovalComposer selection={selection} />
+                    </div>
+                  ) : (
+                    <p className="mt-2 rounded-xl bg-secondary/50 px-3 py-2 text-[9px] font-bold text-muted-foreground">
+                      신호검색기에서 현재 종목을 선택하면 검증된 신호 identity를 사용해 Paper 진입계획을 만들 수 있습니다.
+                    </p>
+                  )}
                   <div className="mt-2 rounded-xl border border-card-border p-2.5" data-testid="ai-chart-entry-readiness">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>

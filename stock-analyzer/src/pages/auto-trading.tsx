@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
-import { AlertTriangle, CheckCircle2, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
+import { PaperTradingPanel } from '@/components/paper-trading-panel';
 import { FormulaAiAutoRehearsalPanel } from '@/components/formula-ai-auto-rehearsal-panel';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
@@ -142,8 +144,7 @@ type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
   embedded?: boolean;
   initialMode?: TradingMode;
-  /** Manual Paper was removed; Paper is always automatic. Kept for call-site compatibility. */
-  paperOrigin?: 'automatic';
+  paperOrigin?: 'automatic' | 'manual';
   holdingsFixture?: readonly TradingHolding[];
 };
 
@@ -494,11 +495,12 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   // Do not request automatic Paper holdings before the epoch and role-specific
   // four-market database guard are verified. Never fabricate an empty account.
+  // Manual Paper and already-active manual LIVE retain their own read path.
   const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync
     && !autoPaperRuntimeError
     && autoPaperRuntimeReadiness?.paperWalletReady === true
     && autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true;
-  const paperHoldingsReadAllowed = automaticPaperHoldingsReadable;
+  const paperHoldingsReadAllowed = paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable;
   const policy = runtimeStatus?.policy;
   const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)
     && policy.enabledStrategies.length > 0;
@@ -664,7 +666,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
         <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
           자동모의매매 전용 100만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
-          기존 모의거래 기록은 보존되며 자동으로 덮어쓰지 않습니다.
+          직접 하는 모의매매 기록이 있으면 자동으로 덮어쓰지 않습니다.
         </p>
         {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
         {autoPaperStatus === 'blocked' && walletAudit?.safeToInitialize === false ? (
@@ -756,7 +758,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold">자동모의매매 · {marketMeta.label}</h2>
+          <h2 className="text-sm font-bold">{paperOrigin === 'automatic' ? '자동모의매매' : '모의매매'} · {marketMeta.label}</h2>
         </div>
         <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
           실제 주문 0
@@ -791,7 +793,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
       </div>
     </section>
-  ) : (
+  ) : paperOrigin === 'automatic' ? (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-orders">
       <h2 className="text-sm font-bold">{marketMeta.label} · 자동모의 주문</h2>
       <div className="mt-3 grid grid-cols-2 gap-2">
@@ -799,6 +801,37 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <StatusItem label="실행 상태" value={autoPaperRuntimeReadiness?.readyForPaperEvaluation ? '준비됨' : '점검 필요'} tone="neutral" />
       </div>
     </section>
+  ) : (
+    <div className="space-y-3" data-testid="paper-trading-orders">
+      {selectionMatchesMarket && selection ? (
+        <ScannerApprovalComposer selection={selection} />
+      ) : (
+        <section className="rounded-2xl border border-card-border bg-card p-4">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-bold">{marketMeta.label} 모의 포지션 준비</h2>
+          </div>
+          <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+            AI 검색기에서 {marketMeta.label} 종목을 선택하면 동일 신호 identity와 위험·비용 evidence를 서버에서 다시 검증해 Paper 포지션을 준비합니다.
+          </p>
+          <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground" onClick={() => navigate('/scanner')}>
+            {marketMeta.label} 신호 선택하기
+          </button>
+        </section>
+      )}
+
+      {market === 'crypto_futures' ? (
+        <details className="rounded-2xl border border-card-border bg-card">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-xs font-bold [&::-webkit-details-marker]:hidden">
+            <span>코인선물 모의매매 시뮬레이터</span>
+            <span className="text-muted-foreground">선택 기능 ⌄</span>
+          </summary>
+          <div className="border-t border-card-border p-2 [&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0">
+            <PaperTradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact />
+          </div>
+        </details>
+      ) : null}
+    </div>
   );
 
   const settings = mode === 'auto' ? (
@@ -851,7 +884,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
         <p>시장 선택은 상단 4시장 버튼에서 통합 관리합니다.</p>
         <p>Canonical Paper는 실제 거래소 주문을 전송하지 않으며, 수량·레버리지·진입가격은 서버 evidence가 결정합니다.</p>
-        <p>모의매매는 자동모의매매만 제공합니다. 신호가 검증되면 서버가 가상계좌에 기록합니다.</p>
+        <p>모의매매는 직접 눌러서 하는 가상거래이고, 자동모의매매는 서버가 전략을 발굴해 가상계좌로 돌립니다. 코인선물 시뮬레이터는 포지션·주문 탭에서 열 수 있습니다.</p>
       </div>
     </section>
   );
@@ -904,9 +937,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <SegmentedButton active={mode === 'paper'} disabled={!canPaper}
               onClick={() => navigate('/paper-trading')} testId="technical-mode-paper">모의매매</SegmentedButton>
           </div>
-          {mode === 'paper' ? <div className="grid grid-cols-1 gap-2" aria-label="모의매매 방식" data-testid="trading-paper-modes">
+          {mode === 'paper' ? <div className="grid grid-cols-2 gap-2" aria-label="모의매매 방식" data-testid="trading-paper-modes">
             <SegmentedButton active={paperOrigin === 'automatic'} disabled={!canAuto}
               onClick={() => navigate('/paper-trading?kind=automatic')} testId="paper-mode-automatic">자동모의매매</SegmentedButton>
+            <SegmentedButton active={paperOrigin === 'manual'}
+              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual">모의매매</SegmentedButton>
           </div> : null}
           <div className="rounded-xl border border-card-border bg-card p-2.5 sm:p-3" data-testid="trading-market-tabs">
             <label className="flex items-center gap-3 sm:hidden">
@@ -950,7 +985,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           {sectionContent}
 
-          {mode === 'paper' && !fixture && canPaper && !automaticPaperHoldingsReadable ? (
+          {mode === 'paper' && paperOrigin === 'automatic' && !fixture && canPaper && !automaticPaperHoldingsReadable ? (
             <p role="status" data-testid="automatic-paper-holdings-awaiting-evidence" className="text-xs text-muted-foreground">
               자동모의 보유종목 조회 대기 · 4시장 가상계좌 원장과 회원 조회 권한이 검증되면 자동으로 표시합니다.
             </p>
@@ -959,7 +994,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             providers={(runtimeStatus?.connections ?? []).filter(row => row.accountMode === 'live' && row.configured
               && (market === 'domestic_stock' ? row.exchange === 'kiwoom' || row.exchange === 'toss' : row.exchange === selectedProvider))
               .map(row => row.exchange)}
-            accountMode={mode === 'auto' ? 'live' : 'paper'} origin="automatic"
+            accountMode={mode === 'auto' ? 'live' : 'paper'} origin={paperOrigin}
             userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}
             fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} />
         </div>

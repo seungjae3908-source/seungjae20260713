@@ -172,6 +172,6 @@ test('Phase 1 mapping keeps scanner business logic and trade approval ownership 
   assert.equal(UI_BUILDER_REGISTRY_MAPPING.AiChart.target, 'AiChartPage / UnifiedAnalysisChart');
   assert.equal(UI_BUILDER_REGISTRY_MAPPING.PositionSummary.target, 'getPortfolioChartOverlay / PortfolioPage');
   assert.equal(UI_BUILDER_REGISTRY_MAPPING.PositionSummary.scannerSurface, 'position');
-  assert.equal(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.target, 'TechnicalWorkspace TradeReviewSurface');
+  assert.equal(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.target, 'ScannerApprovalComposer');
   assert.equal(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.scannerSurface, 'trade-review');
 });

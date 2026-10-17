@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
+import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
 import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
@@ -135,12 +136,16 @@ function PositionMetric({ label, value }: { label: string; value: string }) {
 }
 
 function TradeReviewSurface() {
-  return (
-    <section data-testid="ui-builder-trade-review-empty" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm sm:p-4">
-      <h2 className="text-sm font-bold">거래 검토</h2>
-      <p className="mt-2 break-keep text-xs font-medium leading-5 text-muted-foreground">모의매매는 자동모의매매로만 진행합니다. 진행 상황은 매매 탭에서 확인하세요.</p>
-    </section>
-  );
+  const { selection } = useAnalysisSelection();
+  if (!selection) {
+    return (
+      <section data-testid="ui-builder-trade-review-empty" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm sm:p-4">
+        <h2 className="text-sm font-bold">거래 검토</h2>
+        <p className="mt-2 break-keep text-xs font-medium leading-5 text-muted-foreground">검색 결과에서 종목을 선택하면 기존 승인형 Paper 검토 흐름을 사용할 수 있습니다.</p>
+      </section>
+    );
+  }
+  return <ScannerApprovalComposer selection={selection} />;
 }
 
 function ScannerSurface({ desktop, showSectionHeader }: { desktop: boolean; showSectionHeader: boolean }) {
