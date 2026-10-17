@@ -185,7 +185,27 @@ for (const viewport of [
   });
 }
 
-test('malformed stock profile fails closed instead of reporting the summary as normal', async ({ page }) => {
+// Provider profiles legitimately omit market/currency and descriptive fields
+// (Finnhub, Naver, DART); only identity drift or a missing name is malformed.
+for (const [label, profileBody] of [
+  ['drifted to another ticker', { ticker: '000660', name: 'SK하이닉스', market: 'KR', currency: 'KRW' }],
+  ['without a company name', { ticker: '005930', market: 'KR', currency: 'KRW', sector: '반도체' }],
+] as const) {
+  test(`malformed stock profile ${label} fails closed instead of reporting the summary as normal`, async ({ page }) => {
+    const requests: string[] = [];
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installApprovedSession(page);
+    await mockDetail(page, requests, { profileBody });
+    await page.goto('/stock-info/analysis?back=%2Fstocks&asset=stock&market=KR&ticker=005930');
+
+    await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
+    await expect(page.getByText('기업 정보 확인 실패', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('stock-detail-health-status')).toHaveText('부분');
+    expect(requests).toContain('/api/stocks/005930/profile');
+  });
+}
+
+test('partial provider profile renders missing fields as 정보 없음 instead of failing the summary', async ({ page }) => {
   const requests: string[] = [];
   await page.setViewportSize({ width: 390, height: 844 });
   await installApprovedSession(page);
@@ -193,7 +213,8 @@ test('malformed stock profile fails closed instead of reporting the summary as n
   await page.goto('/stock-info/analysis?back=%2Fstocks&asset=stock&market=KR&ticker=005930');
 
   await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
-  await expect(page.getByText('기업 정보 확인 실패', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('stock-detail-health-status')).toHaveText('부분');
+  await expect(page.getByTestId('stock-detail-health-status')).toHaveText('정상');
+  await expect(page.getByText('기업 정보 확인 실패', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('정보 없음', { exact: true }).first()).toBeVisible();
   expect(requests).toContain('/api/stocks/005930/profile');
 });
