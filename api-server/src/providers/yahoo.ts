@@ -16,10 +16,7 @@ type YahooChartResult = {
     regularMarketPrice?: number;
     regularMarketTime?: number;
     previousClose?: number;
-    regularMarketPreviousClose?: number;
-    /** Close before the requested range starts (about a month ago for 1mo). Never a daily previous close. */
     chartPreviousClose?: number;
-    gmtoffset?: number;
   };
   timestamp?: number[];
   indicators?: {
@@ -220,51 +217,6 @@ function lastValidIndex(values: Array<number | null | undefined>) {
   return -1;
 }
 
-function exchangeDayKey(epochSeconds: number, gmtOffsetSeconds: number): string {
-  return new Date((epochSeconds + gmtOffsetSeconds) * 1000).toISOString().slice(0, 10);
-}
-
-/**
- * Daily previous close for a quote built from a daily-bar chart response.
- *
- * `meta.chartPreviousClose` is the close *before the requested range starts*
- * (about one month ago for range=1mo), so using it as the previous close turns
- * the daily change into a monthly change. Instead:
- * - when the last valid bar is today's session bar, use the prior valid bar's close;
- * - when today's bar is not in the series yet (regularMarketTime is on a later
- *   exchange day than the last bar), the last bar itself is the previous close;
- * - otherwise fall back to meta.regularMarketPreviousClose / meta.previousClose.
- */
-export function resolveYahooDailyPreviousClose(
-  result: YahooChartResult,
-  closes: Array<number | null | undefined>,
-  lastIndex: number,
-): number {
-  const gmtOffset = safeNumber(result.meta?.gmtoffset, 0);
-  const marketTime = safeNumber(result.meta?.regularMarketTime, Number.NaN);
-  const lastBarTime = safeNumber(result.timestamp?.[lastIndex], Number.NaN);
-  const marketPrice = safeNumber(result.meta?.regularMarketPrice);
-
-  if (
-    lastIndex >= 0
-    && Number.isFinite(marketTime) && marketTime > 0
-    && Number.isFinite(lastBarTime) && lastBarTime > 0
-    && marketPrice > 0
-    && exchangeDayKey(marketTime, gmtOffset) > exchangeDayKey(lastBarTime, gmtOffset)
-  ) {
-    const lastClose = safeNumber(closes[lastIndex]);
-    if (lastClose > 0) return lastClose;
-  }
-
-  for (let i = lastIndex - 1; i >= 0; i -= 1) {
-    const candidate = safeNumber(closes[i]);
-    if (candidate > 0) return candidate;
-  }
-
-  return safeNumber(result.meta?.regularMarketPreviousClose)
-    || safeNumber(result.meta?.previousClose);
-}
-
 function yahooProviderTimestamp(result: YahooChartResult, index: number): string {
   const regularMarketTime = safeNumber(result.meta?.regularMarketTime, Number.NaN);
   const candleTime = safeNumber(result.timestamp?.[index], Number.NaN);
@@ -386,7 +338,20 @@ export async function getQuote(
     throw new Error(`YAHOO_PROVIDER_MARKER_20260711_ZERO_PRICE:${symbol}`);
   }
 
-  let previousClose = resolveYahooDailyPreviousClose(result, quote.close, index);
+  let previousClose =
+    safeNumber(result.meta?.previousClose) ||
+    safeNumber(result.meta?.chartPreviousClose);
+
+  if (!previousClose) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const candidate = safeNumber(quote.close[i]);
+
+      if (candidate > 0) {
+        previousClose = candidate;
+        break;
+      }
+    }
+  }
 
   if (!previousClose) previousClose = price;
 
@@ -491,7 +456,19 @@ export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
 
   const price =
     safeNumber(result.meta?.regularMarketPrice) || safeNumber(quote.close[index]);
-  const previousClose = resolveYahooDailyPreviousClose(result, quote.close, index);
+  let previousClose =
+    safeNumber(result.meta?.previousClose) ||
+    safeNumber(result.meta?.chartPreviousClose);
+
+  if (!previousClose) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      const candidate = safeNumber(quote.close[i]);
+      if (candidate > 0) {
+        previousClose = candidate;
+        break;
+      }
+    }
+  }
 
   if (!price || !previousClose) {
     throw new Error(`YAHOO_INDEX_INCOMPLETE:${clean}`);
