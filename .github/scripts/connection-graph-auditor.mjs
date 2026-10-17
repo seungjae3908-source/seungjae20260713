@@ -140,9 +140,11 @@ export const DEFAULT_EDGES = [
     lane: 'scanner-paper',
     required: [
       {
+        // Scanner pages no longer mount the manual Paper composer (owner decision 2026-10-17);
+        // the remaining scanner -> Paper handoff is the guarded Telegram order window.
         id: 'crypto-workspace-paper-handoff',
-        paths: ['stock-analyzer/src/pages/signal-scanner.tsx'],
-        allOf: ['<ScannerApprovalComposer', 'selectionFor', 'onOrderPreparation'],
+        paths: ['stock-analyzer/src/components/guarded-signal-order.tsx'],
+        allOf: ['<ScannerApprovalComposer', 'selection={selection}'],
       },
       {
         id: 'spot-paper-supported-composer',
@@ -170,8 +172,8 @@ export const DEFAULT_EDGES = [
     required: [
       {
         id: 'futures-ui-paper-handoff',
-        paths: ['stock-analyzer/src/pages/signal-scanner.tsx'],
-        allOf: ['<ScannerApprovalComposer', 'LONG', 'SHORT', 'onOrderPreparation'],
+        paths: ['stock-analyzer/src/components/guarded-signal-order.tsx'],
+        allOf: ['<ScannerApprovalComposer', 'LONG', 'SHORT'],
       },
       {
         id: 'futures-paper-supported-composer',
