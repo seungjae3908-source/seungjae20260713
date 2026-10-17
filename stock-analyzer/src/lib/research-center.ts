@@ -187,6 +187,80 @@ export interface ResearchFormulaBacktestReadback {
   firstBlocker: string;
 }
 
+export type ResearchFormulaLaneId = 'CRYPTO_FUTURES_LONG' | 'CRYPTO_FUTURES_SHORT' | 'CRYPTO_SPOT_LONG' | 'KR_STOCK_LONG' | 'US_STOCK_LONG';
+
+export interface ResearchFormulaCombinationLane {
+  laneId: ResearchFormulaLaneId;
+  status: string;
+  trialsEvaluated: number | null;
+  trialsPlanned: number | null;
+  cumulativeTrials: number | null;
+  survivors: number | null;
+  watch: number | null;
+  rejected: number | null;
+  holdoutChecked: number | null;
+  paperCandidates: number;
+  top: Array<{
+    labels: string[];
+    finalStatus: 'SURVIVOR' | 'WATCH' | 'REJECT';
+    exitId: string | null;
+    trades: number | null;
+    meanReturn: number | null;
+    winRate: number | null;
+    profitFactor: number | null;
+    qValue: number | null;
+    holdoutPass: boolean | null;
+    unseenPass: boolean | null;
+  }>;
+}
+
+export interface ResearchFormulaExitLane {
+  laneId: ResearchFormulaLaneId;
+  status: string;
+  signalSets: Array<{
+    label: string;
+    winnerStatus: 'WINNER' | 'NO_WINNER';
+    winnerVariant: string | null;
+    variants: Array<{
+      variantId: string;
+      trades: number | null;
+      meanR: number | null;
+      winRate: number | null;
+      maxConsecutiveLosses: number | null;
+      unseenTrades: number | null;
+      unseenMeanR: number | null;
+    }>;
+  }>;
+}
+
+export interface ResearchFormulaDevelopment {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'PRESENT';
+  combination: { present: boolean; observedAt: string | null; lanes: ResearchFormulaCombinationLane[] };
+  exitComparison: { present: boolean; observedAt: string | null; lanes: ResearchFormulaExitLane[] };
+  exploratoryPaper: {
+    present: boolean;
+    observedAt: string | null;
+    closed: number | null;
+    open: number | null;
+    promotionEligibleRules: number | null;
+    demotedRules: number | null;
+    rules: Array<{
+      laneId: ResearchFormulaLaneId | null;
+      labels: string[];
+      lifecycle: string | null;
+      open: number | null;
+      trades: number | null;
+      meanR: number | null;
+      lower95: number | null;
+      winRate: number | null;
+      promotionEligible: boolean;
+    }>;
+  };
+  watchdog: { present: boolean; observedAt: string | null; healthy: number | null; problems: string[] };
+  executionAuthority: 'NONE';
+}
+
 export interface ResearchLightweightMarketWatch {
   contract: 'lightweight-market-watch-readback/v1';
   status: 'MISSING' | 'INVALID' | 'STALE' | 'HOLD' | 'THROTTLED' |
@@ -279,6 +353,7 @@ export interface ResearchCenterOverview {
     blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
     formulaBacktest?: ResearchFormulaBacktestReadback;
+    formulaDevelopment?: ResearchFormulaDevelopment;
     liquidityIndependence?: {
       present: boolean;
       status: 'MISSING' | 'INVALID' | 'PRESENT';

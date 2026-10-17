@@ -104,6 +104,15 @@ requireText(overviewContract, 'input.producerBound !== false || input.paperConsu
 requireText(dashboardSource, 'def summarize_formula_queue_readback(summary, registry):', 'dashboard readback');
 requireText(dashboardSource, "if counts['PASS'] or registered:", 'no TRAIN-only PASS or Paper registry promotion');
 requireText(dashboardSource, "'producerBound': False, 'paperConsumerBound': False", 'unattested inputs fail-closed');
+// Formula development readback: research summaries only, never order authority.
+requireText(dashboardSource, 'def summarize_formula_development(root):', 'formula development dashboard readback');
+requireText(dashboardSource, "'formulaDevelopment': formula_development,", 'formula development overview field');
+requireText(dashboardSource, "'executionAuthority': 'NONE',", 'formula development has no execution authority');
+requireText(overviewContract, 'function sanitizeFormulaDevelopment(value: unknown): FormulaDevelopmentReadback', 'formula development sanitizer');
+requireText(overviewContract, "input.executionAuthority !== 'NONE'", 'formula development rejects execution authority');
+requireText(researchClient, 'export interface ResearchFormulaDevelopment', 'formula development DTO');
+requireText(researchPage, 'data-testid="research-formula-development"', 'visible formula development panel');
+requireText(researchPage, '주문 권한 없음', 'formula development panel states no order authority');
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
