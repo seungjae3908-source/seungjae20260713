@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CHUNK_RELOAD_STORAGE_KEY, CHUNK_RELOAD_WINDOW_MS, claimChunkReload } from './chunk-load-recovery';
+import { CHUNK_RELOAD_STORAGE_KEY, CHUNK_RELOAD_WINDOW_MS, claimChunkReload, shouldAutoReloadForChunkError } from './chunk-load-recovery';
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -26,4 +26,13 @@ test('never reloads when storage is missing or throws', () => {
     setItem: () => { throw new Error('blocked'); },
   };
   assert.equal(claimChunkReload(throwing), false);
+});
+
+test('never reloads while the browser is offline and keeps the one-shot guard unspent', () => {
+  const storage = memoryStorage();
+  assert.equal(shouldAutoReloadForChunkError(false, storage, 1_000_000), false);
+  assert.equal(storage.values.has(CHUNK_RELOAD_STORAGE_KEY), false);
+  assert.equal(shouldAutoReloadForChunkError(true, storage, 1_000_000 + 1_000), true);
+  // Unknown connectivity (no navigator) keeps the normal one-shot behavior.
+  assert.equal(shouldAutoReloadForChunkError(undefined, memoryStorage(), 1_000_000), true);
 });
