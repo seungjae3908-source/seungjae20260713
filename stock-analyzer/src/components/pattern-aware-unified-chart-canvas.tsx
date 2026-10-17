@@ -33,7 +33,18 @@ import {
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
 import { buildChartPatternOverlay } from '@/lib/chart-pattern-overlay';
-import { analyzeChartStructure } from '@/lib/chart-structure-engine';
+import { analyzeChartStructure, type ChartStructureResult } from '@/lib/chart-structure-engine';
+import {
+  WAVE_DOWN_COLOR,
+  WAVE_FLAT_COLOR,
+  WAVE_UP_COLOR,
+  buildChartWaveTrendOverlay,
+  segmentLinePoints,
+  waveDirectionColor,
+  waveLinePoints,
+  type ChartTrendline,
+  type ChartWaveTrendOverlay,
+} from '@/lib/chart-wave-trend';
 import type { UnifiedChartTimeframe } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
 
@@ -73,13 +84,22 @@ type OverlayState = {
   rsi: boolean;
   macd: boolean;
   atr: boolean;
+  wave: boolean;
+  trendline: boolean;
+  channel: boolean;
 };
+
+type StructureLineKey = 'wave' | 'supportTrend' | 'resistanceTrend' | 'channelUpper' | 'channelLower';
+
+/** 파동 마커 라벨은 최근 스윙만 표시해 차트가 글자로 덮이지 않게 한다. */
+const WAVE_MARKER_LIMIT = 12;
 
 type ChartInstance = {
   chart: IChartApi;
   candle: ISeriesApi<'Candlestick'>;
   volume: ISeriesApi<'Histogram'>;
   lines: Record<LineKey, ISeriesApi<'Line'>>;
+  structureLines: Record<StructureLineKey, ISeriesApi<'Line'>>;
   referencePriceLines: IPriceLine[];
   analysisPriceLines: IPriceLine[];
   pricePlanLines: IPriceLine[];
@@ -117,6 +137,8 @@ type Props = {
   analysis: ChartAnalysis | null;
   pricePlan?: AnalysisPricePlan;
   overlays: OverlayState;
+  structure?: ChartStructureResult;
+  waveTrend?: ChartWaveTrendOverlay;
   timeframe: UnifiedChartTimeframe;
   resetKey: string;
   market: AnalysisMarket;
@@ -140,6 +162,21 @@ function setLineData(
 function removePriceLines(series: ISeriesApi<'Candlestick'>, lines: IPriceLine[]): void {
   for (const line of lines) series.removePriceLine(line);
   lines.splice(0, lines.length);
+}
+
+function trendlineColor(line: ChartTrendline): string {
+  if (line.broken) return WAVE_FLAT_COLOR;
+  return line.role === 'support' ? WAVE_UP_COLOR : WAVE_DOWN_COLOR;
+}
+
+function trendlineOptions(line: ChartTrendline | null): Record<string, unknown> {
+  if (!line) return { visible: false };
+  return {
+    color: trendlineColor(line),
+    lineStyle: line.broken ? LineStyle.SparseDotted : LineStyle.Solid,
+    lineWidth: line.broken ? 1 : 2,
+    title: line.label,
+  };
 }
 
 function statusColor(status: ChartAnalysis['status']): string {
@@ -290,6 +327,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   analysis,
   pricePlan,
   overlays,
+  structure: providedStructure,
+  waveTrend: providedWaveTrend,
   timeframe,
   resetKey,
   market,
@@ -352,11 +391,19 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     },
   }), [resetKey, timeframe]);
 
+  const structure = useMemo(
+    () => providedStructure ?? analyzeChartStructure(candles),
+    [candles, providedStructure],
+  );
+  const waveTrend = useMemo(
+    () => providedWaveTrend ?? buildChartWaveTrendOverlay(candles, structure.marketStructure.pivots),
+    [candles, providedWaveTrend, structure],
+  );
   const activePattern = useMemo(() => {
-    return analyzeChartStructure(candles).patterns
+    return structure.patterns
       .filter((pattern) => pattern.status !== 'expired')
       .sort((left, right) => right.updatedAtTime - left.updatedAtTime)[0] ?? null;
-  }, [candles]);
+  }, [structure]);
   const patternOverlay = useMemo(
     () => buildChartPatternOverlay(analysis, activePattern),
     [activePattern, analysis],
@@ -432,6 +479,23 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       bollingerMiddle: createLine(chart, { color: 'rgba(14,165,233,0.38)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: 'BB 중심', visible: false }),
       bollingerLower: createLine(chart, { color: 'rgba(14,165,233,0.75)', lineWidth: 1, title: 'BB 하단', visible: false }),
     };
+    // 추세선·채널은 마지막 봉까지 연장되므로 가격축 자동 범위에 끼어들지 않게 한다.
+    const excludeFromAutoscale = () => null;
+    const structureLines: Record<StructureLineKey, ISeriesApi<'Line'>> = {
+      wave: createLine(chart, {
+        color: dark ? 'rgba(226,232,240,0.78)' : 'rgba(51,65,85,0.78)',
+        lineWidth: 2,
+        title: '',
+        visible: false,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      }),
+      supportTrend: createLine(chart, { color: WAVE_UP_COLOR, lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, autoscaleInfoProvider: excludeFromAutoscale }),
+      resistanceTrend: createLine(chart, { color: WAVE_DOWN_COLOR, lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, autoscaleInfoProvider: excludeFromAutoscale }),
+      channelUpper: createLine(chart, { color: 'rgba(168,85,247,0.85)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '채널 상단', visible: false, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: excludeFromAutoscale }),
+      channelLower: createLine(chart, { color: 'rgba(168,85,247,0.85)', lineWidth: 1, lineStyle: LineStyle.Dashed, title: '채널 하단', visible: false, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: excludeFromAutoscale }),
+    };
     const volume = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -445,6 +509,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       candle,
       volume,
       lines,
+      structureLines,
       referencePriceLines: [],
       analysisPriceLines: [],
       pricePlanLines: [],
@@ -686,13 +751,57 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         });
       }
     }
+    if (overlays.wave) {
+      for (const swing of waveTrend.wave.swings.slice(-WAVE_MARKER_LIMIT)) {
+        markers.push({
+          time: swing.time as UTCTimestamp,
+          position: swing.kind === 'high' ? 'aboveBar' : 'belowBar',
+          color: waveDirectionColor(swing.direction),
+          shape: 'circle',
+          size: 0.6,
+          text: swing.label,
+        });
+      }
+    }
     markers.sort((left, right) => Number(left.time) - Number(right.time));
     instance.candle.setMarkers(markers as never[]);
 
     restoreLogicalViewport(instance.chart, beforeUpdate);
     const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
-  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey, timeframe]);
+  }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, overlays.wave, patternOverlay, pricePlan, resetKey, timeframe, waveTrend]);
+
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    const beforeUpdate = logicalViewport(instance.chart)
+      ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
+    const waveRows = overlays.wave ? waveLinePoints(waveTrend.wave) : [];
+    setLineData(instance.structureLines.wave, waveRows);
+    instance.structureLines.wave.applyOptions({ visible: waveRows.length >= 2 });
+
+    const trendRows: Array<[ISeriesApi<'Line'>, ChartTrendline | null]> = [
+      [instance.structureLines.supportTrend, overlays.trendline ? waveTrend.support : null],
+      [instance.structureLines.resistanceTrend, overlays.trendline ? waveTrend.resistance : null],
+    ];
+    for (const [series, line] of trendRows) {
+      const rows = line ? segmentLinePoints(line) : [];
+      setLineData(series, rows);
+      series.applyOptions({ ...trendlineOptions(line), visible: rows.length >= 2 });
+    }
+
+    const channelModel = overlays.channel ? waveTrend.channel : null;
+    const upperRows = channelModel ? segmentLinePoints(channelModel.upper) : [];
+    const lowerRows = channelModel ? segmentLinePoints(channelModel.lower) : [];
+    setLineData(instance.structureLines.channelUpper, upperRows);
+    setLineData(instance.structureLines.channelLower, lowerRows);
+    instance.structureLines.channelUpper.applyOptions({ visible: upperRows.length >= 2 });
+    instance.structureLines.channelLower.applyOptions({ visible: lowerRows.length >= 2 });
+
+    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
+    if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
+  }, [overlays.channel, overlays.trendline, overlays.wave, resetKey, waveTrend]);
 
   useEffect(() => {
     const instance = instanceRef.current;
@@ -787,6 +896,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         />
         <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
       </div>
+      <ChartStructureLegend waveTrend={waveTrend} overlays={overlays} />
       {chartSymbol ? (
         <div className="px-3 sm:px-4">
           <AiChartPositionPanel
@@ -805,6 +915,52 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     </div>
   );
 });
+
+function trendTone(direction: 'up' | 'down' | 'neutral'): string {
+  if (direction === 'up') return 'border-[#F04452]/30 bg-[#F04452]/10 text-[#F04452]';
+  if (direction === 'down') return 'border-[#3485FA]/30 bg-[#3485FA]/10 text-[#3485FA]';
+  return 'border-card-border bg-secondary text-muted-foreground';
+}
+
+function ChartStructureLegend({ waveTrend, overlays }: {
+  waveTrend: ChartWaveTrendOverlay;
+  overlays: Pick<OverlayState, 'wave' | 'trendline' | 'channel'>;
+}) {
+  const items: Array<{ key: string; text: string; tone: 'up' | 'down' | 'neutral'; dashed?: boolean }> = [];
+  if (overlays.wave) {
+    const trend = waveTrend.wave.trend;
+    items.push({ key: 'wave', text: `파동: ${waveTrend.wave.label}`, tone: trend === 'bullish' ? 'up' : trend === 'bearish' ? 'down' : 'neutral' });
+  }
+  if (overlays.trendline) {
+    for (const line of [waveTrend.support, waveTrend.resistance]) {
+      if (!line) continue;
+      items.push({ key: line.role, text: line.label, tone: line.broken ? 'neutral' : line.role === 'support' ? 'up' : 'down' });
+    }
+    if (!waveTrend.support && !waveTrend.resistance) items.push({ key: 'trend-none', text: '추세선: 확정 스윙 부족', tone: 'neutral' });
+  }
+  if (overlays.channel) {
+    items.push(waveTrend.channel
+      ? { key: 'channel', text: `채널: ${waveTrend.channel.label}`, tone: waveTrend.channel.slope === 'rising' ? 'up' : waveTrend.channel.slope === 'falling' ? 'down' : 'neutral', dashed: true }
+      : { key: 'channel-none', text: '채널: 계산 불가', tone: 'neutral', dashed: true });
+  }
+  if (!items.length) return null;
+  return (
+    <div data-testid="chart-structure-legend" className="flex flex-wrap gap-1.5 px-3 sm:px-4" aria-label="파동·추세선·채널 범례">
+      {items.map((item) => (
+        <span
+          key={item.key}
+          data-testid={`chart-structure-legend-${item.key}`}
+          className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black', item.dashed && 'border-dashed', trendTone(item.tone))}
+        >
+          {item.text}
+        </span>
+      ))}
+      {overlays.wave && waveTrend.wave.swings.length > 0 && (
+        <span className="px-1 py-0.5 text-[10px] font-bold text-muted-foreground">확정 고점·저점만 연결 (HH·HL <span style={{ color: WAVE_UP_COLOR }}>●</span> / LH·LL <span style={{ color: WAVE_DOWN_COLOR }}>●</span>)</span>
+      )}
+    </div>
+  );
+}
 
 function ChartControl({ label, testId, onClick, children }: {
   label: string;
