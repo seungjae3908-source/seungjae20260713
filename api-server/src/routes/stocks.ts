@@ -12,7 +12,6 @@ import {
 import { FilingService } from "../services/filing.service";
 import { SpecialFeedService } from "../services/special-feed.service";
 import { SignalService } from "../services/signal.service";
-import { buildStockAnalysis } from "../services/stock-analysis.service";
 import { computeIndicators } from "../sample/indicators";
 import { computeScores } from "../sample/scores";
 import { scoreToRating } from "../sample/rating";
@@ -1319,12 +1318,6 @@ router.get("/:ticker/profile", async (req, res) => {
 async function enrichCompanyProfile(ticker: string, base: any) {
 	const profile: any = { ...(base ?? {}) };
 	if (isPlaceholderDescription(profile.description)) profile.description = "";
-	// Finnhub 프로필 등 일부 공급자는 식별 필드를 주지 않으므로 요청 기준으로 채웁니다.
-	const isKr = /^\d{6}$/.test(ticker);
-	if (!profile.ticker) profile.ticker = ticker;
-	if (!profile.market) profile.market = isKr ? "KR" : "US";
-	if (!profile.currency) profile.currency = isKr ? "KRW" : "USD";
-	if (!profile.name && profile.companyName) profile.name = profile.companyName;
 
 	try {
 		if (/^\d{6}$/.test(ticker)) {
@@ -1488,43 +1481,6 @@ router.get("/:ticker/rating", async (req, res) => {
 	}
 });
 
-class AnalysisInputUnavailableError extends Error {}
-
-// GET /api/stocks/:ticker/analysis — 종목 상세 "AI 분석" 탭.
-// 실시간 시세 + 일봉으로 계산한 기술 지표만 사용합니다(근거 없는 목표가 미생성).
-router.get("/:ticker/analysis", async (req, res) => {
-	const ticker = normalizeTicker(req.params.ticker);
-	if (!ticker) {
-		res.status(400).json({ error: "MISSING_TICKER" });
-		return;
-	}
-	try {
-		const payload = await withLiveCache(`analysis:${ticker}`, 60_000, async () => {
-			const [quote, meta] = await Promise.all([
-				MarketDataService.getQuoteRow(ticker).catch(() => null),
-				MarketDataService.getCandlesMeta(ticker, "1D" as any).catch(() => null),
-			]);
-			const built = buildStockAnalysis({
-				ticker,
-				quote,
-				candles: meta?.candles ?? [],
-				candleProvider: meta?.provider ?? null,
-			});
-			// 입력이 없으면 캐시하지 않도록 예외로 빠집니다.
-			if (!built) throw new AnalysisInputUnavailableError();
-			return built;
-		});
-		res.json(payload);
-	} catch (error) {
-		if (error instanceof AnalysisInputUnavailableError) {
-			res.status(503).json({ error: "ANALYSIS_INPUT_UNAVAILABLE", ticker });
-			return;
-		}
-		logProviderFailure("stock analysis route error:", error);
-		res.status(500).json({ error: "STOCK_ANALYSIS_ROUTE_ERROR", ticker });
-	}
-});
-
 // GET /api/stocks/:ticker/financials
 router.get("/:ticker/financials", async (req, res) => {
 	const ticker = normalizeTicker(req.params.ticker);
@@ -1618,9 +1574,9 @@ items,
 summary: items.length
 ? simpleDartSummary(items[0]) +
 (items.length > 1
-? " 최근 공시는 총 " + items.length + "건입니다."
+? "   " + items.length + " ."
 : "")
-: "최근 확인된 공시가 없습니다.",
+: "  .",
 });
 } catch (error) {
 console.error("stock disclosures route error:", error);
@@ -1630,8 +1586,8 @@ disclosures: [],
 filings: [],
 items: [],
 summary: /^\d{6}$/.test(ticker)
-? "DART 공시를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
-: "SEC EDGAR 공시를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+? "DART   ."
+: "SEC EDGAR   .",
 });
 }
 });
