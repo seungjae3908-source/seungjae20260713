@@ -269,7 +269,7 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
             {online ? '온라인' : '오프라인'}
           </span>
           <span className="inline-flex min-h-8 items-center rounded-full border border-card-border px-3 font-medium" data-testid="professional-query-status">
-            {activeRequests > 0 ? `데이터 요청 중 · ${activeRequests}` : '데이터 요청 대기'}
+            {activeRequests > 0 ? `불러오는 중 · ${activeRequests}건` : '진행 중인 요청 없음'}
           </span>
           <button type="button" aria-label="계정 열기" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
             {auth.displayName ?? '계정'}

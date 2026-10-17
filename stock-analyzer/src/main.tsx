@@ -28,6 +28,34 @@ if (directAiChartColdRoute) {
 
 let applicationGraphStarted = false;
 
+// A stale cached entry (after a deploy) can fail to import the App graph. Reload
+// once (same guard key as lib/chunk-load-recovery) instead of leaving a white page.
+function recoverFromEntryChunkFailure() {
+	const key = 'sa-chunk-reload-at';
+	// Offline is a network outage, not a stale deploy: reloading would only show the browser error page.
+	const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+	if (!offline) {
+		try {
+			const previous = Number(window.sessionStorage.getItem(key));
+			if (!Number.isFinite(previous) || Date.now() - previous >= 30_000) {
+				window.sessionStorage.setItem(key, String(Date.now()));
+				window.location.reload();
+				return;
+			}
+		} catch {
+			// Storage blocked: fall through to the static message.
+		}
+	}
+	const root = document.getElementById('root');
+	if (root && !root.childElementCount) {
+		root.innerHTML = '<div role="alert" style="padding:32px 16px;text-align:center;font-family:sans-serif">'
+			+ '<p style="font-weight:800">앱 파일을 불러오지 못했습니다.</p>'
+			+ '<p style="font-size:13px;opacity:.75">새 버전으로 업데이트되었거나 네트워크가 불안정합니다.</p>'
+			+ '<button type="button" onclick="location.reload()" style="margin-top:12px;min-height:44px;padding:0 16px;border-radius:12px;border:1px solid #888;background:transparent;color:inherit;font-weight:800">다시 시도</button>'
+			+ '</div>';
+	}
+}
+
 function startApplicationGraph() {
 	if (applicationGraphStarted) return;
 	applicationGraphStarted = true;
@@ -36,7 +64,7 @@ function startApplicationGraph() {
 
 	void Promise.all([appModulePromise, runtimeModulePromise]).then(([{ default: App }, { mountApp }]) => {
 		mountApp(App);
-	});
+	}).catch(recoverFromEntryChunkFailure);
 }
 
 if (directAiChartRoutePromise) {
