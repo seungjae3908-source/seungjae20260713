@@ -331,16 +331,6 @@ const automaticTradingDriftReviewed=[
  // Scanner-repair overlap is intentionally sent through this full gate, never
  // through the immutable historical-repair exemption.
  ...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS,
- // Owner-approved manual Paper removal (2026-10-17): order-preparation panel
- // removed from AI chart/technical/scanner surfaces plus their UI registry,
- // connection-graph probes and specs. Both Trading guards stay mandatory.
- '.github/scripts/connection-graph-auditor.mjs',
- '.github/tests/connection-graph-auditor.test.mjs',
- 'stock-analyzer/src/components/ai-chart-position-panel-impl.tsx',
- 'stock-analyzer/e2e/ai-chart-position-readonly.spec.ts',
- 'stock-analyzer/e2e/ui-builder-layout-contract.spec.ts',
- 'stock-analyzer/src/lib/ui-builder-layout.ts',
- 'stock-analyzer/src/lib/ui-builder-layout.test.ts',
  // Read-only holdings UI and entry evidence, with no new database or financial scope.
  'stock-analyzer/src/components/bottom-nav.tsx',
  'stock-analyzer/e2e/app-navigation.spec.ts',

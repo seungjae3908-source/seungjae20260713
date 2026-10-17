@@ -361,9 +361,9 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   await expect(detail).toContainText('74,000~75,000');
   await expect(detail).toContainText('서버 계획');
   await expect(detail).toContainText('public-candles');
-  // Manual Paper order preparation was removed (owner decision 2026-10-17).
-  await expect(detail.getByRole('button', { name: '주문 준비 열기' })).toHaveCount(0);
-  await expect(detail.getByTestId('order-preparation')).toHaveCount(0);
+  await detail.getByRole('button', { name: '주문 준비 열기' }).click();
+  await expect(detail.getByTestId('order-preparation')).toContainText('실행 아님');
+  await expect(detail.getByTestId('order-preparation')).toContainText(/검색·분석 전용|승인 대기 등록/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect(forbidden).toEqual([]);
 });

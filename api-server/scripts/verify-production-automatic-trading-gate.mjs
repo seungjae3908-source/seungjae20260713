@@ -131,8 +131,7 @@ for (const [input, token, code] of [
   [autoTradingPage, 'const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync', 'AUTO_PAPER_HOLDINGS_MEMBER_AUTH_REQUIRED'],
   [autoTradingPage, 'autoPaperRuntimeReadiness?.paperWalletReady === true', 'AUTO_PAPER_HOLDINGS_WALLET_PROOF_REQUIRED'],
   [autoTradingPage, 'autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true', 'AUTO_PAPER_HOLDINGS_DB_PROOF_REQUIRED'],
-  // Manual Paper was removed: Paper holdings only follow the automatic proofs.
-  [autoTradingPage, 'const paperHoldingsReadAllowed = automaticPaperHoldingsReadable;', 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
+  [autoTradingPage, "paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable", 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
   [autoTradingPage, "enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}", 'AUTO_PAPER_HOLDINGS_READ_GATE_REQUIRED'],
   [holdingsPanel, 'const snapshots = enabled ? query.data?.snapshots : undefined;', 'AUTO_PAPER_HOLDINGS_CACHED_SCOPE_GUARD_REQUIRED'],
   [holdingsPanel, 'enabled: enabled && fixture == null', 'AUTO_PAPER_HOLDINGS_QUERY_DISABLED_REQUIRED'],
