@@ -338,3 +338,131 @@ any send reservation or call Telegram.
 These are source-only changes on Draft #1882: Production still uses
 the old PM2 revision, and safe isolated-owner rollout remains NO-GO.
 No Replit, PM2 restart, real Bot send, DB writes, or orders.
+
+
+## 2026-10-14 protected install attempt #2: post-check failure, NOT another fresh install
+
+The first owner-approved protected attempt #38503780994 stopped BEFORE SSH with
+TELEGRAM_DORMANT_REQUIRED6_MISSING. Exact merged-main official Full CI
+#38506733496 subsequently passed Required6/6. Retrying only the failed job
+(attempt #2) reached the real Production server: SSH, original source-artifact
+provenance, ZIP digest verification, ingress creation, transfer, and installer
+receipt validation all completed successfully. The last step returned
+TELEGRAM_DORMANT_PM2_CHANGED_UNEXPECTEDLY (exit 26).
+
+The old guard hashed the ENTIRE pm2_env object including PM2-managed fields.
+The mismatch does NOT prove a restart or harmless telemetry drift. There is
+no stored before/after field-level diff; do not turn off that guard blindly.
+The immutable release/current marker is written BEFORE the final PM2 check.
+A COMPLETE, SEALED but UNCONFIRMED dormant package may therefore remain in
+the host directory. Replaying the create-only installation would hit existing
+release/current and ingress and could destroy the evidence if forcibly cleared.
+
+The new owner-protected read-only recovery audit is implemented in:
+
+- ops/telegram-dormant-installed-readonly.mjs
+- .github/tests/telegram-dormant-installed-readonly.test.mjs
+- .github/workflows/telegram-dormant-installed-readonly.yml
+
+The audit authenticates exactly one successful immutable original GitHub push
+artifact, verifies its ZIP checksum and the manifest digest, then verifies
+already-installed byte hashes, marker, file metadata, installation receipt
+and private state root. It compares the current actual PM2 identity twice,
+without exposing app environment values. It NEVER uploads, installs, restarts,
+changes permissions or worker ownership, sends a Bot message, or touches DB,
+credentials, broker orders or trading/Paper authority.
+
+After separately approved merge and an owner-protected Production environment
+review, the exact command in Release Control #1555 is:
+
+    /run-telegram-dormant-readback <new-current-main-40-sha> bcb8503559cd64c853f211ed1a10f5c5fad3c04f
+
+SEALED_DORMANT_BYTES_PM2_STABLE_NOW verifies only already sealed bytes and
+current two-pass PM2 stability. It does not prove PM2 preservation DURING
+the earlier failed attempt, four send-capable lanes quiesced, a single
+Telegram writer lease, Signal V3 freshness, genuine member SENT or sender
+activation authorization. Any mismatch is NO-GO, with zero host changes.
+The already confirmed six-room messages are NOT resent. No Replit.
+
+
+### Future-install PM2 post-check precision (source-only Draft follow-up)
+
+The protected Bash installer now computes its before/after PM2 fingerprint
+using the real single process PID, start time, restart count, canonical cwd and
+entrypoint, deployed SHA marker, sender-owner mode and ALL configured
+application environment names (uppercase and executionAuthority, hashed
+without printing values). Dynamic PM2-generated lower-case diagnostic objects
+such as axm_monitor/versioning are excluded. It does NOT exempt LIVE, AUTO,
+PAPER, Bot credentials, broker flags or a genuine restart. Fake-PM2 end-to-end
+tests inject telemetry-only drift (permitted) and PID/start/restart/trading/
+owner changes (blocked) with real Bash execution, preserving residual seal on
+post-check failure for the separately protected read-only recovery audit.
+This source change does not repair or confirm any historic Production state.
+
+
+### Pre-Full-CI readback cross-check — 2026-10-14
+
+Additional preflight found three risks in the initial #1888 readback:
+1. Its PM2 configuration digest covered only a subset of application flags,
+   unlike the installer; changes in DB, runtime or other uppercase
+   configuration could otherwise appear stable.
+2. It verified sealed bytes only before the pair of process observations;
+   a changed file during that interval could escape the single proof.
+3. It did not distinguish unexpected Telegram PM2 owner modes from a clean
+   old embedded sender, and owner-only workflow guards lacked a dedicated
+   focused contract test.
+
+The readback now mirrors the installer's comprehensive uppercase app-key
+fingerprint (excluding only PM2_/AXM_ internal metadata), repeats the full
+original-manifest sealed file check AFTER PM2 reads, and records an explicit
+NO-GO for unexpected owner modes. Added offline negative tests cover
+DATABASE_URL/other application config changes, binary changes mid-read,
+owner anomalies and a no-mutation protected workflow contract.
+
+These are source/CI preflight fixes only. They do NOT prove the historical
+Production PM2 state, overwrite the old release, restart a process or
+authorize sender activation. No Replit was used.
+
+
+## Full-source Telegram recovery pre-CI audit 2026-10-14 13:27 KST
+
+After Full CI #38511222330 passed for the PRIOR #1888 HEAD, a new
+source-to-Production readback review identified additional gaps:
+
+1. The original manifest covered three executable files, NOT preparation.json.
+   Verifying preparation JSON fields alone was insufficient. The readback
+   now requires the prepared receipt bytes to match the immutable original
+   GitHub push artifact SHA-256. Both producer and install use canonical
+   JSON.stringify receipt plus a newline, making exact-byte verification
+   compatible with the existing failed installation.
+2. A two-pass stable PM2 snapshot does not prove that Production is still
+   on the deployed revision observed BEFORE the failed protected install.
+   The readback now requires exact legacy deployed SHA
+   3e104bbeefffcb3bb5ce03b57637f548e493b8e6, failing closed on a new
+   revision even when current PID/restart metadata appears stable.
+   Historical process preservation DURING the earlier failed install
+   remains unproven and is never claimed.
+3. Rechecking current main ONLY before Production access leaves a release
+   report race. The workflow now checks exact main after remote inspection
+   and rechecks from GitHub again immediately before posting any proof.
+4. The protected readback now requires genuine exact-current-main Required
+   CI 6/6 and postmerge provenance BEFORE SSH, reusing the pre-existing
+   production validation helpers; it restricts the owner command to the
+   original failed installation source package SHA
+   bcb8503559cd64c853f211ed1a10f5c5fad3c04f.
+
+The private release root also checks its ancestor directory ownership-safety
+properties (non-symlink and non-world-writable), and regression tests cover
+semantically unchanged but byte-tampered preparation JSON, a different live
+deploy revision, missing prerequisites, and an unsafe release ancestor.
+
+No real Bot POST, start, restart, secret, account, trading, Paper, DB or host
+file mutation is authorized by the source-only checks. No Replit.
+Do NOT rerun the old failed create-only installer or clean its existing
+release/current and incoming directories: preserve evidence.
+
+The only subsequent server step is a separately approved, protected,
+READ-ONLY observation after approved PR merge and exact-main Required6 proof.
+Even complete sealed bytes plus a stable currently embedded PM2 instance
+do NOT prove a single sender, four stopped legacy lanes, valid Signal V3
+production data or operational Telegram delivery.

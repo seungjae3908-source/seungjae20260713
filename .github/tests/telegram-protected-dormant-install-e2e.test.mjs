@@ -33,7 +33,11 @@ function fixture(){
     fs.mkdirSync(dir,{recursive:true});
   fs.writeFileSync(path.join(app,'.deploy','current-sha'),OLD_SHA+'\n');
   fs.writeFileSync(path.join(bin,'pm2'),
-    '#!/bin/sh\nif [ "$1" != "jlist" ]; then exit 77; fi\ncat "$TG_TEST_PM2_JSON"\n',
+    '#!/bin/sh\nif [ "$1" != "jlist" ]; then exit 77; fi\n' +
+    'if [ -n "$TG_TEST_PM2_SECOND" ]; then\n' +
+    ' if [ -e "$TG_TEST_PM2_SEEN" ]; then cat "$TG_TEST_PM2_SECOND"; exit; fi\n' +
+    ' : > "$TG_TEST_PM2_SEEN"\n' +
+    'fi\ncat "$TG_TEST_PM2_JSON"\n',
     {mode:0o700});
   call('git',['init','-q',checkout]);
   call('git',['-C',checkout,'config','user.email','qa@example.test']);
@@ -79,20 +83,32 @@ function fixture(){
   const pm2Data=[
     {name:'stock-app',pid:44444,pm2_env:{
       status:'online',DEPLOY_SHA:OLD_SHA,
+      pm_cwd:'/opt/stock-app',
+      pm_exec_path:'/opt/stock-app/api-server/dist/index.mjs',
+      pm_uptime:1728680000000,restart_time:0,
       LIVE_TRADING:'true',TOSS_LIVE_ORDER_ENABLED:'true',
       TELEGRAM_WORKER_OWNER:'embedded',
     }},
   ];
   fs.writeFileSync(pm2Json,JSON.stringify(pm2Data));
-  const execute=(options={})=>spawnSync('bash',[
+  const execute=(options={})=>{
+    const second=path.join(temp,'pm2-second.json');
+    const seen=path.join(temp,'pm2-seen');
+    fs.rmSync(seen,{force:true});
+    if(options.secondPm2)fs.writeFileSync(second,JSON.stringify(options.secondPm2));
+    return spawnSync('bash',[
       runnerPath,sha,options.tarSha??tarSha,options.installerSha??installerSha,
     ],{
       env:{...process.env,
         TELEGRAM_DORMANT_PROTECTED_REVIEW:options.approved===false?'false':'true',
-        TG_TEST_PM2_JSON:pm2Json,PATH:bin+':'+process.env.PATH,
+        TG_TEST_PM2_JSON:pm2Json,
+        TG_TEST_PM2_SECOND:options.secondPm2?second:'',
+        TG_TEST_PM2_SEEN:seen,
+        PATH:bin+':'+process.env.PATH,
       },
       cwd:temp,encoding:'utf8',timeout:20000,maxBuffer:65536,
     });
+  };
   return {temp,app,base,pm2Json,incoming,runnerPath,sha,
     installerFile,tarFile,tarSha,installerSha,execute,
     release:path.join(base,'release','current'),
@@ -193,6 +209,48 @@ test('symlinked and permissive pre-existing sender state directory block install
       if(unsafe==='permissive')
         assert.equal(fs.statSync(state).mode&0o777,0o755,
           'must not silently chmod operator-owned directory');
+    }finally{x.clean();}
+  }
+});
+
+
+test('volatile PM2 axm and versioning telemetry cannot falsely block a sealed install',()=>{
+  const x=fixture();
+  try {
+    const rows=JSON.parse(fs.readFileSync(x.pm2Json,'utf8'));
+    rows[0].pm2_env.axm_monitor={cpu:23,heap:120};
+    rows[0].pm2_env.versioning={revision:'volatile'};
+    rows[0].pm2_env.node_version='22.18.0';
+    const result=x.execute({secondPm2:rows});
+    assert.equal(result.status,0,result.stderr||result.stdout);
+    assert.match(result.stdout,/TELEGRAM_DORMANT_INSTALLED_INACTIVE_PM2_UNCHANGED/u);
+    assert.equal(fs.readFileSync(path.join(x.release,'.deploy/current-sha'),'utf8'),x.sha+'\n');
+  }finally{x.clean();}
+});
+
+test('real PM2 process, restart and trading changes still fail after write without concealing evidence',()=>{
+  for(const change of [
+    row=>{row.pid+=100;},
+    row=>{row.pm2_env.pm_uptime+=1000;},
+    row=>{row.pm2_env.restart_time+=1;},
+    row=>{row.pm2_env.LIVE_TRADING='false';},
+    row=>{row.pm2_env.TOSS_LIVE_ORDER_ENABLED='false';},
+    row=>{row.pm2_env.executionAuthority='LIVE';},
+    row=>{row.pm2_env.TELEGRAM_WORKER_OWNER='isolated';},
+  ]){
+    const x=fixture();
+    try{
+      const rows=JSON.parse(fs.readFileSync(x.pm2Json,'utf8'));
+      change(rows[0]);
+      const result=x.execute({secondPm2:rows});
+      assert.equal(result.status,26,result.stderr||result.stdout);
+      assert.match(result.stderr,/TELEGRAM_DORMANT_PM2_CHANGED_UNEXPECTEDLY/u);
+      // The JS creates marker before the final guard. Preserve for read-only
+      // recovery; never claim a green install or delete the residual bytes.
+      assert.equal(fs.readFileSync(
+        path.join(x.release,'.deploy/current-sha'),'utf8'),x.sha+'\n');
+      assert.equal(fs.readFileSync(
+        path.join(x.app,'.deploy/current-sha'),'utf8'),OLD_SHA+'\n');
     }finally{x.clean();}
   }
 });
