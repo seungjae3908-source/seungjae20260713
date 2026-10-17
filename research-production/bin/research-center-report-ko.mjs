@@ -30,6 +30,16 @@ if (universe) {
   const rows = Object.entries(universe.sources ?? {}).map(([source, row]) => `${source}: 상장 ${row.listed} · 유동성 통과 ${row.liquid} · 연구 ${row.research.length} · 감시 ${row.watch.length}`);
   out.push(`[전 종목 목록 V2] ${rows.length ? rows.join(' / ') : '아직 수집 중 (완료 전까지 기존 20종목 사용)'} · 상장폐지 종목 미포함(생존편향 있음)`);
 }
+const selfUpdate = await latest('self-update-v1.json');
+if (selfUpdate) {
+  const SELF_UPDATE_KO = {
+    UP_TO_DATE: '최신', NO_RESEARCH_CHANGE: '연구 변경 없음(앱만 바뀜)', VALIDATING: '격리 시험 중', CUTTING_OVER: '교체 중',
+    UPDATED: '업데이트 완료', VALIDATION_FAILED: '격리 시험 실패(기존 버전 유지)', CUTOVER_FAILED: '교체 실패(기존 버전 복구)',
+    AI_ACTIVATION_FAILED: 'AI 일정 전환 실패(이전 상태 복구)', WAITING_AFTER_FAILURE: '최근 실패, 나중에 재시도',
+    DEFERRED_MANUAL_ACTIVATION: '수동 활성화 진행 중이라 미룸', RESTORING_AI: '꺼진 AI 연구 일정 복구 중', AI_RESTORED: '꺼진 AI 연구 일정 복구 완료', AI_RESTORE_FAILED: 'AI 연구 일정 복구 실패(기본 연구는 계속)', MAIN_UNREADABLE: 'main 확인 실패', NO_CURRENT_RELEASE: '현재 버전 없음',
+  };
+  out.push(`[자동 업데이트] ${selfUpdate.observedAt} · ${SELF_UPDATE_KO[selfUpdate.status] ?? selfUpdate.status} · 현재 ${String(selfUpdate.currentSha ?? '-').slice(0, 7)} → main ${String(selfUpdate.targetSha ?? '-').slice(0, 7)}${selfUpdate.detail ? ` · ${selfUpdate.detail}` : ''}`);
+}
 const papers = await latest('paper-discovery-v1.json');
 if (papers?.latestPending?.length) {
   out.push(`[논문 발굴] 승인 대기 초안 ${papers.pendingApproval}개`);
