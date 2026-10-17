@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, AlertCircle, SearchX, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatSafeErrorDiagnostics, readPublicDeploySha } from '@/lib/safe-error-diagnostics';
+import { describeError } from '@/lib/error-reason';
 
 export function LoadingState({ label = '불러오는 중...' }: { label?: string }) {
   return (
@@ -63,14 +64,6 @@ export function PageFallback() {
   );
 }
 
-const ERROR_MESSAGES: Record<string, string> = {
-  UNKNOWN_TICKER: '종목을 찾을 수 없습니다',
-  NOT_CONFIGURED: '데이터 제공에 필요한 API 키가 설정되지 않았습니다',
-  RATE_LIMITED: '요청이 많아 잠시 후 다시 시도해 주세요',
-  UNAVAILABLE: '해당 종목의 데이터가 없습니다',
-  UPSTREAM_ERROR: '데이터 제공처 응답 오류로 불러오지 못했습니다',
-};
-
 type ErrorStateProps = {
   code?: string;
   message?: string;
@@ -81,9 +74,9 @@ type ErrorStateProps = {
 
 export function ErrorState({ code, message, provider, occurredAt: providedOccurredAt, onRetry }: ErrorStateProps) {
   const notFound = code === 'UNKNOWN_TICKER';
-  const resolvedMessage = message
-    ?? (code && ERROR_MESSAGES[code])
-    ?? '데이터를 불러오지 못했습니다';
+  // Always explain what failed, why, and what to do — never a bare code.
+  const described = describeError(code ?? null, { message });
+  const resolvedMessage = described.title;
   const [occurredAt, setOccurredAt] = useState(() => providedOccurredAt ?? new Date().toISOString());
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
@@ -117,7 +110,8 @@ export function ErrorState({ code, message, provider, occurredAt: providedOccurr
       ) : (
         <AlertCircle className="h-7 w-7 text-warning" />
       )}
-      <div className="text-sm font-medium">{resolvedMessage}</div>
+      <div className="text-sm font-medium" data-error-code={described.code ?? undefined}>{resolvedMessage}</div>
+      <p className="max-w-md break-keep px-4 text-xs leading-5 text-muted-foreground">{described.reason} {described.action}</p>
       {(onRetry || !notFound) && (
         <div className="flex flex-wrap items-center justify-center gap-2">
           {onRetry && (
