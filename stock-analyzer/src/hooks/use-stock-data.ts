@@ -137,16 +137,6 @@ export function useQuotes(tickers: string[]) {
 	});
 }
 
-export function useOverview(ticker: string) {
-	return useQuery({
-		queryKey: ['overview', ticker],
-		queryFn: () => api.overview(ticker),
-		enabled: ticker.trim().length > 0,
-		staleTime: STALE.quote,
-		retry,
-	});
-}
-
 export function useChart(ticker: string, tf: Timeframe, enabled: boolean) {
 	const interval = chartRefetchInterval(tf);
 
@@ -198,20 +188,6 @@ export function useDisclosures(ticker: string, enabled: boolean) {
 		queryFn: () => api.disclosures(ticker),
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.disclosures,
-		refetchInterval: enabled ? 60 * 1000 : false,
-		refetchIntervalInBackground: false,
-		refetchOnWindowFocus: true,
-		refetchOnReconnect: true,
-		retry,
-	});
-}
-
-export function useSignals(ticker: string, enabled: boolean) {
-	return useQuery({
-		queryKey: ['signals', ticker],
-		queryFn: () => api.signals(ticker),
-		enabled: enabled && ticker.trim().length > 0,
-		staleTime: STALE.signals,
 		refetchInterval: enabled ? 60 * 1000 : false,
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,

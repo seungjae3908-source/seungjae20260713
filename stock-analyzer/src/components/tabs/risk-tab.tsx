@@ -1,3 +1,4 @@
+import { errorCodeOf } from '@/lib/error-reason';
 import { useState } from 'react';
 import { ExternalLink, X } from 'lucide-react';
 import { Panel, Bar } from '@/components/ui-bits';
@@ -6,7 +7,7 @@ import { LoadingState, ErrorState } from '@/components/data-state';
 import { useRisk } from '@/hooks/use-stock-data';
 import { RISK_KO, riskTone, toneBadge, type Tone } from '@/lib/labels';
 import { cn } from '@/lib/utils';
-import { ApiError, type RiskEvent, type RiskEventStatus } from '@/lib/api';
+import { type RiskEvent, type RiskEventStatus } from '@/lib/api';
 
 const STATUS_META: Record<
 	Exclude<RiskEventStatus, 'IGNORED'>,
@@ -168,7 +169,7 @@ export function RiskTab({ ticker, active }: { ticker: string; active: boolean })
 
 	if (isLoading) return <LoadingState />;
 	if (isError || !data)
-		return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
+		return <ErrorState code={errorCodeOf(error) ?? undefined} onRetry={() => refetch()} />;
 
 	const events = data.events ?? [];
 	const grouped = STATUS_ORDER.map((status) => ({

@@ -28,11 +28,13 @@ test.describe('query identity isolation contract', () => {
       "queryKey: ['financials', ticker]",
       "queryKey: ['risk', ticker]",
       "queryKey: ['disclosures', ticker]",
-      "queryKey: ['signals', ticker]",
       "queryKey: ['news', ticker]",
       "queryKey: ['analysis', ticker]",
     ]) {
       expect(source).toContain(contract);
     }
+    // The signals query was removed with its client (the server has no
+    // /stocks/:ticker/signals route); it must not come back without a key.
+    expect(source).not.toMatch(/queryKey: \['signals'(?!, ticker\])/);
   });
 });
