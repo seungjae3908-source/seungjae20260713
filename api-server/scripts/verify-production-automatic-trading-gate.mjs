@@ -579,8 +579,10 @@ const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.se
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 48
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 48
+// Owner-approved 2026-10-17 (PR #1933): the crypto scanner moves into this exact
+// full-review list because its changes regenerate the automatic signal bundle.
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 50
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 50
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
