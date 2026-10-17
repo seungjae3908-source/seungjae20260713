@@ -43,6 +43,8 @@ export function resolveAutoRun(status: TradeAutomationStatus | null): AutoRun | 
   if (!status) return null;
   if (status.autoRun) return status.autoRun;
   const policy = status.policy;
+  // A malformed or partial payload (no policy) must not crash the page; treat it as unknown.
+  if (!policy) return null;
   const switchOn = switchOnFromPolicy(policy);
   const state: AutoRunState = policy.emergencyStopped || policy.newEntriesStopped ? 'KILL_SWITCH'
     : !switchOn ? 'STOPPED' : status.emergencyStopped ? 'GLOBAL_STOP' : 'RUNNING';
@@ -57,7 +59,7 @@ export function resolveAutoRun(status: TradeAutomationStatus | null): AutoRun | 
     perOrderApprovalRequired: false,
     orderMethod: state === 'RUNNING' ? 'AUTOMATIC_WHILE_RUNNING' : 'STOPPED',
     markets: Object.fromEntries(MARKETS.map((market) => [market, {
-      enabled: Boolean(policy.marketEnabled?.[market]) && policy.exchangeEnabled[exchanges[market]] === true,
+      enabled: Boolean(policy.marketEnabled?.[market]) && policy.exchangeEnabled?.[exchanges[market]] === true,
       exchange: exchanges[market],
       lane: 'paper' as const,
       liveConfirmed: false,
