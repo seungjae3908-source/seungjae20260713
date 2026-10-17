@@ -18,15 +18,6 @@ export const SCANNER_REPAIR_INTEGRATION_BLOBS = Object.freeze({
   'stock-analyzer/src/lib/signal-scanner.ts': '74e76587563b7a3373a90a3ab8a2b8f0593c2940',
   'stock-analyzer/src/lib/scanner-request.test.ts': 'a9df28952560e7ed63d2adfba30b85c9b8b015ec',
 });
-// Owner-approved manual Paper removal (2026-10-17): these two scanner page
-// blobs drop the manual Paper order-preparation panel. They are reviewed and
-// pinned by the market-scope block of the Paper Forward validation (with both
-// Trading guards and the gate verifier), so only these exact bytes leave the
-// immutable repair classification. Any other edit restores the full gate.
-export const SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS = Object.freeze({
-  'stock-analyzer/e2e/signal-scanner.spec.ts': '1ebd190966214a0caac212984c5912e6be2f951d',
-  'stock-analyzer/src/pages/signal-scanner.tsx': 'f8c627431f6e646720b74e882a85222d197afc91',
-});
 export const SCANNER_REPAIR_PINNED_PATHS = Object.freeze([
   "api-server/package.json",
   "api-server/scripts/ai-preview-diagnostic-contract.mjs",
@@ -130,12 +121,9 @@ export function verifyPinnedScannerScope(changed, base, readBlob) {
   // newer full automatic-trading review. Exact pipeline paths fall through to
   // the mandatory Production guards instead of being misclassified as a
   // byte-identical historical repair.
-  const candidates = changed.filter(path => pinned.has(path) && !fullAutomaticReview.has(path));
-  if (!candidates.length) return [];
-  if (!/^[0-9a-f]{40}$/u.test(base ?? '')) throw new Error('SCANNER_SCOPE_BASE_REQUIRED');
-  const scanner = candidates.filter(path => !(Object.hasOwn(SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS, path)
-    && readBlob('HEAD', path) === SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS[path]));
+  const scanner = changed.filter(path => pinned.has(path) && !fullAutomaticReview.has(path));
   if (!scanner.length) return [];
+  if (!/^[0-9a-f]{40}$/u.test(base ?? '')) throw new Error('SCANNER_SCOPE_BASE_REQUIRED');
   for (const path of scanner) {
     const verifiedSourceBlob = readBlob(SCANNER_REPAIR_SOURCE_SHA, path);
     const reviewedMainMerge = base === SCANNER_REPAIR_INTEGRATION_BASE_SHA
