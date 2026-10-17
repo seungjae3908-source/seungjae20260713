@@ -69,6 +69,15 @@ on:
       - api-server/src/routes/market-information.ts
       - api-server/src/routes/stocks.ts
       - stock-analyzer/e2e/market-information-timeout-contract.spec.ts
+      - api-server/src/services/trade-automation-run-control.service.test.ts
+      - api-server/src/services/trade-automation-run-control.service.ts
+      - api-server/src/services/trade-kill-switch.service.ts
+      - api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql
+      - api-server/supabase/migrations/2026101701_trade_automation_run_control.sql
+      - stock-analyzer/e2e/detail-auto-ui-compact.spec.ts
+      - stock-analyzer/e2e/scanner-chart-broadcast.spec.ts
+      - stock-analyzer/src/components/auto-trading-run-control.tsx
+      - stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx
       - signal-intelligence-v3/README.md
       - signal-intelligence-v3/ARCHITECTURE.md
       - signal-intelligence-v3/scripts/diagnose-public-providers.ts
@@ -524,8 +533,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 48 or len(set(auto_signal)) != 48:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_48')
+          if len(auto_signal) != 50 or len(set(auto_signal)) != 50:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_50')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -561,7 +570,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 48
+          test "${#auto_signal[@]}" -eq 50
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
@@ -590,25 +599,29 @@ jobs:
           # kept and named 모의매매 (2026-10-17). Exact UI/spec blobs and BOTH
           # Trading guards are pinned; the gate verifier must pass. Paper safety
           # is unchanged.
+          # Owner re-pinned 2026-10-17 (PR #1928): the four UI/spec blobs below
+          # are the run-button versions; the holdings panel keeps its own exact
+          # pin and must stay unchanged.
           market_scope_ui=(
             stock-analyzer/src/pages/auto-trading.tsx
             stock-analyzer/src/components/trade-automation-settings.tsx
             stock-analyzer/e2e/phase12-trade-automation.spec.ts
             stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts
-            stock-analyzer/src/components/trading-holdings-panel.tsx
           )
           market_scope_expected=(
-            090b773f868269e810051a4dc794a72988759e4a
-            218b2102d6f68e59ddc2e5054fbdabf2add6772d
-            47c4d4fb698a237b31d34b2f2468ca00491d9b80
-            602a523599f004fd346f6ded8305c9672e7047c0
-            d2a8de70e6ac11198fa3ed5bf99664e323e4f303
+            de178653e68ac0dce5fbf631fc12e203977712e1
+            910906461d29a31fa72659fd91784362b03e7b4a
+            05f59589197111d0961af67bc39c3f3aa88a6987
+            6d0939b3cafc0fb34eb1b110bab2c2bbacdf6d3d
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
             printf '%s\n' "${market_scope_ui[@]}" | grep -Fx "$path" >/dev/null && market_scope_requested=true
           done
           if [[ "$market_scope_requested" == true ]]; then
+            [[ "$(git rev-parse HEAD:stock-analyzer/src/components/trading-holdings-panel.tsx)" == "d2a8de70e6ac11198fa3ed5bf99664e323e4f303" ]] || {
+              echo "MARKET_SCOPE_UI_BLOB_DRIFT:stock-analyzer/src/components/trading-holdings-panel.tsx" >&2; exit 1;
+            }
             for i in "${!market_scope_ui[@]}"; do
               path="${market_scope_ui[$i]}"
               printf '%s\n' "${changed[@]}" | grep -Fx "$path" >/dev/null || {
@@ -623,8 +636,8 @@ jobs:
               api-server/scripts/verify-production-automatic-trading-gate.mjs
             )
             market_scope_guard_expected=(
-              0c34f5bd57a36048fc2bb56694a7fec76009dc7a
-              a6c8fbb9a5457961c50b04198f0e5a673dd2c0f2
+              4be3074430fd04fcc58f29c3c73ac0aba119387e
+              cc1180c0e9b690890e200e9879404e405f9d55a3
             )
             for i in "${!market_scope_guards[@]}"; do
               path="${market_scope_guards[$i]}"
@@ -691,7 +704,7 @@ jobs:
             }
             if [[ "$path" == stock-analyzer/* ]]; then
               case "$path" in
-                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/e2e/market-information-timeout-contract.spec.ts) ;;
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/e2e/market-information-timeout-contract.spec.ts|stock-analyzer/e2e/detail-auto-ui-compact.spec.ts|stock-analyzer/e2e/scanner-chart-broadcast.spec.ts|stock-analyzer/src/components/auto-trading-run-control.tsx|stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx) ;;
                 *)
                   if ! printf '%s\n' "${research_batch[@]}" "${scanner_repair[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \

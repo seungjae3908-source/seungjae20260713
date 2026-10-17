@@ -130,10 +130,10 @@ test('production membership denial uses the actual basic-info capability and saf
 });
 
 test('extracted Paper allowlist preserves the exact legacy set plus its own data file', () => {
-  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 277);
-  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 277);
+  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 286);
+  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 286);
   const digest = createHash('sha256').update([...PAPER_FORWARD_REVIEWED_PATHS].sort().join('\n')).digest('hex');
-  assert.equal(digest, 'ebeaef3d3d360b4145f77b104e73ea94b39342f68104eeb3f815e48c8bd5a16b');
+  assert.equal(digest, 'aff170fe6c337a31d9776281c62a43ece547ef005daaed378b602b5acf6d7768');
   for (const path of PAPER_FORWARD_REVIEWED_PATHS) assert.ok(!path.includes('*') && !path.includes('..'));
 });
 
@@ -167,11 +167,11 @@ test('owner-approved AUTO safety registration is exactly the 52 approved paths, 
 
 test('automatic signal pipeline scope is exact and receives full Trading review instead of Scanner repair status', () => {
   const paths = AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS;
-  assert.equal(paths.length, 48);
-  assert.equal(new Set(paths).size, 48);
+  assert.equal(paths.length, 50);
+  assert.equal(new Set(paths).size, 50);
   assert.deepEqual(paths, [...paths].sort());
   assert.equal(createHash('sha256').update(paths.join('\n')).digest('hex'),
-    'cc17ff5e34257a263b8c12c6a13efaaba018eace46881a7c70e729354dd753af');
+    '6707ff2db3441d2f6d1744b17d8d3383c7a1fa367c92781c247703e6cb358b69');
   assert.equal(Object.isFrozen(paths), true);
   const generatedRuntimeOutputs = new Set([
     'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
@@ -217,7 +217,7 @@ test('registered AUTO paths retain Trading, protected-main and Paper assertions 
     assert.ok(researchTrigger.includes(path), path);
   }
   for (const token of ["'--list-auto-live-safety'", 'test "${#auto_safety[@]}" -eq 52',
-    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 48',
+    "'--list-auto-signal-pipeline'", 'test "${#auto_signal[@]}" -eq 50',
     'allowed+=("${auto_safety[@]}")', 'allowed+=("${auto_signal[@]}")',
     'echo "unexpected path: $path"', 'echo "Unexpected Paper-facing UI change: $path"']) {
     assert.ok(workflow.includes(token), token);

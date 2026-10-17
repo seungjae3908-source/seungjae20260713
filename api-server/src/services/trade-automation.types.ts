@@ -454,3 +454,30 @@ export type StoredTradingState = {
   orders: TradingOrder[];
   events: TradingOrderEvent[];
 };
+
+/**
+ * Per-member automatic-trading run control (작동/정지).
+ * "Running" itself is derived from the persisted policy
+ * (mode=automatic && automaticEnabled && no member stop); this record keeps
+ * why/when it last changed and which LIVE markets the member already
+ * acknowledged run without per-order approval.
+ */
+export type AutoRunAction = 'RUN' | 'STOP' | 'AUTO_STOP' | 'KILL_SWITCH';
+
+export type AutoRunControl = {
+  liveConfirmedMarkets: TradingAssetClass[];
+  lastAction: AutoRunAction | null;
+  lastReason: string | null;
+  changedAt: string | null;
+};
+
+export type AutoRunAuditEntry = {
+  id: string;
+  userId: string;
+  action: AutoRunAction;
+  reason: string | null;
+  actor: 'member' | 'system';
+  liveMarkets: TradingAssetClass[];
+  paperMarkets: TradingAssetClass[];
+  createdAt: string;
+};

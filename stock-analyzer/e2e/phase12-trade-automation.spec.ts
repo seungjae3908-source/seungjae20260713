@@ -61,8 +61,10 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('trading-market-select')).toBeVisible();
 
     const safetySummary = page.getByTestId('auto-trading-safety-summary');
-    await expect(safetySummary).toContainText('주문별 승인');
-    await expect(safetySummary).toContainText('불필요');
+    await expect(safetySummary).toContainText('주문 방식');
+    await expect(safetySummary).toContainText('정지됨');
+    await expect(page.getByTestId('auto-trading-run-toggle')).toBeVisible();
+    await expect(page.getByTestId('auto-trading-kill-switch')).toBeVisible();
     await expect(safetySummary).toContainText('4시장');
     await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
 
@@ -434,4 +436,68 @@ test('auto-trading rehearsal tab proves the safe four-market chain and displays 
     telegramReady: true,
   });
   expect(forbiddenTradingMutations).toEqual([]);
+});
+
+test('작동 runs automatic trading without per-order approval and 정지 stops it', async ({ page }) => {
+  const failures = captureBrowserFailures(page);
+  const approvalRequests: string[] = [];
+  page.on('request', (request) => {
+    if (/\/api\/trade-automation\/plans\/[^/]+\/(approve|approval-status)/u.test(new URL(request.url()).pathname)) {
+      approvalRequests.push(request.url());
+    }
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase12-trade-automation-e2e');
+  const toggle = page.getByTestId('auto-trading-run-toggle');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(toggle).toHaveText(/작동/);
+  await expect(page.getByTestId('auto-trading-run-lane-crypto_futures')).toContainText('모의');
+
+  await toggle.click();
+  // Paper-only markets: no LIVE dialog.
+  await expect(page.getByRole('dialog', { name: '실거래 자동 작동 확인' })).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('auto-trading-run-state')).toHaveText('작동 중 자동 실행');
+  await expect(page.getByTestId('auto-trading-safety-summary')).toContainText('작동 중 자동 실행');
+  await expect(page.getByTestId('auto-trading-run-lane-crypto_futures')).toContainText('모의');
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('auto-trading-run-state')).toHaveText('정지됨');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  expect(approvalRequests).toEqual([]);
+  expectNoBrowserFailures(failures);
+});
+
+test('first 작동 with a LIVE market asks once that orders go out without per-order approval', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e?liveMarket=crypto_futures');
+  await expect(page.getByTestId('auto-trading-run-lane-crypto_futures')).toContainText('실거래');
+  const toggle = page.getByTestId('auto-trading-run-toggle');
+  await toggle.click();
+  const dialog = page.getByRole('dialog', { name: '실거래 자동 작동 확인' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('코인선물');
+  await expect(dialog).toContainText('주문별 승인 없이 실제 주문이 자동으로 전송됩니다');
+  await dialog.getByRole('button', { name: '취소' }).click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+  await toggle.click();
+  await page.getByTestId('auto-trading-run-live-confirm').click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await toggle.click();
+  await toggle.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('모든 자동매매 즉시 정지 stops every market and requires resume', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('auto-trading-run-toggle').click();
+  await page.getByTestId('auto-trading-kill-switch').click();
+  await expect(page.getByTestId('auto-trading-run-state')).toHaveText('즉시정지됨');
+  await expect(page.getByTestId('auto-trading-run-toggle')).toHaveCount(0);
+  await expect(page.getByTestId('auto-trading-run-resume')).toBeVisible();
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    await expect(page.getByTestId(`auto-trading-run-lane-${market}`)).toContainText('꺼짐');
+  }
 });

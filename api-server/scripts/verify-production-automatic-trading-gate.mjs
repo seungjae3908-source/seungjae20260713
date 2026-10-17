@@ -579,12 +579,14 @@ const scannerQuantTest = read('api-server/src/services/scanner-quant-strategy.se
 const scannerScope = read('.github/scripts/scanner-readonly-repair-scope.mjs');
 const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 48
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 48
+// Owner-approved 2026-10-17 (PR #1933): the crypto scanner moves into this exact
+// full-review list because its changes regenerate the automatic signal bundle.
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 50
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 50
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== 'cc17ff5e34257a263b8c12c6a13efaaba018eace46881a7c70e729354dd753af') {
+    !== '6707ff2db3441d2f6d1744b17d8d3383c7a1fa367c92781c247703e6cb358b69') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
@@ -640,6 +642,10 @@ requireText(stockSignalScanner, 'backtests: request.backtests', 'AUTO_GATE_SCANN
 // Owner-approved 2026-10-17 (PR #1925): the scan deadline is derived from the
 // route budget so the route never times out before partial results return.
 requireText(stockSignalScanner, 'deadlineMs: stockScannerScanDeadlineMs(', 'AUTO_GATE_SCANNER_ROUTE_BUDGET_BINDING_MISSING');
+// Owner-approved 2026-10-17 (PR #1928): the run button starts automatic orders
+// without per-order approval, but a market on a LIVE lane still needs explicit confirmation.
+requireText(read('api-server/src/services/trade-automation-run-control.service.ts'),
+  "'AUTO_RUN_LIVE_CONFIRMATION_REQUIRED'", 'AUTO_GATE_RUN_CONTROL_LIVE_CONFIRMATION_MISSING');
 requireText(scannerCandidateRanking,
   'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
