@@ -56,6 +56,10 @@ import {
   automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
   deriveFourMarketPaperExecutionPolicy,
+  automaticLiveMarketScope,
+  automaticLiveScopeIsAllFour,
+  automaticPolicyHasMarketScope,
+  liveScopedConnectionVerificationReady,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -3104,3 +3108,154 @@ test('automatic Paper worker persists cost-policy tax/fee/FX receipts while miss
     else process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = prior;
   }
 });
+
+// ---------- owner-approved per-market automatic LIVE scope ----------
+
+const LIVE_KEYS = [
+  'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+  'AUTO_TRADING',
+  'LIVE_AUTOMATIC_TRADING_ENABLED',
+  'LIVE_TRADING',
+  'REAL_ORDER_ENABLED',
+  'PRIVATE_TRADING_API_ALLOWED',
+] as const;
+
+async function withLiveScope<T>(scope: string | undefined, run: () => Promise<T>) {
+  const keys = [...LIVE_KEYS, 'MEMBER_AUTO_TRADING_LIVE_MARKETS'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of LIVE_KEYS) process.env[key] = 'true';
+    if (scope === undefined) delete process.env.MEMBER_AUTO_TRADING_LIVE_MARKETS;
+    else process.env.MEMBER_AUTO_TRADING_LIVE_MARKETS = scope;
+    return await run();
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function futuresOnlyPolicy(): TradingPolicy {
+  return normalizeTradingPolicy({
+    ...policy(),
+    pilotStage: 'validated',
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: true },
+    exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
+  });
+}
+
+test('unset live market scope keeps the historical four-market activation', () => {
+  assert.deepEqual([...automaticLiveMarketScope({})], ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']);
+  assert.deepEqual([...automaticLiveMarketScope({ MEMBER_AUTO_TRADING_LIVE_MARKETS: '  ' })], ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']);
+  assert.equal(automaticLiveScopeIsAllFour(automaticLiveMarketScope({})), true);
+  // Full scope delegates to the unchanged all-four policy check.
+  assert.equal(automaticPolicyHasMarketScope(allFourPolicy(), automaticLiveMarketScope({})), true);
+  assert.equal(automaticPolicyHasMarketScope(policy(), automaticLiveMarketScope({})), false);
+});
+
+test('malformed live market scope fails closed with an empty scope', () => {
+  for (const raw of ['CRYPTO_FUTURES,CRYPTO_FUTURES', 'FUTURES', 'CRYPTO_FUTURES,BOGUS', ',']) {
+    const scope = automaticLiveMarketScope({ MEMBER_AUTO_TRADING_LIVE_MARKETS: raw });
+    assert.deepEqual([...scope], [], raw);
+    assert.equal(automaticPolicyHasMarketScope(allFourPolicy(), scope), false);
+  }
+  assert.deepEqual([...automaticLiveMarketScope({ MEMBER_AUTO_TRADING_LIVE_MARKETS: 'crypto_futures, crypto_spot' })], ['CRYPTO_SPOT', 'CRYPTO_FUTURES']);
+});
+
+test('scoped policy and connection readiness only require the scoped markets and providers', () => {
+  const nowMs = Date.now();
+  const scope = automaticLiveMarketScope({ MEMBER_AUTO_TRADING_LIVE_MARKETS: 'CRYPTO_FUTURES' });
+  assert.equal(automaticPolicyHasMarketScope(futuresOnlyPolicy(), scope), true);
+  assert.equal(automaticPolicyHasMarketScope(policy(), scope), false, 'futures disabled in the member policy');
+  const connection = (exchange: ExchangeConnection['exchange'], overrides: Partial<ExchangeConnection> = {}): ExchangeConnection => ({
+    userId: USER,
+    exchange,
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: 'encrypted',
+    lastVerifiedAt: new Date(nowMs - 60_000).toISOString(),
+    lastErrorCode: null,
+    updatedAt: new Date(nowMs - 60_000).toISOString(),
+    ...overrides,
+  });
+  // Only Bitget is needed for a futures-only scope; Toss/Kiwoom/Upbit are never required.
+  assert.equal(liveScopedConnectionVerificationReady(futuresOnlyPolicy(), [connection('bitget')], scope, nowMs), true);
+  assert.equal(liveScopedConnectionVerificationReady(futuresOnlyPolicy(), [], scope, nowMs), false);
+  assert.equal(liveScopedConnectionVerificationReady(futuresOnlyPolicy(), [connection('bitget', { lastErrorCode: 'AUTH_REVOKED' })], scope, nowMs), false);
+  // The full scope keeps the four-provider requirement.
+  assert.equal(liveScopedConnectionVerificationReady(allFourPolicy(), [connection('bitget')], automaticLiveMarketScope({}), nowMs), false);
+});
+
+test('scoped live activation never evaluates an automatic entry outside the owner scope', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const memberPolicy = normalizeTradingPolicy({ ...allFourPolicy() });
+  await repository.savePolicy(USER, memberPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{ userId: USER, policy: memberPolicy, profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true } }];
+    },
+  });
+  // The fixture handoff carries a CRYPTO_SPOT entry; the scope opens futures only.
+  const result = await withLiveScope('CRYPTO_FUTURES', () => withFetchMock(() => worker.runOnce(new Date(nowMs))));
+  assert.deepEqual([...result.liveMarketScope], ['CRYPTO_FUTURES']);
+  assert.ok(result.entries > 0);
+  assert.equal(result.liveEntriesOutsideMarketScope, result.entries);
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.livePlans, 0);
+});
+
+test('futures-only scope completes live warmup with a futures member without stock or spot markets', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const memberPolicy = futuresOnlyPolicy();
+  await repository.savePolicy(USER, memberPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{ userId: USER, policy: memberPolicy, profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true } }];
+    },
+  });
+  const result = await withLiveScope('CRYPTO_FUTURES', () => withFetchMock(() => worker.runOnce(new Date(nowMs))));
+  assert.equal(result.liveAllFourPolicyReadyMembers, 0, 'not an all-four member');
+  assert.equal(result.liveScopedPolicyReadyMembers, 1);
+  assert.equal(result.liveCycleScopedPolicyReady, true);
+  assert.equal(result.liveEntryWarmupComplete, true);
+  // The same member under the historical ALL4 scope still cannot warm up.
+  const worker4 = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{ userId: USER, policy: memberPolicy, profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true } }];
+    },
+  });
+  const all4 = await withLiveScope(undefined, () => withFetchMock(() => worker4.runOnce(new Date(nowMs))));
+  assert.equal(all4.liveEntryWarmupComplete, false);
+  assert.equal(all4.liveCycleScopedPolicyReady, false);
+});
+
+test('a scoped witness that fails revalidation drops the scoped warmup', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const memberPolicy = futuresOnlyPolicy();
+  await repository.savePolicy(USER, memberPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const calls: string[][] = [];
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{ userId: USER, policy: memberPolicy, profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true } }];
+    },
+    async revalidateLiveScopedReadiness(_userId, scope) { calls.push([...scope]); return false; },
+  });
+  const result = await withLiveScope('CRYPTO_FUTURES', () => withFetchMock(() => worker.runOnce(new Date(nowMs))));
+  assert.deepEqual(calls, [['CRYPTO_FUTURES']]);
+  assert.equal(result.liveCycleScopedPolicyReady, false);
+  assert.equal(result.liveEntryWarmupComplete, false);
+});
+

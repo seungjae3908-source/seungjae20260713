@@ -131,7 +131,8 @@ for (const [input, token, code] of [
   [autoTradingPage, 'const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync', 'AUTO_PAPER_HOLDINGS_MEMBER_AUTH_REQUIRED'],
   [autoTradingPage, 'autoPaperRuntimeReadiness?.paperWalletReady === true', 'AUTO_PAPER_HOLDINGS_WALLET_PROOF_REQUIRED'],
   [autoTradingPage, 'autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true', 'AUTO_PAPER_HOLDINGS_DB_PROOF_REQUIRED'],
-  [autoTradingPage, "paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable", 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
+  // Manual Paper was removed: Paper holdings only follow the automatic proofs.
+  [autoTradingPage, 'const paperHoldingsReadAllowed = automaticPaperHoldingsReadable;', 'AUTO_PAPER_HOLDINGS_MANUAL_SEPARATION_REQUIRED'],
   [autoTradingPage, "enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}", 'AUTO_PAPER_HOLDINGS_READ_GATE_REQUIRED'],
   [holdingsPanel, 'const snapshots = enabled ? query.data?.snapshots : undefined;', 'AUTO_PAPER_HOLDINGS_CACHED_SCOPE_GUARD_REQUIRED'],
   [holdingsPanel, 'enabled: enabled && fixture == null', 'AUTO_PAPER_HOLDINGS_QUERY_DISABLED_REQUIRED'],
@@ -338,7 +339,7 @@ requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_G
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
 requireText(workflow, 'REAL_ORDER_SUBMITTED=false', 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
 requireText(workflow, 'REAL_ORDER_SUBMITTED_BY_GATE: false', 'AUTO_GATE_IDEMPOTENT_GATE_ORDER_RECEIPT_MISSING');
-const idempotentActivation = workflow.match(/status: 'ALREADY_ACTIVATED_ALL4'[\s\S]*?process\.exit\(0\);/u)?.[0] ?? '';
+const idempotentActivation = workflow.match(/status: allFourScope \? 'ALREADY_ACTIVATED_ALL4' : 'ALREADY_ACTIVATED_SCOPED'[\s\S]*?process\.exit\(0\);/u)?.[0] ?? '';
 requireText(idempotentActivation, 'REAL_ORDER_SUBMITTED_BY_GATE: false', 'AUTO_GATE_IDEMPOTENT_GATE_ORDER_RECEIPT_DRIFT');
 forbid(idempotentActivation, /REAL_ORDER_SUBMITTED:\s*false/u, 'AUTO_GATE_IDEMPOTENT_GLOBAL_ORDER_CLAIM_FORBIDDEN');
 requireText(workflow, 'const preservedManualRuntimeEnv = (env) => ({', 'AUTO_GATE_RESTART_PRESERVED_MANUAL_ENV_MISSING');
@@ -663,7 +664,35 @@ requireText(tradeService, 'input.signalOccurrenceId.trim()', 'AUTO_GATE_SIGNAL_O
 requireText(tradeIntegrationTest,
   'validated signal occurrences are idempotent within one event and allow a later repeat opportunity',
   'AUTO_GATE_REPEAT_OPPORTUNITY_REGRESSION_MISSING');
-requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
+requireText(paperWorker, '&& (liveScopeAllFour ? this.liveCycleAllFourPolicyReadySeen : this.liveCycleScopedPolicyReadySeen);', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
+// Owner-approved per-market scope (MEMBER_AUTO_TRADING_LIVE_MARKETS): unset =
+// historical ALL4, malformed = empty scope (fail closed), entries outside the
+// scope never reach live order evaluation, scoped warmup needs a scoped witness.
+for (const token of [
+  "const raw = env.MEMBER_AUTO_TRADING_LIVE_MARKETS;",
+  "if (raw === undefined || raw.trim() === '') return AUTOMATIC_LIVE_MARKETS;",
+  "|| tokens.some((token) => !(AUTOMATIC_LIVE_MARKETS as readonly string[]).includes(token))) return Object.freeze([]);",
+  "if (liveModeRequested && !liveMarketScope.includes(entry.identity.market)) {",
+  "result.liveEntriesOutsideMarketScope += 1;",
+  "if (automaticLiveScopeIsAllFour(scope)) return automaticPolicyHasAllFourMarkets(policy);",
+  "if (automaticLiveScopeIsAllFour(scope)) return this.revalidateLiveAllFourReadiness(userId);",
+  "&& this.source.revalidateLiveScopedReadiness) {",
+]) requireText(paperWorker, token, 'AUTO_GATE_WORKER_MARKET_SCOPE_MISSING');
+for (const token of [
+  "(all4|(?:kr|us|spot|futures)(?:,(?:kr|us|spot|futures)){0,3})$/u",
+  "throw new Error('AUTOMATIC_TRADING_MARKET_SCOPE_INVALID');",
+  "throw new Error('AUTOMATIC_TRADING_MARKET_SCOPE_BINDING_INVALID');",
+  "MEMBER_AUTO_TRADING_LIVE_MARKETS: enabled ? scopeCsv : '',",
+  "MEMBER_AUTO_TRADING_LIVE_MARKETS: '',",
+  "health.liveMarketScope.join(',') === scopeCsv)",
+  "kinds,",
+]) requireText(workflow, token, 'AUTO_GATE_WORKFLOW_MARKET_SCOPE_MISSING');
+for (const token of [
+  'unset live market scope keeps the historical four-market activation',
+  'malformed live market scope fails closed with an empty scope',
+  'scoped live activation never evaluates an automatic entry outside the owner scope',
+  'futures-only scope completes live warmup with a futures member without stock or spot markets',
+]) requireText(paperWorkerTest, token, 'AUTO_GATE_WORKER_MARKET_SCOPE_TEST_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
@@ -829,6 +858,8 @@ forbid(legacyCryptoRoute, /type MarginMode =[^\n]*crossed/, 'LEGACY_CRYPTO_CROSS
 console.log(JSON.stringify({
   ok: true,
   scope: 'ALL4',
+  // Per-market activation (e.g. futures only) uses the same gate with a server-enforced scope.
+  scopedActivationSupported: true,
   markets: ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'],
   providers: ['toss', 'kiwoom', 'upbit', 'bitget'],
   activationSubmitsOrder: false,
