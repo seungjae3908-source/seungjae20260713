@@ -3,7 +3,10 @@ import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supab
 import {
   DEFAULT_TRADING_POLICY,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  type AutoRunAuditEntry,
+  type AutoRunControl,
   type ExchangeConnection,
+  type TradingAssetClass,
   type TradingExchange,
   type TradingOrder,
   type TradingOrderEvent,
@@ -60,6 +63,38 @@ export interface TradingRepository {
   listEvents(userId: string): Promise<TradingOrderEvent[]>;
   /** Account-owned scoped replay, without a user-wide 1,000-event truncation. */
   listEventsForOrder?(userId: string, orderId: string): Promise<TradingOrderEvent[]>;
+  /** Automatic run (작동/정지) metadata; absent storage reads as the default record. */
+  getRunControl?(userId: string): Promise<AutoRunControl>;
+  saveRunControl?(userId: string, control: AutoRunControl): Promise<void>;
+  /** Server-written audit trail for run/stop/auto-stop/kill-switch. */
+  appendRunAudit?(entry: AutoRunAuditEntry): Promise<void>;
+  listRunAudit?(userId: string, limit: number): Promise<AutoRunAuditEntry[]>;
+}
+
+export const DEFAULT_AUTO_RUN_CONTROL: AutoRunControl = Object.freeze({
+  liveConfirmedMarkets: [] as TradingAssetClass[],
+  lastAction: null,
+  lastReason: null,
+  changedAt: null,
+}) as AutoRunControl;
+
+const AUTO_RUN_ASSET_CLASSES: readonly TradingAssetClass[] = ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures'];
+const AUTO_RUN_ACTIONS = ['RUN', 'STOP', 'AUTO_STOP', 'KILL_SWITCH'] as const;
+
+function autoRunMarkets(value: unknown): TradingAssetClass[] {
+  if (!Array.isArray(value)) return [];
+  return AUTO_RUN_ASSET_CLASSES.filter((market) => value.includes(market));
+}
+
+export function normalizeAutoRunControl(value: unknown): AutoRunControl {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const action = (AUTO_RUN_ACTIONS as readonly unknown[]).includes(row.lastAction) ? row.lastAction as AutoRunControl['lastAction'] : null;
+  return {
+    liveConfirmedMarkets: autoRunMarkets(row.liveConfirmedMarkets),
+    lastAction: action,
+    lastReason: typeof row.lastReason === 'string' ? row.lastReason.slice(0, 120) : null,
+    changedAt: typeof row.changedAt === 'string' && Number.isFinite(Date.parse(row.changedAt)) ? row.changedAt : null,
+  };
 }
 
 function copy<T>(value: T): T {
@@ -117,6 +152,15 @@ export class InMemoryTradingRepository implements TradingRepository {
   private executionClaims = new Map<string, { id: string; claimedAt: number }>();
   private budgetHolds = new Map<string, AutomaticLiveBudgetCharge>();
   private budgetQueues = new Map<string, Promise<void>>();
+  private runControls = new Map<string, AutoRunControl>();
+  private runAudit: AutoRunAuditEntry[] = [];
+
+  async getRunControl(userId: string) { return copy(this.runControls.get(userId) ?? normalizeAutoRunControl(DEFAULT_AUTO_RUN_CONTROL)); }
+  async saveRunControl(userId: string, control: AutoRunControl) { this.runControls.set(userId, normalizeAutoRunControl(control)); }
+  async appendRunAudit(entry: AutoRunAuditEntry) { this.runAudit.push(copy(entry)); }
+  async listRunAudit(userId: string, limit: number) {
+    return this.runAudit.filter((entry) => entry.userId === userId).slice(-Math.max(0, limit)).reverse().map(copy);
+  }
 
   async getGlobalEmergencyStop() { return this.globalEmergencyStopped; }
   async setGlobalEmergencyStop(stopped: boolean, _changedBy: string) { this.globalEmergencyStopped = stopped; }
@@ -468,6 +512,65 @@ function createScopedTradingRepository(
       }, { onConflict: 'user_id' });
       if (error) throw databaseError();
       return policy;
+    },
+    async getRunControl(userId) {
+      owned(userId);
+      const { data, error } = await client.from('trade_automation_run_controls')
+        .select('live_confirmed_markets,last_action,last_reason,changed_at')
+        .eq('user_id', userId).maybeSingle();
+      if (error) throw new Error('AUTO_RUN_STORAGE_UNAVAILABLE');
+      return normalizeAutoRunControl(data ? {
+        liveConfirmedMarkets: data.live_confirmed_markets,
+        lastAction: data.last_action,
+        lastReason: data.last_reason,
+        changedAt: data.changed_at,
+      } : DEFAULT_AUTO_RUN_CONTROL);
+    },
+    async saveRunControl(userId, control) {
+      owned(userId);
+      const normalized = normalizeAutoRunControl(control);
+      // Server-only write: members can read but never forge their run record.
+      const { error } = await secureClient().from('trade_automation_run_controls').upsert({
+        user_id: userId,
+        live_confirmed_markets: normalized.liveConfirmedMarkets,
+        last_action: normalized.lastAction,
+        last_reason: normalized.lastReason,
+        changed_at: normalized.changedAt,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+      if (error) throw new Error('AUTO_RUN_STORAGE_UNAVAILABLE');
+    },
+    async appendRunAudit(entry) {
+      owned(entry.userId);
+      const { error } = await secureClient().from('trade_automation_run_audit').insert({
+        id: entry.id,
+        user_id: entry.userId,
+        action: entry.action,
+        reason: entry.reason,
+        actor: entry.actor,
+        live_markets: entry.liveMarkets,
+        paper_markets: entry.paperMarkets,
+        created_at: entry.createdAt,
+      });
+      if (error) throw new Error('AUTO_RUN_AUDIT_STORAGE_UNAVAILABLE');
+    },
+    async listRunAudit(userId, limit) {
+      owned(userId);
+      const { data, error } = await client.from('trade_automation_run_audit')
+        .select('id,user_id,action,reason,actor,live_markets,paper_markets,created_at')
+        .eq('user_id', userId).order('created_at', { ascending: false })
+        .limit(Math.max(1, Math.min(50, limit)));
+      if (error) throw new Error('AUTO_RUN_AUDIT_STORAGE_UNAVAILABLE');
+      return (data ?? []).map((row) => ({
+        id: String(row.id),
+        userId: String(row.user_id),
+        action: String(row.action) as AutoRunAuditEntry['action'],
+        reason: row.reason == null ? null : String(row.reason),
+        actor: row.actor === 'system' ? 'system' as const : 'member' as const,
+        liveMarkets: autoRunMarkets(row.live_markets),
+        paperMarkets: autoRunMarkets(row.paper_markets),
+        createdAt: String(row.created_at),
+      }));
     },
     async getConnections(userId) {
       owned(userId);
