@@ -150,12 +150,11 @@ function marketTrend(pivots: ConfirmedChartPivot[]): ChartMarketStructure['trend
   const latestHigh = [...pivots].reverse().find((pivot) => pivot.kind === 'high') ?? null;
   const latestLow = [...pivots].reverse().find((pivot) => pivot.kind === 'low') ?? null;
   if (!latestHigh || !latestLow) return 'insufficient';
-  const bullishHigh = latestHigh.classification === 'HH' || latestHigh.classification === 'EH';
-  const bullishLow = latestLow.classification === 'HL' || latestLow.classification === 'EL';
-  const bearishHigh = latestHigh.classification === 'LH' || latestHigh.classification === 'EH';
-  const bearishLow = latestLow.classification === 'LL' || latestLow.classification === 'EL';
-  if (bullishHigh && bullishLow) return 'bullish';
-  if (bearishHigh && bearishLow) return 'bearish';
+  const high = latestHigh.classification;
+  const low = latestLow.classification;
+  // 동일 고점(EH)·동일 저점(EL)은 한쪽만 방향을 보완할 수 있다. EH+EL(박스권)은 상승으로 보지 않는다.
+  if ((high === 'HH' && (low === 'HL' || low === 'EL')) || (high === 'EH' && low === 'HL')) return 'bullish';
+  if ((low === 'LL' && (high === 'LH' || high === 'EH')) || (low === 'EL' && high === 'LH')) return 'bearish';
   return 'mixed';
 }
 
