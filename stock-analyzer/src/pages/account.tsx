@@ -103,16 +103,19 @@ export default function AccountPage() {
       {auth.bootstrapError && <section role="alert" data-testid="account-bootstrap-error" className="mb-4 rounded-2xl border border-warning/30 bg-warning/10 p-4">
         <p className="text-sm font-bold text-warning">계정 상태를 불러오지 못했습니다.</p>
         <p className="mt-1 text-sm leading-6 text-muted-foreground">{auth.bootstrapError}</p>
+        {auth.user ? <p className="mt-1 text-xs leading-5 text-muted-foreground">로그인은 유지되어 있습니다. 아래 계정 카드에서 로그아웃·비밀번호 변경을 할 수 있으며, 승인 상태는 다시 확인 후 표시됩니다.</p> : null}
         <button type="button" onClick={() => auth.retryBootstrap()} className="mt-3 min-h-11 rounded-xl border border-warning/40 px-4 text-sm font-semibold text-warning">다시 확인</button>
       </section>}
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
-      {!auth.loading && auth.user && !auth.bootstrapError ? <Card>
+      {!auth.loading && auth.user ? <Card>
         <div className="text-center">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><ShieldCheck className="h-6 w-6" /></span>
           <p className="mt-3 text-xs font-medium text-muted-foreground">로그인 중</p>
           <p className="mt-1 truncate text-xl font-bold">{auth.displayName ?? '사용자'}</p>
-          <span data-testid="membership-label" className="mt-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-semibold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span>
+          {auth.bootstrapError && !auth.profile
+            ? <span data-testid="membership-label" className="mt-2 inline-flex rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">회원 등급 확인 실패</span>
+            : <span data-testid="membership-label" className="mt-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-semibold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span>}
         </div>
         {stateMessage && <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-warning/10 p-4 text-center text-sm font-semibold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
         {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}

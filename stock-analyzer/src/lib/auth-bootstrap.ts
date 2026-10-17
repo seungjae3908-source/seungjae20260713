@@ -1,5 +1,7 @@
 export const AUTH_SESSION_BOOTSTRAP_TIMEOUT_MS = 8_000;
-export const AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS = 8_000;
+// Member profile reads (Supabase) can be slow on a cold connection; 8s was
+// routinely exceeded in production and hid the account state.
+export const AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS = 15_000;
 export const APP_API_SESSION_TIMEOUT_MS = 8_000;
 export const APP_API_REQUEST_TIMEOUT_MS = 12_000;
 
@@ -119,7 +121,7 @@ export function authBootstrapErrorMessage(cause: unknown): string {
     return '로그인 세션 확인이 지연되고 있습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';
   }
   if (code === 'AUTH_PROFILE_TIMEOUT') {
-    return '사용자 권한 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+    return `사용자 권한 정보를 불러오지 못했습니다. 회원 정보 저장소 응답이 ${AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS / 1000}초 안에 오지 않았습니다(서버 지연). 다시 확인을 눌러 주세요.`;
   }
   return '초기 계정 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
 }
