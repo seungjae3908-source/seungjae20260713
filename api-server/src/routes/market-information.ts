@@ -22,7 +22,14 @@ export interface MarketInformationRouterOptions {
   stockWarmupDeadlineMs?: number;
 }
 
-const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 2_500;
+// Overseas providers (ranking universe, sectors, news, SEC filings) routinely
+// need 3-4s on a cold cache, so 2.5s always fell back to "unavailable" for the
+// US room. Stay at least 1.5s below the browser's 6s market-information
+// request timeout (stock-analyzer/src/lib/auth-fetch.ts).
+const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_500;
+// A last confirmed room snapshot is served (clearly marked stale) when a later
+// first paint times out, instead of blanking every card.
+const STOCK_LAST_GOOD_MAX_AGE_MS = 30 * 60_000;
 const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
 type StockRoom = Extract<MarketInformationRoomId, 'stocks-kr' | 'stocks-us'>;
@@ -116,6 +123,50 @@ function stockFirstPaintFallback(room: StockRoom): MarketInformationResponse {
   };
 }
 
+type LastGoodRoom = { result: MarketInformationResponse; storedAt: number };
+
+function isUsableRoomResult(result: MarketInformationResponse): boolean {
+  if (!result || result.ok !== true || !result.sections) return false;
+  return Object.values(result.sections).some((value) => value?.status === 'ready' || value?.status === 'partial');
+}
+
+function staleSection<T>(value: MarketInformationResponse['sections'][keyof MarketInformationResponse['sections']] & { data: T }, message: string) {
+  if (value.status !== 'ready' && value.status !== 'partial' && value.status !== 'stale') return value;
+  return {
+    ...value,
+    status: 'stale' as const,
+    meta: {
+      ...value.meta,
+      isDelayed: true,
+      isStale: true,
+      partial: true,
+      errorCode: FIRST_PAINT_TIMEOUT_CODE,
+      retryable: true,
+    },
+    message,
+  };
+}
+
+/** Last confirmed snapshot, every live section re-labelled stale with the time it was confirmed. */
+export function stockFirstPaintStaleFallback(lastGood: MarketInformationResponse, storedAt: number): MarketInformationResponse {
+  const confirmedAt = new Date(storedAt).toISOString();
+  const message = `제공기관 응답이 지연되어 ${confirmedAt} 기준 마지막으로 확인한 값을 표시합니다. 새로고침 시 다시 확인합니다.`;
+  const sections = lastGood.sections;
+  return {
+    ...lastGood,
+    fetchedAt: new Date().toISOString(),
+    partial: true,
+    sections: {
+      indices: staleSection(sections.indices, message),
+      rankings: staleSection(sections.rankings, message),
+      sectors: staleSection(sections.sectors, message),
+      news: staleSection(sections.news, message),
+      disclosures: staleSection(sections.disclosures, message),
+      derivatives: sections.derivatives,
+    } as MarketInformationResponse['sections'],
+  };
+}
+
 export function createMarketInformationRouter(
   service: MarketInformationRoomReader = MarketInformationService,
   options: MarketInformationRouterOptions = {},
@@ -123,6 +174,10 @@ export function createMarketInformationRouter(
   const router: IRouter = Router();
   const stockFirstPaintTimeoutMs = resolveStockFirstPaintTimeout(options);
   const stockWarmupDeadlineMs = resolveStockWarmupDeadline(options, stockFirstPaintTimeoutMs);
+  const lastGoodByRoom = new Map<StockRoom, LastGoodRoom>();
+  const rememberLastGood = (room: StockRoom, result: MarketInformationResponse) => {
+    if (isUsableRoomResult(result)) lastGoodByRoom.set(room, { result, storedAt: Date.now() });
+  };
 
   router.get('/:room', async (req, res) => {
     const room = req.params.room;
@@ -154,7 +209,11 @@ export function createMarketInformationRouter(
       const clearWarmupDeadline = () => {
         if (warmupDeadlineTimer) clearTimeout(warmupDeadlineTimer);
       };
-      void roomPromise.then(clearWarmupDeadline, clearWarmupDeadline);
+      void roomPromise.then((value) => {
+        clearWarmupDeadline();
+        // Detached warmups that finish after the first paint still refresh the snapshot.
+        if (isStockRoom(room)) rememberLastGood(room, value);
+      }, clearWarmupDeadline);
       const result = isStockRoom(room)
         ? await Promise.race([
           roomPromise,
@@ -175,6 +234,10 @@ export function createMarketInformationRouter(
       const timedOut = isStockRoom(room) && error instanceof MarketInformationFirstPaintTimeoutError;
       if (timedOut) {
         res.setHeader('Cache-Control', 'private, no-cache, max-age=0');
+        const lastGood = lastGoodByRoom.get(room);
+        if (lastGood && Date.now() - lastGood.storedAt <= STOCK_LAST_GOOD_MAX_AGE_MS) {
+          return res.status(200).json(stockFirstPaintStaleFallback(lastGood.result, lastGood.storedAt));
+        }
         return res.status(200).json(stockFirstPaintFallback(room));
       }
       if (controller.signal.aborted) return undefined;
