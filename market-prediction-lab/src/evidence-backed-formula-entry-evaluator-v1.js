@@ -10,6 +10,7 @@ export const EVIDENCE_BACKED_FORMULA_ENTRY_EVALUATOR_VERSION = 1;
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 const SUPPORTED_MARKETS = new Set([...CASH_MARKETS, "CRYPTO_FUTURES"]);
 const SUPPORTED_INDICATORS = new Set(["SMA", "EMA", "ADX", "ROC", "RVOL", "BREAKOUT", "RSI"]);
+const SUPPORTED_PRICE_FIELDS = new Set(["open", "high", "low", "close"]);
 const SUPPORTED_OPERATORS = new Set(["GT", "LT", "CROSSOVER"]);
 const REQUIRED_EXIT_TYPES = Object.freeze(["ATR_STOP", "TARGET", "TIME_EXIT"]);
 const HASH64 = /^[0-9a-f]{64}$/u;
@@ -312,6 +313,11 @@ function createEntryRuntime({ entryDsl, selectedParameters }) {
   function operandValue(node, candles, index) {
     if (node?.kind === "PARAMETER") return parameterValue(node, selectedParameters);
     if (node?.kind === "INDICATOR") return indicatorValue(node, candles, index);
+    if (node?.kind === "PRICE") {
+      if (node.lag !== 1) fail("PRICE_SYSTEM_LAG_INVALID", { lag: node.lag });
+      if (!SUPPORTED_PRICE_FIELDS.has(node.field)) fail("PRICE_FIELD_NOT_SUPPORTED", { field: node.field });
+      return candles[index][node.field];
+    }
     fail("OPERAND_NODE_NOT_SUPPORTED", { kind: node?.kind });
   }
 

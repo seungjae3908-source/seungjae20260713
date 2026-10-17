@@ -5,6 +5,16 @@ import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
 import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
 import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.mjs';
+import { runExploratoryPaperLedgerV1 } from '../src/exploratory-paper-ledger-v1.mjs';
+import { runGridDcaResearchV1 } from '../src/grid-dca-research-v1.mjs';
+import { runOpsWatchdogV1 } from '../src/ops-watchdog-v1.mjs';
+import { runPaperDiscoveryV1 } from '../src/paper-discovery-v1.mjs';
+import {
+  combinationUniverseFromSnapshotV2,
+  readResearchUniverseSnapshotV2,
+  refreshResearchUniverseV2,
+  watchUniverseFromSnapshotV2,
+} from '../src/research-universe-v2.mjs';
 import {
   aiIntervalMinutesV1,
   decideFreeAiRunV1,
@@ -80,14 +90,25 @@ if (aiDecision.run) {
   }
 }
 
+const enabled = (name) => String(process.env[name] ?? 'true').trim().toLowerCase() !== 'false';
+const remainingMs = () => TOTAL_BUDGET_MS - (Date.now() - startedMs);
+
+// Full-market universe (V2): frozen liquid sets where complete, V1 otherwise.
+let snapshot = { sources: {} };
+let snapshotError = null;
+try { if (enabled('RESEARCH_UNIVERSE_V2_ENABLED')) snapshot = await readResearchUniverseSnapshotV2(stateRoot); }
+catch (error) { snapshotError = safeError(error); }
+const researchUniverse = combinationUniverseFromSnapshotV2(snapshot);
+
 // Deterministic, no-AI combination research. Its failure is reported but does
 // not change the AI lane exit code (activation proofs depend on that code).
 let combination = null;
 let combinationError = null;
 try {
-  const remaining = TOTAL_BUDGET_MS - (Date.now() - startedMs) - 30_000;
-  const budgetMs = Math.max(20_000, Math.min(remaining, 270_000));
-  combination = await runCombinationSearchLaneV1({ stateRoot, researchCodeSha, budgetMs });
+  // Later stages (exit comparison, paper ledger, universe, watchdog) need ~3 min.
+  const remaining = remainingMs() - 180_000;
+  const budgetMs = Math.max(20_000, Math.min(remaining, 240_000));
+  combination = await runCombinationSearchLaneV1({ stateRoot, researchCodeSha, budgetMs, universe: researchUniverse });
 } catch (error) {
   combinationError = safeError(error);
 }
@@ -108,7 +129,8 @@ try {
 let exitComparison = null;
 let exitComparisonError = null;
 try {
-  const remaining = TOTAL_BUDGET_MS - (Date.now() - startedMs) - 20_000;
+  // Leave room for the paper ledger, universe probes and the watchdog.
+  const remaining = remainingMs() - 150_000;
   if (remaining >= 30_000) {
     exitComparison = await runExitStrategyComparisonV1({ stateRoot, researchCodeSha, budgetMs: Math.min(remaining, 120_000) });
   } else {
@@ -117,6 +139,41 @@ try {
 } catch (error) {
   exitComparisonError = safeError(error);
 }
+
+// Exploratory forward paper ledger (EXPLORATORY lane, paper only).
+let exploratory = null;
+let exploratoryError = null;
+if (enabled('RESEARCH_EXPLORATORY_PAPER_ENABLED')) {
+  try {
+    exploratory = await runExploratoryPaperLedgerV1({ stateRoot, universe: researchUniverse, watchUniverse: watchUniverseFromSnapshotV2(snapshot),
+      budgetMs: Math.max(15_000, Math.min(remainingMs() - 60_000, 90_000)) });
+  } catch (error) { exploratoryError = safeError(error); }
+}
+
+// Liquidity probes for the next universe snapshot (bounded).
+let universe = null;
+let universeError = snapshotError;
+if (enabled('RESEARCH_UNIVERSE_V2_ENABLED') && remainingMs() > 50_000) {
+  try { universe = await refreshResearchUniverseV2({ stateRoot, maximumProbes: 15, budgetMs: Math.min(remainingMs() - 40_000, 60_000) }); }
+  catch (error) { universeError = safeError(error); }
+}
+
+let papers = null;
+let papersError = null;
+if (enabled('RESEARCH_PAPER_DISCOVERY_ENABLED') && remainingMs() > 30_000) {
+  try { papers = await runPaperDiscoveryV1({ stateRoot }); } catch (error) { papersError = safeError(error); }
+}
+
+let gridDca = null;
+let gridDcaError = null;
+if (remainingMs() > 20_000) {
+  try { gridDca = await runGridDcaResearchV1({ stateRoot }); } catch (error) { gridDcaError = safeError(error); }
+}
+
+// Watchdog last, so this tick's own outputs count as fresh.
+let watchdog = null;
+let watchdogError = null;
+try { watchdog = await runOpsWatchdogV1({ stateRoot, invoker: 'coordinator' }); } catch (error) { watchdogError = safeError(error); }
 
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
@@ -151,6 +208,14 @@ const result = Object.freeze({
     lanes: exitComparison.lanes.map((lane) => ({ laneId: lane.laneId, status: lane.status, computedAt: lane.computedAt ?? null })),
   },
   scannerEvidence: signalEvidence == null ? { error: signalEvidenceError } : { rules: signalEvidence.rules.length },
+  exploratoryPaper: exploratory == null ? { error: exploratoryError, enabled: enabled('RESEARCH_EXPLORATORY_PAPER_ENABLED') }
+    : { trades: exploratory.totals.trades, closed: exploratory.totals.closed, rules: exploratory.rules.length,
+      promotionEligibleRules: exploratory.totals.promotionEligibleRules, lane: exploratory.lane },
+  universeV2: universe == null ? { error: universeError, frozen: Object.keys(snapshot.sources ?? {}) }
+    : { log: universe.log, frozen: universe.frozenSources },
+  paperDiscovery: papers == null ? { error: papersError } : { status: papers.status, added: papers.added ?? 0, pendingApproval: papers.pendingApproval ?? null },
+  gridDca: gridDca == null ? { error: gridDcaError } : { status: gridDca.status ?? 'RAN' },
+  opsWatchdog: watchdog == null ? { error: watchdogError } : { healthy: watchdog.healthy, problems: watchdog.problems, alertChannel: watchdog.alertChannel, delivery: watchdog.delivery },
   liveTrading: false,
   privateTradingApi: false,
   realOrder: false,
