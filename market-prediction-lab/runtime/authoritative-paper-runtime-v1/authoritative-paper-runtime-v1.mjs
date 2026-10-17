@@ -3981,7 +3981,8 @@ function applyScannerQuantHardening(input) {
 var UPBIT_BASE = "https://api.upbit.com";
 var BITGET_BASE = "https://api.bitget.com";
 var BITGET_PRODUCT_TYPE = "USDT-FUTURES";
-var DEADLINE_MS = 12e3;
+var CRYPTO_SCANNER_DEADLINE_MS = 9e3;
+var DEADLINE_MS = CRYPTO_SCANNER_DEADLINE_MS;
 var ITEM_TIMEOUT_MS = 3500;
 var CONCURRENCY = 5;
 var MAX_BATCH_SIZE = 40;
@@ -5804,6 +5805,7 @@ var StrategyPromotionService = class {
         killState,
         blockers: Object.freeze(blockers),
         promotionEligible: currentState === "PROMOTION_CANDIDATE",
+        evidenceLinked: overrides.size > 0,
         executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY,
         liveTradingAuthority: false,
         privateTradingApiCount: 0
@@ -5817,6 +5819,7 @@ var StrategyPromotionService = class {
       items,
       counts,
       evidenceSources: sourceRegistry(),
+      evidenceLinkage: evidenceLinkage(items),
       promotionCandidates: counts.PROMOTION_CANDIDATE,
       executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY,
       liveTradingAuthority: false,
@@ -5847,6 +5850,32 @@ var StrategyPromotionService = class {
     };
   }
 };
+function evidenceLinkage(items) {
+  const totalStrategyCount = items.length;
+  const linkedStrategyCount = items.filter((item) => item.evidenceLinked).length;
+  if (totalStrategyCount > 0 && linkedStrategyCount === 0) {
+    return {
+      status: "MISSING",
+      linkedStrategyCount,
+      totalStrategyCount,
+      message: '연구 검증 증거가 아직 승격센터에 연결되지 않았습니다. 단계별 "시작 전"은 연구 미진행이 아니라 증거 미연결 상태입니다.'
+    };
+  }
+  if (linkedStrategyCount < totalStrategyCount) {
+    return {
+      status: "PARTIAL",
+      linkedStrategyCount,
+      totalStrategyCount,
+      message: `전략 ${totalStrategyCount}개 중 ${linkedStrategyCount}개만 연구 검증 증거가 연결되어 있습니다.`
+    };
+  }
+  return {
+    status: "LINKED",
+    linkedStrategyCount,
+    totalStrategyCount,
+    message: totalStrategyCount === 0 ? "조건에 맞는 전략이 없습니다." : "모든 전략에 연구 검증 증거가 연결되어 있습니다."
+  };
+}
 function byCostStressNeedsDetails(stages) {
   const cost = stages.find((stage) => stage.stage === "COST_STRESS");
   return cost?.status === "PASS" && !costStressComplete(cost);
