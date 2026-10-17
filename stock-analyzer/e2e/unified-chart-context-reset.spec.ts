@@ -1,7 +1,10 @@
 import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
-const BASE_TIME = 1_775_600_000;
 const STEP_SECONDS = 300;
+// This test checks *current* analysis after a timeframe change. The previous
+// April 2026 fixture was always stale by October, so the fail-closed chart
+// correctly withheld its present-tense judgment. Use genuinely recent bars.
+const BASE_TIME = Math.floor(Date.now() / (STEP_SECONDS * 1000)) * STEP_SECONDS - 24 * STEP_SECONDS;
 const DOUBLE_TOP = [100, 104, 110, 104, 100, 103, 109.5, 104, 102, 103, 104];
 
 type BrowserEvidence = {
@@ -108,13 +111,14 @@ async function fulfillStockChart(route: Route, onOneMinuteCall: () => void) {
   }
 
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+  const collectedAt = new Date().toISOString();
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
       provider,
-      fetchedAt: '2026-08-04T11:40:00.000Z',
-      updatedAt: '2026-08-04T11:40:00.000Z',
+      fetchedAt: collectedAt,
+      updatedAt: collectedAt,
       candles,
     }),
   }).catch(() => undefined);
@@ -141,7 +145,7 @@ async function installMocks(page: Page) {
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
   await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
-  await expect(page.getByText('context-reset-kr-5m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-5m');
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();
 }
@@ -163,7 +167,7 @@ function timeline(page: Page) {
 }
 
 function currentAnalysis(page: Page) {
-  return page.locator('section').filter({ hasText: '현재 판단' }).last();
+  return page.getByTestId('ai-chart-current-judgment');
 }
 
 async function expectLatestCandle(page: Page, expectedTime: number) {
@@ -211,7 +215,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
 
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
-  await expect(page.getByText('context-reset-kr-15m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-15m');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
@@ -232,7 +236,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await symbolInput.fill('000660');
   await page.getByTestId('apply-chart-symbol').click();
   await expect(page).toHaveURL(/ticker=000660/);
-  await expect(page.getByText('context-reset-kr-000660', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-000660');
   await expectLatestCandle(page, BASE_TIME + (DOUBLE_TOP.length - 1) * STEP_SECONDS);
   const secondOverlay = page.getByTestId('chart-pattern-overlay');
   await expect(secondOverlay).toHaveCount(1);
@@ -248,7 +252,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await page.getByTestId('market-US').click();
   await expect(page).toHaveURL(/market=US/);
   await expect(page).toHaveURL(/ticker=AAPL/);
-  await expect(page.getByText('context-reset-us-aapl', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-us-aapl');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');

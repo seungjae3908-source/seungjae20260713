@@ -7,7 +7,7 @@ import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
 import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
-import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { selectionQuery, useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
 import { getPortfolioChartOverlay } from '@/lib/portfolio-overlay';
 import {
@@ -149,14 +149,27 @@ function TradeReviewSurface() {
 }
 
 function ScannerSurface({ desktop, showSectionHeader }: { desktop: boolean; showSectionHeader: boolean }) {
+  const { selection } = useAnalysisSelection();
+  const [, navigate] = useLocation();
+  const auth = useAuth();
+  // The desktop scanner intentionally previews the chart beside the result.
+  // Offer a separate full-screen link without editing the S-only pinned scanner transport.
+  const chartSelection = desktop && auth.can('canAccessAiChart') && selection?.signalId
+    && ['KR', 'US', 'UPBIT', 'BITGET'].includes(selection.market) ? selection : null;
   return (
     <div className={[
-      'h-full min-h-0 min-w-0 overflow-hidden',
+      'flex h-full min-h-0 min-w-0 flex-col overflow-hidden',
       showSectionHeader
         ? '[&_main>div>header:first-child]:rounded-2xl [&_main>div>header:first-child]:p-3 [&_main>div>header:first-child_p]:hidden [&_main>div>header:first-child_h1]:text-center'
         : '[&_main>div>header:first-child]:hidden',
     ].join(' ')}>
-      <SignalScannerPage embedded={desktop} />
+      {chartSelection ? <div className="flex shrink-0 items-center justify-between gap-2 border-b border-card-border bg-card px-3 py-1.5" data-testid="technical-scanner-chart-handoff">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">최근 선택 신호 · {chartSelection.displayName || chartSelection.ticker}</span>
+        <button type="button" data-testid="technical-scanner-open-full-chart"
+          onClick={() => navigate(`/ai-chart?${selectionQuery(chartSelection)}`)}
+          className="min-h-10 shrink-0 rounded-xl border border-primary/40 bg-primary/10 px-3 text-xs font-semibold text-primary">AI차트 전체화면</button>
+      </div> : null}
+      <div className="min-h-0 flex-1"><SignalScannerPage embedded={desktop} /></div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -13,6 +13,10 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { ChartCurrencyProvider, useChartCurrency } from '@/components/chart-currency-provider';
+import { AiChartLivePanel, AiChartDrawingSummary, type ChartLiveSnapshot } from '@/components/ai-chart-live-panel';
+import { isChartLiveSnapshotUsable } from '@/lib/chart-live-feed';
+
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import {
   defaultStrategyMode,
@@ -88,7 +92,6 @@ const LazyAiChartPositionPanel = lazy(() =>
     default: AiChartPositionPanel,
   })),
 );
-
 type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
 
 const MOBILE_CHART_TABS = [
@@ -182,7 +185,12 @@ function strategyModeLabel(mode: AiChartStrategyMode): string {
 
 function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
   return chartSelectionKey(left) === chartSelectionKey(right)
-    && left.displayName === right.displayName;
+    && left.displayName === right.displayName
+    && left.signalId === right.signalId
+    && left.searchRunId === right.searchRunId
+    && left.signalScore === right.signalScore
+    && left.action === right.action
+    && left.selectedAt === right.selectedAt;
 }
 
 function supportedSelection(value: AnalysisSelection | null): AnalysisSelection | null {
@@ -234,9 +242,11 @@ function useDesktopChartLayout(): boolean {
 }
 
 function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; analysis: ChartAnalysis | null }) {
-  const plan = selection.pricePlan;
-  const confidence = analysis?.confidence ?? selection.confidence;
-  const reason = analysis?.summary ?? selection.reasons?.[0] ?? '확인된 추가 설명 없음';
+  // Scanner selections can outlive their source candles. Do not present old
+  // action/entry/stop/targets as a current chart decision during an outage.
+  const plan = analysis ? selection.pricePlan : undefined;
+  const confidence = analysis?.confidence;
+  const reason = analysis?.summary ?? '차트 데이터 확인 후 표시됩니다.';
 
   return (
     <section data-testid="ai-chart-mobile-summary" className="space-y-3 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
@@ -248,10 +258,11 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
           </p>
         </div>
         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
-          {contextualActionLabel(selection, analysis)}
+          {analysis ? contextualActionLabel(selection, analysis) : selection.action && !['NO_TRADE','UNKNOWN','NONE'].includes(selection.action) ? `이전 검색 신호 · ${actionLabel(selection.action)} · 현재 판단 대기` : '판단 대기'}
         </span>
       </div>
 
+      {selection.signalScore != null && !analysis ? <p className="rounded-lg bg-background px-3 py-2 text-[11px] text-muted-foreground">아래 신호점수는 이전 검색 결과입니다. 최신 차트 근거로 확인되기 전에는 현재 진입 신호가 아닙니다.</p> : null}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">신호점수</p>
@@ -263,7 +274,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">위험</p>
-          <strong className="mt-0.5 block truncate text-sm">{selection.riskLevel || '미확인'}</strong>
+          <strong className="mt-0.5 block truncate text-sm">{analysis ? selection.riskLevel || '미확인' : '미확인'}</strong>
         </div>
       </div>
 
@@ -286,7 +297,7 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
         </div>
         <div className="rounded-2xl border border-card-border p-3">
           <p className="text-[10px] font-bold text-muted-foreground">손익비</p>
-          <strong className="mt-1 block tabular-nums">{plan?.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)}</strong>
+          <strong className="mt-1 block tabular-nums">{plan?.riskReward == null || !Number.isFinite(plan.riskReward) ? '미확인' : plan.riskReward.toFixed(2)}</strong>
         </div>
       </div>
 
@@ -322,7 +333,7 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
         </div>
         <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
           <p className="text-[10px] text-muted-foreground">근거 강도</p>
-          <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
+          <strong>{formatAiChartScore(analysis?.confidence)}</strong>
         </div>
       </div>
     </section>
@@ -330,66 +341,17 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
 }
 
 function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
-  return (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <Database className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-black">현재 판단</h2>
-      </div>
-      {analysis ? (
-        <div className="mt-3 space-y-3 text-xs">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <BiasIcon bias={analysis.bias} />
-                <strong className="line-clamp-2 break-keep text-sm">{analysis.title}</strong>
-              </div>
-            </div>
-            <span
-              className={cn(
-                'shrink-0 rounded-full border px-2 py-1 text-[10px] font-black',
-                analysis.status === 'confirmed'
-                  ? 'border-primary/30 bg-primary/10 text-primary'
-                  : analysis.status === 'invalidated' || analysis.status === 'expired'
-                    ? 'border-muted bg-muted text-muted-foreground'
-                    : 'border-warning/30 bg-warning/10 text-warning',
-              )}
-            >
-              {statusLabel(analysis.status)}
-            </span>
-          </div>
-
-          <p className="line-clamp-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 leading-5 text-foreground">
-            {analysis.summary}
-          </p>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-2xl border border-card-border bg-background p-3">
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <Clock3 className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-bold">감지</span>
-              </div>
-              <strong className="mt-1 block text-[11px]">{formatAnalysisTime(analysis.detectedAt)}</strong>
-            </div>
-            <div className="rounded-2xl border border-card-border bg-background p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">최근 변화</p>
-              <strong className="mt-1 block line-clamp-2 break-keep text-[11px]">
-                {analysis.transitionReason ?? '최초 분석'}
-              </strong>
-            </div>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-3">
-            <CompactList title="판단 근거" items={analysis.reasons} />
-            <CompactList title="확인 조건" items={analysis.confirmationConditions} />
-            <CompactList title="무효 조건" items={analysis.invalidationConditions} danger />
-          </div>
-        </div>
-      ) : (
-        <p className="mt-3 text-xs font-bold text-muted-foreground">차트 데이터 확인 후 표시됩니다.</p>
-      )}
-    </section>
-  );
+  const { format } = useChartCurrency();
+  const market = ['KR', 'US', 'UPBIT', 'BITGET'].includes(analysis?.market ?? '') ? analysis!.market as AnalysisSelection['market'] : 'KR';
+  const current = typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null;
+  return <section data-testid="ai-chart-current-judgment" className="rounded-2xl border border-card-border bg-card p-4">
+    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
+    {analysis ? <><div className="mt-3 flex items-center gap-2"><BiasIcon bias={analysis.bias} /><strong className="text-sm">{analysis.bias === 'bullish' ? '상승 우세' : analysis.bias === 'bearish' ? '하락 우세' : '판단 보류'}</strong></div>
+      <p className="mt-2 text-xl font-black tabular-nums">{format(current, market)}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2">{analysis.priceLevels.slice(0, 4).map((level, i) => <div key={level.role + i} className="rounded-xl bg-background p-2"><p className="text-[11px] text-muted-foreground">{level.role === 'support' ? '지지' : level.role === 'resistance' ? '저항' : level.role === 'target' ? '참고 목표' : level.role === 'invalidation' ? '무효화' : level.role}</p><p className="mt-1 text-xs font-bold tabular-nums">{format(level.price, market)}</p></div>)}</div>
+      <p className="mt-3 text-[11px] text-muted-foreground">{formatAnalysisTime(analysis.detectedAt)} · 기술 강도 {formatAiChartScore(analysis.confidence)} · 승률 아님</p>
+    </> : <p className="mt-3 text-xs text-muted-foreground">차트 데이터 확인 후 표시됩니다.</p>}
+  </section>;
 }
 
 function CompactList({ title, items, danger = false }: { title: string; items: string[]; danger?: boolean }) {
@@ -440,9 +402,30 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const hasSelection = Boolean(String(selection.symbol || selection.ticker || '').trim());
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [liveSnapshot, setLiveSnapshot] = useState<ChartLiveSnapshot | null>(null);
+  const handleLiveSnapshotChange = useCallback((snapshot: ChartLiveSnapshot) => setLiveSnapshot(snapshot), []);
+  const visibleLiveSnapshot = liveSnapshot?.identity === `${selection.market}:${selection.ticker}:${selection.timeframe}` ? liveSnapshot : null;
+  // A successful fetch is not proof of fresh source candles. Current decision
+  // cards must use the exact same fail-closed freshness boundary as live feed.
+  const currentEvidenceUsable = visibleLiveSnapshot != null && isChartLiveSnapshotUsable(visibleLiveSnapshot);
+  const currentAnalysis = currentEvidenceUsable ? analysis : null;
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
+  const evidenceReadyRef = useRef(!DIRECT_AI_CHART_COLD_ROUTE);
+  const evidenceIdleRef = useRef<number | null>(null);
+  const evidenceFrameRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (evidenceIdleRef.current != null) window.cancelIdleCallback?.(evidenceIdleRef.current);
+    if (evidenceFrameRef.current != null) window.cancelAnimationFrame(evidenceFrameRef.current);
+  }, []);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  // Summary-first: do not start chart transport or load its large bundle until
+  // the user first opens the chart; once visited, retain its public stream.
+  const [mobileChartActivated, setMobileChartActivated] = useState(false);
+  const changeMobileTab = useCallback((tab: MobileChartTab) => {
+    if (tab === 'chart') setMobileChartActivated(true);
+    setMobileTab(tab);
+  }, []);
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -474,8 +457,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
-  const ignorePositionOverlay = useCallback(() => {}, []);
-
   const stopPopupTracking = useCallback(() => {
     popupPollCleanupRef.current?.();
     popupPollCleanupRef.current = null;
@@ -487,7 +468,24 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const handleAnalysisChange = useCallback((nextAnalysis: ChartAnalysis | null) => {
     setAnalysis(nextAnalysis);
-    setCriticalRendererMounted(true);
+  }, []);
+  const handleRendererFirstPaint = useCallback(() => {
+    if (evidenceReadyRef.current || evidenceIdleRef.current != null || evidenceFrameRef.current != null) return;
+    const releaseEvidence = () => {
+      evidenceIdleRef.current = null;
+      evidenceFrameRef.current = null;
+      evidenceReadyRef.current = true;
+      startTransition(() => {
+        setCriticalRendererMounted(true);
+      });
+    };
+    // Current judgment and live records remain immediate. Only optional
+    // intelligence/public-context chunks yield to the freshly usable chart.
+    if (typeof window.requestIdleCallback === 'function') {
+      evidenceIdleRef.current = window.requestIdleCallback(releaseEvidence, { timeout: 1_000 });
+    } else {
+      evidenceFrameRef.current = window.requestAnimationFrame(releaseEvidence);
+    }
   }, []);
 
   const updateStrategyMode = useCallback((nextMode: AiChartStrategyMode) => {
@@ -507,7 +505,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     selectionRef.current = normalized;
     setSelection(normalized);
     setAnalysis(null);
-    setMobileTab('summary');
+    setMobileTab('chart');
   }, [embedded, state.selection]);
 
   useEffect(() => {
@@ -758,6 +756,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         selection={selection}
         onSelectionChange={updateSelection}
         onAnalysisChange={handleAnalysisChange}
+        onLiveSnapshotChange={handleLiveSnapshotChange}
+        onFirstPaint={handleRendererFirstPaint}
       />
     </Suspense>
   ) : emptyState;
@@ -772,7 +772,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
       <LazyAiChartV2IntelligencePanel
         selection={selection}
-        analysis={analysis}
+        analysis={currentAnalysis}
         mode={strategyMode}
         onModeChange={updateStrategyModeAndTimeframe}
       />
@@ -780,13 +780,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   ) : null;
 
   const details = hasSelection ? (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {visibleLiveSnapshot && !currentEvidenceUsable ? <p role="status" data-testid="ai-chart-current-halted" className="rounded-2xl border border-warning/30 bg-warning/5 p-3 text-xs font-bold text-warning">{visibleLiveSnapshot.status} · 이전 방향·가격·진입/손절/목표와 근거 점수를 현재 판단으로 표시하지 않습니다. 생중계의 과거 관측 기록은 보존됩니다.</p> : null}
+      <DecisionCard analysis={currentAnalysis} />
+      <AiChartDrawingSummary snapshot={visibleLiveSnapshot} />
+      <ContextCard selection={selection} analysis={currentAnalysis} />
       {deferNonCriticalEvidence ? (
-        <p
-          role="status"
-          data-testid="ai-chart-cold-evidence-deferred"
-          className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground"
-        >
+        <p role="status" data-testid="ai-chart-cold-evidence-deferred" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">
           차트를 먼저 준비한 뒤 AI 분석 근거와 공개 시장 근거를 불러옵니다.
         </p>
       ) : (
@@ -797,16 +797,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           </Suspense>
         </>
       )}
-      <ContextCard selection={selection} analysis={analysis} />
-      <DecisionCard analysis={analysis} />
       <SafetyNote />
     </div>
-  ) : <div className="space-y-4"><SafetyNote /></div>;
-
+  ) : null;
   const mobile = !desktop && !externalMode && !embedded;
 
   return (
-    <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
+    <ChartCurrencyProvider market={selection.market}><div className="flex h-full min-h-0 flex-col"><div data-testid="ai-chart-route-scroll" className="h-full min-w-0 overflow-y-auto overscroll-contain bg-background min-h-0 flex-1 pb-4">
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
@@ -861,50 +858,62 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         <>
           <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl sm:top-[61px]">
             <div className="mx-auto max-w-7xl">
-              <ResponsiveTabs
-                value={mobileTab}
-                options={MOBILE_CHART_TABS}
-                onChange={setMobileTab}
-                ariaLabel="AI 차트 모바일 보기"
-                testId="ai-chart-mobile-tabs"
-                compact
-                fluid
-              />
+              <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={changeMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
             </div>
           </div>
-          <main className="mx-auto w-full max-w-7xl p-3 sm:p-4">
-            {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={analysis} /> : emptyState) : null}
-            {mobileTab === 'chart' ? (
-              <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
-                {chart}
-                {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
-              </section>
-            ) : null}
+          <main data-testid="ai-chart-workspace" className="mx-auto w-full max-w-7xl p-3 sm:p-4">
+            {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={currentAnalysis} /> : emptyState) : null}
+            {/* Keep the read-only renderer and its public feed alive across mobile tab changes.
+                `hidden` preserves identity without showing a second chart. */}
+            <section data-testid="ai-chart-mobile-chart" hidden={mobileTab !== 'chart'} className="min-w-0 space-y-3">
+              {(mobileChartActivated || mobileTab === 'chart') ? chart : null}
+              {hasSelection && mobileTab === 'chart' ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
+            </section>
             {mobileTab === 'position' ? (
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
-                  <LazyAiChartPositionPanel
-                    selection={selection}
-                    market={selection.market}
-                    symbol={selection.symbol || selection.ticker}
-                    chartPrice={null}
-                    pricePlan={selection.pricePlan}
-                    onOverlayChange={ignorePositionOverlay}
-                  />
+                  <Suspense fallback={<p role="status" className="rounded-xl border border-card-border bg-card p-4 text-sm">포지션 조회 준비 중</p>}>
+                    <LazyAiChartPositionPanel
+                      selection={selection}
+                      market={selection.market}
+                      symbol={selection.symbol || selection.ticker}
+                      chartPrice={null}
+                      pricePlan={selection.pricePlan}
+                      onOverlayChange={() => undefined}
+                    />
+                  </Suspense>
                 ) : emptyState}
               </section>
             ) : null}
-            {mobileTab === 'details' ? <section data-testid="ai-chart-mobile-details">{details}</section> : null}
+            {mobileTab === 'details' ? (
+              <section data-testid="ai-chart-mobile-details" className="min-w-0 space-y-3">
+                {details}
+              </section>
+            ) : null}
+            {/* Retain the event recorder while this tab is hidden; reopening 상세
+                must not turn the most recent observation into a brand-new feed. */}
+            {hasSelection ? (
+              <div hidden={mobileTab !== 'details'} data-testid="ai-chart-mobile-live-persistent">
+                <details className="rounded-2xl border border-card-border bg-card p-3" data-testid="ai-chart-mobile-live-disclosure">
+                  <summary className="min-h-11 cursor-pointer text-sm font-bold">AI 생중계 · 기술 이벤트 보기</summary>
+                  <p className="mb-2 mt-1 text-xs text-muted-foreground">읽기 전용 관측 기록이며 확정봉과 수신 상태를 확인해 표시합니다. 주문 신호가 아닙니다.</p>
+                  <AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} />
+                </details>
+              </div>
+            ) : null}
           </main>
         </>
       ) : (
-        <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <main data-testid="ai-chart-workspace" style={{ maxWidth: '1680px' }} className="mx-auto grid w-full max-w-7xl items-start gap-3 p-3 md:p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
           <section className="min-w-0">{chart}</section>
-          <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">{details}</aside>
+          <aside className="min-w-0 space-y-3 lg:sticky lg:top-20 lg:self-start">
+            {details}
+            {hasSelection ? <div data-testid="ai-chart-desktop-live"><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div> : null}
+          </aside>
         </main>
       )}
 
-      {!embedded && !externalMode && <BottomNav />}
-    </div>
+    </div>{!embedded && !externalMode && <BottomNav />}
+    </div></ChartCurrencyProvider>
   );
 }

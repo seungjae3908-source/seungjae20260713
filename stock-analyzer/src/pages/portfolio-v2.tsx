@@ -8,6 +8,8 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { PortfolioAiDiagnosis } from '@/components/portfolio-ai-diagnosis';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
+import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { readOnlyChartTarget } from '@/lib/ui-chart-navigation';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
 
@@ -303,7 +305,14 @@ function AdditionalBuySimulator({ intelligence }: { intelligence: Intelligence }
 }
 
 function IntelligenceDashboard() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
+  const { select: selectChart } = useAnalysisSelection();
+  const openChart = (market: string, symbol: string, name?: string) => {
+    const target = readOnlyChartTarget(market, symbol, name);
+    if (!target) return;
+    selectChart(target.selection);
+    navigate(target.href);
+  };
   const [profile, setProfile] = useState('BALANCED');
   const query = useQuery({
     queryKey: ['portfolio-intelligence-v2', profile],
@@ -369,7 +378,7 @@ function IntelligenceDashboard() {
           <div className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">집중도 · 분산</h2><p className="mt-3 text-center text-sm font-semibold">상위 5개 집중도 {percent(intelligence.top5Concentration.percent)}</p><p className="mt-2 text-center text-sm font-semibold">상관관계 {intelligence.correlation.pair.join(' / ') || '—'} · {intelligence.correlation.correlation == null ? '미확인' : intelligence.correlation.correlation.toFixed(3)}</p><p className="mt-1 text-center text-xs font-medium text-muted-foreground">정렬 표본 {intelligence.correlation.sampleSize}</p><p className="mt-2 text-center text-xs font-medium text-muted-foreground">위험 근거: {intelligence.riskClassification.reason}</p></div>
         </section>
 
-        <section className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">상위 보유자산</h2><div className="mt-3 divide-y divide-border">{intelligence.topHoldings.length ? intelligence.topHoldings.map((holding) => <div key={holding.id} className="flex items-center justify-between gap-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-semibold">{holding.name}</p><p className="text-xs font-medium text-muted-foreground">{holding.ticker} · {holding.market} · {holding.currentPrice.toLocaleString()} {holding.currency}</p></div><span className="shrink-0 font-semibold tabular-nums">{money(holding.normalizedKRW)}</span></div>) : <p className="text-center text-sm font-medium text-muted-foreground">보유자산 없음</p>}</div></section>
+        <section className="rounded-2xl border border-border bg-card p-4"><h2 className="text-center text-base font-bold">상위 보유자산</h2><div className="mt-3 divide-y divide-border">{intelligence.topHoldings.length ? intelligence.topHoldings.map((holding) => <div key={holding.id} className="flex items-center justify-between gap-3 py-2 text-sm"><div className="min-w-0"><p className="truncate font-semibold">{holding.name}</p><p className="text-xs font-medium text-muted-foreground">{holding.ticker} · {holding.market} · {holding.currentPrice.toLocaleString()} {holding.currency}</p></div><div className="flex shrink-0 flex-col items-end gap-1"><span className="font-semibold tabular-nums">{money(holding.normalizedKRW)}</span><button type="button" data-testid="portfolio-holding-open-chart" disabled={!readOnlyChartTarget(holding.market, holding.ticker)} onClick={() => openChart(holding.market, holding.ticker, holding.name)} className="min-h-9 rounded-lg border border-primary/30 px-2 text-xs font-semibold text-primary disabled:opacity-40">AI차트</button></div></div>) : <p className="text-center text-sm font-medium text-muted-foreground">보유자산 없음</p>}</div></section>
 
         <section data-testid="portfolio-linked-account-positions" className="rounded-2xl border border-border bg-card p-4">
           <div className="flex flex-wrap items-center justify-center gap-2"><WalletCards className="h-4 w-4" /><h2 className="font-bold">연결 실계좌 보유</h2><span className="rounded-full bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">조회 전용</span></div>
@@ -377,7 +386,7 @@ function IntelligenceDashboard() {
           <div className="mt-3 divide-y divide-border">
             {linkedAccountPositions.length ? linkedAccountPositions.map((position, index) => <div key={`${position.provider}:${position.market}:${position.symbol}:${index}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-2 text-sm">
               <div className="min-w-0"><p className="truncate font-semibold">{position.symbol} · {position.market}</p><p className="text-xs font-medium text-muted-foreground">{position.provider.toUpperCase()} · 수량 {position.quantity.toLocaleString()} · 평단 {position.averageEntryPrice == null ? '미확인' : position.averageEntryPrice.toLocaleString()} {position.currency ?? ''}</p></div>
-              <div className="text-right text-xs font-semibold tabular-nums"><p>평가 {position.marketValue == null ? '미확인' : position.marketValue.toLocaleString()} {position.currency ?? ''}</p><p className={position.unrealizedPnl == null ? 'text-muted-foreground' : position.unrealizedPnl >= 0 ? 'text-positive' : 'text-destructive'}>손익 {position.unrealizedPnl == null ? '미확인' : position.unrealizedPnl.toLocaleString()} {position.currency ?? ''}</p>{position.stale ? <p className="text-warning">이전 정상값</p> : null}</div>
+              <div className="text-right text-xs font-semibold tabular-nums"><p>평가 {position.marketValue == null ? '미확인' : position.marketValue.toLocaleString()} {position.currency ?? ''}</p><p className={position.unrealizedPnl == null ? 'text-muted-foreground' : position.unrealizedPnl >= 0 ? 'text-positive' : 'text-destructive'}>손익 {position.unrealizedPnl == null ? '미확인' : position.unrealizedPnl.toLocaleString()} {position.currency ?? ''}</p>{position.stale ? <p className="text-warning">이전 정상값</p> : null}{readOnlyChartTarget(position.market, position.symbol) ? <button type="button" data-testid="portfolio-linked-position-open-chart" onClick={() => openChart(position.market, position.symbol)} className="mt-1 min-h-9 rounded-lg border border-primary/30 px-2 text-xs text-primary">AI차트</button> : null}</div>
             </div>) : <p className="py-3 text-center text-sm font-medium text-muted-foreground">연결된 실계좌 보유 근거가 없습니다.</p>}
           </div>
         </section>

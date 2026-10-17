@@ -1,4 +1,5 @@
 import type { AnalysisMarket } from '@/lib/analysis-selection';
+import { useChartCurrency } from './chart-currency-provider';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import type {
   ChartIndicatorResult,
@@ -89,6 +90,7 @@ export function SelectedCandleDetailPanel({
   selectedTime,
   onReset,
 }: Props) {
+  const { format: formatPrice } = useChartCurrency();
   const detail = resolveSelectedCandleDetail(candles, indicators, selectedTime);
   if (!detail) return null;
   const { candle, indicator, isLatest } = detail;

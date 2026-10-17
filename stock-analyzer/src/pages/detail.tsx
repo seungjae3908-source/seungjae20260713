@@ -6,7 +6,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
-import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
+import { useAnalysisSelection, selectionQuery, type AnalysisSelection } from '@/lib/analysis-selection';
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
 import { parseStockDetailNews, parseStockDetailProfile, parseStockDetailQuote } from '@/lib/stock-detail-response';
 import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
@@ -229,10 +229,11 @@ export default function DetailPage() {
               </div>
             </section>
 
-            <section className="grid grid-cols-3 gap-2" aria-label="종목 상세 빠른 실행">
+            <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="종목 상세 빠른 실행">
               <button type="button" onClick={() => setTab('chart')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary px-2 text-xs font-black text-primary-foreground"><BarChart3 className="h-5 w-5" /><span className="truncate">AI 차트</span></button>
               <button type="button" onClick={() => setTab('news')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><Newspaper className="h-5 w-5 text-primary" /><span className="truncate">뉴스</span></button>
               <button type="button" onClick={() => setTab('analysis')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><ExternalLink className="h-5 w-5 text-primary" /><span className="truncate">상세분석</span></button>
+              {routeContextValid ? <button type="button" data-testid="stock-detail-open-full-ai-chart" onClick={() => { analysisSelection.select(canonicalChartSelection); navigate(`/ai-chart?${selectionQuery(canonicalChartSelection)}`); }} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-primary/40 bg-primary/10 px-2 text-xs font-black text-primary"><BarChart3 className="h-5 w-5" /><span className="truncate">AI차트 전체화면</span></button> : null}
             </section>
           </div>
         ) : null}
