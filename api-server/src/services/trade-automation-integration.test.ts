@@ -1339,3 +1339,28 @@ test('canonical trading risk never treats an empty automatic allowlist as unrest
   });
   assert.equal(reviewed.blockCodes.includes('STRATEGY_NOT_ENABLED'),false);
 });
+
+test('BTC benchmark drawdown blocks only new crypto long/buy entries and never fails closed on missing data', () => {
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const options = { emergencyStopped: false, serverLiveEnabled: false };
+  const blocked = (input: TradingPlanInput) => evaluateTradingPlan(input, policy, options)
+    .blockCodes.includes('BENCHMARK_DRAWDOWN_LONG_BLOCKED');
+  const crash = { ...plan().marketSnapshot, benchmarkDrawdownPercent: 6.5 };
+  const calm = { ...plan().marketSnapshot, benchmarkDrawdownPercent: 2 };
+
+  // Upbit spot buy during a BTC crash: blocked. Calm or unknown benchmark: not blocked.
+  assert.equal(blocked(plan({ marketSnapshot: crash })), true);
+  assert.equal(blocked(plan({ marketSnapshot: calm })), false);
+  assert.equal(blocked(plan()), false);
+  assert.equal(blocked(plan({ marketSnapshot: { ...plan().marketSnapshot, benchmarkDrawdownPercent: null } })), false);
+
+  // Bitget: new long blocked, short allowed.
+  const futures = { exchange: 'bitget' as const, market: 'USDT-FUTURES', quantity: 0.01, quoteAmount: null,
+    leverage: 2, marginMode: 'isolated' as const };
+  assert.equal(blocked(plan({ ...futures, side: 'long', marketSnapshot: crash })), true);
+  assert.equal(blocked(plan({ ...futures, side: 'short', marketSnapshot: crash })), false);
+
+  // Stocks are never affected by the crypto benchmark.
+  assert.equal(blocked(plan({ exchange: 'kiwoom', market: 'KR', symbol: '005930', quantity: 1, quoteAmount: null,
+    marketSnapshot: crash })), false);
+});

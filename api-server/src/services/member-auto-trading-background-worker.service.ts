@@ -108,6 +108,7 @@ import {
   isEvidenceBackedAutoStrategyId,
   RULE_PACK_PILOT_PROFILE,
 } from './evidence-backed-auto-strategy-catalog.service';
+import { createBtcBenchmarkDrawdownReader } from './crypto-benchmark-regime.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -395,6 +396,8 @@ export interface MemberAutoTradingBackgroundSource {
     market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
     nowMs: number,
   ): Promise<MemberAutoTradingFxQuote>;
+  /** BTC drawdown (%) from its 24h peak. Optional; null/missing never blocks. */
+  readBenchmarkDrawdownPercent?(nowMs: number): Promise<number | null>;
   readLiveAccountSnapshot(userId: string, provider: AccountProvider): Promise<CanonicalAccountSnapshot>;
   /** Read-only native protection watch. Missing/failed proof blocks new entries,
    * not observation of existing AUTO-owned positions or guarded exits. */
@@ -1479,6 +1482,7 @@ function buildPlanInput(
   fx: MemberAutoTradingFxQuote,
   nowMs: number,
   accountMode: TradingPlan['accountMode'] = 'paper',
+  benchmarkDrawdownPercent: number | null = null,
 ): TradingPlanInput {
   const mapping = marketMapping(entry.identity.market, member.policy);
   const quote = currentPrice(entry);
@@ -1615,6 +1619,9 @@ function buildPlanInput(
       existingPositionSide: exposure.existingPositionSide,
       liquidationDistancePercent: mapping.exchange === 'bitget'
         ? Number(evidence?.liquidationDistancePct)
+        : null,
+      benchmarkDrawdownPercent: mapping.exchange === 'bitget' || mapping.exchange === 'upbit'
+        ? benchmarkDrawdownPercent
         : null,
       openOrderExposureKrw: exposure.accountExposureKrw,
       currentPrice: quote.midpoint,
@@ -2211,6 +2218,7 @@ export class MemberAutoTradingBackgroundWorker {
       const entries = batch.entries;
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
+      let benchmarkDrawdownCache: number | null | undefined;
       let memberAuditFailedThisTick = false;
       // Database wallet and canonical-order guards apply globally and must
       // be reverified on every Worker run (never carried across restarts).
@@ -2541,9 +2549,18 @@ export class MemberAutoTradingBackgroundWorker {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
+            const cryptoEntry = entry.identity.market === 'CRYPTO_SPOT' || entry.identity.market === 'CRYPTO_FUTURES';
+            if (cryptoEntry && benchmarkDrawdownCache === undefined) {
+              try {
+                benchmarkDrawdownCache = await this.source.readBenchmarkDrawdownPercent?.(nowMs) ?? null;
+              } catch {
+                benchmarkDrawdownCache = null;
+              }
+            }
+            const benchmarkDrawdown = cryptoEntry ? benchmarkDrawdownCache ?? null : null;
             const persistentStop = await repository.getGlobalEmergencyStop();
             if (!liveModeRequested && refreshedPaperLaneReady) {
-              let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs, 'paper');
+              let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs, 'paper', benchmarkDrawdown);
               let paperEntryPolicy = runtime.fourMarketCapital
                 ? deriveFourMarketPaperExecutionPolicy(
                     member.policy,
@@ -2627,7 +2644,7 @@ export class MemberAutoTradingBackgroundWorker {
                   entry,
                   runtime,
                   marketPilotCapital,
-                  buildPlanInput(member, entry, runtime, fx, nowMs, 'live').estimatedKrw,
+                  buildPlanInput(member, entry, runtime, fx, nowMs, 'live', benchmarkDrawdown).estimatedKrw,
                   nowMs,
                   true,
                 );
@@ -2641,7 +2658,7 @@ export class MemberAutoTradingBackgroundWorker {
               const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveCandidateInput = buildPlanInput(
-                liveMember, entry, runtime, fx, nowMs, 'live',
+                liveMember, entry, runtime, fx, nowMs, 'live', benchmarkDrawdown,
               );
               const liveSeed = await buildLivePlanInput({
                 source: this.source,
@@ -3195,6 +3212,12 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   resolveFx(market: MemberAutoTradingPaperHandoffEntry['identity']['market'], nowMs: number) {
     return resolveMemberAutoTradingKrwRate(market, { nowMs });
+  }
+
+  private readonly btcBenchmarkDrawdown = createBtcBenchmarkDrawdownReader();
+
+  readBenchmarkDrawdownPercent(nowMs: number) {
+    return this.btcBenchmarkDrawdown(nowMs);
   }
 
   async readLiveAccountSnapshot(userId: string, provider: AccountProvider) {
