@@ -13,6 +13,7 @@ import {
   type TradingRiskDecision,
 } from './trade-automation.types';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
+import { benchmarkDrawdownBlocksLong, isNewCryptoLongEntry } from './crypto-benchmark-regime.service';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
@@ -241,6 +242,10 @@ export function evaluateTradingPlan(
     && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (!riskReducing && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
+  // BTC가 24시간 고점 대비 급락 중이면 코인 신규 롱/매수 진입만 차단 (청산·숏은 허용)
+  if (isNewCryptoLongEntry(plan, riskReducing) && benchmarkDrawdownBlocksLong(snapshot.benchmarkDrawdownPercent)) {
+    add(blockCodes, 'BENCHMARK_DRAWDOWN_LONG_BLOCKED');
+  }
 
   const nowMs = Date.now();
   const observedAtMs = Date.parse(snapshot.observedAt);
