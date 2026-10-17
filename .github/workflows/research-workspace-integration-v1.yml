@@ -167,6 +167,8 @@ on:
       - signal-intelligence-v3/tests/public-provider-diagnostics.test.mjs
       - signal-intelligence-v3/tests/research-evidence-bridge.test.mjs
       - .github/workflows/research-workspace-integration-v1.yml
+      - api-server/src/services/crypto-benchmark-regime.service.ts
+      - api-server/src/services/trade-automation-risk.service.ts
 permissions:
   contents: read
 concurrency:
