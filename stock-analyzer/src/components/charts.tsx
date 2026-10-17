@@ -11,8 +11,9 @@ import {
 } from 'lightweight-charts';
 import type { Candle, IndicatorSeries } from '@/lib/api';
 
-const UP = '#22c55e';
-const DOWN = '#ef4444';
+// Korean convention: 상승=빨강, 하락=파랑.
+const UP = '#F04452';
+const DOWN = '#3485FA';
 const GRID = 'rgba(255,255,255,0.05)';
 const TEXT = 'rgba(255,255,255,0.55)';
 

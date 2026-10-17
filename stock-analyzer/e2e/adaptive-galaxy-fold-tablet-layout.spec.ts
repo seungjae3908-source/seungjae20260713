@@ -118,7 +118,8 @@ test('layout adapts across phone, fold-open, tablet and desktop widths without r
     const audit = await page.evaluate(() => {
       const viewportWidth = window.innerWidth;
       const navElement = document.querySelector('nav[aria-label="주요 메뉴"]');
-      const buttons = navElement ? Array.from(navElement.querySelectorAll('button')) : [];
+      // Touch widths use the tab bar (buttons); desktop uses the sidebar (links).
+      const buttons = navElement ? Array.from(navElement.querySelectorAll('button, a')) : [];
       const visibleButtons = buttons.filter((button) => {
         const style = getComputedStyle(button);
         const rect = button.getBoundingClientRect();
@@ -142,7 +143,7 @@ test('layout adapts across phone, fold-open, tablet and desktop widths without r
     for (const rect of audit.buttons) {
       expect(rect.left, `${geometry.width}px button clips left`).toBeGreaterThanOrEqual(-1);
       expect(rect.right, `${geometry.width}px button clips right`).toBeLessThanOrEqual(audit.viewportWidth + 1);
-      expect(rect.height, `${geometry.width}px touch target too short`).toBeGreaterThanOrEqual(43);
+      expect(rect.height, `${geometry.width}px touch target too short`).toBeGreaterThanOrEqual(geometry.viewport === 'desktop' ? 32 : 43);
     }
   }
 });
@@ -155,18 +156,18 @@ test('bottom navigation menu remains inside every required short landscape viewp
   const runtime = page.getByTestId('ui-builder-runtime-settings');
   const nav = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(nav).toBeVisible();
-  const technical = nav.getByRole('button', { name: '기술' });
+  const technical = nav.getByRole('button', { name: '검색기', exact: true });
 
   for (const geometry of LANDSCAPES) {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await expect(runtime).toHaveAttribute('data-adaptive-viewport', geometry.viewport);
     await expect(runtime).toHaveAttribute('data-builder-device', 'mobile');
 
-    if (await page.getByRole('menu', { name: '기술 메뉴' }).isVisible().catch(() => false)) {
+    if (await page.getByRole('menu', { name: '검색기 메뉴' }).isVisible().catch(() => false)) {
       await page.keyboard.press('Escape');
     }
     await technical.click();
-    const menu = page.getByRole('menu', { name: '기술 메뉴' });
+    const menu = page.getByRole('menu', { name: '검색기 메뉴' });
     await expect(menu).toBeVisible();
 
     const rect = await menu.boundingBox();

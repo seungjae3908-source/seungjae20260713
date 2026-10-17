@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useIsFetching } from '@tanstack/react-query';
+import { useIsFetching, useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
   Bell,
@@ -19,6 +19,8 @@ import {
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
 import { APP_ROUTES, resolveAppRoutePresentation } from '@/lib/app-navigation';
+import type { SummaryItem } from '@/lib/api';
+import { getMarketSummary, validMarketSummaryItems } from '@/lib/market-summary';
 import '@/professional-focus-mode.css';
 
 interface CommandAction {
@@ -47,6 +49,41 @@ function editableTarget(target: EventTarget | null) {
   return element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
 }
 
+function formatClock() {
+  return new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+}
+
+function formatTapeValue(item: SummaryItem) {
+  const digits = item.unit === 'krw' && item.price >= 1000 ? 0 : 2;
+  return item.price.toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+/**
+ * Index ticker tape. It only reads market-summary data already cached by the
+ * home and market-overview screens, so the shell never adds its own request.
+ */
+function IndexTickerTape() {
+  const home = useQuery({ queryKey: ['home-dashboard-market'], queryFn: getMarketSummary, enabled: false });
+  const overview = useQuery({ queryKey: ['market-overview-summary'], queryFn: getMarketSummary, enabled: false });
+  const items = validMarketSummaryItems(home.data?.items ?? overview.data?.items ?? []).slice(0, 7);
+  return (
+    <div data-testid="index-ticker-tape" aria-label="주요 지수" className="no-scrollbar flex min-w-0 flex-1 items-center gap-5 overflow-hidden whitespace-nowrap text-[12.5px]">
+      {items.length ? items.map((item) => {
+        const change = Number(item.changePercent);
+        const tone = change > 0 ? 'text-rise' : change < 0 ? 'text-fall' : 'text-muted-foreground';
+        return (
+          <span key={item.key} className="inline-flex items-baseline gap-1.5">
+            <b className="font-medium text-sidebar-foreground">{item.label}</b>
+            <span className={`num ${tone}`}>
+              {formatTapeValue(item)} {Number.isFinite(change) ? `${change > 0 ? '+' : ''}${change.toFixed(2)}%` : ''}
+            </span>
+          </span>
+        );
+      }) : <span className="text-muted-foreground">지수 정보는 홈 화면을 열면 표시됩니다</span>}
+    </div>
+  );
+}
+
 function supportsFocusMode(location: string) {
   const path = location.split(/[?#]/, 1)[0] || '/';
   return FOCUS_ROUTES.some((route) => path === route || path.startsWith(`${route}/`));
@@ -61,6 +98,7 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
   const [activeIndex, setActiveIndex] = useState(0);
   const [focusMode, setFocusMode] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
+  const [clock, setClock] = useState(formatClock);
   const inputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLElement | null>(null);
   const presentation = resolveAppRoutePresentation(location);
@@ -83,6 +121,11 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
   const filteredActions = needle
     ? visibleActions.filter((item) => `${item.label} ${item.description}`.toLocaleLowerCase('ko-KR').includes(needle))
     : visibleActions;
+
+  useEffect(() => {
+    if (activeRequests > 0) return;
+    setClock(formatClock());
+  }, [activeRequests]);
 
   useEffect(() => {
     const onOnline = () => setOnline(true);
@@ -226,30 +269,28 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
     <>
       <div
         data-testid="professional-command-bar"
-        className="hidden min-[1200px]:flex h-14 shrink-0 items-center gap-3 border-b border-card-border bg-background/95 px-4 backdrop-blur"
-        aria-label="프로페셔널 명령 바"
+        className="hidden min-[1200px]:flex h-14 shrink-0 items-center gap-4 border-b border-border bg-sidebar px-5"
+        aria-label="상단 바"
       >
-        <button type="button" onClick={() => navigate(APP_ROUTES.homeAlias)} className="flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-2 text-sm font-bold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><BarChart3 className="h-4 w-4" /></span>
-          <span>STOCK AI</span>
-        </button>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium text-muted-foreground">{presentation?.breadcrumb.join(' / ') ?? '투자 워크스페이스'}</p>
-          <p className="truncate text-sm font-semibold">{presentation?.title ?? '투자 워크스페이스'}</p>
+        <div className="hidden min-w-0 max-w-[10rem] shrink-0 2xl:block">
+          <p className="truncate text-[11px] font-medium text-muted-foreground">{presentation?.breadcrumb.slice(0, -1).join(' / ') || 'STOCK AI'}</p>
+          <p className="truncate text-sm font-semibold">{presentation?.title ?? '홈'}</p>
         </div>
+        <span className="sr-only 2xl:hidden">{presentation?.title ?? '홈'}</span>
 
         <button
           type="button"
           onClick={() => setOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={open}
-          className="flex min-h-10 w-[min(28vw,22rem)] min-w-56 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-left text-sm text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+          className="flex h-9 w-[min(26vw,20rem)] min-w-52 shrink-0 items-center gap-2 rounded-lg border border-input bg-background px-3 text-left text-[13px] text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
         >
-          <Search className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">화면·기능 빠른 실행</span>
-          <kbd className="shrink-0 rounded-md border border-card-border bg-background px-2 py-1 text-xs font-semibold">Ctrl K</kbd>
+          <Search className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">종목·화면 검색</span>
+          <kbd className="num shrink-0 rounded border border-input px-1.5 py-0.5 text-[11px] font-medium">Ctrl K</kbd>
         </button>
+
+        <IndexTickerTape />
 
         <div className="flex shrink-0 items-center gap-2 text-xs">
           {focusEligible ? (
@@ -259,19 +300,19 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
               aria-label="집중 모드 시작"
               title="집중 모드 시작 (F)"
               onClick={() => { setOpen(false); setFocusMode(true); }}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-card-border text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-input text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
             >
               <Maximize2 className="h-4 w-4" aria-hidden="true" />
             </button>
           ) : null}
-          <span className="inline-flex min-h-8 items-center gap-2 rounded-full border border-card-border px-3 font-medium" data-testid="professional-network-status">
-            <span className={`h-2 w-2 rounded-full ${online ? 'bg-positive' : 'bg-destructive'}`} aria-hidden="true" />
+          <span className="inline-flex min-h-8 items-center gap-1.5 px-1 font-medium text-sidebar-foreground" data-testid="professional-network-status">
+            <span className={`h-2 w-2 rounded-full ${online ? (activeRequests > 0 ? 'bg-warning' : 'bg-positive') : 'bg-destructive'}`} aria-hidden="true" />
             {online ? '온라인' : '오프라인'}
           </span>
-          <span className="inline-flex min-h-8 items-center rounded-full border border-card-border px-3 font-medium" data-testid="professional-query-status">
-            {activeRequests > 0 ? `데이터 요청 중 · ${activeRequests}` : '데이터 요청 대기'}
+          <span className="inline-flex min-h-8 items-center px-1 font-medium text-muted-foreground" data-testid="professional-query-status">
+            {activeRequests > 0 ? `데이터 갱신 중 · ${activeRequests}` : `데이터 정상 · ${clock} 기준`}
           </span>
-          <button type="button" aria-label="계정 열기" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
+          <button type="button" aria-label="계정 열기" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-36 truncate rounded-lg border border-input px-3 font-semibold text-foreground hover:bg-sidebar-hover">
             {auth.displayName ?? '계정'}
           </button>
           {showGlobalLogout ? (
@@ -280,7 +321,7 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
               aria-label="로그아웃"
               title="로그아웃"
               onClick={() => void auth.signOut()}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-card-border text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
             >
               <LogOut className="h-4 w-4" aria-hidden="true" />
             </button>

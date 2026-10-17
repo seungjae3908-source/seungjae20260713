@@ -806,7 +806,7 @@ function SpecialFeedRow({
 				<div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-black">
 					<span>{formatAppPrice(item.price, item.currency)}</span>
 					{item.changePercent != null && (
-						<span className={item.changePercent >= 0 ? 'text-positive' : 'text-destructive'}>
+						<span className={item.changePercent >= 0 ? 'text-rise' : 'text-fall'}>
 							{formatAppPercent(item.changePercent)}
 						</span>
 					)}
@@ -887,7 +887,7 @@ function Section({ title, state, action, children }: { title: string; state?: st
 }
 
 function Metric({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: 'up' | 'down' }) {
-	return <div className="rounded-2xl bg-secondary/60 p-3"><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className={cn('mt-1 break-words text-xs font-black', strong && 'text-base', tone === 'up' && 'text-positive', tone === 'down' && 'text-destructive')}>{value}</p></div>;
+	return <div className="rounded-2xl bg-secondary/60 p-3"><p className="text-[10px] font-bold text-muted-foreground">{label}</p><p className={cn('mt-1 break-words text-xs font-black', strong && 'text-base', tone === 'up' && 'text-rise', tone === 'down' && 'text-fall')}>{value}</p></div>;
 }
 
 function InlineState({ children, tone }: { children: ReactNode; tone?: 'error' }) {

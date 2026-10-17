@@ -291,7 +291,7 @@ function AssetList({ route, rows, onSelect }: { route: MarketInformationRoute; r
             <span className="block text-xs font-black sm:text-sm">{formatNumber(row.price, row.currency)} {row.currency}</span>
             <span className={cn(
               'text-[10px] font-black sm:text-xs',
-              (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground',
+              (row.changePercent ?? 0) > 0 ? 'text-rise' : (row.changePercent ?? 0) < 0 ? 'text-fall' : 'text-muted-foreground',
             )}>
               {formatPercent(row.changePercent)}
             </span>
@@ -390,7 +390,7 @@ export default function MarketInformationPage() {
             <div key={row.key} className="rounded-xl border bg-background p-3">
               <p className="truncate text-xs font-bold text-muted-foreground">{row.label}</p>
               <p className="mt-1 text-base font-black">{formatNumber(row.value)}</p>
-              <p className={cn('mt-1 text-xs font-black', (row.changePercent ?? 0) > 0 ? 'text-red-600' : (row.changePercent ?? 0) < 0 ? 'text-blue-600' : 'text-muted-foreground')}>{formatPercent(row.changePercent)}</p>
+              <p className={cn('mt-1 text-xs font-black', (row.changePercent ?? 0) > 0 ? 'text-rise' : (row.changePercent ?? 0) < 0 ? 'text-fall' : 'text-muted-foreground')}>{formatPercent(row.changePercent)}</p>
             </div>
           ))}
         </div>

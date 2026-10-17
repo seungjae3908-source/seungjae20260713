@@ -106,7 +106,9 @@ async function expectTouchTarget(
   width: number,
   role: 'button' | 'tab' = 'button',
 ) {
-  const control = page.getByRole(role, { name: label, exact: true });
+  // Page content only: the app tab bar may carry a same-named destination (검색기).
+  const scope = role === 'button' ? page.getByRole('main') : page;
+  const control = scope.getByRole(role, { name: label, exact: true });
   await expect(control).toBeVisible();
   const box = await control.boundingBox();
   expect(box?.height ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(44);

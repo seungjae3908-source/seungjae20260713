@@ -15,23 +15,26 @@ import {
   Settings,
   Star,
   TrendingUp,
+  PieChart,
+  Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import {
-  APP_NAVIGATION,
+  MOBILE_NAVIGATION,
   cleanAppPath,
-  navigationGroupMatches,
+  mobileTabMatches,
   navigationMenuItemIsUserVisible,
   navigationMenuItemMatches,
   resolveAppRoutePresentation,
-  type NavigationGroupId,
+  type MobileTabIconId,
+  type MobileTabId,
   type NavigationIconId,
   type NavigationMenuItem,
 } from '@/lib/app-navigation';
 
-const ICONS: Record<NavigationIconId, LucideIcon> = {
+export const NAVIGATION_ICONS: Record<NavigationIconId, LucideIcon> = {
   home: Home,
   assets: TrendingUp,
   technical: Search,
@@ -50,22 +53,36 @@ const ICONS: Record<NavigationIconId, LucideIcon> = {
   portfolio: BriefcaseBusiness,
 };
 
-function menuPlacement(groupId: NavigationGroupId) {
-  if (groupId === 'assets') return 'left-0 right-auto translate-x-0';
-  if (groupId === 'information' || groupId === 'settings') return 'left-auto right-0 translate-x-0';
+const MOBILE_TAB_ICONS: Record<MobileTabIconId, LucideIcon> = {
+  home: Home,
+  assets: BarChart3,
+  search: Search,
+  power: Zap,
+  portfolio: PieChart,
+};
+
+function menuPlacement(groupId: MobileTabId) {
+  if (groupId === 'home' || groupId === 'assets') return 'left-0 right-auto translate-x-0';
+  if (groupId === 'auto-trading' || groupId === 'wealth') return 'left-auto right-0 translate-x-0';
   return 'left-1/2 right-auto -translate-x-1/2';
 }
+
+/**
+ * Mobile/tablet tab bar (<1200px). Pages render it at their bottom edge; on
+ * desktop the AppShell sidebar takes over and this bar is hidden by CSS so the
+ * document title and route metadata effects keep running.
+ */
 
 export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
   const path = cleanAppPath(location);
   const presentation = resolveAppRoutePresentation(location);
-  const [openMenu, setOpenMenu] = useState<NavigationGroupId | null>(null);
+  const [openMenu, setOpenMenu] = useState<MobileTabId | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const triggerRefs = useRef<Partial<Record<NavigationGroupId, HTMLButtonElement | null>>>({});
+  const triggerRefs = useRef<Partial<Record<MobileTabId, HTMLButtonElement | null>>>({});
   const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const visibleGroups = APP_NAVIGATION.filter((item) => !item.capability || auth.can(item.capability));
+  const visibleGroups = MOBILE_NAVIGATION.filter((item) => !item.capability || auth.can(item.capability));
 
   useEffect(() => {
     setOpenMenu(null);
@@ -78,7 +95,7 @@ export function BottomNav() {
   }, [presentation?.title]);
 
   useEffect(() => {
-    function closeAndRestoreFocus(groupId: NavigationGroupId | null = openMenu) {
+    function closeAndRestoreFocus(groupId: MobileTabId | null = openMenu) {
       if (!groupId) return;
       const trigger = triggerRefs.current[groupId];
       setOpenMenu(null);
@@ -117,13 +134,13 @@ export function BottomNav() {
     window.requestAnimationFrame(() => menuItemRefs.current[index]?.focus());
   }
 
-  function openGroupMenu(groupId: NavigationGroupId, focusIndex = 0) {
+  function openGroupMenu(groupId: MobileTabId, focusIndex = 0) {
     menuItemRefs.current = [];
     setOpenMenu(groupId);
     focusMenuItem(focusIndex);
   }
 
-  function closeGroupMenu(groupId: NavigationGroupId) {
+  function closeGroupMenu(groupId: MobileTabId) {
     const trigger = triggerRefs.current[groupId];
     setOpenMenu(null);
     menuItemRefs.current = [];
@@ -132,7 +149,7 @@ export function BottomNav() {
 
   function handleTriggerKeyDown(
     event: ReactKeyboardEvent<HTMLButtonElement>,
-    groupId: NavigationGroupId,
+    groupId: MobileTabId,
     itemCount: number,
     isOpen: boolean,
   ) {
@@ -157,7 +174,7 @@ export function BottomNav() {
     event: ReactKeyboardEvent<HTMLButtonElement>,
     index: number,
     itemCount: number,
-    groupId: NavigationGroupId,
+    groupId: MobileTabId,
   ) {
     let targetIndex: number | null = null;
     if (event.key === 'ArrowDown') targetIndex = (index + 1) % itemCount;
@@ -185,7 +202,8 @@ export function BottomNav() {
       aria-label="주요 메뉴"
       data-route-title={presentation?.title ?? undefined}
       data-breadcrumb={presentation?.breadcrumb.join(' / ') ?? undefined}
-      className="relative z-40 w-full shrink-0 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
+      data-mobile-tab-bar="true"
+      className="relative z-40 w-full shrink-0 border-t border-card-border bg-sidebar px-1 pb-[env(safe-area-inset-bottom)] pt-1"
     >
       {presentation?.breadcrumb.length ? (
         <ol aria-label="현재 위치" className="sr-only">
@@ -201,8 +219,8 @@ export function BottomNav() {
         style={{ gridTemplateColumns: `repeat(${Math.max(visibleGroups.length, 1)}, minmax(0, 1fr))` }}
       >
         {visibleGroups.map((group) => {
-          const active = navigationGroupMatches(group, path);
-          const Icon = ICONS[group.icon];
+          const active = mobileTabMatches(group, path);
+          const Icon = MOBILE_TAB_ICONS[group.icon];
           const visibleMenuItems = (group.menu ?? []).filter(
             (item) => (!item.capability || auth.can(item.capability))
               && navigationMenuItemIsUserVisible(item),
@@ -221,12 +239,12 @@ export function BottomNav() {
                     aria-label={`${group.label} 메뉴`}
                     aria-orientation="vertical"
                     className={cn(
-                      'absolute bottom-full z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 max-w-[calc(100vw-0.75rem)] overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl',
+                      'absolute bottom-full z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 max-w-[calc(100vw-0.75rem)] overflow-y-auto rounded-xl border border-card-border bg-popover p-1.5 shadow-2xl',
                       menuPlacement(group.id),
                     )}
                   >
                     {visibleMenuItems.map((menuItem: NavigationMenuItem, index) => {
-                      const MenuIcon = ICONS[menuItem.icon];
+                      const MenuIcon = NAVIGATION_ICONS[menuItem.icon];
                       const menuActive = navigationMenuItemMatches(menuItem, path);
                       return (
                         <button
@@ -243,10 +261,10 @@ export function BottomNav() {
                             group.id,
                           )}
                           className={cn(
-                            'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-semibold transition',
+                            'flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium transition',
                             menuActive
-                              ? 'bg-primary/10 text-primary'
-                              : 'text-foreground hover:bg-muted active:bg-muted',
+                              ? 'bg-sidebar-active text-foreground'
+                              : 'text-muted-foreground hover:bg-muted hover:text-foreground active:bg-muted',
                           )}
                         >
                           <MenuIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -272,11 +290,11 @@ export function BottomNav() {
                   }}
                   onKeyDown={(event) => handleTriggerKeyDown(event, group.id, visibleMenuItems.length, menuOpen)}
                   className={cn(
-                    'flex min-h-11 w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-xs font-semibold transition',
-                    active || menuOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground',
+                    'flex min-h-11 w-full min-w-0 flex-col items-center justify-center rounded-lg px-1 py-1 text-xs font-medium transition',
+                    active || menuOpen ? 'text-foreground' : 'text-muted-foreground active:text-foreground',
                   )}
                 >
-                  <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
+                  <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-foreground' : 'text-muted-foreground')} aria-hidden="true" />
                   <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
                 </button>
               </div>
@@ -290,11 +308,11 @@ export function BottomNav() {
               aria-current={active ? 'page' : undefined}
               onClick={() => moveTo(group.href)}
               className={cn(
-                'flex min-h-11 min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-xs font-semibold transition',
-                active ? 'text-primary' : 'text-muted-foreground active:text-foreground',
+                'flex min-h-11 min-w-0 flex-col items-center justify-center rounded-lg px-1 py-1 text-xs font-medium transition',
+                active ? 'text-foreground' : 'text-muted-foreground active:text-foreground',
               )}
             >
-              <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
+              <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-foreground' : 'text-muted-foreground')} aria-hidden="true" />
               <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
             </button>
           );
