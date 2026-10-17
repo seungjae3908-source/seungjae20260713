@@ -25,7 +25,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { ResearchDetailDialog } from '@/components/research-detail-dialog';
 import { useAuth } from '@/lib/auth';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
-import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
+import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview, type ResearchFormulaDevelopment, type ResearchFormulaLaneId } from '@/lib/research-center';
 import { ResearchLightweightMarketWatchPanel } from '@/components/research-lightweight-market-watch-panel';
 import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';
 import {
@@ -372,6 +372,8 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
 
+      <FormulaDevelopmentPanel development={overview.research.formulaDevelopment} />
+
       <ResearchLightweightMarketWatchPanel
         watch={overview.dataFactory?.lightweightMarketWatch}
         cadence={overview.dataFactory?.lightweightMarketWatchCadence}
@@ -400,6 +402,199 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
           </div>
         </section>
         {selected ? <ResearchDetailDialog title={selectedCard.label} onClose={() => onSelect(null)}><StageDetail card={selectedCard} /></ResearchDetailDialog> : null}
+      </div>
+    </section>
+  );
+}
+
+const FORMULA_LANE_LABELS: Readonly<Record<ResearchFormulaLaneId, string>> = Object.freeze({
+  CRYPTO_FUTURES_LONG: '코인선물 롱',
+  CRYPTO_FUTURES_SHORT: '코인선물 숏',
+  CRYPTO_SPOT_LONG: '코인현물',
+  KR_STOCK_LONG: '국내주식',
+  US_STOCK_LONG: '미국주식',
+});
+const FORMULA_TRIAL_LABELS = Object.freeze({ SURVIVOR: '합격', WATCH: '관찰', REJECT: '탈락' });
+const FORMULA_EXIT_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  X1: '고정 2R', X2: '고정 1.5R·넓은 손절', X3: '추적 손절', X4: '절반 익절+추적',
+});
+const FORMULA_ENTRY_LABELS: Readonly<Record<string, string>> = Object.freeze({ SINGLE: '한 번에', PYRAMID: '위로 추가' });
+const FORMULA_VARIANT_EXIT_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  FIXED_FULL: '고정 전량', FIXED_SCALED: '고정 분할', TRAIL_FULL: '추적 전량', TRAIL_SCALED: '추적 분할',
+});
+
+/** Pure: signed percent with fixed digits, '—' for missing or non-finite input. */
+function formatFormulaPercent(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const percent = value * 100;
+  return `${percent > 0 ? '+' : ''}${percent.toFixed(digits)}%`;
+}
+
+/** Pure: signed R multiple, '—' for missing or non-finite input. */
+function formatFormulaR(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}R`;
+}
+
+/** Pure: unsigned share 0..1 as a whole percent, '—' when unknown. */
+function formatFormulaShare(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+function formulaVariantLabel(variantId: string | null | undefined): string {
+  if (!variantId) return '—';
+  const [entry, exit] = variantId.split('+');
+  return `${FORMULA_ENTRY_LABELS[entry] ?? entry} + ${FORMULA_VARIANT_EXIT_LABELS[exit] ?? exit ?? ''}`.trim();
+}
+
+function formulaCountText(value: number | null | undefined): string {
+  return value == null ? '—' : value.toLocaleString('ko-KR');
+}
+
+function FormulaSection({ title, observedAt, children, testId }: { title: string; observedAt: string | null; children: ReactNode; testId: string }) {
+  return (
+    <section className="min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid={testId}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-black">{title}</h3>
+        <span className="text-[10px] text-muted-foreground">{observedAt ? `갱신 ${formatDate(observedAt)}` : '아직 결과 없음'}</span>
+      </div>
+      <div className="mt-3 space-y-3 text-xs">{children}</div>
+    </section>
+  );
+}
+
+function FormulaDevelopmentPanel({ development }: { development: ResearchFormulaDevelopment | undefined }) {
+  const combinationLanes = useMemo(() => development?.combination.lanes ?? [], [development]);
+  const exitLanes = useMemo(() => development?.exitComparison.lanes ?? [], [development]);
+  const paperRules = useMemo(() => development?.exploratoryPaper.rules ?? [], [development]);
+  const totals = useMemo(() => combinationLanes.reduce((sum, lane) => ({
+    survivors: sum.survivors + (lane.survivors ?? 0),
+    watch: sum.watch + (lane.watch ?? 0),
+    paperCandidates: sum.paperCandidates + lane.paperCandidates,
+  }), { survivors: 0, watch: 0, paperCandidates: 0 }), [combinationLanes]);
+
+  if (!development || development.status === 'MISSING') {
+    return (
+      <section className="rounded-2xl border border-card-border bg-card p-4 text-xs text-muted-foreground" data-testid="research-formula-development" aria-label="수식 개발 현황">
+        <h2 className="text-base font-black text-foreground">수식 개발 현황</h2>
+        <p className="mt-2">아직 연구 결과가 없습니다. 연구 서버가 10분마다 결과를 만듭니다.</p>
+      </section>
+    );
+  }
+  if (development.status === 'INVALID') {
+    return (
+      <section className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-xs" data-testid="research-formula-development" role="status" aria-label="수식 개발 현황">
+        <h2 className="text-base font-black">수식 개발 현황</h2>
+        <p className="mt-2">연구 결과 파일을 읽지 못했습니다. 숫자를 지어내지 않고 비워 둡니다.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="space-y-3" data-testid="research-formula-development" aria-labelledby="research-formula-development-title">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h2 id="research-formula-development-title" className="text-base font-black">수식 개발 현황</h2>
+          <p className="mt-1 text-[11px] text-muted-foreground">2025년까지 데이터로 탐색 · 2026 봉인 데이터로 1회 검증 · 수수료·펀딩 반영 · 주문 권한 없음</p>
+        </div>
+        <div className="flex gap-2 text-[11px] font-black">
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300">합격 {totals.survivors}</span>
+          <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-sky-700 dark:text-sky-300">관찰 {totals.watch}</span>
+          <span className="rounded-full border border-border bg-muted/50 px-2.5 py-1">모의 후보 {totals.paperCandidates}</span>
+        </div>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <FormulaSection title="조합 탐색" observedAt={development.combination.observedAt} testId="research-formula-combination">
+          {combinationLanes.length === 0 ? <p className="text-muted-foreground">탐색 결과 없음</p> : combinationLanes.map((lane) => (
+            <article key={lane.laneId} className="rounded-xl border border-card-border bg-background p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-black">{FORMULA_LANE_LABELS[lane.laneId]}</h4>
+                <span className="text-[10px] text-muted-foreground">
+                  {lane.status === 'WAITING_FOR_DATA' ? '데이터 수집 중' : `시도 ${formulaCountText(lane.trialsEvaluated)}/${formulaCountText(lane.trialsPlanned)}`}
+                  {lane.cumulativeTrials != null ? ` · 누적 ${formulaCountText(lane.cumulativeTrials)}` : ''}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                합격 {formulaCountText(lane.survivors)} · 관찰 {formulaCountText(lane.watch)} · 탈락 {formulaCountText(lane.rejected)} · 봉인 검증 {formulaCountText(lane.holdoutChecked)} · 모의 후보 {lane.paperCandidates}
+              </p>
+              {lane.top.length ? (
+                <ul className="mt-2 space-y-1.5">
+                  {lane.top.slice(0, 3).map((row, index) => (
+                    <li key={`${lane.laneId}-${index}`} className="rounded-lg bg-muted/40 px-2.5 py-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${row.finalStatus === 'SURVIVOR' ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-sky-500/15 text-sky-700 dark:text-sky-300'}`}>{FORMULA_TRIAL_LABELS[row.finalStatus]}</span>
+                        <span className="font-bold">{row.labels.join(' + ') || '조건 미표시'}</span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        청산 {row.exitId ? FORMULA_EXIT_LABELS[row.exitId] ?? row.exitId : '—'} · 검증 {formulaCountText(row.trades)}건 · 평균 {formatFormulaPercent(row.meanReturn, 3)} · 승률 {formatFormulaShare(row.winRate)}
+                        {row.holdoutPass == null ? '' : row.holdoutPass ? ' · 봉인 검증 통과' : ' · 봉인 검증 실패'}
+                        {row.unseenPass == null ? '' : row.unseenPass ? ' · 처음 보는 종목 통과' : ' · 처음 보는 종목 실패'}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </article>
+          ))}
+        </FormulaSection>
+
+        <FormulaSection title="청산 방식 비교 (8가지)" observedAt={development.exitComparison.observedAt} testId="research-formula-exit-comparison">
+          {exitLanes.length === 0 ? <p className="text-muted-foreground">비교 결과 없음 (배포 후 첫 연구 주기에 생성)</p> : exitLanes.map((lane) => (
+            <article key={lane.laneId} className="rounded-xl border border-card-border bg-background p-3">
+              <h4 className="font-black">{FORMULA_LANE_LABELS[lane.laneId]}</h4>
+              {lane.status !== 'COMPLETE' ? <p className="mt-1 text-[11px] text-muted-foreground">데이터 대기</p> : lane.signalSets.map((set) => (
+                <div key={set.label} className="mt-2">
+                  <p className="text-[11px] font-bold">{set.label}</p>
+                  <p className={`text-[11px] ${set.winnerStatus === 'WINNER' ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}`}>
+                    {set.winnerStatus === 'WINNER' ? `채택 후보: ${formulaVariantLabel(set.winnerVariant)}` : '채택 후보 없음 (검증·처음 보는 종목 모두 플러스인 방식 없음)'}
+                  </p>
+                  <div className="mt-1 overflow-x-auto">
+                    <table className="w-full min-w-[22rem] text-[10px]">
+                      <thead className="text-muted-foreground"><tr><th className="py-1 text-left font-bold">방식</th><th className="text-right font-bold">거래</th><th className="text-right font-bold">평균</th><th className="text-right font-bold">승률</th><th className="text-right font-bold">처음 보는 종목</th></tr></thead>
+                      <tbody>
+                        {set.variants.map((variant) => (
+                          <tr key={variant.variantId} className={variant.variantId === set.winnerVariant ? 'font-black' : ''}>
+                            <td className="py-0.5">{formulaVariantLabel(variant.variantId)}</td>
+                            <td className="text-right">{formulaCountText(variant.trades)}</td>
+                            <td className="text-right">{formatFormulaR(variant.meanR)}</td>
+                            <td className="text-right">{formatFormulaShare(variant.winRate)}</td>
+                            <td className="text-right">{formatFormulaR(variant.unseenMeanR)} ({formulaCountText(variant.unseenTrades)})</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </article>
+          ))}
+        </FormulaSection>
+
+        <FormulaSection title="탐색용 모의매매" observedAt={development.exploratoryPaper.observedAt} testId="research-formula-exploratory-paper">
+          <p className="text-[11px] text-muted-foreground">
+            종료 {formulaCountText(development.exploratoryPaper.closed)}건 · 진행 {formulaCountText(development.exploratoryPaper.open)}건 · 졸업 후보 {formulaCountText(development.exploratoryPaper.promotionEligibleRules)} · 강등 {formulaCountText(development.exploratoryPaper.demotedRules)}
+          </p>
+          <p className="text-[10px] text-muted-foreground">졸업 기준: 30건 이상 · 평균의 95% 하한 &gt; 0 · 3종목 이상</p>
+          {paperRules.length ? (
+            <ul className="space-y-1.5">
+              {paperRules.map((rule, index) => (
+                <li key={`${rule.laneId ?? 'lane'}-${index}`} className="rounded-lg bg-muted/40 px-2.5 py-2">
+                  <p className="font-bold">{rule.laneId ? `${FORMULA_LANE_LABELS[rule.laneId]} · ` : ''}{rule.labels.join(' + ') || '조건 미표시'}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {formulaCountText(rule.trades)}건 · 평균 {formatFormulaR(rule.meanR)} · 하한 {formatFormulaR(rule.lower95)} · 승률 {formatFormulaShare(rule.winRate)}{rule.promotionEligible ? ' · 졸업 후보' : ''}{rule.lifecycle === 'DEMOTED' ? ' · 강등' : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-muted-foreground">아직 모의 거래 없음</p>}
+        </FormulaSection>
+
+        <FormulaSection title="운영 감시" observedAt={development.watchdog.observedAt} testId="research-formula-watchdog">
+          {development.watchdog.present ? (
+            <p className="text-[11px]">정상 {formulaCountText(development.watchdog.healthy)}개 · 문제 {development.watchdog.problems.length ? development.watchdog.problems.join(', ') : '없음'}</p>
+          ) : <p className="text-muted-foreground">감시 기록 없음</p>}
+        </FormulaSection>
       </div>
     </section>
   );
