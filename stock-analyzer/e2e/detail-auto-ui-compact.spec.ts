@@ -58,8 +58,8 @@ for (const width of [360, 390, 412, 430]) {
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toBeVisible();
     await expect(safety).toContainText('자동매매 실행 방식');
-    await expect(safety).toContainText('주문별 승인');
-    await expect(safety).toContainText('불필요');
+    await expect(safety).toContainText('주문 방식');
+    await expect(safety).toContainText('손실 한도');
     await expect(safety).toContainText('위험검사');
 
     await expect(page.getByTestId('trading-market-domestic_stock')).toBeHidden();
