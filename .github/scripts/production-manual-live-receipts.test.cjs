@@ -62,3 +62,19 @@ test('receipt must reference a successful exact-SHA authentic workflow', async (
   broken = true;
   await assert.rejects(inspectManualLiveReceipts(input), /SPOT_MANUAL/);
 });
+
+test('a futures-only automatic scope needs only the futures receipt; an empty or unknown scope is refused', async () => {
+  const context = { repo: { owner: 'owner', repo: 'repo' } };
+  const futures = { ...receipt('futures'), id: 124, body: receipt('futures').body.replace('workflow_run: 100', 'workflow_run: 101') };
+  const github = { rest: { actions: { async getWorkflowRun({ run_id }) { return { data: {
+    path: `.github/workflows/production-${run_id === 100 ? 'live' : 'futures-live'}-trading-gate.yml`,
+    head_sha: sha, head_branch: 'main', event: 'issue_comment', status: 'completed', conclusion: 'success',
+    created_at: '2026-10-12T00:00:30Z', updated_at: '2026-10-12T00:01:01Z' } }; } } } };
+  const base = { github, context, comments: [futures], targetSha: sha, deploymentCompletedAt: deploy };
+  const ready = await inspectManualLiveReceipts({ ...base, kinds: ['futures'] });
+  assert.equal(ready.futures.commentId, 124);
+  assert.equal(ready.spot, undefined);
+  await assert.rejects(inspectManualLiveReceipts(base), /AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED/u);
+  await assert.rejects(inspectManualLiveReceipts({ ...base, kinds: [] }), /AUTOMATIC_TRADING_MANUAL_RECEIPT_SCOPE_INVALID/u);
+  await assert.rejects(inspectManualLiveReceipts({ ...base, kinds: ['kr'] }), /AUTOMATIC_TRADING_MANUAL_RECEIPT_SCOPE_INVALID/u);
+});
