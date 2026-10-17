@@ -16,6 +16,7 @@ import {
 } from './middleware/auth';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
+import { isMissingFrontendStaticAssetRequest } from './lib/frontend-static-cache';
 
 const app: Express = express();
 
@@ -144,8 +145,12 @@ if (existsSync(clientDist)) {
     },
   }));
 
-  app.get(/^(?!\/api).*/, (_req, res) => {
+  app.get(/^(?!\/api).*/, (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (isMissingFrontendStaticAssetRequest(req.path)) {
+      res.status(404).type('text/plain').send('Not Found');
+      return;
+    }
     res.sendFile(clientIndex);
   });
 }

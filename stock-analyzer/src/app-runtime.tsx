@@ -1,6 +1,8 @@
 import type { ComponentType } from 'react';
 import { createRoot } from 'react-dom/client';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { AppErrorBoundary } from '@/components/app-error-boundary';
+import { installChunkLoadRecovery } from '@/lib/chunk-load-recovery';
 import { primeInitialAuthBootstrap } from '@/lib/auth-initial-bootstrap';
 import { installDeferredScannerResponseGuard } from '@/lib/scanner-response-guard-bootstrap';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
@@ -60,6 +62,7 @@ function registerServiceWorker() {
 	});
 }
 
+installChunkLoadRecovery();
 void primeInitialAuthBootstrap()?.catch(() => undefined);
 configureUnifiedChartFetch(authorizedFetch);
 installDeferredScannerResponseGuard();
@@ -67,5 +70,9 @@ applyInitialAccent();
 registerServiceWorker();
 
 export function mountApp(App: ComponentType) {
-	createRoot(document.getElementById('root')!).render(<App />);
+	createRoot(document.getElementById('root')!).render(
+		<AppErrorBoundary>
+			<App />
+		</AppErrorBoundary>,
+	);
 }
