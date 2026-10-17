@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
 import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
+import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.mjs';
 import {
   aiIntervalMinutesV1,
   decideFreeAiRunV1,
@@ -101,6 +102,22 @@ try {
   signalEvidenceError = safeError(error);
 }
 
+// Deterministic exit-strategy comparison on the cached coin datasets. Lanes
+// recompute only when code or data changed (or weekly); failure never changes
+// the exit code.
+let exitComparison = null;
+let exitComparisonError = null;
+try {
+  const remaining = TOTAL_BUDGET_MS - (Date.now() - startedMs) - 20_000;
+  if (remaining >= 30_000) {
+    exitComparison = await runExitStrategyComparisonV1({ stateRoot, researchCodeSha, budgetMs: Math.min(remaining, 120_000) });
+  } else {
+    exitComparisonError = 'SKIPPED_NO_BUDGET';
+  }
+} catch (error) {
+  exitComparisonError = safeError(error);
+}
+
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
@@ -129,6 +146,9 @@ const result = Object.freeze({
     lanes: combination.lanes.map((lane) => ({ laneId: lane.laneId, status: lane.status,
       trialsEvaluated: lane.trialsEvaluated ?? 0, survivors: lane.survivors ?? 0, watch: lane.watch ?? 0 })),
     aiProviderCalls: 0,
+  },
+  exitComparison: exitComparison == null ? { error: exitComparisonError } : {
+    lanes: exitComparison.lanes.map((lane) => ({ laneId: lane.laneId, status: lane.status, computedAt: lane.computedAt ?? null })),
   },
   scannerEvidence: signalEvidence == null ? { error: signalEvidenceError } : { rules: signalEvidence.rules.length },
   liveTrading: false,
