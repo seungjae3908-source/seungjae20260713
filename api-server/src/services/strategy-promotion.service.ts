@@ -114,25 +114,9 @@ export interface StrategyPromotionRecord {
   killState: KillState;
   blockers: readonly string[];
   promotionEligible: boolean;
-  /** True only when at least one stage beyond RESEARCH_DESIGN has linked evidence for this exact strategy id. */
-  evidenceLinked: boolean;
   executionAuthority: 'NONE';
   liveTradingAuthority: false;
   privateTradingApiCount: 0;
-}
-
-export type StrategyEvidenceLinkageStatus = 'MISSING' | 'PARTIAL' | 'LINKED';
-
-/**
- * Whether research evidence is actually wired into this service. Without it every
- * stage is NOT_STARTED, which must be shown as "evidence not connected" rather
- * than as "0 validated", since the latter reads as research having made no progress.
- */
-export interface StrategyEvidenceLinkage {
-  status: StrategyEvidenceLinkageStatus;
-  linkedStrategyCount: number;
-  totalStrategyCount: number;
-  message: string;
 }
 
 export interface PromotionEvidenceSource {
@@ -150,7 +134,6 @@ export interface StrategyPromotionList {
   items: readonly StrategyPromotionRecord[];
   counts: Readonly<Record<PromotionState, number>>;
   evidenceSources: readonly PromotionEvidenceSource[];
-  evidenceLinkage: StrategyEvidenceLinkage;
   promotionCandidates: number;
   executionAuthority: 'NONE';
   liveTradingAuthority: false;
@@ -544,7 +527,6 @@ export class StrategyPromotionService {
         killState,
         blockers: Object.freeze(blockers),
         promotionEligible: currentState === 'PROMOTION_CANDIDATE',
-        evidenceLinked: overrides.size > 0,
         executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY,
         liveTradingAuthority: false as const,
         privateTradingApiCount: 0 as const,
@@ -561,7 +543,6 @@ export class StrategyPromotionService {
       items,
       counts,
       evidenceSources: sourceRegistry(),
-      evidenceLinkage: evidenceLinkage(items),
       promotionCandidates: counts.PROMOTION_CANDIDATE,
       executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY,
       liveTradingAuthority: false,
@@ -603,33 +584,6 @@ export class StrategyPromotionService {
       executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY,
     };
   }
-}
-
-export function evidenceLinkage(items: readonly StrategyPromotionRecord[]): StrategyEvidenceLinkage {
-  const totalStrategyCount = items.length;
-  const linkedStrategyCount = items.filter((item) => item.evidenceLinked).length;
-  if (totalStrategyCount > 0 && linkedStrategyCount === 0) {
-    return {
-      status: 'MISSING',
-      linkedStrategyCount,
-      totalStrategyCount,
-      message: '연구 검증 증거가 아직 승격센터에 연결되지 않았습니다. 단계별 "시작 전"은 연구 미진행이 아니라 증거 미연결 상태입니다.',
-    };
-  }
-  if (linkedStrategyCount < totalStrategyCount) {
-    return {
-      status: 'PARTIAL',
-      linkedStrategyCount,
-      totalStrategyCount,
-      message: `전략 ${totalStrategyCount}개 중 ${linkedStrategyCount}개만 연구 검증 증거가 연결되어 있습니다.`,
-    };
-  }
-  return {
-    status: 'LINKED',
-    linkedStrategyCount,
-    totalStrategyCount,
-    message: totalStrategyCount === 0 ? '조건에 맞는 전략이 없습니다.' : '모든 전략에 연구 검증 증거가 연결되어 있습니다.',
-  };
 }
 
 function byCostStressNeedsDetails(stages: readonly PromotionStageEvidence[]) {

@@ -140,24 +140,3 @@ test('versioned filters and kill state remain fail closed', () => {
   assert.equal(killed.items[0]?.promotionState, 'KILLED');
   assert.equal(killed.items[0]?.executionAuthority, 'NONE');
 });
-
-test('default service reports evidence as not connected instead of a silent zero', () => {
-  const list = new StrategyPromotionService({ sourceSha: SHA, now: () => NOW }).list();
-  assert.ok(list.items.length > 0);
-  assert.equal(list.evidenceLinkage.status, 'MISSING');
-  assert.equal(list.evidenceLinkage.linkedStrategyCount, 0);
-  assert.equal(list.evidenceLinkage.totalStrategyCount, list.items.length);
-  assert.match(list.evidenceLinkage.message, /증거 미연결/u);
-  assert.ok(list.items.every((item) => item.evidenceLinked === false));
-});
-
-test('evidence linkage becomes partial once one exact strategy id has evidence', () => {
-  const list = new StrategyPromotionService({
-    sourceSha: SHA,
-    now: () => NOW,
-    evidence: { [STRATEGY]: [pass('HISTORICAL_BACKTEST')] },
-  }).list();
-  assert.equal(list.evidenceLinkage.status, 'PARTIAL');
-  assert.equal(list.evidenceLinkage.linkedStrategyCount, 1);
-  assert.equal(list.items.find((item) => item.identity.strategyId === STRATEGY)?.evidenceLinked, true);
-});
