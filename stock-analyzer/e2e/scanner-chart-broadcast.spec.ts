@@ -538,8 +538,8 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
     const safety = page.getByTestId('auto-trading-safety-summary');
-    await expect(safety).toContainText('주문별 승인');
-    await expect(safety).toContainText('불필요');
+    await expect(safety).toContainText('주문 방식');
+    await expect(safety).not.toContainText('주문별 승인');
     await expect(safety).toContainText('4시장');
     await expect(safety).toContainText('매 주문 재검증');
     await expect(page.getByTestId('technical-trading-modes')).toBeVisible();
