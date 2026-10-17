@@ -22,7 +22,10 @@ test('owned live-data queries stop interval polling while the app is in the back
     foregroundOnlyQueryCount += source.match(/refetchIntervalInBackground:\s*false/g)?.length ?? 0;
   }
 
-  expect(foregroundOnlyQueryCount).toBeGreaterThanOrEqual(24);
+  // 23 after useSignals was removed: it polled /api/stocks/:ticker/signals, a route
+  // the API server does not serve (it only produced 404s). Every remaining
+  // polling query must still opt out of hidden-tab polling (asserted above).
+  expect(foregroundOnlyQueryCount).toBeGreaterThanOrEqual(23);
 });
 
 test('lazy routes render an immediate structured shell without a blocking spinner', async ({ page }) => {
