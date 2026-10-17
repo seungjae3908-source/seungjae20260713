@@ -575,54 +575,21 @@ jobs:
                 scope_requested=true ;;
             esac
           done
-          # Owner-approved per-market automatic LIVE scope + manual Paper
-          # removal (2026-10-17). Exact UI/spec blobs and BOTH Trading guards
-          # are pinned; the gate verifier must pass. Paper safety is unchanged.
+          # Owner-approved per-market automatic LIVE scope; user-clicked Paper is
+          # kept and named 모의매매 (2026-10-17). Exact UI/spec blobs and BOTH
+          # Trading guards are pinned; the gate verifier must pass. Paper safety
+          # is unchanged.
           market_scope_ui=(
             stock-analyzer/src/pages/auto-trading.tsx
-            stock-analyzer/src/pages/paper-trading.tsx
-            stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx
             stock-analyzer/src/components/trade-automation-settings.tsx
-            stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
-            stock-analyzer/e2e/detail-auto-ui-compact.spec.ts
-            stock-analyzer/e2e/paper-bottom-nav-inset-contract.spec.ts
             stock-analyzer/e2e/phase12-trade-automation.spec.ts
-            stock-analyzer/e2e/stock-detail-ai-chart-ui-remediation.spec.ts
             stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts
-            # Manual Paper order preparation removed from scanner, AI chart and
-            # technical workspace (owner decision 2026-10-17).
-            stock-analyzer/src/pages/signal-scanner.tsx
-            stock-analyzer/src/pages/technical-workspace.tsx
-            stock-analyzer/src/components/ai-chart-position-panel-impl.tsx
-            stock-analyzer/src/lib/ui-builder-layout.ts
-            stock-analyzer/src/lib/ui-builder-layout.test.ts
-            stock-analyzer/e2e/signal-scanner.spec.ts
-            stock-analyzer/e2e/ai-chart-position-readonly.spec.ts
-            stock-analyzer/e2e/ui-builder-layout-contract.spec.ts
-            .github/scripts/connection-graph-auditor.mjs
-            .github/tests/connection-graph-auditor.test.mjs
           )
           market_scope_expected=(
-            7b8a872244fa3a9ba7083e92a3df5ca9136d5fcb
-            9575e57c46f221797fe21b1d79711e75534c6f2f
-            a5ce2db3e6b9180527dd0c65d121403920fd7a7f
+            090b773f868269e810051a4dc794a72988759e4a
             218b2102d6f68e59ddc2e5054fbdabf2add6772d
-            28958c60eb80eb3eb872bd3d05264df0b6f8522c
-            caf86ad759b47a116eedc3a5781023fb8f5da4c8
-            16aeedd9299f30fe9490692a56f44512d5035c39
-            bccddf8a0d4e24ce3a19a78d5ec87a724df7d6c2
-            44449fc8ece6e6ffa45e958e85666fdc07e0693c
+            47c4d4fb698a237b31d34b2f2468ca00491d9b80
             602a523599f004fd346f6ded8305c9672e7047c0
-            f8c627431f6e646720b74e882a85222d197afc91
-            a80bd533ba60661030ccf2dfd609c39714f51ff0
-            ee66d0a25421756de16e60295d8bfa34e81aef79
-            676ae5ef82499ef3619ef65fc73c9bf1aa2fefb4
-            7f3a52bf8699ffd2a0a2258b5de09fda8a8c1903
-            1ebd190966214a0caac212984c5912e6be2f951d
-            e6a58fe8df7e88821999e74122b18894c5b8f2a9
-            508d73dcd6b3ca0ec48ffac4859cdb8c2b269b82
-            a31e045a2ef5a2b91164c7c39f4248f46ab93b23
-            7f7f23618e53f4855bb976fcfdcf082c38400306
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
@@ -644,7 +611,7 @@ jobs:
             )
             market_scope_guard_expected=(
               0c34f5bd57a36048fc2bb56694a7fec76009dc7a
-              7493cedee10abe1a99792290a3bc7276d41d7c31
+              a6c8fbb9a5457961c50b04198f0e5a673dd2c0f2
             )
             for i in "${!market_scope_guards[@]}"; do
               path="${market_scope_guards[$i]}"

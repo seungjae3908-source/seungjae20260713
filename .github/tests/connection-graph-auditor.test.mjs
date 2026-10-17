@@ -95,7 +95,7 @@ test('default graph ids are unique and core repair lanes are represented', () =>
 test('frontend endpoint text cannot prove KR scanner backend connection', () => {
   const files = new Map([
     ['stock-analyzer/src/components/scanner-approval-composer.tsx', "selection.market === 'KR' /api/trade-automation/scanner/plans accountMode: 'paper' adapter: 'paper'"],
-    ['stock-analyzer/src/components/guarded-signal-order.tsx', '<ScannerApprovalComposer'],
+    ['stock-analyzer/src/pages/signal-scanner.tsx', '<ScannerApprovalComposer'],
     ['api-server/src/routes/trade-automation.ts', "router.post('/plans', handler)"],
     ['api-server/src/routes/scanner-paper-plans.ts', ''],
   ]);
