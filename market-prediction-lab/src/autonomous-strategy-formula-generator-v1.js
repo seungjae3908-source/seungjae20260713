@@ -815,9 +815,26 @@ function p1NormalizeParameterNode(node, context, depth) {
   return { node: p1Freeze({ kind: "PARAMETER", name }), type: "NUMBER" };
 }
 
+// PRICE: the closed candle's own open/high/low/close (e.g. "close > SMA(200)").
+// Same system-fixed lag as indicators: the value at the signal bar, executed
+// at the next bar's open. The field must be declared in availableDataFields.
+export const SAFE_STRATEGY_PRICE_FIELDS = Object.freeze(["open", "high", "low", "close"]);
+
+function p1NormalizePriceNode(node, context, depth) {
+  p1EnterNode(context, depth);
+  const keys = Object.hasOwn(node, "lag") ? ["kind", "field", "lag"] : ["kind", "field"];
+  p1Exact(node, keys, "PRICE_NODE_SHAPE_INVALID");
+  if (Object.hasOwn(node, "lag") && node.lag !== 1) p1Fail("PRICE_LAG_MUST_BE_SYSTEM_FIXED");
+  const field = p1Text(node.field, "PRICE_FIELD_INVALID", { lower: true });
+  if (!SAFE_STRATEGY_PRICE_FIELDS.includes(field)) p1Fail("PRICE_FIELD_INVALID", field);
+  if (!context.availableDataFields.has(field)) p1Fail("PRICE_DATA_FIELD_UNAVAILABLE", field);
+  return { node: p1Freeze({ kind: "PRICE", field, lag: 1 }), type: "NUMBER" };
+}
+
 function p1NormalizeOperand(node, context, depth) {
   p1Plain(node, "STRATEGY_DSL_NODE_INVALID");
   if (node.kind === "INDICATOR") return p1NormalizeIndicator(node, context, depth);
+  if (node.kind === "PRICE") return p1NormalizePriceNode(node, context, depth);
   if (node.kind === "PARAMETER") return p1NormalizeParameterNode(node, context, depth);
   if (node.kind === "OPERATOR") return p1NormalizeOperator(node, context, depth);
   p1Fail("STRATEGY_DSL_NODE_KIND_FORBIDDEN", String(node.kind));
@@ -967,6 +984,7 @@ function p1MarketScopeAllows(marketScope, market) {
 
 function p1SemanticNode(node, parameterMap) {
   if (node.kind === "PARAMETER") return { kind: "PARAMETER", domain: parameterMap.get(node.name).domain };
+  if (node.kind === "PRICE") return { kind: "PRICE", field: node.field, lag: node.lag };
   if (node.kind === "INDICATOR") {
     return {
       kind: "INDICATOR",
