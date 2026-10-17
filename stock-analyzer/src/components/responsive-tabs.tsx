@@ -35,9 +35,9 @@ export function ResponsiveTabs<T extends string>({
       data-ui-role="tabs"
       className={cn(
         fluid
-          ? 'no-scrollbar grid min-w-0 gap-1 overflow-visible border border-card-border'
-          : 'no-scrollbar flex min-w-0 gap-1 overflow-x-auto overscroll-x-contain border border-card-border min-[1200px]:grid min-[1200px]:overflow-visible',
-        compact ? 'rounded-xl bg-background p-0.5' : 'rounded-2xl bg-card p-1',
+          ? 'no-scrollbar grid min-w-0 gap-0.5 overflow-visible border-b border-border'
+          : 'no-scrollbar flex min-w-0 gap-0.5 overflow-x-auto overscroll-x-contain border-b border-border min-[1200px]:grid min-[1200px]:overflow-visible',
+        'rounded-none bg-transparent p-0',
         options.length === 2 && 'min-[1200px]:grid-cols-2',
         options.length === 3 && 'min-[1200px]:grid-cols-3',
         options.length === 4 && 'min-[1200px]:grid-cols-4',
@@ -68,14 +68,14 @@ export function ResponsiveTabs<T extends string>({
               if (!option.disabled) onChange(option.value);
             }}
             className={cn(
-              'inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4 transition-colors min-[1200px]:min-w-0',
+              '-mb-px inline-flex min-h-11 shrink-0 items-center justify-center rounded-none border-b-2 text-center text-xs leading-4 transition-colors min-[1200px]:min-w-0',
               fluid
                 ? 'min-w-0 w-full px-1.5'
                 : compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
               selected
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                ? 'border-brand font-semibold text-foreground'
+                : 'border-transparent font-semibold text-muted-foreground hover:text-foreground',
             )}
           >
             <span className="block w-full text-center leading-4">{option.label}{option.disabled ? ' · 잠김' : ''}</span>

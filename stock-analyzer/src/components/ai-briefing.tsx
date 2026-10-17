@@ -159,7 +159,7 @@ export function AiBriefing() {
               <div className="mb-1 text-[11px] font-semibold text-positive">강세 종목</div>
               <div className="space-y-1.5">
                 {data.gainers.map((g) => (
-                  <NameChip key={g.ticker} ticker={g.ticker} name={g.name} right={formatPercent(g.changePercent)} tone="text-positive" />
+                  <NameChip key={g.ticker} ticker={g.ticker} name={g.name} right={formatPercent(g.changePercent)} tone="text-rise" />
                 ))}
               </div>
             </div>
@@ -167,7 +167,7 @@ export function AiBriefing() {
               <div className="mb-1 text-[11px] font-semibold text-destructive">약세 종목</div>
               <div className="space-y-1.5">
                 {data.losers.map((g) => (
-                  <NameChip key={g.ticker} ticker={g.ticker} name={g.name} right={formatPercent(g.changePercent)} tone="text-destructive" />
+                  <NameChip key={g.ticker} ticker={g.ticker} name={g.name} right={formatPercent(g.changePercent)} tone="text-fall" />
                 ))}
               </div>
             </div>
