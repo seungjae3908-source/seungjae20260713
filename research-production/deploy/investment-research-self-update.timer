@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Investment Research server self-update
+
+[Timer]
+OnCalendar=*-*-* *:37:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=investment-research-self-update.service
+
+[Install]
+WantedBy=timers.target
