@@ -110,7 +110,6 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-candle-normalizer.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-indicator-engine.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-structure-engine.test.ts'),
-    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-wave-trend.test.ts'),
   ],
   phase12: [
     path.join(root, 'src/services/canonical-provider-action-contract.service.test.ts'),
