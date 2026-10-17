@@ -40,10 +40,33 @@ function sessionStorageOrNull(): StorageLike | null {
   }
 }
 
-/** Reload once for a stale chunk; returns false when the one reload was already spent. */
+/**
+ * A failed import while the browser is offline is a network outage, not a stale
+ * deploy: reloading would replace the working page (local paper trading,
+ * journal) with the browser's offline error page. Only reload when online, and
+ * do not spend the one-shot guard while offline.
+ */
+export function shouldAutoReloadForChunkError(
+  online: boolean | undefined,
+  storage: StorageLike | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (online === false) return false;
+  return claimChunkReload(storage, now);
+}
+
+function browserOnline(): boolean | undefined {
+  try {
+    return typeof navigator === 'undefined' ? undefined : navigator.onLine;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reload once for a stale chunk; returns false when offline or the one reload was already spent. */
 export function reloadOnceForChunkError(): boolean {
   if (typeof window === 'undefined') return false;
-  if (!claimChunkReload(sessionStorageOrNull())) return false;
+  if (!shouldAutoReloadForChunkError(browserOnline(), sessionStorageOrNull())) return false;
   window.location.reload();
   return true;
 }
