@@ -18,7 +18,27 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-import { runIndependentSignalBacktest, runIndependentSignalFinalHoldout } from '../../market-prediction-lab/src/independent-strategy-backtest.js';
+import { runExtendedExitBacktestV1, runExtendedExitFinalHoldoutV1 } from './extended-exit-backtest-v1.mjs';
+import {
+  appendExperimentRecordV1,
+  experimentRecordV1,
+  monteCarloTradeSequenceV1,
+  regimeDependenceV1,
+  regimeSeriesV1,
+  rollingSelectionWalkForwardV1,
+} from './research-analytics-v1.mjs';
+import { LIQUIDITY_COST_MODEL_VERSION_V1, liquidityImpactV1, liquidityProfileV1, verifyCandleDatasetV1 } from './data-integrity-v1.mjs';
+import {
+  TRIAL_LEDGER_POLICY_V1,
+  deflatedSharpeFromStatsV1,
+  holdoutAllowedV1,
+  priorTrialsExcludingV1,
+  readTrialLedgerV1,
+  recordExperimentTrialsV1,
+  recordHoldoutUseV1,
+  benjaminiHochbergCumulativeV1,
+  writeTrialLedgerV1,
+} from './trial-ledger-v1.mjs';
 import { RESEARCH_BACKTEST_PERIOD } from '../../market-prediction-lab/src/multi-market-backtest-engine.js';
 import { collectUpbitSpotHistory } from '../../market-prediction-lab/src/upbit-spot-history.js';
 import { collectBitgetCandles } from '../../market-prediction-lab/src/bitget-candle-collector.js';
@@ -75,7 +95,7 @@ const KR_ETF = new Set(['069500', '229200']);
 // about 0.10% per side. Assumptions, to be replaced with the broker's real rates.
 const US_RETAIL_COMMISSION_RATE = 0.001;
 const US_RETAIL_FX_SPREAD_RATE = 0.001;
-function symbolCost(lane, symbol) {
+function baseSymbolCost(lane, symbol) {
   if (lane.market === 'KR_STOCK' && !KR_ETF.has(symbol)) return { ...lane.cost, taxRate: KR_STOCK_SELL_TAX_RATE };
   if (lane.market === 'US_STOCK') {
     return {
@@ -88,16 +108,50 @@ function symbolCost(lane, symbol) {
   return { ...lane.cost };
 }
 
+// Fixed slippage plus square-root market impact of the lane's full position
+// notional (initial capital x leverage, the largest order the sizing allows)
+// against the symbol's pre-2026 median daily traded value. Without a liquidity
+// profile the base cost is used (identical to the pre-impact model).
+export function combinationSymbolCostV1(lane, symbol, liquidity = null) {
+  const base = baseSymbolCost(lane, symbol);
+  if (!liquidity) return base;
+  const notional = lane.initialCapital * combinationRiskModelV1(lane).leverage;
+  const impact = liquidityImpactV1({ notional, medianDailyValue: liquidity.medianDailyValue, dailyVolatility: liquidity.dailyVolatility });
+  return { ...base, slippageRate: base.slippageRate + impact };
+}
+const symbolCost = combinationSymbolCostV1;
+
 // Coin futures are researched at 5x leverage with a 2% per-trade loss budget
 // (owner decision 2026-10-16). Every other lane keeps 1x and 1%. Research only.
 export function combinationRiskModelV1(lane) {
   return lane.market === 'CRYPTO_FUTURES' ? { riskPerTrade: 0.02, leverage: 5 } : { riskPerTrade: 0.01, leverage: 1 };
 }
 
+// X1/X2: fixed ATR stop, fixed target, time exit (canonical backtester).
+// X3: let winners run - ATR trailing stop from +1R, no fixed target, 3x time.
+// X4: scale out - half at +1.5R, stop to break-even, trail the rest, 3x time.
+// X3/X4 use the extended-exit loop (proven equal to the canonical loop on
+// plain exits). Only X1/X2 rules are exported to the Signal V3 scanner, whose
+// plan model has fixed targets; X3/X4 rules are validated by forward paper.
 export const COMBINATION_EXIT_PROFILES_V1 = Object.freeze([
   Object.freeze({ id: 'X1', stopAtrMultiple: 1.5, targetRiskMultiple: 2, timeBarsFactor: 1 }),
   Object.freeze({ id: 'X2', stopAtrMultiple: 2.5, targetRiskMultiple: 1.5, timeBarsFactor: 2 }),
+  Object.freeze({ id: 'X3', stopAtrMultiple: 1.5, targetRiskMultiple: null, timeBarsFactor: 3,
+    extended: Object.freeze({ trailing: Object.freeze({ atrMultiple: 2.5, activationRiskMultiple: 1 }) }) }),
+  Object.freeze({ id: 'X4', stopAtrMultiple: 1.5, targetRiskMultiple: null, timeBarsFactor: 3,
+    extended: Object.freeze({ partials: Object.freeze([Object.freeze({ riskMultiple: 1.5, fraction: 0.5 })]),
+      trailing: Object.freeze({ atrMultiple: 2, activationRiskMultiple: 1.5 }), breakevenAfterFirstPartial: true }) }),
 ]);
+
+export const SCANNER_EXPORTABLE_EXIT_IDS_V1 = Object.freeze(['X1', 'X2']);
+
+/** Backtester parameters for one lane and exit profile. */
+export function combinationExitParametersV1(lane, exit) {
+  const parameters = { atrPeriod: 14, stopAtrMultiple: exit.stopAtrMultiple, timeBars: lane.timeBars * exit.timeBarsFactor };
+  if (exit.extended) parameters.extended = exit.extended;
+  else parameters.targetRiskMultiple = exit.targetRiskMultiple;
+  return parameters;
+}
 
 export const COMBINATION_POLICY_V1 = Object.freeze({
   discoveryFraction: 0.6,
@@ -210,8 +264,8 @@ export async function fetchCombinationFundingRatesV1({ source, symbol, startTime
 }
 
 /** Public candles only, capped before the sealed 2026 holdout. */
-export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = globalThis.fetch }) {
-  const spec = COMBINATION_UNIVERSE_V1[source];
+export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = globalThis.fetch, universe = COMBINATION_UNIVERSE_V1 }) {
+  const spec = universe[source];
   if (!spec || !spec.symbols.includes(symbol)) throw new Error('COMBINATION_DATASET_UNKNOWN');
   const endTime = HOLDOUT_START - 3_600_000;
   const startTime = endTime - (spec.lookbackDays * DAY);
@@ -226,8 +280,8 @@ export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = glo
 export const HOLDOUT_END_V1 = RESEARCH_BACKTEST_PERIOD.defaultEndTime;
 
 /** 2026 holdout candles, fetched only when a survivor needs its one-time check. */
-export async function loadCombinationHoldoutDatasetV1({ source, symbol, fetchImpl = globalThis.fetch, nowMs = Date.now() }) {
-  const spec = COMBINATION_UNIVERSE_V1[source];
+export async function loadCombinationHoldoutDatasetV1({ source, symbol, fetchImpl = globalThis.fetch, nowMs = Date.now(), universe = COMBINATION_UNIVERSE_V1 }) {
+  const spec = universe[source];
   if (!spec || !spec.symbols.includes(symbol)) throw new Error('COMBINATION_DATASET_UNKNOWN');
   const endTime = Math.min(HOLDOUT_END_V1, nowMs);
   const rows = await fetchSourceCandles({ source, symbol, startTime: HOLDOUT_START, endTime, fetchImpl });
@@ -341,24 +395,27 @@ export function benjaminiHochbergV1(pValues) {
 
 // ---------- evaluation ----------
 
-export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COMBINATION_POLICY_V1 }) {
+export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COMBINATION_POLICY_V1, collectReturns = false }) {
   const exit = COMBINATION_EXIT_PROFILES_V1.find((row) => row.id === trial.exitId);
   if (!exit) throw new Error('COMBINATION_EXIT_UNKNOWN');
   const side = lane.direction === 'SHORT' ? 'short' : 'long';
   const discovery = []; const validation = [];
   const windows = Array.from({ length: policy.walkForwardWindows }, () => []);
   const perSymbol = [];
+  // Out-of-sample (validation) returns per market regime of the traded symbol.
+  const regimeReturns = { BULL: [], BEAR: [], SIDEWAYS: [] };
   for (const data of datasets) {
-    const { candles, atoms, symbol, splitTime, windowEdges, fundingRates = [] } = data;
+    const { candles, atoms, symbol, splitTime, windowEdges, fundingRates = [], liquidity = null, regimes = null } = data;
+    const regimeAt = regimes ? new Map(candles.map((row, i) => [row.timestamp, regimes[i]])) : null;
     const arrays = trial.atoms.map((id) => atoms.get(id));
     const signalEvaluator = ({ index }) => (arrays.every((array) => array[index] === 1) ? { combination: trial.trialId } : null);
-    const result = runIndependentSignalBacktest({
+    const result = runExtendedExitBacktestV1({
       backtestInput: {
         market: lane.market, side, symbol, timeframe: lane.timeframe, candles, fundingRates,
-        initialCapital: lane.initialCapital, costModel: symbolCost(lane, symbol), riskModel: combinationRiskModelV1(lane),
+        initialCapital: lane.initialCapital, costModel: symbolCost(lane, symbol, liquidity), riskModel: combinationRiskModelV1(lane),
       },
       strategy: 'combination_search_v1', strategyVersion: `COMBINATION:${trial.trialId}`,
-      parameters: { atrPeriod: 14, stopAtrMultiple: exit.stopAtrMultiple, targetRiskMultiple: exit.targetRiskMultiple, timeBars: lane.timeBars * exit.timeBarsFactor },
+      parameters: combinationExitParametersV1(lane, exit),
       signalEvaluator,
       period: { startTime: candles[0].timestamp, endTime: candles.at(-1).timestamp },
     });
@@ -367,7 +424,11 @@ export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COM
       if (!(trade.equityBefore > 0)) continue;
       const r = trade.netPnl / trade.equityBefore;
       if (trade.signalTime < splitTime) discovery.push(r);
-      else { validation.push(r); symbolValidation.push(r); }
+      else {
+        validation.push(r); symbolValidation.push(r);
+        const regime = regimeAt?.get(trade.signalTime);
+        if (regime) regimeReturns[regime].push(r);
+      }
       let w = windowEdges.findIndex((edge) => trade.signalTime < edge);
       if (w < 0) w = windows.length - 1;
       windows[w].push(r);
@@ -394,15 +455,28 @@ export function evaluateCombinationTrialV1({ lane, trial, datasets, policy = COM
     discovery: compact(d), validation: compact(v),
     walkForward: { windows: windowMeans.map((row) => ({ trades: row.trades, meanReturn: round(row.meanReturn) })), positiveWindows },
     symbolBreadth: round(breadth, 4), symbols: perSymbol,
+    regimes: Object.fromEntries(Object.entries(regimeReturns).map(([key, rows]) => [key, { trades: rows.length, meanReturn: rows.length ? round(rows.reduce((a, b) => a + b, 0) / rows.length) : null }])),
+    ...(collectReturns ? { validationReturns: validation } : {}),
   });
 }
 
 /** Final classification needs the lane-wide FDR, so it runs over all trials. */
-export function classifyLaneTrialsV1(trials, { symbolCount, baselines = {}, policy = COMBINATION_POLICY_V1 } = {}) {
+export function classifyLaneTrialsV1(trials, { symbolCount, baselines = {}, policy = COMBINATION_POLICY_V1, priorTrials = 0 } = {}) {
   const rows = Object.values(trials);
-  const q = benjaminiHochbergV1(rows.map((row) => row.pValue ?? 1));
+  // Earlier experiments on the same data count in the FDR denominator (p = 1).
+  const totalTrials = rows.length + Math.max(0, Math.floor(Number(priorTrials) || 0));
+  const q = benjaminiHochbergCumulativeV1(rows.map((row) => row.pValue ?? 1), totalTrials);
+  // Deflated Sharpe (reported): luck benchmark from the spread of per-trade
+  // Sharpe estimates across this lane's non-rejected trials.
+  const sharpes = rows.filter((row) => row.status !== 'REJECT' && row.validation?.trades >= 3)
+    .map((row) => row.validation.tStat / Math.sqrt(row.validation.trades));
+  const sMean = sharpes.reduce((a, b) => a + b, 0) / Math.max(1, sharpes.length);
+  const sharpeVariance = sharpes.length > 1 ? sharpes.reduce((a, b) => a + ((b - sMean) ** 2), 0) / (sharpes.length - 1) : null;
   const out = rows.map((row, index) => {
     if (row.status === 'REJECT') return { ...row, qValue: round(q[index], 6), finalStatus: 'REJECT' };
+    const n = row.validation?.trades ?? 0;
+    const dsr = deflatedSharpeFromStatsV1({ sharpe: n > 0 ? row.validation.tStat / Math.sqrt(n) : 0, n, trials: totalTrials, sharpeVariance });
+    row = { ...row, deflatedSharpeProbability: round(dsr.probability, 4) };
     const survivor = q[index] <= policy.falseDiscoveryRate
       && (row.validation.profitFactor == null || row.validation.profitFactor >= policy.minimumProfitFactor)
       && row.symbolBreadth >= policy.minimumSymbolBreadth
@@ -415,6 +489,7 @@ export function classifyLaneTrialsV1(trials, { symbolCount, baselines = {}, poli
     return { ...row, qValue: round(q[index], 6), baselineValidationMean: Number.isFinite(baseline) ? baseline : null,
       beatsBaseline, finalStatus: survivor && beatsBaseline ? 'SURVIVOR' : 'WATCH' };
   });
+  out.totalTrials = totalTrials;
   return out;
 }
 
@@ -426,13 +501,13 @@ function holdoutReturns({ lane, atomIds, exitId, data }) {
   const exit = COMBINATION_EXIT_PROFILES_V1.find((row) => row.id === exitId);
   const side = lane.direction === 'SHORT' ? 'short' : 'long';
   const arrays = atomIds.map((id) => data.atoms.get(id));
-  const result = runIndependentSignalFinalHoldout({
+  const result = runExtendedExitFinalHoldoutV1({
     backtestInput: {
       market: lane.market, side, symbol: data.symbol, timeframe: lane.timeframe, candles: data.candles, fundingRates: data.fundingRates ?? [],
-      initialCapital: lane.initialCapital, costModel: symbolCost(lane, data.symbol), riskModel: combinationRiskModelV1(lane),
+      initialCapital: lane.initialCapital, costModel: symbolCost(lane, data.symbol, data.liquidity ?? null), riskModel: combinationRiskModelV1(lane),
     },
     strategy: 'combination_search_v1', strategyVersion: `COMBINATION_HOLDOUT:${atomIds.join('+') || 'BASELINE'}`,
-    parameters: { atrPeriod: 14, stopAtrMultiple: exit.stopAtrMultiple, targetRiskMultiple: exit.targetRiskMultiple, timeBars: lane.timeBars * exit.timeBarsFactor },
+    parameters: combinationExitParametersV1(lane, exit),
     signalEvaluator: ({ index }) => (arrays.every((array) => array[index] === 1) ? { holdout: true } : null),
     period: { startTime: HOLDOUT_START, endTime: Math.min(HOLDOUT_END_V1, data.candles.at(-1).timestamp), includeFinalHoldout: true },
   });
@@ -469,7 +544,7 @@ export function evaluateHoldoutV1({ lane, trial, holdoutDatasets, observedAt, po
   });
 }
 
-async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observedAtMs, fetchBudget, log, policy }) {
+async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observedAtMs, fetchBudget, log, policy, universe = COMBINATION_UNIVERSE_V1 }) {
   const out = [];
   for (const data of warm) {
     const path = join(root, 'combination-research', 'holdout-datasets', source, `${data.symbol}.json`);
@@ -481,7 +556,7 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
       if (fetchBudget.remaining <= 0) { log.push(`HOLDOUT_${source}:${data.symbol}:FETCH_BUDGET_NEXT_TICK`); continue; }
       fetchBudget.remaining -= 1;
       try {
-        const fetched = await loader({ source, symbol: data.symbol, fetchImpl, nowMs: observedAtMs });
+        const fetched = await loader({ source, symbol: data.symbol, fetchImpl, nowMs: observedAtMs, universe });
         cached = { contract: 'combination-holdout-dataset/v1', source, symbol: data.symbol, fetchedAt: observedAtMs, candles: fetched.candles, fundingRates: fetched.fundingRates ?? [], fundingSource: fetched.fundingSource ?? null };
         await atomicJson(path, cached);
         log.push(`HOLDOUT_${source}:${data.symbol}:FETCHED:${fetched.candles.length}`);
@@ -494,7 +569,10 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
     }
     const future = cached.candles.filter((row) => row.timestamp >= HOLDOUT_START && row.timestamp <= HOLDOUT_END_V1);
     const candles = [...data.candles.slice(-policy.warmupBars), ...future];
-    out.push({ symbol: data.symbol, candles, fundingRates: cached.fundingRates ?? [], atoms: computeCombinationAtomsV1(candles, { timeframe: data.timeframe }) });
+    // Liquidity is the pre-2026 profile of the warm dataset: nothing measured
+    // inside the holdout changes the cost charged in it.
+    out.push({ symbol: data.symbol, candles, fundingRates: cached.fundingRates ?? [], liquidity: data.liquidity ?? null,
+      atoms: computeCombinationAtomsV1(candles, { timeframe: data.timeframe }) });
   }
   return out;
 }
@@ -524,7 +602,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
       if (fetchBudget.remaining <= 0) { log.push(`${source}:${symbol}:FETCH_BUDGET_NEXT_TICK`); pending += 1; continue; }
       fetchBudget.remaining -= 1;
       try {
-        const data = await loader({ source, symbol, fetchImpl });
+        const data = await loader({ source, symbol, fetchImpl, universe });
         cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles, fundingRates: data.fundingRates ?? [], fundingSource: data.fundingSource ?? null };
         await atomicJson(path, cached);
         log.push(`${source}:${symbol}:FETCHED:${data.candles.length}`);
@@ -540,7 +618,13 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
     // Defence in depth: never let a cached/injected 2026 candle into selection.
     const candles = cached.candles.filter((row) => row.timestamp < HOLDOUT_START);
     if (candles.length < 300) { log.push(`${source}:${symbol}:TOO_FEW_CANDLES:${candles.length}`); continue; }
-    ready.push({ symbol, timeframe: cached.timeframe, candles, fundingRates: (cached.fundingRates ?? []).filter((row) => row.timestamp < HOLDOUT_START) });
+    // Attestation: hash + coverage + OHLC checks. FAIL never enters a backtest.
+    const integrity = verifyCandleDatasetV1(candles, { timeframe: cached.timeframe });
+    if (integrity.status === 'FAIL') { log.push(`${source}:${symbol}:INTEGRITY_FAIL:${integrity.findings.join(',')}`); continue; }
+    if (integrity.status === 'WARN') log.push(`${source}:${symbol}:INTEGRITY_WARN:${integrity.findings.join(',')}`);
+    ready.push({ symbol, timeframe: cached.timeframe, candles, integrity,
+      liquidity: liquidityProfileV1(candles, { timeframe: cached.timeframe }),
+      fundingRates: (cached.fundingRates ?? []).filter((row) => row.timestamp < HOLDOUT_START) });
   }
   return { ready, pending };
 }
@@ -557,6 +641,8 @@ function laneSummary(lane, classified, planned, symbols, policy, baselines = {})
       positiveWindows: row.walkForward.positiveWindows, symbolBreadth: row.symbolBreadth,
       baselineValidationMean: row.baselineValidationMean, beatsBaseline: row.beatsBaseline,
       holdout: row.holdout ?? null, unseen: row.unseen ?? null,
+      deflatedSharpeProbability: row.deflatedSharpeProbability ?? null, holdoutBudgetExhausted: row.holdoutBudgetExhausted === true,
+      regimes: row.regimes ?? null, regimeDependence: row.regimeDependence ?? null, monteCarlo: row.monteCarlo ?? null,
     }));
   const paperCandidates = classified.filter((row) => row.finalStatus === 'SURVIVOR' && row.holdout?.pass === true
       && (!policy.requireUnseenSymbolPass || row.unseen?.pass === true))
@@ -628,6 +714,8 @@ export async function runCombinationSearchLaneV1({
   const summaries = [];
   let evaluatedThisTick = 0;
   const cursorPath = join(root, 'combination-research', 'cursor.json');
+  // A corrupt ledger throws: never search with a forgotten trial count.
+  const ledger = await readTrialLedgerV1(root);
   const cursor = Number((await readJson(cursorPath))?.next ?? 0) % Math.max(lanes.length, 1);
   const ordered = lanes.map((_, k) => lanes[(cursor + k) % lanes.length]);
 
@@ -638,7 +726,7 @@ export async function runCombinationSearchLaneV1({
       const { ready, pending } = await loadSourceDatasets({ root, source, fetchImpl, loader: datasetLoader, observedAtMs, fetchBudget, log, universe });
       const all = ready.map((data) => {
         const { splitTime, windowEdges } = splitEdges(data.candles, policy);
-        return { ...data, atoms: computeCombinationAtomsV1(data.candles, { timeframe: data.timeframe }), splitTime, windowEdges };
+        return { ...data, atoms: computeCombinationAtomsV1(data.candles, { timeframe: data.timeframe }), regimes: regimeSeriesV1(data.candles), splitTime, windowEdges };
       });
       const universeSymbols = universe[source].symbols;
       const isUnseen = (symbol) => policy.unseenSymbolStride > 0
@@ -654,7 +742,9 @@ export async function runCombinationSearchLaneV1({
     }
     const statePath = join(root, 'combination-research', 'lanes', lane.id, 'state.json');
     const prior = await readJson(statePath);
-    const symbolKey = `${datasets.map((row) => row.symbol).join(',')}|unseen:${unseenDatasets.map((row) => row.symbol).join(',')}|${universe[source].lookbackDays}d|${policy.unseenSymbolStride}`;
+    const symbolKey = `${datasets.map((row) => row.symbol).join(',')}|unseen:${unseenDatasets.map((row) => row.symbol).join(',')}|${universe[source].lookbackDays}d|${policy.unseenSymbolStride}`
+      + `|exits:${COMBINATION_EXIT_PROFILES_V1.map((row) => row.id).join(',')}|cost:${LIQUIDITY_COST_MODEL_VERSION_V1}`;
+    const experimentKey = sha256([lane.id, COMBINATION_ATOM_LIBRARY_VERSION, symbolKey].join('|')).slice(0, 24);
     // A different atom library or symbol set is a different experiment.
     const fresh = prior?.atomLibraryVersion !== COMBINATION_ATOM_LIBRARY_VERSION || prior?.symbolKey !== symbolKey;
     const trials = fresh ? {} : { ...(prior?.trials ?? {}) };
@@ -689,7 +779,9 @@ export async function runCombinationSearchLaneV1({
       evaluatedThisTick += 1;
     }
     const planned = base.length + planTripleTrialsV1(lane, Object.fromEntries(Object.entries(trials).filter(([, row]) => row.atoms.length === 2)), policy).length;
-    const classified = classifyLaneTrialsV1(trials, { symbolCount: datasets.length, baselines, policy });
+    const priorTrials = priorTrialsExcludingV1(ledger, source, experimentKey);
+    recordExperimentTrialsV1(ledger, { source, laneId: lane.id, experimentKey, trials: Object.keys(trials).length, observedAt });
+    const classified = classifyLaneTrialsV1(trials, { symbolCount: datasets.length, baselines, policy, priorTrials });
     // One-time sealed-holdout check, only for survivors not yet checked.
     const holdout = fresh ? {} : { ...(prior?.holdout ?? {}) };
     // Survivors must first hold up on symbols that never took part in selection.
@@ -700,25 +792,56 @@ export async function runCombinationSearchLaneV1({
       row.unseen = unseenChecks[row.trialId];
     }
     const unseenOk = (row) => !policy.requireUnseenSymbolPass || row.unseen?.pass === true;
-    const unchecked = classified.filter((row) => row.finalStatus === 'SURVIVOR' && unseenOk(row) && !holdout[row.trialId]);
+    // The sealed 2026 check has a fixed per-source budget across ALL
+    // experiments; once spent, only the live forward paper sample can validate.
+    const unchecked = [];
+    // Scarce budget goes to the strongest survivors first (same order as the report).
+    const byStrength = [...classified].sort((a, b) => (a.qValue - b.qValue) || (b.validation.meanReturn - a.validation.meanReturn) || a.trialId.localeCompare(b.trialId));
+    for (const row of byStrength) {
+      if (row.finalStatus !== 'SURVIVOR' || !unseenOk(row) || holdout[row.trialId]) continue;
+      if (holdoutAllowedV1(ledger, { source, trialId: row.trialId }).allowed) unchecked.push(row);
+      else row.holdoutBudgetExhausted = true;
+    }
     if (unchecked.length > 0 && clock() < deadline) {
       const holdoutDatasets = await loadHoldoutSource({ root, source, warm: datasets, fetchImpl, loader: holdoutLoader,
-        observedAtMs, fetchBudget, log, policy: HOLDOUT_POLICY_V1 });
+        observedAtMs, fetchBudget, log, policy: HOLDOUT_POLICY_V1, universe });
       if (holdoutDatasets.length === datasets.length) {
         for (const row of unchecked) {
           if (clock() >= deadline) break;
+          if (!holdoutAllowedV1(ledger, { source, trialId: row.trialId }).allowed) { row.holdoutBudgetExhausted = true; continue; }
           holdout[row.trialId] = evaluateHoldoutV1({ lane, trial: row, holdoutDatasets, observedAt });
+          recordHoldoutUseV1(ledger, { source, laneId: lane.id, trialId: row.trialId, observedAt, pass: holdout[row.trialId].pass });
         }
       }
     }
     for (const row of classified) if (holdout[row.trialId]) row.holdout = holdout[row.trialId];
+    // Reproducibility: one append-only record per experiment with input digests.
+    await appendExperimentRecordV1(root, experimentRecordV1({ laneId: lane.id, experimentKey, researchCodeSha, atomLibraryVersion: COMBINATION_ATOM_LIBRARY_VERSION,
+      symbolKey, policy, observedAt, datasetDigests: Object.fromEntries(datasets.map((row) => [row.symbol, row.integrity?.sha256 ?? null])) }));
+    // Monte Carlo of the out-of-sample trade sequence for the strongest rows
+    // (re-evaluated once, returns not persisted) and regime dependence.
+    const strongest = classified.filter((row) => row.finalStatus !== 'REJECT')
+      .sort((a, b) => (a.qValue - b.qValue) || (b.validation.meanReturn - a.validation.meanReturn)).slice(0, 3);
+    for (const row of strongest) {
+      if (clock() >= deadline) break;
+      const again = evaluateCombinationTrialV1({ lane, trial: row, datasets, policy, collectReturns: true });
+      row.monteCarlo = monteCarloTradeSequenceV1(again.validationReturns, { paths: 1_000, seed: parseInt(row.trialId.slice(0, 8), 16) || 7 });
+    }
+    for (const row of classified) if (row.regimes) row.regimeDependence = regimeDependenceV1(row.regimes);
+    const rollingWalkForward = rollingSelectionWalkForwardV1(trials, { minimumTrades: policy.minimumDiscoveryTrades });
     await atomicJson(statePath, {
       contract: COMBINATION_SEARCH_CONTRACT_V1, atomLibraryVersion: COMBINATION_ATOM_LIBRARY_VERSION,
-      laneId: lane.id, symbolKey, updatedAt: observedAt, researchCodeSha, baselines, unseenBaselines, unseenChecks, holdout, trials,
+      laneId: lane.id, symbolKey, experimentKey, priorTrials, source, updatedAt: observedAt, researchCodeSha, baselines, unseenBaselines, unseenChecks, holdout, trials,
+      integrity: Object.fromEntries(datasets.map((row) => [row.symbol, { status: row.integrity?.status ?? null, sha256: row.integrity?.sha256 ?? null, findings: row.integrity?.findings ?? [] }])),
     });
-    summaries.push({ ...laneSummary(lane, classified, planned, datasets.map((row) => row.symbol), policy, baselines), stage, status: 'SEARCHING' });
+    summaries.push({ ...laneSummary(lane, classified, planned, datasets.map((row) => row.symbol), policy, baselines),
+      stage, status: 'SEARCHING', source, universeVersion: universe[source].universeVersion ?? 'V1', rollingWalkForward,
+      cumulativeTrials: classified.totalTrials, priorTrials,
+      holdoutUsed: ledger.holdoutUses.filter((row) => row.source === source).length, holdoutBudget: TRIAL_LEDGER_POLICY_V1.holdoutChecksPerSource,
+      integrityWarnings: datasets.filter((row) => row.integrity?.status === 'WARN').length });
     if (clock() >= deadline) break;
   }
+  await writeTrialLedgerV1(root, ledger);
   await atomicJson(cursorPath, { next: (cursor + 1) % Math.max(lanes.length, 1) });
   const result = Object.freeze({
     schemaVersion: 1,
@@ -792,6 +915,11 @@ export function formatCombinationReportKoV1(result) {
     lines.push('');
     lines.push(`■ ${name} — 종목 ${lane.symbols.length}개 (${lane.symbols.join(', ')})`);
     lines.push(`  진행: ${lane.trialsEvaluated} / ${lane.trialsPlanned}개 시험 ${lane.searchExhausted ? '(이번 재료로는 탐색 완료)' : '(다음 회차에 계속)'}`);
+    if (lane.rollingWalkForward?.outOfSampleTrades) {
+      const w = lane.rollingWalkForward;
+      lines.push(`  선택 과정 워크포워드(과거 구간에서 1등 고르고 다음 구간 성적): ${w.outOfSampleTrades}회 · 거래당 ${pct(w.outOfSampleMean, 3)} → ${w.verdict === 'SELECTION_HOLDS_OUT_OF_SAMPLE' ? '선택 방식이 다음 구간에서도 통함' : '선택 방식이 다음 구간에서 안 통함(과적합 경고)'}`);
+    }
+    if (lane.cumulativeTrials != null) lines.push(`  누적 시도(같은 데이터, 이전 실험 포함): ${lane.cumulativeTrials}개 → 우연 보정에 모두 반영 · 2026 확인 사용 ${lane.holdoutUsed ?? 0}/${lane.holdoutBudget ?? '-'}회 · 종목 목록 ${lane.universeVersion ?? 'V1'}`);
     lines.push(`  판정: 합격 ${lane.survivors} · 관찰 ${lane.watch} · 탈락 ${lane.rejected}`);
     const b1 = lane.baselines?.X1?.validation; const b2 = lane.baselines?.X2?.validation;
     if (b1 || b2) lines.push(`  기준선(조건 없이 아무 때나 진입) 검증구간 거래당 평균: 청산1 ${pct(b1?.meanReturn, 3)} · 청산2 ${pct(b2?.meanReturn, 3)} — 합격하려면 이것보다 높아야 함`);
@@ -810,10 +938,22 @@ export function formatCombinationReportKoV1(result) {
         const h = row.holdout;
         const why = { HOLDOUT_TOO_FEW_TRADES: '거래 수 부족', HOLDOUT_NOT_POSITIVE: '손실', HOLDOUT_BELOW_BASELINE: '기준선보다 낮음', HOLDOUT_SYMBOL_BREADTH_LOW: '플러스 종목 부족' }[h.reason] ?? h.reason;
         lines.push(`     2026 봉인 데이터 1회 확인(${h.period.start}~${h.period.end}): ${h.pass ? '통과 → 모의매매 후보' : `실패(${why})`} · 거래 ${h.result.trades}회 · 거래당 ${pct(h.result.meanReturn, 3)} · 기준선 ${pct(h.baseline.meanReturn, 3)} · 플러스 종목 ${Math.round(h.symbolBreadth * 100)}%`);
+      } else if (row.finalStatus === 'SURVIVOR' && row.holdoutBudgetExhausted) {
+        lines.push(`     2026 봉인 데이터 확인: 이 데이터의 확인 횟수(${lane.holdoutBudget ?? '-'}회)를 다 써서 하지 않음 → 실시간 모의매매 결과로만 검증`);
       } else if (row.finalStatus === 'SURVIVOR') {
         lines.push('     2026 봉인 데이터 확인: 대기 중(다음 회차)');
       }
       lines.push(`     일관성: 검증구간 플러스 종목 ${Math.round((row.symbolBreadth ?? 0) * 100)}% · 전체 4구간 중 ${row.positiveWindows}구간 플러스 · 우연 보정 q=${row.qValue} (0.10 이하면 통과)`);
+      if (row.deflatedSharpeProbability != null) lines.push(`     운 보정 샤프(참고): ${Math.round(row.deflatedSharpeProbability * 100)}% (95% 이상이면 운으로 설명하기 어려움)`);
+      if (row.regimes) {
+        const g = row.regimes;
+        const dep = { ALL_REGIMES: '모든 국면에서 플러스', ONLY_BULL: '상승장에서만 플러스(주의)', ONLY_BEAR: '하락장에서만 플러스', ONLY_SIDEWAYS: '횡보장에서만 플러스', MIXED: '국면별로 엇갈림', NONE: '모든 국면에서 마이너스', INSUFFICIENT: '국면별 표본 부족' }[row.regimeDependence] ?? '-';
+        lines.push(`     시장 국면(검증구간): 상승 ${g.BULL.trades}회 ${pct(g.BULL.meanReturn, 3)} · 하락 ${g.BEAR.trades}회 ${pct(g.BEAR.meanReturn, 3)} · 횡보 ${g.SIDEWAYS.trades}회 ${pct(g.SIDEWAYS.meanReturn, 3)} → ${dep}`);
+      }
+      if (row.monteCarlo?.paths) {
+        const mc = row.monteCarlo;
+        lines.push(`     몬테카를로(거래 순서 ${mc.paths}회 섞기): 최대낙폭 중간 ${pct(-mc.maxDrawdown.p50, 1)} · 나쁜 5% ${pct(-mc.maxDrawdown.p95, 1)} · 원금 ${Math.round(mc.ruinDrawdown * 100)}% 손실 확률 ${Math.round(mc.probabilityOfRuin * 100)}%`);
+      }
     });
     if (lane.top.length === 0) lines.push('  아직 관찰할 만한 조합 없음 (모두 탈락)');
     if (lane.paperCandidates?.length) lines.push(`  ★ 모의매매 후보 ${lane.paperCandidates.length}개: ${lane.paperCandidates.map((row) => row.labels.join(' + ')).join(' / ')}`);
