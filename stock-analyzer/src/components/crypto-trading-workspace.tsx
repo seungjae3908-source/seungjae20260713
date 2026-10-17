@@ -806,8 +806,8 @@ function formatPercent(value: number | null | undefined, digits = 2) {
 }
 
 function toneClass(direction: Direction) {
-  if (direction === "LONG") return "border-positive/30 bg-positive/10 text-positive";
-  if (direction === "SHORT") return "border-destructive/30 bg-destructive/10 text-destructive";
+  if (direction === "LONG") return "border-rise/30 bg-rise/10 text-rise";
+  if (direction === "SHORT") return "border-fall/30 bg-fall/10 text-fall";
   return "border-card-border bg-secondary text-muted-foreground";
 }
 
@@ -1769,7 +1769,7 @@ export function CryptoTradingWorkspace({
             </div>
             <div className="text-right">
               <p className="text-lg font-black">{formatPrice(selectedTicker?.markPrice ?? currentAnalysis?.currentPrice)}</p>
-              <p className={cn("text-xs font-black", (selectedTicker?.changePercent24h ?? 0) >= 0 ? "text-positive" : "text-destructive")}>{formatPercent(selectedTicker?.changePercent24h)}</p>
+              <p className={cn("text-xs font-black", (selectedTicker?.changePercent24h ?? 0) >= 0 ? "text-rise" : "text-fall")}>{formatPercent(selectedTicker?.changePercent24h)}</p>
             </div>
           </div>
 
@@ -1817,7 +1817,7 @@ export function CryptoTradingWorkspace({
                     className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-secondary"
                   >
                     <span className="text-sm font-black">{row.symbol}</span>
-                    <span className={cn("text-xs font-black", row.changePercent24h >= 0 ? "text-positive" : "text-destructive")}>{formatPercent(row.changePercent24h)}</span>
+                    <span className={cn("text-xs font-black", row.changePercent24h >= 0 ? "text-rise" : "text-fall")}>{formatPercent(row.changePercent24h)}</span>
                   </button>
                 ))}
                 {!filteredTickers.length && <p className="p-4 text-center text-xs font-bold text-muted-foreground">검색 결과가 없습니다.</p>}
@@ -2133,7 +2133,7 @@ export function CryptoTradingWorkspace({
                       <p className="mt-1 text-[10px] font-bold text-muted-foreground">수량 {formatPrice(Math.abs(position.total))} · 진입 {formatPrice(position.openPriceAvg)} · {position.leverage}배</p>
                     </div>
                     <div className="text-right">
-                      <p className={cn("text-sm font-black", position.unrealizedPL >= 0 ? "text-positive" : "text-destructive")}>{formatPrice(position.unrealizedPL)} USDT</p>
+                      <p className={cn("text-sm font-black", position.unrealizedPL >= 0 ? "text-rise" : "text-fall")}>{formatPrice(position.unrealizedPL)} USDT</p>
                       <button
                         type="button"
                         onClick={() => navigate("/auto-trading?market=crypto_futures&section=orders")}

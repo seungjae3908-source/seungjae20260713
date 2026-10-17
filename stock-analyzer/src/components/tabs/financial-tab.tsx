@@ -312,7 +312,7 @@ function GrowthChart({ labels, values }: { labels: string[]; values: number[] })
         <ChartReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
         <ChartBar dataKey="value" radius={[3, 3, 0, 0]}>
           {data.map((d, i) => (
-            <Cell key={i} fill={d.value >= 0 ? '#22c55e' : '#ef4444'} />
+            <Cell key={i} fill={d.value >= 0 ? '#F04452' : '#3485FA'} />
           ))}
         </ChartBar>
       </BarChart>
