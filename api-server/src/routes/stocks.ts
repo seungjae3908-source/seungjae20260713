@@ -17,6 +17,7 @@ import { computeScores } from "../sample/scores";
 import { scoreToRating } from "../sample/rating";
 import { deliverMemberNotification } from "../services/notification.service";
 import { requireAdmin, requireCapability, type AuthenticatedRequest } from "../middleware/auth";
+import { rssDateToIso } from "../lib/rss-date";
 import {
 	getCorpCode as getDartProviderCorpCode,
 	getFinancials as getDartProviderFinancials,
@@ -876,16 +877,21 @@ async function fetchGoogleNews(ticker: string, allHistory = false) {
 	const grouped = new Map<string, any>();
 	const items = (xml.match(/<item>[\s\S]*?<\/item>/g) ?? [])
 		.slice(0, 100)
-		.map((block) => ({
+		.map((block) => {
+			// RSS pubDate is RFC 822 ("Fri, 17 Oct 2026 03:00:00 GMT"); expose ISO 8601
+			// so the client can format it in KST and sort chronologically.
+			const publishedAt = rssDateToIso(xmlTag(block, "pubDate")) ?? "";
+			return {
 			title: xmlTag(block, "title"),
 			url: xmlTag(block, "link"),
 			link: xmlTag(block, "link"),
-			publishedAt: xmlTag(block, "pubDate"),
-			date: xmlTag(block, "pubDate"),
+			publishedAt,
+			date: publishedAt,
 			source: xmlTag(block, "source") || "Google News",
 			description: cleanFinanceCell(xmlTag(block, "description")),
 			summary: cleanFinanceCell(xmlTag(block, "description")),
-		}))
+			};
+		})
 		.filter((item) => {
 			const timestamp = Date.parse(item.publishedAt);
 			return item.title && item.url && Number.isFinite(timestamp);
