@@ -269,6 +269,16 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/e2e/backtester-korean-result-ui.spec.ts",
   "stock-analyzer/src/lib/excel-export.ts",
   ".github/scripts/paper-forward-reviewed-paths.mjs",
+  // Owner-approved data-accuracy fixes (PR #1925, 2026-10-17): exact paths only.
+  "api-server/src/lib/rss-date.test.ts",
+  "api-server/src/lib/rss-date.ts",
+  "api-server/src/providers/yahoo.test.ts",
+  "api-server/src/routes/backtests.smoke.test.ts",
+  "api-server/src/routes/bounded-market-scan.smoke.test.ts",
+  "api-server/src/routes/market-information.smoke.test.ts",
+  "api-server/src/routes/market-information.ts",
+  "api-server/src/routes/stocks.ts",
+  "stock-analyzer/e2e/market-information-timeout-contract.spec.ts",
   // Owner-approved auto-trading run button (PR #1928, 2026-10-17): exact paths only.
   "api-server/src/services/trade-automation-run-control.service.test.ts",
   "api-server/src/services/trade-automation-run-control.service.ts",

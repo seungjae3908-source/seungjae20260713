@@ -101,3 +101,14 @@ test('pattern identifiers stay stable while status changes for the same anchor p
   assert.equal(candidate?.anchorPivots[0].time, confirmed?.anchorPivots[0].time);
   assert.equal(candidate?.anchorPivots[1].time, confirmed?.anchorPivots[1].time);
 });
+
+test('equal high plus equal low (range) is mixed, not bullish', () => {
+  const base = { candleIndex: 0, confirmedAtTime: 0 };
+  const pivots: ConfirmedChartPivot[] = [
+    { ...base, id: 'h', kind: 'high', time: 6, candleIndex: 6, price: 10, classification: 'EH' },
+    { ...base, id: 'l', kind: 'low', time: 8, candleIndex: 8, price: 5, classification: 'EL' },
+  ];
+  assert.equal(buildMarketStructure(pivots).trend, 'mixed');
+  assert.equal(buildMarketStructure([pivots[0], { ...pivots[1], classification: 'HL' }]).trend, 'bullish');
+  assert.equal(buildMarketStructure([{ ...pivots[0], classification: 'LH' }, pivots[1]]).trend, 'bearish');
+});
