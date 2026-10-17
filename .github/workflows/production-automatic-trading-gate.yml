@@ -94,6 +94,7 @@ on:
       - api-server/src/routes/bounded-market-scan.smoke.test.ts
       - api-server/src/services/crypto-signal-scanner.service.test.ts
       - api-server/src/services/crypto-signal-scanner.service.ts
+      - stock-analyzer/src/lib/auth-bootstrap.ts
       - api-server/src/services/telegram-v3-current-source.service.test.ts
       - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/signal-intelligence-telegram-subscriber.service.ts
