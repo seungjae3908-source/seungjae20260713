@@ -198,16 +198,26 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/activate-production-auto-trading ([0-9a-f]{40}) all4$/u.exec(body);
-          if (!match) throw new Error('Expected /activate-production-auto-trading <40-char-current-main-sha> all4');
+          // Scope: all4 (historical four-market activation) or an explicit
+          // per-market list, e.g. "futures" or "spot,futures".
+          const match = /^\/activate-production-auto-trading ([0-9a-f]{40}) (all4|(?:kr|us|spot|futures)(?:,(?:kr|us|spot|futures)){0,3})$/u.exec(body);
+          if (!match) throw new Error('Expected /activate-production-auto-trading <40-char-current-main-sha> all4|<kr,us,spot,futures>');
+          const canonical = { kr: 'KR_STOCK', us: 'US_STOCK', spot: 'CRYPTO_SPOT', futures: 'CRYPTO_FUTURES' };
+          const order = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+          const tokens = match[2] === 'all4' ? Object.keys(canonical) : match[2].split(',');
+          if (new Set(tokens).size !== tokens.length) throw new Error('AUTOMATIC_TRADING_MARKET_SCOPE_DUPLICATE');
+          const markets = order.filter((market) => tokens.some((token) => canonical[token] === market));
           fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'markets=' + markets.join(',') + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'scope=' + (markets.length === 4 ? 'ALL4' : 'SCOPED') + '\n');
           NODE
 
-      - name: Require exact release, all-provider QA, and both manual live receipts
+      - name: Require exact release, all-provider QA, and the manual live receipts of the scope
         id: gate
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          MARKETS: ${{ steps.command.outputs.markets }}
         with:
           script: |
             const target = String(process.env.TARGET_SHA || '');
@@ -232,11 +242,22 @@ jobs:
             const { inspectManualLiveReceipts } = require(
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-manual-live-receipts.cjs`
             );
+            const markets = String(process.env.MARKETS || '').split(',').filter(Boolean);
+            // Manual spot live opens KR, US and coin spot together; futures is separate.
+            const kinds = [
+              ...(markets.some((market) => ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT'].includes(market)) ? ['spot'] : []),
+              ...(markets.includes('CRYPTO_FUTURES') ? ['futures'] : []),
+            ];
+            if (kinds.length === 0) {
+              core.setFailed('AUTOMATIC_TRADING_MARKET_SCOPE_EMPTY');
+              return;
+            }
             const { spot: spotReceipt, futures: futuresReceipt } = await inspectManualLiveReceipts({
               github, context, comments, targetSha: target,
               deploymentCompletedAt: release.productionDeployCompletedAt,
+              kinds,
             });
-            const leverage = futuresReceipt.leverage;
+            const leverage = futuresReceipt ? futuresReceipt.leverage : '7';
 
             core.setOutput('ci_run_id', String(ciRunId));
             core.setOutput('production_run_id', String(production.id));
@@ -244,8 +265,8 @@ jobs:
             core.setOutput('account_run_id', String(account.id));
             core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
             core.setOutput('qa_scope', release.qaScope);
-            core.setOutput('spot_receipt_comment_id', String(spotReceipt.commentId));
-            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.commentId));
+            core.setOutput('spot_receipt_comment_id', spotReceipt ? String(spotReceipt.commentId) : 'NOT_IN_SCOPE');
+            core.setOutput('futures_receipt_comment_id', futuresReceipt ? String(futuresReceipt.commentId) : 'NOT_IN_SCOPE');
             core.setOutput('futures_max_leverage', leverage);
 
       - name: Download exact Production post-deploy evidence
@@ -317,15 +338,16 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
 
-      - name: Activate automatic execution across all four markets
+      - name: Activate automatic execution in the owner-approved market scope
         shell: bash
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
           QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
+          MARKETS: ${{ steps.command.outputs.markets }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
+          remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q AUTO_LIVE_MARKETS=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE" "$MARKETS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
@@ -334,6 +356,17 @@ jobs:
 
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
+          const scopeOrder = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+          const scopeMarkets = String(process.env.AUTO_LIVE_MARKETS || '').split(',').filter(Boolean);
+          if (scopeMarkets.length === 0 || new Set(scopeMarkets).size !== scopeMarkets.length
+            || scopeMarkets.some((market) => !scopeOrder.includes(market))
+            || scopeMarkets.join(',') !== scopeOrder.filter((market) => scopeMarkets.includes(market)).join(',')) {
+            throw new Error('AUTOMATIC_TRADING_MARKET_SCOPE_INVALID');
+          }
+          const scopeCsv = scopeMarkets.join(',');
+          const allFourScope = scopeMarkets.length === 4;
+          const scopeHasSpot = scopeMarkets.some((market) => market !== 'CRYPTO_FUTURES');
+          const scopeHasFutures = scopeMarkets.includes('CRYPTO_FUTURES');
           const pm2Name = 'stock-app';
           // The automatic LIVE worker must consume ONLY the isolated public
           // observer. Paper Forward accounts and research are independent.
@@ -454,7 +487,11 @@ jobs:
                   && health?.liveReadinessCycleComplete === true
                   && health?.liveCycleOrderEligible === true
                   && health?.liveCyclePolicyReady === true
-                  && health?.liveCycleAllFourPolicyReady === true
+                  && (allFourScope
+                    ? health?.liveCycleAllFourPolicyReady === true
+                    : health?.liveCycleScopedPolicyReady === true
+                      && Array.isArray(health?.liveMarketScope)
+                      && health.liveMarketScope.join(',') === scopeCsv)
                   && health?.globalEmergencyStopActive === false
                   && (!requireCurrentArm || health?.liveEntryArmPresent === true && health?.liveEntriesArmed === true)) {
                   return health;
@@ -499,6 +536,12 @@ jobs:
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
             }
+            // Only the manual gates of the scoped markets must be ready; the
+            // others are preserved exactly as they are (never opened here).
+            if (expectedAuto && String(env.MEMBER_AUTO_TRADING_LIVE_MARKETS || '') !== scopeCsv) {
+              throw new Error('AUTOMATIC_TRADING_MARKET_SCOPE_BINDING_INVALID');
+            }
+            if (scopeHasSpot) {
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
               throw new Error('AUTOMATIC_TRADING_SPOT_THREE_MARKETS_NOT_READY');
@@ -512,7 +555,9 @@ jobs:
               if (!spotMarkets.has(market)) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_MISSING:' + market);
             }
             if (spotMarkets.size !== 3) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_SCOPE_TOO_WIDE');
+            }
 
+            if (scopeHasFutures) {
             if (!manual.futuresApproved || !manual.bitgetFutures
               || manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'
               || manual.futuresMarkets !== 'CRYPTO_FUTURES'
@@ -523,6 +568,7 @@ jobs:
             const futuresCaps = csv(manual.futuresCapabilities);
             for (const capability of ['BALANCE_READ','POSITION_READ','OPEN_ORDER_READ','ORDER_CREATE','ORDER_CANCEL','ORDER_AMEND']) {
               if (!futuresCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_FUTURES_CAPABILITY_MISSING:' + capability);
+            }
             }
             if (bool(env, 'AUTO_TRADING') !== expectedAuto
               || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
@@ -573,6 +619,8 @@ jobs:
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_HANDOFF_PATH: enabled ? automaticLiveHandoffPath
                   : String(baselineEnv.MEMBER_AUTO_TRADING_HANDOFF_PATH ?? ''),
+                // Server-enforced market scope of automatic LIVE entries.
+                MEMBER_AUTO_TRADING_LIVE_MARKETS: enabled ? scopeCsv : '',
                 TRADE_RECOVERY_WORKER_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_RECOVERY_WORKER_ENABLED ?? 'false'),
                 TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED: enabled ? 'true' : String(baselineEnv.TRADE_PRIVATE_RECOVERY_LOOKUP_ENABLED ?? 'false'),
                 MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
@@ -630,7 +678,8 @@ jobs:
             assertAllFourManual(persisted, true);
             requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
-              status: 'ALREADY_ACTIVATED_ALL4',
+              status: allFourScope ? 'ALREADY_ACTIVATED_ALL4' : 'ALREADY_ACTIVATED_SCOPED',
+              markets: scopeMarkets,
               targetSha: target,
               idempotent: true,
               persistenceReadback: 'PASS',
@@ -666,10 +715,11 @@ jobs:
             // zero-mutation rehearsal alone is not Production activation.
             const armedHealth = requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
-              status: 'ACTIVATED_ALL4',
+              status: allFourScope ? 'ACTIVATED_ALL4' : 'ACTIVATED_SCOPED',
               targetSha: target,
-              markets: ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'],
-              providers: ['toss','kiwoom','upbit','bitget'],
+              markets: allFourScope ? ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'] : scopeMarkets,
+              providers: allFourScope ? ['toss','kiwoom','upbit','bitget']
+                : [...(scopeHasSpot ? ['toss','kiwoom','upbit'] : []), ...(scopeHasFutures ? ['bitget'] : [])],
               AUTO_TRADING: true,
               LIVE_AUTOMATIC_TRADING_ENABLED: true,
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: true,
@@ -691,6 +741,7 @@ jobs:
               LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
               LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
               LIVE_CYCLE_ALL_FOUR_POLICY_READY: warmupHealth.liveCycleAllFourPolicyReady,
+              LIVE_CYCLE_SCOPED_POLICY_READY: warmupHealth.liveCycleScopedPolicyReady,
               GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
               OPTIONAL_TELEGRAM_STATE_PRESERVED: true,
               REAL_ORDER_SUBMITTED: false,
@@ -714,10 +765,12 @@ jobs:
           }
           NODE
 
-      - name: Record sanitized four-market automatic activation receipt
+      - name: Record sanitized automatic activation receipt
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          MARKETS: ${{ steps.command.outputs.markets }}
+          SCOPE: ${{ steps.command.outputs.scope }}
           CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
           PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
           COMPREHENSIVE_RUN_ID: ${{ steps.gate.outputs.comprehensive_run_id }}
@@ -734,10 +787,15 @@ jobs:
               issue_number: 1555,
               body: [
                 '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
-                'status: ACTIVATED_ALL4_AUTO',
+                process.env.SCOPE === 'ALL4' ? 'status: ACTIVATED_ALL4_AUTO' : 'status: ACTIVATED_SCOPED_AUTO',
                 'target_sha: ' + process.env.TARGET_SHA,
-                'markets: KR_STOCK,US_STOCK,CRYPTO_SPOT,CRYPTO_FUTURES',
-                'providers: toss,kiwoom,upbit,bitget',
+                process.env.SCOPE === 'ALL4' ? 'markets: KR_STOCK,US_STOCK,CRYPTO_SPOT,CRYPTO_FUTURES' : 'markets: ' + process.env.MARKETS,
+                process.env.SCOPE === 'ALL4' ? 'providers: toss,kiwoom,upbit,bitget'
+                  : 'providers: ' + [
+                    ...(process.env.MARKETS.split(',').some((market) => market !== 'CRYPTO_FUTURES') ? ['toss', 'kiwoom', 'upbit'] : []),
+                    ...(process.env.MARKETS.split(',').includes('CRYPTO_FUTURES') ? ['bitget'] : []),
+                  ].join(','),
+                'MEMBER_AUTO_TRADING_LIVE_MARKETS=' + process.env.MARKETS,
                 'required_ci_run: ' + process.env.CI_RUN_ID,
                 'production_deploy_run: ' + process.env.PRODUCTION_RUN_ID,
                 'qa_scope: ' + process.env.QA_SCOPE,
@@ -768,7 +826,7 @@ jobs:
                 'live_readiness_cycle_complete=true',
                 'live_cycle_order_eligible=true',
                 'live_cycle_policy_ready=true',
-                'live_cycle_all_four_policy_ready=true',
+                process.env.SCOPE === 'ALL4' ? 'live_cycle_all_four_policy_ready=true' : 'live_cycle_scoped_policy_ready=true',
                 'global_emergency_stop=false',
                 'optional_telegram_state_preserved=true',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
@@ -967,6 +1025,7 @@ jobs:
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
               MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_MARKETS: '',
               CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
               CRYPTO_AUTO_TRADE_ENABLED: 'false',
               BITGET_AUTO_TRADE_ENABLED: 'false',

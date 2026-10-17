@@ -516,6 +516,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const providerVerified = liveReadiness?.providerVerified === true;
   const autoWorker = runtimeStatus?.autoTradingBackground;
+  // Server-enforced market scope of automatic LIVE entries (owner gate).
+  const scopeMarketKey = ({ domestic_stock: 'KR_STOCK', us_stock: 'US_STOCK', crypto_spot: 'CRYPTO_SPOT', crypto_futures: 'CRYPTO_FUTURES' } as const)[market];
+  const liveMarketScope = Array.isArray(autoWorker?.liveMarketScope) ? autoWorker.liveMarketScope : null;
+  const marketInLiveScope = liveMarketScope === null || liveMarketScope.includes(scopeMarketKey);
+  const liveScopeLabel = liveMarketScope === null ? '4시장'
+    : liveMarketScope.length === 4 ? '4시장'
+      : liveMarketScope.length === 0 ? '전체 닫힘'
+        : liveMarketScope.map((key) => ({ KR_STOCK: '국내', US_STOCK: '해외', CRYPTO_SPOT: '코인현물', CRYPTO_FUTURES: '코인선물' } as Record<string, string>)[key] ?? key).join('·');
   const runtimeNowMs = runtimeClockMs;
   const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
   const automaticRuntimeReady = liveStrategyConfigured
@@ -527,7 +535,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && autoWorker.newEntriesFailClosed === false
     && autoWorker.liveEntryWarmupComplete === true
     && autoWorker.liveEntriesArmed === true
-    && autoWorker.globalEmergencyStopActive === false;
+    && autoWorker.globalEmergencyStopActive === false
+    && marketInLiveScope;
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
     : runtimeReadError
@@ -546,6 +555,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
               ? '자동 워커 차단'
               : !autoWorkerFresh
                 ? '자동 워커 상태 지연'
+                : !marketInLiveScope
+                  ? '이 시장은 서버에서 자동 실거래 닫힘'
                 : autoWorker.liveEntriesArmed !== true
                   ? '안전대기 · Arm 준비 중'
                 : automaticRuntimeReady
@@ -576,7 +587,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <StatusItem label="주문별 승인" value="불필요" />
-          <StatusItem label="시장 제어" value="4시장" />
+          <StatusItem label="시장 제어" value={liveScopeLabel} />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
       </section>
@@ -655,7 +666,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
         <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
           자동모의매매 전용 100만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
-          기존 수동 모의거래 기록이 있으면 자동으로 덮어쓰지 않습니다.
+          직접 하는 모의매매 기록이 있으면 자동으로 덮어쓰지 않습니다.
         </p>
         {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
         {autoPaperStatus === 'blocked' && walletAudit?.safeToInitialize === false ? (
@@ -747,7 +758,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold">{paperOrigin === 'automatic' ? '자동모의매매' : '수동모의매매'} · {marketMeta.label}</h2>
+          <h2 className="text-sm font-bold">{paperOrigin === 'automatic' ? '자동모의매매' : '모의매매'} · {marketMeta.label}</h2>
         </div>
         <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
           실제 주문 0
@@ -812,7 +823,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       {market === 'crypto_futures' ? (
         <details className="rounded-2xl border border-card-border bg-card">
           <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-xs font-bold [&::-webkit-details-marker]:hidden">
-            <span>기존 코인선물 수동 시뮬레이터</span>
+            <span>코인선물 모의매매 시뮬레이터</span>
             <span className="text-muted-foreground">선택 기능 ⌄</span>
           </summary>
           <div className="border-t border-card-border p-2 [&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0">
@@ -873,7 +884,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
         <p>시장 선택은 상단 4시장 버튼에서 통합 관리합니다.</p>
         <p>Canonical Paper는 실제 거래소 주문을 전송하지 않으며, 수량·레버리지·진입가격은 서버 evidence가 결정합니다.</p>
-        <p>코인선물 수동 시뮬레이터는 포지션·주문 탭에서만 선택적으로 열 수 있습니다.</p>
+        <p>모의매매는 직접 눌러서 하는 가상거래이고, 자동모의매매는 서버가 전략을 발굴해 가상계좌로 돌립니다. 코인선물 시뮬레이터는 포지션·주문 탭에서 열 수 있습니다.</p>
       </div>
     </section>
   );
@@ -930,7 +941,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <SegmentedButton active={paperOrigin === 'automatic'} disabled={!canAuto}
               onClick={() => navigate('/paper-trading?kind=automatic')} testId="paper-mode-automatic">자동모의매매</SegmentedButton>
             <SegmentedButton active={paperOrigin === 'manual'}
-              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual">수동모의매매</SegmentedButton>
+              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual">모의매매</SegmentedButton>
           </div> : null}
           <div className="rounded-xl border border-card-border bg-card p-2.5 sm:p-3" data-testid="trading-market-tabs">
             <label className="flex items-center gap-3 sm:hidden">

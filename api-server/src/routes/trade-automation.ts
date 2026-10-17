@@ -285,6 +285,9 @@ function sanitizedAutomaticRuntimeHealth() {
     liveEntryWarmupComplete: health.liveEntryWarmupComplete,
     liveReadinessCycleComplete: health.liveReadinessCycleComplete,
     liveCycleAllFourPolicyReady: health.liveCycleAllFourPolicyReady,
+    // Owner-approved server market scope for automatic LIVE entries.
+    liveMarketScope: [...health.liveMarketScope],
+    liveCycleScopedPolicyReady: health.liveCycleScopedPolicyReady,
     globalEmergencyStopActive: health.globalEmergencyStopActive,
     errorCode: health.errorCode,
   };
