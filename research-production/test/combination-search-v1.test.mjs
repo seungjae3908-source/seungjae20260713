@@ -338,3 +338,25 @@ test('coin futures research uses 5x leverage and 2% loss budget, other lanes sta
   assert.deepEqual(combinationRiskModelV1(LANE('CRYPTO_FUTURES_SHORT')), { riskPerTrade: 0.02, leverage: 5 });
   assert.deepEqual(combinationRiskModelV1(LANE('US_STOCK_LONG')), { riskPerTrade: 0.01, leverage: 1 });
 });
+
+test('funding history falls back to the labelled Binance proxy when Bitget covers too little', async () => {
+  const { fetchCombinationFundingRatesV1 } = await import('../src/combination-search-lane-v1.mjs');
+  const start = Date.parse('2025-01-01T00:00:00Z');
+  const end = start + 30 * 24 * 3_600_000;
+  const binanceRows = Array.from({ length: 90 }, (_, i) => ({ symbol: 'BTCUSDT', fundingTime: start + i * 8 * 3_600_000, fundingRate: '0.0001' }));
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('fapi.binance.com')) return { ok: true, status: 200, json: async () => binanceRows };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ code: '00000', msg: 'success', data: [] }), json: async () => ({ code: '00000', msg: 'success', data: [] }) };
+  };
+  const result = await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol: 'BTCUSDT', startTime: start, endTime: end, fetchImpl, minimumRecords: 60 });
+  assert.equal(result.fundingSource, 'BINANCE_PROXY');
+  assert.equal(result.rows.length, 90);
+  assert.ok(calls.some((url) => url.includes('fapi.binance.com')));
+  await assert.rejects(
+    fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol: 'BTCUSDT', startTime: start, endTime: end, fetchImpl, minimumRecords: 500 }),
+    /COMBINATION_FUNDING_INCOMPLETE/u,
+  );
+  assert.deepEqual(await fetchCombinationFundingRatesV1({ source: 'UPBIT_1H', symbol: 'KRW-BTC', startTime: start, endTime: end, fetchImpl, minimumRecords: 1 }), { rows: [], fundingSource: null });
+});
