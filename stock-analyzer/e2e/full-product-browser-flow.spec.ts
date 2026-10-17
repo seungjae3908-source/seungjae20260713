@@ -4,14 +4,16 @@ import { ageBrowserSession, installFullProductFixtures } from './support/full-pr
 
 const SEARCH_NOW = new Date().toISOString();
 
-// Desktop (>=1200px) navigation is the left sidebar: sections are headings and
-// every destination is a direct link.
+// Desktop (>=1200px) navigation is the left sidebar: each section heading is a
+// button and its destinations form an always-visible menu.
 async function openMenuItem(page: Page, section: string, item: string) {
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
-  await expect(navigation.getByRole('group', { name: section, exact: true })).toBeVisible();
-  const link = navigation.getByRole('link', { name: item, exact: true });
-  await expect(link).toBeVisible();
-  await link.click();
+  await navigation.getByRole('button', { name: section, exact: true }).click();
+  const menu = navigation.getByRole('menu', { name: `${section} 메뉴`, exact: true });
+  await expect(menu).toBeVisible();
+  const menuItem = menu.getByRole('menuitem', { name: item, exact: true });
+  await expect(menuItem).toBeVisible();
+  await menuItem.click();
 }
 
 async function loginThroughUi(page: Page) {
