@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+// Owner-approved 2026-10-17: run-control unit tests run inside this registered suite.
+import '../services/trade-automation-run-control.service.test';
 import type { AddressInfo } from 'node:net';
 import router, {
   normalizeReadonlyCredentialsForLiveExecution,
