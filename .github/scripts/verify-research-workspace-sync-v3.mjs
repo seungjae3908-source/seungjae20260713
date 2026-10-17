@@ -454,6 +454,22 @@ const researchPITReadOnlyReviewed=[
   'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
   '.github/workflows/research-pit-minute-readonly-drift.yml',
 ];
+// Owner-approved 2026-10-17 (PR #1925): exact data-accuracy paths only
+// (news dates, backtest error reasons, market-information timeout, promotion
+// evidence). No prefix, no order or deployment authority.
+const dataAccuracyReviewed=[
+  'api-server/src/lib/rss-date.test.ts',
+  'api-server/src/lib/rss-date.ts',
+  'api-server/src/routes/backtests.smoke.test.ts',
+  'api-server/src/routes/backtests.ts',
+  'api-server/src/routes/bounded-market-scan.smoke.test.ts',
+  'api-server/src/routes/market-information.smoke.test.ts',
+  'api-server/src/routes/market-information.ts',
+  'api-server/src/routes/stocks.ts',
+  'api-server/src/services/strategy-promotion.service.test.ts',
+  'api-server/src/services/strategy-promotion.service.ts',
+  'stock-analyzer/e2e/market-information-timeout-contract.spec.ts',
+];
 // Owner-approved 2026-10-17 (PR #1928): exact auto-trading run-button paths only.
 // Both automatic-trading guards stay mandatory; no prefix or deployment authority.
 const autoRunControlReviewed=[
@@ -466,6 +482,7 @@ const autoRunControlReviewed=[
 ];
 const allowed=new Set([
  ...SCANNER_REPAIR_PATHS,
+ ...dataAccuracyReviewed,
  ...autoRunControlReviewed,
  ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
