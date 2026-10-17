@@ -167,15 +167,46 @@ async function fetchSourceCandles({ source, symbol, startTime, endTime, fetchImp
 // futures backtest without it overstates long returns in bull runs and short
 // returns in bear runs. Fail closed: incomplete funding history is an error,
 // never a silent zero.
-async function fetchFundingRates({ source, symbol, startTime, endTime, fetchImpl, minimumRecords }) {
-  if (source !== 'BITGET_1H') return [];
-  const history = await collectFundingRateHistory({
-    client: new BitgetPublicClient({ fetchImpl }), symbol, startTime, endTime, maxPages: 80,
-  });
-  const rows = history.records.map((row) => ({ timestamp: row.timestamp, rate: row.rate }))
-    .filter((row) => Number.isSafeInteger(row.timestamp) && Number.isFinite(row.rate));
-  if (!history.exhausted || rows.length < minimumRecords) throw new Error(`COMBINATION_FUNDING_INCOMPLETE:${rows.length}`);
-  return rows;
+// Bitget serves only about four months of funding history, so older windows are
+// completed from Binance USDT-M perpetuals (same 8h series, public) and labelled
+// fundingSource BINANCE_PROXY. Still fail closed when neither source covers it.
+async function fetchBinanceFundingRates({ symbol, startTime, endTime, fetchImpl }) {
+  const rows = [];
+  let cursor = startTime;
+  for (let page = 0; page < 20; page += 1) {
+    const response = await fetchImpl(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${encodeURIComponent(symbol)}&startTime=${cursor}&endTime=${endTime}&limit=1000`);
+    if (!response.ok) throw new Error(`COMBINATION_FUNDING_PROXY_HTTP_${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload)) throw new Error('COMBINATION_FUNDING_PROXY_SHAPE');
+    for (const row of payload) {
+      const timestamp = Number(row.fundingTime);
+      const rate = Number(row.fundingRate);
+      if (Number.isSafeInteger(timestamp) && Number.isFinite(rate) && timestamp >= startTime && timestamp <= endTime) rows.push({ timestamp, rate });
+    }
+    const last = Number(payload.at(-1)?.fundingTime);
+    if (payload.length < 1000 || !Number.isFinite(last) || last < cursor) break;
+    cursor = last + 1;
+  }
+  return rows.sort((a, b) => a.timestamp - b.timestamp).filter((row, index, all) => index === 0 || row.timestamp > all[index - 1].timestamp);
+}
+
+export async function fetchCombinationFundingRatesV1({ source, symbol, startTime, endTime, fetchImpl, minimumRecords }) {
+  if (source !== 'BITGET_1H') return { rows: [], fundingSource: null };
+  let bitgetCount = 0;
+  try {
+    const history = await collectFundingRateHistory({
+      client: new BitgetPublicClient({ fetchImpl }), symbol, startTime, endTime, maxPages: 80,
+    });
+    const rows = history.records.map((row) => ({ timestamp: row.timestamp, rate: row.rate }))
+      .filter((row) => Number.isSafeInteger(row.timestamp) && Number.isFinite(row.rate));
+    bitgetCount = rows.length;
+    if (history.exhausted && rows.length >= minimumRecords) return { rows, fundingSource: 'BITGET' };
+  } catch {
+    bitgetCount = 0;
+  }
+  const proxy = await fetchBinanceFundingRates({ symbol, startTime, endTime, fetchImpl });
+  if (proxy.length < minimumRecords) throw new Error(`COMBINATION_FUNDING_INCOMPLETE:${bitgetCount}/${proxy.length}`);
+  return { rows: proxy, fundingSource: 'BINANCE_PROXY' };
 }
 
 /** Public candles only, capped before the sealed 2026 holdout. */
@@ -188,8 +219,8 @@ export async function loadCombinationDatasetV1({ source, symbol, fetchImpl = glo
   const minimum = spec.timeframe === '1d' ? 500 : 2_000;
   if (candles.length < minimum) throw new Error(`COMBINATION_DATASET_INSUFFICIENT:${candles.length}`);
   // About 3 funding payments per day; require two thirds of that as coverage.
-  const fundingRates = await fetchFundingRates({ source, symbol, startTime, endTime, fetchImpl, minimumRecords: Math.floor(spec.lookbackDays * 2) });
-  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates });
+  const funding = await fetchCombinationFundingRatesV1({ source, symbol, startTime, endTime, fetchImpl, minimumRecords: Math.floor(spec.lookbackDays * 2) });
+  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates: funding.rows, fundingSource: funding.fundingSource });
 }
 
 export const HOLDOUT_END_V1 = RESEARCH_BACKTEST_PERIOD.defaultEndTime;
@@ -203,8 +234,9 @@ export async function loadCombinationHoldoutDatasetV1({ source, symbol, fetchImp
   const candles = cleanCandles(rows ?? [], { allowHoldout: true }).filter((row) => row.timestamp >= HOLDOUT_START && row.timestamp <= HOLDOUT_END_V1);
   const minimum = spec.timeframe === '1d' ? 60 : 1_000;
   if (candles.length < minimum) throw new Error(`COMBINATION_HOLDOUT_INSUFFICIENT:${candles.length}`);
-  const fundingRates = await fetchFundingRates({ source, symbol, startTime: HOLDOUT_START, endTime, fetchImpl, minimumRecords: 10 });
-  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates });
+  const holdoutDays = Math.max(1, Math.floor((endTime - HOLDOUT_START) / DAY));
+  const funding = await fetchCombinationFundingRatesV1({ source, symbol, startTime: HOLDOUT_START, endTime, fetchImpl, minimumRecords: Math.max(10, Math.floor(holdoutDays * 2)) });
+  return Object.freeze({ source, symbol, timeframe: spec.timeframe, candles, fundingRates: funding.rows, fundingSource: funding.fundingSource });
 }
 
 // ---------- trial plan ----------
@@ -450,7 +482,7 @@ async function loadHoldoutSource({ root, source, warm, fetchImpl, loader, observ
       fetchBudget.remaining -= 1;
       try {
         const fetched = await loader({ source, symbol: data.symbol, fetchImpl, nowMs: observedAtMs });
-        cached = { contract: 'combination-holdout-dataset/v1', source, symbol: data.symbol, fetchedAt: observedAtMs, candles: fetched.candles, fundingRates: fetched.fundingRates ?? [] };
+        cached = { contract: 'combination-holdout-dataset/v1', source, symbol: data.symbol, fetchedAt: observedAtMs, candles: fetched.candles, fundingRates: fetched.fundingRates ?? [], fundingSource: fetched.fundingSource ?? null };
         await atomicJson(path, cached);
         log.push(`HOLDOUT_${source}:${data.symbol}:FETCHED:${fetched.candles.length}`);
       } catch (error) {
@@ -493,7 +525,7 @@ async function loadSourceDatasets({ root, source, fetchImpl, loader, observedAtM
       fetchBudget.remaining -= 1;
       try {
         const data = await loader({ source, symbol, fetchImpl });
-        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles, fundingRates: data.fundingRates ?? [] };
+        cached = { contract: 'combination-dataset/v1', source, symbol, timeframe: data.timeframe, lookbackDays: spec.lookbackDays, fetchedAt: observedAtMs, candles: data.candles, fundingRates: data.fundingRates ?? [], fundingSource: data.fundingSource ?? null };
         await atomicJson(path, cached);
         log.push(`${source}:${symbol}:FETCHED:${data.candles.length}`);
       } catch (error) {
