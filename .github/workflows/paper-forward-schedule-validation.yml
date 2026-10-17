@@ -533,8 +533,8 @@ jobs:
           auto_signal = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-signal-pipeline'], text=True
           ).splitlines()
-          if len(auto_signal) != 48 or len(set(auto_signal)) != 48:
-              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_48')
+          if len(auto_signal) != 50 or len(set(auto_signal)) != 50:
+              raise SystemExit('AUTO_SIGNAL_PIPELINE_SCOPE_MUST_BE_EXACTLY_50')
           scanner = subprocess.check_output(
               ['node', '.github/scripts/scanner-readonly-repair-scope.mjs', '--list-paths'], text=True
           ).splitlines()
@@ -570,7 +570,7 @@ jobs:
           test "${#auto_supplement[@]}" -eq 19
           allowed+=("${auto_supplement[@]}")
           mapfile -t auto_signal < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-signal-pipeline)
-          test "${#auto_signal[@]}" -eq 48
+          test "${#auto_signal[@]}" -eq 50
           allowed+=("${auto_signal[@]}")
           # The Research Center batch shares Paper readbacks, not Live authority.
           # Add exact reviewed paths, while preserving every Paper safety test.
