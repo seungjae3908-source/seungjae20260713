@@ -1884,8 +1884,8 @@ export default function PortfolioPage() {
 																'mt-1 text-sm font-extrabold',
 
 																profit >= 0
-																	? 'text-positive'
-																	: 'text-destructive',
+																	? 'text-rise'
+																	: 'text-fall',
 															)}
 														>
 															{signedMoney(
@@ -1950,8 +1950,8 @@ function SummaryBox({
 					'mt-1 font-extrabold',
 
 					positive
-						? 'text-positive'
-						: 'text-destructive',
+						? 'text-rise'
+						: 'text-fall',
 				)}
 			>
 				{value}

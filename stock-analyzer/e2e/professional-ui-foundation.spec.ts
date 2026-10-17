@@ -111,7 +111,7 @@ for (const width of [320, 360, 390, 430]) {
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await expect(navigation).toBeVisible();
 
-    for (const label of ['종목', '기술', '정보', '설정']) {
+    for (const label of ['종목', '검색기', '자산']) {
       const trigger = navigation.getByRole('button', { name: label, exact: true });
       await expect(trigger).toBeVisible();
       await trigger.click();
@@ -135,7 +135,7 @@ for (const width of [320, 360, 390, 430]) {
   });
 }
 
-test('1024 through 1199 stays touch-first and desktop dock begins at 1200', async ({ page }) => {
+test('1024 through 1199 stays touch-first and the desktop sidebar begins at 1200', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await installApprovedRuntime(page);
   await page.goto('/more');
@@ -165,13 +165,15 @@ test('1024 through 1199 stays touch-first and desktop dock begins at 1200', asyn
   }
 
   await page.setViewportSize({ width: 1200, height: 820 });
+  await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
   const desktop = await navigation.evaluate((node) => {
-    const style = getComputedStyle(node);
     const rect = node.getBoundingClientRect();
-    return { width: rect.width, borderRadius: style.borderRadius };
+    return { left: rect.left, width: rect.width, height: rect.height };
   });
-  expect(desktop.width, '1200px should use bounded desktop dock').toBeLessThan(1100);
-  expect(desktop.borderRadius, '1200px should use desktop floating radius').not.toBe('0px');
+  expect(Math.round(desktop.width), '1200px should use the 216px desktop sidebar').toBe(216);
+  expect(desktop.left, '1200px sidebar is anchored to the left edge').toBeLessThanOrEqual(1);
+  expect(desktop.height, '1200px sidebar spans the viewport height').toBeGreaterThan(700);
+  await expect(page.locator('nav[data-mobile-tab-bar]')).toBeHidden();
 });
 
 for (const width of [600, 768, 900, 1024, 1180]) {

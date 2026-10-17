@@ -18,6 +18,7 @@ import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
 import { ProfessionalCommandBar } from '@/components/professional-command-bar';
+import { AppSidebar, useDesktopShell } from '@/components/app-sidebar';
 import { ErrorState, PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
@@ -266,12 +267,22 @@ function LegacyStockDetailRedirect() {
   return target ? <PageFallback /> : <NotFound />;
 }
 
+const SIDEBAR_EXCLUDED_PATHS = new Set(['/install']);
+
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  const auth = useAuth();
+  const desktop = useDesktopShell();
+  const path = location.split('?')[0] || '/';
   const legacyScannerE2E = phase11E2EEnabled && location.startsWith('/__phase11-ai-workspace-e2e');
   const scannerRoute = location.startsWith('/scanner') || legacyScannerE2E;
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<ProfessionalCommandBar /><div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
+  const showSidebar = desktop
+    && auth.isApproved
+    && !auth.loading
+    && !path.startsWith('/__')
+    && !SIDEBAR_EXCLUDED_PATHS.has(path);
+  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} data-app-sidebar={showSidebar ? 'true' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full overflow-hidden bg-background ${showSidebar ? 'max-w-screen-xl min-[1200px]:max-w-none' : wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}>{showSidebar ? <div data-testid="desktop-sidebar-slot" className="flex h-full shrink-0"><AppSidebar /></div> : null}<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"><OfflineBanner /><ProfessionalCommandBar />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div><OrderbookRouteDock /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
