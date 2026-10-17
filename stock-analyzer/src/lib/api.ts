@@ -273,16 +273,17 @@ export interface Financials {
     roe: number;
     debtRatio: number;
   };
-  growth: {
+  // Sample-only blocks; the live /financials route omits them.
+  growth?: {
     revenue: number[];
     profit: number[];
   };
-  cashBurn: {
+  cashBurn?: {
     cashBalance: number;
     quarterlyBurn: number;
     survivalQuarters: number | null;
   };
-  health: {
+  health?: {
     level: HealthLevel;
     confidence: number;
   };
@@ -415,8 +416,8 @@ export interface AiAnalysis {
   shortTerm: string;
   midTerm: string;
   longTerm: string;
-  targetPrice: number;
-  stopLossPrice: number;
+  targetPrice?: number;
+  stopLossPrice?: number;
   strategy?: AiStrategy;
   conclusion: string;
   score?: number;
@@ -653,72 +654,6 @@ function normalizeFrame(tf: ChartFrameInput): Timeframe {
   return tf;
 }
 
-function clampAnalysisPrice(analysis: AiAnalysis, overview: Overview): AiAnalysis {
-  const price = overview.quote.price;
-  const currency = overview.profile.currency;
-  const name = overview.profile.name.toLowerCase();
-
-  const isEtf =
-    name.includes('etf') ||
-    name.includes('etn') ||
-    name.includes('tiger') ||
-    name.includes('kodex') ||
-    name.includes('ace') ||
-    name.includes('sol') ||
-    name.includes('hanaro') ||
-    name.includes('arirang') ||
-    name.includes('soxl') ||
-    name.includes('soxs') ||
-    name.includes('tqqq') ||
-    name.includes('sqqq');
-
-  const maxTargetRate = isEtf
-    ? 0.08
-    : analysis.opinion === 'STRONG_BUY'
-      ? 0.15
-      : analysis.opinion === 'BUY'
-        ? 0.1
-        : analysis.opinion === 'HOLD'
-          ? 0.06
-          : 0.04;
-
-  const maxStopRate = isEtf
-    ? 0.05
-    : analysis.opinion === 'STRONG_BUY' || analysis.opinion === 'BUY'
-      ? 0.08
-      : analysis.opinion === 'HOLD'
-        ? 0.06
-        : 0.04;
-
-  let targetPrice = analysis.targetPrice;
-  let stopLossPrice = analysis.stopLossPrice;
-
-  if (
-    !Number.isFinite(targetPrice) ||
-    targetPrice <= price ||
-    targetPrice > price * (1 + maxTargetRate)
-  ) {
-    targetPrice = price * (1 + maxTargetRate);
-  }
-
-  if (
-    !Number.isFinite(stopLossPrice) ||
-    stopLossPrice >= price ||
-    stopLossPrice < price * (1 - maxStopRate)
-  ) {
-    stopLossPrice = price * (1 - maxStopRate);
-  }
-
-  const round = (value: number) =>
-    currency === 'KRW' ? Math.round(value) : Math.round(value * 100) / 100;
-
-  return {
-    ...analysis,
-    targetPrice: round(targetPrice),
-    stopLossPrice: round(stopLossPrice),
-  };
-}
-
 export const api = {
   config: () => apiGet<AppConfig>('/config'),
 
@@ -749,9 +684,6 @@ export const api = {
       `/quotes?tickers=${enc(tickers.join(','))}`,
     ),
 
-  overview: (ticker: string) =>
-    apiGet<Overview>(`/stocks/${enc(ticker)}/overview`),
-
   chart: (ticker: string, timeframe: ChartFrameInput) =>
     apiGet<ChartData>(
       `/stocks/${enc(ticker)}/chart?tf=${enc(normalizeFrame(timeframe))}`,
@@ -769,17 +701,9 @@ export const api = {
   news: (ticker: string) =>
     apiGet<NewsData>(`/stocks/${enc(ticker)}/news`),
 
-  analysis: async (ticker: string) => {
-    const [analysis, overview] = await Promise.all([
-      apiGet<AiAnalysis>(`/stocks/${enc(ticker)}/analysis`),
-      apiGet<Overview>(`/stocks/${enc(ticker)}/overview`),
-    ]);
-
-    return clampAnalysisPrice(analysis, overview);
-  },
-
-  signals: (ticker: string) =>
-    apiGet<SignalReport>(`/stocks/${enc(ticker)}/signals`),
+  // 서버 /stocks/:ticker/analysis: 실시간 시세 + 일봉 기술지표 기반(목표가는 근거 없으면 미포함).
+  analysis: (ticker: string) =>
+    apiGet<AiAnalysis>(`/stocks/${enc(ticker)}/analysis`),
 
   scan: (
     indicators: string[],
