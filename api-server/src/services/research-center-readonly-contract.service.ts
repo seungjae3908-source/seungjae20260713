@@ -896,6 +896,164 @@ export function sanitizeMarketWatchCadenceReadback(value: unknown) {
   };
 }
 
+const FORMULA_DEVELOPMENT_LANES = Object.freeze(['CRYPTO_FUTURES_LONG', 'CRYPTO_FUTURES_SHORT', 'CRYPTO_SPOT_LONG', 'KR_STOCK_LONG', 'US_STOCK_LONG']);
+const FORMULA_DEVELOPMENT_LANE_SET = new Set<string>(FORMULA_DEVELOPMENT_LANES);
+const FORMULA_DEVELOPMENT_TRIAL_STATUSES = new Set(['SURVIVOR', 'WATCH', 'REJECT']);
+const FORMULA_DEVELOPMENT_ISO = /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$/;
+
+interface FormulaDevelopmentSection { present: boolean; observedAt: string | null; lanes: UnknownRecord[] }
+interface FormulaDevelopmentReadback {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'PRESENT';
+  combination: FormulaDevelopmentSection;
+  exitComparison: FormulaDevelopmentSection;
+  exploratoryPaper: {
+    present: boolean; observedAt: string | null; closed: number | null; open: number | null;
+    promotionEligibleRules: number | null; demotedRules: number | null; rules: UnknownRecord[];
+  };
+  watchdog: { present: boolean; observedAt: string | null; healthy: number | null; problems: string[] };
+  executionAuthority: 'NONE';
+}
+
+function emptyFormulaDevelopment(status: 'MISSING' | 'INVALID' = 'MISSING'): FormulaDevelopmentReadback {
+  return {
+    present: status !== 'MISSING',
+    status,
+    combination: { present: false, observedAt: null, lanes: [] },
+    exitComparison: { present: false, observedAt: null, lanes: [] },
+    exploratoryPaper: { present: false, observedAt: null, closed: null, open: null, promotionEligibleRules: null, demotedRules: null, rules: [] },
+    watchdog: { present: false, observedAt: null, healthy: null, problems: [] },
+    executionAuthority: 'NONE',
+  };
+}
+
+const formulaNumber = (value: unknown): number | null => finiteOrNull(value) ?? null;
+const formulaCount = (value: unknown): number | null => countOrNull(value) ?? null;
+const formulaText = (value: unknown, maximum = 120): string | null => safeTextOrNull(value, maximum) ?? null;
+const formulaIso = (value: unknown): string | null => {
+  const text = formulaText(value, 40);
+  return text && FORMULA_DEVELOPMENT_ISO.test(text) ? text : null;
+};
+const formulaLane = (value: unknown): string | null => (typeof value === 'string' && FORMULA_DEVELOPMENT_LANE_SET.has(value) ? value : null);
+const formulaLabels = (value: unknown): string[] => (Array.isArray(value)
+  ? value.slice(0, 4).map((item) => formulaText(item)).filter((item): item is string => item !== null)
+  : []);
+const formulaBool = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+const formulaRows = (value: unknown, limit: number): UnknownRecord[] => (Array.isArray(value)
+  ? value.slice(0, limit).map(record).filter((row): row is UnknownRecord => row !== null)
+  : []);
+
+function sanitizeFormulaDevelopment(value: unknown): FormulaDevelopmentReadback {
+  const input = record(value);
+  if (!input) return emptyFormulaDevelopment();
+  if (input.status === 'MISSING') return emptyFormulaDevelopment();
+  if (input.status !== 'PRESENT' || input.executionAuthority !== 'NONE') return emptyFormulaDevelopment('INVALID');
+  const combination = record(input.combination);
+  const exitComparison = record(input.exitComparison);
+  const paper = record(input.exploratoryPaper);
+  const watchdog = record(input.watchdog);
+  const out = emptyFormulaDevelopment();
+  out.present = true;
+  out.status = 'PRESENT';
+  if (combination?.present === true) {
+    out.combination = {
+      present: true,
+      observedAt: formulaIso(combination.observedAt),
+      lanes: formulaRows(combination.lanes, 8).flatMap((lane) => {
+        const laneId = formulaLane(lane.laneId);
+        if (!laneId) return [];
+        return [{
+          laneId,
+          status: formulaText(lane.status, 40) ?? 'UNKNOWN',
+          trialsEvaluated: formulaCount(lane.trialsEvaluated),
+          trialsPlanned: formulaCount(lane.trialsPlanned),
+          cumulativeTrials: formulaCount(lane.cumulativeTrials),
+          survivors: formulaCount(lane.survivors),
+          watch: formulaCount(lane.watch),
+          rejected: formulaCount(lane.rejected),
+          holdoutChecked: formulaCount(lane.holdoutChecked),
+          paperCandidates: formulaCount(lane.paperCandidates) ?? 0,
+          top: formulaRows(lane.top, 5).flatMap((row) => (typeof row.finalStatus === 'string' && FORMULA_DEVELOPMENT_TRIAL_STATUSES.has(row.finalStatus) ? [{
+            labels: formulaLabels(row.labels),
+            finalStatus: row.finalStatus,
+            exitId: formulaText(row.exitId, 8),
+            trades: formulaCount(row.trades),
+            meanReturn: formulaNumber(row.meanReturn),
+            winRate: formulaNumber(row.winRate),
+            profitFactor: formulaNumber(row.profitFactor),
+            qValue: formulaNumber(row.qValue),
+            holdoutPass: formulaBool(row.holdoutPass),
+            unseenPass: formulaBool(row.unseenPass),
+          }] : [])),
+        }];
+      }),
+    };
+  }
+  if (exitComparison?.present === true) {
+    out.exitComparison = {
+      present: true,
+      observedAt: formulaIso(exitComparison.observedAt),
+      lanes: formulaRows(exitComparison.lanes, 8).flatMap((lane) => {
+        const laneId = formulaLane(lane.laneId);
+        if (!laneId) return [];
+        return [{
+          laneId,
+          status: formulaText(lane.status, 40) ?? 'UNKNOWN',
+          signalSets: formulaRows(lane.signalSets, 4).map((set) => ({
+            label: formulaText(set.label) ?? '진입 신호',
+            winnerStatus: set.winnerStatus === 'WINNER' ? 'WINNER' : 'NO_WINNER',
+            winnerVariant: set.winnerStatus === 'WINNER' ? formulaText(set.winnerVariant, 40) : null,
+            variants: formulaRows(set.variants, 8).flatMap((variant) => {
+              const variantId = formulaText(variant.variantId, 40);
+              return variantId ? [{
+                variantId,
+                trades: formulaCount(variant.trades),
+                meanR: formulaNumber(variant.meanR),
+                winRate: formulaNumber(variant.winRate),
+                maxConsecutiveLosses: formulaCount(variant.maxConsecutiveLosses),
+                unseenTrades: formulaCount(variant.unseenTrades),
+                unseenMeanR: formulaNumber(variant.unseenMeanR),
+              }] : [];
+            }),
+          })),
+        }];
+      }),
+    };
+  }
+  if (paper?.present === true) {
+    out.exploratoryPaper = {
+      present: true,
+      observedAt: formulaIso(paper.observedAt),
+      closed: formulaCount(paper.closed),
+      open: formulaCount(paper.open),
+      promotionEligibleRules: formulaCount(paper.promotionEligibleRules),
+      demotedRules: formulaCount(paper.demotedRules),
+      rules: formulaRows(paper.rules, 10).map((rule) => ({
+        laneId: formulaLane(rule.laneId),
+        labels: formulaLabels(rule.labels),
+        lifecycle: formulaText(rule.lifecycle, 20),
+        open: formulaCount(rule.open),
+        trades: formulaCount(rule.trades),
+        meanR: formulaNumber(rule.meanR),
+        lower95: formulaNumber(rule.lower95),
+        winRate: formulaNumber(rule.winRate),
+        promotionEligible: rule.promotionEligible === true,
+      })),
+    };
+  }
+  if (watchdog?.present === true) {
+    out.watchdog = {
+      present: true,
+      observedAt: formulaIso(watchdog.observedAt),
+      healthy: formulaCount(watchdog.healthy),
+      problems: Array.isArray(watchdog.problems)
+        ? watchdog.problems.slice(0, 20).map((item) => formulaText(item, 60)).filter((item): item is string => item !== null)
+        : [],
+    };
+  }
+  return out;
+}
+
 export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | null {
   const payload = record(value);
   const state = record(payload?.state);
@@ -914,6 +1072,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   const formulaBacktest = sanitizeFormulaBacktestReadback(research?.formulaBacktest);
+  const formulaDevelopment = sanitizeFormulaDevelopment(research?.formulaDevelopment);
   const lightweightMarketWatch = sanitizeMarketWatchReadback(dataFactory?.lightweightMarketWatch);
   const lightweightMarketWatchCadence = sanitizeMarketWatchCadenceReadback(dataFactory?.lightweightMarketWatchCadence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
@@ -949,7 +1108,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       authorityEvidenceComplete: safety.authorityEvidenceComplete,
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
-    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest },
+    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest, formulaDevelopment },
     dataFactory: { temporalCryptoFutures, lightweightMarketWatch, lightweightMarketWatchCadence },
     factory,
     paper: { runtime, ledger, candidatePerformance },
