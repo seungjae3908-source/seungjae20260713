@@ -18,12 +18,7 @@ import type {
 const UPBIT_BASE = 'https://api.upbit.com';
 const BITGET_BASE = 'https://api.bitget.com';
 const BITGET_PRODUCT_TYPE = 'USDT-FUTURES';
-// Must end well before the browser's 12s app API timeout
-// (stock-analyzer/src/lib/auth-bootstrap.ts APP_API_REQUEST_TIMEOUT_MS) so the
-// universe fetch + scan can still return partial results instead of the client
-// aborting first. It previously equalled the browser timeout.
-export const CRYPTO_SCANNER_DEADLINE_MS = 9_000;
-const DEADLINE_MS = CRYPTO_SCANNER_DEADLINE_MS;
+const DEADLINE_MS = 12_000;
 const ITEM_TIMEOUT_MS = 3_500;
 const CONCURRENCY = 5;
 const MAX_BATCH_SIZE = 40;

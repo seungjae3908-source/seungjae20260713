@@ -89,7 +89,6 @@ on:
       - api-server/src/services/scanner-quant-strategy.service.test.ts
       - api-server/src/services/stock-signal-scanner.service.ts
       - api-server/src/routes/bounded-market-scan.smoke.test.ts
-      - api-server/src/services/crypto-signal-scanner.service.ts
       - api-server/src/services/telegram-v3-current-source.service.test.ts
       - api-server/src/services/telegram-v3-current-source.service.ts
       - api-server/src/services/signal-intelligence-telegram-subscriber.service.ts
