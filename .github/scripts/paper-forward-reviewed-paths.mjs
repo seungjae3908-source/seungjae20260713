@@ -278,7 +278,17 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "api-server/src/routes/market-information.smoke.test.ts",
   "api-server/src/routes/market-information.ts",
   "api-server/src/routes/stocks.ts",
-  "stock-analyzer/e2e/market-information-timeout-contract.spec.ts"
+  "stock-analyzer/e2e/market-information-timeout-contract.spec.ts",
+  // Owner-approved auto-trading run button (PR #1928, 2026-10-17): exact paths only.
+  "api-server/src/services/trade-automation-run-control.service.test.ts",
+  "api-server/src/services/trade-automation-run-control.service.ts",
+  "api-server/src/services/trade-kill-switch.service.ts",
+  "api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql",
+  "api-server/supabase/migrations/2026101701_trade_automation_run_control.sql",
+  "stock-analyzer/e2e/detail-auto-ui-compact.spec.ts",
+  "stock-analyzer/e2e/scanner-chart-broadcast.spec.ts",
+  "stock-analyzer/src/components/auto-trading-run-control.tsx",
+  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx"
 ]);
 // Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
 // directory exemption or permission to deploy/activate. Keep the immutable
@@ -341,6 +351,8 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
 // admission bridge. Paths that previously belonged to the immutable Scanner
 // repair are deliberately routed through the full automatic-trading guards;
 // this list grants neither deployment nor order authority.
+// Owner-approved 2026-10-17 (PR #1933): the crypto scanner moves from Scanner
+// repair status to this full review because its changes regenerate the bundle.
 export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   ".github/scripts/paper-forward-reviewed-paths.mjs",
   ".github/scripts/scanner-readonly-repair-scope.mjs",
@@ -352,6 +364,8 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   ".github/workflows/research-workspace-integration-v1.yml",
   "api-server/scripts/verify-production-automatic-trading-gate.mjs",
   "api-server/src/routes/bounded-market-scan.ts",
+  "api-server/src/services/crypto-signal-scanner.service.test.ts",
+  "api-server/src/services/crypto-signal-scanner.service.ts",
   "api-server/src/services/forward-observer-scanner-quality-consumer.service.test.ts",
   "api-server/src/services/forward-observer-scanner-quality-consumer.service.ts",
   "api-server/src/services/member-auto-trading-background-worker.service.test.ts",
