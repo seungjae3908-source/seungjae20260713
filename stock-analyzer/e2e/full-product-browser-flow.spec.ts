@@ -4,13 +4,14 @@ import { ageBrowserSession, installFullProductFixtures } from './support/full-pr
 
 const SEARCH_NOW = new Date().toISOString();
 
-async function openMenuItem(page: Page, group: string, item: string) {
-  const trigger = page.getByRole('button', { name: group, exact: true });
-  await expect(trigger).toBeVisible();
-  await trigger.click();
-  const menuItem = page.getByRole('menuitem', { name: item, exact: true });
-  await expect(menuItem).toBeVisible();
-  await menuItem.click();
+// Desktop (>=1200px) navigation is the left sidebar: sections are headings and
+// every destination is a direct link.
+async function openMenuItem(page: Page, section: string, item: string) {
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  await expect(navigation.getByRole('group', { name: section, exact: true })).toBeVisible();
+  const link = navigation.getByRole('link', { name: item, exact: true });
+  await expect(link).toBeVisible();
+  await link.click();
 }
 
 async function loginThroughUi(page: Page) {
@@ -105,7 +106,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page.getByTestId('ai-chart-empty-selection')).toContainText('분석할 종목이 선택되지 않았습니다.');
   await expect(page.getByTestId('unified-chart-canvas')).toHaveCount(0);
 
-  await openMenuItem(page, '설정', '계정');
+  await openMenuItem(page, '계정', '계정 연결');
   await expect(page).toHaveURL(/\/account$/u);
   await expect(page.getByTestId('brokerage-account-connections')).toBeVisible();
   await expect(page.getByTestId('connection-toss')).toContainText('연결됨');
@@ -118,7 +119,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();
   await expect(page.getByTestId('portfolio-data-quality')).toContainText('일부 데이터');
 
-  await openMenuItem(page, '기술', '기술매매');
+  await openMenuItem(page, '기술', '자동매매');
   await expect(page).toHaveURL(/\/auto-trading$/u);
   await expect(page.getByTestId('technical-trading-modes')).toBeVisible();
   await page.getByTestId('technical-mode-paper').click();
@@ -234,7 +235,7 @@ test('search fault matrix fails closed and latest response wins without leaking 
   await page.route(pattern, delayedUnmount);
   await input.fill('삼성전자');
   await page.waitForTimeout(260);
-  await openMenuItem(page, '설정', '계정');
+  await openMenuItem(page, '계정', '계정 연결');
   await expect(page).toHaveURL(/\/account$/u);
   await expect(page.getByTestId('brokerage-account-connections')).toBeVisible();
   await page.waitForTimeout(1_000);
