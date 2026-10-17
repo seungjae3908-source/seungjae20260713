@@ -1,4 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
+import { autoStopRunForLossLimit } from './trade-automation-run-control.service';
 
 const KILL_SWITCH_CODES = new Set([
   'MARKET_DATA_TIMESTAMP_UNAVAILABLE',
@@ -37,6 +38,9 @@ export async function tripKillSwitchForRiskFailure(input: {
   userId: string;
   blockCodes: readonly string[];
 }) {
+  // A daily loss limit also auto-stops this member's 작동 state (recorded with
+  // its reason). This never weakens the block itself: the order is still rejected.
+  await autoStopRunForLossLimit(input.repository, input.userId, input.blockCodes);
   const reasons = killSwitchReasons(input.blockCodes);
   if (reasons.length === 0) return { tripped: false, reasons };
   await input.repository.setGlobalEmergencyStop(true, input.userId);

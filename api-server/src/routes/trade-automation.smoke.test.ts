@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+// Owner-approved 2026-10-17: run-control unit tests run inside this registered suite.
+import '../services/trade-automation-run-control.service.test';
 import type { AddressInfo } from 'node:net';
 import router, {
   normalizeReadonlyCredentialsForLiveExecution,
@@ -3277,5 +3279,89 @@ test('administrator Paper readiness verifies database wallet guard against authe
     setTradePaperRuntimeRecordsReaderForTests(null);
     setTradePaperRuntimeAdminGuardReaderForTests(null);
     await close(server);
+  }
+});
+
+test('작동/정지 route runs automatic trading without per-order approval and audits every toggle', async () => {
+  const runRepository = new InMemoryTradingRepository();
+  await runRepository.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledStrategies: ['breakout-v1'],
+  }));
+  setTradeAutomationRepositoryFactoryForTests(() => runRepository);
+  const { server, baseUrl } = await startServer(true, 'regular');
+  const post = (path: string, body?: unknown) => fetch(`${baseUrl}/api/trade-automation${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}),
+  });
+  try {
+    assert.equal((await post('/run', {})).status, 400);
+
+    const before = await (await fetch(`${baseUrl}/api/trade-automation/status`)).json();
+    assert.equal(before.autoRun.state, 'STOPPED');
+    assert.equal(before.autoRun.perOrderApprovalRequired, false);
+    assert.equal(before.autoRun.markets.crypto_spot.enabled, true);
+    assert.equal(before.autoRun.markets.crypto_spot.lane, 'paper', 'no LIVE gate in tests');
+
+    const started = await post('/run', { running: true });
+    const startedBody = await started.json();
+    assert.equal(started.status, 200);
+    assert.equal(startedBody.running, true);
+    assert.equal(startedBody.perOrderApprovalRequired, false);
+    assert.deepEqual(startedBody.liveMarkets, []);
+    assert.deepEqual(startedBody.paperMarkets, ['crypto_spot']);
+    assert.equal(startedBody.liveGateChangedByThisRequest, false);
+    assert.equal(startedBody.auditStorage, 'DATABASE');
+
+    const running = await (await fetch(`${baseUrl}/api/trade-automation/status`)).json();
+    assert.equal(running.autoRun.state, 'RUNNING');
+    assert.equal(running.autoRun.orderMethod, 'AUTOMATIC_WHILE_RUNNING');
+    assert.equal(running.policy.mode, 'automatic');
+    assert.equal(running.policy.automaticEnabled, true);
+    assert.equal(running.autoRun.recentAudit[0].action, 'RUN');
+    assert.equal('userId' in running.autoRun.recentAudit[0], false);
+
+    const stopped = await (await post('/run', { running: false })).json();
+    assert.equal(stopped.running, false);
+    assert.equal(stopped.policy.automaticEnabled, false);
+    assert.equal(stopped.policy.marketEnabled.crypto_spot, true, 'market choices survive 정지');
+
+    const killed = await post('/emergency-stop');
+    const killedBody = await killed.json();
+    assert.equal(killed.status, 200);
+    assert.equal(killedBody.autoRunState, 'KILL_SWITCH');
+    const blocked = await post('/run', { running: true });
+    assert.equal(blocked.status, 409);
+    assert.equal((await blocked.json()).error, 'MEMBER_TRADING_RESUME_REQUIRED');
+    const after = await (await fetch(`${baseUrl}/api/trade-automation/status`)).json();
+    assert.equal(after.autoRun.state, 'KILL_SWITCH');
+    assert.deepEqual(after.autoRun.recentAudit.map((entry: { action: string }) => entry.action), ['KILL_SWITCH', 'STOP', 'RUN']);
+  } finally {
+    await close(server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('작동 is refused while the global emergency stop is active', async () => {
+  const runRepository = new InMemoryTradingRepository();
+  await runRepository.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+  }));
+  await runRepository.setGlobalEmergencyStop(true, USER);
+  setTradeAutomationRepositoryFactoryForTests(() => runRepository);
+  const { server, baseUrl } = await startServer(true, 'regular');
+  try {
+    const response = await fetch(`${baseUrl}/api/trade-automation/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ running: true }),
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error, 'GLOBAL_EMERGENCY_STOP_ACTIVE');
+    assert.equal((await runRepository.getPolicy(USER)).automaticEnabled, false);
+  } finally {
+    await close(server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
   }
 });
