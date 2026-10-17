@@ -49,6 +49,9 @@ on:
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
       - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/trade-automation-run-control.service.ts
+      - api-server/src/services/trade-automation-run-control.service.test.ts
+      - api-server/supabase/migrations/2026101701_trade_automation_run_control.sql
       - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/crypto-benchmark-regime.service.ts
       - api-server/src/services/trade-automation-optimization.service.ts
