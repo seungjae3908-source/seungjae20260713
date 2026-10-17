@@ -385,6 +385,8 @@ export interface MemberAutoTradingBackgroundSource {
   adminPaperDatabaseGuardReady?(): Promise<boolean>;
   fourMarketPaperDatabaseGuardReady?(): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
+  /** Same proof as the all-four check, limited to the server market scope. */
+  revalidateLiveScopedReadiness?(userId: string, scope: readonly AutomaticLiveMarket[]): Promise<boolean>;
   /** Current owner capability/role read, never a cached batch permission. */
   revalidateLiveMemberAccess?(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
@@ -430,10 +432,14 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
   liveAllFourPolicyReadyMembers: number;
+  liveScopedPolicyReadyMembers: number;
   liveReadinessCycleComplete: boolean;
   liveCycleOrderEligible: boolean;
   liveCyclePolicyReady: boolean;
   liveCycleAllFourPolicyReady: boolean;
+  liveCycleScopedPolicyReady: boolean;
+  liveMarketScope: readonly AutomaticLiveMarket[];
+  liveEntriesOutsideMarketScope: number;
   globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
@@ -485,10 +491,13 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
   liveAllFourPolicyReadyMembers: number;
+  liveScopedPolicyReadyMembers: number;
   liveReadinessCycleComplete: boolean;
   liveCycleOrderEligible: boolean;
   liveCyclePolicyReady: boolean;
   liveCycleAllFourPolicyReady: boolean;
+  liveCycleScopedPolicyReady: boolean;
+  liveMarketScope: readonly AutomaticLiveMarket[];
   globalEmergencyStopActive: boolean;
   errorCode: string | null;
 }>;
@@ -520,10 +529,14 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   liveOrderEligibleMembers: 0,
   livePolicyReadyMembers: 0,
   liveAllFourPolicyReadyMembers: 0,
+  liveScopedPolicyReadyMembers: 0,
   liveReadinessCycleComplete: true,
   liveCycleOrderEligible: false,
   liveCyclePolicyReady: false,
   liveCycleAllFourPolicyReady: false,
+  liveCycleScopedPolicyReady: false,
+  // Module-load literal: the scope constant is declared below (no TDZ access).
+  liveMarketScope: Object.freeze([]) as readonly AutomaticLiveMarket[],
   globalEmergencyStopActive: false,
   errorCode: null,
 });
@@ -730,6 +743,61 @@ export function liveAllFourConnectionVerificationReady(
       connections.find((connection) => connection.exchange === exchange),
       nowMs,
     ));
+}
+
+// Server-side market scope for automatic LIVE entries. The owner gate writes
+// MEMBER_AUTO_TRADING_LIVE_MARKETS (canonical market names, comma separated).
+// Unset = the historical four-market activation. Any unknown or duplicated
+// token = an EMPTY scope (fail closed: no automatic live entry anywhere).
+// The scope only gates NEW entries; owned positions keep their protective exits.
+export const AUTOMATIC_LIVE_MARKETS = Object.freeze(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const);
+export type AutomaticLiveMarket = typeof AUTOMATIC_LIVE_MARKETS[number];
+const AUTOMATIC_LIVE_MARKET_ASSET_CLASS: Readonly<Record<AutomaticLiveMarket, TradingAssetClass>> = Object.freeze({
+  KR_STOCK: 'domestic_stock', US_STOCK: 'us_stock', CRYPTO_SPOT: 'crypto_spot', CRYPTO_FUTURES: 'crypto_futures',
+});
+
+export function automaticLiveMarketScope(env: NodeJS.ProcessEnv = process.env): readonly AutomaticLiveMarket[] {
+  const raw = env.MEMBER_AUTO_TRADING_LIVE_MARKETS;
+  if (raw === undefined || raw.trim() === '') return AUTOMATIC_LIVE_MARKETS;
+  const tokens = raw.split(',').map((token) => token.trim().toUpperCase()).filter(Boolean);
+  if (tokens.length === 0 || new Set(tokens).size !== tokens.length
+    || tokens.some((token) => !(AUTOMATIC_LIVE_MARKETS as readonly string[]).includes(token))) return Object.freeze([]);
+  return Object.freeze(AUTOMATIC_LIVE_MARKETS.filter((market) => tokens.includes(market)));
+}
+
+export function automaticLiveScopeIsAllFour(scope: readonly AutomaticLiveMarket[]) {
+  return AUTOMATIC_LIVE_MARKETS.every((market) => scope.includes(market));
+}
+
+function automaticLiveScopeExchanges(policy: TradingPolicy, scope: readonly AutomaticLiveMarket[]): TradingExchange[] {
+  return [...new Set(scope.map((market) => marketMapping(market, policy).exchange))];
+}
+
+/** Member policy enables every market (and its exchange) in the server scope. */
+export function automaticPolicyHasMarketScope(policy: TradingPolicy, scope: readonly AutomaticLiveMarket[]) {
+  if (scope.length === 0) return false;
+  if (automaticLiveScopeIsAllFour(scope)) return automaticPolicyHasAllFourMarkets(policy);
+  if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
+    return false;
+  }
+  if (policy.pilotStage === 'approval-20') return false;
+  return scope.every((market) => {
+    const mapping = marketMapping(market, policy);
+    return policy.marketEnabled[AUTOMATIC_LIVE_MARKET_ASSET_CLASS[market]] === true
+      && policy.exchangeEnabled[mapping.exchange] === true;
+  });
+}
+
+export function liveScopedConnectionVerificationReady(
+  policy: TradingPolicy,
+  connections: readonly ExchangeConnection[],
+  scope: readonly AutomaticLiveMarket[],
+  nowMs = Date.now(),
+) {
+  if (automaticLiveScopeIsAllFour(scope)) return liveAllFourConnectionVerificationReady(policy, connections, nowMs);
+  if (!automaticPolicyHasMarketScope(policy, scope)) return false;
+  return automaticLiveScopeExchanges(policy, scope).every((exchange) =>
+    liveConnectionVerificationFresh(connections.find((connection) => connection.exchange === exchange), nowMs));
 }
 
 function validateFormulaAiPilotEntry(
@@ -2004,6 +2072,8 @@ export class MemberAutoTradingBackgroundWorker {
   private liveCyclePolicyReadySeen = false;
   private liveCycleAllFourPolicyReadySeen = false;
   private liveCycleAllFourWitnessUserId: string | null = null;
+  private liveCycleScopedPolicyReadySeen = false;
+  private liveCycleScopedWitnessUserId: string | null = null;
   private handoffEntryOffset = 0;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
@@ -2012,6 +2082,8 @@ export class MemberAutoTradingBackgroundWorker {
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
+    const liveMarketScope = automaticLiveMarketScope();
+    const liveScopeAllFour = automaticLiveScopeIsAllFour(liveMarketScope);
     const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
     // An exact-SHA human-issued arm is still required for reducing exits.
     // New-entry signal outages/restarts must not disable protection of an
@@ -2040,10 +2112,14 @@ export class MemberAutoTradingBackgroundWorker {
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveScopedPolicyReadyMembers: 0,
       liveReadinessCycleComplete: true,
       liveCycleOrderEligible: false,
       liveCyclePolicyReady: false,
       liveCycleAllFourPolicyReady: false,
+      liveCycleScopedPolicyReady: false,
+      liveMarketScope,
+      liveEntriesOutsideMarketScope: 0,
       globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
@@ -2207,6 +2283,15 @@ export class MemberAutoTradingBackgroundWorker {
           && !environmentGlobalStop) {
           result.liveAllFourPolicyReadyMembers += 1;
           this.liveCycleAllFourWitnessUserId ??= member.userId;
+        }
+        if (!liveScopeAllFour
+          && hasCapability(member.profile, 'canPlaceOrders')
+          && (!liveMarketScope.includes('CRYPTO_FUTURES') || hasCapability(member.profile, 'canAccessFutures'))
+          && automaticPolicyHasMarketScope(member.policy, liveMarketScope)
+          && !persistentGlobalStop
+          && !environmentGlobalStop) {
+          result.liveScopedPolicyReadyMembers += 1;
+          this.liveCycleScopedWitnessUserId ??= member.userId;
         }
 
         const refreshRuntime = async () => {
@@ -2410,6 +2495,13 @@ export class MemberAutoTradingBackgroundWorker {
             !liveModeRequested && runtime.fourMarketRisk != null,
           )) {
             result.skipped += 1;
+            continue;
+          }
+          // Owner-approved server market scope: no automatic LIVE entry in a
+          // market the gate did not open (Paper-only mode is unaffected).
+          if (liveModeRequested && !liveMarketScope.includes(entry.identity.market)) {
+            result.skipped += 1;
+            result.liveEntriesOutsideMarketScope += 1;
             continue;
           }
           result.evaluated += 1;
@@ -2654,6 +2746,22 @@ export class MemberAutoTradingBackgroundWorker {
         this.liveCycleOrderEligibleSeen ||= result.liveOrderEligibleMembers > 0;
         this.liveCyclePolicyReadySeen ||= result.livePolicyReadyMembers > 0;
         this.liveCycleAllFourPolicyReadySeen ||= result.liveAllFourPolicyReadyMembers > 0;
+        this.liveCycleScopedPolicyReadySeen ||= result.liveScopedPolicyReadyMembers > 0;
+        if (cycleComplete
+          && !liveScopeAllFour
+          && this.liveCycleScopedPolicyReadySeen
+          && this.liveCycleScopedWitnessUserId
+          && this.source.revalidateLiveScopedReadiness) {
+          const scopedWitnessStillReady = await this.source.revalidateLiveScopedReadiness(
+            this.liveCycleScopedWitnessUserId, liveMarketScope,
+          );
+          if (!scopedWitnessStillReady) {
+            this.liveCycleOrderEligibleSeen = false;
+            this.liveCyclePolicyReadySeen = false;
+            this.liveCycleScopedPolicyReadySeen = false;
+            this.liveCycleScopedWitnessUserId = null;
+          }
+        }
         if (cycleComplete
           && this.liveCycleAllFourPolicyReadySeen
           && this.liveCycleAllFourWitnessUserId
@@ -2672,6 +2780,10 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCycleOrderEligible = this.liveCycleOrderEligibleSeen;
         result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
+        // With the full four-market scope the scoped readiness IS the all-four readiness.
+        result.liveCycleScopedPolicyReady = liveScopeAllFour
+          ? this.liveCycleAllFourPolicyReadySeen
+          : this.liveCycleScopedPolicyReadySeen;
 
         const hardWarmupBlock = this.stopped || !result.handoffReady
           || result.nativeProtectionErrorCode !== null
@@ -2689,22 +2801,27 @@ export class MemberAutoTradingBackgroundWorker {
           result.liveCycleOrderEligible = false;
           result.liveCyclePolicyReady = false;
           result.liveCycleAllFourPolicyReady = false;
+          result.liveCycleScopedPolicyReady = false;
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
           this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleScopedPolicyReadySeen = false;
+          this.liveCycleScopedWitnessUserId = null;
           // A completed blocked rotation is never ready. The NEXT complete
           // rotation can retry after the offending condition is remedied.
           if (cycleComplete) this.liveCycleHardWarmupBlocked = false;
         } else if (cycleComplete) {
           this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
             && this.liveCyclePolicyReadySeen
-            && this.liveCycleAllFourPolicyReadySeen;
+            && (liveScopeAllFour ? this.liveCycleAllFourPolicyReadySeen : this.liveCycleScopedPolicyReadySeen);
           if (!this.liveEntryWarmupComplete) result.newEntriesFailClosed = true;
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
           this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleScopedPolicyReadySeen = false;
+          this.liveCycleScopedWitnessUserId = null;
         }
       } else {
         this.liveEntryWarmupComplete = false;
@@ -2713,6 +2830,8 @@ export class MemberAutoTradingBackgroundWorker {
         this.liveCyclePolicyReadySeen = false;
         this.liveCycleAllFourPolicyReadySeen = false;
           this.liveCycleAllFourWitnessUserId = null;
+        this.liveCycleScopedPolicyReadySeen = false;
+        this.liveCycleScopedWitnessUserId = null;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       if (this.stopped) {
@@ -2729,6 +2848,8 @@ export class MemberAutoTradingBackgroundWorker {
       this.liveCyclePolicyReadySeen = false;
       this.liveCycleAllFourPolicyReadySeen = false;
           this.liveCycleAllFourWitnessUserId = null;
+      this.liveCycleScopedPolicyReadySeen = false;
+      this.liveCycleScopedWitnessUserId = null;
       throw error;
     } finally {
       this.running = false;
@@ -2940,6 +3061,63 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       && process.env.TRADING_EMERGENCY_STOP !== 'true';
   }
 
+  async revalidateLiveScopedReadiness(userId: string, scope: readonly AutomaticLiveMarket[]) {
+    if (scope.length === 0) return false;
+    if (automaticLiveScopeIsAllFour(scope)) return this.revalidateLiveAllFourReadiness(userId);
+    const { data: policyRows, error: policyError } = await this.client.from('trade_automation_profiles')
+      .select('user_id,payload')
+      .eq('user_id', userId)
+      .limit(1);
+    if (policyError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const policyRow = policyRows?.[0];
+    if (!policyRow?.payload) return false;
+
+    const { data: profileRows, error: profileError } = await this.client.from('profiles')
+      .select('id,role,status,membership_level,is_active,membership_expires_at')
+      .eq('id', userId)
+      .limit(1);
+    if (profileError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const profile = profileRows?.[0] as (MemberAccessProfile & { id: string }) | undefined;
+    if (!profile) return false;
+
+    const nowMs = Date.now();
+    const maximumSingleEntryKrw = maximumSingleEntryKrwForProfile(profile);
+    this.maximumSingleEntryKrwByUserId.set(userId, maximumSingleEntryKrw);
+    const policy = normalizeTradingPolicy(
+      policyRow.payload as Partial<TradingPolicy>, maximumSingleEntryKrw,
+    );
+    const repository = createServiceRoleTradingRepository(
+      userId, this.client, maximumSingleEntryKrw,
+    );
+    const [persistentGlobalStop, connections, plans, orders] = await Promise.all([
+      repository.getGlobalEmergencyStop(),
+      repository.getConnections(userId),
+      repository.listPlans(userId),
+      repository.listOrders(userId),
+    ]);
+    const owned = canonicalAutomaticLivePositions(plans, orders);
+    // Only the providers of the scoped markets must prove a fresh, isolated
+    // account snapshot; an unopened market's provider is never contacted.
+    const providers = [...new Set(scope.map((market) => marketMapping(market, policy).exchange))];
+    const liveSnapshots = await Promise.all(providers.map((provider) => this.readLiveAccountSnapshot(userId, provider)));
+    const nativeProtectionReady = scope.includes('CRYPTO_FUTURES')
+      ? await this.auditNativeFuturesProtection(userId, plans, orders)
+      : true;
+    const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
+      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, owned,
+        maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+          ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE));
+    return hasCapability(profile, 'canAccessAutoTrading')
+      && hasCapability(profile, 'canPlaceOrders')
+      && (!scope.includes('CRYPTO_FUTURES') || hasCapability(profile, 'canAccessFutures'))
+      && automaticPolicyHasMarketScope(policy, scope)
+      && liveScopedConnectionVerificationReady(policy, connections, scope, nowMs)
+      && liveSnapshotsReady
+      && nativeProtectionReady
+      && !persistentGlobalStop
+      && process.env.TRADING_EMERGENCY_STOP !== 'true';
+  }
+
   async revalidateLiveMemberAccess(userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) {
     const { data, error } = await this.client.from('profiles')
       .select('id,role,status,membership_level,is_active,membership_expires_at')
@@ -3065,10 +3243,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveScopedPolicyReadyMembers: 0,
       liveReadinessCycleComplete: true,
       liveCycleOrderEligible: false,
       liveCyclePolicyReady: false,
       liveCycleAllFourPolicyReady: false,
+      liveCycleScopedPolicyReady: false,
+      liveMarketScope: automaticLiveMarketScope(),
       globalEmergencyStopActive: false,
       errorCode: null,
     });
@@ -3102,10 +3283,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveScopedPolicyReadyMembers: 0,
       liveReadinessCycleComplete: true,
       liveCycleOrderEligible: false,
       liveCyclePolicyReady: false,
       liveCycleAllFourPolicyReady: false,
+      liveCycleScopedPolicyReady: false,
+      liveMarketScope: automaticLiveMarketScope(),
       globalEmergencyStopActive: false,
       errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
     });
@@ -3138,10 +3322,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     liveOrderEligibleMembers: 0,
     livePolicyReadyMembers: 0,
     liveAllFourPolicyReadyMembers: 0,
+    liveScopedPolicyReadyMembers: 0,
     liveReadinessCycleComplete: true,
     liveCycleOrderEligible: false,
     liveCyclePolicyReady: false,
     liveCycleAllFourPolicyReady: false,
+    liveCycleScopedPolicyReady: false,
+    liveMarketScope: automaticLiveMarketScope(),
     globalEmergencyStopActive: false,
     errorCode: null,
   });
@@ -3189,10 +3376,13 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveOrderEligibleMembers: result.liveOrderEligibleMembers,
         livePolicyReadyMembers: result.livePolicyReadyMembers,
         liveAllFourPolicyReadyMembers: result.liveAllFourPolicyReadyMembers,
+        liveScopedPolicyReadyMembers: result.liveScopedPolicyReadyMembers,
         liveReadinessCycleComplete: result.liveReadinessCycleComplete,
         liveCycleOrderEligible: result.liveCycleOrderEligible,
         liveCyclePolicyReady: result.liveCyclePolicyReady,
         liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
+        liveCycleScopedPolicyReady: result.liveCycleScopedPolicyReady,
+        liveMarketScope: result.liveMarketScope,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
         errorCode: result.handoffErrorCode ?? (result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
           : result.executionSyncFailures > 0 || result.executionSyncMissingReferences > 0
@@ -3222,6 +3412,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveCycleOrderEligible: false,
         liveCyclePolicyReady: false,
         liveCycleAllFourPolicyReady: false,
+        liveCycleScopedPolicyReady: false,
         errorCode: errorCode(error),
       });
       console.error('[member-auto-trading-background] tick failed', {
@@ -3243,6 +3434,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         enabled: false, tickOk: null, newEntriesFailClosed: true,
         liveEntriesArmed: false, liveEntryWarmupComplete: false,
         liveCycleOrderEligible: false, liveCyclePolicyReady: false, liveCycleAllFourPolicyReady: false,
+        liveCycleScopedPolicyReady: false,
         errorCode: 'BACKGROUND_WORKER_STOPPED' });
     }
   } };

@@ -187,7 +187,9 @@ test('paper mode exposes the same four-market navigation without enabling live a
   }
 
   await expect(page.getByTestId('trading-paper-modes')).toContainText('자동모의매매');
-  await expect(page.getByTestId('trading-paper-modes')).toContainText('수동모의매매');
+  // Manual Paper was removed; only automatic Paper remains.
+  await expect(page.getByTestId('trading-paper-modes')).not.toContainText('수동모의매매');
+  await expect(page.getByTestId('paper-mode-manual')).toHaveCount(0);
   await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveCount(0);
   expectNoBrowserFailures(failures);
 });

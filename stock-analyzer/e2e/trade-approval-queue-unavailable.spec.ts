@@ -22,7 +22,9 @@ test('auto trading source has no approval queue dependency', async () => {
   const source = await readFile('src/pages/auto-trading.tsx', 'utf8');
   expect(source).not.toContain('TradeApprovalQueue');
   expect(source).not.toContain('approvalFixture');
-  expect(source).toContain('<StatusItem label="시장 제어" value="4시장"');
+  // Market control shows the server-enforced automatic LIVE scope (default 4시장).
+  expect(source).toContain('<StatusItem label="시장 제어" value={liveScopeLabel}');
+  expect(source).toContain("liveMarketScope === null ? '4시장'");
   expect(source).toContain('<StatusItem label="주문별 승인" value="불필요"');
   expect(source).toContain('<StatusItem label="위험검사" value="매 주문 재검증"');
   expect(source).toContain('data-testid="trading-market-tabs"');

@@ -146,9 +146,10 @@ test('modern home search theme learn auto-trading and settings routes lose obsol
 
 test('paper trading gives its unified runtime main the remaining flex height instead of stacking a fixed-nav spacer', () => {
   expect(paperTradingSource).toContain('<AutoTradingPage key={search} initialMode="paper"');
-  expect(paperTradingSource).toContain("paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'}");
+  expect(paperTradingSource).toContain('initialMode="paper" paperOrigin="automatic"');
   expect(autoTradingSource).toContain("data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}");
-  expect(autoTradingSource).toContain('<PaperTradingPanel');
+  // The legacy manual coin-futures simulator was removed with manual Paper.
+  expect(autoTradingSource).not.toContain('<PaperTradingPanel');
   expect(autoTradingSource).toContain('min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain');
   expect(touchCss).toContain('[data-testid="paper-trading-shell"] {');
   expect(touchCss).toContain('[data-testid="paper-trading-shell"] > main {');

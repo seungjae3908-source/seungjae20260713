@@ -20,6 +20,7 @@ export default function PaperTradingPage() {
     );
   }
 
-  return <AutoTradingPage key={search} initialMode="paper"
-    paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'} />;
+  // Manual Paper was removed: every Paper route (including an old ?kind=manual
+  // link) opens automatic Paper. Existing records stay in the journal.
+  return <AutoTradingPage key={search} initialMode="paper" paperOrigin="automatic" />;
 }

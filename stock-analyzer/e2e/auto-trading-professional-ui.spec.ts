@@ -16,7 +16,10 @@ test('technical trading has one menu entry and shared live/paper shell with sepa
   expect(page).not.toContain('data-testid="trading-mode-tabs"');
   expect(page).toContain('data-testid="trading-market-select"');
   expect(paper).toContain('initialMode="paper"');
-  expect(paper).toContain("get('kind') === 'manual'");
+  // Manual Paper was removed (owner decision 2026-10-17).
+  expect(paper).not.toContain("get('kind') === 'manual'");
+  expect(page).not.toContain('testId="paper-mode-manual"');
+  expect(page).not.toContain('<PaperTradingPanel');
   expect(workspace).toContain("{ value: 'trade', label: '기술매매' }");
   expect(workspace).toContain("trade: '기술매매'");
   expect(navigation).toContain("label: '기술매매'");
@@ -192,7 +195,7 @@ test('automatic Paper holdings stay unqueried until role-bound four-market walle
   expect(page).toContain("const automaticPaperHoldingsReadable = canPaper && canAuto && canJournalSync");
   expect(page).toContain('autoPaperRuntimeReadiness?.paperWalletReady === true');
   expect(page).toContain('autoPaperRuntimeReadiness?.fourMarketDatabaseGuardReady === true');
-  expect(page).toContain("const paperHoldingsReadAllowed = paperOrigin === 'manual' ? canPaper : automaticPaperHoldingsReadable;");
+  expect(page).toContain('const paperHoldingsReadAllowed = automaticPaperHoldingsReadable;');
   expect(page).toContain("enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}");
   expect(page).toContain('data-testid="automatic-paper-holdings-awaiting-evidence"');
   expect(panel).toContain('enabled: enabled && fixture == null');
