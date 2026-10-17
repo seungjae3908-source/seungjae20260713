@@ -74,3 +74,20 @@ test('evidence file is built from every lane state and carries no authority', as
   assert.equal(read.contract, 'combination-signal-evidence/v1');
   assert.equal(read.researchCodeSha, SHA);
 });
+
+test('futures edge is measured in R of the lane\'s own 2% risk, not the 1% cash risk', () => {
+  const [rule] = combinationSignalRulesForLaneV1({ lane: SHORT, laneState: laneState() });
+  assert.equal(rule.edgeR, 0.2); // min(0.6%, 0.4%) / 2% risk
+});
+
+test('trailing and scale-out rules are never exported to the fixed-target scanner', () => {
+  const state = laneState();
+  state.trials.a = { ...state.trials.a, exitId: 'X3' };
+  state.baselines.X3 = { validation: { meanReturn: 0.001 } };
+  assert.deepEqual(combinationSignalRulesForLaneV1({ lane: KR, laneState: state }), []);
+});
+
+test('earlier experiments recorded in the lane state make the scanner export stricter too', () => {
+  const state = { ...laneState(), priorTrials: 100_000 };
+  assert.deepEqual(combinationSignalRulesForLaneV1({ lane: KR, laneState: state }), []);
+});

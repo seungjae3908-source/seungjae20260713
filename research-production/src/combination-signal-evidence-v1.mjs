@@ -12,10 +12,12 @@ import { RESEARCH_LANES_V2 } from './autonomous-research-discovery-v2.mjs';
 import { COMBINATION_ATOM_LIBRARY_VERSION, combinationAtomV1 } from './combination-atoms-v1.mjs';
 import {
   COMBINATION_EXIT_PROFILES_V1,
+  SCANNER_EXPORTABLE_EXIT_IDS_V1,
   COMBINATION_POLICY_V1,
   COMBINATION_UNIVERSE_V1,
   LANE_DATA_SOURCE_V1,
   classifyLaneTrialsV1,
+  combinationRiskModelV1,
 } from './combination-search-lane-v1.mjs';
 
 export const COMBINATION_SIGNAL_EVIDENCE_CONTRACT_V1 = 'combination-signal-evidence/v1';
@@ -77,17 +79,24 @@ export function combinationSignalRulesForLaneV1({ lane, laneState, policy = COMB
   const scannerTimeframe = SCANNER_TIMEFRAME[lane.timeframe];
   if (!direction || !scannerTimeframe) return [];
   const symbols = String(laneState.symbolKey ?? '').split('|')[0].split(',').filter(Boolean);
-  const classified = classifyLaneTrialsV1(laneState.trials, { symbolCount: symbols.length, baselines: laneState.baselines ?? {}, policy });
+  // Same cumulative FDR denominator as the lane runner used for this state.
+  const classified = classifyLaneTrialsV1(laneState.trials, { symbolCount: symbols.length, baselines: laneState.baselines ?? {}, policy,
+    priorTrials: Number(laneState.priorTrials ?? 0) });
   const rules = [];
   for (const row of classified) {
     const holdout = laneState.holdout?.[row.trialId];
     if (row.finalStatus !== 'SURVIVOR' || holdout?.pass !== true) continue;
     // Rules must also have held up on symbols that never took part in selection.
     if (policy.requireUnseenSymbolPass && laneState.unseenChecks?.[row.trialId]?.pass !== true) continue;
+    // The scanner plan model has fixed targets: trailing/scale-out rules are
+    // validated by the forward paper ledger instead of being exported here.
+    if (!SCANNER_EXPORTABLE_EXIT_IDS_V1.includes(row.exitId)) continue;
     const exit = COMBINATION_EXIT_PROFILES_V1.find((profile) => profile.id === row.exitId);
     if (!exit) continue;
     const conservativeMean = Math.min(Number(row.validation?.meanReturn), Number(holdout.result?.meanReturn));
-    const edgeR = conservativeMean / COMBINATION_RISK_PER_TRADE_V1;
+    // Futures lanes risk 2% per trade (5x research model), the rest 1%:
+    // dividing by the lane's own risk keeps edgeR in true R multiples.
+    const edgeR = conservativeMean / combinationRiskModelV1(lane).riskPerTrade;
     if (!(Number.isFinite(edgeR) && edgeR > 0)) continue;
     const parameters = { atomLibraryVersion: COMBINATION_ATOM_LIBRARY_VERSION, laneId: lane.id, atoms: [...row.atoms].sort(), exitId: row.exitId };
     rules.push(Object.freeze({
