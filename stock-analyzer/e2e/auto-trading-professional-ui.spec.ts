@@ -41,8 +41,9 @@ test('trading shell keeps professional typography and standing-authorization saf
 
   expect(page).toContain('data-testid="auto-trading-safety-summary"');
   expect(page).toContain('자동매매 실행 방식');
-  expect(page).toContain('주문별 승인');
-  expect(page).toContain('불필요');
+  expect(page).toContain('주문 방식');
+  expect(page).toContain('<AutoTradingRunControl');
+  expect(page).not.toContain('value="불필요"');
   expect(page).toContain('위험검사');
   expect(page).toContain('data-testid="trading-market-tabs"');
   expect(page).toContain('data-testid="trading-section-tabs"');
