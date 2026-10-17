@@ -470,6 +470,23 @@ ENV
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
   done
 
+  # Owner decision 2026-10-17: the Research server keeps itself on the latest
+  # main Research release (isolated validation first, then cutover). Installed
+  # from this exact release; rename keeps any running updater on its old inode.
+  local self_update_src="$CURRENT/research-production/deploy"
+  if [[ -f "$self_update_src/self-update.sh" ]]; then
+    bash -n "$self_update_src/self-update.sh"
+    "${SUDO[@]}" install -o root -g root -m 0755 "$self_update_src/self-update.sh" /usr/local/sbin/.investment-research-self-update.new
+    "${SUDO[@]}" mv -f /usr/local/sbin/.investment-research-self-update.new /usr/local/sbin/investment-research-self-update
+    local self_unit
+    for self_unit in investment-research-self-update.service investment-research-self-update.timer; do
+      "${SUDO[@]}" install -o root -g root -m 0644 "$self_update_src/$self_unit" "/etc/systemd/system/$self_unit"
+    done
+    "${SUDO[@]}" systemctl daemon-reload
+    "${SUDO[@]}" systemctl enable --now investment-research-self-update.timer
+    "${SUDO[@]}" systemctl is-enabled --quiet investment-research-self-update.timer
+  fi
+
   local app_sha_after
   app_sha_after="$(read_app_sha)"
   [[ "$app_sha_after" == "$APP_SHA_BEFORE" ]] || {
@@ -489,6 +506,7 @@ ENV
     "ORDER_AUTHORITY=false"
 
   "${SUDO[@]}" systemctl list-timers --all "${CORE_TIMERS[@]}" --no-pager
+  printf '%s\n' "SELF_UPDATE_TIMER_ENABLED=$("${SUDO[@]}" systemctl is-enabled investment-research-self-update.timer 2>/dev/null || echo absent)"
   printf '%s\n' "AI_REVIEW_TIMER_ENABLED=false" "VIDEO_DISCOVERY_TIMER_ENABLED=false" "APPROVED_JOB_INTAKE_TIMER_ENABLED=false" "WORKSPACE_WORKER_ENABLED=false" "MARKET_WATCH_SERVICE_ENABLED=false"
 }
 
