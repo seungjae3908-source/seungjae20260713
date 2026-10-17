@@ -454,8 +454,19 @@ const researchPITReadOnlyReviewed=[
   'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
   '.github/workflows/research-pit-minute-readonly-drift.yml',
 ];
+// Owner-approved 2026-10-17 (PR #1928): exact auto-trading run-button paths only.
+// Both automatic-trading guards stay mandatory; no prefix or deployment authority.
+const autoRunControlReviewed=[
+  'api-server/src/services/trade-automation-run-control.service.test.ts',
+  'api-server/src/services/trade-automation-run-control.service.ts',
+  'api-server/src/services/trade-kill-switch.service.ts',
+  'api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql',
+  'api-server/supabase/migrations/2026101701_trade_automation_run_control.sql',
+  'stock-analyzer/src/components/auto-trading-run-control.tsx',
+];
 const allowed=new Set([
  ...SCANNER_REPAIR_PATHS,
+ ...autoRunControlReviewed,
  ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
  ...added,
