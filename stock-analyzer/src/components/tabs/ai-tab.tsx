@@ -1,3 +1,4 @@
+import { errorCodeOf } from '@/lib/error-reason';
 import { Panel, ReasonList } from '@/components/ui-bits';
 import { RatingBadge } from '@/components/rating-badge';
 import { ScoreRing } from '@/components/score-ring';
@@ -5,7 +6,7 @@ import { LoadingState, ErrorState } from '@/components/data-state';
 import { useAnalysis } from '@/hooks/use-stock-data';
 import { formatPrice } from '@/lib/format';
 import { ratingTone } from '@/lib/labels';
-import { ApiError, type Currency } from '@/lib/api';
+import { type Currency } from '@/lib/api';
 
 const ANALYSIS_RATINGS = new Set([
   'STRONG_BUY',
@@ -59,7 +60,7 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
   const { data, isLoading, isError, error, refetch } = useAnalysis(ticker, active);
   if (isLoading) return <LoadingState label="AI 분석 생성 중..." />;
   if (isError || !data)
-    return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
+    return <ErrorState code={errorCodeOf(error) ?? undefined} onRetry={() => refetch()} />;
   if (!validAnalysisPayload(data))
     return <ErrorState code="AI_ANALYSIS_CONTRACT_INVALID" onRetry={() => refetch()} />;
 

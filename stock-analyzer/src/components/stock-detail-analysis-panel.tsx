@@ -3,6 +3,7 @@ import { AiTab } from '@/components/tabs/ai-tab';
 import { DisclosureTab } from '@/components/tabs/disclosure-tab';
 import { FinancialTab } from '@/components/tabs/financial-tab';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
+import { AppErrorBoundary } from '@/components/app-error-boundary';
 
 type Market = 'KR' | 'US';
 type AnalysisTab = 'ai' | 'financials' | 'filings';
@@ -31,9 +32,11 @@ export function StockDetailAnalysisPanel({ ticker, market }: { ticker: string; m
       </div>
 
       <div className="min-h-0 min-w-0" data-testid={`stock-detail-analysis-${tab}`}>
-        {tab === 'ai' ? <AiTab ticker={ticker} currency={currency} active /> : null}
-        {tab === 'financials' ? <FinancialTab ticker={ticker} currency={currency} active /> : null}
-        {tab === 'filings' ? <DisclosureTab ticker={ticker} active /> : null}
+        <AppErrorBoundary area={ANALYSIS_TABS.find((item) => item.value === tab)?.label} variant="panel" resetKey={`${ticker}:${tab}`}>
+          {tab === 'ai' ? <AiTab ticker={ticker} currency={currency} active /> : null}
+          {tab === 'financials' ? <FinancialTab ticker={ticker} currency={currency} active /> : null}
+          {tab === 'filings' ? <DisclosureTab ticker={ticker} active /> : null}
+        </AppErrorBoundary>
       </div>
     </section>
   );
