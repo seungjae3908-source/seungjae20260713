@@ -429,6 +429,6 @@ export default function PortfolioV2Page() {
   return <div className="flex h-full min-h-0 flex-col bg-background">
     {tab === 'intelligence' ? <CenteredPageHeader title="포트폴리오" infoTitle="포트폴리오 안내" infoItems={['수집된 실제 자산 근거만 표시합니다.', '누락값은 0으로 바꾸지 않고 미확인으로 표시합니다.']} /> : null}
     <div className="shrink-0 border-b border-border bg-background px-3 py-2"><div className="mx-auto w-full max-w-md"><ResponsiveTabs value={tab} options={PORTFOLIO_TABS} onChange={selectTab} ariaLabel="포트폴리오 보기" testId="portfolio-v2-tabs" compact /></div></div>
-    <div className="min-h-0 flex-1">{tab === 'intelligence' ? <IntelligenceDashboard /> : <div className="h-full [&_[aria-label='포트폴리오_보기']]:hidden"><PortfolioPage /></div>}</div>
+    <div className="min-h-0 flex-1">{tab === 'intelligence' ? <IntelligenceDashboard /> : <div className="h-full [&_[aria-label='포트폴리오_보기']]:hidden"><PortfolioPage key={tab} /></div>}</div>
   </div>;
 }
