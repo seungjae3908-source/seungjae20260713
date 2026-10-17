@@ -680,7 +680,7 @@ jobs:
             }
             if [[ "$path" == stock-analyzer/* ]]; then
               case "$path" in
-                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/e2e/market-information-timeout-contract.spec.ts) ;;
                 *)
                   if ! printf '%s\n' "${research_batch[@]}" "${scanner_repair[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \
