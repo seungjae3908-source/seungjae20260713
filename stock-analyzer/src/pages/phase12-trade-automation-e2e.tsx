@@ -53,11 +53,30 @@ const FIXTURE: TradeAutomationStatus = {
   lastOrder: null,
 };
 
+function liveRunFixture(liveMarket: string): NonNullable<TradeAutomationStatus['autoRun']> {
+  const row = (market: 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures',
+    exchange: 'kiwoom' | 'upbit' | 'bitget') => ({
+    enabled: true, exchange, lane: market === liveMarket ? 'live' as const : 'paper' as const, liveConfirmed: false,
+  });
+  return {
+    state: 'STOPPED', switchOn: false, running: false, perOrderApprovalRequired: false, orderMethod: 'STOPPED',
+    markets: {
+      domestic_stock: row('domestic_stock', 'kiwoom'), us_stock: row('us_stock', 'kiwoom'),
+      crypto_spot: row('crypto_spot', 'upbit'), crypto_futures: row('crypto_futures', 'bitget'),
+    },
+    lossLimit: { dailyLossLimitPercent: 5, totalDailyLossLimitPercent: 1, autoStopped: false, autoStopReason: null },
+    perSymbolMaxKrw: 1_000_000, maxAssetPercent: 30, lastAction: null, lastReason: null, changedAt: null,
+  };
+}
+
 export default function Phase12TradeAutomationE2EPage() {
   const search = useSearch();
   const initialMode = new URLSearchParams(search).get('mode') === 'paper' ? 'paper' : 'auto';
   const params = new URLSearchParams(search);
-  return <AutoTradingPage fixture={FIXTURE} initialMode={initialMode}
+  // ?liveMarket=crypto_futures simulates a market whose server LIVE gates are open.
+  const liveMarket = params.get('liveMarket');
+  const fixture: TradeAutomationStatus = liveMarket ? { ...FIXTURE, autoRun: liveRunFixture(liveMarket) } : FIXTURE;
+  return <AutoTradingPage fixture={fixture} initialMode={initialMode}
     paperOrigin={params.get('kind') === 'manual' ? 'manual' : 'automatic'}
     holdingsFixture={params.get('holdings') === 'true' ? HOLDINGS.map(row => params.get('missingFillPrice') === 'true' && row.entryEvidence
       ? { ...row, entryEvidence: { ...row.entryEvidence, entryPrice: null } } : row) : []} />;
