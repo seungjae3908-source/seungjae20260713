@@ -203,6 +203,40 @@ function boundedCompatibilityTimeframe(timeframe: string): Timeframe {
   return (timeframe === '1m' || timeframe === '3m' ? '5m' : timeframe) as Timeframe;
 }
 
+/**
+ * Wall-clock budget the HTTP route gives one stock scan. Must equal
+ * STOCK_SCANNER_ROUTE_DEADLINE_MS in `routes/bounded-market-scan.ts` (asserted
+ * by bounded-market-scan.smoke.test.ts); every internal budget below is derived
+ * from it and always ends first. If an
+ * internal deadline outlived the route deadline the route would abort the scan
+ * before it could return partial results and every slow scan would surface as
+ * a bare timeout.
+ */
+export const STOCK_SCANNER_ROUTE_BUDGET_MS = 8_000;
+/** Ranking, lifecycle and JSON serialisation after the scan and enrichment. */
+export const STOCK_SCANNER_POSTPROCESS_RESERVE_MS = 300;
+/** Upper bound for news/disclosure enrichment after the scan. */
+export const STOCK_SCANNER_INTELLIGENCE_MAX_MS = 1_200;
+/** Floor so a slow universe lookup still leaves the scanner a usable window. */
+const STOCK_SCANNER_MIN_SCAN_MS = 500;
+
+/** Remaining scan deadline after universe lookup, always strictly inside the route budget. */
+export function stockScannerScanDeadlineMs(elapsedMs: number): number {
+  const remaining = STOCK_SCANNER_ROUTE_BUDGET_MS
+    - STOCK_SCANNER_POSTPROCESS_RESERVE_MS
+    - STOCK_SCANNER_INTELLIGENCE_MAX_MS
+    - Math.max(0, elapsedMs);
+  return Math.max(STOCK_SCANNER_MIN_SCAN_MS, remaining);
+}
+
+/** Enrichment budget for whatever time is left before the post-processing reserve. */
+export function stockScannerIntelligenceBudgetMs(elapsedMs: number): number {
+  return Math.max(0, Math.min(
+    STOCK_SCANNER_INTELLIGENCE_MAX_MS,
+    STOCK_SCANNER_ROUTE_BUDGET_MS - STOCK_SCANNER_POSTPROCESS_RESERVE_MS - Math.max(0, elapsedMs),
+  ));
+}
+
 export const StockSignalScannerService = {
   async scan(request: StockSignalScanRequest): Promise<ScannerResponse> {
     const startedAt = Date.now();
@@ -238,7 +272,7 @@ export const StockSignalScannerService = {
     });
     const execution: ScanExecutionOptions = {
       signal: request.signal,
-      deadlineMs: 8_500,
+      deadlineMs: stockScannerScanDeadlineMs(Date.now() - startedAt),
       itemTimeoutMs: 4_000,
       concurrency: 6,
       limit: universe.entries.length || 1,
@@ -295,7 +329,7 @@ export const StockSignalScannerService = {
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
     const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
-    const intelligenceBudgetMs = Math.max(0, Math.min(1_200, 9_300 - (Date.now() - startedAt)));
+    const intelligenceBudgetMs = stockScannerIntelligenceBudgetMs(Date.now() - startedAt);
     const intelligenceCards = await enrichStockScannerCardsWithNewsDisclosureIntelligence(lifecycle.cards, {
       market: request.market,
       enabled: !publicCoreOnly,
