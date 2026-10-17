@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
 import { useAuth } from '@/lib/auth';
-import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionQuery,
   useAnalysisSelection,
@@ -221,20 +220,14 @@ function remainingValidityLabel(value: string | null | undefined): string {
 
 function SignalDetailPanel({
   card,
-  selection,
-  showOrderPreparation,
   onClose,
   onOpenAsset,
   onAiChart,
-  onOrderPreparation,
 }: {
   card: ScannerSignalCard;
-  selection: AnalysisSelection;
-  showOrderPreparation: boolean;
   onClose?: () => void;
   onOpenAsset: () => void;
   onAiChart: () => void;
-  onOrderPreparation: () => void;
 }) {
   const auth = useAuth();
   const reviewIdentity = JSON.stringify([auth.user?.id, card.signalId, card.aiReviewEvidenceKey]);
@@ -267,7 +260,7 @@ function SignalDetailPanel({
   const missing = [...new Set([...card.unverified, ...(card.aiValidation?.missingData ?? [])])];
   const risks = [...new Set([...card.warnings, ...(card.aiValidation?.risks ?? [])])];
   const mobile = Boolean(onClose);
-  const [mobileTab, setMobileTab] = useState<MobileDetailTab>(() => showOrderPreparation ? 'risk' : 'summary');
+  const [mobileTab, setMobileTab] = useState<MobileDetailTab>('summary');
   const quality = card.backtestQuality;
   const signalQuality = card.dataQuality;
   const quant = card.quantScore;
@@ -283,10 +276,6 @@ function SignalDetailPanel({
   useEffect(() => {
     setMobileTab('summary');
   }, [card.signalId]);
-
-  useEffect(() => {
-    if (showOrderPreparation) setMobileTab('risk');
-  }, [showOrderPreparation]);
 
   const qualityPanel = (
     <section data-testid="scanner-signal-quality-panel" aria-label="신호 품질" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
@@ -414,7 +403,7 @@ function SignalDetailPanel({
 
       <div className="grid grid-cols-2 gap-2">
         <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI 차트</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">주문 준비</button>
+        <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold">자산 상세</button>
       </div>
     </div>
   );
@@ -475,20 +464,7 @@ function SignalDetailPanel({
         <p className="mt-1 text-[11px] text-muted-foreground">관측 {formatObservedAt(card.observedAt)} · 만료 {formatObservedAt(card.expiresAt)}</p>
         {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
       </section>
-      <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
-        <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
-      </div>
-      <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
-      {showOrderPreparation ? (
-        <div data-testid="order-preparation" className="border-t border-card-border pt-3">
-          <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-            <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
-          </div>
-          <ScannerApprovalComposer selection={selection} />
-        </div>
-      ) : null}
+      <button type="button" onClick={onOpenAsset} className="min-h-11 w-full rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
     </div>
   );
 
@@ -569,19 +545,8 @@ function SignalDetailPanel({
           </section>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트</button>
-            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
-            <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
+            <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
           </div>
-          <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
-          {showOrderPreparation ? (
-            <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
-              <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-                <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
-                <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
-              </div>
-              <ScannerApprovalComposer selection={selection} />
-            </div>
-          ) : null}
         </>
       )}
     </section>
@@ -607,7 +572,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [data, setData] = useState<ScannerResponse | null>(null);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [showOrderPreparation, setShowOrderPreparation] = useState(false);
   const dataRef = useRef<ScannerResponse | null>(null);
   dataRef.current = data;
   const [errorMessage, setErrorMessage] = useState('');
@@ -683,15 +647,13 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     setData(null);
     setSelectedSignalId(null);
     setDetailOpen(false);
-    setShowOrderPreparation(false);
   }, [requestKey]);
 
   useEffect(() => {
     if (selectedSignalId && !visibleCards.some((card) => card.signalId === selectedSignalId)) {
       setSelectedSignalId(null);
       setDetailOpen(false);
-      setShowOrderPreparation(false);
-    }
+      }
   }, [selectedSignalId, visibleCards]);
 
   useEffect(() => {
@@ -774,7 +736,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
   const selectSignal = (card: ScannerSignalCard) => {
     setSelectedSignalId(card.signalId);
-    setShowOrderPreparation(false);
     setDetailOpen(true);
     analysisSelection.select(selectionFor(card));
   };
@@ -789,14 +750,6 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       params.set('strategyMode', toAiChartStrategyMode(chartStrategyMode));
       navigate(`/ai-chart?${params.toString()}`);
     }
-  };
-
-  const openOrderPreparation = (card: ScannerSignalCard) => {
-    const selection = selectionFor(card);
-    analysisSelection.select(selection);
-    setSelectedSignalId(card.signalId);
-    setShowOrderPreparation(true);
-    setDetailOpen(true);
   };
 
   return (
@@ -958,22 +911,21 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                         <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
                       <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
-                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">주문 준비</button>
+                      <div className="mt-2">
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 w-full rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
                       </div>
                     </article>
                   ))}
                   {embedded && selectedCard ? (
                     <div className="hidden pt-2 lg:block">
-                      <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} />
+                      <SignalDetailPanel card={selectedCard} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} />
                     </div>
                   ) : null}
                 </div>
                 {!embedded ? (
                   <aside data-testid="scanner-desktop-detail" className="hidden min-w-0 lg:block">
                     <div className="sticky top-3">
-                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">신호 상세</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·진입·손절·목표와 안전 액션을 표시합니다.</p></section>}
+                      {selectedCard ? <SignalDetailPanel card={selectedCard} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">신호 상세</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·진입·손절·목표와 안전 액션을 표시합니다.</p></section>}
                     </div>
                   </aside>
                 ) : null}
@@ -990,9 +942,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       </div>
       {selectedCard && detailOpen ? (
         <div className="lg:hidden">
-          <button type="button" aria-label="Signal Detail 닫기" onClick={() => { setDetailOpen(false); setShowOrderPreparation(false); }} className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-[1px]" />
+          <button type="button" aria-label="Signal Detail 닫기" onClick={() => setDetailOpen(false)} className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-[1px]" />
           <div role="dialog" aria-modal="true" aria-label="Signal Detail" data-testid="scanner-mobile-sheet" className="fixed inset-x-0 bottom-0 z-[70] max-h-[calc(100dvh-0.75rem)] overflow-y-auto overscroll-contain rounded-t-3xl border border-card-border bg-card p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl ring-1 ring-black/10">
-            <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onClose={() => { setDetailOpen(false); setShowOrderPreparation(false); }} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} />
+            <SignalDetailPanel card={selectedCard} onClose={() => setDetailOpen(false)} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} />
           </div>
         </div>
       ) : null}

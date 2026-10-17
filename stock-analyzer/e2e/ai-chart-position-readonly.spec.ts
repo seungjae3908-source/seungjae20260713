@@ -118,11 +118,10 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
   expect(panel).toContain("isUsStockPriceOnlyAmend(item)");
   expect(panel).toContain("const quantity = priceOnly ? null");
   expect(panel).toContain("부분체결된 주문은 정정하지 않고 미체결 잔량 취소 후 새 계획으로 다시 검증합니다.");
-  expect(panel).toContain("ScannerApprovalComposer selection={selection}");
+  expect(panel).not.toContain("ScannerApprovalComposer");
   expect(panel).toContain("data-testid=\"ai-chart-entry-planning\"");
-  expect(panel).toContain("이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.");
+  expect(panel).toContain("이 화면에서는 수동 모의 진입계획을 만들지 않습니다.");
   expect(panel).toContain("실전 신규진입은 브라우저에서 임의 생성하지 않으며");
-  expect(panel).toContain("Live 진입초안 · 서버검증 연결");
   expect(panel).toContain("authorizedFetch('/api/trade-automation/scanner/live-draft'");
   expect(panel).toContain("data-testid=\"ai-chart-prepare-live-entry-draft\"");
   expect(panel).toContain("payload.livePlanCreated !== false");
