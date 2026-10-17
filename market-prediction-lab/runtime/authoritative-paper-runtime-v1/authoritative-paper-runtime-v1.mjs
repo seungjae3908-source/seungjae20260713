@@ -3981,8 +3981,7 @@ function applyScannerQuantHardening(input) {
 var UPBIT_BASE = "https://api.upbit.com";
 var BITGET_BASE = "https://api.bitget.com";
 var BITGET_PRODUCT_TYPE = "USDT-FUTURES";
-var CRYPTO_SCANNER_DEADLINE_MS = 9e3;
-var DEADLINE_MS = CRYPTO_SCANNER_DEADLINE_MS;
+var DEADLINE_MS = 12e3;
 var ITEM_TIMEOUT_MS = 3500;
 var CONCURRENCY = 5;
 var MAX_BATCH_SIZE = 40;
