@@ -26,6 +26,7 @@ import {
   automaticLiveIsolationReceipt,
 } from './automatic-live-position-isolation.service';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { startAutoRun, stopAutoRun } from './trade-automation-run-control.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
@@ -3259,3 +3260,40 @@ test('a scoped witness that fails revalidation drops the scoped warmup', async (
   assert.equal(result.liveEntryWarmupComplete, false);
 });
 
+
+// ---------- 작동/정지 run control (owner decision 2026-10-17) ----------
+
+test('작동 ON places the automatic Paper order with no per-order approval; 정지 places nothing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  // Member starts from the default approval-mode policy with markets chosen.
+  await repository.savePolicy(USER, normalizeTradingPolicy({ ...policy(), mode: 'approval', automaticEnabled: false }));
+  const paperLanes = () => false;
+
+  const stoppedPolicy = await repository.getPolicy(USER);
+  const idle = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { policyOverride: stoppedPolicy }));
+  const idleRun = await withFetchMock(() => idle.runOnce(new Date(nowMs)));
+  assert.equal(idleRun.createdPlans, 0, 'run OFF: nothing is placed');
+  assert.equal((await repository.listOrders(USER)).length, 0);
+
+  const started = await startAutoRun(repository, USER, { isLive: paperLanes, liveConfirmed: false });
+  assert.equal(started.ok, true);
+  const running = await repository.getPolicy(USER);
+  const worker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { policyOverride: running }));
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 1);
+  assert.equal(result.filledOrders, 1);
+  assert.equal(result.liveOrders, 0, '작동 never turns a Paper market into LIVE');
+  const plans = await repository.listPlans(USER);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].executionMode, 'automatic');
+  assert.notEqual(plans[0].state, 'APPROVAL_PENDING', 'no per-order approval queue');
+  assert.ok(plans[0].approvedAt);
+
+  await stopAutoRun(repository, USER, { isLive: paperLanes });
+  const afterStop = await repository.getPolicy(USER);
+  const stoppedWorker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { policyOverride: afterStop }));
+  const stoppedRun = await withFetchMock(() => stoppedWorker.runOnce(new Date(nowMs + 60_000)));
+  assert.equal(stoppedRun.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+});
