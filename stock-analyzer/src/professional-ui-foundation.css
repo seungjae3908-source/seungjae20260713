@@ -98,6 +98,10 @@ nav[aria-label='주요 메뉴'] [role='menuitem'] {
   nav[aria-label='주요 메뉴']
     > div:last-child
     > div:has(> button[aria-controls='bottom-nav-settings-menu'])
+    > [role='menu'],
+  nav[aria-label='주요 메뉴']
+    > div:last-child
+    > div:has(> button[aria-controls='bottom-nav-wealth-menu'])
     > [role='menu'] {
     left: auto !important;
     right: 0 !important;

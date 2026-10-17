@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { Info } from 'lucide-react';
+import { Info, Settings } from 'lucide-react';
+import { Link, useLocation } from 'wouter';
 import { cn } from '@/lib/utils';
 
 type CenteredPageHeaderProps = {
@@ -40,11 +41,25 @@ export function CenteredPageHeader({
     </details>
   ) : null;
 
+  const [location] = useLocation();
+  const path = location.split('?')[0];
+  // Mobile settings entry: the tab bar has no 설정 tab, so header gear links to it.
+  const settingsAction = path === '/more' || path === '/settings' ? null : (
+    <Link
+      href="/more"
+      aria-label="설정 열기"
+      data-testid="header-settings-link"
+      className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition hover:text-foreground min-[1200px]:hidden"
+    >
+      <Settings className="h-5 w-5" aria-hidden="true" />
+    </Link>
+  );
+
   return (
     <header
       data-testid={testId}
       data-ui-role="page-header"
-      className={cn('shrink-0 border-b border-card-border bg-background/95 px-3 py-3 backdrop-blur sm:px-4', className)}
+      className={cn('shrink-0 border-b border-border bg-background px-3 py-2.5 sm:px-4', className)}
     >
       <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
         <div className="flex min-w-0 justify-start">{leading ?? <span aria-hidden className="h-11 w-11" />}</div>
@@ -52,7 +67,7 @@ export function CenteredPageHeader({
           {eyebrow ? <p data-ui-role="eyebrow" className="truncate text-xs font-semibold text-primary">{eyebrow}</p> : null}
           <h1 data-ui-role="page-title" className="truncate text-xl font-bold sm:text-2xl">{title}</h1>
         </div>
-        <div className="flex min-w-0 justify-end">{action ?? infoAction ?? <span aria-hidden className="h-11 w-11" />}</div>
+        <div className="flex min-w-0 justify-end">{action ?? infoAction ?? settingsAction ?? <span aria-hidden className="h-11 w-11" />}</div>
       </div>
     </header>
   );

@@ -4,6 +4,96 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Self-hosted Latin subsets (OFL). Korean glyphs come from a locally installed
+ * IBM Plex Sans KR when present, otherwise the platform Korean UI font.
+ */
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-sans-kr-400-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('IBM Plex Sans KR'), local('IBMPlexSansKR-Regular');
+  unicode-range: U+1100-11FF, U+3130-318F, U+AC00-D7AF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-sans-kr-500-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local('IBM Plex Sans KR'), local('IBMPlexSansKR-Regular');
+  unicode-range: U+1100-11FF, U+3130-318F, U+AC00-D7AF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-sans-kr-600-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local('IBM Plex Sans KR'), local('IBMPlexSansKR-Regular');
+  unicode-range: U+1100-11FF, U+3130-318F, U+AC00-D7AF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-sans-kr-700-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans KR';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local('IBM Plex Sans KR'), local('IBMPlexSansKR-Regular');
+  unicode-range: U+1100-11FF, U+3130-318F, U+AC00-D7AF, U+3000-303F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-500-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/ibm-plex-mono-600-latin.woff2') format('woff2');
+}
+
 @theme inline {
   /* Card/background alpha let the scuba background show through when enabled. */
   --color-background: hsl(var(--background) / var(--bg-alpha, 1));
@@ -37,6 +127,21 @@
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
 
+  /* Price direction (Korean convention: 상승=빨강, 하락=파랑). Never reuse positive/destructive for direction. */
+  --color-brand: hsl(var(--rise));
+  --color-rise: hsl(var(--rise));
+  --color-fall: hsl(var(--fall));
+  --color-rise-surface: hsl(var(--rise) / 0.12);
+  --color-fall-surface: hsl(var(--fall) / 0.12);
+
+  /* App shell surfaces */
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-active: hsl(var(--sidebar-active));
+  --color-sidebar-hover: hsl(var(--sidebar-hover));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--foreground));
+
   /* Semantic accents from the spec: AI=blue, risk=orange, 공시=purple. */
   --color-ai: hsl(var(--ai));
   --color-ai-foreground: hsl(var(--ai-foreground));
@@ -45,13 +150,16 @@
   --color-disclosure: hsl(var(--disclosure));
   --color-disclosure-foreground: hsl(var(--disclosure-foreground));
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  --font-sans: 'IBM Plex Sans KR', 'Pretendard', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 
-  --radius-sm: 0.375rem;
-  --radius-md: 0.625rem;
-  --radius-lg: 0.875rem;
-  --radius-xl: 1.25rem;
+  /* Compact professional geometry: panels 12px, controls 8–10px. */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 0.875rem;
 }
 
 /* Light theme (opt-in via settings) */
@@ -94,48 +202,67 @@
   --risk-foreground: 0 0% 100%;
   --disclosure: 270 72% 52%;
   --disclosure-foreground: 0 0% 100%;
+
+  --rise: 355 78% 52%;
+  --fall: 215 90% 50%;
+
+  --sidebar: 220 20% 98%;
+  --sidebar-foreground: 220 9% 38%;
+  --sidebar-active: 218 40% 92%;
+  --sidebar-hover: 220 14% 94%;
+  --popover: 0 0% 100%;
 }
 
-/* Dark theme (default) */
+/* Dark theme (default) — #0B0E13 base, #0F131A shell, #11161E panels, #1E252F lines. */
 .dark {
-  --background: 225 18% 7%;
-  --foreground: 210 20% 98%;
+  --background: 218 27% 6%;
+  --foreground: 216 25% 92%;
 
-  --card: 224 16% 11%;
-  --card-foreground: 210 20% 98%;
-  --card-border: 222 14% 20%;
+  /* Cards render at --card-alpha 0.72 over the base; these values resolve to #11161E / #1E252F. */
+  --card: 216 28% 10%;
+  --card-foreground: 216 25% 92%;
+  --card-border: 214 22% 19%;
 
-  --border: 222 14% 18%;
-  --input: 222 14% 18%;
-  --ring: 210 100% 60%;
+  --border: 215 22% 15%;
+  --input: 215 21% 17%;
+  --ring: 215 95% 59%;
 
-  --primary: 210 100% 56%;
+  --primary: 215 95% 59%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 222 14% 18%;
-  --secondary-foreground: 210 20% 98%;
+  --secondary: 218 22% 14%;
+  --secondary-foreground: 216 25% 92%;
 
-  --muted: 222 14% 18%;
-  --muted-foreground: 220 12% 65%;
+  --muted: 216 25% 12%;
+  --muted-foreground: 217 11% 54%;
 
-  --accent: 222 14% 18%;
-  --accent-foreground: 210 20% 98%;
+  --accent: 218 30% 15%;
+  --accent-foreground: 216 25% 92%;
 
-  --destructive: 0 84% 62%;
+  --destructive: 355 85% 60%;
   --destructive-foreground: 0 0% 100%;
 
-  --positive: 145 72% 47%;
-  --positive-foreground: 144 100% 8%;
+  --positive: 151 62% 44%;
+  --positive-foreground: 150 100% 8%;
 
-  --warning: 42 96% 56%;
+  --warning: 37 91% 55%;
   --warning-foreground: 40 100% 10%;
 
-  --ai: 210 100% 62%;
+  --ai: 215 95% 64%;
   --ai-foreground: 0 0% 100%;
   --risk: 26 96% 58%;
   --risk-foreground: 24 100% 10%;
   --disclosure: 272 86% 72%;
   --disclosure-foreground: 0 0% 100%;
+
+  --rise: 355 85% 60%;
+  --fall: 215 95% 59%;
+
+  --sidebar: 218 27% 8%;
+  --sidebar-foreground: 215 16% 73%;
+  --sidebar-active: 218 30% 15%;
+  --sidebar-hover: 216 25% 12%;
+  --popover: 217 28% 9%;
 }
 
 @layer base {
@@ -152,11 +279,64 @@
   body {
     @apply font-sans antialiased text-foreground;
     overscroll-behavior: none;
+    background-color: hsl(var(--background));
+    font-feature-settings: 'tnum' 0;
+    letter-spacing: -0.005em;
+  }
+  /* Every <table> number column reads as a professional data table. */
+  table {
+    font-variant-numeric: tabular-nums;
   }
   /* Smooth number/scale transitions for the premium feel */
   button,
   a {
     -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/*
+ * Numbers: prices, percentages, quantities. IBM Plex Mono + tabular figures so
+ * columns line up. Use on any element that renders a market value.
+ */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@utility text-up {
+  color: hsl(var(--rise));
+}
+
+@utility text-down {
+  color: hsl(var(--fall));
+}
+
+/* Compact data table: right-aligned numeric columns, hairline rows. */
+@utility data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  & th {
+    padding: 0.375rem 0.5rem;
+    border-bottom: 1px solid hsl(var(--border));
+    color: hsl(var(--muted-foreground));
+    font-size: 0.71875rem;
+    font-weight: 500;
+    text-align: right;
+  }
+  & td {
+    padding: 0.5625rem 0.5rem;
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+    text-align: right;
+  }
+  & th:first-child,
+  & td:first-child {
+    text-align: left;
+  }
+  & tr:last-child td {
+    border-bottom: 0;
   }
 }
 
@@ -437,4 +617,36 @@ input[type='search']::-webkit-search-results-decoration {
   background-color: hsl(var(--card));
   border-color: hsl(var(--card-border));
   color: hsl(var(--card-foreground));
+}
+
+/*
+ * Professional desktop shell (>=1200px): the left sidebar owns the
+ * "주요 메뉴" landmark, so the mobile tab bar is hidden and no bottom reserve
+ * is subtracted. Legacy floating-dock geometry must not leak onto the sidebar.
+ */
+@media (min-width: 1200px) {
+  html:root:has(nav[data-testid='desktop-sidebar']) {
+    --app-bottom-nav-reserve: 0px;
+  }
+
+  /* Only when the sidebar is mounted; shell-less routes keep the tab bar. */
+  #root:has(nav[data-testid='desktop-sidebar']) nav[aria-label='주요 메뉴'][data-mobile-tab-bar] {
+    display: none !important;
+  }
+
+  nav[aria-label='주요 메뉴'][data-testid='desktop-sidebar'] {
+    position: relative;
+    inset: auto;
+    width: 216px !important;
+    max-width: none !important;
+    transform: none !important;
+    border-width: 0 1px 0 0 !important;
+    border-radius: 0 !important;
+    padding: 1rem 0.75rem 1.25rem !important;
+    box-shadow: none !important;
+  }
+
+  nav[aria-label='주요 메뉴'][data-testid='desktop-sidebar'] > div {
+    max-width: none;
+  }
 }

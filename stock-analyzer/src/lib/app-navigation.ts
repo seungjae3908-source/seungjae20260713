@@ -368,3 +368,170 @@ export function resolveAppRoutePresentation(location: string): AppRoutePresentat
     item.pathPrefixes?.some((prefix) => path.startsWith(prefix)),
   )) ?? null;
 }
+
+/*
+ * Mobile tab bar (<1200px). 자동매매 is a first-class tab so it is always one
+ * tap away on phones; settings are reached from the header gear and from the
+ * 자산 menu. Every route that the desktop sidebar exposes stays reachable here.
+ */
+export type MobileTabId = 'home' | 'assets' | 'scanner' | 'auto-trading' | 'wealth';
+export type MobileTabIconId = 'home' | 'assets' | 'search' | 'power' | 'portfolio';
+
+export interface MobileNavigationTab {
+  id: MobileTabId;
+  href: string;
+  label: string;
+  icon: MobileTabIconId;
+  capability?: MemberCapability;
+  exactPaths?: readonly string[];
+  pathPrefixes?: readonly string[];
+  menu?: readonly NavigationMenuItem[];
+}
+
+function navigationGroupById(id: NavigationGroupId): NavigationGroup {
+  const group = APP_NAVIGATION.find((item) => item.id === id);
+  if (!group) throw new Error(`navigation group missing: ${id}`);
+  return group;
+}
+
+export const MOBILE_NAVIGATION: readonly MobileNavigationTab[] = [
+  {
+    id: 'home',
+    href: APP_ROUTES.home,
+    label: '홈',
+    icon: 'home',
+    exactPaths: navigationGroupById('home').exactPaths,
+  },
+  {
+    id: 'assets',
+    href: APP_ROUTES.assets,
+    label: '종목',
+    icon: 'assets',
+    exactPaths: navigationGroupById('assets').exactPaths,
+    pathPrefixes: navigationGroupById('assets').pathPrefixes,
+    menu: navigationGroupById('assets').menu,
+  },
+  {
+    id: 'scanner',
+    href: APP_ROUTES.scanner,
+    label: '검색기',
+    icon: 'search',
+    exactPaths: [
+      APP_ROUTES.scanner,
+      APP_ROUTES.telegramOrder,
+      APP_ROUTES.aiChart,
+      APP_ROUTES.backtests,
+      APP_ROUTES.strategyPromotion,
+    ],
+    menu: [
+      { id: 'scanner', href: APP_ROUTES.scanner, label: 'AI 검색기', icon: 'search', capability: 'canAccessBasicInfo' },
+      { id: 'ai-chart', href: APP_ROUTES.aiChart, label: 'AI차트', icon: 'chart', capability: 'canAccessAiChart' },
+      { id: 'backtests', href: APP_ROUTES.backtests, label: '과거검증', icon: 'chart', capability: 'canAccessBacktests' },
+    ],
+  },
+  {
+    id: 'auto-trading',
+    href: APP_ROUTES.autoTrading,
+    label: '자동매매',
+    icon: 'power',
+    capability: 'canAccessAutoTrading',
+    exactPaths: [APP_ROUTES.autoTrading, APP_ROUTES.paperTrading],
+  },
+  {
+    id: 'wealth',
+    href: APP_ROUTES.portfolio,
+    label: '자산',
+    icon: 'portfolio',
+    exactPaths: [
+      ...(navigationGroupById('information').exactPaths ?? []),
+      ...(navigationGroupById('settings').exactPaths ?? []),
+    ],
+    menu: [
+      { id: 'portfolio', href: APP_ROUTES.portfolio, label: '포트폴리오', icon: 'portfolio', capability: 'canAccessPaperTrading' },
+      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
+      { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 상담', icon: 'chat', capability: 'canAccessBasicInfo' },
+      { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
+      { id: 'settings', href: APP_ROUTES.settings, label: '앱 설정', icon: 'settings' },
+      { id: 'account', href: APP_ROUTES.account, label: '계정', icon: 'settings' },
+      { id: 'admin', href: APP_ROUTES.admin, label: '회원 관리', icon: 'settings', capability: 'canManageMembers' },
+    ],
+  },
+] as const;
+
+export function mobileTabMatches(tab: MobileNavigationTab, location: string): boolean {
+  const path = cleanAppPath(location);
+  return Boolean(
+    tab.exactPaths?.includes(path) ||
+    tab.pathPrefixes?.some((prefix) => path.startsWith(prefix)),
+  );
+}
+
+/*
+ * Desktop sidebar (>=1200px). Sections follow the product grouping
+ * 홈 / 종목 / 기술 / 정보 / 계정 and list every user-visible destination.
+ */
+export interface SidebarSection {
+  id: NavigationGroupId;
+  label: string | null;
+  items: readonly NavigationMenuItem[];
+}
+
+export const SIDEBAR_NAVIGATION: readonly SidebarSection[] = [
+  {
+    id: 'home',
+    label: null,
+    items: [{ id: 'home', href: APP_ROUTES.home, label: '홈', icon: 'home' }],
+  },
+  {
+    id: 'assets',
+    label: '종목',
+    items: navigationGroupById('assets').menu ?? [],
+  },
+  {
+    id: 'technical',
+    label: '기술',
+    items: [
+      { id: 'scanner', href: APP_ROUTES.scanner, label: 'AI 검색기', icon: 'search', capability: 'canAccessBasicInfo' },
+      { id: 'ai-chart', href: APP_ROUTES.aiChart, label: 'AI차트', icon: 'chart', capability: 'canAccessAiChart' },
+      { id: 'backtests', href: APP_ROUTES.backtests, label: '과거검증', icon: 'chart', capability: 'canAccessBacktests' },
+      { id: 'auto-trading', href: APP_ROUTES.autoTrading, label: '자동매매', icon: 'power', capability: 'canAccessAutoTrading' },
+    ],
+  },
+  {
+    id: 'information',
+    label: '정보',
+    items: [
+      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
+      { id: 'portfolio', href: APP_ROUTES.portfolio, label: '포트폴리오', icon: 'portfolio', capability: 'canAccessPaperTrading' },
+      { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 상담', icon: 'chat', capability: 'canAccessBasicInfo' },
+      { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
+    ],
+  },
+  {
+    id: 'settings',
+    label: '계정',
+    items: [
+      { id: 'settings', href: APP_ROUTES.settings, label: '설정', icon: 'settings' },
+      { id: 'account', href: APP_ROUTES.account, label: '계정 연결', icon: 'settings' },
+      { id: 'admin', href: APP_ROUTES.admin, label: '회원 관리', icon: 'settings', capability: 'canManageMembers' },
+    ],
+  },
+] as const;
+
+export function sidebarItemMatches(item: NavigationMenuItem, location: string): boolean {
+  const path = cleanAppPath(location);
+  if (item.id === 'auto-trading' && path === APP_ROUTES.paperTrading) return true;
+  if (item.id === 'portfolio' && (path === APP_ROUTES.assetsPortfolio || path === APP_ROUTES.position)) return true;
+  if (item.id === 'settings' && path === APP_ROUTES.settingsAlias) return true;
+  if (item.id === 'asset-search' && (
+    path === APP_ROUTES.unifiedSearchAlias
+    || path === APP_ROUTES.stockInfo
+    || path === APP_ROUTES.stockAnalysis
+    || path.startsWith(APP_ROUTES.stockDetailPrefix)
+  )) return true;
+  if (item.id === 'themes' && path === APP_ROUTES.newsInformation) return true;
+  if (item.id === 'scanner' && path === APP_ROUTES.telegramOrder) return true;
+  if (item.id === 'backtests' && path === APP_ROUTES.strategyPromotion) return true;
+  if (item.id === 'admin' && path.startsWith(`${APP_ROUTES.admin}/`)) return true;
+  return path === item.href;
+}

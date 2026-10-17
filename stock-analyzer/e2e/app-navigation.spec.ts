@@ -2,6 +2,8 @@ import { test, expect, type Page, type Route } from '@playwright/test';
 import {
   APP_NAVIGATION,
   APP_ROUTES,
+  MOBILE_NAVIGATION,
+  SIDEBAR_NAVIGATION,
   UNIFIED_SEARCH_ROUTE_CONTRACT,
   navigationGroupMatches,
 } from '../src/lib/app-navigation';
@@ -206,9 +208,46 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankings).toBe('/market-rankings');
   expect(navigationGroupMatches(group('assets'), '/coins/spot')).toBe(true);
   expect(navigationGroupMatches(group('technical'), '/auto-trading')).toBe(true);
+
+  // Mobile tab bar: 자동매매 is a first-class tab; every sidebar destination stays reachable.
+  expect(MOBILE_NAVIGATION.map((item) => item.label)).toEqual(['홈', '종목', '검색기', '자동매매', '자산']);
+  expect(MOBILE_NAVIGATION.find((item) => item.id === 'auto-trading')?.href).toBe(APP_ROUTES.autoTrading);
+  const mobileHrefs = new Set(MOBILE_NAVIGATION.flatMap((item) => [item.href, ...(item.menu ?? []).map((menu) => menu.href)]));
+  for (const section of SIDEBAR_NAVIGATION) {
+    for (const item of section.items) expect(mobileHrefs.has(item.href), item.href).toBe(true);
+  }
+  expect(SIDEBAR_NAVIGATION.map((section) => section.label)).toEqual([null, '종목', '기술', '정보', '계정']);
 });
 
-for (const width of [360, 390, 430, 1023, 1024, 1440]) {
+test('desktop sidebar owns the primary navigation at 1440px and the mobile tab bar is hidden', async ({ page }) => {
+  const assertClean = await installApprovedRuntime(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/stocks/kr');
+  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  await expect(navigation).toHaveCount(1);
+  await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
+  await expect(navigation).toHaveAttribute('data-route-title', '국내주식');
+  for (const label of ['홈', '통합검색', '국내주식', 'AI 검색기', '과거검증', '자동매매', '연구센터', '포트폴리오', 'AI 상담', '설정']) {
+    await expect(navigation.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
+  }
+  await expect(navigation.getByRole('menuitem', { name: '국내주식', exact: true })).toHaveAttribute('aria-current', 'page');
+  // Section headings are buttons that move focus into their always-visible menu.
+  await navigation.getByRole('button', { name: '기술', exact: true }).click();
+  const technicalMenu = page.getByRole('menu', { name: '기술 메뉴' });
+  await expect(technicalMenu).toBeVisible();
+  await expect(technicalMenu.getByRole('menuitem').first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(technicalMenu.getByRole('menuitem').nth(1)).toBeFocused();
+  const box = await navigation.boundingBox();
+  expect(Math.round(box?.width ?? 0)).toBe(216);
+  await expect(page.locator('nav[data-mobile-tab-bar]')).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  assertClean();
+});
+
+for (const width of [360, 390, 430, 1023, 1024]) {
   test(`five top-level controls and anchored menus avoid overflow at ${width}px`, async ({ page }) => {
     const assertClean = await installApprovedRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
@@ -217,7 +256,7 @@ for (const width of [360, 390, 430, 1023, 1024, 1440]) {
 
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await expect(navigation.getByRole('button')).toHaveCount(5);
-    for (const label of ['홈', '종목', '기술', '정보', '설정']) {
+    for (const label of ['홈', '종목', '검색기', '자동매매', '자산']) {
       const button = navigation.getByRole('button', { name: label, exact: true });
       await expect(button).toBeVisible();
       const box = await button.boundingBox();
@@ -299,27 +338,40 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
   assertClean();
 });
 
-test('technical menu reaches scanner, AI chart, and auto-trading routes without information-route confusion', async ({ page }) => {
+test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without information-route confusion', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/stocks/kr');
 
   const cases = [
-    ['검색기', '/scanner', /AI 신호검색기/],
+    ['AI 검색기', '/scanner', /AI 신호검색기/],
     ['AI차트', '/ai-chart', /AI 차트 생중계/],
-    ['기술매매', '/auto-trading', /자동매매/],
+    ['자동매매', '/auto-trading', /자동매매/],
   ] as const;
 
   for (const [label, route, heading] of cases) {
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
-    await navigation.getByRole('button', { name: '기술', exact: true }).click();
-    const menu = page.getByRole('menu', { name: '기술 메뉴' });
-    await menu.getByRole('menuitem', { name: label, exact: true }).click();
+    await navigation.getByRole('menuitem', { name: label, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${route.replaceAll('/', '\\/')}$`));
     await expect(page.getByRole('heading', { name: heading }).first()).toBeVisible();
-    await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeHidden();
+    await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('menuitem', { name: label, exact: true })).toHaveAttribute('aria-current', 'page');
     await page.goto('/stocks/kr');
   }
+  assertClean();
+});
+
+test('mobile tab bar exposes 자동매매 directly and the scanner menu reaches AI chart', async ({ page }) => {
+  const assertClean = await installApprovedRuntime(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/stocks/kr');
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  await navigation.getByRole('button', { name: '자동매매', exact: true }).click();
+  await expect(page).toHaveURL(/\/auto-trading$/u);
+  await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('button', { name: '자동매매', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('button', { name: '검색기', exact: true }).click();
+  const menu = page.getByRole('menu', { name: '검색기 메뉴' });
+  await menu.getByRole('menuitem', { name: 'AI차트', exact: true }).click();
+  await expect(page).toHaveURL(/\/ai-chart$/u);
   assertClean();
 });
 

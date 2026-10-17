@@ -1405,7 +1405,7 @@ export default function SearchPage() {
                 <button key={row.ticker} type="button" onClick={() => { setWatchlistOpen(false); openDetail(row); }} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
                   <Star className="h-4 w-4 shrink-0 fill-yellow-400 text-yellow-400" />
                   <div className="min-w-0 flex-1"><p className="truncate text-sm font-extrabold">{displayStockName(row.ticker, row.name, row.market)}</p><p className="mt-1 text-[11px] font-bold text-muted-foreground">{row.ticker}</p></div>
-                  <div className="shrink-0 text-right"><p className="text-sm font-extrabold">{formatAppPrice(row.price, row.currency)}</p><p className={cn("mt-1 text-xs font-extrabold", (row.changePercent ?? 0) >= 0 ? "text-positive" : "text-destructive")}>{formatAppPercent(row.changePercent)}</p></div>
+                  <div className="shrink-0 text-right"><p className="text-sm font-extrabold">{formatAppPrice(row.price, row.currency)}</p><p className={cn("mt-1 text-xs font-extrabold", (row.changePercent ?? 0) >= 0 ? "text-rise" : "text-fall")}>{formatAppPercent(row.changePercent)}</p></div>
                 </button>
               ))}
             </div>
