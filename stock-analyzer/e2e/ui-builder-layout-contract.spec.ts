@@ -120,6 +120,6 @@ test('trade review action cannot be mutated and scanner logic remains owned by e
     expect(UI_BUILDER_REGISTRY_MAPPING[type].scannerSurface).toBe('scanner');
     expect(UI_BUILDER_REGISTRY_MAPPING[type].target).toContain('SignalScannerPage');
   }
-  expect(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.target).toBe('ScannerApprovalComposer');
+  expect(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.target).toBe('TechnicalWorkspace TradeReviewSurface');
   expect(UI_BUILDER_REGISTRY_MAPPING.TradeReviewButton.scannerSurface).toBe('trade-review');
 });
