@@ -589,6 +589,18 @@ jobs:
             stock-analyzer/e2e/phase12-trade-automation.spec.ts
             stock-analyzer/e2e/stock-detail-ai-chart-ui-remediation.spec.ts
             stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts
+            # Manual Paper order preparation removed from scanner, AI chart and
+            # technical workspace (owner decision 2026-10-17).
+            stock-analyzer/src/pages/signal-scanner.tsx
+            stock-analyzer/src/pages/technical-workspace.tsx
+            stock-analyzer/src/components/ai-chart-position-panel-impl.tsx
+            stock-analyzer/src/lib/ui-builder-layout.ts
+            stock-analyzer/src/lib/ui-builder-layout.test.ts
+            stock-analyzer/e2e/signal-scanner.spec.ts
+            stock-analyzer/e2e/ai-chart-position-readonly.spec.ts
+            stock-analyzer/e2e/ui-builder-layout-contract.spec.ts
+            .github/scripts/connection-graph-auditor.mjs
+            .github/tests/connection-graph-auditor.test.mjs
           )
           market_scope_expected=(
             7b8a872244fa3a9ba7083e92a3df5ca9136d5fcb
@@ -601,6 +613,16 @@ jobs:
             bccddf8a0d4e24ce3a19a78d5ec87a724df7d6c2
             44449fc8ece6e6ffa45e958e85666fdc07e0693c
             602a523599f004fd346f6ded8305c9672e7047c0
+            f8c627431f6e646720b74e882a85222d197afc91
+            a80bd533ba60661030ccf2dfd609c39714f51ff0
+            ee66d0a25421756de16e60295d8bfa34e81aef79
+            676ae5ef82499ef3619ef65fc73c9bf1aa2fefb4
+            7f3a52bf8699ffd2a0a2258b5de09fda8a8c1903
+            1ebd190966214a0caac212984c5912e6be2f951d
+            e6a58fe8df7e88821999e74122b18894c5b8f2a9
+            508d73dcd6b3ca0ec48ffac4859cdb8c2b269b82
+            a31e045a2ef5a2b91164c7c39f4248f46ab93b23
+            7f7f23618e53f4855bb976fcfdcf082c38400306
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
