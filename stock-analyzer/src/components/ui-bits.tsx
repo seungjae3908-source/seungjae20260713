@@ -40,6 +40,8 @@ export function Bar({ value, tone = 'neutral' }: { value: number; tone?: Tone })
     warning: 'bg-warning',
     destructive: 'bg-destructive',
     neutral: 'bg-muted-foreground',
+    rise: 'bg-rise',
+    fall: 'bg-fall',
   };
   return (
     <div className="h-1.5 w-full min-w-0 overflow-hidden rounded-full bg-muted">

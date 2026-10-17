@@ -279,7 +279,7 @@ function StockRow({ stock, onClick }: { stock: AnyObj; onClick: () => void }) {
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-rise' : change !== null && change < 0 ? 'text-fall' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -291,7 +291,7 @@ function CoinRow({ row, coinMarket, onClick }: { row: AnyObj; coinMarket: 'spot'
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
       <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-rise' : change < 0 ? 'text-fall' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
     </button>
   );
 }
@@ -381,7 +381,7 @@ function StockRankRow({ rank, stock, onClick }: { rank: number; stock: AnyObj; o
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-rise' : change !== null && change < 0 ? 'text-fall' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -401,7 +401,7 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
                 <div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{row.market}</span></div>
                 <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 규칙 점수 {row.score}점</p>
               </div>
-              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
+              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-rise' : change !== null && change < 0 ? 'text-fall' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
             </div>
             {row.reasons.length > 0 && (
               <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] font-bold text-foreground/90">
@@ -455,7 +455,7 @@ function CoinRankRow({ rank, row, coinMarket, onClick }: { rank: number; row: An
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
       <div className="min-w-0 flex-1"><p className="truncate text-sm font-black">{displayCoinName(String(row.symbol), row.koreanName, row.englishName)}</p><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.symbol} · {coinMarket === 'spot' ? 'UPBIT' : 'BITGET'}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(Number(row.price), currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-rise' : change < 0 ? 'text-fall' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
     </button>
   );
 }

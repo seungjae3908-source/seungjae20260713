@@ -8,7 +8,8 @@ export const RATING_KO: Record<Rating, string> = {
   STRONG_SELL: '적극 매도',
 };
 
-export type Tone = 'positive' | 'warning' | 'destructive' | 'neutral';
+// rise/fall are price-direction tones (Korean convention: 상승=빨강, 하락=파랑).
+export type Tone = 'positive' | 'warning' | 'destructive' | 'neutral' | 'rise' | 'fall';
 
 export function ratingTone(r: Rating): Tone {
   if (r === 'STRONG_BUY' || r === 'BUY') return 'positive';
@@ -176,6 +177,10 @@ export function userFacingCodeLabel(
 // Tailwind classes for the app's semantic colors (Green/Yellow/Red).
 export function toneText(t: Tone): string {
   switch (t) {
+    case 'rise':
+      return 'text-rise';
+    case 'fall':
+      return 'text-fall';
     case 'positive':
       return 'text-positive';
     case 'destructive':
@@ -189,6 +194,10 @@ export function toneText(t: Tone): string {
 
 export function toneBadge(t: Tone): string {
   switch (t) {
+    case 'rise':
+      return 'bg-rise/15 text-rise border-rise/30';
+    case 'fall':
+      return 'bg-fall/15 text-fall border-fall/30';
     case 'positive':
       return 'bg-positive/15 text-positive border-positive/30';
     case 'destructive':
@@ -202,6 +211,10 @@ export function toneBadge(t: Tone): string {
 
 export function toneDot(t: Tone): string {
   switch (t) {
+    case 'rise':
+      return 'bg-rise';
+    case 'fall':
+      return 'bg-fall';
     case 'positive':
       return 'bg-positive';
     case 'destructive':
@@ -214,7 +227,7 @@ export function toneDot(t: Tone): string {
 }
 
 export function changeTone(pct: number): Tone {
-  if (pct > 0) return 'positive';
-  if (pct < 0) return 'destructive';
+  if (pct > 0) return 'rise';
+  if (pct < 0) return 'fall';
   return 'neutral';
 }

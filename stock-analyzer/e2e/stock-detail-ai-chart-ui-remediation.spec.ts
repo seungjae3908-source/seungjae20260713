@@ -110,7 +110,8 @@ test('상세분석 replaces the embedded legacy full page with focused AI financ
 });
 
 test('all shared and semantic tab labels use one centered 12px 600 weight 16px line-height spec', () => {
-  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4');
+  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-none border-b-2 text-center text-xs leading-4');
+  expect(responsiveTabsSource).toContain("'border-brand font-semibold text-foreground'");
   expect(responsiveTabsSource).toContain('<span className="block w-full text-center leading-4">');
   expect(touchCss).toContain('#root [role="tablist"] [role="tab"]');
   expect(touchCss).toContain('#root [aria-label$="탭"] > button');

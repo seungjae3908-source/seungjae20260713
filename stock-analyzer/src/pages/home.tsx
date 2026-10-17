@@ -227,11 +227,12 @@ export default function HomePage() {
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
         {indices.length === 0
           ? <DashboardPlaceholder label={marketState} />
-          : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} />)}
+          : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} change={item.changePercent} />)}
         <MetricCard
           label="비트코인 · 업비트"
           value={btc ? btcPrice == null ? '가격 미확인' : formatAppPrice(btcPrice, 'KRW') : bitcoin.isLoading ? '확인 중' : '미확인'}
           sub={btc ? btcChangePercent == null ? '등락 미확인' : formatAppPercent(btcChangePercent) : bitcoin.isError ? '확인 필요' : '현물 시세'}
+          change={btcChangePercent}
         />
       </div>
     </section>
@@ -274,7 +275,7 @@ export default function HomePage() {
                 </div>
                 <div className="shrink-0 text-right text-xs font-semibold">
                   <p>{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</p>
-                  <p className="text-xs font-medium text-muted-foreground">{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
+                  <p className={`num text-xs font-medium ${directionClass(watchlistChangePercent)}`}>{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
                 </div>
               </div>
             );
@@ -390,8 +391,13 @@ function DashboardStatusCard({ icon, label, value, detail, onClick }: {
   );
 }
 
-function MetricCard({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
+function directionClass(change: number | null | undefined): string {
+  if (change == null || !Number.isFinite(change) || change === 0) return 'text-muted-foreground';
+  return change > 0 ? 'text-rise' : 'text-fall';
+}
+
+function MetricCard({ label, value, sub, change }: { label: string; value: string; sub: string; change?: number | null }) {
+  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="num mt-1 truncate text-sm font-semibold">{value}</p><p className={`num mt-1 truncate text-xs font-medium ${directionClass(change)}`}>{sub}</p></div>;
 }
 
 function DashboardPlaceholder({ label }: { label: string }) {
