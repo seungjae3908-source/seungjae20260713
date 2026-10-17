@@ -20,10 +20,13 @@ test('Market Information client timeout cannot preempt the server first-paint fa
   const clientTimeout = numericConstant(clientSource, 'MARKET_INFORMATION_REQUEST_TIMEOUT_MS');
   const serverFirstPaintTimeout = numericConstant(serverSource, 'DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS');
 
-  expect(serverFirstPaintTimeout).toBe(2_500);
+  // Overseas cold-cache providers need 3-4s, so the server first paint waits 4.5s
+  // and must still answer (fallback or stale snapshot) at least 1.5s before the
+  // browser's 6s market-information transport timeout aborts the request.
+  expect(serverFirstPaintTimeout).toBe(4_500);
   expect(clientTimeout).toBe(6_000);
   expect(clientTimeout).toBeGreaterThan(serverFirstPaintTimeout);
-  expect(5_000 - serverFirstPaintTimeout).toBeGreaterThanOrEqual(2_500);
+  expect(clientTimeout - serverFirstPaintTimeout).toBeGreaterThanOrEqual(1_500);
   expect(clientSource).toContain("requestPath(input).startsWith('/api/market-information/')");
   expect(clientSource).toContain("errorCode: 'MARKET_INFORMATION_TIMEOUT'");
   expect(clientSource).not.toContain('MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500');
