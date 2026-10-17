@@ -5,6 +5,7 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
+import { AppErrorBoundary } from '@/components/app-error-boundary';
 import { apiGet } from '@/lib/api';
 import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
@@ -23,6 +24,7 @@ const DETAIL_TABS = [
   { value: 'news', label: '뉴스' },
   { value: 'analysis', label: '상세분석' },
 ] as const;
+const DETAIL_TAB_LABEL: Record<DetailTab, string> = { summary: '종목 요약', chart: 'AI 차트', news: '뉴스', analysis: '상세분석' };
 const CHART_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 
 function queryState() {
@@ -69,6 +71,17 @@ function text(...values: unknown[]) {
     if (result) return result;
   }
   return null;
+}
+
+// RSS dates arrive as "Sat, 17 Oct 2026 04:34:00 GMT"; show them in Korean time.
+function formatNewsTime(value: unknown): string | null {
+  const raw = typeof value === 'number' ? value : String(value ?? '').trim();
+  if (raw === '') return null;
+  const date = typeof raw === 'number' ? new Date(raw < 1e12 ? raw * 1000 : raw) : new Date(raw);
+  if (!Number.isFinite(date.getTime())) return typeof raw === 'string' ? raw : null;
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(date);
 }
 
 function compactNumber(value: unknown, suffix = '') {
@@ -155,8 +168,9 @@ export default function DetailPage() {
   const price = finite(quoteData.price, quoteData.currentPrice, quoteData.close, quoteData.last);
   const changePercent = finite(quoteData.changePercent, quoteData.change_rate, quoteData.percentChange, quoteData.changePct);
   const exchange = text(quoteData.exchange, profileData.exchange, market === 'KR' ? 'KR 시장' : '미국 시장') ?? '-';
-  const sector = text(profileData.sector, profileData.industry, profileData.category) ?? '-';
-  const marketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
+  const sector = text(profileData.sector, profileData.industry, profileData.category) ?? '정보 없음';
+  const rawMarketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
+  const marketCap = rawMarketCap === '-' ? '정보 없음' : rawMarketCap;
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
   const summaryLoading = quote.isLoading || profile.isLoading;
   const routeContextValid = validStockContext(ticker, market);
@@ -192,6 +206,7 @@ export default function DetailPage() {
       </div>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
+        <AppErrorBoundary area={DETAIL_TAB_LABEL[tab]} variant="panel" resetKey={`${ticker}:${tab}`}>
         {tab === 'summary' ? (
           <div className="mx-auto w-full max-w-5xl space-y-3 sm:space-y-4" data-testid="stock-detail-summary">
             {quote.isError ? (
@@ -223,8 +238,8 @@ export default function DetailPage() {
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2 sm:mt-5 sm:grid-cols-4">
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시장</p><p className="mt-1 truncate text-sm font-black">{exchange}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '-' ? '확인 중' : sector}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '-' ? '확인 중' : marketCap}</p></div>
+                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '정보 없음' ? '확인 중' : sector}</p></div>
+                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '정보 없음' ? '확인 중' : marketCap}</p></div>
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p data-testid="stock-detail-health-status" className="mt-1 text-sm font-black">{quote.isError ? '오류' : profile.isError ? '부분' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상'}</p></div>
               </div>
             </section>
@@ -265,7 +280,7 @@ export default function DetailPage() {
               const title = text(item.title, item.headline) ?? '제목 미확인';
               const summary = text(item.summary, item.description, item.content);
               const source = text(item.source, item.publisher) ?? '출처 미확인';
-              const published = text(item.publishedAt, item.published_at, item.date, item.datetime);
+              const published = formatNewsTime(item.publishedAt ?? item.published_at ?? item.date ?? item.datetime);
               const url = text(item.url, item.link);
               const content = (
                 <>
@@ -286,6 +301,7 @@ export default function DetailPage() {
             </Suspense>
           </div>
         ) : null}
+        </AppErrorBoundary>
       </main>
       <BottomNav />
     </div>
