@@ -1,3 +1,4 @@
+import { errorCodeOf } from '@/lib/error-reason';
 import { ChevronRight, ExternalLink } from "lucide-react";
 import { Panel } from "@/components/ui-bits";
 import { SourceLogo } from "@/components/source-logo";
@@ -10,7 +11,7 @@ import {
   type NewsRelevanceProvenance,
 } from "@/lib/news-evidence-display";
 import { cn } from "@/lib/utils";
-import { ApiError, type NewsItem } from "@/lib/api";
+import { type NewsItem } from "@/lib/api";
 
 type ExtendedNewsItem = NewsItem & {
   reliability?: number;
@@ -151,7 +152,7 @@ export function NewsTab({
   if (isError || !data) {
     return (
       <ErrorState
-        code={error instanceof ApiError ? error.code : undefined}
+        code={errorCodeOf(error) ?? undefined}
         onRetry={() => refetch()}
       />
     );

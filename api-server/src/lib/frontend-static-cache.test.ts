@@ -137,3 +137,14 @@ test('Express serves fingerprinted assets as immutable while the SPA shell reval
   assert.equal(shellResponse.status, 200);
   assert.equal(shellResponse.headers.get('cache-control'), FRONTEND_REVALIDATE_CACHE_CONTROL);
 });
+
+test('missing static assets are recognized so they get a 404 instead of index.html', async () => {
+  const { isMissingFrontendStaticAssetRequest } = await import('./frontend-static-cache');
+  assert.equal(isMissingFrontendStaticAssetRequest('/assets/detail-OLDHASH.js'), true);
+  assert.equal(isMissingFrontendStaticAssetRequest('/assets/index-OLD.css'), true);
+  assert.equal(isMissingFrontendStaticAssetRequest('/workbox-1234.js'), true);
+  assert.equal(isMissingFrontendStaticAssetRequest('/stock-info/analysis'), false);
+  assert.equal(isMissingFrontendStaticAssetRequest('/stock-info/analysis?ticker=005930'), false);
+  assert.equal(isMissingFrontendStaticAssetRequest('/home'), false);
+  assert.equal(isMissingFrontendStaticAssetRequest('/api/stocks/005930/quote'), false);
+});
