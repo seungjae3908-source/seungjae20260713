@@ -226,6 +226,8 @@ export type TradingMarketSnapshot = {
   consecutiveLosses: number;
   existingPositionSide?: TradingSide | null;
   liquidationDistancePercent?: number | null;
+  /** BTC drawdown (%) from its 24h peak close. Null/absent = unknown (gate does not block). */
+  benchmarkDrawdownPercent?: number | null;
   openOrderExposureKrw?: number;
   currentPrice?: number | null;
   plannedPrice?: number | null;
