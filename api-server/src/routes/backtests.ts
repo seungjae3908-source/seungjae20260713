@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request } from 'express';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
+import { ProviderError } from '../lib/errors';
+import { logger } from '../lib/logger';
 import { ProductPaperSourceError, productPaperSourceRegistry, type ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import {
   BACKTEST_LIMITS,
@@ -110,9 +112,78 @@ function serializedSize(body: unknown) {
   }
 }
 
-function safeError(error: unknown) {
-  if (error instanceof BacktestValidationError) return { status: 400, code: error.code, message: error.message };
-  return { status: 500, code: 'BACKTEST_EXECUTION_FAILED', message: '백테스트를 완료하지 못했습니다.' };
+export type BacktestFailureReason =
+  | 'INVALID_REQUEST'
+  | 'PROVIDER_BLOCKED'
+  | 'PROVIDER_RATE_LIMITED'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_UNAVAILABLE'
+  | 'PROVIDER_INVALID_RESPONSE'
+  | 'PROVIDER_NETWORK'
+  | 'INTERNAL';
+
+export interface BacktestSafeError {
+  status: number;
+  code: string;
+  reason: BacktestFailureReason;
+  message: string;
+}
+
+const PROVIDER_LABEL: Record<string, string> = {
+  BITGET: '코인선물(비트겟)',
+  UPBIT: '코인현물(업비트)',
+};
+
+function providerLabel(raw: string): string {
+  const prefix = /^([A-Z]+)_/u.exec(raw)?.[1] ?? '';
+  return PROVIDER_LABEL[prefix] ?? '과거 데이터';
+}
+
+/**
+ * Maps any backtest failure to a safe, specific Korean reason the UI can show.
+ * Provider/network failures used to collapse into BACKTEST_EXECUTION_FAILED,
+ * hiding e.g. a 403 block from the exchange's public API. Raw error text and
+ * stacks are never returned to the client; they are logged server-side.
+ */
+export function classifyBacktestError(error: unknown): BacktestSafeError {
+  if (error instanceof BacktestValidationError) {
+    const reason: BacktestFailureReason = error.code === 'PROVIDER_TIMEOUT' || error.code === 'BACKTEST_TIMEOUT'
+      ? 'PROVIDER_TIMEOUT'
+      : 'INVALID_REQUEST';
+    return { status: 400, code: error.code, reason, message: error.message };
+  }
+  const raw = error instanceof Error ? error.message : String(error ?? '');
+  const name = error instanceof Error ? error.name : '';
+  const causeCode = String((error as { cause?: { code?: unknown } } | null)?.cause?.code ?? (error as { code?: unknown } | null)?.code ?? '');
+  const label = providerLabel(raw);
+  const httpStatus = Number(/_HTTP_(\d{3})\b/u.exec(raw)?.[1] ?? Number.NaN);
+
+  if (httpStatus === 401 || httpStatus === 403 || httpStatus === 451) {
+    return { status: 502, code: 'PROVIDER_BLOCKED', reason: 'PROVIDER_BLOCKED',
+      message: `${label} 제공기관이 서버 요청을 차단했습니다(HTTP ${httpStatus}). 잠시 후 다시 시도하거나 다른 시장을 선택해 주세요.` };
+  }
+  if (httpStatus === 429 || (error instanceof ProviderError && error.code === 'RATE_LIMITED')) {
+    return { status: 503, code: 'PROVIDER_RATE_LIMITED', reason: 'PROVIDER_RATE_LIMITED',
+      message: `${label} 제공기관의 요청 한도를 초과했습니다. 1~2분 뒤 다시 시도해 주세요.` };
+  }
+  if (name === 'AbortError' || name === 'TimeoutError' || causeCode === 'ETIMEDOUT' || causeCode === 'UND_ERR_CONNECT_TIMEOUT' || /TIMEOUT/iu.test(raw)) {
+    return { status: 504, code: 'PROVIDER_TIMEOUT', reason: 'PROVIDER_TIMEOUT',
+      message: `${label} 제공기관 응답 시간이 초과되었습니다. 기간을 줄이거나 잠시 후 다시 시도해 주세요.` };
+  }
+  if (Number.isFinite(httpStatus) || error instanceof ProviderError) {
+    return { status: 502, code: 'PROVIDER_UNAVAILABLE', reason: 'PROVIDER_UNAVAILABLE',
+      message: `${label} 제공기관에서 캔들을 받지 못했습니다. 잠시 후 다시 시도해 주세요.` };
+  }
+  if (/INVALID_RESPONSE/u.test(raw)) {
+    return { status: 502, code: 'PROVIDER_INVALID_RESPONSE', reason: 'PROVIDER_INVALID_RESPONSE',
+      message: `${label} 제공기관 응답 형식이 올바르지 않아 실행을 중단했습니다.` };
+  }
+  if (/^(ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|UND_ERR_SOCKET)$/u.test(causeCode) || (name === 'TypeError' && /fetch failed/iu.test(raw))) {
+    return { status: 502, code: 'PROVIDER_NETWORK', reason: 'PROVIDER_NETWORK',
+      message: `${label} 제공기관에 연결하지 못했습니다. 서버 네트워크 상태를 확인한 뒤 다시 시도해 주세요.` };
+  }
+  return { status: 500, code: 'BACKTEST_EXECUTION_FAILED', reason: 'INTERNAL',
+    message: '백테스트 계산 중 내부 오류가 발생했습니다. 같은 오류가 반복되면 관리자에게 알려 주세요.' };
 }
 
 async function withTimeout<T>(promise: Promise<T>, controller: AbortController) {
@@ -203,8 +274,19 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
         result,
       });
     } catch (error) {
-      const safe = safeError(error);
-      return res.status(safe.status).json({ ok: false, mode: 'backtest-only', orderSubmitted: false, code: safe.code, message: safe.message });
+      const safe = classifyBacktestError(error);
+      if (safe.reason !== 'INVALID_REQUEST') {
+        logger.warn({
+          event: 'backtest_run_failed',
+          code: safe.code,
+          reason: safe.reason,
+          market: isObject(req.body) ? String(req.body.market ?? '') : '',
+          symbol: isObject(req.body) ? String(req.body.symbol ?? '').slice(0, 32) : '',
+          timeframe: isObject(req.body) ? String(req.body.timeframe ?? '') : '',
+          err: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+        }, 'backtest run failed');
+      }
+      return res.status(safe.status).json({ ok: false, mode: 'backtest-only', orderSubmitted: false, code: safe.code, reason: safe.reason, message: safe.message });
     } finally {
       activeExecutions = Math.max(0, activeExecutions - 1);
       detachAbort();

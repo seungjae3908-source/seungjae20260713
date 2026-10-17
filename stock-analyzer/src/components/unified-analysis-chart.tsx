@@ -49,7 +49,8 @@ import {
   computeChartIndicators,
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
-import { analyzeChartStructure } from '@/lib/chart-structure-engine';
+import { analyzeChartStructure, type ChartStructureResult } from '@/lib/chart-structure-engine';
+import { buildChartWaveTrendOverlay, type ChartWaveTrendOverlay } from '@/lib/chart-wave-trend';
 import {
   UNIFIED_CHART_TIMEFRAMES,
   UnifiedChartDataError,
@@ -78,7 +79,10 @@ type OverlayKey =
   | 'markers'
   | 'rsi'
   | 'macd'
-  | 'atr';
+  | 'atr'
+  | 'wave'
+  | 'trendline'
+  | 'channel';
 
 type SearchCandidate = {
   symbol: string;
@@ -144,6 +148,9 @@ const OVERLAY_OPTIONS: Array<{ key: OverlayKey; label: string }> = [
   { key: 'rsi', label: 'RSI' },
   { key: 'macd', label: 'MACD' },
   { key: 'atr', label: 'ATR' },
+  { key: 'wave', label: '파동' },
+  { key: 'trendline', label: '추세선' },
+  { key: 'channel', label: '추세 채널' },
 ];
 const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   sma5: true,
@@ -160,6 +167,9 @@ const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
   rsi: true,
   macd: true,
   atr: true,
+  wave: true,
+  trendline: true,
+  channel: true,
 };
 const OVERLAY_STORAGE_KEY = 'unified-analysis-chart-overlays.v1';
 
@@ -173,8 +183,17 @@ function finite(value: unknown): number | null {
 function loadOverlays(): Record<OverlayKey, boolean> {
   if (typeof window === 'undefined') return DEFAULT_OVERLAYS;
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(OVERLAY_STORAGE_KEY) ?? '{}') as Partial<Record<OverlayKey, boolean>>;
-    return { ...DEFAULT_OVERLAYS, ...parsed };
+    // 저장값은 알려진 키의 boolean만 반영한다. 새로 추가된 키(파동·추세선·추세 채널)는
+    // 기존 사용자 저장값에 없으므로 기본값(켜짐)이 그대로 적용된다.
+    const parsed = JSON.parse(window.localStorage.getItem(OVERLAY_STORAGE_KEY) ?? '{}') as unknown;
+    const next = { ...DEFAULT_OVERLAYS };
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const key of Object.keys(DEFAULT_OVERLAYS) as OverlayKey[]) {
+        const value = (parsed as Record<string, unknown>)[key];
+        if (typeof value === 'boolean') next[key] = value;
+      }
+    }
+    return next;
   } catch {
     return DEFAULT_OVERLAYS;
   }
@@ -182,7 +201,11 @@ function loadOverlays(): Record<OverlayKey, boolean> {
 
 function persistOverlays(overlays: Record<OverlayKey, boolean>): Record<OverlayKey, boolean> {
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(overlays));
+    try {
+      window.localStorage.setItem(OVERLAY_STORAGE_KEY, JSON.stringify(overlays));
+    } catch {
+      // 저장소가 막혀 있어도(사생활 보호 모드 등) 토글은 현재 화면에서 동작해야 한다.
+    }
   }
   return overlays;
 }
@@ -354,6 +377,8 @@ function buildCurrentAnalysis(input: {
   data: UnifiedChartData;
   indicators: ChartIndicatorResult;
   levels: PriceLevels;
+  structure: ChartStructureResult;
+  waveTrend: ChartWaveTrendOverlay;
   previous: ChartAnalysis | null;
 }): ChartAnalysis | null {
   const candles = input.data.normalization.candles;
@@ -361,13 +386,15 @@ function buildCurrentAnalysis(input: {
   const previousCandle = candles.at(-2);
   if (!latest || !previousCandle) return null;
   const current = input.indicators.latest;
-  const structure = analyzeChartStructure(candles);
+  const structure = input.structure;
   const pattern = structure.patterns
     .filter((item) => item.status !== 'expired')
     .sort((left, right) => right.updatedAtTime - left.updatedAtTime)[0];
-  const trend = structure.marketStructure.trend === 'bullish'
+  // 화면에 그리는 파동(지그재그)과 같은 기준으로 추세를 판단해 표시가 서로 어긋나지 않게 한다.
+  const waveTrend = input.waveTrend.wave.trend;
+  const trend = waveTrend === 'bullish'
     ? '상승'
-    : structure.marketStructure.trend === 'bearish'
+    : waveTrend === 'bearish'
       ? '하락'
       : current?.sma5 != null && current.sma20 != null
         ? current.sma5 > current.sma20 ? '상승' : current.sma5 < current.sma20 ? '하락' : '중립'
@@ -671,6 +698,11 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const candles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
   const indicators = useMemo(() => computeChartIndicators(candles), [candles]);
   const levels = useMemo(() => computeLevels(candles, indicators), [candles, indicators]);
+  const structure = useMemo(() => analyzeChartStructure(candles), [candles]);
+  const waveTrend = useMemo(
+    () => buildChartWaveTrendOverlay(candles, structure.marketStructure.pivots),
+    [candles, structure],
+  );
   const analysis = useMemo(() => {
     if (!chartQuery.data || !levels || candles.length < 2) return null;
     return buildCurrentAnalysis({
@@ -678,9 +710,11 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       data: chartQuery.data,
       indicators,
       levels,
+      structure,
+      waveTrend,
       previous: previousAnalysisRef.current,
     });
-  }, [candles.length, chartQuery.data, indicators, levels, selection, timeframe]);
+  }, [candles.length, chartQuery.data, indicators, levels, selection, structure, timeframe, waveTrend]);
 
   useEffect(() => {
     if (selectedCandleTime != null && !candles.some((candle) => candle.time === selectedCandleTime)) {
@@ -858,7 +892,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       <section className="overflow-hidden rounded-3xl border border-card-border bg-card shadow-sm">
         <div className="border-b border-card-border p-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-black">{selection.displayName}</h2><span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-extrabold text-muted-foreground">{selection.ticker}</span><span data-testid="chart-data-status" className={cn('rounded-full border px-2 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span></div><p className="mt-1 text-[11px] font-bold text-muted-foreground">{unifiedMarketLabel(market)} · {chartQuery.data?.provider ?? '데이터 연결 대기'}</p></div>
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="truncate text-lg font-black">{selection.displayName}</h2><span className="rounded-full bg-secondary px-2 py-1 text-[10px] font-extrabold text-muted-foreground">{selection.ticker}</span><span data-testid="chart-data-status" className={cn('rounded-full border px-2 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>{overlays.wave && candles.length >= 2 && <span data-testid="chart-wave-structure" data-wave-trend={waveTrend.wave.trend} className={cn('rounded-full border px-2 py-1 text-[10px] font-black', waveTrend.wave.trend === 'bullish' ? 'border-[#F04452]/30 bg-[#F04452]/10 text-[#F04452]' : waveTrend.wave.trend === 'bearish' ? 'border-[#3485FA]/30 bg-[#3485FA]/10 text-[#3485FA]' : 'border-card-border bg-secondary text-muted-foreground')}>파동: {waveTrend.wave.label}</span>}</div><p className="mt-1 text-[11px] font-bold text-muted-foreground">{unifiedMarketLabel(market)} · {chartQuery.data?.provider ?? '데이터 연결 대기'}</p></div>
             <button type="button" aria-label="차트 새로고침" onClick={() => void chartQuery.refetch()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-card-border bg-background"><RefreshCw className={cn('h-4 w-4', chartQuery.isFetching && 'animate-spin')} /></button>
           </div>
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
@@ -868,7 +902,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} selection={selection} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} selection={selection} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} structure={structure} waveTrend={waveTrend} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
       </section>
 
