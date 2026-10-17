@@ -11,6 +11,7 @@ import { TradeAutomationSettings } from '@/components/trade-automation-settings'
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
 import { AdminFourMarketPaperPanel } from '@/components/admin-four-market-paper-panel';
+import { AUTO_RUN_STATE_LABELS, AutoTradingRunControl, resolveAutoRun } from '@/components/auto-trading-run-control';
 import { TradingHoldingsPanel, type TradingHolding } from '@/components/trading-holdings-panel';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
@@ -568,9 +569,26 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const newEntriesStopped = policy?.newEntriesStopped === true;
   const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
   const showLegacyPaperReadinessInsideAutoDashboard = mode === 'paper' && paperOrigin === 'automatic';
+  // 작동/정지 run view (server-owned). Paper/LIVE per market comes only from server gates.
+  const autoRun = resolveAutoRun(runtimeStatus ?? null);
+  const runState = autoRun?.state ?? 'STOPPED';
+  const runMarket = autoRun?.markets[market];
+  const orderMethodLabel = runtimeLoading && !autoRun ? '확인 중' : AUTO_RUN_STATE_LABELS[runState];
+  const marketLaneLabel = !runMarket?.enabled ? '꺼짐' : runMarket.lane === 'live' ? '실거래' : '모의';
+  const lossLimitLabel = !autoRun ? '확인 중'
+    : autoRun.lossLimit.autoStopped ? '도달 · 자동정지'
+      : `-${autoRun.lossLimit.dailyLossLimitPercent}% 도달 시 정지`;
+  const perSymbolLabel = autoRun ? `${autoRun.perSymbolMaxKrw.toLocaleString('ko-KR')}원` : '확인 중';
 
   const liveDashboard = (
     <div className="space-y-3">
+      <AutoTradingRunControl
+        status={runtimeStatus ?? null}
+        fixture={Boolean(fixture)}
+        loading={runtimeLoading}
+        onStatus={(next) => { setRuntimeStatus(next); setRuntimeReadError(false); }}
+        onOpenSettings={() => setSection('settings')}
+      />
       <section
         aria-label="자동매매 실행 상태"
         className="rounded-2xl border border-primary/20 bg-primary/5 p-3"
@@ -582,15 +600,19 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">자동매매 실행 방식</h2>
           </div>
           <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-xs font-bold">
-            {runtimeLoading ? '확인 중' : policy?.automaticEnabled ? '자동 실행 ON' : '자동 실행 OFF'}
+            {runtimeLoading && !autoRun ? '확인 중' : runState === 'RUNNING' ? '작동 중' : '정지'}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <StatusItem label="주문별 승인" value="불필요" />
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <StatusItem label="주문 방식" value={orderMethodLabel} tone={runState === 'RUNNING' ? 'ok' : runState === 'STOPPED' ? 'neutral' : 'warn'} />
+          <StatusItem label={`${marketMeta.label} 실행`} value={marketLaneLabel} tone={runMarket?.enabled && runMarket.lane === 'live' ? 'warn' : 'neutral'} />
           <StatusItem label="시장 제어" value={liveScopeLabel} />
+          <StatusItem label="손실 한도" value={lossLimitLabel} tone={autoRun?.lossLimit.autoStopped ? 'warn' : 'ok'} />
+          <StatusItem label="종목당 한도" value={perSymbolLabel} />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
       </section>
+
 
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
         <div className="flex flex-wrap items-start justify-between gap-2">

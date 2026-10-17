@@ -20,7 +20,23 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   memberAutoTradingWorkerMode,
   SupabaseMemberAutoTradingBackgroundSource,
+  liveBackgroundEnabled,
+  automaticLiveMarketScope,
 } from '../services/member-auto-trading-background-worker.service';
+import {
+  AUTO_RUN_ASSET_CLASSES,
+  autoRunMarketLanes,
+  autoRunState,
+  autoRunSwitchOn,
+  readAutoRunAudit,
+  readAutoRunControl,
+  recordAutoRunKillSwitch,
+  recordAutoRunPolicyToggle,
+  registerAutoRunLiveResolver,
+  startAutoRun,
+  stopAutoRun,
+  type AutoRunLiveResolver,
+} from '../services/trade-automation-run-control.service';
 import { auditAutomaticLivePreactivation } from '../services/automatic-live-preactivation-audit.service';
 import { assertPublicLivePlanOrigin, publicPlanPolicy, assertPublicPlanApprovalOrigin } from '../services/public-live-plan-origin.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
@@ -183,6 +199,58 @@ function emptyMarketActivity(): Record<TradingAssetClass, MarketActivitySummary>
     us_stock: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
     crypto_spot: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
     crypto_futures: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
+  };
+}
+
+const AUTO_RUN_SCOPE_KEY: Record<TradingAssetClass, 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES'> = {
+  domestic_stock: 'KR_STOCK',
+  us_stock: 'US_STOCK',
+  crypto_spot: 'CRYPTO_SPOT',
+  crypto_futures: 'CRYPTO_FUTURES',
+};
+
+/**
+ * A market runs LIVE only when every server gate is open: the background LIVE
+ * worker, the provider's automatic LIVE gate and the owner's per-market LIVE
+ * scope (#1923). Otherwise the market runs as 자동모의매매 (Paper). The member's
+ * 작동 button never changes any of these gates.
+ */
+const autoRunLiveResolver: AutoRunLiveResolver = (assetClass, exchange) => liveBackgroundEnabled()
+  && automaticLiveExecutionEnabled(exchange)
+  && automaticLiveMarketScope().includes(AUTO_RUN_SCOPE_KEY[assetClass]);
+registerAutoRunLiveResolver(autoRunLiveResolver);
+
+async function autoRunStatus(repository: TradingRepository, userId: string, policy: TradingPolicy, globalStopped: boolean) {
+  const [{ control, storageReady }, audit] = await Promise.all([
+    readAutoRunControl(repository, userId),
+    readAutoRunAudit(repository, userId, 5),
+  ]);
+  const lanes = autoRunMarketLanes(policy, autoRunLiveResolver);
+  const state = autoRunState(policy, control, globalStopped);
+  return {
+    state,
+    switchOn: autoRunSwitchOn(policy),
+    running: state === 'RUNNING',
+    // Owner decision 2026-10-17: no per-order approval while 작동 is ON.
+    perOrderApprovalRequired: false,
+    orderMethod: state === 'RUNNING' ? 'AUTOMATIC_WHILE_RUNNING' : 'STOPPED',
+    markets: Object.fromEntries(AUTO_RUN_ASSET_CLASSES.map((assetClass) => [assetClass, {
+      ...lanes[assetClass],
+      liveConfirmed: control.liveConfirmedMarkets.includes(assetClass),
+    }])),
+    lossLimit: {
+      dailyLossLimitPercent: policy.dailyLossLimitPercent,
+      totalDailyLossLimitPercent: policy.totalDailyLossLimitPercent,
+      autoStopped: state === 'AUTO_STOPPED',
+      autoStopReason: state === 'AUTO_STOPPED' ? control.lastReason : null,
+    },
+    perSymbolMaxKrw: policy.maxInstrumentKrw,
+    maxAssetPercent: policy.maxAssetPercent,
+    lastAction: control.lastAction,
+    lastReason: control.lastReason,
+    changedAt: control.changedAt,
+    controlStorageReady: storageReady,
+    recentAudit: audit.entries.map(({ userId: _owner, ...entry }) => entry),
   };
 }
 
@@ -1347,6 +1415,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       lastOrderByMarket,
       marketActivityByMarket,
       automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans),
+      autoRun: await autoRunStatus(repository, userId, policy, persistentGlobalStop || environmentGlobalStop),
       actualOrderSubmittedByStatusRequest: false,
     });
   } catch (error) {
@@ -1540,6 +1609,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     }
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
+    await recordAutoRunPolicyToggle(repository, userId, { before: current, after: policy, isLive: autoRunLiveResolver });
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
   } catch (error) { return errorResponse(res, error); }
 });
@@ -1969,7 +2039,54 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
       exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
     }, maximumSingleEntryKrw(req));
     await repository.savePolicy(userId, policy);
-    return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
+    // The stop is already persisted; the audit write can never undo it.
+    const audit = await recordAutoRunKillSwitch(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });
+    return res.json({
+      ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false,
+      autoRunState: 'KILL_SWITCH', ...audit,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+/**
+ * 작동/정지. `running: true` turns the member's automatic run ON: eligible
+ * signals of the enabled strategies then execute automatically without a
+ * per-order approval queue (every order still passes the risk gate).
+ * `running: false` turns it OFF and nothing new is placed. A market whose
+ * server LIVE gates are open asks once for an explicit acknowledgement.
+ */
+router.post('/run', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (typeof req.body?.running !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'AUTO_RUN_VALUE_REQUIRED', orderSubmitted: false });
+    }
+    if (req.body.running === false) {
+      const stopped = await stopAutoRun(repository, userId, { isLive: autoRunLiveResolver });
+      return res.json({
+        ok: true, running: false, policy: stopped.policy, wasRunning: stopped.wasRunning,
+        auditRecorded: stopped.auditRecorded, auditStorage: stopped.auditStorage,
+        orderSubmitted: false, liveGateChangedByThisRequest: false,
+      });
+    }
+    const started = await startAutoRun(repository, userId, {
+      isLive: autoRunLiveResolver,
+      liveConfirmed: req.body?.confirmation?.liveAutomaticWithoutPerOrderApproval === true,
+    });
+    if (!started.ok) {
+      return res.status(started.status).json({
+        ok: false, error: started.error, liveMarkets: started.liveMarkets ?? [],
+        orderSubmitted: false, liveGateChangedByThisRequest: false,
+      });
+    }
+    return res.json({
+      ok: true, running: true, policy: started.policy, alreadyRunning: started.alreadyRunning,
+      liveMarkets: started.liveMarkets, paperMarkets: started.paperMarkets,
+      liveConfirmedMarkets: started.control.liveConfirmedMarkets,
+      perOrderApprovalRequired: false,
+      auditRecorded: started.auditRecorded ?? false, auditStorage: started.auditStorage ?? null,
+      orderSubmitted: false, liveGateChangedByThisRequest: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
