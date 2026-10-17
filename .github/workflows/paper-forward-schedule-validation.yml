@@ -584,12 +584,14 @@ jobs:
             stock-analyzer/src/components/trade-automation-settings.tsx
             stock-analyzer/e2e/phase12-trade-automation.spec.ts
             stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts
+            stock-analyzer/src/components/trading-holdings-panel.tsx
           )
           market_scope_expected=(
             090b773f868269e810051a4dc794a72988759e4a
             218b2102d6f68e59ddc2e5054fbdabf2add6772d
             47c4d4fb698a237b31d34b2f2468ca00491d9b80
             602a523599f004fd346f6ded8305c9672e7047c0
+            d2a8de70e6ac11198fa3ed5bf99664e323e4f303
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
