@@ -460,6 +460,8 @@ const researchPITReadOnlyReviewed=[
 const dataAccuracyReviewed=[
   'api-server/src/lib/rss-date.test.ts',
   'api-server/src/lib/rss-date.ts',
+  // Owner-approved 2026-10-17 (PR #1933): Yahoo daily previous-close regression tests.
+  'api-server/src/providers/yahoo.test.ts',
   'api-server/src/routes/backtests.smoke.test.ts',
   'api-server/src/routes/backtests.ts',
   'api-server/src/routes/bounded-market-scan.smoke.test.ts',
