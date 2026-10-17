@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { describeErrorText, looksLikeDeveloperCode } from '@/lib/error-reason';
 import { useLocation } from 'wouter';
 import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
@@ -121,8 +122,9 @@ function errorMessage(payload: AiChatPayload | null): string {
   if (payload?.error === 'AI_CHAT_PRIVATE_DATA_FORBIDDEN') return 'API 키·토큰·계좌번호 등 민감정보를 제거한 뒤 다시 질문해 주세요.';
   if (payload?.error === 'AI_CHAT_INVALID_CONTEXT') return '선택된 시장과 종목 정보가 일치하지 않습니다. 종목을 다시 선택해 주세요.';
   if (payload?.error === 'AI_CHAT_UNSAFE_RESPONSE') return '투자 권유·수익 보장·위험한 행동이 포함된 응답을 차단했습니다.';
-  if (payload?.error === 'AI_CHAT_NOT_CONFIGURED') return 'AI 채팅 공급자가 아직 서버에 연결되지 않았습니다.';
-  return payload?.message || 'AI 채팅 응답을 받지 못했습니다.';
+  if (payload?.error === 'AI_CHAT_NOT_CONFIGURED' || payload?.error === 'AI_CHAT_PROVIDER_ERROR') return describeErrorText(payload.error, { message: payload.message });
+  if (payload?.message && !looksLikeDeveloperCode(payload.message)) return payload.message;
+  return describeErrorText(payload?.error ?? null, { fallbackTitle: 'AI 상담 응답을 받지 못했습니다' });
 }
 
 export default function AiChatPage() {
