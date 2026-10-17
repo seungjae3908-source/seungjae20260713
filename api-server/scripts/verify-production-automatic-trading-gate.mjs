@@ -628,6 +628,9 @@ requireText(signalCanonicalAdapterTest,
   'only an explicit S grade can cross the automatic-trading quant gate',
   'AUTO_GATE_SIGNAL_V3_EXACT_S_GRADE_REGRESSION_MISSING');
 requireText(stockSignalScanner, 'backtests: request.backtests', 'AUTO_GATE_SCANNER_QUALITY_BINDING_MISSING');
+// Owner-approved 2026-10-17 (PR #1925): the scan deadline is derived from the
+// route budget so the route never times out before partial results return.
+requireText(stockSignalScanner, 'deadlineMs: stockScannerScanDeadlineMs(', 'AUTO_GATE_SCANNER_ROUTE_BUDGET_BINDING_MISSING');
 requireText(scannerCandidateRanking,
   'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
