@@ -860,8 +860,8 @@ function WatchCard({
               positive == null
                 ? "text-muted-foreground"
                 : positive
-                  ? "text-positive"
-                  : "text-destructive",
+                  ? "text-rise"
+                  : "text-fall",
             )}
           >
             {positive == null ? null : positive ? (

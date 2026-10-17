@@ -1,8 +1,8 @@
 import { useSettings } from '@/lib/settings';
 import { MemberPrivacyWatermark } from '@/components/member-privacy-watermark';
 
-// Theme-aware backdrop. In dark mode it renders a subtle top-lit gradient over
-// a near-black base; in light mode it renders a soft light gradient so the
+// Theme-aware backdrop. In dark mode it renders the flat #0B0E13 professional
+// base; in light mode it renders a soft light gradient so the
 // translucent cards keep their contrast. The backdrop must follow the active
 // theme, otherwise a hardcoded dark base would show through the translucent
 // app shell and make light mode look dark.
@@ -22,15 +22,7 @@ export function AppBackground() {
         </div>
       )
     : (
-        <div className="fixed inset-0 z-0 bg-[#04070c]">
-          <div
-            className="absolute inset-0"
-            style={{
-              background:
-                'radial-gradient(120% 80% at 50% -10%, rgba(37,99,235,0.14) 0%, rgba(4,7,12,0) 45%), linear-gradient(180deg, #070b12 0%, #05080d 55%, #04060a 100%)',
-            }}
-          />
-        </div>
+        <div className="fixed inset-0 z-0 bg-[#0B0E13]" />
       );
 
   return (

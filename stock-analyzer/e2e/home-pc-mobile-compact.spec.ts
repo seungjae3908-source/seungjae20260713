@@ -190,6 +190,6 @@ test('Home desktop uses the professional dashboard workspace and does not show m
   await expect(page.getByTestId('home-signal-summary')).toBeVisible();
   await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
   await expect(page.getByTestId('home-portfolio-summary')).toBeVisible();
-  await expect(page.getByText('포트폴리오', { exact: true })).toBeVisible();
-  await expect(page.getByText('검색기', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByText('포트폴리오', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByText('검색기', { exact: true })).toBeVisible();
 });
