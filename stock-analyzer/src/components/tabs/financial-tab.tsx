@@ -1,3 +1,4 @@
+import { errorCodeOf } from '@/lib/error-reason';
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import {
@@ -15,7 +16,7 @@ import { useFinancials } from '@/hooks/use-stock-data';
 import { formatCompact } from '@/lib/format';
 import { HEALTH_KO, healthTone, toneBadge, toneText } from '@/lib/labels';
 import { cn } from '@/lib/utils';
-import { ApiError, type Currency, type FinancialRow, type Financials } from '@/lib/api';
+import { type Currency, type FinancialRow, type Financials } from '@/lib/api';
 
 // Recharts 2.x publishes class component declarations that TypeScript 5.9 can
 // reject under the React 18 JSX constructor check even though runtime support
@@ -253,6 +254,18 @@ function RatioCard({
   );
 }
 
+function yoySeries(rows: FinancialRow[], key: 'revenue' | 'netIncome'): number[] {
+  const values: number[] = [];
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = Number(rows[index - 1]?.[key]);
+    const current = Number(rows[index]?.[key]);
+    values.push(Number.isFinite(previous) && Number.isFinite(current) && previous !== 0
+      ? Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10
+      : 0);
+  }
+  return values;
+}
+
 function FinCards({ rows, currency }: { rows: FinancialRow[]; currency: Currency }) {
   if (rows.length === 0) {
     return <p className="break-keep text-sm leading-relaxed text-muted-foreground">데이터 부족</p>;
@@ -313,16 +326,27 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
 
   if (isLoading) return <LoadingState />;
   if (isError || !data)
-    return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
+    return <ErrorState code={errorCodeOf(error) ?? undefined} onRetry={() => refetch()} />;
 
-  const growthLabels = data.annual.slice(1).map((a) => a.period);
-  const burn = data.cashBurn;
+  // The live /financials route (DART/SEC) returns annual/quarterly/ratios but
+  // not the sample-only growth/cashBurn/health blocks. Derive growth from the
+  // annual rows and hide blocks without evidence instead of crashing.
+  const annual = Array.isArray(data.annual) ? data.annual : [];
+  const quarterly = Array.isArray(data.quarterly) ? data.quarterly : [];
+  const ratios = (data.ratios ?? {}) as Ratios;
+  const growthLabels = annual.slice(1).map((a) => a.period);
+  const growth = data.growth ?? {
+    revenue: yoySeries(annual, 'revenue'),
+    profit: yoySeries(annual, 'netIncome'),
+  };
+  const burn = data.cashBurn ?? null;
+  const health = data.health && HEALTH_KO[data.health.level] ? data.health : null;
 
   // Display rows latest-first (most recent period at the top). The source
   // arrays are oldest -> newest, and growth series depend on that ascending
   // order, so we reverse copies rather than mutating the originals.
-  const annualRows = [...data.annual].reverse();
-  const quarterlyRows = [...data.quarterly].reverse();
+  const annualRows = [...annual].reverse();
+  const quarterlyRows = [...quarterly].reverse();
 
   return (
     <div className="space-y-3">
@@ -333,15 +357,15 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
               key={r.key}
               label={r.label}
               metric={r.key}
-              ratios={data.ratios}
+              ratios={ratios}
               onOpen={setOpenMetric}
             />
           ))}
         </div>
         <p className="mt-2 break-keep text-[11px] leading-relaxed text-muted-foreground">
           각 지표를 눌러 뜻과 이 종목의 해석을 확인하세요.
-          {Number.isFinite(data.ratios.eps) && data.ratios.eps !== 0 && (
-            <> EPS는 {data.ratios.eps.toLocaleString()}원입니다.</>
+          {Number.isFinite(ratios.eps) && ratios.eps !== 0 && (
+            <> EPS는 {ratios.eps.toLocaleString()}원입니다.</>
           )}
         </p>
       </Panel>
@@ -355,13 +379,13 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
       </Panel>
 
       <Panel title="매출 성장률 (YoY)">
-        <GrowthChart labels={growthLabels} values={data.growth.revenue} />
+        <GrowthChart labels={growthLabels} values={growth.revenue} />
       </Panel>
       <Panel title="이익 성장률 (YoY)">
-        <GrowthChart labels={growthLabels} values={data.growth.profit} />
+        <GrowthChart labels={growthLabels} values={growth.profit} />
       </Panel>
 
-      <Panel title="현금 소진 분석">
+      {burn ? <Panel title="현금 소진 분석">
         <div className="grid grid-cols-3 gap-4">
           <Stat label="보유 현금" value={formatCompact(burn.cashBalance, currency)} />
           <Stat
@@ -375,19 +399,19 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
             tone={burn.survivalQuarters === null ? 'positive' : burn.survivalQuarters <= 4 ? 'destructive' : 'warning'}
           />
         </div>
-      </Panel>
+      </Panel> : null}
 
-      <Panel title="재무 건전성" right={<span className={cn('rounded-full border px-2.5 py-1 text-xs font-semibold', toneBadge(healthTone(data.health.level)))}>{HEALTH_KO[data.health.level]}</span>}>
+      {health ? <Panel title="재무 건전성" right={<span className={cn('rounded-full border px-2.5 py-1 text-xs font-semibold', toneBadge(healthTone(health.level)))}>{HEALTH_KO[health.level]}</span>}>
         <div className="flex items-center gap-3">
           <div className="flex-1">
-            <ProgressBar value={data.health.confidence} tone={healthTone(data.health.level)} />
+            <ProgressBar value={health.confidence} tone={healthTone(health.level)} />
           </div>
-          <span className={cn('text-xs font-medium', toneText(healthTone(data.health.level)))}>신뢰도 {data.health.confidence}%</span>
+          <span className={cn('text-xs font-medium', toneText(healthTone(health.level)))}>신뢰도 {health.confidence}%</span>
         </div>
-      </Panel>
+      </Panel> : null}
 
       {openMetric && (
-        <RatioModal metric={openMetric} ratios={data.ratios} onClose={() => setOpenMetric(null)} />
+        <RatioModal metric={openMetric} ratios={ratios} onClose={() => setOpenMetric(null)} />
       )}
     </div>
   );
