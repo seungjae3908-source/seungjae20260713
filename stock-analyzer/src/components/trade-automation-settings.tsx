@@ -102,6 +102,29 @@ type Status = {
     globalEmergencyStopActive: boolean;
     errorCode: string | null;
   } | null;
+  /** 작동/정지 run control (server-owned). LIVE vs Paper per market comes only from server gates. */
+  autoRun?: {
+    state: 'RUNNING' | 'STOPPED' | 'AUTO_STOPPED' | 'KILL_SWITCH' | 'GLOBAL_STOP';
+    switchOn: boolean;
+    running: boolean;
+    perOrderApprovalRequired: false;
+    orderMethod: 'AUTOMATIC_WHILE_RUNNING' | 'STOPPED';
+    markets: Record<Market, { enabled: boolean; exchange: Exchange; lane: 'live' | 'paper'; liveConfirmed: boolean }>;
+    lossLimit: {
+      dailyLossLimitPercent: number;
+      totalDailyLossLimitPercent: number;
+      autoStopped: boolean;
+      autoStopReason: string | null;
+    };
+    perSymbolMaxKrw: number;
+    maxAssetPercent: number;
+    lastAction: 'RUN' | 'STOP' | 'AUTO_STOP' | 'KILL_SWITCH' | null;
+    lastReason: string | null;
+    changedAt: string | null;
+    controlStorageReady?: boolean;
+    recentAudit?: Array<{ id: string; action: 'RUN' | 'STOP' | 'AUTO_STOP' | 'KILL_SWITCH'; reason: string | null;
+      actor: 'member' | 'system'; liveMarkets: Market[]; paperMarkets: Market[]; createdAt: string }>;
+  };
   /** Only read-only historical bootstrap evidence; never grants wallet reset or LIVE authority. */
   automaticPaperWalletBootstrap?: {
     safeToInitialize: boolean;
