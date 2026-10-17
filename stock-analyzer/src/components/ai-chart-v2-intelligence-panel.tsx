@@ -72,8 +72,8 @@ function qualityClass(quality: AiChartTimeframeEvidence['quality']): string {
 }
 
 function sideClass(side: AiChartSignalSide): string {
-  if (side === 'BUY' || side === 'LONG') return 'text-destructive';
-  if (side === 'SELL' || side === 'SHORT') return 'text-blue-500';
+  if (side === 'BUY' || side === 'LONG') return 'text-rise';
+  if (side === 'SELL' || side === 'SHORT') return 'text-fall';
   return 'text-muted-foreground';
 }
 

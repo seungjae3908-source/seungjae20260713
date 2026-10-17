@@ -232,7 +232,7 @@ export default function DetailPage() {
                 <p className="mt-2 text-3xl font-black tabular-nums">
                   {price == null ? (summaryLoading ? '확인 중' : '미확인') : formatAppPrice(price, currency)}
                 </p>
-                <p className={`mt-2 text-sm font-black ${changePercent == null ? 'text-muted-foreground' : changePercent >= 0 ? 'text-emerald-500' : 'text-destructive'}`}>
+                <p className={`mt-2 text-sm font-black ${changePercent == null ? 'text-muted-foreground' : changePercent >= 0 ? 'text-rise' : 'text-fall'}`}>
                   {changePercent == null ? (summaryLoading ? '등락 확인 중' : '등락 미확인') : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`}
                 </p>
               </div>

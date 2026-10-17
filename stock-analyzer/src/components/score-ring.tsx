@@ -5,6 +5,8 @@ const COLOR: Record<Tone, string> = {
   warning: 'hsl(38 92% 50%)',
   destructive: 'hsl(0 84% 60%)',
   neutral: 'hsl(240 5% 65%)',
+  rise: 'hsl(var(--rise))',
+  fall: 'hsl(var(--fall))',
 };
 
 export function ScoreRing({

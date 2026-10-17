@@ -130,7 +130,7 @@ test('settings home opens mobile-friendly categories, returns home, and does not
   await page.goto('/more');
 
   await expect(page.getByRole('button', { name: /계정·권한/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /검색기/ })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: /검색기/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /텔레그램/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /화면/ })).toBeVisible();
 
