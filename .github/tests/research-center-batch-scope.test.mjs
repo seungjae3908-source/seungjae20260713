@@ -130,10 +130,10 @@ test('production membership denial uses the actual basic-info capability and saf
 });
 
 test('extracted Paper allowlist preserves the exact legacy set plus its own data file', () => {
-  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 277);
-  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 277);
+  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 286);
+  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 286);
   const digest = createHash('sha256').update([...PAPER_FORWARD_REVIEWED_PATHS].sort().join('\n')).digest('hex');
-  assert.equal(digest, 'ebeaef3d3d360b4145f77b104e73ea94b39342f68104eeb3f815e48c8bd5a16b');
+  assert.equal(digest, 'aff170fe6c337a31d9776281c62a43ece547ef005daaed378b602b5acf6d7768');
   for (const path of PAPER_FORWARD_REVIEWED_PATHS) assert.ok(!path.includes('*') && !path.includes('..'));
 });
 
