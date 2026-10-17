@@ -207,3 +207,18 @@ export function setFrontendStaticCacheHeaders(
 ) {
   response.setHeader('Cache-Control', frontendStaticCacheControl(frontendDist, filePath));
 }
+
+const STATIC_FILE_EXTENSION = /\.(?:js|mjs|css|map|json|webmanifest|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|txt)$/i;
+
+/**
+ * True when an unmatched request was for a static file (e.g. a removed
+ * /assets/<old-hash>.js after a deploy). Such requests must get a 404 instead
+ * of the SPA index.html: serving HTML for a module script makes the browser's
+ * dynamic import fail with a MIME error and, before the client had an error
+ * boundary, left a white page. The client reloads once on that 404.
+ */
+export function isMissingFrontendStaticAssetRequest(requestPath: string): boolean {
+  const pathname = String(requestPath ?? '').split('?')[0] ?? '';
+  if (pathname.startsWith('/api')) return false;
+  return pathname.startsWith('/assets/') || STATIC_FILE_EXTENSION.test(pathname);
+}

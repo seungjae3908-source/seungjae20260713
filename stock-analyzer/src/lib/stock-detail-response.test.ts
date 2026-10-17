@@ -56,7 +56,7 @@ test('stock detail quote fails closed on identity and currency drift', () => {
   );
 });
 
-test('stock detail profile requires canonical producer evidence while preserving explicit empty strings', () => {
+test('stock detail profile keeps identity checks but treats descriptive fields as optional', () => {
   const parsed = parseStockDetailProfile(profileFixture, 'AAPL', 'US');
   assert.equal(parsed.sector, 'Technology');
   assert.equal(parsed.description, '');
@@ -67,17 +67,36 @@ test('stock detail profile requires canonical producer evidence while preserving
     /ticker mismatch/,
   );
   assert.throws(
-    () => parseStockDetailProfile({ ...profileFixture, currency: undefined }, 'AAPL', 'US'),
-    StockDetailContractError,
+    () => parseStockDetailProfile({ ...profileFixture, currency: 'KRW' }, 'AAPL', 'US'),
+    /currency mismatch/,
   );
   assert.throws(
-    () => parseStockDetailProfile({ ...profileFixture, competitors: undefined }, 'AAPL', 'US'),
-    /invalid competitors/,
+    () => parseStockDetailProfile({ ...profileFixture, market: 'KR' }, 'AAPL', 'US'),
+    /market mismatch/,
   );
-  assert.throws(
-    () => parseStockDetailProfile({ ...profileFixture, sector: undefined }, 'AAPL', 'US'),
-    StockDetailContractError,
+
+  const sparse = parseStockDetailProfile(
+    { ...profileFixture, competitors: undefined, sector: undefined, country: null, mainBusiness: undefined },
+    'AAPL',
+    'US',
   );
+  assert.deepEqual(sparse.competitors, []);
+  assert.equal(sparse.sector, '');
+  assert.equal(sparse.country, '');
+  assert.equal(sparse.mainBusiness, '');
+});
+
+test('stock detail profile accepts a Finnhub-shaped profile without identity fields', () => {
+  const parsed = parseStockDetailProfile(
+    { name: 'Apple Inc', marketCap: 3_000_000_000_000, exchange: 'NASDAQ', industry: 'Technology' },
+    'AAPL',
+    'US',
+  );
+  assert.equal(parsed.ticker, 'AAPL');
+  assert.equal(parsed.market, 'US');
+  assert.equal(parsed.currency, 'USD');
+  assert.equal(parsed.industry, 'Technology');
+  assert.equal(parsed.marketCap, 3_000_000_000_000);
 });
 
 test('stock detail news preserves legitimate empty evidence but rejects missing arrays', () => {

@@ -1,8 +1,9 @@
+import { errorCodeOf } from '@/lib/error-reason';
 import { AlertTriangle, ExternalLink, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Panel } from '@/components/ui-bits';
 import { LoadingState, ErrorState } from '@/components/data-state';
 import { useDisclosures } from '@/hooks/use-stock-data';
-import { ApiError, type Sentiment } from '@/lib/api';
+import { type Sentiment } from '@/lib/api';
 
 const SENTIMENT: Record<Sentiment, { label: string; description: string; className: string; icon: typeof ShieldCheck }> = {
   positive: { label: '긍정', description: '긍정 범주로 분류된 공시입니다. 실제 주가 영향은 원문과 재무 내용을 함께 확인하세요.', className: 'bg-green-500/15 text-green-400', icon: ShieldCheck },
@@ -53,16 +54,28 @@ function revisionLabel(value?: DisclosureEvidence['revisionStatus']) {
   return '관계 미확인';
 }
 
+// The live /disclosures route returns DART rows (report_nm/title, no sentiment)
+// and SEC rows (form/title, no description) — not the legacy sample shape.
+// Normalize defensively so a missing field never crashes the panel.
+function disclosureTitle(item: Record<string, unknown>): string {
+  const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+  const form = text(item.form);
+  const description = text(item.description);
+  if (form) return description ? `${form} · ${description}` : text(item.title) ?? form;
+  return text(item.report) ?? text(item.title) ?? text(item.report_nm) ?? '제목 미확인 공시';
+}
+
 export function DisclosureTab({ ticker, active }: { ticker: string; active: boolean }) {
   const { data, isLoading, isError, error, refetch } = useDisclosures(ticker, active);
   if (isLoading) return <LoadingState />;
-  if (isError || !data) return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
-  const list = data.market === 'US' ? data.filings : data.disclosures;
+  if (isError || !data) return <ErrorState code={errorCodeOf(error) ?? undefined} onRetry={() => refetch()} />;
+  const isUs = data.market ? data.market === 'US' : !/^\d{6}$/.test(ticker);
+  const list = (isUs ? data.filings : data.disclosures) ?? data.disclosures ?? data.filings ?? [];
 
-  return <div className="space-y-3"><Panel title={data.market === 'US' ? '최근 SEC 공시' : '최근 DART 공시'}>
+  return <div className="space-y-3"><Panel title={isUs ? '최근 SEC 공시' : '최근 DART 공시'}>
     {list.length === 0 ? <p className="text-sm text-muted-foreground">확인된 공시가 없습니다.</p> : <ul className="space-y-2">{list.map((item, index) => {
-      const title = 'form' in item ? `${item.form} · ${item.description}` : item.report;
-      const meta = SENTIMENT[item.sentiment];
+      const title = disclosureTitle(item as unknown as Record<string, unknown>);
+      const meta = SENTIMENT[item.sentiment] ?? SENTIMENT.neutral;
       const Icon = meta.icon;
       const evidence = item as typeof item & DisclosureEvidence;
       const relatedCount = item.relatedCount ?? 1;
@@ -76,13 +89,13 @@ export function DisclosureTab({ ticker, active }: { ticker: string; active: bool
           <span>앱 수집: {evidence.collectedAt ?? '미제공'}{evidence.collectionProvenance === 'SERVICE_ASSEMBLY_TIME' ? ' · 서비스 조립시각' : ''}</span>
           <span>관계: {revisionLabel(evidence.revisionStatus)}{evidence.relationProvenance === 'TITLE_OR_FORM_RULE' ? ' · 제목/양식 규칙' : ''}</span>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2"><span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>{item.eventLabels.map((label) => <span key={label} className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{label}</span>)}{(evidence.materialEventLabels ?? []).map((label) => <span key={`material-${label}`} className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{label}</span>)}</div>
+        <div className="mt-2 flex flex-wrap gap-2"><span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${meta.className}`}><Icon className="h-3 w-3" />{meta.label}</span>{(item.eventLabels ?? []).map((label) => <span key={label} className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{label}</span>)}{(evidence.materialEventLabels ?? []).map((label) => <span key={`material-${label}`} className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{label}</span>)}</div>
         <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
           <span className="rounded-full bg-muted px-2 py-1">중요도: {importanceLabel(evidence.importance)}</span>
           <span className="rounded-full bg-muted px-2 py-1">중요도 근거: {(evidence.importanceReasons ?? ['미제공']).join(', ')}</span>
           <span className="rounded-full bg-muted px-2 py-1">주가 영향 미검증</span>
         </div>
-        {'report' in item && <p className="mt-2 text-xs text-muted-foreground">{item.description}</p>}<p className="mt-1 text-xs text-muted-foreground" data-testid="disclosure-sentiment-guidance">분류 안내: {meta.description}</p>
+        {'report' in item && item.description ? <p className="mt-2 text-xs text-muted-foreground">{item.description}</p> : null}<p className="mt-1 text-xs text-muted-foreground" data-testid="disclosure-sentiment-guidance">분류 안내: {meta.description}</p>
         <div className="mt-2 flex flex-wrap gap-3 text-xs">{itemUrl ? <a href={itemUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-400"><ExternalLink className="h-3 w-3" />원문 보기</a> : <span className="text-muted-foreground">원문 링크 미제공</span>}{relatedItems.map((related, relatedIndex) => { const relatedUrl = safeHttpUrl(related.url); return relatedUrl ? <a key={`${related.date}-${relatedIndex}`} href={relatedUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400">이전/관련 공시 {relatedIndex + 1}</a> : null; })}</div>
       </div><span className="shrink-0 font-mono text-xs text-muted-foreground">{item.date}</span></div></li>;
     })}</ul>}

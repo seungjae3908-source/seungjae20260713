@@ -1744,12 +1744,12 @@ export default function PortfolioPage() {
 										<WalletCards className="mx-auto h-9 w-9 text-muted-foreground" />
 
 										<p className="mt-3 text-sm font-extrabold">
-											아직 보유 종목이 없습니다
+											직접 입력한 보유 종목이 없습니다
 										</p>
 
 										<p className="mt-2 break-keep text-xs font-semibold leading-5 text-muted-foreground">
-											보유 종목 추가 버튼을 눌러 종목명, 수량,
-											평균매수가를 저장해 주세요.
+											위 증권사 연결 카드에 보이는 보유 종목은 증권사에서 조회만 한 자료로, 이 목록(직접 입력)과 따로 표시됩니다.
+											직접 관리할 종목은 보유 종목 추가 버튼으로 종목명, 수량, 평균매수가를 저장해 주세요.
 										</p>
 									</section>
 								)}
