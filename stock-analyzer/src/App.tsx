@@ -19,7 +19,7 @@ import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
 import { ProfessionalCommandBar } from '@/components/professional-command-bar';
 import { ErrorState, PageFallback } from '@/components/data-state';
-import { RouteErrorBoundary } from '@/components/app-error-boundary';
+import { AppErrorBoundary, RouteErrorBoundary } from '@/components/app-error-boundary';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
 import { UiBuilderRuntimeBoundary } from '@/components/ui-builder-runtime-boundary';
@@ -483,7 +483,7 @@ function AuthenticatedApp() {
 }
 
 function App() {
-  return <QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RouteErrorBoundary><RootRouter /></RouteErrorBoundary></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider>;
+  return <AppErrorBoundary><QueryClientProvider client={queryClient}><AuthProvider><DirectAiChartDataPrewarm /><SettingsProvider><AssetModeProvider><AnalysisSelectionProvider><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AppShell><RouteErrorBoundary><RootRouter /></RouteErrorBoundary></AppShell></WouterRouter><Toaster /></TooltipProvider></AnalysisSelectionProvider></AssetModeProvider></SettingsProvider></AuthProvider></QueryClientProvider></AppErrorBoundary>;
 }
 
 export default App;
