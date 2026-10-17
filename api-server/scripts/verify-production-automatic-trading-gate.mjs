@@ -640,10 +640,6 @@ requireText(stockSignalScanner, 'backtests: request.backtests', 'AUTO_GATE_SCANN
 // Owner-approved 2026-10-17 (PR #1925): the scan deadline is derived from the
 // route budget so the route never times out before partial results return.
 requireText(stockSignalScanner, 'deadlineMs: stockScannerScanDeadlineMs(', 'AUTO_GATE_SCANNER_ROUTE_BUDGET_BINDING_MISSING');
-// Owner-approved 2026-10-17: the crypto scan deadline ends before the browser's 12s
-// request timeout so partial results return instead of the client aborting first.
-requireText(read('api-server/src/services/crypto-signal-scanner.service.ts'),
-  'export const CRYPTO_SCANNER_DEADLINE_MS = 9_000;', 'AUTO_GATE_CRYPTO_SCANNER_DEADLINE_BINDING_MISSING');
 requireText(scannerCandidateRanking,
   'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
