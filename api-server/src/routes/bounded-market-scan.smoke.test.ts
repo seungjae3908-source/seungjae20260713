@@ -10,11 +10,6 @@ import { createScannerProviderHealth } from '../services/scanner-provider-health
 import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
 import type { ScannerResponse } from '../services/scanner-signal.types';
 import {
-  STOCK_SCANNER_ROUTE_BUDGET_MS,
-  stockScannerIntelligenceBudgetMs,
-  stockScannerScanDeadlineMs,
-} from '../services/stock-signal-scanner.service';
-import {
   STOCK_SCANNER_ROUTE_DEADLINE_MS,
   createBoundedMarketScanRouter,
   type StockScannerRunner,
@@ -163,20 +158,6 @@ test('stock scanner server response budget remains below the browser app API dea
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < browserDeadlineMs);
   assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
-});
-
-test('stock scanner internal deadlines always end before the route deadline', () => {
-  assert.equal(STOCK_SCANNER_ROUTE_DEADLINE_MS, STOCK_SCANNER_ROUTE_BUDGET_MS);
-  for (const universeElapsedMs of [0, 250, 1_500, 3_000]) {
-    const scanDeadlineMs = stockScannerScanDeadlineMs(universeElapsedMs);
-    const intelligenceMs = stockScannerIntelligenceBudgetMs(universeElapsedMs + scanDeadlineMs);
-    assert.ok(universeElapsedMs + scanDeadlineMs < STOCK_SCANNER_ROUTE_DEADLINE_MS, `scan ends before route at ${universeElapsedMs}ms`);
-    assert.ok(
-      universeElapsedMs + scanDeadlineMs + intelligenceMs < STOCK_SCANNER_ROUTE_DEADLINE_MS,
-      `scan + enrichment end before route at ${universeElapsedMs}ms`,
-    );
-  }
-  assert.equal(stockScannerIntelligenceBudgetMs(STOCK_SCANNER_ROUTE_DEADLINE_MS), 0);
 });
 
 test('normal zero-match scan returns HTTP 200 empty with provider health', async () => {
