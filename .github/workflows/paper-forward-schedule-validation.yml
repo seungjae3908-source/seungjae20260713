@@ -636,8 +636,8 @@ jobs:
               api-server/scripts/verify-production-automatic-trading-gate.mjs
             )
             market_scope_guard_expected=(
-              ea824a3659cdac2fa49d1d57adfa3186d132ef65
-              49167b802cf2e8105ae93405104c2db3365ba038
+              4be3074430fd04fcc58f29c3c73ac0aba119387e
+              cc1180c0e9b690890e200e9879404e405f9d55a3
             )
             for i in "${!market_scope_guards[@]}"; do
               path="${market_scope_guards[$i]}"
