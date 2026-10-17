@@ -1475,6 +1475,12 @@ function snapshotMarketStatus(entry: MemberAutoTradingPaperHandoffEntry) {
   return status === 'TRADABLE' ? 'OPEN' as const : 'HALTED' as const;
 }
 
+/** Attach the BTC benchmark drawdown to crypto plans only (stocks stay untouched). */
+function withBenchmarkDrawdown(input: TradingPlanInput, benchmarkDrawdownPercent: number | null): TradingPlanInput {
+  if (input.exchange !== 'bitget' && input.exchange !== 'upbit') return input;
+  return { ...input, marketSnapshot: { ...input.marketSnapshot, benchmarkDrawdownPercent } };
+}
+
 function buildPlanInput(
   member: EligibleMember,
   entry: MemberAutoTradingPaperHandoffEntry,
@@ -1482,7 +1488,6 @@ function buildPlanInput(
   fx: MemberAutoTradingFxQuote,
   nowMs: number,
   accountMode: TradingPlan['accountMode'] = 'paper',
-  benchmarkDrawdownPercent: number | null = null,
 ): TradingPlanInput {
   const mapping = marketMapping(entry.identity.market, member.policy);
   const quote = currentPrice(entry);
@@ -1619,9 +1624,6 @@ function buildPlanInput(
       existingPositionSide: exposure.existingPositionSide,
       liquidationDistancePercent: mapping.exchange === 'bitget'
         ? Number(evidence?.liquidationDistancePct)
-        : null,
-      benchmarkDrawdownPercent: mapping.exchange === 'bitget' || mapping.exchange === 'upbit'
-        ? benchmarkDrawdownPercent
         : null,
       openOrderExposureKrw: exposure.accountExposureKrw,
       currentPrice: quote.midpoint,
@@ -2560,7 +2562,9 @@ export class MemberAutoTradingBackgroundWorker {
             const benchmarkDrawdown = cryptoEntry ? benchmarkDrawdownCache ?? null : null;
             const persistentStop = await repository.getGlobalEmergencyStop();
             if (!liveModeRequested && refreshedPaperLaneReady) {
-              let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs, 'paper', benchmarkDrawdown);
+              let paperInput = withBenchmarkDrawdown(
+                buildPlanInput(member, entry, runtime, fx, nowMs, 'paper'), benchmarkDrawdown,
+              );
               let paperEntryPolicy = runtime.fourMarketCapital
                 ? deriveFourMarketPaperExecutionPolicy(
                     member.policy,
@@ -2644,7 +2648,7 @@ export class MemberAutoTradingBackgroundWorker {
                   entry,
                   runtime,
                   marketPilotCapital,
-                  buildPlanInput(member, entry, runtime, fx, nowMs, 'live', benchmarkDrawdown).estimatedKrw,
+                  buildPlanInput(member, entry, runtime, fx, nowMs, 'live').estimatedKrw,
                   nowMs,
                   true,
                 );
@@ -2657,9 +2661,9 @@ export class MemberAutoTradingBackgroundWorker {
               }
               const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
-              const liveCandidateInput = buildPlanInput(
-                liveMember, entry, runtime, fx, nowMs, 'live', benchmarkDrawdown,
-              );
+              const liveCandidateInput = withBenchmarkDrawdown(buildPlanInput(
+                liveMember, entry, runtime, fx, nowMs, 'live',
+              ), benchmarkDrawdown);
               const liveSeed = await buildLivePlanInput({
                 source: this.source,
                 repository,
