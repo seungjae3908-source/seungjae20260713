@@ -121,23 +121,43 @@ export function parseStockDetailQuote(
   return value;
 }
 
+const PROFILE_OPTIONAL_TEXT_FIELDS = ['description', 'industry', 'sector', 'country', 'mainBusiness'] as const;
+
+function optionalProfileText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Company profile providers (Finnhub/Yahoo/Naver/DART) send very different
+ * shapes: Finnhub omits ticker/market/currency, most omit country,
+ * mainBusiness and competitors. Only identity *drift* and a missing name are
+ * contract failures; every descriptive field is optional and normalized to an
+ * empty string / empty list so the UI can show "정보 없음" for that field
+ * instead of failing the whole company panel.
+ */
 export function parseStockDetailProfile(
   value: unknown,
   expectedTicker: string,
   expectedMarket: 'KR' | 'US',
 ): StockDetailObject {
   if (!isRecord(value)) throw new StockDetailContractError('profile payload must be an object');
-  assertIdentity(value, expectedTicker, expectedMarket, { requireMarketCurrency: true });
-  requiredText(value.name ?? value.companyName, 'name');
-  requiredString(value.description, 'description');
-  requiredString(value.industry, 'industry');
-  requiredString(value.sector, 'sector');
-  requiredString(value.country, 'country');
-  requiredString(value.mainBusiness, 'mainBusiness');
-  if (!Array.isArray(value.competitors) || value.competitors.some((item) => typeof item !== 'string')) {
-    throw new StockDetailContractError('invalid competitors');
-  }
-  return value;
+  if (value.ticker != null) assertTicker(value, expectedTicker);
+  assertIdentity({ ...value, ticker: expectedTicker }, expectedTicker, expectedMarket, { requireMarketCurrency: false });
+  const name = requiredText(value.name ?? value.companyName, 'name');
+  const normalized: StockDetailObject = {
+    ...value,
+    ticker: typeof value.ticker === 'string' && value.ticker.trim() ? value.ticker : expectedTicker,
+    market: typeof value.market === 'string' && value.market.trim() ? value.market : expectedMarket,
+    currency: typeof value.currency === 'string' && value.currency.trim()
+      ? value.currency
+      : expectedMarket === 'KR' ? 'KRW' : 'USD',
+    name,
+    competitors: Array.isArray(value.competitors)
+      ? value.competitors.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [],
+  };
+  for (const field of PROFILE_OPTIONAL_TEXT_FIELDS) normalized[field] = optionalProfileText(value[field]);
+  return normalized;
 }
 
 function assertNewsItem(value: unknown): void {
