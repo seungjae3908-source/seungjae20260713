@@ -32,15 +32,19 @@ let applicationGraphStarted = false;
 // once (same guard key as lib/chunk-load-recovery) instead of leaving a white page.
 function recoverFromEntryChunkFailure() {
 	const key = 'sa-chunk-reload-at';
-	try {
-		const previous = Number(window.sessionStorage.getItem(key));
-		if (!Number.isFinite(previous) || Date.now() - previous >= 30_000) {
-			window.sessionStorage.setItem(key, String(Date.now()));
-			window.location.reload();
-			return;
+	// Offline is a network outage, not a stale deploy: reloading would only show the browser error page.
+	const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+	if (!offline) {
+		try {
+			const previous = Number(window.sessionStorage.getItem(key));
+			if (!Number.isFinite(previous) || Date.now() - previous >= 30_000) {
+				window.sessionStorage.setItem(key, String(Date.now()));
+				window.location.reload();
+				return;
+			}
+		} catch {
+			// Storage blocked: fall through to the static message.
 		}
-	} catch {
-		// Storage blocked: fall through to the static message.
 	}
 	const root = document.getElementById('root');
 	if (root && !root.childElementCount) {
