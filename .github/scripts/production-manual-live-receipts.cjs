@@ -33,9 +33,15 @@ function parseManualReceipt(comment, kind, targetSha, deploymentCompletedAt) {
   return { commentId: comment.id, runId: Number(run), createdAtMs: at, leverage };
 }
 
-async function inspectManualLiveReceipts({ github, context, comments, targetSha, deploymentCompletedAt }) {
+// `kinds` limits the required receipts to the automatic market scope: spot
+// (KR, US and coin spot open together) and/or futures. Default: both (ALL4).
+async function inspectManualLiveReceipts({ github, context, comments, targetSha, deploymentCompletedAt, kinds = ['spot', 'futures'] }) {
+  const wanted = [...new Set(kinds)];
+  if (wanted.length === 0 || wanted.some((kind) => !['spot', 'futures'].includes(kind))) {
+    throw new Error('AUTOMATIC_TRADING_MANUAL_RECEIPT_SCOPE_INVALID');
+  }
   const results = {};
-  for (const kind of ['spot', 'futures']) {
+  for (const kind of ['spot', 'futures'].filter((item) => wanted.includes(item))) {
     const candidates = comments.map((comment) => parseManualReceipt(comment, kind, targetSha, deploymentCompletedAt))
       .filter((receipt) => receipt && (kind !== 'futures' || receipt.leverage === '7'))
       // ALL4 needs the current global maximum 7x receipt. A parseable 3x

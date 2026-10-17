@@ -34,7 +34,7 @@ function price(value: number | null | undefined, currency: string) {
 function rate(value: number | null) { return value == null ? '미확인' : number(value) + '%'; }
 const ownershipLabel = (row: TradingHolding, paper: boolean) => row.ownership === 'AUTO'
   ? paper ? '자동모의' : 'AUTO 운용' : row.ownership === 'MANUAL'
-    ? paper ? '수동모의' : '기존 보유' : '소유 구분 미확인';
+    ? paper ? '모의매매' : '기존 보유' : '소유 구분 미확인';
 
 async function loadHoldings(query: URLSearchParams, signal: AbortSignal): Promise<HoldingsResponse> {
   const response = await authorizedFetch('/api/trade-automation/holdings?' + query.toString(), { signal, cache: 'no-store' });
