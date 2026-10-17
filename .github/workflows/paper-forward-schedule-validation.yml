@@ -575,6 +575,68 @@ jobs:
                 scope_requested=true ;;
             esac
           done
+          # Owner-approved per-market automatic LIVE scope + manual Paper
+          # removal (2026-10-17). Exact UI/spec blobs and BOTH Trading guards
+          # are pinned; the gate verifier must pass. Paper safety is unchanged.
+          market_scope_ui=(
+            stock-analyzer/src/pages/auto-trading.tsx
+            stock-analyzer/src/pages/paper-trading.tsx
+            stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx
+            stock-analyzer/src/components/trade-automation-settings.tsx
+            stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
+            stock-analyzer/e2e/detail-auto-ui-compact.spec.ts
+            stock-analyzer/e2e/paper-bottom-nav-inset-contract.spec.ts
+            stock-analyzer/e2e/phase12-trade-automation.spec.ts
+            stock-analyzer/e2e/stock-detail-ai-chart-ui-remediation.spec.ts
+            stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts
+          )
+          market_scope_expected=(
+            7b8a872244fa3a9ba7083e92a3df5ca9136d5fcb
+            9575e57c46f221797fe21b1d79711e75534c6f2f
+            a5ce2db3e6b9180527dd0c65d121403920fd7a7f
+            218b2102d6f68e59ddc2e5054fbdabf2add6772d
+            28958c60eb80eb3eb872bd3d05264df0b6f8522c
+            caf86ad759b47a116eedc3a5781023fb8f5da4c8
+            16aeedd9299f30fe9490692a56f44512d5035c39
+            bccddf8a0d4e24ce3a19a78d5ec87a724df7d6c2
+            44449fc8ece6e6ffa45e958e85666fdc07e0693c
+            602a523599f004fd346f6ded8305c9672e7047c0
+          )
+          market_scope_requested=false
+          for path in "${changed[@]}"; do
+            printf '%s\n' "${market_scope_ui[@]}" | grep -Fx "$path" >/dev/null && market_scope_requested=true
+          done
+          if [[ "$market_scope_requested" == true ]]; then
+            for i in "${!market_scope_ui[@]}"; do
+              path="${market_scope_ui[$i]}"
+              printf '%s\n' "${changed[@]}" | grep -Fx "$path" >/dev/null || {
+                echo "MARKET_SCOPE_UI_REQUIRED_PATH_MISSING:$path" >&2; exit 1;
+              }
+              [[ "$(git rev-parse "HEAD:$path")" == "${market_scope_expected[$i]}" ]] || {
+                echo "MARKET_SCOPE_UI_BLOB_DRIFT:$path" >&2; exit 1;
+              }
+            done
+            market_scope_guards=(
+              .github/workflows/production-automatic-trading-gate.yml
+              api-server/scripts/verify-production-automatic-trading-gate.mjs
+            )
+            market_scope_guard_expected=(
+              0c34f5bd57a36048fc2bb56694a7fec76009dc7a
+              7493cedee10abe1a99792290a3bc7276d41d7c31
+            )
+            for i in "${!market_scope_guards[@]}"; do
+              path="${market_scope_guards[$i]}"
+              printf '%s\n' "${changed[@]}" | grep -Fx "$path" >/dev/null || {
+                echo "MARKET_SCOPE_TRADING_GUARD_REQUIRED:$path" >&2; exit 1;
+              }
+              [[ "$(git rev-parse "HEAD:$path")" == "${market_scope_guard_expected[$i]}" ]] || {
+                echo "MARKET_SCOPE_TRADING_GUARD_DRIFT:$path" >&2; exit 1;
+              }
+            done
+            node api-server/scripts/verify-production-automatic-trading-gate.mjs >/dev/null
+            allowed+=("${market_scope_ui[@]}")
+            scope_requested=false
+          fi
           if [[ "$scope_requested" == true ]]; then
             [[ "$base" == "00dc3910d0d580837e2506e9f3d36f2faf43c380" ]] || {
               echo 'PAPER_HOLDINGS_READONLY_BASE_DRIFT' >&2; exit 1;
@@ -632,7 +694,8 @@ jobs:
                   if ! printf '%s\n' "${research_batch[@]}" "${scanner_repair[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null \
                     && ! printf '%s\n' "${auto_supplement[@]}" | grep -Fx "$path" >/dev/null \
-                    && ! printf '%s\n' "${paper_holdings_readonly[@]}" | grep -Fx "$path" >/dev/null; then
+                    && ! printf '%s\n' "${paper_holdings_readonly[@]}" | grep -Fx "$path" >/dev/null \
+                    && ! { [[ "$market_scope_requested" == true ]] && printf '%s\n' "${market_scope_ui[@]}" | grep -Fx "$path" >/dev/null; }; then
                     echo "Unexpected Paper-facing UI change: $path" >&2
                     exit 1
                   fi
