@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { createBacktestsRouter, resetBacktestRouteStateForTests } from './backtests';
+import { classifyBacktestError, createBacktestsRouter, resetBacktestRouteStateForTests } from './backtests';
+import { BacktestValidationError } from '../services/backtest-engine.service';
+import { ProviderError } from '../lib/errors';
 import type { NormalizedCandle } from '../services/futures-market-data.service';
 import type { BacktestResult } from '../services/backtest-engine.service';
 import type { AuthenticatedRequest } from '../middleware/auth';
@@ -201,7 +203,8 @@ test('backtest route generalizes unexpected errors without stack traces', async 
     assert.equal(response.status, 500);
     const body = await safeJson(response);
     assert.equal(body.code, 'BACKTEST_EXECUTION_FAILED');
-    assert.doesNotMatch(String(body.message), /internal|database/i);
+    assert.equal(body.reason, 'INTERNAL');
+    assert.doesNotMatch(String(body.message), /internal|database|secret|stack/i);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -222,4 +225,42 @@ test('backtest route rejects oversized request bodies before execution', async (
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+
+test('backtest route returns a specific provider reason instead of a generic failure', async () => {
+  const { server, baseUrl } = await withServer(() => {
+    throw new Error('BITGET_HTTP_403');
+  });
+  try {
+    const response = await fetch(`${baseUrl}/api/backtests/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validBody),
+    });
+    assert.equal(response.status, 502);
+    const body = await safeJson(response);
+    assert.equal(body.code, 'PROVIDER_BLOCKED');
+    assert.equal(body.reason, 'PROVIDER_BLOCKED');
+    assert.match(String(body.message), /비트겟.*차단.*403/u);
+    assert.equal(body.orderSubmitted, false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('backtest failure classifier maps provider, timeout, network and validation failures', () => {
+  assert.equal(classifyBacktestError(new Error('UPBIT_HTTP_429')).code, 'PROVIDER_RATE_LIMITED');
+  assert.match(classifyBacktestError(new Error('UPBIT_HTTP_429')).message, /업비트/u);
+  assert.equal(classifyBacktestError(new ProviderError('RATE_LIMITED', 'yahoo')).code, 'PROVIDER_RATE_LIMITED');
+  assert.equal(classifyBacktestError(new Error('BITGET_HTTP_503')).code, 'PROVIDER_UNAVAILABLE');
+  assert.equal(classifyBacktestError(new Error('BITGET_INVALID_RESPONSE')).code, 'PROVIDER_INVALID_RESPONSE');
+  const abort = new Error('This operation was aborted');
+  abort.name = 'AbortError';
+  assert.equal(classifyBacktestError(abort).code, 'PROVIDER_TIMEOUT');
+  const network = new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } });
+  assert.equal(classifyBacktestError(network).code, 'PROVIDER_NETWORK');
+  const insufficient = classifyBacktestError(new BacktestValidationError('INSUFFICIENT_CANDLES', '최소 60개의 완료 캔들이 필요합니다.'));
+  assert.deepEqual([insufficient.status, insufficient.code, insufficient.reason], [400, 'INSUFFICIENT_CANDLES', 'INVALID_REQUEST']);
+  assert.equal(classifyBacktestError(new BacktestValidationError('PROVIDER_TIMEOUT', 'x')).reason, 'PROVIDER_TIMEOUT');
 });
