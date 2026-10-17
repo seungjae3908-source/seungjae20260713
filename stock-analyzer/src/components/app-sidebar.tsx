@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore, type KeyboardEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
@@ -26,6 +26,30 @@ function desktopSnapshot() {
 /** True at the canonical desktop breakpoint (>=1200px) where the sidebar replaces the tab bar. */
 export function useDesktopShell(): boolean {
   return useSyncExternalStore(subscribeDesktop, desktopSnapshot, () => false);
+}
+
+function menuItems(menu: Element | null): HTMLElement[] {
+  return menu ? Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) : [];
+}
+
+/** Section headings move focus into their always-visible menu (no collapse). */
+function focusMenuItem(menuId: string, index: number) {
+  const items = menuItems(document.getElementById(menuId));
+  items[Math.max(0, Math.min(index, items.length - 1))]?.focus();
+}
+
+function handleMenuKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  const items = menuItems(event.currentTarget);
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  if (current < 0 || items.length === 0) return;
+  let next: number | null = null;
+  if (event.key === 'ArrowDown') next = (current + 1) % items.length;
+  if (event.key === 'ArrowUp') next = (current - 1 + items.length) % items.length;
+  if (event.key === 'Home') next = 0;
+  if (event.key === 'End') next = items.length - 1;
+  if (next == null) return;
+  event.preventDefault();
+  items[next]?.focus();
 }
 
 /**
@@ -76,33 +100,56 @@ export function AppSidebar() {
         <span aria-hidden="true" className="block h-7 w-7 rounded-lg bg-brand" />
         STOCK AI
       </Link>
-      {sections.map((section) => (
-        <div key={section.id} role="group" aria-label={section.label ?? '홈'} className="flex flex-col gap-0.5">
-          {section.label ? (
-            <p className="px-2.5 pb-1 pt-3 text-[11px] font-semibold text-muted-foreground/80">{section.label}</p>
-          ) : null}
-          {section.items.map((item) => {
-            const active = sidebarItemMatches(item, location);
-            const Icon = NAVIGATION_ICONS[item.icon];
-            return (
-              <Link
-                key={`${section.id}-${item.id}`}
-                href={item.href}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex min-h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors',
-                  active
-                    ? 'bg-sidebar-active font-semibold text-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground',
-                )}
+      {sections.map((section) => {
+        const menuId = `sidebar-${section.id}-menu`;
+        const menuLabel = `${section.label ?? '홈'} 메뉴`;
+        return (
+          <div key={section.id} className="flex flex-col gap-0.5">
+            {section.label ? (
+              <button
+                type="button"
+                id={`sidebar-${section.id}-trigger`}
+                aria-controls={menuId}
+                aria-expanded="true"
+                onClick={() => focusMenuItem(menuId, 0)}
+                className="px-2.5 pb-1 pt-3 text-left text-[11px] font-semibold text-muted-foreground/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
-                <Icon aria-hidden="true" className={cn('h-4 w-4 shrink-0', active ? 'text-foreground' : 'text-muted-foreground')} />
-                <span className="truncate">{item.label}</span>
-              </Link>
-            );
-          })}
-        </div>
-      ))}
+                {section.label}
+              </button>
+            ) : null}
+            <div
+              id={menuId}
+              role="menu"
+              aria-label={menuLabel}
+              aria-orientation="vertical"
+              onKeyDown={handleMenuKeyDown}
+              className="flex flex-col gap-0.5"
+            >
+              {section.items.map((item) => {
+                const active = sidebarItemMatches(item, location);
+                const Icon = NAVIGATION_ICONS[item.icon];
+                return (
+                  <Link
+                    key={`${section.id}-${item.id}`}
+                    href={item.href}
+                    role="menuitem"
+                    aria-current={active ? 'page' : undefined}
+                    className={cn(
+                      'flex min-h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      active
+                        ? 'bg-sidebar-active font-semibold text-foreground'
+                        : 'text-sidebar-foreground hover:bg-sidebar-hover hover:text-foreground',
+                    )}
+                  >
+                    <Icon aria-hidden="true" className={cn('h-4 w-4 shrink-0', active ? 'text-foreground' : 'text-muted-foreground')} />
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </nav>
   );
 }
