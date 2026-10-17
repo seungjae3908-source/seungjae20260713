@@ -268,7 +268,17 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/src/pages/phase5-backtest-e2e.tsx",
   "stock-analyzer/e2e/backtester-korean-result-ui.spec.ts",
   "stock-analyzer/src/lib/excel-export.ts",
-  ".github/scripts/paper-forward-reviewed-paths.mjs"
+  ".github/scripts/paper-forward-reviewed-paths.mjs",
+  // Owner-approved auto-trading run button (PR #1928, 2026-10-17): exact paths only.
+  "api-server/src/services/trade-automation-run-control.service.test.ts",
+  "api-server/src/services/trade-automation-run-control.service.ts",
+  "api-server/src/services/trade-kill-switch.service.ts",
+  "api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql",
+  "api-server/supabase/migrations/2026101701_trade_automation_run_control.sql",
+  "stock-analyzer/e2e/detail-auto-ui-compact.spec.ts",
+  "stock-analyzer/e2e/scanner-chart-broadcast.spec.ts",
+  "stock-analyzer/src/components/auto-trading-run-control.tsx",
+  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx"
 ]);
 // Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
 // directory exemption or permission to deploy/activate. Keep the immutable
