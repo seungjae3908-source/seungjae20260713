@@ -55,6 +55,8 @@ test('automatic signal pipeline overlap is routed to full Trading guards, never 
     SCANNER_REPAIR_PINNED_PATHS.includes(path));
   assert.deepEqual(overlap.sort(), [
     'api-server/src/routes/bounded-market-scan.ts',
+    'api-server/src/services/crypto-signal-scanner.service.test.ts',
+    'api-server/src/services/crypto-signal-scanner.service.ts',
     'api-server/src/services/scanner-indicator-library.service.ts',
     'api-server/src/services/scanner-quant-strategy.service.test.ts',
     'api-server/src/services/scanner-quant-strategy.service.ts',
