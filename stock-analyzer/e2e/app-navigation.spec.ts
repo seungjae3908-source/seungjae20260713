@@ -230,9 +230,16 @@ test('desktop sidebar owns the primary navigation at 1440px and the mobile tab b
   await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
   await expect(navigation).toHaveAttribute('data-route-title', '국내주식');
   for (const label of ['홈', '통합검색', '국내주식', 'AI 검색기', '과거검증', '자동매매', '연구센터', '포트폴리오', 'AI 상담', '설정']) {
-    await expect(navigation.getByRole('link', { name: label, exact: true })).toBeVisible();
+    await expect(navigation.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
   }
-  await expect(navigation.getByRole('link', { name: '국내주식', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(navigation.getByRole('menuitem', { name: '국내주식', exact: true })).toHaveAttribute('aria-current', 'page');
+  // Section headings are buttons that move focus into their always-visible menu.
+  await navigation.getByRole('button', { name: '기술', exact: true }).click();
+  const technicalMenu = page.getByRole('menu', { name: '기술 메뉴' });
+  await expect(technicalMenu).toBeVisible();
+  await expect(technicalMenu.getByRole('menuitem').first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(technicalMenu.getByRole('menuitem').nth(1)).toBeFocused();
   const box = await navigation.boundingBox();
   expect(Math.round(box?.width ?? 0)).toBe(216);
   await expect(page.locator('nav[data-mobile-tab-bar]')).toBeHidden();
@@ -344,10 +351,10 @@ test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without
 
   for (const [label, route, heading] of cases) {
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
-    await navigation.getByRole('link', { name: label, exact: true }).click();
+    await navigation.getByRole('menuitem', { name: label, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${route.replaceAll('/', '\\/')}$`));
     await expect(page.getByRole('heading', { name: heading }).first()).toBeVisible();
-    await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('link', { name: label, exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('menuitem', { name: label, exact: true })).toHaveAttribute('aria-current', 'page');
     await page.goto('/stocks/kr');
   }
   assertClean();
