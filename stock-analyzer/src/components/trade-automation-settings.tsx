@@ -96,6 +96,9 @@ type Status = {
     liveEntryWarmupComplete: boolean;
     liveReadinessCycleComplete: boolean;
     liveCycleAllFourPolicyReady: boolean;
+    /** Markets the owner gate opened for automatic LIVE entries (server-enforced). */
+    liveMarketScope?: string[];
+    liveCycleScopedPolicyReady?: boolean;
     globalEmergencyStopActive: boolean;
     errorCode: string | null;
   } | null;
@@ -128,6 +131,13 @@ const EXCHANGE_LABELS: Record<Exchange, string> = {
 const STOCK_BROKER_LABELS: Record<StockBroker, string> = {
   kiwoom: 'Kiwoom',
   toss: 'Toss',
+};
+
+const SERVER_SCOPE_KEY: Record<Market, string> = {
+  domestic_stock: 'KR_STOCK',
+  us_stock: 'US_STOCK',
+  crypto_spot: 'CRYPTO_SPOT',
+  crypto_futures: 'CRYPTO_FUTURES',
 };
 
 const MARKET_LABELS: Record<Market, string> = {
@@ -486,6 +496,9 @@ export function TradeAutomationSettings({
     ?? (canManagePilot ? 500_000 : 100_000);
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
+  // Owner gate scope of automatic LIVE entries (server-enforced). null = not reported.
+  const reportedLiveScope = status?.autoTradingBackground?.liveMarketScope;
+  const serverLiveScope: string[] | null = Array.isArray(reportedLiveScope) ? reportedLiveScope : null;
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
     ? ['bitget']
     : selectedMarket === 'crypto_spot'
@@ -546,6 +559,11 @@ export function TradeAutomationSettings({
           <span className="min-w-0">
             <span className="block text-xs font-extrabold">{MARKET_LABELS[market]}</span>
             <span className="mt-1 block break-keep text-[10px] leading-4 text-muted-foreground">{MARKET_DESCRIPTIONS[market]}</span>
+            {serverLiveScope ? (
+              <span className="mt-1 block text-[10px] font-bold text-muted-foreground" data-testid={`auto-market-server-scope-${market}`}>
+                {serverLiveScope.includes(SERVER_SCOPE_KEY[market]) ? '서버 실거래 범위: 열림' : '서버 실거래 범위: 닫힘 (모의만)'}
+              </span>
+            ) : null}
           </span>
           <Switch active={draft.marketEnabled[market]} />
         </button>
