@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
+  CRYPTO_SCANNER_DEADLINE_MS,
   createCryptoSignalScannerService,
   CryptoPublicRequestGate,
   normalizeCryptoScannerCandles,
@@ -361,4 +364,13 @@ test('Williams futures permits SHORT while spot keeps SHORT disabled', () => {
   assert.equal(spot.status, 'NO_ENTRY');
   assert.equal(spot.direction, null);
   assert.ok(spot.reasons.includes('spot_short_disabled'));
+});
+
+
+test('crypto scanner deadline leaves room under the browser app API timeout', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'stock-analyzer/src/lib/auth-bootstrap.ts'), 'utf8');
+  const match = source.match(/APP_API_REQUEST_TIMEOUT_MS\s*=\s*([\d_]+)/);
+  assert.ok(match, 'browser API timeout constant must exist');
+  const browserDeadlineMs = Number(match[1].replaceAll('_', ''));
+  assert.ok(browserDeadlineMs - CRYPTO_SCANNER_DEADLINE_MS >= 2_000);
 });
