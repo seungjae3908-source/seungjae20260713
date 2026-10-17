@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURCE_SHA, SCANNER_REPAIR_WORKFLOW_BASE_SHA,
-  SCANNER_PROTECTED_AUTHORITY_PATHS, SCANNER_REPAIR_INTEGRATION_BASE_SHA, SCANNER_REPAIR_INTEGRATION_BLOBS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
+  SCANNER_PROTECTED_AUTHORITY_PATHS, SCANNER_REPAIR_INTEGRATION_BASE_SHA, SCANNER_REPAIR_INTEGRATION_BLOBS, SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
 import { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 
 const base = 'b'.repeat(40), blob = 'a'.repeat(40), drift = 'c'.repeat(40);
@@ -102,5 +102,22 @@ test('only exact audited merger and S-only scanner blobs are accepted on the pin
     assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA, changed), /SCANNER_SCOPE_BLOB_DRIFT/);
     assert.throws(() => verifyPinnedScannerScope([path], SCANNER_REPAIR_INTEGRATION_BASE_SHA,
       (ref, name) => ref === 'HEAD' && name === path ? expected : 'invalid'), /SCANNER_SCOPE_BLOB_DRIFT/);
+  }
+});
+
+test('only the exact reviewed manual-Paper-removal scanner blobs leave the immutable repair classification', () => {
+  const page = 'stock-analyzer/src/pages/signal-scanner.tsx';
+  const spec = 'stock-analyzer/e2e/signal-scanner.spec.ts';
+  assert.deepEqual(Object.keys(SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS).sort(), [spec, page]);
+  const reviewed = (ref, path) => (ref === 'HEAD' && Object.hasOwn(SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS, path)
+    ? SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS[path] : blob);
+  assert.deepEqual(verifyPinnedScannerScope([page, spec], base, reviewed), []);
+  // Any other bytes of the same paths keep the full immutable check.
+  assert.throws(() => verifyPinnedScannerScope([page], base, (ref) => (ref === 'HEAD' ? drift : blob)), /SCANNER_SCOPE_BLOB_DRIFT/);
+  // The exemption never covers another pinned scanner path.
+  assert.deepEqual(verifyPinnedScannerScope([page, stock], base, reviewed), [stock]);
+  const validation = read('.github/workflows/paper-forward-schedule-validation.yml');
+  for (const [path, value] of Object.entries(SCANNER_MANUAL_PAPER_REMOVAL_REVIEWED_BLOBS)) {
+    assert.ok(validation.includes(path) && validation.includes(value), path);
   }
 });
