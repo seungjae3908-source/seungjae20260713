@@ -140,8 +140,9 @@ export function evaluateTrendPilotSymbolV1({ symbol, candles, fundingRates = [],
 }
 
 export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
-  const all = datasets.flatMap((d) => d.candles.map((c) => c.timestamp));
-  const split = Math.min(...all) + ((Math.max(...all) - Math.min(...all)) * splitFraction);
+  let first = Infinity; let last = -Infinity;
+  for (const d of datasets) for (const c of d.candles) { if (c.timestamp < first) first = c.timestamp; if (c.timestamp > last) last = c.timestamp; }
+  const split = first + ((last - first) * splitFraction);
   return TREND_PILOT_VARIANTS_V1.map((variant) => {
     const perSymbol = datasets.map((d) => evaluateTrendPilotSymbolV1({ ...d, variant }));
     const primary = perSymbol.filter((s) => TREND_PILOT_PRIMARY_SYMBOLS.includes(s.symbol)).flatMap((s) => s.trades);
@@ -187,6 +188,7 @@ export async function runTrendPilotBacktestV1({ stateRoot, now = () => new Date(
     status: primaryReady ? 'COMPLETE' : 'WAITING_FOR_DATA',
     notionalKrw: TREND_PILOT_NOTIONAL_KRW, dailyLossLimitKrw: TREND_PILOT_DAILY_LOSS_KRW,
     symbols: datasets.map((d) => d.symbol),
+    fundingPrints: Object.fromEntries(datasets.map((d) => [d.symbol, d.fundingRates.length])),
     variants: primaryReady ? evaluateTrendPilotV1({ datasets }) : [],
     holdoutRead: false, liveTrading: false, realOrder: false, executionAuthority: 'NONE',
   };
@@ -213,6 +215,8 @@ export function formatTrendPilotReportKoV1(result) {
     lines.push(`  하루 손실 3만 원 넘은 날 ${a.daysOverDailyLimit}일 · 검증 구간(${v.splitDate}~) 합계 ${won(val.totalKrw)} (${val.trades}회)`);
     lines.push(`  참고 · 다른 코인 ${v.otherSymbols.symbols}개 같은 규칙: 합계 ${won(v.otherSymbols.all.totalKrw)} · 승률 ${pct(v.otherSymbols.all.winRate)}`);
   }
+  const noFunding = Object.entries(result.fundingPrints ?? {}).filter(([, n]) => n < 100).map(([s]) => s);
+  if (noFunding.length) lines.push('', `주의: 펀딩비 기록 없이 계산한 종목 ${noFunding.join(', ')} (선물 보유 비용 미반영 → 실제보다 조금 낙관적일 수 있음)`);
   lines.push('', '과거 성적일 뿐 미래 수익 보장 아님. 주문 권한 없음.');
   return lines.join('\n');
 }
