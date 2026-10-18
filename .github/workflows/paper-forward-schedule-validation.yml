@@ -71,6 +71,13 @@ on:
       - stock-analyzer/e2e/market-information-timeout-contract.spec.ts
       - api-server/src/services/trade-automation-run-control.service.test.ts
       - api-server/src/services/trade-automation-run-control.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
+      - api-server/src/services/trend-pilot-v1-authorization.service.ts
+      - api-server/src/services/trend-pilot-v1-lane.service.test.ts
+      - api-server/src/services/trend-pilot-v1-lane.service.ts
+      - api-server/src/services/trend-pilot-v1-runtime.service.ts
+      - api-server/src/services/trend-pilot-v1.core.test.ts
+      - api-server/src/services/trend-pilot-v1.core.ts
       - api-server/src/services/trade-kill-switch.service.ts
       - api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql
       - api-server/supabase/migrations/2026101701_trade_automation_run_control.sql
