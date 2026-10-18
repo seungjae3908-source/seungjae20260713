@@ -16,6 +16,7 @@ import {
 import {
   BacktestValidationError,
   calculateStrategySignals,
+  fundingSettlementsHeld,
   measureBacktestPerformance,
   runBacktest,
   validateBacktestRequest,
@@ -391,6 +392,24 @@ test('marked drawdown includes unrealized loss and is never below the realized d
       assert.ok(result.markedMaximumDrawdown > 0, 'a winning run that dipped must still show a drawdown');
     }
   }
+});
+test('funding is charged per real settlement boundary, not per elapsed hours', () => {
+  const H = 3_600_000; const base = { timeframe: '1H', fundingIntervalHours: 8 };
+  assert.equal(fundingSettlementsHeld(7 * H, 9 * H, 'strategy_exit', base), 1); // crosses 08:00
+  assert.equal(fundingSettlementsHeld(1 * H, 7 * H, 'strategy_exit', base), 0); // 6h held, no settlement
+  assert.equal(fundingSettlementsHeld(8 * H, 9 * H, 'strategy_exit', base), 0); // filled at the settlement instant
+  assert.equal(fundingSettlementsHeld(1 * H, 7 * H, 'stop_loss', base), 0); // exit bar ends 07:59:59.999
+  assert.equal(fundingSettlementsHeld(1 * H, 8 * H, 'stop_loss', base), 1); // stop inside the 08:00 bar -> held through settlement
+  assert.equal(fundingSettlementsHeld(0, 24 * H, 'strategy_exit', { timeframe: '1H', fundingIntervalHours: 0 }), 0);
+});
+test('order delay moves the entry later and rejects invalid delays', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const immediate = runBacktest(request({ side: 'long', endTime }), rows);
+  const delayed = runBacktest(request({ side: 'long', endTime, parameters: { ...request({}).parameters, entryDelayBars: 2 } }), rows);
+  assert.ok(immediate.trades.length > 0 && delayed.trades.length > 0, 'fixture must trade with and without delay');
+  assert.ok(delayed.trades[0].entryTime > immediate.trades[0].entryTime);
+  assert.ok(delayed.warnings.some((warning) => warning.includes('주문 지연 2봉')));
+  for (const bad of [-1, 6, 1.5]) assert.throws(() => runBacktest(request({ side: 'long', endTime, parameters: { ...request({}).parameters, entryDelayBars: bad } }), rows), /주문 지연/u);
 });
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
