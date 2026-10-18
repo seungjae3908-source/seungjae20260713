@@ -72,26 +72,31 @@
   src: local('IBM Plex Sans KR'), local('IBMPlexSansKR-Regular');
   unicode-range: U+1100-11FF, U+3130-318F, U+AC00-D7AF, U+3000-303F, U+FF00-FFEF;
 }
+/*
+ * Market numbers use the installed IBM Plex Mono or the system monospace stack.
+ * No network font: a lazily fetched woff2 was aborted mid-navigation and the
+ * staging release check fails closed on any aborted request.
+ */
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts/ibm-plex-mono-400-latin.woff2') format('woff2');
+  src: local('IBM Plex Mono'), local('IBMPlexMono');
 }
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('/fonts/ibm-plex-mono-500-latin.woff2') format('woff2');
+  src: local('IBM Plex Mono'), local('IBMPlexMono');
 }
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('/fonts/ibm-plex-mono-600-latin.woff2') format('woff2');
+  src: local('IBM Plex Mono'), local('IBMPlexMono');
 }
 
 @theme inline {
