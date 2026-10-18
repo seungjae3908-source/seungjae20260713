@@ -171,6 +171,10 @@ write_pm2_launcher() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 [[ -r .env.staging ]] || { echo '[staging] runtime env file is missing' >&2; exit 64; }
+# Same outbound network options as Production (ops/deploy-production.sh): the
+# host has no IPv6 route, and Node's 250ms happy-eyeballs attempt otherwise
+# makes provider fetches stall or fail with ETIMEDOUT.
+export NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"
 exec node --enable-source-maps '--env-file=.env.staging' ./dist/index.mjs
 LAUNCHER
   chmod 700 "$PM2_LAUNCHER"
@@ -282,6 +286,7 @@ git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
     "PORT=$STAGING_CANARY_PORT"
     "API_PORT=$STAGING_CANARY_PORT"
     "NODE_ENV=production"
+    "NODE_OPTIONS=--dns-result-order=ipv4first --no-network-family-autoselection"
     "APP_ENV=staging"
     "DEPLOY_SHA=$TARGET_SHA"
     "BACKGROUND_WORKERS_ENABLED=false"
