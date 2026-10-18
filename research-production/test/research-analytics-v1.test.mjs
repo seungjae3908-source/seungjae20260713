@@ -116,3 +116,13 @@ test('walk-forward selection does not use hindsight: a trial rejected on the ful
   const ragged = { a: trial('a', 'WATCH', [0.01, 0.01, 0.01]), b: trial('b', 'WATCH', [0.02, 0.02]) };
   assert.equal(rollingSelectionWalkForwardV1(ragged).folds.length, 1);
 });
+
+test('block bootstrap sees deeper drawdowns than iid when losses cluster', () => {
+  const clustered = [...Array(10).fill(0.02), ...Array(10).fill(-0.04), ...Array(10).fill(0.02), ...Array(10).fill(-0.04)];
+  const iid = monteCarloTradeSequenceV1(clustered, { seed: 5, paths: 3_000, meanBlockLength: 1 });
+  const block = monteCarloTradeSequenceV1(clustered, { seed: 5, paths: 3_000, meanBlockLength: 10 });
+  assert.equal(iid.method, 'IID_BOOTSTRAP');
+  assert.equal(block.method, 'STATIONARY_BLOCK_BOOTSTRAP');
+  assert.ok(block.maxDrawdown.p95 > iid.maxDrawdown.p95);
+  assert.equal(monteCarloTradeSequenceV1(clustered, { seed: 5 }).meanBlockLength, Math.round(40 ** (1 / 3)));
+});
