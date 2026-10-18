@@ -177,6 +177,10 @@ on:
       - stock-analyzer/src/components/trade-automation-settings.tsx
       - stock-analyzer/e2e/phase12-trade-automation.spec.ts
       - api-server/src/services/four-market-auto-readiness.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/live-trading-safety-telegram.service.ts
+      - api-server/src/services/trade-pre-submission-risk.test.ts
+      - stock-analyzer/src/lib/trade-approval-ui.ts
 permissions:
   contents: read
 concurrency:

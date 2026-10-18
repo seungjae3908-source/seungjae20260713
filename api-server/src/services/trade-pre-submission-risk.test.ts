@@ -15,6 +15,16 @@ import {
   type TradingPlan,
 } from './trade-automation.types';
 
+// Tests below exercise LIVE paths that predate the owner's per-market real-order
+// switch: every market switch ON, turned on long before the first-week cap window.
+const LIVE_SWITCHES_ON = {
+  liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+  liveMarketEnabledAt: {
+    domestic_stock: '2026-01-01T00:00:00.000Z', us_stock: '2026-01-01T00:00:00.000Z',
+    crypto_spot: '2026-01-01T00:00:00.000Z', crypto_futures: '2026-01-01T00:00:00.000Z',
+  },
+};
+
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 
 test.afterEach(() => setTradeProfitabilityAttestationRunnerForTests(null));
@@ -122,7 +132,7 @@ async function setup(now: Date, planVersion = 1) {
   const currentPlan = plan(now, planVersion);
   const currentOrder = order(now);
   await repository.savePolicy(USER_ID, {
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     pilotStage: 'limited-50',
   });
   await repository.savePlan(currentPlan);

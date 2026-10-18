@@ -322,10 +322,12 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/bitget-native-protection-readonly.service.test.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.ts",
   "api-server/src/services/crypto-benchmark-regime.service.ts",
+  "api-server/src/services/formula-ai-live-exception.service.test.ts",
   "api-server/src/services/four-market-auto-readiness.service.ts",
   "api-server/src/services/four-market-auto-readiness.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
+  "api-server/src/services/live-trading-safety-telegram.service.ts",
   "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
   "api-server/src/services/member-auto-trading-readiness.service.ts",
   "api-server/src/services/public-live-plan-origin.service.test.ts",
@@ -339,6 +341,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/trade-kiwoom-readonly-contract.test.ts",
   "api-server/src/services/trade-order-recovery.service.ts",
   "api-server/src/services/trade-order-recovery.test.ts",
+  "api-server/src/services/trade-pre-submission-risk.test.ts",
   "api-server/src/services/trade-recovery-worker.service.ts",
   "api-server/src/services/trade-recovery-worker.test.ts",
   "api-server/src/services/trading-provider-response.service.test.ts",
@@ -352,6 +355,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/e2e/phase12-trade-automation.spec.ts",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
   "stock-analyzer/src/components/trade-automation-settings.tsx",
+  "stock-analyzer/src/lib/trade-approval-ui.ts",
 ]);
 // Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
 // admission bridge. Paths that previously belonged to the immutable Scanner

@@ -29,6 +29,16 @@ import {
   type TradingPlanInput,
 } from './trade-automation.types';
 
+// Tests below exercise LIVE paths that predate the owner's per-market real-order
+// switch: every market switch ON, turned on long before the first-week cap window.
+const LIVE_SWITCHES_ON = {
+  liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+  liveMarketEnabledAt: {
+    domestic_stock: '2026-01-01T00:00:00.000Z', us_stock: '2026-01-01T00:00:00.000Z',
+    crypto_spot: '2026-01-01T00:00:00.000Z', crypto_futures: '2026-01-01T00:00:00.000Z',
+  },
+};
+
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
@@ -266,7 +276,7 @@ async function setup() {
   setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER_ID, {
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     pilotStage: 'limited-50',
   });
   await repository.saveConnection({
@@ -537,7 +547,7 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
   const previousEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER_ID, {
-    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON, mode: 'automatic', automaticEnabled: true,
   });
   const now = new Date();
   const futuresPlan = {
@@ -616,7 +626,7 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
     assert.equal(mutations, 0, 'neither margin mode nor leverage nor order is mutated');
 
     await repository.savePolicy(USER_ID, {
-      ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false,
+      ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON, mode: 'approval', automaticEnabled: false,
     });
     await assert.rejects(
       () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
@@ -651,7 +661,7 @@ test('member cap tightening after preflight is enforced again before provider mu
   try {
     process.env.TRADING_EMERGENCY_STOP = 'false';
     await repo.savePolicy(USER_ID, {
-      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON, mode: 'automatic', automaticEnabled: true,
       totalCapitalKrw: 500_000, maxOrderKrw: 10_000,
     });
     await assert.rejects(
@@ -660,7 +670,7 @@ test('member cap tightening after preflight is enforced again before provider mu
       'a stale 20k plan cannot survive a new 10k member cap',
     );
     await repo.savePolicy(USER_ID, {
-      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON, mode: 'automatic', automaticEnabled: true,
       totalCapitalKrw: 500_000, maxOrderKrw: 500_000, maxInstrumentKrw: 10_000,
     });
     await assert.rejects(
