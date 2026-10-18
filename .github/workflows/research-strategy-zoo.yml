@@ -5,6 +5,11 @@ name: Research Strategy Zoo Backtest
 # app markets plus US ETFs. No exchange keys, no orders, no production access.
 on:
   workflow_dispatch:
+    inputs:
+      markets:
+        description: 'Comma-separated markets to run (empty = all)'
+        required: false
+        default: ''
   pull_request:
     paths:
       - .github/workflows/research-strategy-zoo.yml
@@ -31,6 +36,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           export NODE_OPTIONS=--max-old-space-size=6144
+          export ZOO_MARKETS="${{ inputs.markets }}"
           node research-production/bin/strategy-zoo-backtest.mjs --fetch "$RUNNER_TEMP/zoo" > strategy-zoo-report.txt 2> strategy-zoo-fetch.log
           cp "$RUNNER_TEMP/zoo/latest/strategy-zoo-v1.json" strategy-zoo-v1.json
           grep -c '^FETCHED' strategy-zoo-fetch.log || true
