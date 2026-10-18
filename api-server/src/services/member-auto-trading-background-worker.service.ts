@@ -1866,6 +1866,8 @@ async function executeAutomaticPlan(input: {
   planInput: TradingPlanInput;
   policy: TradingPolicy;
   emergencyStopped: boolean;
+  /** Stop-loss / take-profit exit of an owned automatic position: allowed while new entries are stopped. */
+  protectiveExit?: boolean;
   verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
   isActive?: () => boolean;
   memberAccessIsCurrent?: (userId: string, plan: Pick<TradingPlanInput, 'accountMode' | 'exchange' | 'leverage'>) => Promise<boolean>;
@@ -1900,11 +1902,14 @@ async function executeAutomaticPlan(input: {
     : new TradeExecutionService(input.repository, undefined, undefined, undefined, input.isActive, input.memberAccessIsCurrent);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
+    { protectiveExit: input.protectiveExit === true },
   );
   if (!created.plan) return { created, plan: null, order: null, orderDuplicate: false };
   let plan = created.plan;
   assertActive();
-  if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(input.userId, plan.id);
+  if (plan.state === 'APPROVAL_PENDING') {
+    plan = await automation.beginAutomaticPlan(input.userId, plan.id, { protectiveExit: input.protectiveExit === true });
+  }
   if (plan.state !== 'SUBMITTED') return { created, plan, order: null, orderDuplicate: false };
   assertActive();
   const createdOrder = await automation.createOrder(input.userId, plan);
@@ -2006,6 +2011,7 @@ async function processAutomaticExit(input: {
     userId: input.member.userId,
     planInput: exitInput,
     policy: input.member.policy,
+    protectiveExit: true,
     verifiedPaperFxQuote: input.live ? undefined : fx,
     isActive: input.isActive,
     memberAccessIsCurrent: input.live ? (userId, plan) => input.source.revalidateLiveMemberAccess?.(userId, plan)
@@ -2234,6 +2240,12 @@ export class MemberAutoTradingBackgroundWorker {
         const memberAutoExecutionEnabled = memberCanRunAutomation
           && member.policy.mode === 'automatic'
           && member.policy.automaticEnabled && !member.policy.emergencyStopped;
+        // Owner decision 2026-10-18: emergency stop / 작동 OFF blocks new
+        // entries only. Stop-loss / take-profit exits of already-owned
+        // automatic Live positions keep running (like the daily-loss auto
+        // stop) under the same arm, capability, ownership and reduce-only
+        // checks. Only losing automatic-trading membership revokes them.
+        const memberProtectiveExitsEnabled = memberCanRunAutomation;
         const repository = this.source.tradingRepositoryFor(member.userId);
         const paper = this.source.paperJournalRepositoryFor(member.userId);
         let runtime: MemberRuntimeState;
@@ -2422,9 +2434,11 @@ export class MemberAutoTradingBackgroundWorker {
         if (liveModeRequested) {
           const livePositions = trackedAutomaticPositions(runtime, 'live');
           result.liveTrackedPositions += livePositions.length;
-          if (!memberAutoExecutionEnabled) {
-            // Emergency-stop / AUTO OFF must not erase existing Live positions
-            // from observation, nor silently run them under manual authority.
+          // Emergency-stop / AUTO OFF never erases existing Live positions from
+          // observation and keeps new entries fail-closed; their protective
+          // exits run below under the owned automatic position's authority.
+          if (!memberAutoExecutionEnabled && livePositions.length) result.newEntriesFailClosed = true;
+          if (!memberProtectiveExitsEnabled) {
             result.liveExitsSuppressedByPolicy += livePositions.length;
             if (livePositions.length) result.newEntriesFailClosed = true;
           } else if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
