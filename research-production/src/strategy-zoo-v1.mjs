@@ -444,7 +444,8 @@ export const SPECIAL_RULES_V1 = Object.freeze([
   { id: 'VOL_BREAKOUT_NOISE', family: '돌파', name: '변동성 돌파 노이즈 k + 이평 점수 + 변동성 비중 (강환국)', source: '강환국, 가상화폐 투자 마스터플랜 (2021)' },
   { id: 'DUAL_THRUST', family: '돌파', name: '듀얼 스러스트 (N=4, K=0.5, 롱숏 반전)', source: 'Michael Chalek; jesse-ai DUAL_THRUST; je-suis-tm' },
   { id: 'DCA_MARTINGALE', family: '봇', name: 'DCA 물타기 봇 (안전주문 5개 ×2배, +1.5% 익절, 손절 없음)', source: '3Commas/거래소 DCA 봇 기본형' },
-  { id: 'FUNDING_CARRY', family: '캐리', name: '펀딩비 반대편 보유 (선물 전용)', source: 'BIS WP 1087 (crypto carry); Bitget/Binance funding docs' },
+  { id: 'FUNDING_CARRY', family: '캐리', name: '펀딩비 반대 방향 선물만 보유 (헤지 없음, 비교용)', source: 'directional variant (not the paper strategy)' },
+  { id: 'FUNDING_CARRY_HEDGED', family: '캐리', name: '펀딩비 차익 (현물 매수 + 선물 매도, 가격위험 헤지)', source: 'He, Manela, Ross & von Wachter 2024 (arXiv 2212.06888); BIS WP 1087' },
 ]);
 
 // ------------------------------------------------------------------ rotation (cross-sectional) rules
@@ -542,6 +543,7 @@ export function simulateSpecialPortfolio(panel, ruleId, market) {
   const spec = STRATEGY_ZOO_MARKETS_V1[market];
   const fundingMaps = panel.series.map((s) => fundingByDay(s.funding));
   const dtPos = {};
+  const hedgedPos = {};
   const perSymbol = panel.series.map((ser, s) => {
     const bars = ser.bars; const close = bars.map((b) => b.close); const s5 = sma(close, 5);
     const r = new Array(bars.length).fill(0); const exp = new Array(bars.length).fill(0); const turn = new Array(bars.length).fill(0);
@@ -595,6 +597,19 @@ export function simulateSpecialPortfolio(panel, ruleId, market) {
           if (dow === 6 || dow === 0) { r[j] = b.close / p.close - 1; exp[j] = 1; }
           if (dow === 1) { r[j] = (b.open / p.close - 1) - (2 * spec.costPerSide); exp[j] = 1; turn[j] = 2; }
           if (market === 'CRYPTO_FUTURES' && exp[j]) r[j] -= fundingMaps[s].get(Math.floor(b.timestamp / DAY) * DAY) ?? 0;
+        }
+      } else if (ruleId === 'FUNDING_CARRY_HEDGED') {
+        if (market === 'CRYPTO_FUTURES') {
+          // Enter (at the next open) when the last 3 days averaged ≥ 3 bp/day of funding,
+          // leave when the average turns negative. Capital = spot notional + 50% perp
+          // margin (2x isolated short) → funding yield ÷ 1.5. Four legs pay costs each way.
+          let f = 0; let k = 0;
+          for (let d = 1; d <= 3; d += 1) { const v = fundingMaps[s].get(Math.floor(bars[j - d]?.timestamp / DAY) * DAY); if (Number.isFinite(v)) { f += v; k += 1; } }
+          const avg = k ? f / k : 0; const prev = hedgedPos[s] ?? 0;
+          const pos = prev ? (avg < 0 ? 0 : 1) : (avg >= 0.0003 ? 1 : 0);
+          const today = fundingMaps[s].get(Math.floor(b.timestamp / DAY) * DAY) ?? 0;
+          r[j] = (pos * today / 1.5) - (pos !== prev ? (4 * spec.costPerSide) / 1.5 : 0);
+          exp[j] = pos; turn[j] = pos !== prev ? 4 / 1.5 : 0; hedgedPos[s] = pos;
         }
       } else if (ruleId === 'FUNDING_CARRY') {
         if (market === 'CRYPTO_FUTURES') {
@@ -964,8 +979,8 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   for (const rule of allocationOnly ? [] : SPECIAL_RULES_V1) {
     if (rule.id === 'OVERNIGHT' && market.startsWith('CRYPTO')) continue;
     if (rule.id === 'WEEKEND_CRYPTO' && !market.startsWith('CRYPTO')) continue;
-    if (rule.id === 'FUNDING_CARRY' && market !== 'CRYPTO_FUTURES') continue;
-    if (rule.id === 'FUNDING_CARRY' && !panel.series.some((s) => s.funding.length > 100)) continue;
+    if (rule.id.startsWith('FUNDING_CARRY') && market !== 'CRYPTO_FUTURES') continue;
+    if (rule.id.startsWith('FUNDING_CARRY') && !panel.series.some((s) => s.funding.length > 100)) continue;
     add({ id: rule.id, family: rule.family, name: rule.name, source: rule.source, kind: 'special' }, simulateSpecialPortfolio(panel, rule.id, market));
   }
   if (!allocationOnly && panel.series.length >= 8) {
@@ -987,11 +1002,12 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   const srVariance = (1.4826 * mad) ** 2;
   // Effective number of independent trials (Bailey & López de Prado): many rules
   // here are near-duplicates (e.g. several trend filters), so N_eff = ρ̄ + (1 − ρ̄)·N
-  // with ρ̄ the mean pairwise correlation of the strategies' daily returns.
+  // with ρ̄ the mean absolute pairwise correlation of the strategies' daily returns.
   const series = rows.map((r) => r.daily);
   let sumCorr = 0; let pairs = 0;
   for (let a = 0; a < series.length; a += 1) for (let b = a + 1; b < series.length; b += 1) {
-    const c = correlation(series[a], series[b]); if (Number.isFinite(c)) { sumCorr += c; pairs += 1; }
+    // |ρ|: a mirrored short of a rule is as redundant as a copy of it
+    const c = correlation(series[a], series[b]); if (Number.isFinite(c)) { sumCorr += Math.abs(c); pairs += 1; }
   }
   const rhoBar = pairs ? Math.max(0, Math.min(1, sumCorr / pairs)) : 0;
   const effectiveTrials = Math.max(1, rhoBar + ((1 - rhoBar) * rows.length));
