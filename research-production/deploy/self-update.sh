@@ -15,7 +15,10 @@
 # taken from the target commit. Research has no order authority; this updater
 # never touches the app process, trading, the database or member data.
 set -Eeuo pipefail
-umask 077
+# Releases staged by the activation scripts must stay readable by the
+# investment-research user; a 077 umask made them root-only and every isolated
+# validation died with MODULE_NOT_FOUND. The state directory itself is 0700.
+umask 022
 
 REPOSITORY_URL="${RESEARCH_SELF_UPDATE_REPOSITORY_URL:-https://github.com/seungjae3908-source/seungjae20260713.git}"
 RESEARCH_ROOT=/opt/investment-research
@@ -28,6 +31,7 @@ RESEARCH_STATE=/var/lib/investment-research-production
 PUBLIC_STATUS="$RESEARCH_STATE/latest/self-update-v1.json"
 CONFIG=/etc/investment-research/self-update.env
 LOCK=/run/lock/investment-research-self-update.lock
+ISOLATED_RELEASES=/var/lib/investment-research-transition-v2/releases
 VALIDATION_ATTEMPTS="${RESEARCH_SELF_UPDATE_VALIDATION_ATTEMPTS:-3}"
 RETRY_AFTER_SECONDS="${RESEARCH_SELF_UPDATE_RETRY_AFTER_SECONDS:-21600}"
 IDLE_WAIT_SECONDS="${RESEARCH_SELF_UPDATE_IDLE_WAIT_SECONDS:-1200}"
@@ -112,6 +116,22 @@ wait_for_idle_oneshots() {
   done
 }
 
+# An isolated release staged under the old 077 umask is reused as-is by
+# validate-isolated, so open it up for the research user before validating.
+repair_isolated_release() {
+  local release="$ISOLATED_RELEASES/$1"
+  [[ -d "$release" && ! -L "$release" ]] || return 0
+  chmod -R u+rwX,go+rX,go-w -- "$release"
+}
+
+# First failure code or error line from a validation log, for the status file.
+validation_reason() {
+  local log="$1" reason
+  reason="$(grep -Eo '"reason": *"[^"]+"' "$log" | tail -1 | sed 's/.*: *"//;s/"$//' || true)"
+  [[ -n "$reason" ]] || reason="$(grep -Eo '^(AI_RESEARCH_[A-Z0-9_]+(:[^ ]*)?|Error: .*)' "$log" | grep -viE 'token|secret|key|password' | tail -1 || true)"
+  printf '%s' "${reason:0:200}"
+}
+
 manual_activation_running() {
   pgrep -f -- 'activate-server.sh|activate-ai-research.sh|activate-lightweight-market-watch.sh' >/dev/null 2>&1
 }
@@ -129,7 +149,7 @@ ai_schedules_enabled() { systemctl is-enabled --quiet research-production-ai-rev
 # succeeds. If they are off for the running release, validate it in isolation
 # and turn them back on without any release change.
 restore_ai_for_current() {
-  local sha="$1" work_dir attempt
+  local sha="$1" work_dir attempt reason=""
   if manual_activation_running; then
     write_status DEFERRED_MANUAL_ACTIVATION "$sha" "$sha" "an owner-approved activation is running"
     return 0
@@ -142,6 +162,7 @@ restore_ai_for_current() {
   for script in activate-ai-research.sh activate-lightweight-market-watch.sh; do
     git -C "$MIRROR" show "$sha:research-production/deploy/$script" > "$work_dir/$script"
   done
+  repair_isolated_release "$sha"
   write_status RESTORING_AI "$sha" "$sha" "AI schedules were off; isolated validation then re-enable"
   for attempt in $(seq 1 "$VALIDATION_ATTEMPTS"); do
     wait_for_idle_oneshots || continue
@@ -152,11 +173,12 @@ restore_ai_for_current() {
       rm -rf -- "$work_dir"
       return 0
     fi
+    reason="$(validation_reason "$work_dir/validate.log")"
     sleep 60
   done
   rm -rf -- "$work_dir"
   record_failure "restore-$sha" ai-restore
-  write_status AI_RESTORE_FAILED "$sha" "$sha" "AI schedules still off; core research timers keep running"
+  write_status AI_RESTORE_FAILED "$sha" "$sha" "${reason:+$reason; }AI schedules still off; core research timers keep running"
   return 1
 }
 
@@ -215,6 +237,7 @@ done
 watch_was_active=false
 systemctl is-active --quiet "$WATCH_SERVICE" && watch_was_active=true
 
+repair_isolated_release "$main_sha"
 write_status VALIDATING "$main_sha" "$current_sha" "isolated validation (production untouched)"
 validated=false
 reason=""
@@ -225,7 +248,7 @@ for attempt in $(seq 1 "$VALIDATION_ATTEMPTS"); do
     validated=true
     break
   fi
-  reason="$(grep -Eo '"reason": *"[^"]+"' "$work/validate-$attempt.log" | tail -1 | sed 's/.*: *"//;s/"$//' || true)"
+  reason="$(validation_reason "$work/validate-$attempt.log")"
   echo "SELF_UPDATE_VALIDATION_ATTEMPT_FAILED:$attempt:${reason:-unknown}" >&2
   sleep 60
 done
