@@ -587,6 +587,16 @@ async function main() {
         responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
         sGradeCards: response.cards.filter((card) => card.signalGrade === 'S').length,
+        aGradeCards: response.cards.filter((card) => card.signalGrade === 'A').length,
+        // Watch list for the room brief: names only, never a plan or authority.
+        aGradeWatch: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA' ? [] : response.cards
+          .filter((card) => card.signalGrade === 'A' && typeof card.symbol === 'string')
+          .slice(0, 5)
+          .map((card) => ({
+            symbol: card.symbol.slice(0, 30),
+            name: typeof card.name === 'string' ? card.name.slice(0, 40) : null,
+            direction: card.direction ?? null,
+          })),
         retainedFromBatch: adapted.length,
         status,
         outcome: response.outcome ?? null,
