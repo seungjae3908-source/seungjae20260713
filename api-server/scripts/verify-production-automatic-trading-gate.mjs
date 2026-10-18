@@ -36,6 +36,7 @@ const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.
 const tradeTypes = read('api-server/src/services/trade-automation.types.ts');
 const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts');
 const benchmarkRegime = read('api-server/src/services/crypto-benchmark-regime.service.ts');
+const spotLiveCapability = read('api-server/src/services/spot-live-limited-capability.service.ts');
 const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
 const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
@@ -128,6 +129,11 @@ requireText(benchmarkRegime, 'if (riskReducing) return false;', 'AUTO_GATE_BENCH
 requireText(benchmarkRegime, 'value = null;', 'AUTO_GATE_BENCHMARK_DRAWDOWN_FAIL_OPEN_MISSING');
 requireText(paperWorker, 'withBenchmarkDrawdown(buildPlanInput(', 'AUTO_GATE_BENCHMARK_DRAWDOWN_LIVE_WIRING_MISSING');
 requireText(tradeIntegrationTest, 'BTC benchmark drawdown blocks only new crypto long/buy entries', 'AUTO_GATE_BENCHMARK_DRAWDOWN_REGRESSION_MISSING');
+// Owner-approved stock routing: KR and US stocks each route through the selected broker (Toss or Kiwoom).
+requireText(spotLiveCapability, "toss: new Set(['KR_STOCK', 'US_STOCK'])", 'AUTO_GATE_TOSS_US_STOCK_CAPABILITY_MISSING');
+requireText(tradeRisk, "us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const", 'AUTO_GATE_US_STOCK_BROKER_SELECTION_MISSING');
+requireText(paperWorker, "if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';", 'AUTO_GATE_US_STOCK_WORKER_ROUTING_MISSING');
+requireText(tradeIntegrationTest, "[{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true]", 'AUTO_GATE_TOSS_US_REGRESSION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');

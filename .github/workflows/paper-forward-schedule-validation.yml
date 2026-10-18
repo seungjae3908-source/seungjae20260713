@@ -621,6 +621,9 @@ jobs:
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
+            # Paths registered in the exact AUTO live safety scope get the full
+            # Trading guard review instead of the frozen historical market-scope blobs.
+            printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null && continue
             printf '%s\n' "${market_scope_ui[@]}" | grep -Fx "$path" >/dev/null && market_scope_requested=true
           done
           if [[ "$market_scope_requested" == true ]]; then
