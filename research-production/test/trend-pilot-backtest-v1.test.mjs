@@ -74,3 +74,10 @@ test('KRW summary counts days over the daily loss limit and streaks', () => {
   assert.equal(s.maxDrawdownKrw, 35_000);
   assert.match(formatTrendPilotReportKoV1({ status: 'WAITING_FOR_DATA', notionalKrw: 1_000_000 }), /데이터 대기/);
 });
+
+test('full-size data (two years of hourly candles for several symbols) does not overflow the stack', async () => {
+  const { evaluateTrendPilotV1 } = await import('../src/trend-pilot-backtest-v1.mjs');
+  const datasets = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].map((symbol, k) => ({ symbol, candles: hourly(19_680, () => 0, k + 2), fundingRates: [] }));
+  const result = evaluateTrendPilotV1({ datasets });
+  assert.equal(result.length, 3);
+});
