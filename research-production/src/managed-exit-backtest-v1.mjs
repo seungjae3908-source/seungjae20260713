@@ -127,6 +127,7 @@ function fundingBetween(rows, entryTime, exitTime) {
 /**
  * Exit plan, all distances in R (R = initial stop distance):
  *   stopAtrMultiple       initial stop distance in ATR
+ *   maxStopFraction       optional cap of the stop distance as a price fraction (e.g. 0.025)
  *   targetR               final target for whatever is still open (null = none)
  *   partials              [{ atR, fraction }] fraction of the total opened quantity
  *   breakevenAfterR       stop → entry once the best price reached this R (null = never)
@@ -168,6 +169,7 @@ export function normalizeManagedPlanV1(plan = {}) {
     throw contractError('INVALID_TIME_STOP', 'timeStop needs integer bars >= 1 and a finite minFavorableR');
   }
   const maxHoldBars = exit.maxHoldBars ?? null;
+  const maxStopFraction = exit.maxStopFraction == null ? null : fraction(exit.maxStopFraction, 'exit.maxStopFraction');
   if (maxHoldBars !== null && (!Number.isSafeInteger(maxHoldBars) || maxHoldBars < 1)) {
     throw contractError('INVALID_TIME_BARS', 'maxHoldBars must be an integer >= 1');
   }
@@ -177,7 +179,7 @@ export function normalizeManagedPlanV1(plan = {}) {
     fraction: fraction(row.fraction, `entry.adds[${index}].fraction`),
   })).sort((a, b) => a.atR - b.atR);
   return Object.freeze({
-    exit: Object.freeze({ stopAtrMultiple, targetR, partials: Object.freeze(partials), breakevenAfterR, trailing, timeStop, maxHoldBars }),
+    exit: Object.freeze({ stopAtrMultiple, maxStopFraction, targetR, partials: Object.freeze(partials), breakevenAfterR, trailing, timeStop, maxHoldBars }),
     entry: Object.freeze({ initialFraction, adds: Object.freeze(adds), moveStopToEntryOnAdd: entry.moveStopToEntryOnAdd !== false }),
   });
 }
@@ -471,7 +473,9 @@ export function runManagedExitBacktestV1({
     const signalContext = signalEvaluator({ market, side, symbol, timeframe, candles: inPeriod, atr, index, atrNow });
     if (!signalContext) continue;
     const entryPrice = entryCandle.open;
-    const riskUnit = atrNow * normalizedPlan.exit.stopAtrMultiple;
+    const riskUnit = normalizedPlan.exit.maxStopFraction === null
+      ? atrNow * normalizedPlan.exit.stopAtrMultiple
+      : Math.min(atrNow * normalizedPlan.exit.stopAtrMultiple, entryPrice * normalizedPlan.exit.maxStopFraction);
     const stopPrice = entryPrice - (dir * riskUnit);
     if (!(stopPrice > 0)) continue;
     if (normalizedPlan.exit.targetR !== null && !(entryPrice + (dir * riskUnit * normalizedPlan.exit.targetR) > 0)) continue;

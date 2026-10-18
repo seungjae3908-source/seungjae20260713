@@ -581,3 +581,358 @@ export function answerCanonicalResearchQuestion(
     ? `현재 가장 먼저 확인할 근거는 ${blocker}입니다. 이 응답은 AI 추정이 아니라 read-only canonical 상태 조회입니다.`
     : '현재 질문과 직접 연결되는 canonical evidence가 없습니다. 없는 결과를 생성하지 않습니다.';
 }
+
+const RESEARCH_BLOCKER_COPY: Readonly<Record<string, string>> = Object.freeze({
+  EXTERNAL_RESEARCH_NOT_EVIDENCED: '외부 연구 자료가 아직 연결되지 않았습니다.',
+  EXTERNAL_RESEARCH_SOURCE_UNLINKED: '일부 연구 출처가 아직 연결되지 않았습니다.',
+  SHADOW_RUNTIME_PROOF_MISSING: '관찰 검증이 서버에서 실행된 증거가 없습니다.',
+  PAPER_RUNTIME_INACTIVE: '모의매매 서버 실행이 꺼져 있습니다.',
+  PAPER_RUNTIME_PROOF_MISSING: '모의매매 서버 실행 증거가 없습니다.',
+  PAPER_SCHEDULE_STATE_MISSING: '모의매매 실행 일정 상태가 수집되지 않았습니다.',
+  SETTLEMENT_NOT_EVIDENCED: '정산된 모의 거래 기록이 아직 없습니다.',
+  SETTLEMENT_SAMPLE_EMPTY: '정산된 거래 표본이 0건입니다.',
+  PROFITABILITY_NOT_PROVEN: '비용을 뺀 수익성이 아직 증명되지 않았습니다.',
+  FULL_COST_EVIDENCE_NOT_PUBLISHED: '수수료·세금·슬리피지 등 전체 비용 근거가 아직 없습니다.',
+  STRATEGY_HEALTH_EVIDENCE_MISSING: '전략 건강 점검 근거가 수집되지 않았습니다.',
+  PROMOTION_API_UNAVAILABLE: '전략 승격 기록을 불러오지 못했습니다.',
+  PROMOTION_CANDIDATE_EMPTY: '승격 후보가 아직 없습니다.',
+  CHAMPION_EVIDENCE_NOT_PUBLISHED: '대표 전략 근거가 아직 게시되지 않았습니다.',
+  CURRENT_VALIDATED_CHAMPION_NONE: '현재 검증을 통과한 대표 전략이 없습니다.',
+  PREDICTION_COLLAPSE: '예측이 한쪽으로 쏠려 있습니다.',
+  MISSING_CANONICAL_SOURCE_SHA: '근거의 코드 버전(SHA)이 확인되지 않습니다.',
+  RESEARCH_CANDIDATE_EVIDENCE_INVALID: '연구 후보 근거가 형식 검증을 통과하지 못했습니다.',
+  RESEARCH_BRIDGE_NOT_REVIEWABLE: '연구 후보가 승격 검토 단계로 넘어오지 못했습니다.',
+  PRE_HOLDOUT_GATE_FAILED: '최종 검증 전 사전 관문을 통과하지 못했습니다.',
+  MISSING_PRODUCER_OUTBOX: '백테스트 결과를 내보내는 연결이 아직 없습니다.',
+});
+
+/** Pure: Korean one-line reason for a machine blocker code; never throws. */
+export function explainResearchBlocker(code: string | null | undefined): string {
+  if (typeof code !== 'string' || code.trim().length === 0) return '명시된 차단 사유가 없습니다.';
+  const normalized = code.trim();
+  const known = RESEARCH_BLOCKER_COPY[normalized];
+  if (known) return known;
+  if (normalized.startsWith('SOURCE_')) return '연구 출처가 연결되지 않았습니다.';
+  if (/_INVALID$/u.test(normalized)) return '근거가 형식 검증을 통과하지 못했습니다.';
+  if (/_(MISSING|NOT_EVIDENCED|NOT_PUBLISHED)$/u.test(normalized)) return '필요한 근거가 아직 수집되지 않았습니다.';
+  if (/_(UNAVAILABLE|INACTIVE)$/u.test(normalized)) return '해당 기능이 아직 켜지지 않았거나 응답이 없습니다.';
+  return '검증 자료 보완이 필요합니다.';
+}
+
+export type ResearchFunnelStageState = 'passed' | 'running' | 'blocked' | 'unknown';
+
+export interface ResearchFunnelStage {
+  key: ResearchPipelineKey;
+  label: string;
+  state: ResearchFunnelStageState;
+  reason: string | null;
+}
+
+export interface ResearchFunnelSummary {
+  stages: ResearchFunnelStage[];
+  total: number;
+  passedCount: number;
+  firstUnpassed: ResearchFunnelStage | null;
+  headline: string;
+}
+
+const FUNNEL_RUNNING_STATUSES: ReadonlySet<ResearchProductStatus> = new Set(['accumulating', 'running', 'validating', 'waiting']);
+const FUNNEL_BLOCKED_STATUSES: ReadonlySet<ResearchProductStatus> = new Set(['error', 'attention', 'insufficient', 'stale']);
+
+/** Pure: classify one pipeline card for the "where is it stuck" summary. */
+export function classifyFunnelStage(card: ResearchPipelineCard): ResearchFunnelStageState {
+  if ((card.status === 'verified' || card.status === 'normal') && !card.blocker) return 'passed';
+  if (card.blocker || FUNNEL_BLOCKED_STATUSES.has(card.status)) return 'blocked';
+  if (FUNNEL_RUNNING_STATUSES.has(card.status)) return 'running';
+  return 'unknown';
+}
+
+/** Pure: stage-by-stage progress and the first stage that has not passed. */
+export function summarizeResearchFunnel(cards: readonly ResearchPipelineCard[]): ResearchFunnelSummary {
+  const stages: ResearchFunnelStage[] = cards.map((card) => {
+    const state = classifyFunnelStage(card);
+    return {
+      key: card.key,
+      label: card.label,
+      state,
+      reason: state === 'passed' ? null : explainResearchBlocker(card.blocker),
+    };
+  });
+  const passedCount = stages.filter((stage) => stage.state === 'passed').length;
+  const firstUnpassed = stages.find((stage) => stage.state !== 'passed') ?? null;
+  const total = stages.length;
+  let headline: string;
+  if (total === 0) headline = '연구 단계 정보를 불러오지 못했습니다.';
+  else if (!firstUnpassed) headline = `${total}단계를 모두 통과했습니다.`;
+  else headline = `${total}단계 중 ${passedCount}단계 통과 · "${firstUnpassed.label}" 단계에서 멈춰 있습니다.`;
+  return { stages, total, passedCount, firstUnpassed, headline };
+}
+
+export interface PromotionStageTally {
+  stage: string;
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  waiting: number;
+}
+
+export interface PromotionReasonTally {
+  code: string;
+  count: number;
+  explanation: string;
+}
+
+export interface PromotionDropSummary {
+  strategyCount: number;
+  stages: PromotionStageTally[];
+  topReasons: PromotionReasonTally[];
+}
+
+function tallyBucket(status: string): 'passed' | 'failed' | 'blocked' | 'waiting' {
+  if (status === 'PASS') return 'passed';
+  if (status === 'FAIL' || status === 'INVALIDATED') return 'failed';
+  if (status === 'BLOCKED' || status === 'INSUFFICIENT_SAMPLE' || status === 'STALE') return 'blocked';
+  return 'waiting';
+}
+
+/** Pure: how many strategies passed, failed, are blocked or wait at each stage, and why. */
+export function summarizePromotionDrops(
+  items: readonly StrategyPromotionItem[],
+  maxReasons = 5,
+): PromotionDropSummary {
+  const stageOrder: string[] = [];
+  const stages = new Map<string, PromotionStageTally>();
+  const reasons = new Map<string, number>();
+  for (const item of items) {
+    for (const stage of item.stages ?? []) {
+      let tally = stages.get(stage.stage);
+      if (!tally) {
+        tally = { stage: stage.stage, total: 0, passed: 0, failed: 0, blocked: 0, waiting: 0 };
+        stages.set(stage.stage, tally);
+        stageOrder.push(stage.stage);
+      }
+      tally.total += 1;
+      tally[tallyBucket(stage.status)] += 1;
+      if (stage.status !== 'PASS') {
+        const codes = [...(stage.failureReasons ?? []), ...(stage.failureReason ? [stage.failureReason] : [])];
+        for (const code of new Set(codes)) reasons.set(code, (reasons.get(code) ?? 0) + 1);
+      }
+    }
+    for (const code of new Set(item.blockers ?? [])) reasons.set(code, (reasons.get(code) ?? 0) + 1);
+  }
+  const topReasons = [...reasons.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, Math.max(0, maxReasons))
+    .map(([code, count]) => ({ code, count, explanation: explainResearchBlocker(code) }));
+  return {
+    strategyCount: items.length,
+    stages: stageOrder.map((name) => stages.get(name)!),
+    topReasons,
+  };
+}
+
+export type PromotionChecklistState = 'met' | 'unmet' | 'unmeasured';
+
+export interface PromotionChecklistItem {
+  key: string;
+  label: string;
+  state: PromotionChecklistState;
+  detail: string;
+}
+
+export const PROMOTION_MIN_TRADES = 30;
+
+function stagePassCount(item: StrategyPromotionItem): number {
+  return (item.stages ?? []).filter((stage) => stage.status === 'PASS').length;
+}
+
+/** Pure: the strategy furthest along (most passed stages), or null when none exist. */
+export function pickLeadingPromotionItem(items: readonly StrategyPromotionItem[]): StrategyPromotionItem | null {
+  let best: StrategyPromotionItem | null = null;
+  for (const item of items) {
+    if (best === null || stagePassCount(item) > stagePassCount(best)) best = item;
+  }
+  return best;
+}
+
+/** Pure: promotion conditions for one strategy, from fields the promotion API already returns. */
+export function buildPromotionChecklist(item: StrategyPromotionItem | null): PromotionChecklistItem[] {
+  if (!item) return [];
+  const stages = item.stages ?? [];
+  const passed = stages.filter((stage) => stage.status === 'PASS').length;
+  const trades = stages.reduce<number | null>((max, stage) => {
+    const value = typeof stage.tradeCount === 'number' && Number.isFinite(stage.tradeCount) ? stage.tradeCount : null;
+    if (value === null) return max;
+    return max === null ? value : Math.max(max, value);
+  }, null);
+  const drift = item.drift?.classification ?? null;
+  return [
+    {
+      key: 'stages',
+      label: '모든 검증 단계 통과',
+      state: stages.length === 0 ? 'unmeasured' : passed === stages.length ? 'met' : 'unmet',
+      detail: stages.length === 0 ? '단계 기록 없음' : `${stages.length}단계 중 ${passed}단계 통과`,
+    },
+    {
+      key: 'trades',
+      label: `정산된 거래 ${PROMOTION_MIN_TRADES}건 이상`,
+      state: trades === null ? 'unmeasured' : trades >= PROMOTION_MIN_TRADES ? 'met' : 'unmet',
+      detail: trades === null ? '거래 건수 미측정' : `가장 많은 단계의 거래 ${trades}건`,
+    },
+    {
+      key: 'drift',
+      label: '성적 이탈(드리프트) 없음',
+      state: drift === null ? 'unmeasured' : drift === 'HEALTHY' || drift === 'WATCH' ? 'met' : 'unmet',
+      detail: drift === null ? (item.drift?.reason ?? '표본 부족') : `분류 ${drift}`,
+    },
+    {
+      key: 'kill',
+      label: '긴급중단 상태 아님',
+      state: item.killState === 'NONE' ? 'met' : 'unmet',
+      detail: item.killState === 'NONE' ? '없음' : item.killState,
+    },
+    {
+      key: 'eligible',
+      label: '승격 검토 대상으로 표시됨',
+      state: item.promotionEligible ? 'met' : 'unmet',
+      detail: item.promotionEligible ? '검토 가능' : '아직 검토 대상 아님',
+    },
+    {
+      key: 'authority',
+      label: '실행 권한 없음 유지',
+      state: item.executionAuthority === 'NONE' && item.liveTradingAuthority === false ? 'met' : 'unmet',
+      detail: '승격 후보는 검토 대상일 뿐 실전매매 승인이 아닙니다',
+    },
+  ];
+}
+
+export interface PaperTradeResult {
+  symbol: string;
+  /** Net return of one closed paper trade after all costs, in percent (e.g. 0.42 = +0.42%). */
+  netReturnPct: number;
+}
+
+export interface PaperScorecard {
+  trades: number;
+  distinctSymbols: number;
+  winRate: number | null;
+  meanPct: number | null;
+  /** Standard error of the mean, percent. Needs at least 2 trades. */
+  standardErrorPct: number | null;
+  /** 95% lower bound: mean - 1.96 x standard error. */
+  lowerBound95Pct: number | null;
+  droppedInvalid: number;
+}
+
+export const PAPER_PROMOTION_MIN_SYMBOLS = 3;
+export const PAPER_PROMOTION_MIN_WIN_RATE = 0.6;
+
+/** Pure: paper-trading scorecard. Invalid rows are counted and ignored; never divides by zero. */
+export function buildPaperScorecard(trades: readonly PaperTradeResult[] | null | undefined): PaperScorecard {
+  const valid: PaperTradeResult[] = [];
+  let droppedInvalid = 0;
+  for (const trade of trades ?? []) {
+    if (trade && typeof trade.symbol === 'string' && trade.symbol.length > 0
+      && typeof trade.netReturnPct === 'number' && Number.isFinite(trade.netReturnPct)) {
+      valid.push(trade);
+    } else {
+      droppedInvalid += 1;
+    }
+  }
+  const n = valid.length;
+  if (n === 0) {
+    return { trades: 0, distinctSymbols: 0, winRate: null, meanPct: null, standardErrorPct: null, lowerBound95Pct: null, droppedInvalid };
+  }
+  const mean = valid.reduce((sum, t) => sum + t.netReturnPct, 0) / n;
+  const wins = valid.filter((t) => t.netReturnPct > 0).length;
+  let standardError: number | null = null;
+  if (n >= 2) {
+    const variance = valid.reduce((sum, t) => sum + (t.netReturnPct - mean) ** 2, 0) / (n - 1);
+    standardError = Math.sqrt(variance) / Math.sqrt(n);
+  }
+  return {
+    trades: n,
+    distinctSymbols: new Set(valid.map((t) => t.symbol)).size,
+    winRate: wins / n,
+    meanPct: mean,
+    standardErrorPct: standardError,
+    lowerBound95Pct: standardError === null ? null : mean - 1.96 * standardError,
+    droppedInvalid,
+  };
+}
+
+/** Pure: the owner-fixed paper-to-live review conditions. Review eligibility only, never an order permission. */
+export function evaluatePaperPromotion(card: PaperScorecard): PromotionChecklistItem[] {
+  const measured = card.trades > 0;
+  const state = (ok: boolean | null): PromotionChecklistState => (ok === null ? 'unmeasured' : ok ? 'met' : 'unmet');
+  return [
+    {
+      key: 'paper-trades',
+      label: `정산된 모의 거래 ${PROMOTION_MIN_TRADES}건 이상`,
+      state: state(measured ? card.trades >= PROMOTION_MIN_TRADES : null),
+      detail: measured ? `${card.trades}건` : '모의 거래 없음',
+    },
+    {
+      key: 'paper-lower-bound',
+      label: '거래당 평균 수익의 95% 하한이 0보다 큼',
+      state: state(card.lowerBound95Pct === null ? null : card.lowerBound95Pct > 0),
+      detail: card.lowerBound95Pct === null ? '표본 2건 미만' : `하한 ${card.lowerBound95Pct.toFixed(3)}% (평균 ${(card.meanPct ?? 0).toFixed(3)}%)`,
+    },
+    {
+      key: 'paper-symbols',
+      label: `서로 다른 ${PAPER_PROMOTION_MIN_SYMBOLS}종목 이상에서 거래`,
+      state: state(measured ? card.distinctSymbols >= PAPER_PROMOTION_MIN_SYMBOLS : null),
+      detail: measured ? `${card.distinctSymbols}종목` : '모의 거래 없음',
+    },
+    {
+      key: 'paper-win-rate',
+      label: `플러스 거래 비율 ${Math.round(PAPER_PROMOTION_MIN_WIN_RATE * 100)}% 이상`,
+      state: state(card.winRate === null ? null : card.winRate >= PAPER_PROMOTION_MIN_WIN_RATE),
+      detail: card.winRate === null ? '모의 거래 없음' : `${(card.winRate * 100).toFixed(1)}%`,
+    },
+  ];
+}
+
+export type SourceReadinessState = 'ready' | 'missing' | 'unknown';
+
+export interface SourceReadinessInput {
+  market: 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' | 'KR_STOCK' | 'US_STOCK';
+  rightsAttestationPinned: boolean | null;
+  archiveSessionsPresent: boolean | null;
+  /** Stocks only: owner-supplied holiday list. Pass null for crypto. */
+  holidayListPresent: boolean | null;
+}
+
+export interface SourceReadinessRow {
+  market: SourceReadinessInput['market'];
+  label: string;
+  state: SourceReadinessState;
+  missing: string[];
+}
+
+const MARKET_LABEL: Readonly<Record<SourceReadinessInput['market'], string>> = Object.freeze({
+  CRYPTO_SPOT: '코인현물(업비트)',
+  CRYPTO_FUTURES: '코인선물(비트겟)',
+  KR_STOCK: '국내주식(키움·토스)',
+  US_STOCK: '미국주식(키움·토스)',
+});
+
+/** Pure: what each market still lacks before its TRAIN source verifier can pass. Unknown stays unknown. */
+export function buildSourceReadiness(inputs: readonly SourceReadinessInput[]): SourceReadinessRow[] {
+  return inputs.map((input) => {
+    const checks: Array<[string, boolean | null]> = [
+      ['권리 확인 서명(해시 고정)', input.rightsAttestationPinned],
+      ['1분 아카이브 세션', input.archiveSessionsPresent],
+    ];
+    if (input.market === 'KR_STOCK' || input.market === 'US_STOCK') checks.push(['휴장일 목록', input.holidayListPresent]);
+    const missing = checks.filter(([, ok]) => ok === false).map(([name]) => name);
+    const unknown = checks.some(([, ok]) => ok === null);
+    return {
+      market: input.market,
+      label: MARKET_LABEL[input.market],
+      state: missing.length > 0 ? 'missing' : unknown ? 'unknown' : 'ready',
+      missing,
+    };
+  });
+}
