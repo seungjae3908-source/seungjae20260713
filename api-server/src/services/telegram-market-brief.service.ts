@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger';
 import { MarketInformationService } from './market-information.service';
 import type {
   MarketInformationResponse,
@@ -163,6 +164,16 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
     const warnings = rooms.flatMap((item) => item.error ? [`${item.room}:${item.error}`] : []);
     if (!krThemeResult) warnings.push('KR_THEME_UNAVAILABLE');
     if (!usThemeResult) warnings.push('US_THEME_UNAVAILABLE');
+    // One line per brief naming each degraded section and its provider error
+    // code, so a "확인 지연" label in a room can be traced afterwards.
+    const degraded = rooms.flatMap((item) => item.response
+      ? Object.entries(item.response.sections)
+        .filter(([, value]) => !['ready', 'partial', 'empty', 'unsupported'].includes(value.status))
+        .map(([key, value]) => `${item.room}:${key}:${value.status}:${value.meta.errorCode ?? '-'}`)
+      : [`${item.room}:ROOM:${item.error ?? 'UNAVAILABLE'}`]);
+    if (degraded.length || warnings.length) {
+      logger.info({ degraded, warnings }, 'telegram market brief degraded sections');
+    }
     return {
       generatedAt: new Date().toISOString(),
       rooms,
