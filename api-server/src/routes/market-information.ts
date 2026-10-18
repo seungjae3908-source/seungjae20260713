@@ -19,6 +19,8 @@ export interface MarketInformationRoomReader {
 
 export interface MarketInformationRouterOptions {
   stockFirstPaintTimeoutMs?: number;
+  /** First-paint budget once a last confirmed snapshot can stand in for a slow provider. */
+  stockSnapshotFirstPaintTimeoutMs?: number;
   stockWarmupDeadlineMs?: number;
   /** Load both stock rooms once at startup; omitted means no provider calls. */
   warmStockRoomsOnStart?: boolean;
@@ -32,6 +34,12 @@ const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_500;
 // A last confirmed room snapshot is served (clearly marked stale) when a later
 // first paint times out, instead of blanking every card.
 const STOCK_LAST_GOOD_MAX_AGE_MS = 30 * 60_000;
+// Once a snapshot exists the full 4.5s wait only buys fresher data at the cost
+// of the page sitting on its loading card: production QA saw /stocks/us still
+// busy at 4.8s against a 5s ready budget while an overseas refresh was pending.
+// Give a warm cache time to answer, then serve the snapshot and let the
+// detached warmup refresh it for the next visit.
+const DEFAULT_STOCK_SNAPSHOT_FIRST_PAINT_TIMEOUT_MS = 1_500;
 const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
 // A cold US room needs most of the 4.5s first-paint budget on its own, so the
@@ -65,6 +73,18 @@ function resolveStockFirstPaintTimeout(options: MarketInformationRouterOptions):
   if (configured == null) return DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS;
   if (!Number.isInteger(configured) || configured < 10 || configured > 30_000) {
     throw new Error('stockFirstPaintTimeoutMs must be an integer between 10 and 30000');
+  }
+  return configured;
+}
+
+function resolveStockSnapshotFirstPaintTimeout(
+  options: MarketInformationRouterOptions,
+  firstPaintTimeoutMs: number,
+): number {
+  const configured = options.stockSnapshotFirstPaintTimeoutMs
+    ?? Math.min(DEFAULT_STOCK_SNAPSHOT_FIRST_PAINT_TIMEOUT_MS, firstPaintTimeoutMs);
+  if (!Number.isInteger(configured) || configured < 10 || configured > firstPaintTimeoutMs) {
+    throw new Error('stockSnapshotFirstPaintTimeoutMs must be an integer between 10 and stockFirstPaintTimeoutMs');
   }
   return configured;
 }
@@ -181,10 +201,16 @@ export function createMarketInformationRouter(
 ): IRouter {
   const router: IRouter = Router();
   const stockFirstPaintTimeoutMs = resolveStockFirstPaintTimeout(options);
+  const stockSnapshotFirstPaintTimeoutMs = resolveStockSnapshotFirstPaintTimeout(options, stockFirstPaintTimeoutMs);
   const stockWarmupDeadlineMs = resolveStockWarmupDeadline(options, stockFirstPaintTimeoutMs);
   const lastGoodByRoom = new Map<StockRoom, LastGoodRoom>();
   const rememberLastGood = (room: StockRoom, result: MarketInformationResponse) => {
     if (isUsableRoomResult(result)) lastGoodByRoom.set(room, { result, storedAt: Date.now() });
+  };
+  const usableLastGood = (room: StockRoom): LastGoodRoom | undefined => {
+    const lastGood = lastGoodByRoom.get(room);
+    if (!lastGood || Date.now() - lastGood.storedAt > STOCK_LAST_GOOD_MAX_AGE_MS) return undefined;
+    return lastGood;
   };
   if (options.warmStockRoomsOnStart) {
     setTimeout(() => {
@@ -230,6 +256,11 @@ export function createMarketInformationRouter(
         // Detached warmups that finish after the first paint still refresh the snapshot.
         if (isStockRoom(room)) rememberLastGood(room, value);
       }, clearWarmupDeadline);
+      // With a snapshot in hand the short budget applies; the warmup keeps its
+      // full deadline either way so the snapshot is refreshed for the next visit.
+      const firstPaintBudgetMs = isStockRoom(room) && usableLastGood(room)
+        ? stockSnapshotFirstPaintTimeoutMs
+        : stockFirstPaintTimeoutMs;
       const result = isStockRoom(room)
         ? await Promise.race([
           roomPromise,
@@ -238,9 +269,9 @@ export function createMarketInformationRouter(
               detachedWarmup = true;
               warmupDeadlineTimer = setTimeout(() => {
                 abortWithReason(new MarketInformationWarmupDeadlineError(stockWarmupDeadlineMs));
-              }, stockWarmupDeadlineMs - stockFirstPaintTimeoutMs);
-              reject(new MarketInformationFirstPaintTimeoutError(stockFirstPaintTimeoutMs));
-            }, stockFirstPaintTimeoutMs);
+              }, stockWarmupDeadlineMs - firstPaintBudgetMs);
+              reject(new MarketInformationFirstPaintTimeoutError(firstPaintBudgetMs));
+            }, firstPaintBudgetMs);
           }),
         ])
         : await roomPromise;
@@ -250,8 +281,8 @@ export function createMarketInformationRouter(
       const timedOut = isStockRoom(room) && error instanceof MarketInformationFirstPaintTimeoutError;
       if (timedOut) {
         res.setHeader('Cache-Control', 'private, no-cache, max-age=0');
-        const lastGood = lastGoodByRoom.get(room);
-        if (lastGood && Date.now() - lastGood.storedAt <= STOCK_LAST_GOOD_MAX_AGE_MS) {
+        const lastGood = usableLastGood(room);
+        if (lastGood) {
           return res.status(200).json(stockFirstPaintStaleFallback(lastGood.result, lastGood.storedAt));
         }
         return res.status(200).json(stockFirstPaintFallback(room));
