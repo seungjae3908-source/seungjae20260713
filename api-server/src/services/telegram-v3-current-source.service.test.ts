@@ -738,3 +738,20 @@ test('explicit Telegram 429 rejection releases only the failed reservation and p
    await rm(dir,{recursive:true,force:true});
  }
 });
+test('one failed scanner lane keeps the snapshot valid instead of rejecting all 12 lanes',async()=>{
+ const x=fixture();
+ x.coverage[0]={laneId:x.coverage[0].laneId,sourceCycleId:EPOCH,rosterId:null,
+   market:x.coverage[0].market,strategy:x.coverage[0].strategy,timeframe:x.coverage[0].timeframe,
+   cursorBefore:0,cursorAfter:0,totalUniverse:null,scannedCards:0,retainedFromBatch:0,
+   status:'SEARCH_FAILURE',leverage:{evaluated:0,available:0,blocked:0,unavailable:0},
+   lastGoodPreserved:true,error:'TIMEOUT'} as any;
+ x.events=[];
+ assert.equal(validTelegramV3CurrentSource(x,NOW),true);
+ // Producer contract: every coverage row the scanner cycle writes, including
+ // the failure branch, carries the cycle id the consumer requires.
+ const source=await readFile(path.resolve(process.cwd(),
+   process.cwd().endsWith('api-server')?'..':'.','signal-intelligence-v3/scripts/run-public-scanner-cycle.ts'),'utf8');
+ const pushes=source.split('coverage.push({').slice(1).map(block=>block.split('});')[0]);
+ assert.ok(pushes.length>=2);
+ for(const block of pushes)assert.match(block,/\bsourceCycleId\b/);
+});
