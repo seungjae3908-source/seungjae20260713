@@ -60,11 +60,23 @@ test('R summary: mean, streak, drawdown, confidence bound', () => {
 });
 
 test('winner rule needs validation and unseen symbols both positive', () => {
-  const row = (variantId, v, u, n = 30) => ({ variantId, validation: { trades: n, meanR: v, ciLow95: v - 0.1 }, unseen: { trades: n, meanR: u } });
+  const row = (variantId, v, u, n = 30, tStat = 4) => ({ variantId, validation: { trades: n, meanR: v, ciLow95: v - 0.1, tStat }, unseen: { trades: n, meanR: u } });
   const picked = pickExitWinnerV1([row('SINGLE+FIXED_FULL', 0.05, 0.02), row('SINGLE+TRAIL_FULL', 0.3, -0.1), row('PYRAMID+TRAIL_FULL', 0.2, 0.1)]);
   assert.equal(picked.variantId, 'PYRAMID+TRAIL_FULL');
   assert.equal(picked.upliftVsBaselineR, 0.15);
   assert.equal(pickExitWinnerV1([row('SINGLE+FIXED_FULL', 0.5, 0.5, 5)]).status, 'NO_WINNER');
+});
+
+test('winner is rejected when the best variant is not significant after multiple-comparison correction', () => {
+  const row = (variantId, tStat) => ({ variantId, validation: { trades: 30, meanR: 0.2, ciLow95: 0.05, tStat }, unseen: { trades: 30, meanR: 0.1 } });
+  const variants = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((id) => row(id, 2.2));
+  const rejected = pickExitWinnerV1(variants);
+  assert.equal(rejected.status, 'NO_WINNER');
+  assert.equal(rejected.reason, 'NOT_SIGNIFICANT_AFTER_MULTIPLE_COMPARISON');
+  assert.equal(rejected.comparisons, 8);
+  assert.ok(rejected.criticalT > 2.4);
+  assert.equal(pickExitWinnerV1([...variants.slice(1), row('A', 3)]).status, 'WINNER');
+  assert.equal(pickExitWinnerV1([row('A', null)]).status, 'NO_WINNER');
 });
 
 test('runner reads the cache, never the holdout, and caches lane results', async () => {
