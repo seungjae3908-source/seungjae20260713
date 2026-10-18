@@ -8,6 +8,7 @@ import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.
 import { runExploratoryPaperLedgerV1 } from '../src/exploratory-paper-ledger-v1.mjs';
 import { runGridDcaResearchV1 } from '../src/grid-dca-research-v1.mjs';
 import { runOpsWatchdogV1 } from '../src/ops-watchdog-v1.mjs';
+import { runResearchResultsDigestV1 } from '../src/research-results-digest-v1.mjs';
 import { runPaperDiscoveryV1 } from '../src/paper-discovery-v1.mjs';
 import {
   combinationUniverseFromSnapshotV2,
@@ -175,6 +176,13 @@ let watchdog = null;
 let watchdogError = null;
 try { watchdog = await runOpsWatchdogV1({ stateRoot, invoker: 'coordinator' }); } catch (error) { watchdogError = safeError(error); }
 
+// Korean results digest on the ops Telegram channel (daily + new milestones).
+let digest = null;
+let digestError = null;
+if (enabled('RESEARCH_RESULTS_DIGEST_ENABLED')) {
+  try { digest = await runResearchResultsDigestV1({ stateRoot }); } catch (error) { digestError = safeError(error); }
+}
+
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
@@ -216,6 +224,7 @@ const result = Object.freeze({
   paperDiscovery: papers == null ? { error: papersError } : { status: papers.status, added: papers.added ?? 0, pendingApproval: papers.pendingApproval ?? null },
   gridDca: gridDca == null ? { error: gridDcaError } : { status: gridDca.status ?? 'RAN' },
   opsWatchdog: watchdog == null ? { error: watchdogError } : { healthy: watchdog.healthy, problems: watchdog.problems, alertChannel: watchdog.alertChannel, delivery: watchdog.delivery },
+  resultsDigest: digest == null ? { error: digestError, enabled: enabled('RESEARCH_RESULTS_DIGEST_ENABLED') } : { kind: digest.kind, newMilestones: digest.newMilestones, delivery: digest.delivery },
   liveTrading: false,
   privateTradingApi: false,
   realOrder: false,
