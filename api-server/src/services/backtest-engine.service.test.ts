@@ -20,11 +20,13 @@ import {
   expectedMaxNoiseSharpe,
   fundingSettlementsHeld,
   inverseNormalCdf,
+  PORTFOLIO_BACKTEST_LIMITS,
   recordSelectionRun,
   resetSelectionRunsForTests,
   selectionBiasWarning,
   measureBacktestPerformance,
   runBacktest,
+  runPortfolioBacktest,
   validateBacktestRequest,
   type BacktestRequest,
 } from './backtest-engine.service';
@@ -449,6 +451,30 @@ test('selection runs count distinct settings, ignore the period, include nested 
   assert.equal(recordSelectionRun('m2', base), 1);
   assert.equal(recordSelectionRun('m1', { ...base, stopLossValue: 2 }, Date.now() + 25 * 3_600_000), 1);
   resetSelectionRunsForTests();
+});
+const relabel = (rows: NormalizedCandle[], symbol: string): NormalizedCandle[] => rows.map((row) => ({ ...row, symbol }));
+test('portfolio backtest splits capital equally, combines closed trades and bounds the marked drawdown', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const portfolio = runPortfolioBacktest(request({ side: 'long', endTime }), { BTCUSDT: rows, ETHUSDT: relabel(rows, 'ETHUSDT') });
+  assert.deepEqual(portfolio.symbols, ['BTCUSDT', 'ETHUSDT']);
+  assert.ok(portfolio.sleeves.every((sleeve) => sleeve.allocatedCapital === 5_000 && sleeve.result.initialCapital === 5_000));
+  const single = runBacktest(request({ side: 'long', endTime, initialCapital: 5_000 }), rows);
+  assert.equal(portfolio.totalTrades, single.totalTrades * 2);
+  assert.ok(Math.abs(portfolio.finalCapital - (10_000 + single.totalReturnPercent / 100 * 5_000 * 2)) < 1e-6);
+  assert.ok(portfolio.markedMaximumDrawdownUpperBound >= portfolio.maximumDrawdown - 1e-9);
+  assert.equal(portfolio.equityCurve.length, portfolio.totalTrades + 1);
+  assert.ok(portfolio.warnings.some((warning) => warning.includes('독립 운용')));
+});
+test('portfolio backtest rejects bad sizes, skips unusable symbols and fails when none remain', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp; const base = request({ side: 'long', endTime });
+  assert.throws(() => runPortfolioBacktest(base, { BTCUSDT: rows }), /종목 2~5개/u);
+  const many = Object.fromEntries(['AUSDT', 'BUSDT', 'CUSDT', 'DUSDT', 'EUSDT', 'FUSDT'].map((symbol) => [symbol, relabel(rows, symbol)]));
+  assert.equal(PORTFOLIO_BACKTEST_LIMITS.maximumSymbols, 5);
+  assert.throws(() => runPortfolioBacktest(base, many), /종목 2~5개/u);
+  const partial = runPortfolioBacktest(base, { BTCUSDT: rows, ETHUSDT: relabel(rows.slice(0, 10), 'ETHUSDT') });
+  assert.deepEqual(partial.symbols, ['BTCUSDT']);
+  assert.equal(partial.skipped[0].symbol, 'ETHUSDT');
+  assert.throws(() => runPortfolioBacktest(base, { BTCUSDT: rows.slice(0, 10), ETHUSDT: relabel(rows.slice(0, 10), 'ETHUSDT') }), /만족하지 못했습니다/u);
 });
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
