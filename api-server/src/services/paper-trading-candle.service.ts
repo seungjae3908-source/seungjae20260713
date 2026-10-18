@@ -51,7 +51,15 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   let lastOrder: PaperOrder | null = null;
   let lastPosition: PaperPosition | null = null;
 
-  for (const order of state.orders.filter((item) => item.status === 'pending' && item.symbol === candle.symbol)) {
+  // A candle that opened before the order (or position) existed must never fill
+  // or stop it: its high/low were already known when the order was placed.
+  const startedBeforeCandle = (iso: string) => {
+    const startedAt = Date.parse(iso);
+    return !Number.isFinite(startedAt) || startedAt <= candle.timestamp;
+  };
+
+  for (const order of state.orders.filter((item) => item.status === 'pending' && item.symbol === candle.symbol
+    && startedBeforeCandle(item.submittedAt))) {
     const trigger = pendingOrderTrigger(order, candle);
     if (!trigger) continue;
     try {
@@ -68,7 +76,8 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     }
   }
 
-  for (const position of state.positions.filter((item) => item.status !== 'closed' && item.symbol === candle.symbol)) {
+  for (const position of state.positions.filter((item) => item.status !== 'closed' && item.symbol === candle.symbol
+    && startedBeforeCandle(item.openedAt))) {
     position.currentPrice = candle.close;
     updateExcursions(position, candle.high, candle.low);
     if (openedPositionIds.has(position.id)) continue;
