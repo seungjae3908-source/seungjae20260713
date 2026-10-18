@@ -113,28 +113,11 @@ function Choice<T extends string>({
   );
 }
 
-function SectionHeader({ section }: { section: SettingsSection }) {
-  const Icon = section.icon;
-  return (
-    <div className="rounded-2xl border border-card-border bg-card/80 p-4">
-      <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-        <span aria-hidden className="h-11 w-11" />
-        <div className="min-w-0 text-center">
-          <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Icon className="h-5 w-5" aria-hidden="true" /></span>
-          <h2 className="mt-2 break-keep text-base font-bold sm:text-lg">{section.title}</h2>
-        </div>
-        <span aria-hidden className="h-11 w-11" />
-      </div>
-    </div>
-  );
-}
-
 function DetailPanel({ section, navigate }: { section: SettingsSection; navigate: (href: string) => void }) {
   const { settings, update, reset } = useSettings();
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      <SectionHeader section={section} />
 
       {section.id === 'account' ? (
         <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
@@ -220,7 +203,14 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
               className="w-full accent-primary"
             />
           </label>
-          <LinkButton label="AI 차트" href="/ai-chart" navigate={navigate} />
+          <div>
+            <div className="mb-2 text-center text-xs font-semibold text-muted-foreground">보호 워터마크</div>
+            <Choice<'on' | 'off'>
+              value={settings.privacyWatermark ? 'on' : 'off'}
+              options={[{ value: 'off', label: '끄기' }, { value: 'on', label: '켜기' }]}
+              onChange={(mode) => update({ privacyWatermark: mode === 'on' })}
+            />
+          </div>
         </div>
       ) : null}
 

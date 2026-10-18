@@ -861,7 +861,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <details
         className="rounded-2xl border border-card-border bg-card"
         data-testid="auto-trading-advanced-settings"
-        open
       >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
           <span>{marketMeta.label} · 자동매매 설정</span>
@@ -1012,13 +1011,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
               자동모의 보유종목 조회 대기 · 4시장 가상계좌 원장과 회원 조회 권한이 검증되면 자동으로 표시합니다.
             </p>
           ) : null}
-          <TradingHoldingsPanel market={marketMeta.selectionMarket}
+          {section === 'dashboard' ? <TradingHoldingsPanel market={marketMeta.selectionMarket}
             providers={(runtimeStatus?.connections ?? []).filter(row => row.accountMode === 'live' && row.configured
               && (market === 'domestic_stock' ? row.exchange === 'kiwoom' || row.exchange === 'toss' : row.exchange === selectedProvider))
               .map(row => row.exchange)}
             accountMode={mode === 'auto' ? 'live' : 'paper'} origin={paperOrigin}
             userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}
-            fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} />
+            fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} /> : null}
         </div>
       </main>
       {!embedded ? <BottomNav /> : null}
