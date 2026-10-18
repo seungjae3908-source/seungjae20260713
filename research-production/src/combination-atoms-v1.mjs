@@ -355,11 +355,15 @@ export function computeCombinationAtomsV1(candles, { timeframe = '1h' } = {}) {
       }
     }
     if (i >= 78) {
-      let peak = -Infinity; let trough = Infinity;
-      for (let j = i - 72; j < i; j += 1) { peak = Math.max(peak, candles[j].high); trough = Math.min(trough, candles[j].low); }
+      let peak = -Infinity; let trough = Infinity; let peakAt = -1; let troughAt = -1;
+      for (let j = i - 72; j < i; j += 1) {
+        if (candles[j].high > peak) { peak = candles[j].high; peakAt = j; }
+        if (candles[j].low < trough) { trough = candles[j].low; troughAt = j; }
+      }
       let low6 = Infinity;
       for (let j = i - 6; j < i; j += 1) low6 = Math.min(low6, candles[j].low);
-      set('P_POST_SURGE_BREAK_SHORT', i, trough > 0 && peak / trough >= 1.15 && close[i] < low6);
+      // A surge means the low came BEFORE the high; a high-then-low path is a decline, not a surge.
+      set('P_POST_SURGE_BREAK_SHORT', i, trough > 0 && troughAt < peakAt && peak / trough >= 1.15 && close[i] < low6);
     }
     if (ok(obvSma20[i])) { set('U_OBV_ABOVE_SMA20', i, obv[i] > obvSma20[i]); set('U_OBV_BELOW_SMA20', i, obv[i] < obvSma20[i]); }
 
