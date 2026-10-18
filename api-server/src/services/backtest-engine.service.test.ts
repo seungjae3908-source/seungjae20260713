@@ -16,6 +16,7 @@ import {
 import {
   BacktestValidationError,
   calculateStrategySignals,
+  KR_STOCK_SELL_TAX_RATE,
   measureBacktestPerformance,
   runBacktest,
   validateBacktestRequest,
@@ -373,4 +374,65 @@ test('performance measurement returns finite duration and memory delta', () => {
 
 test('futures 7x analytical ceiling is accepted with no provider order', () => {
   assert.doesNotThrow(() => validateBacktestRequest(request({ market: 'crypto-futures', symbol: 'BTCUSDT', side: 'long', leverage: 7 })));
+});
+
+const DAY = 24 * 60 * 60_000;
+function withDays(rows: NormalizedCandle[], days: readonly number[], market: BacktestRequest['market'] = 'crypto-futures', symbol = 'BTCUSDT') {
+  const extra = days.flatMap((day) => Array.from({ length: 4 }, (_, k) => ({ ...makeCandle(0, 104, { open: 104, high: 104.2, low: 103.8 }), timestamp: START + day * DAY + k * STEP })));
+  return [...rows, ...extra].map((row) => ({ ...row, market, symbol }));
+}
+function expectedSharpe(returns: number[], periodsPerYear: number) {
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const deviation = Math.sqrt(returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1));
+  return mean / deviation * Math.sqrt(periodsPerYear);
+}
+test('crypto Sharpe zero-fills every calendar day without exits and annualizes with 365', () => {
+  const rows = withDays(breakoutFixture('long'), [1, 2, 5, 6, 7]);
+  const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
+  assert.equal(result.totalTrades, 1);
+  const returns = [result.trades[0].netPnl / 10_000, 0, 0, 0, 0, 0, 0, 0];
+  assert.ok(Math.abs(result.sharpeRatio! - expectedSharpe(returns, 365)) < 1e-9);
+});
+test('stock Sharpe uses trading days from candles and annualizes with 252', () => {
+  const rows = withDays(breakoutFixture('long'), [1, 2, 5, 6, 7], 'kr-stock', '005930');
+  const result = runBacktest(request({ market: 'kr-stock', symbol: '005930', side: 'long', leverage: 1, endTime: rows.at(-1)!.timestamp }), rows);
+  assert.equal(result.totalTrades, 1);
+  const returns = [result.trades[0].netPnl / 10_000, 0, 0, 0, 0, 0];
+  assert.ok(Math.abs(result.sharpeRatio! - expectedSharpe(returns, 252)) < 1e-9);
+});
+test('long stop gapped through by the open fills at the open, not the stop', () => {
+  const rows = breakoutFixture('long');
+  rows[62] = { ...rows[62], open: 100, high: 101, low: 99, close: 100 };
+  const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
+  assert.equal(result.trades[0].exitReason, 'stop_loss');
+  assert.ok(result.trades[0].stopLossPrice > 100);
+  assert.ok(Math.abs(result.trades[0].exitPrice - 100 * (1 - 0.0005)) < 1e-9);
+});
+test('short stop gapped through by the open fills at the open, not the stop', () => {
+  const rows = breakoutFixture('short');
+  rows[62] = { ...rows[62], open: 100, high: 101, low: 99, close: 100 };
+  const result = runBacktest(request({ side: 'short', endTime: rows.at(-1)!.timestamp }), rows);
+  assert.equal(result.trades[0].exitReason, 'stop_loss');
+  assert.ok(result.trades[0].stopLossPrice < 100);
+  assert.ok(Math.abs(result.trades[0].exitPrice - 100 * (1 + 0.0005)) < 1e-9);
+});
+test('open gapped through the stop wins even with target-first priority', () => {
+  const rows = breakoutFixture('long');
+  rows[62] = { ...rows[62], open: 100, high: 120, low: 99, close: 100 };
+  const result = runBacktest(request({ side: 'long', intrabarPriority: 'target_first', endTime: rows.at(-1)!.timestamp }), rows);
+  assert.equal(result.trades[0].exitReason, 'stop_loss');
+  assert.ok(Math.abs(result.trades[0].exitPrice - 100 * (1 - 0.0005)) < 1e-9);
+});
+test('KR stock long exits pay the default sell tax; explicit zero and crypto pay none', () => {
+  const rows = breakoutFixture('long').map((row) => ({ ...row, market: 'kr-stock' as const, symbol: '005930' }));
+  const kr = request({ market: 'kr-stock', symbol: '005930', side: 'long', leverage: 1, endTime: rows.at(-1)!.timestamp });
+  const taxed = runBacktest(kr, rows).trades[0];
+  assert.equal(KR_STOCK_SELL_TAX_RATE, 0.002);
+  assert.ok(Math.abs(taxed.exitFee - taxed.exitPrice * taxed.quantity * (0.0006 + KR_STOCK_SELL_TAX_RATE)) < 1e-9);
+  const untaxed = runBacktest({ ...kr, taxRate: 0 }, rows).trades[0];
+  assert.ok(Math.abs(untaxed.exitFee - untaxed.exitPrice * untaxed.quantity * 0.0006) < 1e-9);
+  const cryptoRows = breakoutFixture('long');
+  const crypto = runBacktest(request({ side: 'long', endTime: cryptoRows.at(-1)!.timestamp }), cryptoRows).trades[0];
+  assert.ok(Math.abs(crypto.exitFee - crypto.exitPrice * crypto.quantity * 0.0006) < 1e-9);
+  assert.throws(() => validateBacktestRequest({ ...kr, taxRate: -0.1 }), /거래세/);
 });
