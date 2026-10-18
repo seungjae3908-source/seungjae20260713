@@ -82,10 +82,41 @@ function healthPayload(route: '/health' | '/api/health') {
 
 app.disable('x-powered-by');
 
+// Production API responses are readable only by this site's own origin (the
+// request's host) or an explicitly configured origin. Requests without an
+// Origin header (server-to-server, same-origin GET) are unaffected.
+function corsOriginAllowed(
+  origin: string | undefined,
+  requestHost: string | undefined,
+  production: boolean,
+  configured: ReadonlySet<string> = new Set(),
+): boolean {
+  if (!origin || !production) return true;
+  if (configured.has(origin)) return true;
+  const host = requestHost?.split(',')[0]?.trim().toLowerCase();
+  if (!host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
+}
+
+const configuredCorsOrigins = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean),
+);
+
+// Reflect only this site's own origin (and any configured extra origins) in
+// production; any other web page gets no CORS headers, so a browser will not
+// hand it this API's responses.
 app.use(
-  cors({
-    origin: true,
-    credentials: true,
+  cors((req, callback) => {
+    const forwardedHost = req.headers['x-forwarded-host'];
+    const requestHost = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) || req.headers.host;
+    callback(null, {
+      origin: corsOriginAllowed(req.headers.origin, requestHost, process.env.NODE_ENV === 'production', configuredCorsOrigins),
+      credentials: true,
+    });
   }),
 );
 
