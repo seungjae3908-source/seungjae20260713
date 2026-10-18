@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { FOUR_MARKET_UNIVERSE_V1, evaluateFourMarketV1, formatFourMarketReportKoV1, fourMarketSymbolTradesV1 } from '../src/four-market-trend-backtest-v1.mjs';
+import { FOUR_MARKET_UNIVERSE_V1, evaluateFourMarketV1, formatFourMarketReportKoV1, fourMarketSymbolTradesV1, fundingCoverageV1 } from '../src/four-market-trend-backtest-v1.mjs';
 
 const HOUR = 3_600_000; const DAY = 24 * HOUR;
 function walk(n, step, seed, start, drift = 0.0006) {
@@ -65,4 +65,24 @@ test('futures side comparison reruns long-only and short-only with the same rule
   assert.match(formatFourMarketReportKoV1(result), /롱·숏 분리 비교/);
   const none = evaluateFourMarketV1({ datasets: [{ market: 'KR_STOCK', symbol: '005930', candles: walk(1500, DAY, 11, Date.UTC(2020, 0, 1)) }] });
   assert.equal(none.futuresSideComparison, null);
+});
+
+test('funding coverage flags a short funding history instead of silently under-counting cost', () => {
+  const start = Date.UTC(2024, 0, 1);
+  const candles = walk(6000, HOUR, 3, start);
+  const span = candles.at(-1).timestamp - candles[0].timestamp;
+  const rates = (fraction) => Array.from({ length: 50 }, (_, i) => ({ timestamp: start + Math.floor((span * fraction * i) / 49), rate: 0.0001 }));
+  const full = fundingCoverageV1([{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles, fundingRates: rates(1) }]);
+  assert.equal(full.status, 'COMPLETE');
+  const partial = fundingCoverageV1([{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles, fundingRates: rates(0.15) }]);
+  assert.equal(partial.status, 'INCOMPLETE');
+  assert.ok(partial.minCoveredFraction < 0.2);
+  const none = fundingCoverageV1([{ market: 'CRYPTO_FUTURES', symbol: 'ETHUSDT', candles, fundingRates: [] }]);
+  assert.equal(none.status, 'INCOMPLETE');
+  assert.equal(none.minCoveredFraction, 0);
+  assert.equal(fundingCoverageV1([{ market: 'US_STOCK', symbol: 'NVDA', candles }]).status, 'NOT_APPLICABLE');
+  // the Korean report carries the warning and never hides it
+  const result = evaluateFourMarketV1({ datasets: [{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles, fundingRates: rates(0.15) }] });
+  assert.equal(result.fundingCoverage.status, 'INCOMPLETE');
+  assert.match(formatFourMarketReportKoV1(result), /펀딩비 자료가 기간의 .*만 있습니다/);
 });

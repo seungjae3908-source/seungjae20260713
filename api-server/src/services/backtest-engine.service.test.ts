@@ -242,6 +242,18 @@ test('same candle stop and target defaults to stop first', () => {
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
   assert.equal(result.trades[0].exitReason, 'stop_loss');
 });
+test('a bar that gaps through the stop fills at the open, not at the better stop price', () => {
+  const rows = breakoutFixture('long').map((row) => ({ ...row }));
+  const base = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
+  const entry = base.trades[0];
+  const gapIndex = rows.findIndex((row) => row.timestamp === entry.entryTime) + 1;
+  const gapOpen = entry.entryPrice * 0.9; // far below the 1% stop
+  rows[gapIndex] = { ...rows[gapIndex], open: gapOpen, high: gapOpen * 1.001, low: gapOpen * 0.99, close: gapOpen };
+  const gapped = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows).trades[0];
+  assert.equal(gapped.exitReason, 'stop_loss');
+  assert.ok(gapped.exitPrice < entry.entryPrice * 0.95, `gap fill ${gapped.exitPrice} must be near the gapped open`);
+  assert.ok(gapped.netPnl < base.trades[0].netPnl || gapped.netPnl < 0);
+});
 test('target-first option is explicit and non-default', () => {
   const rows = breakoutFixture('long', { bothTouched: true });
   const result = runBacktest(request({ side: 'long', intrabarPriority: 'target_first', endTime: rows.at(-1)!.timestamp }), rows);

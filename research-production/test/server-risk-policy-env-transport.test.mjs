@@ -268,9 +268,13 @@ test('release rotation keeps the owner-entered ops-alert Telegram channel and no
     'RESEARCH_OPS_TELEGRAM_CHAT_ID=-1001234567890',
     'RESEARCH_RESULTS_DIGEST_ENABLED=false',
     'RESEARCH_TEMPORAL_CRYPTO_SYMBOLS=BTCUSDT',
+    'RESEARCH_MINUTE_ARCHIVE_ENABLED=true',
+    'RESEARCH_MINUTE_ARCHIVE_ROOT=/var/lib/investment-research-production/minute-archive',
+    'RESEARCH_MINUTE_QUEUE_MANIFEST=/var/lib/investment-research-production/minute-queue/q.json',
+    'RESEARCH_WORKSPACE_RETENTION_HOURS=72',
     'LIVE_TRADING=true',
     'REAL_ORDER_ENABLED=true',
     'RESEARCH_CODE_SHA=' + 'b'.repeat(40),
   ];
-  assert.deepEqual(previous.filter(line => keep.test(line)), previous.slice(0, 4));
+  assert.deepEqual(previous.filter(line => keep.test(line)), previous.slice(0, 8));
 });

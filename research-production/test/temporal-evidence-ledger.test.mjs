@@ -46,6 +46,19 @@ test('conflicting observation identity fails closed',()=>{
   assert.throws(()=>appendTemporalEvidenceV1(ledger,row({value:0.02})),/conflicting temporal observation identity/);
 });
 
+test('re-served overlapping observation keeps the first-seen availability and never moves it',()=>{
+  const empty=createTemporalEvidenceLedgerV1({researchSha:SHA});
+  const first=appendTemporalEvidenceV1(empty,row({availableAt:T+60_000,recordedAt:T+60_000}));
+  const again=appendTemporalEvidenceV1(first,row({availableAt:T+3_660_000,recordedAt:T+3_660_000}));
+  assert.equal(again,first);
+  assert.equal(again.observations.length,1);
+  assert.equal(again.observations[0].availableAt,T+60_000);
+  // an earlier availability for an already-recorded identity is NOT accepted silently
+  assert.throws(()=>appendTemporalEvidenceV1(first,row({availableAt:T+1_000,recordedAt:T+1_000})),/conflicting temporal observation identity/);
+  // a revised value is still a conflict
+  assert.throws(()=>appendTemporalEvidenceV1(first,row({value:0.02,availableAt:T+3_660_000,recordedAt:T+3_660_000})),/conflicting temporal observation identity/);
+});
+
 test('future or not-yet-available evidence cannot leak into an earlier anchor',()=>{
   const ledger=appendTemporalEvidenceBatchV1(createTemporalEvidenceLedgerV1({researchSha:SHA}),[
     row({observedAt:T,availableAt:T,value:0.01}),
