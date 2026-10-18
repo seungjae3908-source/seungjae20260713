@@ -181,6 +181,13 @@ on:
       - api-server/src/services/live-trading-safety-telegram.service.ts
       - api-server/src/services/trade-pre-submission-risk.test.ts
       - stock-analyzer/src/lib/trade-approval-ui.ts
+      - api-server/src/services/manual-live-order.service.ts
+      - stock-analyzer/e2e/phase13-orderbook.spec.ts
+      - stock-analyzer/src/components/instrument-orderbook-dock.tsx
+      - stock-analyzer/src/components/manual-order-ticket.tsx
+      - stock-analyzer/src/components/trading-holdings-panel.tsx
+      - stock-analyzer/src/lib/manual-order-ticket.ts
+      - stock-analyzer/src/pages/detail.tsx
 permissions:
   contents: read
 concurrency:

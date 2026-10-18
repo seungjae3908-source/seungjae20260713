@@ -12,6 +12,13 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import {
+  buildManualLivePlanInput,
+  MANUAL_ORDER_STRATEGY_ID,
+  resolveManualOrderRoute,
+  validateManualProtection,
+} from './manual-live-order.service';
+import { assertPublicLivePlanOrigin } from './public-live-plan-origin.service';
+import {
   assetClassOfPlan,
   liveSafetyAlertCodes,
   notifyLiveMarketSwitch,
@@ -1554,4 +1561,92 @@ test('loss-limit alerts are de-duplicated per user, rule and KST day; failures a
   const throwing = (async () => { throw new Error('telegram down'); }) as never;
   assert.deepEqual(await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'] }, throwing), [null]);
   assert.equal(await notifyLiveMarketSwitch({ userId: USER_A, market: 'crypto_spot', enabled: true }, throwing), null);
+});
+
+test('manual order ticket routes each market to its broker and enforces stops for entries only', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
+    bitgetLeverage: 3,
+  });
+  const kr = resolveManualOrderRoute({ market: 'domestic_stock', symbol: '005930', action: 'buy', orderType: 'market',
+    quantity: 2, stopPrice: 60_000 }, policy);
+  assert.equal(kr.exchange, 'toss');
+  assert.equal(kr.planMarket, 'KR');
+  assert.equal(kr.exit, false);
+
+  assert.throws(() => resolveManualOrderRoute({ market: 'us_stock', symbol: 'AAPL', action: 'buy', orderType: 'market',
+    quantity: 1, stopPrice: 150 }, policy), /MANUAL_ORDER_US_EXCHANGE_REQUIRED/u);
+  const us = resolveManualOrderRoute({ market: 'us_stock', symbol: 'AAPL', action: 'sell', orderType: 'limit',
+    quantity: 1, limitPrice: 200, stockExchange: 'NASDAQ' }, policy);
+  assert.equal(us.exchange, 'kiwoom');
+  assert.equal(us.exit, true);
+
+  const spot = resolveManualOrderRoute({ market: 'crypto_spot', symbol: 'KRW-BTC', action: 'buy', orderType: 'market',
+    quoteAmountKrw: 50_000, stopPrice: 90_000_000 }, policy);
+  assert.equal(spot.symbol, 'BTC');
+  assert.equal(spot.quoteAmountKrw, 50_000);
+  assert.equal(spot.quantity, null);
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_spot', symbol: 'BTC', action: 'buy', orderType: 'market',
+    quantity: 0.01, stopPrice: 1 }, policy), /MANUAL_ORDER_AMOUNT_REQUIRED/u);
+
+  const closeLong = resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'close_long',
+    orderType: 'market', quantity: 0.01 }, policy);
+  assert.equal(closeLong.side, 'short');
+  assert.equal(closeLong.exit, true);
+  assert.equal(closeLong.leverage, 3);
+  assert.equal(closeLong.marginMode, 'isolated');
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'long',
+    orderType: 'market', quantity: 0.01 }, policy), /MANUAL_ORDER_STOP_REQUIRED/u);
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'buy',
+    orderType: 'market', quantity: 0.01, stopPrice: 1 }, policy), /MANUAL_ORDER_ACTION_INVALID/u);
+  assert.throws(() => resolveManualOrderRoute({ market: 'domestic_stock', symbol: '005930', action: 'buy',
+    orderType: 'market', quantity: 1.5, stopPrice: 1 }, normalizeTradingPolicy(DEFAULT_TRADING_POLICY)), /MUST_BE_INTEGER/u);
+
+  validateManualProtection('long', false, 100, 95, 110);
+  assert.throws(() => validateManualProtection('long', false, 100, 105, null), /STOP_SIDE_INVALID/u);
+  assert.throws(() => validateManualProtection('short', false, 100, 95, null), /STOP_SIDE_INVALID/u);
+  assert.throws(() => validateManualProtection('buy', false, 100, 95, 90), /TARGET_SIDE_INVALID/u);
+  validateManualProtection('sell', true, 100, null, null);
+});
+
+test('manual order ticket builds a LIVE approval plan from server-read data, never from the browser price', async () => {
+  const repository = new InMemoryTradingRepository();
+  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 2 });
+  const seen: TradingPlanInput[] = [];
+  const built = await buildManualLivePlanInput({
+    userId: USER_A,
+    request: { market: 'crypto_futures', symbol: 'btcusdt', action: 'long', orderType: 'market', quantity: 0.01,
+      stopPrice: 95_000, targetPrice: 110_000 },
+    policy,
+    repository,
+    krwPerQuote: async () => 1_400,
+    previewSnapshot: async (seed) => {
+      seen.push(seed);
+      return { ...plan().marketSnapshot, currentPrice: 100_000, plannedPrice: 100_000, spreadPercent: 0.01,
+        source: 'bitget-live-preview' };
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].accountMode, 'live');
+  assert.equal(built.exchange, 'bitget');
+  assert.equal(built.symbol, 'BTCUSDT');
+  assert.equal(built.side, 'long');
+  assert.equal(built.reduceOnly, false);
+  assert.equal(built.stopPrice, 95_000);
+  assert.deepEqual(built.targetPrices, [110_000]);
+  assert.equal(built.estimatedKrw, 0.01 * 100_000 * 1_400);
+  assert.equal(built.strategyId, MANUAL_ORDER_STRATEGY_ID);
+  assert.ok(built.signalReasons.includes('MANUAL_ORDER_TICKET'));
+  assert.equal(built.marketSnapshot.dailyPnlPercent, 0);
+  assert.match(String(built.marketSnapshot.source), /manual-order-ticket/u);
+  // The plan must pass the public live-origin guard (no forged server reasons).
+  assertPublicLivePlanOrigin(built);
+
+  await assert.rejects(buildManualLivePlanInput({
+    userId: USER_A,
+    request: { market: 'crypto_futures', symbol: 'BTCUSDT', action: 'long', orderType: 'market', quantity: 0.01, stopPrice: 120_000 },
+    policy, repository, krwPerQuote: async () => 1_400,
+    previewSnapshot: async () => ({ ...plan().marketSnapshot, currentPrice: 100_000 }),
+  }), /MANUAL_ORDER_STOP_SIDE_INVALID/u);
 });

@@ -92,7 +92,11 @@ for (const width of [360, 390, 430]) {
     await expect(dialog.getByTestId('ask-level-1')).toContainText('70,100');
     await expect(dialog.getByTestId('bid-level-1')).toContainText('70,000');
     await expect(dialog.getByText(/ORDERBOOK_IMBALANCE != TRADE_SIGNAL/)).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /매수|매도|주문|취소|정정|잔고|포지션/ })).toHaveCount(0);
+    // The dock never submits, cancels or amends. Members with order capability only get the two
+    // buttons that open the separate confirm-first order ticket.
+    await expect(dialog.getByRole('button', { name: /취소|정정|잔고|포지션/ })).toHaveCount(0);
+    const ticketOpeners = dialog.getByRole('button', { name: /매수|매도|롱|숏|주문/ });
+    for (const name of await ticketOpeners.allInnerTexts()) expect(name.trim()).toMatch(/^(매수|매도|롱|숏) 주문창$/);
 
     const box = await dialog.boundingBox();
     expect(box).not.toBeNull();
