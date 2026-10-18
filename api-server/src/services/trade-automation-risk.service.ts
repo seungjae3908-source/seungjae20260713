@@ -117,10 +117,8 @@ export function normalizeTradingPolicy(
   };
   const stockBrokerByMarket = {
     domestic_stock: input.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
-    // Production execution policy is fixed: US stock orders are Kiwoom-only.
-    // Normalize legacy/user-supplied Toss selections closed instead of carrying
-    // an unsupported route into the automatic worker.
-    us_stock: 'kiwoom' as const,
+    // Owner-approved: US stock orders may route through Kiwoom or Toss.
+    us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
   };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',

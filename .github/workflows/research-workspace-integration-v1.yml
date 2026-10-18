@@ -171,6 +171,11 @@ on:
       - .github/workflows/research-workspace-integration-v1.yml
       - api-server/src/services/crypto-benchmark-regime.service.ts
       - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/four-market-auto-readiness.service.ts
+      - api-server/src/services/member-auto-trading-readiness.service.ts
+      - api-server/src/services/spot-live-limited-capability.service.ts
+      - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/phase12-trade-automation.spec.ts
 permissions:
   contents: read
 concurrency:

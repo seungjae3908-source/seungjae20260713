@@ -83,8 +83,8 @@ for (const width of [360, 390, 430]) {
     await page.getByTestId('trading-market-select').selectOption('us_stock');
     await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
-    await expect(page.getByTestId('stock-broker-us_stock')).toBeDisabled();
-    await expect(page.getByTestId('stock-broker-us_stock').locator('option')).toHaveCount(1);
+    await expect(page.getByTestId('stock-broker-us_stock')).toBeEnabled();
+    await expect(page.getByTestId('stock-broker-us_stock').locator('option')).toHaveText(['Kiwoom', 'Toss']);
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
 
     await page.getByTestId('trading-market-select').selectOption('crypto_spot');

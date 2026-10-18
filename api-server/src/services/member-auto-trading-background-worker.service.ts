@@ -574,7 +574,7 @@ export function resolveMemberStockBroker(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
 ): 'kiwoom' | 'toss' | null {
   if (market === 'KR_STOCK') return policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
-  if (market === 'US_STOCK') return 'kiwoom';
+  if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return null;
 }
 
@@ -712,8 +712,9 @@ function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
     return false;
   }
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  const usBroker = policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return (policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker])
-    || (policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom)
+    || (policy.marketEnabled.us_stock && policy.exchangeEnabled[usBroker])
     || (policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit)
     || (policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget);
 }
@@ -724,12 +725,13 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
   }
   if (policy.pilotStage === 'approval-20') return false;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  const usBroker = policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return policy.marketEnabled.domestic_stock
     && policy.marketEnabled.us_stock
     && policy.marketEnabled.crypto_spot
     && policy.marketEnabled.crypto_futures
     && policy.exchangeEnabled[domesticBroker]
-    && policy.exchangeEnabled.kiwoom
+    && policy.exchangeEnabled[usBroker]
     && policy.exchangeEnabled.upbit
     && policy.exchangeEnabled.bitget;
 }

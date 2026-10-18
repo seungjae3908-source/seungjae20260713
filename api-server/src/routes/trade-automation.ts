@@ -1332,7 +1332,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
     const marketProvider: Record<TradingAssetClass, TradingExchange> = {
       domestic_stock: domesticBroker,
-      us_stock: 'kiwoom',
+      us_stock: policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom',
       crypto_spot: 'upbit',
       crypto_futures: 'bitget',
     };
