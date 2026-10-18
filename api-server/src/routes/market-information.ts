@@ -20,6 +20,8 @@ export interface MarketInformationRoomReader {
 export interface MarketInformationRouterOptions {
   stockFirstPaintTimeoutMs?: number;
   stockWarmupDeadlineMs?: number;
+  /** Background refresh period for the stock rooms; omitted means no timer. */
+  stockBackgroundWarmIntervalMs?: number;
 }
 
 // Overseas providers (ranking universe, sectors, news, SEC filings) routinely
@@ -32,6 +34,12 @@ const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_500;
 const STOCK_LAST_GOOD_MAX_AGE_MS = 30 * 60_000;
 const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
+// A cold US room needs most of the 4.5s first-paint budget on its own, so the
+// page misses its 5s ready budget after a restart. Refreshing both stock rooms
+// in the background keeps every provider cache inside its stale-while-revalidate
+// window (rankings: 30s fresh + 5min stale), so first paint reads cached rows.
+const STOCK_BACKGROUND_WARM_INTERVAL_MS = 2 * 60_000;
+const STOCK_ROOMS = ['stocks-kr', 'stocks-us'] as const;
 type StockRoom = Extract<MarketInformationRoomId, 'stocks-kr' | 'stocks-us'>;
 
 class MarketInformationFirstPaintTimeoutError extends Error {
@@ -178,6 +186,16 @@ export function createMarketInformationRouter(
   const rememberLastGood = (room: StockRoom, result: MarketInformationResponse) => {
     if (isUsableRoomResult(result)) lastGoodByRoom.set(room, { result, storedAt: Date.now() });
   };
+  if (options.stockBackgroundWarmIntervalMs != null) {
+    const warmStockRooms = () => {
+      for (const room of STOCK_ROOMS) {
+        void service.getRoom(room, AbortSignal.timeout(stockWarmupDeadlineMs))
+          .then((result) => rememberLastGood(room, result), () => undefined);
+      }
+    };
+    setTimeout(warmStockRooms, 0).unref?.();
+    setInterval(warmStockRooms, options.stockBackgroundWarmIntervalMs).unref?.();
+  }
 
   router.get('/:room', async (req, res) => {
     const room = req.params.room;
@@ -272,4 +290,7 @@ export function createMarketInformationRouter(
   return router;
 }
 
-export default createMarketInformationRouter();
+// Only the deployed server warms; tests and local runs make no provider calls.
+export default createMarketInformationRouter(MarketInformationService, {
+  stockBackgroundWarmIntervalMs: process.env.NODE_ENV === 'production' ? STOCK_BACKGROUND_WARM_INTERVAL_MS : undefined,
+});
