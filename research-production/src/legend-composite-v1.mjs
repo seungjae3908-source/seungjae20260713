@@ -260,3 +260,112 @@ export function formatLegendCompositeReportKoV1(venues) {
   }
   return lines.join('\n');
 }
+
+// ------------------------------------------------------------------ robustness + trend-pilot correlation
+
+/**
+ * One-at-a-time and full-grid neighbourhood of the winning variant (V1_TRAIL, 5 slots, taker).
+ * A real edge should stay positive in both halves for most neighbours, not only at the chosen point.
+ */
+export function robustnessGridV1({ datasets, span, splitTime }) {
+  const base = LEGEND_VARIANTS_V1.find((v) => v.id === 'V1_TRAIL');
+  const run = (params, K = 5) => {
+    const sim = simulateLegendCompositeV1({ venue: 'PERP_1H', datasets, variant: base, maxPositions: K, fill: 'TAKER', params });
+    return { full: curveStats(sim.curve, span.from, span.to), discovery: curveStats(sim.curve, span.from, splitTime), validation: curveStats(sim.curve, splitTime, span.to),
+      yearly: yearlyReturns(sim.curve), trades: tradeSummary(sim.trades).n ?? 0, curve: sim.curve };
+  };
+  const grid = [];
+  for (const pumpRet of [0.04, 0.05, 0.06]) for (const pumpVolX of [3, 5, 8]) for (const atrMult of [2, 3, 4]) {
+    const r = run({ pumpRet, pumpVolX, atrMult }); grid.push({ pumpRet, pumpVolX, atrMult, ...r, curve: undefined });
+  }
+  const oneAtATime = [];
+  for (const timeStopBars of [12, 48]) { const r = run({ timeStopBars }); oneAtATime.push({ label: `무진전 청산 ${timeStopBars}시간 (기본 24)`, ...r, curve: undefined }); }
+  for (const K of [3, 8]) { const r = run({}, K); oneAtATime.push({ label: `최대 ${K}종목 (기본 5)`, ...r, curve: undefined }); }
+  const risk = [];
+  for (const riskPct of [0.01, 0.02, 0.03]) { const r = run({ riskPct }); risk.push({ riskPct, ...r }); }
+  const both = grid.filter((g) => g.discovery.cagr > 0 && g.validation.cagr > 0).length;
+  const sorted = (xs) => [...xs].sort((a, b) => a - b); const med = (xs) => { const s = sorted(xs); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  return { grid, oneAtATime, risk, summary: { cells: grid.length, positiveBothHalves: both, medianCagr: med(grid.map((g) => g.full.cagr)), medianSharpe: med(grid.map((g) => g.full.sharpe)),
+    worstCagr: Math.min(...grid.map((g) => g.full.cagr)), medianValidationSharpe: med(grid.map((g) => g.validation.sharpe)) } };
+}
+
+/** Replica of the live trend pilot core (TREND_PILOT_BTC_ETH_4H_V1): 4h, 55-bar channel + EMA200, long/short. */
+export function trendPilotReplicaTradesV1(hourly, { costPerSide = 0.0013 } = {}) {
+  const groups = new Map();
+  for (const c of hourly) { const k = Math.floor(c.timestamp / (4 * HOUR)) * 4 * HOUR; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+  const bars = [...groups.entries()].sort((a, b) => a[0] - b[0]).filter(([, r]) => r.length === 4)
+    .map(([timestamp, r]) => ({ timestamp, open: r[0].open, high: Math.max(...r.map((x) => x.high)), low: Math.min(...r.map((x) => x.low)), close: r.at(-1).close }));
+  const close = bars.map((b) => b.close); const e = ema(close, 200); const a = atr(bars, 14);
+  const hi = rollingMax(bars.map((b) => b.high), 55); const lo = bars.map((b) => b.low); const loMin = [];
+  for (let i = 0; i < bars.length; i += 1) { let m = Infinity; for (let k = Math.max(0, i - 54); k <= i; k += 1) m = Math.min(m, lo[k]); loMin.push(i >= 54 ? m : null); }
+  const trades = []; let i = 200;
+  while (i < bars.length - 1) {
+    const longSig = fin(hi[i - 1]) && fin(e[i]) && close[i] > hi[i - 1] && close[i] > e[i];
+    const shortSig = fin(loMin[i - 1]) && fin(e[i]) && close[i] < loMin[i - 1] && close[i] < e[i];
+    if (!(longSig || shortSig) || !fin(a[i])) { i += 1; continue; }
+    const dir = longSig ? 1 : -1; const k0 = i + 1; const entry = bars[k0].open;
+    const stopDist = Math.min(0.025 * entry, 2 * a[i]); let stop = entry - (dir * stopDist); const R = stopDist;
+    let best = entry; let j = k0; let exit = null;
+    for (; j < Math.min(bars.length, k0 + 180); j += 1) {
+      const b = bars[j];
+      if (dir === 1 ? b.open <= stop : b.open >= stop) { exit = b.open; break; }
+      if (dir === 1 ? b.low <= stop : b.high >= stop) { exit = stop; break; }
+      best = dir === 1 ? Math.max(best, b.high) : Math.min(best, b.low);
+      if (dir * (best - entry) >= R) stop = dir === 1 ? Math.max(stop, entry) : Math.min(stop, entry);
+      if (fin(a[j])) stop = dir === 1 ? Math.max(stop, best - (2.5 * a[j])) : Math.min(stop, best + (2.5 * a[j]));
+    }
+    if (exit === null) { j = Math.min(bars.length - 1, k0 + 179); exit = bars[j].close; }
+    const gross = dir * (exit - entry); const cost = costPerSide * (entry + exit);
+    trades.push({ entryT: bars[k0].timestamp, exitT: bars[j].timestamp, side: dir === 1 ? 'LONG' : 'SHORT', rMultiple: (gross - cost) / R });
+    i = j + 1;
+  }
+  return trades;
+}
+
+function monthKey(t) { return new Date(t).toISOString().slice(0, 7); }
+export function monthlyFromCurve(curve) {
+  const last = new Map(); for (const c of curve) last.set(monthKey(c.t), c.equity);
+  const out = new Map(); let prev = curve[0]?.equity ?? 1; for (const [m, eq] of [...last.entries()].sort()) { out.set(m, prev > 0 ? eq / prev - 1 : 0); prev = eq; }
+  return out;
+}
+export function monthlyFromTrades(trades, riskPct) {
+  const out = new Map(); for (const t of trades) { const m = monthKey(t.exitT); out.set(m, (out.get(m) ?? 0) + (riskPct * t.rMultiple)); }
+  return out;
+}
+
+export function combineMonthlyV1(a, b, from, to) {
+  const months = []; for (let d = new Date(from); d.getTime() < to; d.setUTCMonth(d.getUTCMonth() + 1)) months.push(d.toISOString().slice(0, 7));
+  const xa = months.map((m) => a.get(m) ?? 0); const xb = months.map((m) => b.get(m) ?? 0);
+  const mean = (xs) => xs.reduce((s, x) => s + x, 0) / xs.length;
+  const ma = mean(xa); const mb = mean(xb);
+  let cov = 0; let va = 0; let vb = 0; for (let i = 0; i < months.length; i += 1) { cov += (xa[i] - ma) * (xb[i] - mb); va += (xa[i] - ma) ** 2; vb += (xb[i] - mb) ** 2; }
+  const stats = (xs) => { let eq = 1; let peak = 1; let mdd = 0; for (const x of xs) { eq *= 1 + x; peak = Math.max(peak, eq); mdd = Math.max(mdd, 1 - (eq / peak)); }
+    const years = xs.length / 12; const m = mean(xs); const sd = Math.sqrt(xs.reduce((s, x) => s + ((x - m) ** 2), 0) / Math.max(1, xs.length - 1));
+    return { cagr: eq > 0 ? (eq ** (1 / years)) - 1 : -1, maxDrawdown: mdd, sharpe: sd > 0 ? (m / sd) * Math.sqrt(12) : 0, negativeMonths: xs.filter((x) => x < 0).length }; };
+  const both = xa.map((x, i) => (x + xb[i]) / 2);
+  return { months: months.length, correlation: va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) : null, bothLosingMonths: xa.filter((x, i) => x < 0 && xb[i] < 0).length,
+    composite: stats(xa), trendPilot: stats(xb), half: stats(both), full: stats(xa.map((x, i) => x + xb[i])) };
+}
+
+const p1 = (v, d = 1) => (fin(v) ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(d)}%` : '-');
+export function formatRobustnessReportKoV1({ robust, correlation, span, splitDate }) {
+  const s = robust.summary; const L = [];
+  L.push('급등 따라타기 ① (익절 없이 끝까지, 최대 5종목) 견고성 시험 — 코인선물 1시간봉 25종목', `기간 ${span.from}~${span.to}, 검증 시작 ${splitDate}, 1회 위험 1%`, '');
+  L.push(`■ 기준값 흔들기 27조합 (상승률 4/5/6% × 거래량 3/5/8배 × ATR 2/3/4배)`);
+  L.push(`  앞·뒤 기간 모두 플러스: ${s.positiveBothHalves}/${s.cells} · 연수익 중앙값 ${p1(s.medianCagr)} · 최악 ${p1(s.worstCagr)} · 샤프 중앙값 ${(s.medianSharpe ?? 0).toFixed(2)} (뒤 기간 ${(s.medianValidationSharpe ?? 0).toFixed(2)})`);
+  for (const g of robust.grid) L.push(`  상승 ${p1(g.pumpRet, 0)} 거래량 ${g.pumpVolX}배 ATR ${g.atrMult}배 → 연 ${p1(g.full.cagr)} 낙폭 ${p1(-g.full.maxDrawdown)} 샤프 ${(g.full.sharpe ?? 0).toFixed(2)} · 앞 ${p1(g.discovery.cagr)} / 뒤 ${p1(g.validation.cagr)} · 거래 ${g.trades}`);
+  L.push('', '■ 하나씩 바꿔 보기');
+  for (const g of robust.oneAtATime) L.push(`  ${g.label} → 연 ${p1(g.full.cagr)} 낙폭 ${p1(-g.full.maxDrawdown)} 샤프 ${(g.full.sharpe ?? 0).toFixed(2)} · 앞 ${p1(g.discovery.cagr)} / 뒤 ${p1(g.validation.cagr)}`);
+  L.push('', '■ 1회 위험 키우기 (선물 총노출 5배 한도 안)');
+  for (const g of robust.risk) L.push(`  1회 ${p1(g.riskPct, 0)} → 연 ${p1(g.full.cagr)} 낙폭 ${p1(-g.full.maxDrawdown)} 샤프 ${(g.full.sharpe ?? 0).toFixed(2)} · ${Object.entries(g.yearly).map(([y, x]) => `${String(y).slice(2)}년 ${p1(x, 0)}`).join(' ')}`);
+  if (correlation) {
+    const c = correlation;
+    L.push('', '■ 추세 파일럿(#1958, BTC·ETH 4시간 롱숏, 1회 2%)과 같이 쓰면 (월간, 재현판)');
+    L.push(`  월수익 상관계수 ${fin(c.correlation) ? c.correlation.toFixed(2) : '-'} · ${c.months}개월 중 둘 다 손실인 달 ${c.bothLosingMonths}개`);
+    L.push(`  급등 따라타기 1%: 연 ${p1(c.composite.cagr)} 낙폭 ${p1(-c.composite.maxDrawdown)} 샤프 ${c.composite.sharpe.toFixed(2)} · 손실 달 ${c.composite.negativeMonths}`);
+    L.push(`  추세 파일럿 2%: 연 ${p1(c.trendPilot.cagr)} 낙폭 ${p1(-c.trendPilot.maxDrawdown)} 샤프 ${c.trendPilot.sharpe.toFixed(2)} · 손실 달 ${c.trendPilot.negativeMonths}`);
+    L.push(`  둘 다 그대로 동시 운용: 연 ${p1(c.full.cagr)} 낙폭 ${p1(-c.full.maxDrawdown)} 샤프 ${c.full.sharpe.toFixed(2)} · 손실 달 ${c.full.negativeMonths}`);
+    L.push(`  자금 반반 나눠 운용: 연 ${p1(c.half.cagr)} 낙폭 ${p1(-c.half.maxDrawdown)} 샤프 ${c.half.sharpe.toFixed(2)}`);
+  }
+  return L.join('\n');
+}
