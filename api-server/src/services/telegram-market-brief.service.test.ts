@@ -4,6 +4,8 @@ import {
   buildTelegramMarketBriefInput, boundedTelegramBriefRead,
   type TelegramMarketBriefSnapshot,
 } from './telegram-market-brief.service';
+import { dueTelegramIntelligenceReports } from './telegram-intelligence-report.service';
+import { renderTelegramAlert } from './telegram-notification.service';
 
 const leaders=Array.from({length:6},(_,i)=>({
   name:'관찰종목'+(i+1),symbol:'T'+(i+1),changePercent:2.5,
@@ -70,4 +72,61 @@ test('a hung optional public theme or market-room source cannot stall Telegram s
     throw new Error('SECRET_TOKEN_IN_PROVIDER_MESSAGE');
   },15),null);
   assert.equal(await boundedTelegramBriefRead(async()=> 'unexpected',0),null);
+});
+
+test('brief title carries room, kind and KST date; footer shows KST time, not a raw UTC stamp',()=>{
+  const input=buildTelegramMarketBriefInput({
+    kind:'MORNING',localDate:'2026-10-18',destination:'CRYPTO_SPOT_ROOM',
+    destinationChatId:'room-spot',dedupeKey:'title',
+    now:new Date('2026-10-17T22:50:55.133Z'),snapshot:{...snapshot,rooms:[]},
+  });
+  assert.equal(input.title,'🪙 코인현물 아침 시황 · 10월 18일 (일)');
+  assert.match(input.details||'',/기준 시각 10월 18일 \(일\) 07:50 \(한국 시간\)/u);
+  assert.doesNotMatch(renderTelegramAlert(input),/2026-10-17T22:50/u);
+});
+
+test('spot TOP 5 drops stablecoins, repeated names collapse, delayed sections are named',()=>{
+  const spot={
+    ...snapshot,
+    rooms:[{room:'coins-spot',error:null,response:{
+      partial:true,sections:{
+        indices:{status:'error',data:[]},
+        rankings:{status:'ready',data:[
+          {name:'테더',symbol:'USDT',changePercent:0.15},
+          {name:'KRW-USDC',symbol:'KRW-USDC',changePercent:0.01},
+          {name:'샌드박스',symbol:'SAND',changePercent:9.8},
+          {name:'ETHUSDT',symbol:'ETHUSDT',changePercent:-1.13},
+        ]},
+        news:{status:'unavailable',data:[]},
+        disclosures:{status:'empty',data:[]},
+        derivatives:{status:'empty',data:null},
+        sectors:{status:'empty',data:[]},
+      },
+    }}],
+  } as unknown as TelegramMarketBriefSnapshot;
+  const details=buildTelegramMarketBriefInput({
+    kind:'MORNING',localDate:'2026-10-18',destination:'CRYPTO_SPOT_ROOM',
+    destinationChatId:'room-spot',dedupeKey:'spot',now:new Date('2026-10-17T22:50:00Z'),snapshot:spot,
+  }).details||'';
+  assert.doesNotMatch(details,/USDT\)|USDC/u);
+  assert.match(details,/1\. 샌드박스 \(SAND\) \+9\.80%/u);
+  assert.match(details,/2\. ETHUSDT -1\.13%/u);
+  assert.match(details,/⚠️ 확인 지연: 지수, 뉴스/u);
+});
+
+test('weekend KST morning skips stock rooms with no fresh session; crypto rooms still get the brief',()=>{
+  const audience={membership:'admin' as const};
+  const destinations=(iso:string)=>dueTelegramIntelligenceReports(new Date(iso),audience)
+    .find(plan=>plan.kind==='MORNING')?.destinations;
+  // Saturday 08:00 KST: KR closed, US Friday session just closed.
+  assert.deepEqual(destinations('2026-10-16T23:00:00.000Z'),['US_STOCK_ROOM','CRYPTO_SPOT_ROOM','CRYPTO_FUTURES_ROOM']);
+  // Sunday 08:00 KST: both stock markets closed since the last brief.
+  assert.deepEqual(destinations('2026-10-17T23:00:00.000Z'),['CRYPTO_SPOT_ROOM','CRYPTO_FUTURES_ROOM']);
+  // Monday 08:00 KST: KR opens; the US room waits for its Tuesday brief.
+  assert.deepEqual(destinations('2026-10-18T23:00:00.000Z'),['KR_STOCK_ROOM','CRYPTO_SPOT_ROOM','CRYPTO_FUTURES_ROOM']);
+  // Weekday: all four rooms.
+  assert.deepEqual(destinations('2026-10-19T23:00:00.000Z'),['KR_STOCK_ROOM','US_STOCK_ROOM','CRYPTO_SPOT_ROOM','CRYPTO_FUTURES_ROOM']);
+  const stockOnly=dueTelegramIntelligenceReports(new Date('2026-10-17T23:00:00.000Z'),
+    {membership:'associate',includeCrypto:false});
+  assert.equal(stockOnly.some(plan=>plan.kind==='MORNING'),false);
 });
