@@ -29,17 +29,17 @@ if (!datasets.length) {
   for (const [market, cfg] of Object.entries(FOUR_MARKET_UNIVERSE_V1)) {
     for (const symbol of cfg.symbols) {
       try {
-        let candles = []; let fundingRates = [];
+        let candles = []; let fundingRates = []; let fundingError = null;
         if (market === 'CRYPTO_FUTURES') {
           candles = (await collectBitgetCandles({ client: bitget, market, symbol, timeframe: '1h', startTime: CRYPTO_START, endTime: END, maxCandles: 20_000, productType: 'usdt-futures' })).candles;
-          try { fundingRates = (await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol, startTime: CRYPTO_START, endTime: END, fetchImpl: globalThis.fetch, minimumRecords: 0 })).rows; }
-          catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 100)}\n`); }
+          try { fundingRates = (await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol, startTime: CRYPTO_START, endTime: END, fetchImpl: globalThis.fetch, minimumRecords: 100 })).rows; }
+          catch (error) { fundingError = String(error?.message ?? error).slice(0, 100); process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${fundingError}\n`); }
         } else if (market === 'CRYPTO_SPOT') {
           candles = (await collectUpbitSpotHistory({ symbol, timeframe: '4h', startTime: CRYPTO_START, endTime: END, maxPages: 40, fetchImpl: globalThis.fetch })).candles;
         } else {
           candles = (await collectYahooStockHistory({ market, symbol, startTime: STOCK_START, endTime: END, fetchImpl: globalThis.fetch })).candles;
         }
-        datasets.push({ market, symbol, candles: candles.map((c) => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 })), fundingRates });
+        datasets.push({ market, symbol, candles: candles.map((c) => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume ?? 0 })), fundingRates, ...(fundingError ? { fundingError } : {}) });
         process.stderr.write(`FETCHED:${market}:${symbol}:${candles.length}\n`);
       } catch (error) {
         process.stderr.write(`FETCH_FAILED:${market}:${symbol}:${String(error?.message ?? error).slice(0, 160)}\n`);
