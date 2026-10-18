@@ -113,7 +113,7 @@ test('four fixed markets accept only their canonical provider and market-specifi
   }
 });
 
-test('domestic stocks allow Toss or Kiwoom while US stocks fail closed outside Kiwoom', () => {
+test('domestic and US stocks allow Toss or Kiwoom while other providers fail closed', () => {
   const domesticKiwoom = inputFor('KR_STOCK', 'KIWOOM', 'BUY');
   domesticKiwoom.providerEvidence = {
     kind: 'KIWOOM', sessionOpen: true, halted: false, tickSize: 1, sellableQuantity: 10,
@@ -124,7 +124,11 @@ test('domestic stocks allow Toss or Kiwoom while US stocks fail closed outside K
   usToss.providerEvidence = {
     kind: 'TOSS', sessionOpen: true, halted: false, tickSize: 0.01, sellableQuantity: 10,
   };
-  const result = evaluateFourMarketAutoPredeployReadiness(usToss, NOW);
+  assert.equal(evaluateFourMarketAutoPredeployReadiness(usToss, NOW).status, 'AUTO_PREDEPLOY_READY');
+
+  const usUpbit = inputFor('US_STOCK', 'UPBIT', 'BUY');
+  usUpbit.providerEvidence = { kind: 'UPBIT', tickSize: 1, minOrderKrw: 5_000 };
+  const result = evaluateFourMarketAutoPredeployReadiness(usUpbit, NOW);
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.reasons.includes('PROVIDER_AUTHORITY_MISMATCH'));
 });

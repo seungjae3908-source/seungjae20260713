@@ -323,6 +323,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/bitget-native-protection-readonly.service.ts",
   "api-server/src/services/crypto-benchmark-regime.service.ts",
   "api-server/src/services/four-market-auto-readiness.service.ts",
+  "api-server/src/services/four-market-auto-readiness.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
   "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
