@@ -471,6 +471,12 @@ on:
       - api-server/src/services/live-trading-safety-telegram.service.ts
       - api-server/src/services/trade-pre-submission-risk.test.ts
       - stock-analyzer/src/lib/trade-approval-ui.ts
+      - api-server/src/services/manual-live-order.service.ts
+      - stock-analyzer/e2e/phase13-orderbook.spec.ts
+      - stock-analyzer/src/components/instrument-orderbook-dock.tsx
+      - stock-analyzer/src/components/manual-order-ticket.tsx
+      - stock-analyzer/src/lib/manual-order-ticket.ts
+      - stock-analyzer/src/pages/detail.tsx
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -533,8 +539,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 62 or len(set(auto_safety)) != 62:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_62')
+          if len(auto_safety) != 69 or len(set(auto_safety)) != 69:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_69')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -574,7 +580,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 62
+          test "${#auto_safety[@]}" -eq 69
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19

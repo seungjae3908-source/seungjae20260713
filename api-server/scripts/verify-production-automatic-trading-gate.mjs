@@ -139,6 +139,10 @@ requireText(tradeRisk, "add(blockCodes, 'LIVE_MARKET_SWITCH_OFF')", 'AUTO_GATE_L
 requireText(tradeRisk, "add(blockCodes, 'LIVE_FIRST_WEEK_ORDER_CAP')", 'AUTO_GATE_LIVE_FIRST_WEEK_CAP_MISSING');
 requireText(paperWorker, 'if (liveModeRequested && !memberLiveMarketSwitchOn(member.policy, entry.identity.market)) {', 'AUTO_GATE_WORKER_LIVE_SWITCH_MISSING');
 requireText(tradeIntegrationTest, 'per-market live switch defaults OFF and blocks only new LIVE entries in that market', 'AUTO_GATE_LIVE_SWITCH_REGRESSION_MISSING');
+// Manual order ticket: server-built LIVE plan in APPROVAL mode; nothing is sent until explicit approval.
+requireText(tradeAutomationRoute, "router.post('/manual-orders/plan'", 'AUTO_GATE_MANUAL_TICKET_ROUTE_MISSING');
+requireText(tradeAutomationRoute, 'approvalRequired: true,', 'AUTO_GATE_MANUAL_TICKET_APPROVAL_MISSING');
+requireText(tradeIntegrationTest, 'manual order ticket builds a LIVE approval plan from server-read data, never from the browser price', 'AUTO_GATE_MANUAL_TICKET_REGRESSION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
