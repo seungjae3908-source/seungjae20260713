@@ -277,9 +277,9 @@ test('bounded source saturation cannot evict or substitute an unexpired Scanner 
   assert.throws(() => registry.resolveScanner('owner', body, sha), /NOT_RESOLVABLE/);
 });
 
-test('candidate identity carries the v2 engine version so results from the earlier engine never share a candidate id', () => {
+test('candidate identity carries the v3 engine version so results from the earlier engine never share a candidate id', () => {
   const bundle = buildBacktestPaperHandoffBundle(request, candles, sha);
   const inputs = Object.values(bundle.strategyIdentityInputs);
   assert.ok(inputs.length > 0);
-  for (const input of inputs) assert.equal(input.strategyVersion, 'phase5-backtest-v2');
+  for (const input of inputs) assert.equal(input.strategyVersion, 'phase5-backtest-v3');
 });

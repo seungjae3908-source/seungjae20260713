@@ -5,7 +5,7 @@ import {
   normalizeFuturesSymbol,
   type NormalizedCandle,
 } from './futures-market-data.service';
-import { BACKTEST_LIMITS, BacktestValidationError, type BacktestMarket } from './backtest-engine.service';
+import { BACKTEST_LIMITS, BacktestValidationError, type BacktestMarket, type FundingPoint } from './backtest-engine.service';
 
 const BITGET_BASE_URL = 'https://api.bitget.com';
 const UPBIT_BASE_URL = 'https://api.upbit.com';
@@ -367,4 +367,70 @@ export async function loadHistoricalBacktestCandles(input: {
     return loadSpot({ symbol, timeframe, startTime: input.startTime, endTime: input.endTime, signal: input.signal, fetchImpl, now });
   }
   return loadStock({ market, symbol, timeframe, startTime: input.startTime, endTime: input.endTime, signal: input.signal, now });
+}
+
+const FUNDING_PAGE_SIZE = 100;
+const FUNDING_MAX_PAGES = 40;
+
+export type HistoricalFundingData = { points: FundingPoint[]; warnings: string[]; requestCount: number };
+
+/**
+ * Per-settlement funding rates from Bitget's public history endpoint (newest first, paged). A failure never aborts the backtest:
+ * the caller falls back to the fixed rate and the result says so.
+ */
+export async function loadBitgetFundingHistory(input: {
+  symbol: unknown;
+  startTime: number;
+  endTime: number;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<HistoricalFundingData> {
+  const symbol = normalizeFuturesSymbol(String(input.symbol ?? '').trim().toUpperCase());
+  if (!symbol) throw new BacktestValidationError('INVALID_SYMBOL', '코인선물 종목 형식이 올바르지 않습니다.');
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const byTime = new Map<number, FundingPoint>();
+  const warnings: string[] = [];
+  let requestCount = 0;
+  let reachedStart = false;
+  for (let pageNo = 1; pageNo <= FUNDING_MAX_PAGES && !reachedStart; pageNo += 1) {
+    if (input.signal?.aborted) throw new BacktestValidationError('BACKTEST_CANCELLED', '백테스트 요청이 취소되었습니다.');
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    input.signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
+    const url = new URL('/api/v2/mix/market/history-fund-rate', BITGET_BASE_URL);
+    url.searchParams.set('symbol', symbol);
+    url.searchParams.set('productType', PRODUCT_TYPE);
+    url.searchParams.set('pageSize', String(FUNDING_PAGE_SIZE));
+    url.searchParams.set('pageNo', String(pageNo));
+    let rows: unknown[];
+    try {
+      const response = await fetchImpl(url, { headers: { Accept: 'application/json', 'User-Agent': 'seungjae-investment-app/2.0' }, signal: controller.signal });
+      if (!response.ok) throw new Error(`BITGET_HTTP_${response.status}`);
+      const payload = await response.json() as unknown;
+      if (!isObject(payload) || String(payload.code ?? '') !== '00000' || !Array.isArray(payload.data)) throw new Error('BITGET_INVALID_RESPONSE');
+      rows = payload.data;
+    } catch (error) {
+      if (input.signal?.aborted) throw new BacktestValidationError('BACKTEST_CANCELLED', '백테스트 요청이 취소되었습니다.');
+      warnings.push(`펀딩 이력 조회에 실패해 일부 또는 전체 구간은 고정 비율을 씁니다 (${error instanceof Error && error.name === 'AbortError' ? '시간 초과' : '제공자 오류'}).`);
+      break;
+    } finally {
+      clearTimeout(timeout);
+      input.signal?.removeEventListener('abort', forwardAbort);
+    }
+    requestCount += 1;
+    if (!rows.length) break;
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const row of rows) {
+      if (!isObject(row)) continue;
+      const time = Number(row.fundingTime);
+      const rate = Number(row.fundingRate);
+      if (!Number.isFinite(time) || time <= 0 || !Number.isFinite(rate)) continue;
+      earliest = Math.min(earliest, time);
+      if (time >= input.startTime && time <= input.endTime) byTime.set(time, { time, rate });
+    }
+    if (earliest <= input.startTime || rows.length < FUNDING_PAGE_SIZE) reachedStart = true;
+    if (!reachedStart && pageNo === FUNDING_MAX_PAGES) warnings.push('펀딩 이력 조회 한도에 도달해 더 오래된 구간은 고정 비율을 씁니다.');
+  }
+  return { points: [...byTime.values()].sort((a, b) => a.time - b.time), warnings, requestCount };
 }
