@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowRight, BarChart3, BriefcaseBusiness, Radar, Star } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
-import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
+import { resolveAutoRun } from '@/components/auto-trading-run-control';
+import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
+import { useQuotes } from '@/hooks/use-stock-data';
 import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
-import { useAnalysisSelection, type AnalysisTradeAction } from '@/lib/analysis-selection';
-import { apiGet, type SummaryItem } from '@/lib/api';
+import { useAnalysisSelection, type AnalysisSelection, type AnalysisTradeAction } from '@/lib/analysis-selection';
+import { api, apiGet, type Briefing, type SummaryItem } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
-import {
-  getMarketSummary,
-  validMarketSummaryItems,
-} from '@/lib/market-summary';
+import { useAuth } from '@/lib/auth';
+import { authorizedFetch } from '@/lib/auth-fetch';
+import { getMarketSummary, validMarketSummaryItems } from '@/lib/market-summary';
 import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from '@/lib/unified-asset-search';
 import {
   formatAppPercent,
@@ -22,6 +23,9 @@ import {
   WATCHLIST_CHANGE_EVENT,
   type WatchlistItem,
 } from '@/lib/stock-display';
+
+// Home follows the STOCK AI 시안: numbers first, one list per subject, no
+// section tabs. Mobile stacks the same blocks the PC grid shows.
 
 interface CryptoTickerRow {
   symbol?: unknown;
@@ -35,14 +39,10 @@ interface CryptoTickerResponse {
   tickers?: CryptoTickerRow[];
 }
 
-type MobileHomeTab = 'market' | 'signal' | 'watchlist' | 'portfolio';
-
-const MOBILE_HOME_TABS = [
-  { value: 'market', label: '시장' },
-  { value: 'signal', label: '신호' },
-  { value: 'watchlist', label: '관심' },
-  { value: 'portfolio', label: '자산' },
-] as const;
+interface PortfolioTotals {
+  totalAssets: { status: string; normalizedKRW: number | null; knownNormalizedKRW: number };
+  valuationPnl: { status: string; normalizedKRW: number | null; returnPercent: number | null };
+}
 
 function finite(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -86,6 +86,46 @@ function actionLabel(action: AnalysisTradeAction | undefined): string {
   return '관찰';
 }
 
+function actionTone(action: AnalysisTradeAction | undefined): string {
+  if (action === 'BUY' || action === 'LONG') return 'bg-rise-surface text-rise';
+  if (action === 'SELL' || action === 'SHORT') return 'bg-fall-surface text-fall';
+  return 'bg-secondary text-muted-foreground';
+}
+
+function directionClass(change: number | null | undefined): string {
+  if (change == null || !Number.isFinite(change) || change === 0) return 'text-muted-foreground';
+  return change > 0 ? 'text-rise' : 'text-fall';
+}
+
+function krw(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '미확인';
+  return `${Math.round(value).toLocaleString('ko-KR')}원`;
+}
+
+function signedKrw(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '미확인';
+  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${sign}${Math.round(Math.abs(value)).toLocaleString('ko-KR')}`;
+}
+
+function planPrice(value: number | null | undefined, currency: string): string {
+  return value == null || !Number.isFinite(value) ? '미확인' : formatAppPrice(value, currency);
+}
+
+function selectionCurrency(selection: AnalysisSelection): string {
+  const market = String(selection.market ?? '').toUpperCase();
+  if (market === 'US') return 'USD';
+  if (market.includes('FUTURES') || market.includes('BITGET')) return 'USDT';
+  return 'KRW';
+}
+
+function timeSeoul(value: string | undefined): string {
+  if (!value) return '';
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return '';
+  return new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(parsed));
+}
+
 function useDesktopHome(): boolean {
   const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
@@ -101,16 +141,22 @@ function useDesktopHome(): boolean {
   return desktop;
 }
 
+async function readAutomationStatus(): Promise<TradeAutomationStatus | null> {
+  const response = await authorizedFetch('/api/trade-automation/status', { cache: 'no-store' });
+  const payload = await response.json().catch(() => null) as TradeAutomationStatus | null;
+  return response.ok && payload ? payload : null;
+}
+
 export default function HomePage() {
   const [, navigate] = useLocation();
+  const auth = useAuth();
   const assetMode = useAssetMode();
   const { selection } = useAnalysisSelection();
   const desktop = useDesktopHome();
-  const [mobileTab, setMobileTab] = useState<MobileHomeTab>('market');
-  const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => readWatchlistItems().slice(0, 8));
+  const [storedWatchlist, setStoredWatchlist] = useState<WatchlistItem[]>(() => readWatchlistItems().slice(0, 6));
 
   useEffect(() => {
-    const refresh = () => setWatchlist(readWatchlistItems().slice(0, 8));
+    const refresh = () => setStoredWatchlist(readWatchlistItems().slice(0, 6));
     window.addEventListener(WATCHLIST_CHANGE_EVENT, refresh);
     window.addEventListener('storage', refresh);
     return () => {
@@ -118,6 +164,9 @@ export default function HomePage() {
       window.removeEventListener('storage', refresh);
     };
   }, []);
+
+  const canSeePortfolio = auth.can('canAccessBasicInfo');
+  const canSeeAutomation = auth.can('canAccessAutoTrading');
 
   const market = useQuery({
     queryKey: ['home-dashboard-market'],
@@ -135,13 +184,46 @@ export default function HomePage() {
     refetchOnWindowFocus: false,
     retry: 1,
   });
+  const briefing = useQuery({
+    queryKey: ['home-dashboard-briefing'],
+    queryFn: api.briefing,
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+  const portfolio = useQuery({
+    queryKey: ['home-dashboard-portfolio'],
+    queryFn: () => apiGet<PortfolioTotals>('/portfolio/intelligence?profile=BALANCED'),
+    enabled: canSeePortfolio,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+  const automation = useQuery({
+    queryKey: ['home-dashboard-automation'],
+    queryFn: readAutomationStatus,
+    enabled: canSeeAutomation,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  const tickers = useMemo(() => storedWatchlist.map((item) => item.ticker.toUpperCase()), [storedWatchlist]);
+  const quotes = useQuotes(tickers);
+  const watchlist = useMemo(() => {
+    const quoteMap = new Map((quotes.data?.quotes ?? []).map((quote) => [String(quote.ticker).toUpperCase(), quote]));
+    return storedWatchlist.map((item) => ({ ...item, ...(quoteMap.get(item.ticker.toUpperCase()) ?? {}) }));
+  }, [storedWatchlist, quotes.data?.quotes]);
 
   const indices = useMemo(() => marketSummaryRows(market.data?.items ?? []), [market.data?.items]);
   const btc = useMemo(() => (bitcoin.data?.tickers ?? []).find((row) => baseCoinSymbol(row.symbol) === 'BTC') ?? null, [bitcoin.data?.tickers]);
   const btcPrice = btc ? finite(btc.price ?? btc.tradePrice) : null;
   const btcChangePercent = btc ? finite(btc.changePercent ?? btc.changePercent24h) : null;
   const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
-  const currentSignal = Boolean(selection && signalIsCurrent && selection.signalScore != null);
+  const currentSignal = selection && signalIsCurrent && selection.signalScore != null ? selection : null;
   const marketWarning = market.isError
     ? '주식 시장 정보 확인 실패'
     : market.data?.dataState === 'provider_error'
@@ -158,14 +240,17 @@ export default function HomePage() {
     : market.isError || market.data?.dataState === 'provider_error'
       ? '확인 필요'
       : '데이터 없음';
-  const marketEvidenceAvailable = indices.length > 0 || btcPrice != null;
-  const dashboardMarketState = market.isLoading || bitcoin.isLoading
-    ? '확인 중'
-    : warnings.length > 0
-      ? '확인 필요'
-      : marketEvidenceAvailable
-        ? '시세 확인됨'
-        : '데이터 없음';
+
+  // Treat a malformed or partial payload like a fetch failure instead of rendering a broken number.
+  const totals = portfolio.data && portfolio.data.totalAssets && portfolio.data.valuationPnl ? portfolio.data : null;
+  const brief = briefing.data && typeof briefing.data.headline === 'string' ? briefing.data : null;
+  const strongSectors = Array.isArray(brief?.strongSectors) ? brief.strongSectors : [];
+  const weakSectors = Array.isArray(brief?.weakSectors) ? brief.weakSectors : [];
+  const gainers = Array.isArray(brief?.gainers) ? brief.gainers : [];
+  const losers = Array.isArray(brief?.losers) ? brief.losers : [];
+  const autoRun = resolveAutoRun(automation.data ?? null);
+  const autoState = autoRun?.state ?? null;
+  const autoMarkets = autoRun ? Object.values(autoRun.markets).filter((row) => row.enabled).length : 0;
 
   const openAsset = (item: UnifiedAssetSuggestion) => {
     if (item.assetType === 'stock') {
@@ -178,140 +263,154 @@ export default function HomePage() {
     navigate(unifiedAssetDetailPath(item, '/home'));
   };
 
-  const professionalOverview = (
-    <section
-      data-testid="home-professional-overview"
-      className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
-      aria-labelledby="home-professional-overview-title"
-    >
-      <div className="text-center">
-        <p className="text-xs font-semibold tracking-[0.12em] text-primary">투자 대시보드</p>
-        <h2 id="home-professional-overview-title" className="mt-1 text-lg font-bold sm:text-xl">오늘의 투자 상태</h2>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <DashboardStatusCard
-          icon={<BarChart3 className="h-5 w-5" />}
-          label="시세"
-          value={dashboardMarketState}
-          detail="주식·코인 공개 시세"
-          onClick={() => navigate('/market-overview')}
-        />
-        <DashboardStatusCard
-          icon={<Radar className="h-5 w-5" />}
-          label="AI 신호"
-          value={currentSignal && selection ? `${actionLabel(selection.action)} · ${selection.signalScore}점` : '오늘 신호 없음'}
-          detail={currentSignal && selection ? selection.displayName ?? selection.ticker : '선택된 최신 신호 없음'}
-          onClick={() => navigate('/scanner')}
-        />
-        <DashboardStatusCard
-          icon={<Star className="h-5 w-5" />}
-          label="관심종목"
-          value={`${watchlist.length}개`}
-          detail={watchlist.length ? '관심 목록 확인' : '등록된 관심종목 없음'}
-          onClick={() => navigate('/watchlist')}
-        />
-        <DashboardStatusCard
-          icon={<BriefcaseBusiness className="h-5 w-5" />}
-          label="자산"
-          value="자산 보기"
-          detail="보유·손익·위험 확인"
-          onClick={() => navigate('/portfolio')}
-        />
-      </div>
-    </section>
+  const assetSection = (
+    <Panel testId="home-asset-summary" title="총 평가자산" action="자산 보기" onAction={() => navigate('/portfolio')} compactTitle>
+      {!canSeePortfolio ? (
+        <p className="mt-2 text-sm font-medium text-muted-foreground">자산 조회 권한이 필요합니다.</p>
+      ) : portfolio.isLoading ? (
+        <p className="num mt-1 text-2xl font-semibold text-muted-foreground">확인 중</p>
+      ) : portfolio.isError || !totals ? (
+        <p className="mt-2 text-sm font-medium text-muted-foreground">자산 정보를 불러오지 못했습니다.</p>
+      ) : (
+        <>
+          <p className="num mt-1 text-[28px] font-semibold leading-tight tracking-tight">
+            {totals.totalAssets.normalizedKRW == null ? '미확정' : krw(totals.totalAssets.normalizedKRW)}
+          </p>
+          <p className="mt-1 text-xs font-medium text-muted-foreground">
+            {totals.totalAssets.normalizedKRW == null
+              ? `확인된 자산 ${krw(totals.totalAssets.knownNormalizedKRW)} · 누락 계좌 있음`
+              : `평가손익 `}
+            {totals.totalAssets.normalizedKRW != null ? (
+              <span className={`num font-semibold ${directionClass(totals.valuationPnl.normalizedKRW)}`}>
+                {signedKrw(totals.valuationPnl.normalizedKRW)}
+                {totals.valuationPnl.returnPercent == null ? '' : ` (${formatAppPercent(totals.valuationPnl.returnPercent)})`}
+              </span>
+            ) : null}
+          </p>
+        </>
+      )}
+    </Panel>
   );
 
   const marketSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
-      <HomeSectionHeader title="시장" actionLabel="시황" onAction={() => navigate('/market-overview')} />
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
-        {indices.length === 0
-          ? <DashboardPlaceholder label={marketState} />
-          : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} change={item.changePercent} />)}
-        <MetricCard
-          label="비트코인 · 업비트"
-          value={btc ? btcPrice == null ? '가격 미확인' : formatAppPrice(btcPrice, 'KRW') : bitcoin.isLoading ? '확인 중' : '미확인'}
-          sub={btc ? btcChangePercent == null ? '등락 미확인' : formatAppPercent(btcChangePercent) : bitcoin.isError ? '확인 필요' : '현물 시세'}
-          change={btcChangePercent}
-        />
-      </div>
-    </section>
-  );
-
-  const signalSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
-      <HomeSectionHeader icon={<Radar className="h-4 w-4" />} title="최근 신호" actionLabel="검색기" onAction={() => navigate('/scanner')} />
-      {selection && signalIsCurrent && selection.signalScore != null ? (
-        <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-bold">{selection.displayName}</p>
-            <p className="mt-1 truncate text-xs font-medium text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p>
-          </div>
-          <div className="shrink-0 text-right">
-            <p className="text-sm font-bold">{actionLabel(selection.action)}</p>
-            <p className="text-xs font-medium text-muted-foreground">점수 {selection.signalScore}</p>
-          </div>
-        </button>
-      ) : <p className="mt-3 rounded-2xl bg-background p-4 text-center text-xs font-medium text-muted-foreground">오늘 선택한 신호 없음</p>}
+    <section className="grid grid-cols-3 gap-2 sm:grid-cols-5" data-testid="home-market-summary" aria-label="주요 지수">
+      {indices.length === 0
+        ? <div className="col-span-3 rounded-xl border border-card-border bg-card px-3 py-4 text-center text-xs font-medium text-muted-foreground sm:col-span-4">{marketState}</div>
+        : indices.map((item) => <IndexTile key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} change={item.changePercent} />)}
+      <IndexTile
+        label="비트코인"
+        value={btc ? btcPrice == null ? '가격 미확인' : formatAppPrice(btcPrice, 'KRW') : bitcoin.isLoading ? '확인 중' : '미확인'}
+        change={btcChangePercent}
+        sub={btc ? btcChangePercent == null ? '등락 미확인' : formatAppPercent(btcChangePercent) : bitcoin.isError ? '확인 필요' : '업비트'}
+      />
     </section>
   );
 
   const watchlistSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
-      <HomeSectionHeader icon={<Star className="h-4 w-4" />} title="관심종목" actionLabel="전체" onAction={() => navigate('/watchlist')} />
-      <div className="mt-3 space-y-2">
-        {watchlist.length
-          ? watchlist.slice(0, 5).map((item) => {
+    <Panel testId="home-watchlist-summary" title="관심종목" action="전체" onAction={() => navigate('/watchlist')}>
+      {watchlist.length ? (
+        <ul className="mt-1 divide-y divide-card-border">
+          {watchlist.map((item) => {
             const watchlistPrice = finite(item.price);
             const watchlistChangePercent = finite(item.changePercent);
             const watchlistCurrency = typeof item.currency === 'string' && item.currency.trim()
               ? item.currency.trim().toUpperCase()
               : null;
             return (
-              <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold">{item.name || item.ticker}</p>
-                  <p className="truncate text-xs font-medium text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
-                </div>
-                <div className="shrink-0 text-right text-xs font-semibold">
-                  <p>{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</p>
-                  <p className={`num text-xs font-medium ${directionClass(watchlistChangePercent)}`}>{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
-                </div>
-              </div>
+              <li key={item.ticker}>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/stock/${item.ticker}?back=${encodeURIComponent('/home')}`)}
+                  className="flex min-h-[52px] w-full items-center justify-between gap-3 py-2 text-left"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium">{item.name || item.ticker}</span>
+                    <span className="block truncate text-[11.5px] text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</span>
+                  </span>
+                  <span className="shrink-0 text-right">
+                    <span className="num block text-sm font-medium">{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</span>
+                    <span className={`num block text-xs ${directionClass(watchlistChangePercent)}`}>{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</span>
+                  </span>
+                </button>
+              </li>
             );
-          })
-          : <p className="rounded-2xl bg-background p-4 text-center text-xs font-medium text-muted-foreground">관심종목 없음</p>}
-      </div>
-    </section>
+          })}
+        </ul>
+      ) : <p className="mt-2 py-3 text-center text-xs font-medium text-muted-foreground">관심종목 없음 · 전체에서 추가</p>}
+    </Panel>
   );
 
-  const portfolioSection = (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
-      <HomeSectionHeader icon={<BriefcaseBusiness className="h-4 w-4" />} title="포트폴리오" />
-      <button type="button" onClick={() => navigate('/portfolio')} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-4 text-sm font-semibold">
-        <span>자산·손익·위험</span><ArrowRight className="h-4 w-4" />
-      </button>
+  const signalSection = (
+    <Panel testId="home-signal-summary" title="오늘의 AI 신호" action="검색기" onAction={() => navigate('/scanner')}>
+      {currentSignal ? (
+        <button type="button" onClick={() => navigate('/scanner')} className="mt-2 block w-full rounded-xl border border-card-border bg-background p-3 text-left">
+          <span className="flex items-center justify-between gap-3">
+            <span className="truncate text-sm font-semibold">{currentSignal.displayName ?? currentSignal.ticker}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${actionTone(currentSignal.action)}`}>{actionLabel(currentSignal.action)} · 점수 {currentSignal.signalScore}</span>
+          </span>
+          <span className="num mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>진입 {currentSignal.pricePlan?.entryZone ? planPrice(currentSignal.pricePlan.entryZone.from, selectionCurrency(currentSignal)) : '미확인'}</span>
+            <span>손절 {planPrice(currentSignal.pricePlan?.stopLoss, selectionCurrency(currentSignal))}</span>
+            <span>목표 {planPrice(currentSignal.pricePlan?.targets?.[0], selectionCurrency(currentSignal))}</span>
+          </span>
+          <span className="mt-1.5 block truncate text-xs text-muted-foreground">{currentSignal.reasons?.[0] ?? `${currentSignal.market} · ${currentSignal.timeframe}`}</span>
+        </button>
+      ) : <p className="mt-2 py-3 text-center text-xs font-medium text-muted-foreground">오늘 선택한 신호 없음</p>}
+    </Panel>
+  );
+
+  const automationSection = canSeeAutomation ? (
+    <Panel testId="home-automation-summary" title="자동매매" action="열기" onAction={() => navigate('/auto-trading')} compactTitle>
+      <p className="mt-1 text-lg font-semibold">
+        {automation.isLoading ? '확인 중' : autoState == null ? '상태 미확인' : autoState === 'RUNNING' ? '실행 중' : autoState === 'KILL_SWITCH' ? '긴급 정지' : autoState === 'GLOBAL_STOP' ? '전체 정지' : '꺼짐'}
+      </p>
+      <p className="mt-1 text-xs font-medium text-muted-foreground">
+        {autoRun ? `시장 ${autoMarkets}개 켜짐 · 주문마다 승인 없음` : '서버 상태를 확인하면 표시됩니다'}
+      </p>
+    </Panel>
+  ) : null;
+
+  const briefingSection = (
+    <section className="grid gap-3 sm:grid-cols-3" data-testid="home-briefing-summary">
+      <Panel title="급등 상위" action="순위" onAction={() => navigate('/market-rankings')}>
+        <MoverList rows={gainers} loading={briefing.isLoading} error={briefing.isError} tone="up" onOpen={(ticker) => navigate(`/stock/${ticker}?back=${encodeURIComponent('/home')}`)} />
+      </Panel>
+      <Panel title="급락 상위" action="순위" onAction={() => navigate('/market-rankings')}>
+        <MoverList rows={losers} loading={briefing.isLoading} error={briefing.isError} tone="down" onOpen={(ticker) => navigate(`/stock/${ticker}?back=${encodeURIComponent('/home')}`)} />
+      </Panel>
+      <Panel title="시황 요약" action="시황" onAction={() => navigate('/market-overview')} meta={timeSeoul(brief?.asOf)}>
+        {briefing.isLoading ? (
+          <p className="mt-2 text-xs font-medium text-muted-foreground">확인 중</p>
+        ) : briefing.isError || !brief ? (
+          <p className="mt-2 text-xs font-medium text-muted-foreground">시황 요약을 불러오지 못했습니다.</p>
+        ) : (
+          <>
+            <p className="mt-2 text-[13px] leading-6">{brief.headline}</p>
+            {strongSectors.length || weakSectors.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {strongSectors.slice(0, 2).map((sector) => <span key={`s-${sector.sector}`} className="num rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold text-foreground">{sector.sector} {formatAppPercent(sector.changePercent)}</span>)}
+                {weakSectors.slice(0, 2).map((sector) => <span key={`w-${sector.sector}`} className="num rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold text-foreground">{sector.sector} {formatAppPercent(sector.changePercent)}</span>)}
+              </div>
+            ) : null}
+          </>
+        )}
+      </Panel>
     </section>
   );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
       <CenteredPageHeader title="홈" />
-      {!desktop ? (
-        <div className="shrink-0 border-b border-card-border bg-background px-2 py-2">
-          <ResponsiveTabs value={mobileTab} options={MOBILE_HOME_TABS} onChange={setMobileTab} ariaLabel="홈 보기" testId="home-mobile-tabs" compact />
-        </div>
-      ) : null}
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
-          <section className="rounded-2xl border border-card-border bg-card p-3 sm:p-4" data-testid="home-single-search">
-            <UnifiedAssetSearch placeholder="종목·코인 검색" onSelect={openAsset} />
-          </section>
-
-          {professionalOverview}
+        <div className="mx-auto w-full max-w-6xl space-y-3 px-3 py-3 sm:px-5 lg:py-5">
+          {!desktop ? (
+            <section className="rounded-xl border border-card-border bg-card p-2" data-testid="home-single-search">
+              <UnifiedAssetSearch placeholder="종목·코인 검색" onSelect={openAsset} />
+            </section>
+          ) : null}
 
           {warnings.length > 0 && (
-            <details role="alert" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+            <details role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-1.5">
               <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-xs font-semibold text-amber-500 [&::-webkit-details-marker]:hidden">
                 <AlertTriangle className="h-4 w-4 shrink-0" />데이터 확인 필요
               </summary>
@@ -320,31 +419,25 @@ export default function HomePage() {
           )}
 
           {desktop ? (
-            <>
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]" data-testid="home-desktop-workspace">
-                <div className="min-w-0 space-y-4">
-                  {marketSection}
-                  {signalSection}
-                </div>
-                <aside className="min-w-0 space-y-4">
-                  {portfolioSection}
-                  {watchlistSection}
-                </aside>
+            <div className="space-y-3" data-testid="home-desktop-workspace">
+              <div className={`grid gap-3 ${automationSection ? 'xl:grid-cols-[2fr_1fr_1fr]' : 'xl:grid-cols-[2fr_1fr]'}`}>
+                {assetSection}
+                {signalSection}
+                {automationSection}
               </div>
-              <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
-                <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
-                <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
-                <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
-                <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
-              </section>
-            </>
+              {marketSection}
+              {watchlistSection}
+              {briefingSection}
+            </div>
           ) : (
-            <section data-testid={`home-mobile-panel-${mobileTab}`}>
-              {mobileTab === 'market' ? marketSection : null}
-              {mobileTab === 'signal' ? signalSection : null}
-              {mobileTab === 'watchlist' ? watchlistSection : null}
-              {mobileTab === 'portfolio' ? portfolioSection : null}
-            </section>
+            <div className="space-y-3" data-testid="home-mobile-stack">
+              {assetSection}
+              {marketSection}
+              {watchlistSection}
+              {signalSection}
+              {briefingSection}
+              {automationSection}
+            </div>
           )}
         </div>
       </main>
@@ -353,57 +446,61 @@ export default function HomePage() {
   );
 }
 
-function HomeSectionHeader({ icon, title, actionLabel, onAction }: {
-  icon?: ReactNode;
+function Panel({ title, action, onAction, meta, compactTitle = false, testId, children }: {
   title: string;
-  actionLabel?: string;
+  action?: string;
   onAction?: () => void;
+  meta?: string;
+  compactTitle?: boolean;
+  testId?: string;
+  children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
-      <span className="flex h-11 w-11 items-center justify-center text-primary" aria-hidden="true">{icon}</span>
-      <h2 className="text-center text-base font-bold">{title}</h2>
-      {actionLabel && onAction ? (
-        <button type="button" onClick={onAction} className="flex h-11 w-11 items-center justify-center text-xs font-semibold text-primary">{actionLabel}</button>
-      ) : <span aria-hidden="true" className="h-11 w-11" />}
+    <section className="min-w-0 rounded-xl border border-card-border bg-card px-4 py-3" data-testid={testId}>
+      <div className="flex min-h-11 items-center justify-between gap-2">
+        <h2 className={compactTitle ? 'text-xs font-medium text-muted-foreground' : 'text-sm font-semibold'}>{title}</h2>
+        <span className="flex items-center gap-2">
+          {meta ? <span className="num text-[11px] text-muted-foreground">{meta}</span> : null}
+          {action && onAction ? (
+            <button type="button" onClick={onAction} className="flex min-h-11 min-w-11 items-center justify-center px-1 text-xs font-semibold text-primary">{action}</button>
+          ) : null}
+        </span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function IndexTile({ label, value, change, sub }: { label: string; value: string; change: number | null | undefined; sub?: string }) {
+  return (
+    <div className="min-w-0 rounded-xl border border-card-border bg-card px-2.5 py-2">
+      <p className="truncate text-[11.5px] text-muted-foreground">{label}</p>
+      <p className="num mt-0.5 truncate text-sm font-semibold">{value}</p>
+      <p className={`num truncate text-xs ${directionClass(change)}`}>{sub ?? formatAppPercent(change)}</p>
     </div>
   );
 }
 
-function DashboardStatusCard({ icon, label, value, detail, onClick }: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  detail: string;
-  onClick: () => void;
+function MoverList({ rows, loading, error, tone, onOpen }: {
+  rows: Briefing['gainers'];
+  loading: boolean;
+  error: boolean;
+  tone: 'up' | 'down';
+  onOpen: (ticker: string) => void;
 }) {
+  if (loading) return <p className="mt-2 text-xs font-medium text-muted-foreground">확인 중</p>;
+  if (error) return <p className="mt-2 text-xs font-medium text-muted-foreground">순위를 불러오지 못했습니다.</p>;
+  if (!rows.length) return <p className="mt-2 text-xs font-medium text-muted-foreground">데이터 없음</p>;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex min-h-24 min-w-0 flex-col items-center justify-center rounded-2xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-    >
-      <span className="text-primary" aria-hidden="true">{icon}</span>
-      <span className="mt-2 text-xs font-semibold text-muted-foreground">{label}</span>
-      <strong className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
-      <span className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">{detail}</span>
-    </button>
+    <ul className="mt-1 divide-y divide-card-border">
+      {rows.slice(0, 4).map((row) => (
+        <li key={row.ticker}>
+          <button type="button" onClick={() => onOpen(row.ticker)} className="flex min-h-11 w-full items-center justify-between gap-3 py-1.5 text-left text-sm">
+            <span className="truncate">{row.name || row.ticker}</span>
+            <span className={`num shrink-0 ${tone === 'up' ? 'text-rise' : 'text-fall'}`}>{formatAppPercent(row.changePercent)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
-}
-
-function directionClass(change: number | null | undefined): string {
-  if (change == null || !Number.isFinite(change) || change === 0) return 'text-muted-foreground';
-  return change > 0 ? 'text-rise' : 'text-fall';
-}
-
-function MetricCard({ label, value, sub, change }: { label: string; value: string; sub: string; change?: number | null }) {
-  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="num mt-1 truncate text-sm font-semibold">{value}</p><p className={`num mt-1 truncate text-xs font-medium ${directionClass(change)}`}>{sub}</p></div>;
-}
-
-function DashboardPlaceholder({ label }: { label: string }) {
-  return <div className="col-span-2 flex min-h-20 items-center justify-center rounded-2xl bg-background px-3 text-center text-xs font-medium text-muted-foreground md:col-span-4">{label}</div>;
-}
-
-function QuickLink({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-card-border bg-card px-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 shrink-0 text-primary" /><span className="break-keep">{label}</span></button>;
 }

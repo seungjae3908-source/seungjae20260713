@@ -121,32 +121,16 @@ for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
     await page.goto('/home');
 
-    if (width < 1024) {
-      const tabs = page.getByTestId('home-mobile-tabs');
-      await expect(tabs).toBeVisible();
-      for (const label of ['시장', '신호', '관심', '자산']) {
-        await expectTouchTarget(page, label, width, 'tab');
-      }
-
-      await expect(page.getByTestId('home-market-summary')).toBeVisible();
-      await expectTouchTarget(page, '시황', width);
-
-      await page.getByRole('tab', { name: '신호', exact: true }).click();
-      await expect(page.getByTestId('home-signal-summary')).toBeVisible();
-      await expectTouchTarget(page, '검색기', width);
-
-      await page.getByRole('tab', { name: '관심', exact: true }).click();
-      await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
-      await expectTouchTarget(page, '전체', width);
-    } else {
-      await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
-      await expect(page.getByTestId('home-market-summary')).toBeVisible();
-      await expect(page.getByTestId('home-signal-summary')).toBeVisible();
-      await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
-      await expectTouchTarget(page, '시황', width);
-      await expectTouchTarget(page, '검색기', width);
-      await expectTouchTarget(page, '전체', width);
-    }
+    // Mockup home: no mobile tab bar; every card carries one text action.
+    await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+    await expect(page.getByTestId(width < 1024 ? 'home-mobile-stack' : 'home-desktop-workspace')).toBeVisible();
+    await expect(page.getByTestId('home-market-summary')).toBeVisible();
+    await expect(page.getByTestId('home-signal-summary')).toBeVisible();
+    await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
+    await expectTouchTarget(page, '자산 보기', width);
+    await expectTouchTarget(page, '전체', width);
+    await expectTouchTarget(page, '검색기', width);
+    await expectTouchTarget(page, '시황', width);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     assertClean();
