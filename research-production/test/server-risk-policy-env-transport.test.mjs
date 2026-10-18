@@ -258,3 +258,19 @@ test('release rotation preserves existing supplemental cost transport only when 
   assert.match(source, /printf 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="%s"\\n'/);
   assert.doesNotMatch(source, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
 });
+
+test('release rotation keeps the owner-entered ops-alert Telegram channel and nothing with authority', () => {
+  const pattern = source.match(/grep -E '(\^\(RESEARCH_TEMPORAL_CRYPTO_SYMBOLS[^']+)' "\$ENV_FILE" > "\$env_tmp"/)?.[1];
+  assert.ok(pattern, 'preserved-key grep pattern not found');
+  const keep = new RegExp(pattern);
+  const previous = [
+    'RESEARCH_OPS_TELEGRAM_BOT_TOKEN=12345:abcdefghijklmnopqrstuvwxyz',
+    'RESEARCH_OPS_TELEGRAM_CHAT_ID=-1001234567890',
+    'RESEARCH_RESULTS_DIGEST_ENABLED=false',
+    'RESEARCH_TEMPORAL_CRYPTO_SYMBOLS=BTCUSDT',
+    'LIVE_TRADING=true',
+    'REAL_ORDER_ENABLED=true',
+    'RESEARCH_CODE_SHA=' + 'b'.repeat(40),
+  ];
+  assert.deepEqual(previous.filter(line => keep.test(line)), previous.slice(0, 4));
+});
