@@ -12,11 +12,10 @@ const mode = String(process.env.PRODUCTION_OBSERVER_MODE ?? 'critical').toLowerC
 const artifactDir = path.resolve('production-health-observer-artifacts');
 fs.mkdirSync(artifactDir, { recursive: true });
 
-const CRITICAL_ROUTES = ['/', '/login', '/stocks', '/scanner', '/ai-chart', '/news-information'] as const;
+const CRITICAL_ROUTES = ['/', '/login', '/stocks', '/scanner', '/ai-chart'] as const;
 const FULL_ROUTES = [
   ...CRITICAL_ROUTES,
-  '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/market-overview',
-  '/market-rankings', '/market-browser', '/themes', '/learn', '/watchlist', '/alerts',
+  '/market-overview', '/watchlist', '/alerts',
   '/portfolio', '/position', '/recommendations', '/backtests', '/paper-trading', '/account',
   '/more', '/settings',
 ] as const;

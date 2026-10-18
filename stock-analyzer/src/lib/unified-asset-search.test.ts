@@ -129,9 +129,10 @@ test('application routes keep unified search capability-gated and separate from 
   assert.match(appSource, /function UnifiedAssetSearchAccess\(\) \{ return gated\('canAccessBasicInfo', builder\('ASSET_SEARCH', <UnifiedAssetSearchPage \/>\)\); \}/);
   assert.match(appSource, /<Route path="\/stocks" component=\{UnifiedAssetSearchAccess\} \/>/);
   assert.match(appSource, /<Route path="\/search" component=\{UnifiedAssetSearchAccess\} \/>/);
-  assert.match(appSource, /<Route path="\/market-rankings" component=\{SearchPage\} \/>/);
-  assert.match(appSource, /<Route path="\/market-browser" component=\{StocksPage\} \/>/);
-  assert.doesNotMatch(appSource, /<Route path="\/search" component=\{SearchPage\} \/>/);
+  assert.doesNotMatch(appSource, /\bSearchPage\b|\bStocksPage\b|@\/pages\/search'|@\/pages\/stocks'/);
+  assert.match(appSource, /'\/market-rankings',/);
+  assert.match(appSource, /'\/market-browser',/);
+  assert.match(appSource, /REMOVED_FEATURE_PATHS\.map\(\(path\) => <Route key=\{path\} path=\{path\}><Redirect to="\/" replace \/><\/Route>\)\}/);
 });
 
 test('keeps Production main global console contract intact', () => {

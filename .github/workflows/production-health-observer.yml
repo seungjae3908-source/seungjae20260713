@@ -127,7 +127,7 @@ jobs:
           node --input-type=module <<'NODE'
           const fs = await import('node:fs');
           const base = process.env.PRODUCTION_BASE_URL.replace(/\/$/, '');
-          const paths = ['/api/health', '/', '/login', '/stocks', '/scanner', '/ai-chart', '/news-information'];
+          const paths = ['/api/health', '/', '/login', '/stocks', '/scanner', '/ai-chart'];
           const failures = [];
           const results = [];
           const clean = (value) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 400);

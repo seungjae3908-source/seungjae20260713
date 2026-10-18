@@ -164,7 +164,6 @@ test('malformed recommendation rows fail closed before investment facts are rend
 
 test('every recommendation consumer validates unknown transport payload before empty-state rendering', () => {
   const recommendationsPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/recommendations.tsx'), 'utf8');
-  const stocksPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/stocks.tsx'), 'utf8');
 
   expect(recommendationsPage).toContain('await apiGet<unknown>(`/market/recommendations?market=${market}`)');
   expect(recommendationsPage).toContain('requireRecommendationResponse<RecoResponse>');
@@ -172,8 +171,6 @@ test('every recommendation consumer validates unknown transport payload before e
   expect(recommendationsPage).toContain('!query.isLoading && !query.isError && rows.length === 0');
   expect(recommendationsPage).toContain('조건 미달 종목으로 채우지 않습니다.');
 
-  expect(stocksPage).toContain('await apiGet<unknown>(`/market/recommendations?market=${mode.stockMarket}`)');
-  expect(stocksPage).toContain('requireRecommendationResponse<RecoResponse>');
-  expect(stocksPage).toContain('if (recommendations.isError)');
-  expect(stocksPage).toContain('const rows = recommendations.data?.rows ?? []');
+  // The /market-browser consumer (pages/stocks.tsx) was removed; /recommendations is the only consumer.
+  expect(fs.existsSync(path.resolve(process.cwd(), 'src/pages/stocks.tsx'))).toBe(false);
 });
