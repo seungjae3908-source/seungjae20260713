@@ -10,10 +10,21 @@ import {
   type TradingPlanInput,
 } from './trade-automation.types';
 
+// Tests below exercise LIVE paths that predate the owner's per-market real-order
+// switch: every market switch ON, turned on long before the first-week cap window.
+const LIVE_SWITCHES_ON = {
+  liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+  liveMarketEnabledAt: {
+    domestic_stock: '2026-01-01T00:00:00.000Z', us_stock: '2026-01-01T00:00:00.000Z',
+    crypto_spot: '2026-01-01T00:00:00.000Z', crypto_futures: '2026-01-01T00:00:00.000Z',
+  },
+};
+
 const HEX64 = 'a'.repeat(64);
 
 function policy() {
   return normalizeTradingPolicy({
+    ...LIVE_SWITCHES_ON,
     mode: 'automatic',
     automaticEnabled: true,
     emergencyStopped: false,
