@@ -39,6 +39,12 @@ import {
 // server budget so the browser cannot abort before the fail-closed fallback.
 const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
 
+// The stock scanner route budget (8s) starts only after authentication, which
+// may spend two bounded 3.5s Supabase read attempts, and result shaping follows
+// the scan. Staging aborted scans at the generic 12s guard while the server was
+// still inside that worst case, so keep the scanner transport guard outside it.
+const STOCK_SCANNER_REQUEST_TIMEOUT_MS = 20_000;
+
 let pageReadLifecycleController: AbortController | null = null;
 let pageReadLifecycleListenersBound = false;
 
@@ -247,10 +253,13 @@ export async function authorizedFetch(
   if (pageReadSignal?.aborted) throw abortReason(pageReadSignal);
 
   const marketInformationRequest = requestPath(input).startsWith('/api/market-information/');
+  const stockScannerRequest = method === 'GET' && requestPath(input) === '/api/market/scan';
   const timeoutMs = options.timeoutMs === undefined
     ? marketInformationRequest
       ? MARKET_INFORMATION_REQUEST_TIMEOUT_MS
-      : APP_API_REQUEST_TIMEOUT_MS
+      : stockScannerRequest
+        ? STOCK_SCANNER_REQUEST_TIMEOUT_MS
+        : APP_API_REQUEST_TIMEOUT_MS
     : options.timeoutMs;
   if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
     throw new Error(`invalid app API request timeout: ${timeoutMs}`);
