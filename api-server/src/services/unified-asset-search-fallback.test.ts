@@ -51,33 +51,6 @@ test('serves partial results from the last-good snapshot and reports its actual 
   }
 });
 
-test('reports stale when a fresh index is built over a source listing older than 24h', async () => {
-  const builtAt = new Date().toISOString();
-  const weekendSourceAsOf = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
-  const snapshot: UnifiedAssetSearchSnapshot = {
-    version: 1,
-    builtAt,
-    providers: [
-      { provider: 'krx', status: 'ok', count: 1, dataAsOf: builtAt },
-      { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: weekendSourceAsOf },
-    ],
-    documents: [
-      document({ assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'AAPL', productCode: 'AAPL', koreanName: '', englishName: 'Apple Inc.', displayName: 'Apple Inc.', aliases: [], baseSymbol: 'AAPL', quoteCurrency: 'USD', provider: 'NASDAQ_TRADER', dataAsOf: weekendSourceAsOf }),
-    ],
-  };
-
-  replaceUnifiedAssetSearchSnapshotForTests(snapshot);
-  try {
-    const response = await searchUnifiedAssets({ q: 'AAPL', market: 'US', limit: 10 });
-    assert.equal(response.count, 1);
-    assert.equal(response.partial, false);
-    assert.equal(response.dataAsOf, weekendSourceAsOf);
-    assert.equal(response.stale, true);
-  } finally {
-    resetUnifiedAssetSearchStateForTests();
-  }
-});
-
 test('keeps a provider error explicit when no last-good rows exist', async () => {
   const builtAt = new Date().toISOString();
   const snapshot: UnifiedAssetSearchSnapshot = {

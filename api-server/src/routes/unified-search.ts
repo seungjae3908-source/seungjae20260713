@@ -23,7 +23,7 @@ import {
   buildUsSearchFallback,
   US_SEARCH_SOFT_DEADLINE_MS,
 } from '../services/unified-us-search-fallback';
-import { deriveUnifiedSearchState } from '../services/unified-search-state';
+import { deriveUnifiedSearchState, markStaleWhenSourceIsOld } from '../services/unified-search-state';
 import {
   canonicalProductCode,
   type UnifiedAssetType,
@@ -171,7 +171,7 @@ router.get('/search/suggest', async (req, res) => {
   }
   const limit = Math.max(1, Math.min(50, Math.trunc(Number(req.query.limit ?? 25)) || 25));
   try {
-    const response = await searchWithMetadataSoftDeadline({ q, asset, market, limit });
+    const response = markStaleWhenSourceIsOld(await searchWithMetadataSoftDeadline({ q, asset, market, limit }));
     const state = deriveUnifiedSearchState({
       resultCount: response.count,
       partial: response.partial,
