@@ -67,10 +67,10 @@ function canonicalize(payload: CoreOrderbookPayload): InstrumentOrderbookPayload
   const status = canonicalStatus(payload);
   const warnings = [...payload.warnings];
   if (payload.status === 'provider_error') {
-    warnings.push('공급자 오류를 canonical unavailable 상태로 fail-closed 처리했습니다.');
+    warnings.push('호가 공급자 오류로 호가를 표시하지 않습니다.');
   }
   if (status === 'stale' && payload.freshness !== 'stale') {
-    warnings.push('상태와 최신성 정보가 일치하지 않아 stale로 fail-closed 처리했습니다.');
+    warnings.push('호가 상태와 갱신 시각이 맞지 않아 오래된 호가로 표시합니다.');
   }
 
   return {
@@ -134,6 +134,7 @@ function invalidTargetResponse(query: Request['query']) {
     assetClass,
     market,
     symbol,
+    currency,
     provider: null,
     providerTimestamp: null,
     receivedAt: new Date().toISOString(),
@@ -144,7 +145,7 @@ function invalidTargetResponse(query: Request['query']) {
     bestBid: null,
     spread: null,
     spreadPct: null,
-    warnings: ['assetClass, market, symbol 조합이 canonical orderbook target과 일치하지 않습니다.'],
+    warnings: ['호가를 조회할 수 없는 시장·종목 조합입니다.'],
     reason: 'INVALID_ORDERBOOK_TARGET',
     orderSubmitted: false as const,
     exchangeRequestSent: false as const,
