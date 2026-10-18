@@ -70,3 +70,37 @@ test('collector keeps independent symbols and fails partially without deleting g
   assert.equal(result.ledger.observations.some(row=>row.symbol==='ETHUSDT'),false);
   assert.equal(result.safety.executionAuthority,'NONE');
 });
+
+test('provider OI timestamp after the request start is accepted with receive-time availability',async()=>{
+  const ledger=createTemporalEvidenceLedgerV1({researchSha:SHA});
+  let clock=T;
+  const client={
+    get:async(path)=>{
+      clock+=400;
+      if(path.includes('open-interest')) return {data:{openInterestList:[{size:'100'}],ts:String(T+300)},code:'00000'};
+      if(path.includes('current-fund-rate')) return {data:[{fundingRate:'0.0001',fundingRateInterval:'8'}],code:'00000'};
+      if(path.includes('history-fund-rate')) return {data:[],code:'00000'};
+      if(path.includes('symbol-price')) return {data:[{price:'100',markPrice:'100',indexPrice:'100'}],code:'00000'};
+      if(path.includes('long-short')) return {data:[{longShortRatio:'1.1',ts:String(T-3600000)}],code:'00000'};
+      throw new Error('unexpected endpoint');
+    },
+  };
+  const result=await collectCryptoFuturesTemporalEvidenceV1({
+    ledger,symbols:['BTCUSDT'],client,now:()=>clock,producerSha:SHA,
+  });
+  assert.equal(result.results[0].status,'success',result.results[0].error);
+  const oi=result.ledger.observations.find(row=>row.feature==='openInterestRaw');
+  assert.equal(oi.observedAt,T+300);
+  assert.ok(oi.availableAt>=oi.observedAt);
+});
+
+test('provider timestamp ahead of the local clock delays availability instead of failing',()=>{
+  const ledger=createTemporalEvidenceLedgerV1({researchSha:SHA});
+  const observations=buildCryptoFuturesTemporalObservationsV1({
+    ledger,symbol:'BTCUSDT',producerSha:SHA,collectedAt:T,
+    context:{openInterest:100,openInterestTimestamp:T+2000},
+    longShortRecords:[],
+  });
+  const next=appendTemporalEvidenceV1(ledger,observations[0]);
+  assert.equal(next.observations[0].availableAt,T+2000);
+});
