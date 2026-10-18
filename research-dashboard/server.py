@@ -937,6 +937,188 @@ def summarize_runtime_liveness(last_success_at, now_ms=None):
     }
 
 
+FORMULA_DEVELOPMENT_LANES = (
+    'CRYPTO_FUTURES_LONG', 'CRYPTO_FUTURES_SHORT', 'CRYPTO_SPOT_LONG', 'KR_STOCK_LONG', 'US_STOCK_LONG',
+)
+FORMULA_DEVELOPMENT_STATUSES = frozenset(('SURVIVOR', 'WATCH', 'REJECT'))
+FORMULA_TEXT_PATTERN = __import__('re').compile(r'^[^\x00-\x1f<>`]{1,120}$')
+
+
+def formula_text(value, maximum=120):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > maximum or not FORMULA_TEXT_PATTERN.match(text) or FORBIDDEN_EVIDENCE_KEY.search(text) or ABSOLUTE_PATH.match(text):
+        return None
+    return text
+
+
+def formula_iso(value):
+    text = formula_text(value, 40)
+    return text if text and __import__('re').match(r'^\d{4}-\d{2}-\d{2}T[0-9:.]+Z$', text) else None
+
+
+def formula_labels(values, limit=4):
+    if not isinstance(values, list):
+        return []
+    return [label for label in (formula_text(value) for value in values[:limit]) if label]
+
+
+def formula_lane_id(value):
+    return value if value in FORMULA_DEVELOPMENT_LANES else None
+
+
+def summarize_combination_lane(row):
+    lane_id = formula_lane_id(row.get('laneId'))
+    if not lane_id:
+        return None
+    top = []
+    for item in (row.get('top') or [])[:5] if isinstance(row.get('top'), list) else []:
+        if not isinstance(item, dict) or item.get('finalStatus') not in FORMULA_DEVELOPMENT_STATUSES:
+            continue
+        validation = item.get('validation') if isinstance(item.get('validation'), dict) else {}
+        holdout = item.get('holdout') if isinstance(item.get('holdout'), dict) else None
+        unseen = item.get('unseen') if isinstance(item.get('unseen'), dict) else None
+        top.append({
+            'labels': formula_labels(item.get('labels')),
+            'finalStatus': item.get('finalStatus'),
+            'exitId': formula_text(item.get('exitId'), 8),
+            'trades': optional_integer_count(validation.get('trades')),
+            'meanReturn': finite_number(validation.get('meanReturn')),
+            'winRate': finite_number(validation.get('winRate')),
+            'profitFactor': finite_number(validation.get('profitFactor')),
+            'qValue': finite_number(item.get('qValue')),
+            'holdoutPass': optional_boolean(holdout.get('pass')) if holdout else None,
+            'unseenPass': optional_boolean(unseen.get('pass')) if unseen else None,
+        })
+    paper_candidates = row.get('paperCandidates')
+    return {
+        'laneId': lane_id,
+        'status': formula_text(row.get('status'), 40) or 'UNKNOWN',
+        'trialsEvaluated': optional_integer_count(row.get('trialsEvaluated')),
+        'trialsPlanned': optional_integer_count(row.get('trialsPlanned')),
+        'cumulativeTrials': optional_integer_count(row.get('cumulativeTrials')),
+        'survivors': optional_integer_count(row.get('survivors')),
+        'watch': optional_integer_count(row.get('watch')),
+        'rejected': optional_integer_count(row.get('rejected')),
+        'holdoutChecked': optional_integer_count(row.get('holdoutChecked')),
+        'paperCandidates': len(paper_candidates) if isinstance(paper_candidates, list) else 0,
+        'top': top,
+    }
+
+
+def summarize_exit_comparison_lane(row):
+    lane_id = formula_lane_id(row.get('laneId'))
+    if not lane_id:
+        return None
+    sets = []
+    for item in (row.get('signalSets') or [])[:4] if isinstance(row.get('signalSets'), list) else []:
+        if not isinstance(item, dict):
+            continue
+        winner = item.get('winner') if isinstance(item.get('winner'), dict) else {}
+        variants = []
+        for variant in (item.get('variants') or [])[:8] if isinstance(item.get('variants'), list) else []:
+            if not isinstance(variant, dict):
+                continue
+            validation = variant.get('validation') if isinstance(variant.get('validation'), dict) else {}
+            unseen = variant.get('unseen') if isinstance(variant.get('unseen'), dict) else {}
+            variant_id = formula_text(variant.get('variantId'), 40)
+            if not variant_id:
+                continue
+            variants.append({
+                'variantId': variant_id,
+                'trades': optional_integer_count(validation.get('trades')),
+                'meanR': finite_number(validation.get('meanR')),
+                'winRate': finite_number(validation.get('winRate')),
+                'maxConsecutiveLosses': optional_integer_count(validation.get('maxConsecutiveLosses')),
+                'unseenTrades': optional_integer_count(unseen.get('trades')),
+                'unseenMeanR': finite_number(unseen.get('meanR')),
+            })
+        sets.append({
+            'label': formula_text(item.get('label')) or '진입 신호',
+            'winnerStatus': 'WINNER' if winner.get('status') == 'WINNER' else 'NO_WINNER',
+            'winnerVariant': formula_text(winner.get('variantId'), 40) if winner.get('status') == 'WINNER' else None,
+            'variants': variants,
+        })
+    return {'laneId': lane_id, 'status': formula_text(row.get('status'), 40) or 'UNKNOWN', 'signalSets': sets}
+
+
+def summarize_formula_development(root):
+    """Read-only summary of combination search, exit comparison, exploratory paper and ops watchdog."""
+    combination = read_json_optional(root / 'latest' / 'combination-research-v1.json')
+    exits = read_json_optional(root / 'latest' / 'exit-strategy-comparison-v1.json')
+    paper = read_json_optional(root / 'latest' / 'exploratory-paper-ledger-v1.json')
+    watchdog = read_json_optional(root / 'latest' / 'ops-watchdog-v1.json')
+    result = {
+        'present': any(value is not None for value in (combination, exits, paper, watchdog)),
+        'status': 'PRESENT',
+        'combination': {'present': False, 'observedAt': None, 'lanes': []},
+        'exitComparison': {'present': False, 'observedAt': None, 'lanes': []},
+        'exploratoryPaper': {'present': False, 'observedAt': None, 'closed': None, 'open': None,
+                             'promotionEligibleRules': None, 'demotedRules': None, 'rules': []},
+        'watchdog': {'present': False, 'observedAt': None, 'healthy': None, 'problems': []},
+        'executionAuthority': 'NONE',
+    }
+    if not result['present']:
+        result['status'] = 'MISSING'
+        return result
+    if isinstance(combination, dict):
+        lanes = [summarize_combination_lane(row) for row in (combination.get('lanes') or []) if isinstance(row, dict)] if isinstance(combination.get('lanes'), list) else []
+        result['combination'] = {'present': True, 'observedAt': formula_iso(combination.get('observedAt')), 'lanes': [row for row in lanes if row][:8]}
+    if isinstance(exits, dict):
+        lanes = [summarize_exit_comparison_lane(row) for row in (exits.get('lanes') or []) if isinstance(row, dict)] if isinstance(exits.get('lanes'), list) else []
+        result['exitComparison'] = {'present': True, 'observedAt': formula_iso(exits.get('observedAt')), 'lanes': [row for row in lanes if row][:8]}
+    if isinstance(paper, dict):
+        totals = paper.get('totals') if isinstance(paper.get('totals'), dict) else {}
+        rules = []
+        for rule in (paper.get('rules') or [])[:200] if isinstance(paper.get('rules'), list) else []:
+            if not isinstance(rule, dict):
+                continue
+            forward = rule.get('forwardAll') if isinstance(rule.get('forwardAll'), dict) else {}
+            rules.append({
+                'laneId': formula_lane_id(rule.get('laneId')),
+                'labels': formula_labels(rule.get('labels')),
+                'lifecycle': formula_text(rule.get('lifecycle'), 20),
+                'open': optional_integer_count(rule.get('open')),
+                'trades': optional_integer_count(forward.get('n')),
+                'meanR': finite_number(forward.get('mean')),
+                'lower95': finite_number(forward.get('lower95')),
+                'winRate': finite_number(forward.get('winRate')),
+                'promotionEligible': rule.get('promotionEligible') is True,
+            })
+        rules.sort(key=lambda row: (-(row['trades'] or 0), row['labels']))
+        result['exploratoryPaper'] = {
+            'present': True, 'observedAt': formula_iso(paper.get('observedAt')),
+            'closed': optional_integer_count(totals.get('closed')), 'open': optional_integer_count(totals.get('open')),
+            'promotionEligibleRules': optional_integer_count(totals.get('promotionEligibleRules')),
+            'demotedRules': optional_integer_count(totals.get('demotedRules')),
+            'rules': rules[:10],
+        }
+    if isinstance(watchdog, dict):
+        problems = watchdog.get('problems') if isinstance(watchdog.get('problems'), list) else []
+        result['watchdog'] = {
+            'present': True, 'observedAt': formula_iso(watchdog.get('observedAt')),
+            'healthy': optional_integer_count(watchdog.get('healthy')),
+            'problems': [text for text in (formula_text(value, 60) for value in problems[:20]) if text],
+        }
+    return result
+
+
+def read_formula_development(root):
+    try:
+        return summarize_formula_development(root)
+    except Exception:
+        return {
+            'present': True, 'status': 'INVALID',
+            'combination': {'present': False, 'observedAt': None, 'lanes': []},
+            'exitComparison': {'present': False, 'observedAt': None, 'lanes': []},
+            'exploratoryPaper': {'present': False, 'observedAt': None, 'closed': None, 'open': None,
+                                 'promotionEligibleRules': None, 'demotedRules': None, 'rules': []},
+            'watchdog': {'present': False, 'observedAt': None, 'healthy': None, 'problems': []},
+            'executionAuthority': 'NONE',
+        }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
@@ -951,6 +1133,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
     formula_backtest = read_formula_queue_readback(root)
+    formula_development = read_formula_development(root)
     # A persisted SHA is untrusted until independently matched to the exact
     # root-managed detached Research release currently installed on the host.
     exact_research_sha = read_active_research_sha()
@@ -1017,6 +1200,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'blockedDataTasks': blocked_data_tasks,
             'cycles': cycles,
             'formulaBacktest': formula_backtest,
+            'formulaDevelopment': formula_development,
             'liquidityIndependence': liquidity_independence,
         },
         'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status,
