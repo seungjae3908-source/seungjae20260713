@@ -5,6 +5,10 @@ import type { ResearchPipelineCard, ResearchPipelineKey, ResearchProductStatus }
 import type { PromotionStageStatus, StrategyPromotionItem, StrategyPromotionResponse } from './strategy-promotion';
 import {
   answerCanonicalResearchQuestion,
+  buildPaperScorecard,
+  buildSourceReadiness,
+  evaluatePaperPromotion,
+  type PaperTradeResult,
   buildFullCostRows,
   buildResearchPipeline,
   classifyFunnelStage,
@@ -307,4 +311,58 @@ test('buildPromotionChecklist reports met, unmet and unmeasured conditions truth
   assert.equal(weak.trades, 'unmet');
   assert.equal(weak.kill, 'unmet');
   assert.equal(pickLeadingPromotionItem([]), null);
+});
+
+test('paper scorecard returns empty metrics without dividing by zero', () => {
+  const card = buildPaperScorecard([]);
+  assert.equal(card.trades, 0);
+  assert.equal(card.winRate, null);
+  assert.equal(card.lowerBound95Pct, null);
+  assert.equal(buildPaperScorecard(undefined).trades, 0);
+});
+
+test('paper scorecard ignores invalid rows and needs two trades for a lower bound', () => {
+  const card = buildPaperScorecard([
+    { symbol: 'A', netReturnPct: 1 },
+    { symbol: '', netReturnPct: 1 },
+    { symbol: 'B', netReturnPct: Number.NaN },
+  ] as PaperTradeResult[]);
+  assert.equal(card.trades, 1);
+  assert.equal(card.droppedInvalid, 2);
+  assert.equal(card.lowerBound95Pct, null);
+});
+
+test('paper scorecard computes mean, win rate, symbols and the 95% lower bound', () => {
+  const card = buildPaperScorecard([
+    { symbol: 'A', netReturnPct: 1 }, { symbol: 'B', netReturnPct: 3 },
+    { symbol: 'C', netReturnPct: -1 }, { symbol: 'A', netReturnPct: 1 },
+  ]);
+  const close = (a: number | null, b: number) => assert.ok(a !== null && Math.abs(a - b) < 1e-9, `${a} vs ${b}`);
+  close(card.meanPct, 1);
+  close(card.winRate, 0.75);
+  assert.equal(card.distinctSymbols, 3);
+  close(card.standardErrorPct, Math.sqrt(8 / 3) / 2);
+  close(card.lowerBound95Pct, 1 - 1.96 * (Math.sqrt(8 / 3) / 2));
+});
+
+test('paper promotion conditions are unmeasured with no trades and unmet below thresholds', () => {
+  assert.ok(evaluatePaperPromotion(buildPaperScorecard([])).every((row) => row.state === 'unmeasured'));
+  const few = evaluatePaperPromotion(buildPaperScorecard([
+    { symbol: 'A', netReturnPct: 1 }, { symbol: 'A', netReturnPct: 1.2 },
+  ]));
+  assert.equal(few.find((row) => row.key === 'paper-trades')?.state, 'unmet');
+  assert.equal(few.find((row) => row.key === 'paper-symbols')?.state, 'unmet');
+  assert.equal(few.find((row) => row.key === 'paper-lower-bound')?.state, 'met');
+});
+
+test('source readiness lists what each market lacks and keeps unknown unknown', () => {
+  const rows = buildSourceReadiness([
+    { market: 'CRYPTO_SPOT', rightsAttestationPinned: true, archiveSessionsPresent: true, holidayListPresent: null },
+    { market: 'KR_STOCK', rightsAttestationPinned: true, archiveSessionsPresent: true, holidayListPresent: false },
+    { market: 'US_STOCK', rightsAttestationPinned: null, archiveSessionsPresent: true, holidayListPresent: true },
+  ]);
+  assert.equal(rows[0].state, 'ready');
+  assert.equal(rows[1].state, 'missing');
+  assert.deepEqual(rows[1].missing, ['휴장일 목록']);
+  assert.equal(rows[2].state, 'unknown');
 });
