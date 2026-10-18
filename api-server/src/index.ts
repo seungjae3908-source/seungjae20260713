@@ -82,6 +82,17 @@ function healthPayload(route: '/health' | '/api/health') {
 
 app.disable('x-powered-by');
 
+// Baseline browser hardening for every response (API and the static web app).
+// No CSP here: the web app talks to several exchange and data hosts, so a CSP
+// needs its own allowlist before it can be turned on without breaking charts.
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
 // Production API responses are readable only by this site's own origin (the
 // request's host) or an explicitly configured origin. Requests without an
 // Origin header (server-to-server, same-origin GET) are unaffected.
