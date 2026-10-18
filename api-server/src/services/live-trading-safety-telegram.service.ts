@@ -12,6 +12,7 @@ import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service'
 import type { TelegramPolicyMarket } from './telegram-alert-policy.service';
 import type { TradingAssetClass, TradingPlanInput } from './trade-automation.types';
 import type { TrendPilotLaneEvent } from './trend-pilot-v1-lane.service';
+import type { PaperCostRuleHealth } from './trade-execution.service';
 
 type Deliver = typeof deliverPersonalTelegramAlert;
 
@@ -176,6 +177,54 @@ export async function notifyTrendPilotEvents(
         alert: {
           type: 'system_critical', title: alert.title, symbol: alert.symbol, market: MARKET_LABEL[market],
           details: alert.details, timestamp: now.toISOString(), dedupeKey: eventId, duplicateWindowMs: 3_600_000, cooldownMs: 0,
+        },
+        now,
+      }));
+    } catch {
+      results.push(null);
+    }
+  }
+  return results;
+}
+
+const COST_MARKET_ASSET: Record<PaperCostRuleHealth['market'], TradingAssetClass> = {
+  KR_STOCK: 'domestic_stock', US_STOCK: 'us_stock', CRYPTO_SPOT: 'crypto_spot', CRYPTO_FUTURES: 'crypto_futures',
+};
+
+/** Pure: markets this member trades in Paper whose cost schedule is not safely current. */
+export function paperCostRuleAlerts(
+  health: readonly PaperCostRuleHealth[],
+  marketEnabled: Readonly<Record<TradingAssetClass, boolean>>,
+): Array<{ market: TradingAssetClass; text: string }> {
+  const out: Array<{ market: TradingAssetClass; text: string }> = [];
+  for (const row of health) {
+    const asset = COST_MARKET_ASSET[row.market];
+    if (!marketEnabled[asset] || row.state === 'ACTIVE') continue;
+    const why = row.state === 'EXPIRING' ? `비용 규칙이 약 ${Math.max(0, Math.round(row.hoursLeft ?? 0))}시간 뒤 만료됩니다`
+      : row.state === 'EXPIRED' ? '비용 규칙이 만료되었습니다'
+        : row.state === 'NOT_YET_EFFECTIVE' ? '비용 규칙이 아직 시작 전입니다'
+          : row.state === 'INVALID_CONFIG' ? '비용 규칙 설정이 올바르지 않습니다' : '비용 규칙이 없습니다';
+    out.push({ market: asset, text: `${why}. 만료되면 이 시장의 모의 자동 정산(전비용 증거)이 멈춥니다. 서버 비용 규칙을 갱신해 주세요.` });
+  }
+  return out;
+}
+
+export async function notifyPaperCostRuleHealth(
+  input: { userId: string; health: readonly PaperCostRuleHealth[]; marketEnabled: Readonly<Record<TradingAssetClass, boolean>>; now?: Date },
+  deliver: Deliver = deliverPersonalTelegramAlert,
+) {
+  const alerts = paperCostRuleAlerts(input.health, input.marketEnabled);
+  const now = input.now ?? new Date();
+  const results = [];
+  for (const alert of alerts) {
+    const eventId = `paper-cost-rules:${input.userId}:${alert.market}:${kstDay(now)}`; // once per market per KST day
+    try {
+      results.push(await deliver({
+        userId: input.userId,
+        event: { userId: input.userId, eventId, market: POLICY_MARKET[alert.market], signalType: 'STRATEGY_HEALTH', priority: 'CRITICAL', occurredAt: now.toISOString() },
+        alert: {
+          type: 'system_critical', title: `${MARKET_LABEL[alert.market]} 모의 비용 규칙 점검`, market: MARKET_LABEL[alert.market],
+          details: alert.text, timestamp: now.toISOString(), dedupeKey: eventId, duplicateWindowMs: 24 * 3_600_000, cooldownMs: 0,
         },
         now,
       }));
