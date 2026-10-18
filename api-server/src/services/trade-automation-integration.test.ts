@@ -1465,3 +1465,32 @@ test('reader computes drawdown from closed Bitget candles, caches for a minute a
   const malformed = createBtcBenchmarkDrawdownReader(async () => ({ code: '40001', data: null }));
   assert.equal(await malformed(nowMs), null);
 });
+
+test('per-market live switch defaults OFF and blocks only new LIVE entries in that market', () => {
+  const defaults = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  assert.deepEqual(defaults.liveMarketEnabled, {
+    domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false,
+  });
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const live = plan({ accountMode: 'live' });
+  const paper = plan({ accountMode: 'paper' });
+  const blocked = (input: TradingPlanInput, policy = defaults) => evaluateTradingPlan(input, policy, options)
+    .blockCodes.includes('LIVE_MARKET_SWITCH_OFF');
+
+  assert.equal(blocked(live), true);
+  assert.equal(blocked(paper), false);
+  const upbitOn = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+  });
+  assert.equal(blocked(live, upbitOn), false);
+  // Another market stays off.
+  assert.equal(blocked(plan({ accountMode: 'live', exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR',
+    symbol: '005930', quantity: 1, quoteAmount: null }), upbitOn), true);
+  // Non-boolean values never switch a market on.
+  const garbage = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: 'yes', us_stock: 1, crypto_spot: null, crypto_futures: undefined } as never,
+  });
+  assert.deepEqual(Object.values(garbage.liveMarketEnabled ?? {}), [false, false, false, false]);
+});
