@@ -63,8 +63,10 @@ export function reconcileCanonicalPaperJournalMirrors(
     executionAuthority: 'NONE';
   }>;
 }> {
-  if (!Array.isArray(storedPayloads) || !Array.isArray(canonicalPayloads)
-    || storedPayloads.length > 5000 || canonicalPayloads.length > 5000)
+  // No row-count ceiling: the repository pages through every stored row and
+  // this reconciliation is linear (Map lookups). A fixed cap here turned a
+  // large-but-valid journal into an HTTP 500 instead of a correct read.
+  if (!Array.isArray(storedPayloads) || !Array.isArray(canonicalPayloads))
     throw new Error('PAPER_JOURNAL_MIRROR_BATCH_INVALID');
   const canonical = new Map<string, Payload>();
   for (const payload of canonicalPayloads) {
@@ -126,8 +128,13 @@ export function reconcileCanonicalPaperJournalMirrors(
  * We only suppress a second, identical, fully scoped real-order snapshot.
  */
 const LIVE_HISTORY_SOURCES = new Set([
-  'APP_AUTO', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',
+  'APP_AUTO', 'APP_MANUAL', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',
 ]);
+// Live orders placed by the app itself (automatic or user-clicked manual).
+// Both are projected by the same trade-automation adapter with the same
+// uppercase BROKER:userId account hash.
+const APP_LIVE_SOURCES = new Set(['APP_AUTO', 'APP_MANUAL']);
+const VERIFIED_UPBIT_BRIDGE_SCOPE = 'VERIFIED_SINGLE_PROVIDER_OWNER_VAULT';
 // The current APP_AUTO order adapter hashes uppercase BROKER:userId; the
 // read-only Upbit vault provider hashes lowercase provider:userId.
 // Neither is a real broker account number. Upbit order UUIDs uniquely bind
@@ -150,9 +157,9 @@ function verifiedOwnerAccountScope(payload: Payload, ownerId?: string): string |
       createHash('sha256').update(identity).digest('hex').slice(0,10);
     const expectedApp=prefix+hash(broker+':'+ownerId);
     const expectedVault=prefix+hash(broker.toLowerCase()+':'+ownerId);
-    if ((source==='APP_AUTO' && payload.accountIdMasked===expectedApp)
+    if ((APP_LIVE_SOURCES.has(source) && payload.accountIdMasked===expectedApp)
       || (source===broker+'_API' && payload.accountIdMasked===expectedVault)) {
-      return 'VERIFIED_SINGLE_PROVIDER_OWNER_VAULT';
+      return VERIFIED_UPBIT_BRIDGE_SCOPE;
     }
   }
   return payload.accountIdMasked;
@@ -199,17 +206,69 @@ function exactEconomicDuplicate(existing: Payload, external: Payload): boolean {
   }
   return true;
 }
+function validCostOrNull(value: unknown): boolean {
+  return value == null
+    || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+function hasExchangeOrderId(payload: Payload): boolean {
+  // The app adapter falls back to its *internal* order id when the exchange
+  // id is unknown; that is not exchange evidence and must never bind.
+  if (!APP_LIVE_SOURCES.has(String(payload.source))) return true;
+  const lineage = object(payload.canonicalLineage) ? payload.canonicalLineage : null;
+  const internal = lineage && Array.isArray(lineage.orderIds) ? lineage.orderIds : [];
+  return !internal.includes(payload.brokerOrderId);
+}
+/**
+ * Exchange-order-id binding (only for the verified Upbit owner bridge, where
+ * brokerOrderId is an Upbit order UUID: globally unique, never reused).
+ * Both rows are then snapshots of ONE exchange order, so exactly one may
+ * count. Returns which snapshot is authoritative, or null to fall back to
+ * the conservative rule (keep both):
+ *  - equal cumulative fill + equal average price: the provider row wins
+ *    (it carries the fee/tax receipt the app snapshot may lack);
+ *  - different cumulative fill: the larger one wins, but only when the
+ *    smaller one is an explicit PARTIALLY_FILLED snapshot.
+ * Any other disagreement (FILLED with different quantity/price, invalid
+ * provider costs, different position side/effect) keeps both rows.
+ */
+function exchangeOrderSupersession(
+  previous: Payload, external: Payload, previousScope: string | null,
+  externalScope: string | null,
+): 'EXTERNAL' | 'PREVIOUS' | null {
+  if (previousScope !== VERIFIED_UPBIT_BRIDGE_SCOPE
+    || externalScope !== VERIFIED_UPBIT_BRIDGE_SCOPE) return null;
+  if (!hasExchangeOrderId(previous) || !hasExchangeOrderId(external)) return null;
+  for (const key of ['symbol','side','positionSide','positionEffect','currency']) {
+    if (previous[key] !== external[key]) return null;
+  }
+  if (!validCostOrNull(external.fees) || !validCostOrNull(external.tax)) return null;
+  const fillStates = new Set(['FILLED', 'PARTIALLY_FILLED']);
+  if (!fillStates.has(String(previous.status)) || !fillStates.has(String(external.status)))
+    return null;
+  if (!positive(previous.filledQuantity) || !positive(external.filledQuantity)
+    || !positive(previous.averageFillPrice) || !positive(external.averageFillPrice))
+    return null;
+  if (equalNumber(previous.filledQuantity, external.filledQuantity)) {
+    return equalNumber(previous.averageFillPrice, external.averageFillPrice)
+      ? 'EXTERNAL' : null;
+  }
+  const [smaller, winner] = previous.filledQuantity < external.filledQuantity
+    ? [previous, 'EXTERNAL' as const] : [external, 'PREVIOUS' as const];
+  return smaller.status === 'PARTIALLY_FILLED' ? winner : null;
+}
 export function reconcileScopedExternalJournalHistory(
   known: readonly Payload[], external: readonly Payload[], ownerId?: string,
-): Readonly<{ payloads: readonly Payload[]; audit: Readonly<{
+): Readonly<{ payloads: readonly Payload[]; knownPayloads: readonly Payload[];
+  audit: Readonly<{
   contract: string;
   suppressedVerifiedDuplicateCount: number;
+  supersededKnownSnapshotCount: number;
   retainedExternalCount: number;
   financialMutationCount: 0;
   executionAuthority: 'NONE';
 }> }> {
-  if (!Array.isArray(known) || !Array.isArray(external)
-    || known.length > 5000 || external.length > 5000)
+  // No row-count ceiling (see reconcileCanonicalPaperJournalMirrors).
+  if (!Array.isArray(known) || !Array.isArray(external))
     throw new Error('JOURNAL_EXTERNAL_SCOPE_BATCH_INVALID');
   const knownByScope = new Map<string, Payload[]>();
   for (const payload of known) {
@@ -222,6 +281,7 @@ export function reconcileScopedExternalJournalHistory(
   }
   let suppressed=0;
   const retained: Payload[]=[];
+  const supersededKnown=new Set<Payload>();
   for (const payload of external) {
     if (!object(payload)) throw new Error('JOURNAL_EXTERNAL_PAYLOAD_INVALID');
     const key=verifiedLiveKey(payload, ownerId);
@@ -235,13 +295,33 @@ export function reconcileScopedExternalJournalHistory(
     }
     if (candidates.some((previous)=>exactEconomicDuplicate(previous,payload))) {
       suppressed++;
-    } else retained.push(payload);
+      continue;
+    }
+    // Fallback: bind by the exchange order UUID (verified bridge only).
+    const externalScope=verifiedOwnerAccountScope(payload, ownerId);
+    const verdicts=candidates.map((previous)=>({
+      previous,
+      winner: exchangeOrderSupersession(previous,payload,
+        verifiedOwnerAccountScope(previous,ownerId),externalScope),
+    }));
+    if (verdicts.some((verdict)=>verdict.winner==='PREVIOUS')) {
+      suppressed++;
+      continue;
+    }
+    for (const verdict of verdicts) {
+      if (verdict.winner==='EXTERNAL') supersededKnown.add(verdict.previous);
+    }
+    retained.push(payload);
   }
   return Object.freeze({
     payloads:Object.freeze(retained),
+    // Known rows minus app/stored snapshots superseded by the provider's
+    // view of the same exchange order. Stored rows are never rewritten.
+    knownPayloads:Object.freeze(known.filter((payload)=>!supersededKnown.has(payload))),
     audit:Object.freeze({
       contract:'journal-external-scoped-dedup/v1',
       suppressedVerifiedDuplicateCount:suppressed,
+      supersededKnownSnapshotCount:supersededKnown.size,
       retainedExternalCount:retained.length,
       financialMutationCount:0 as const,
       executionAuthority:'NONE' as const,
