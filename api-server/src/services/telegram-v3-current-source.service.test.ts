@@ -441,6 +441,45 @@ test('a verified candidate is sent in the owner v2 layout; a row without a plan 
  }
 });
 
+test('an accepted v2 signal is handed to follow-up tracking with its message id; a tracking failure changes nothing',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'telegram-v3-followup-hook-'));
+ const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL,beforeUs=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ const beforeApp=process.env.PUBLIC_APP_URL;
+ const tracked:any[]=[];let failTracking=false;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   process.env.PUBLIC_APP_URL='https://lsj119.com';
+   const make=(file:string)=>new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(path.join(dir,file)),
+     async()=>({ok:true as const,attempts:1,receipt:{messageId:4242,messageKind:'TEXT' as const,renderedText:'<b>signal</b>'}}),
+     async()=>new Response(JSON.stringify({ok:true,serviceSha:SHA,executionAuthority:'NONE',snapshot:fixture()}),{status:200}),
+     async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const}),
+     async(input:any)=>{if(failTracking)throw new Error('TELEGRAM_V3_FOLLOWUP_STATE_UNAVAILABLE');tracked.push(input);return true;},
+   );
+   const result=await make('a.json').runOnce(new Date(NOW));
+   assert.equal(result.publicDelivered,1);
+   assert.equal(tracked.length,1);
+   assert.equal(tracked[0].receipt.messageId,4242);
+   assert.equal(tracked[0].chatId,'-10083004999999');
+   assert.equal(tracked[0].symbol,'AAPL');
+   assert.deepEqual(tracked[0].entryZone,{from:229,to:231});
+   assert.equal(tracked[0].stopLoss,224);
+   assert.deepEqual(tracked[0].targets,[238,245]);
+   assert.match(tracked[0].key,/^signal-intelligence-v3:episode-v2:/u);
+   assert.deepEqual(tracked[0].buttons[0].map((b:any)=>b.text),['🛒 구매','📊 차트']);
+   failTracking=true;
+   const again=await make('b.json').runOnce(new Date(NOW));
+   assert.equal(again.publicDelivered,1);
+   assert.equal(again.failed,0);
+ }finally{
+   for(const [k,v] of [['SIGNAL_INTELLIGENCE_URL',beforeUrl],['TELEGRAM_US_STOCK_CHAT_ID',beforeUs],['PUBLIC_APP_URL',beforeApp]] as const){
+     if(v===undefined)delete process.env[k];else process.env[k]=v;
+   }
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+
 test('stable source-day episode identity is independent of release SHA and duplicate polls',()=>{
  const s:any=fixture();
  const key=verifiedTelegramV3EpisodeKey(s.rows[0],NOW);
