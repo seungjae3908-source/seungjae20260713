@@ -32,6 +32,8 @@ function policy(overrides: Record<string, unknown> = {}) {
   return normalizeTradingPolicy({
     mode: 'automatic', automaticEnabled: true, pilotStage: 'limited-50', bitgetLeverage: 5,
     marketEnabled: { crypto_futures: true, crypto_spot: true, domestic_stock: false, us_stock: false },
+    // Per-market live switch (default OFF) must be explicitly on for the lane to place live entries.
+    liveMarketEnabled: { crypto_futures: true, crypto_spot: true, domestic_stock: false, us_stock: false },
     exchangeEnabled: { bitget: true, upbit: true, kiwoom: false, toss: false },
     enabledStrategies: [TREND_PILOT_V1.strategyId, TREND_PILOT_SPOT_V1.strategyId],
     totalCapitalKrw: 10_000_000, maxOrderKrw: 1_000_000, maxInstrumentKrw: 1_000_000,
@@ -116,6 +118,8 @@ test('bitget: breakout → one signed 5x isolated entry, accepted by the risk ga
     assert.ok(decision.warnings.includes('TREND_PILOT_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED'));
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: true, serverLiveEnabled: true }).blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: false, serverLiveEnabled: false }).blockCodes.includes('LIVE_EXECUTION_DISABLED'));
+    // The per-market live switch stays authoritative: lane entries are refused while it is OFF.
+    assert.ok(evaluateTradingPlan(plan, policy({ liveMarketEnabled: { crypto_futures: false, crypto_spot: false, domestic_stock: false, us_stock: false } }), { emergencyStopped: false, serverLiveEnabled: true }).blockCodes.includes('LIVE_MARKET_SWITCH_OFF'));
     // altered size or stop → no exception
     for (const forged of [{ ...plan, stopPrice: plan.stopPrice - 500 }, { ...plan, estimatedKrw: plan.estimatedKrw * 2, quantity: (plan.quantity ?? 0) * 2 }, { ...plan, signalId: 'replay-2' }]) {
       const blocked = evaluateTradingPlan(forged, d.policy, { emergencyStopped: false, serverLiveEnabled: true });
