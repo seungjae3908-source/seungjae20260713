@@ -436,6 +436,59 @@ export const TIMING_RULES_V1 = Object.freeze([
   ...LEGEND_TRADER_RULES(),
 ]);
 
+// ------------------------------------------------------------------ volume-filter experiment
+// Owner request 2026-10-18: does a volume filter improve net return / drawdown of
+// the near-miss breakout rules? Two filters, fixed BEFORE looking at results, no
+// parameter search: RVOL15 = entry only when the entry bar's volume is >= 1.5x the
+// mean of the previous 20 bars; CONFIRM1 = entry only after the signal persisted a
+// second bar (one-bar delay; exits are never delayed). Every variant is added to
+// the trial count, so the multiple-testing deflation pays for the extra tries.
+export const VOLUME_FILTER_BASE_IDS_V1 = Object.freeze(['BB_BREAKOUT', 'KELTNER_BREAKOUT', 'DONCHIAN20_SMA200', 'RSI70_MOMENTUM']);
+export const VOLUME_FILTER_RVOL_MULTIPLE_V1 = 1.5;
+export const VOLUME_FILTER_RVOL_WINDOW_V1 = 20;
+
+/** Pure: blocks an entry (0 -> +-1 or a flip) unless `allow(i, side)`; the block lasts until the raw signal returns to 0 or flips. */
+export function gateEntriesV1(signal, allow) {
+  const out = new Array(signal.length).fill(0);
+  let prev = 0; let blocked = false;
+  for (let i = 0; i < signal.length; i += 1) {
+    const s = Number.isFinite(signal[i]) ? Math.sign(signal[i]) : 0;
+    if (s === 0) { blocked = false; } else if (s !== prev) { blocked = !allow(i, s); }
+    out[i] = s !== 0 && !blocked ? signal[i] : 0;
+    prev = s;
+  }
+  return out;
+}
+
+/** Pure: true when volume[i] >= multiple x mean(volume[i-window..i-1]); false on missing or zero volume. */
+export function relativeVolumeOkV1(volume, i, { multiple = VOLUME_FILTER_RVOL_MULTIPLE_V1, window = VOLUME_FILTER_RVOL_WINDOW_V1 } = {}) {
+  if (!(i >= window)) return false;
+  let sum = 0;
+  for (let j = i - window; j < i; j += 1) { const v = volume[j]; if (!Number.isFinite(v) || v < 0) return false; sum += v; }
+  const mean = sum / window;
+  return mean > 0 && Number.isFinite(volume[i]) && volume[i] >= multiple * mean;
+}
+
+/** Pure: keep a position only from the second consecutive bar of the same raw signal. */
+export function confirmOneBarV1(signal) {
+  return signal.map((v, i) => (i > 0 && v !== 0 && Math.sign(v) === Math.sign(signal[i - 1] ?? 0) ? v : 0));
+}
+
+function buildVolumeFilteredRules() {
+  const byId = new Map(TIMING_RULES_V1.map((rule) => [rule.id, rule]));
+  const out = [];
+  for (const baseId of VOLUME_FILTER_BASE_IDS_V1) {
+    const base = byId.get(baseId);
+    if (!base) continue;
+    out.push({ id: `${baseId}__RVOL15`, family: '거래량필터', baseId, filter: 'RVOL15', name: `${base.name} + 상대거래량 ≥1.5배(20봉 평균) 진입`, source: `${base.source}; 거래량 필터 실험`,
+      make: (ctx) => { const volume = ctx.bars.map((b) => b.volume ?? 0); return gateEntriesV1(base.make(ctx), (i) => relativeVolumeOkV1(volume, i)); } });
+    out.push({ id: `${baseId}__CONFIRM1`, family: '거래량필터', baseId, filter: 'CONFIRM1', name: `${base.name} + 돌파 다음 봉 확인 진입`, source: `${base.source}; 돌파 확인 실험`,
+      make: (ctx) => confirmOneBarV1(base.make(ctx)) });
+  }
+  return Object.freeze(out);
+}
+export const VOLUME_FILTERED_RULES_V1 = buildVolumeFilteredRules();
+
 // Rules written down from famous traders / YouTubers' public descriptions.
 // Discretionary parts (news, earnings, tape reading) cannot be coded; what is
 // coded is the mechanical skeleton each of them teaches. Adaptations are named.
@@ -1050,7 +1103,7 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
     for (const model of ALLOCATION_MODELS_V1) add({ id: model.id, family: '자산배분', name: model.name, source: model.source, kind: 'allocation' }, simulateAllocationPortfolio(panel, model, market));
   }
   const SIDE_KO = { LONG: '롱만', SHORT: '숏만', LS: '롱숏' };
-  for (const rule of allocationOnly ? [] : TIMING_RULES_V1) {
+  for (const rule of allocationOnly ? [] : [...TIMING_RULES_V1, ...VOLUME_FILTERED_RULES_V1]) {
     if (rule.nativeShort) {
       // a rule that only exists as a short: futures only, run as written
       if (market === 'CRYPTO_FUTURES') add({ id: rule.id, family: rule.family, name: `${rule.name} [숏만]`, source: rule.source, kind: 'timing', side: 'SHORT' }, simulateTimingPortfolio(panel, timingTargets(panel, rule, market), market));
@@ -1129,7 +1182,44 @@ export function formatStrategyZooReportKoV1(markets) {
     }
     lines.push('');
   }
+  lines.push(...formatVolumeFilterComparisonKoV1(markets));
   lines.push('판정 기준: 검증구간 샤프 ≥ 0.5, 수익 플러스, 앞 구간도 플러스, 다중검정 보정(실효 시행 수) 후 우연 아닐 확률 ≥ 90%, 그리고 그냥 보유보다 샤프가 높거나 낙폭이 40% 이상 작으면서 수익 절반 이상. 1차 실행 후 보정 시행 수를 "전체"에서 "실효(상관 반영)"로 바꿨고, 전체 기준 값도 함께 표시합니다.');
   lines.push('한계: 종목은 현재 대형주·상장 코인(생존 편향) — 특히 물타기(DCA)·평균회귀·로테이션은 망한 종목이 빠져 실제보다 좋게 나옵니다. 주식 해외 환전비 미반영, 과거 성적일 뿐 미래 보장 아님. 주문 권한 없음.');
   return lines.join('\n');
+}
+
+/** Pure: filtered rule vs the same rule without the filter, same data and costs. A filter that does not help is marked for removal. */
+export function compareVolumeFilterV1(rows) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = [];
+  for (const rule of VOLUME_FILTERED_RULES_V1) {
+    for (const suffix of ['', '__LONG', '__SHORT', '__LS']) {
+      const filtered = byId.get(`${rule.id}${suffix}`); const base = byId.get(`${rule.baseId}${suffix}`);
+      if (!filtered || !base) continue;
+      const f = filtered.full; const b = base.full; const fv = filtered.validation; const bv = base.validation;
+      if (![f?.cagr, b?.cagr, fv?.sharpe, bv?.sharpe].every(Number.isFinite)) { out.push({ id: filtered.id, baseId: base.id, filter: rule.filter, verdict: 'NO_DATA' }); continue; }
+      const cagrDelta = f.cagr - b.cagr; const mddDelta = b.maxDrawdown - f.maxDrawdown; const sharpeDelta = fv.sharpe - bv.sharpe;
+      // Kept only if net return is not worse, drawdown is not deeper, validation Sharpe improves, and the validation CAGR stays positive.
+      const keep = cagrDelta >= 0 && mddDelta >= 0 && sharpeDelta > 0 && fv.cagr > 0;
+      out.push({ id: filtered.id, baseId: base.id, filter: rule.filter, name: filtered.name, cagrDelta, mddDelta, validationSharpeDelta: sharpeDelta, validationCagr: fv.cagr,
+        deflatedSharpe: filtered.deflatedSharpe ?? null, verdict: keep ? 'KEEP' : 'REMOVE' });
+    }
+  }
+  return out;
+}
+
+export function formatVolumeFilterComparisonKoV1(markets) {
+  const lines = [];
+  for (const m of markets) {
+    if (!m.rows?.length) continue;
+    const comparisons = compareVolumeFilterV1(m.rows);
+    if (!comparisons.length) continue;
+    lines.push(`■ 거래량 필터 비교 · ${m.label} (같은 데이터·같은 비용, 필터 없는 같은 전략 대비)`);
+    for (const c of comparisons) {
+      if (c.verdict === 'NO_DATA') { lines.push(`  데이터 부족 ${c.id}`); continue; }
+      lines.push(`  ${c.verdict === 'KEEP' ? '✅ 유지' : '❌ 제거'} ${c.name}: 연수익 ${pct(c.cagrDelta)}p · 낙폭 ${pct(c.mddDelta)}p 개선 · 검증 샤프 ${c.validationSharpeDelta >= 0 ? '+' : ''}${num(c.validationSharpeDelta)} · 검증 연 ${pct(c.validationCagr)} · 보정 ${num(c.deflatedSharpe)}`);
+    }
+    lines.push('');
+  }
+  return lines;
 }
