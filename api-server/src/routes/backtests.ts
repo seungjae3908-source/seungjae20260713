@@ -69,6 +69,7 @@ function parseRequest(body: unknown): BacktestRequest {
     slippageRate: numberField(body, 'slippageRate'),
     fundingRatePerInterval: optionalNumber(body, 'fundingRatePerInterval'),
     fundingIntervalHours: optionalNumber(body, 'fundingIntervalHours'),
+    taxRate: optionalNumber(body, 'taxRate'),
     stopLossMode: String(body.stopLossMode ?? '') as BacktestRequest['stopLossMode'],
     stopLossValue: numberField(body, 'stopLossValue'),
     takeProfitMode: String(body.takeProfitMode ?? '') as BacktestRequest['takeProfitMode'],
