@@ -1,0 +1,11 @@
+[Unit]
+Description=Every 4h (after each 4h candle closes) H4 majors long forward paper ledger
+
+[Timer]
+OnCalendar=*-*-* 00/4:07:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+Unit=research-production-h4-majors-forward.service
+
+[Install]
+WantedBy=timers.target
