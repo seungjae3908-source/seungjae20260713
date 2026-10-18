@@ -567,7 +567,7 @@ export function protectedAutomaticPaperCostPolicyV1(
     || !Array.isArray(value.rules) || value.rules.length > 8) return null;
   const allowed: Record<MemberAutoTradingFxMarket, readonly TradingExchange[]> = {
     KR_STOCK: ['toss', 'kiwoom'],
-    US_STOCK: ['kiwoom'],
+    US_STOCK: ['kiwoom', 'toss'],
     CRYPTO_SPOT: ['upbit'],
     CRYPTO_FUTURES: ['bitget'],
   };

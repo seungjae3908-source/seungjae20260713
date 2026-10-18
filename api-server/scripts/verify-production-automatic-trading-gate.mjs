@@ -36,6 +36,7 @@ const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.
 const tradeTypes = read('api-server/src/services/trade-automation.types.ts');
 const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts');
 const benchmarkRegime = read('api-server/src/services/crypto-benchmark-regime.service.ts');
+const spotLiveCapability = read('api-server/src/services/spot-live-limited-capability.service.ts');
 const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
 const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
@@ -128,6 +129,24 @@ requireText(benchmarkRegime, 'if (riskReducing) return false;', 'AUTO_GATE_BENCH
 requireText(benchmarkRegime, 'value = null;', 'AUTO_GATE_BENCHMARK_DRAWDOWN_FAIL_OPEN_MISSING');
 requireText(paperWorker, 'withBenchmarkDrawdown(buildPlanInput(', 'AUTO_GATE_BENCHMARK_DRAWDOWN_LIVE_WIRING_MISSING');
 requireText(tradeIntegrationTest, 'BTC benchmark drawdown blocks only new crypto long/buy entries', 'AUTO_GATE_BENCHMARK_DRAWDOWN_REGRESSION_MISSING');
+// Owner-approved stock routing: KR and US stocks each route through the selected broker (Toss or Kiwoom).
+requireText(spotLiveCapability, "toss: new Set(['KR_STOCK', 'US_STOCK'])", 'AUTO_GATE_TOSS_US_STOCK_CAPABILITY_MISSING');
+requireText(tradeRisk, "us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const", 'AUTO_GATE_US_STOCK_BROKER_SELECTION_MISSING');
+requireText(paperWorker, "if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';", 'AUTO_GATE_US_STOCK_WORKER_ROUTING_MISSING');
+requireText(tradeIntegrationTest, "[{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true]", 'AUTO_GATE_TOSS_US_REGRESSION_MISSING');
+// Owner per-market real-order switch (default OFF) and the first-week small-order cap.
+requireText(tradeRisk, "add(blockCodes, 'LIVE_MARKET_SWITCH_OFF')", 'AUTO_GATE_LIVE_MARKET_SWITCH_MISSING');
+requireText(tradeRisk, "add(blockCodes, 'LIVE_FIRST_WEEK_ORDER_CAP')", 'AUTO_GATE_LIVE_FIRST_WEEK_CAP_MISSING');
+requireText(paperWorker, 'if (liveModeRequested && !memberLiveMarketSwitchOn(member.policy, entry.identity.market)) {', 'AUTO_GATE_WORKER_LIVE_SWITCH_MISSING');
+requireText(tradeIntegrationTest, 'per-market live switch defaults OFF and blocks only new LIVE entries in that market', 'AUTO_GATE_LIVE_SWITCH_REGRESSION_MISSING');
+// Manual order ticket: server-built LIVE plan in APPROVAL mode; nothing is sent until explicit approval.
+requireText(tradeAutomationRoute, "router.post('/manual-orders/plan'", 'AUTO_GATE_MANUAL_TICKET_ROUTE_MISSING');
+requireText(tradeAutomationRoute, 'approvalRequired: true,', 'AUTO_GATE_MANUAL_TICKET_APPROVAL_MISSING');
+requireText(tradeIntegrationTest, 'manual order ticket builds a LIVE approval plan from server-read data, never from the browser price', 'AUTO_GATE_MANUAL_TICKET_REGRESSION_MISSING');
+// Owner manual ticket: amount caps and strategy-evidence gates do not apply, never to automatic plans.
+const manualOwnerOrder = read('api-server/src/services/manual-owner-order.ts');
+requireText(manualOwnerOrder, "&& plan.executionMode !== 'automatic';", 'AUTO_GATE_MANUAL_OWNER_NOT_AUTOMATIC_MISSING');
+requireText(tradeIntegrationTest, 'owner manual ticket orders skip amount caps and strategy-evidence gates but keep account protection', 'AUTO_GATE_MANUAL_OWNER_REGRESSION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');

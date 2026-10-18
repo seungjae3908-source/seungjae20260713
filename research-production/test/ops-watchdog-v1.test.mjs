@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { decideOpsAlertsV1, opsTelegramConfigV1, runOpsWatchdogV1 } from '../src/ops-watchdog-v1.mjs';
+import { decideOpsAlertsV1, opsTelegramConfigV1, runOpsWatchdogV1, sendOpsTelegramV1 } from '../src/ops-watchdog-v1.mjs';
 
 const TOKEN = '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const ENV = { RESEARCH_OPS_TELEGRAM_BOT_TOKEN: TOKEN, RESEARCH_OPS_TELEGRAM_CHAT_ID: '-1001234567' };
@@ -83,4 +83,14 @@ test('a failed Telegram delivery is retried on the next run', async (t) => {
   const second = await runOpsWatchdogV1({ stateRoot: root, targets: TARGETS.slice(0, 1), env: ENV, fetchImpl: fetcher({ sent }) });
   assert.equal(second.delivery[0], 'SENT');
   assert.equal(sent.length, 1);
+});
+
+test('ops Telegram send widens the IPv6/IPv4 race budget and names network failures', async () => {
+  const { getDefaultAutoSelectFamilyAttemptTimeout } = await import('node:net');
+  const config = { token: TOKEN, chatId: '-1001234567' };
+  await sendOpsTelegramV1(config, 'x', async () => ({ ok: true }));
+  assert.ok(getDefaultAutoSelectFamilyAttemptTimeout() >= 2_500);
+  const timeout = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('t'), { code: 'ETIMEDOUT' }) });
+  await assert.rejects(sendOpsTelegramV1(config, 'x', async () => { throw timeout; }), /^Error: OPS_TELEGRAM_NETWORK_ETIMEDOUT$/);
+  await assert.rejects(sendOpsTelegramV1(config, 'x', async () => { throw new TypeError('fetch failed'); }), /OPS_TELEGRAM_NETWORK_FAILED/);
 });

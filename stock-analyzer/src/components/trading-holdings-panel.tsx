@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
+import { openManualOrderTicket, type ManualOrderMarket } from '@/lib/manual-order-ticket';
 import { useAnalysisSelection, selectionQuery, type AnalysisMarket, type AnalysisSelection } from '@/lib/analysis-selection';
 import { resolveAssetDetailPath } from '@/lib/asset-navigation';
 
@@ -93,6 +95,22 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
     if (selected && !dialog.current?.open) dialog.current?.showModal();
     if (!selected && dialog.current?.open) dialog.current.close();
   }, [selected]);
+
+  const auth = useAuth();
+  const canSellLive = accountMode === 'live' && auth.can('canPlaceOrders');
+  function openExitTicket(row: TradingHolding) {
+    const market: ManualOrderMarket | null = row.market === 'KR' ? 'domestic_stock' : row.market === 'US' ? 'us_stock'
+      : row.market === 'UPBIT' ? 'crypto_spot' : row.market === 'BITGET' ? 'crypto_futures' : null;
+    if (!market) return;
+    const short = String(row.side ?? '').toLowerCase() === 'short';
+    setSelectedId(null);
+    openManualOrderTicket({
+      market,
+      symbol: market === 'crypto_spot' ? row.symbol.replace(/^KRW-/u, '') : row.symbol,
+      action: market === 'crypto_futures' ? (short ? 'close_short' : 'close_long') : 'sell',
+      quantity: row.quantity,
+    });
+  }
 
   function navigateAsset(row: TradingHolding, chart: boolean) {
     if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(row.market)) return;
@@ -213,6 +231,11 @@ export function TradingHoldingsPanel({ market, providers, accountMode, origin, u
             <button type="button" disabled={!canChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-40"
               onClick={() => navigateAsset(selected, true)}>AI차트</button>
           </div>
+          {canSellLive ? <button type="button" data-testid="holding-open-exit-ticket"
+            className="min-h-12 w-full rounded-xl bg-blue-600 px-3 text-sm font-extrabold text-white"
+            onClick={() => openExitTicket(selected)}>
+            {selected.market === 'BITGET' ? '포지션 청산 주문' : '매도 주문'}
+          </button> : null}
         </div> : null}
       </dialog>
     </section>

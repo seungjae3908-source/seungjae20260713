@@ -457,6 +457,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveCycleScopedPolicyReady: boolean;
   liveMarketScope: readonly AutomaticLiveMarket[];
   liveEntriesOutsideMarketScope: number;
+  liveEntriesSwitchedOff: number;
   globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
@@ -588,7 +589,7 @@ export function resolveMemberStockBroker(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
 ): 'kiwoom' | 'toss' | null {
   if (market === 'KR_STOCK') return policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
-  if (market === 'US_STOCK') return 'kiwoom';
+  if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return null;
 }
 
@@ -726,8 +727,9 @@ function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
     return false;
   }
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  const usBroker = policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return (policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker])
-    || (policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom)
+    || (policy.marketEnabled.us_stock && policy.exchangeEnabled[usBroker])
     || (policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit)
     || (policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget);
 }
@@ -738,12 +740,13 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
   }
   if (policy.pilotStage === 'approval-20') return false;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  const usBroker = policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
   return policy.marketEnabled.domestic_stock
     && policy.marketEnabled.us_stock
     && policy.marketEnabled.crypto_spot
     && policy.marketEnabled.crypto_futures
     && policy.exchangeEnabled[domesticBroker]
-    && policy.exchangeEnabled.kiwoom
+    && policy.exchangeEnabled[usBroker]
     && policy.exchangeEnabled.upbit
     && policy.exchangeEnabled.bitget;
 }
@@ -780,6 +783,17 @@ export function automaticLiveMarketScope(env: NodeJS.ProcessEnv = process.env): 
   if (tokens.length === 0 || new Set(tokens).size !== tokens.length
     || tokens.some((token) => !(AUTOMATIC_LIVE_MARKETS as readonly string[]).includes(token))) return Object.freeze([]);
   return Object.freeze(AUTOMATIC_LIVE_MARKETS.filter((market) => tokens.includes(market)));
+}
+
+/** Owner's per-market real-order switch from the settings screen (default OFF). */
+export function memberLiveMarketSwitchOn(
+  policy: TradingPolicy,
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+): boolean {
+  const assetClass: TradingAssetClass = market === 'KR_STOCK' ? 'domestic_stock'
+    : market === 'US_STOCK' ? 'us_stock'
+      : market === 'CRYPTO_SPOT' ? 'crypto_spot' : 'crypto_futures';
+  return policy.liveMarketEnabled?.[assetClass] === true;
 }
 
 export function automaticLiveScopeIsAllFour(scope: readonly AutomaticLiveMarket[]) {
@@ -2401,6 +2415,7 @@ export class MemberAutoTradingBackgroundWorker {
       liveCycleScopedPolicyReady: false,
       liveMarketScope,
       liveEntriesOutsideMarketScope: 0,
+      liveEntriesSwitchedOff: 0,
       globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
@@ -2806,6 +2821,12 @@ export class MemberAutoTradingBackgroundWorker {
           if (liveModeRequested && !liveMarketScope.includes(entry.identity.market)) {
             result.skipped += 1;
             result.liveEntriesOutsideMarketScope += 1;
+            continue;
+          }
+          // Owner's per-market real-order switch (settings screen). OFF = no new LIVE entry.
+          if (liveModeRequested && !memberLiveMarketSwitchOn(member.policy, entry.identity.market)) {
+            result.skipped += 1;
+            result.liveEntriesSwitchedOff += 1;
             continue;
           }
           result.evaluated += 1;
