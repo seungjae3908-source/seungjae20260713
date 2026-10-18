@@ -199,6 +199,20 @@ test('short limit fills when completed candle high reaches limit', () => {
   assert.equal(result.order?.status, 'filled');
 });
 
+test('a candle that opened before the order never fills it', () => {
+  const pending = place(undefined, { request: { orderType: 'limit', requestedPrice: 95, stopLossPrice: 92, takeProfitPrice1: 100, takeProfitPrice2: 105 } });
+  const earlier = process(pending.state, { timestamp: NOW.getTime() - 15 * 60_000, open: 97, high: 98, low: 94, close: 96 });
+  assert.equal(earlier.fills.length, 0);
+  assert.equal(earlier.state.orders[0].status, 'pending');
+});
+
+test('a candle that opened before the position never stops it out', () => {
+  const opened = place();
+  const earlier = process(opened.state, { timestamp: NOW.getTime() - 15 * 60_000, open: 99, high: 100, low: 90, close: 95 });
+  assert.equal(earlier.fills.length, 0);
+  assert.notEqual(earlier.state.positions[0].status, 'closed');
+});
+
 test('favorable long limit gap uses candle open without exceeding limit', () => {
   const pending = place(undefined, { request: { orderType: 'limit', requestedPrice: 95, stopLossPrice: 92, takeProfitPrice1: 100, takeProfitPrice2: 105 } });
   const result = process(pending.state, { open: 93, high: 96, low: 92, close: 94 });
