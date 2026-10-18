@@ -28,6 +28,11 @@ export class AccountReadonlyService {
     private readonly credentialConfigured: AccountCredentialConfigurationReader = async () => false,
   ) {}
 
+  /** Forget the last good snapshot, e.g. after the member removed the key. */
+  invalidate(userId: string, provider: AccountProvider) {
+    this.lastGood.delete(`${userId.trim()}:${provider}`);
+  }
+
   bitgetDiagnosticFor(snapshot: CanonicalAccountSnapshot) {
     return this.bitgetDiagnostics.get(snapshot) ?? null;
   }
@@ -88,7 +93,12 @@ export class AccountReadonlyService {
       return value;
     } catch (error) {
       const classified = classifyProviderError(error);
-      if (isAccountReadonlyCredentialAccessError(classified.code)) {
+      // No saved key (removed or never saved): never serve an older balance.
+      if (classified.code === 'ACCOUNT_NOT_CONFIGURED') {
+        this.lastGood.delete(cacheKey);
+        return emptySnapshot(provider, 'NOT_CONFIGURED', this.now().toISOString(), classified.code);
+      }
+      if (isAccountReadonlyCredentialAccessError(classified.code) || classified.code === 'CREDENTIALS_UNAVAILABLE') {
         this.lastGood.delete(cacheKey);
         return this.attachBitgetDiagnostic(
           emptySnapshot(provider, 'AUTH_FAILED', this.now().toISOString(), classified.code),
