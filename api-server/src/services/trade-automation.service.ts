@@ -182,7 +182,40 @@ export class TradeAutomationService {
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
 
-  async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
+  /**
+   * Owner decision 2026-10-18: an emergency stop or 작동 OFF blocks new
+   * entries only. A stop-loss / take-profit exit of a position this member's
+   * automatic run already owns keeps its automatic authority. Only the
+   * background worker asks for this, and only for a risk-reducing exit whose
+   * entry plan is a canonical automatic plan of the same member and account.
+   */
+  private async protectiveExitOfAutomaticEntry(
+    userId: string,
+    input: TradingPlanInput,
+    options: { protectiveExit?: boolean },
+  ) {
+    if (options.protectiveExit !== true || !isRiskReducingExitPlan(input)) return false;
+    const entryPlanId = input.signalReasons.find((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:'))
+      ?.slice('AUTO_EXIT_ENTRY_PLAN:'.length);
+    if (!entryPlanId) return false;
+    const entry = await this.repository.getPlan(userId, entryPlanId);
+    return entry != null && entry.userId === userId && entry.executionMode === 'automatic'
+      && entry.reduceOnly !== true && entry.accountMode === input.accountMode
+      && entry.exchange === input.exchange && entry.symbol === input.symbol;
+  }
+
+  /** The plan that decides a kill switch's scope; unreadable means "treat as a LIVE entry". */
+  private async killSwitchPlan(userId: string, planId: string) {
+    try { return await this.repository.getPlan(userId, planId); } catch { return null; }
+  }
+
+  async createPlan(
+    userId: string,
+    input: TradingPlanInput,
+    policy: TradingPolicy,
+    emergencyStopped: boolean,
+    options: { protectiveExit?: boolean } = {},
+  ) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
     const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
     if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
@@ -205,14 +238,18 @@ export class TradeAutomationService {
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, plan: input });
       return { plan: null, duplicate: false, decision };
     }
 
     const now = new Date();
+    const protectiveExit = !(policy.mode === 'automatic' && policy.automaticEnabled)
+      && await this.protectiveExitOfAutomaticEntry(userId, input, options);
     const plan: TradingPlan = {
       ...input,
       executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
+      // A protective exit of an owned automatic entry keeps automatic authority while stopped.
+      ...(protectiveExit ? { executionMode: 'automatic' as const } : {}),
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
@@ -254,7 +291,7 @@ export class TradeAutomationService {
       serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, plan });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
@@ -280,13 +317,14 @@ export class TradeAutomationService {
     return approved;
   }
 
-  async beginAutomaticPlan(userId: string, planId: string) {
+  async beginAutomaticPlan(userId: string, planId: string, options: { protectiveExit?: boolean } = {}) {
     const plan = await this.repository.getPlan(userId, planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
     const expectedVersion = planVersion(plan);
     const storedPolicy = await this.repository.getPolicy(userId);
-    if (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled
+    const automaticRun = storedPolicy.mode === 'automatic' && storedPolicy.automaticEnabled;
+    if ((!automaticRun && !await this.protectiveExitOfAutomaticEntry(userId, plan, options))
       || plan.executionMode !== 'automatic') {
       throw new Error('USER_APPROVAL_REQUIRED');
     }
@@ -304,7 +342,7 @@ export class TradeAutomationService {
       serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, plan });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
@@ -516,11 +554,15 @@ export class TradeAutomationService {
     if (order.state === 'RECOVERY_REQUIRED') {
       escalationCodes.push('ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED');
     }
-    await tripKillSwitchForRiskFailure({
-      repository: this.repository,
-      userId: order.userId,
-      blockCodes: escalationCodes,
-    });
+    if (escalationCodes.length > 0) {
+      await tripKillSwitchForRiskFailure({
+        repository: this.repository,
+        userId: order.userId,
+        blockCodes: escalationCodes,
+        // Kill scope follows the order's plan; an unreadable plan counts as a LIVE entry.
+        plan: await this.killSwitchPlan(order.userId, order.planId),
+      });
+    }
     return order;
   }
 
@@ -537,6 +579,7 @@ export class TradeAutomationService {
           repository: this.repository,
           userId,
           blockCodes: ['ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED'],
+          plan: await this.killSwitchPlan(userId, order.planId),
         });
       }
     }

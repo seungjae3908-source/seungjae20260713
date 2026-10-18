@@ -478,6 +478,8 @@ const autoRunControlReviewed=[
   'api-server/src/services/trade-automation-run-control.service.test.ts',
   'api-server/src/services/trade-automation-run-control.service.ts',
   'api-server/src/services/trade-kill-switch.service.ts',
+  // Owner-approved 2026-10-18: member-scoped kill switch regression tests.
+  'api-server/src/services/trade-kill-switch.test.ts',
   'api-server/supabase/migrations/2026101701_trade_automation_run_control.down.sql',
   'api-server/supabase/migrations/2026101701_trade_automation_run_control.sql',
   'stock-analyzer/src/components/auto-trading-run-control.tsx',

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import { Router, type IRouter, type Response } from 'express';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalPosition } from '../features/account-readonly/account-readonly.contract';
-import { createSupabaseTradingRepository, safeConnections, type TradingRepository } from '../services/trade-automation.repository';
+import {
+  createServiceRoleTradingRepository, createSupabaseTradingRepository, safeConnections, type TradingRepository,
+} from '../services/trade-automation.repository';
+import { tripKillSwitchForRiskFailure } from '../services/trade-kill-switch.service';
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
@@ -32,6 +35,7 @@ import {
   readAutoRunControl,
   recordAutoRunKillSwitch,
   recordAutoRunPolicyToggle,
+  recordAutoRunResume,
   registerAutoRunLiveResolver,
   startAutoRun,
   stopAutoRun,
@@ -297,7 +301,11 @@ function context(req: AuthenticatedRequest) {
     },
     async handleRisk(input) {
       if (input.reason !== 'FAST_MOVE_DETECTED') throw new Error('TRADE_SPLIT_RISK_REASON_UNSUPPORTED');
-      await repository.setGlobalEmergencyStop(true, input.userId);
+      // A fast move on one split plan stops this member's new entries (member-scoped kill code).
+      await tripKillSwitchForRiskFailure({
+        repository, userId: input.userId, blockCodes: [input.reason],
+        plan: await repository.getPlan(input.userId, input.planId).catch(() => null),
+      });
     },
   }) : null;
   return {
@@ -310,6 +318,48 @@ function context(req: AuthenticatedRequest) {
     splitExecution,
     cancellation: new TradeCancelReconciliationService(repository),
   };
+}
+
+/**
+ * Emergency stop: cancel pending/open ENTRY orders through the canonical
+ * cancel path. A protective exit (reduce-only, or a cash-market SELL) is
+ * never canceled, so stop-loss / take-profit orders of owned positions stay.
+ */
+function isEntryOrderPlan(plan: TradingPlan) {
+  if (plan.reduceOnly === true) return false;
+  // Bitget closes only through reduce-only; a cash-market position is reduced by a SELL.
+  return plan.exchange === 'bitget' || plan.side === 'buy';
+}
+
+type EntryOrderCancellation = {
+  entryOrdersCanceled: number;
+  entryOrderCancelsPending: number;
+  entryOrderCancelFailures: number;
+  protectiveExitOrdersKept: number;
+};
+
+async function cancelOpenEntryOrders(
+  repository: TradingRepository, userId: string, summary: EntryOrderCancellation,
+) {
+  const cancellation = new TradeCancelReconciliationService(repository);
+  for (const order of await repository.listOrders(userId)) {
+    if (!CANCEL_RECONCILIATION_STATES.has(order.state)) continue;
+    try {
+      const plan = await repository.getPlan(userId, order.planId);
+      if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+      if (!isEntryOrderPlan(plan)) { summary.protectiveExitOrdersKept += 1; continue; }
+      const canceled = await cancellation.cancel(userId, plan, order);
+      if (canceled.state === 'CANCELED') summary.entryOrdersCanceled += 1;
+      else summary.entryOrderCancelsPending += 1;
+    } catch {
+      summary.entryOrderCancelFailures += 1;
+    }
+  }
+  return summary;
+}
+
+function emptyEntryOrderCancellation(): EntryOrderCancellation {
+  return { entryOrdersCanceled: 0, entryOrderCancelsPending: 0, entryOrderCancelFailures: 0, protectiveExitOrdersKept: 0 };
 }
 
 function liveExecutionReadinessForConnection(
@@ -1728,9 +1778,12 @@ router.post('/resume', async (req: AuthenticatedRequest, res) => {
     ]);
     const policy = resumeMemberTradingPolicy(current);
     await repository.savePolicy(userId, policy);
+    // The resume is already persisted; the audit write can never undo it.
+    const audit = await recordAutoRunResume(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });
     return res.json({
       ok: true,
       policy,
+      ...audit,
       automaticTradingEnabledByThisRequest: false,
       memberEmergencyStopped: false,
       memberNewEntriesStopped: false,
@@ -2041,8 +2094,13 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     await repository.savePolicy(userId, policy);
     // The stop is already persisted; the audit write can never undo it.
     const audit = await recordAutoRunKillSwitch(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });
+    // After the stop is persisted (nothing new can start), cancel this
+    // member's open ENTRY orders. Protective exits stay in place.
+    const cancellation = await cancelOpenEntryOrders(repository, userId, emptyEntryOrderCancellation());
     return res.json({
-      ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false,
+      ok: true, emergencyStopped: true, newOrdersBlocked: true,
+      existingOrdersCanceled: cancellation.entryOrderCancelFailures === 0 && cancellation.entryOrderCancelsPending === 0,
+      ...cancellation, protectiveExitsContinue: true,
       autoRunState: 'KILL_SWITCH', ...audit,
     });
   } catch (error) { return errorResponse(res, error); }
@@ -2100,12 +2158,40 @@ router.post('/admin/emergency-stop', requireAdmin, async (req: AuthenticatedRequ
     }
     await repository.setGlobalEmergencyStop(req.body.stopped, userId);
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    // A global stop also cancels every member's open ENTRY orders (each
+    // through that member's own hard-scoped repository). Protective exits
+    // stay. Resuming new-order evaluation cancels nothing.
+    const cancellation = emptyEntryOrderCancellation();
+    let membersWithOpenOrders = 0;
+    if (req.body.stopped) {
+      let memberIds: string[];
+      try {
+        memberIds = repository.listOpenOrderUserIds ? await repository.listOpenOrderUserIds() : [userId];
+      } catch {
+        memberIds = [userId];
+        cancellation.entryOrderCancelFailures += 1;
+      }
+      membersWithOpenOrders = memberIds.length;
+      for (const memberId of memberIds) {
+        try {
+          const memberRepository = memberId === userId ? repository
+            : repositoryFactoryForTests ? repositoryFactoryForTests(memberId)
+              : createServiceRoleTradingRepository(memberId);
+          await cancelOpenEntryOrders(memberRepository, memberId, cancellation);
+        } catch {
+          cancellation.entryOrderCancelFailures += 1;
+        }
+      }
+    }
     return res.json({
       ok: true,
       persistentGlobalEmergencyStopped: req.body.stopped,
       effectiveGlobalEmergencyStopped: req.body.stopped || environmentGlobalStop,
       automaticTradingEnabledByThisRequest: false,
-      existingOrdersCanceled: false,
+      existingOrdersCanceled: req.body.stopped
+        && cancellation.entryOrderCancelFailures === 0 && cancellation.entryOrderCancelsPending === 0,
+      membersWithOpenOrders,
+      ...cancellation,
     });
   } catch (error) { return errorResponse(res, error); }
 });
