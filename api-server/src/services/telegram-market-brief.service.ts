@@ -32,11 +32,35 @@ export type TelegramMarketBriefSnapshot = {
 
 function reportLabel(kind: TelegramIntelligenceReportKind): string {
   switch (kind) {
-    case 'MORNING': return '🌅 오늘의 시황';
-    case 'KR_CLOSING': return '🇰🇷 국내장 마감 브리핑';
-    case 'US_PREMARKET': return '🇺🇸 미국장 프리마켓 브리핑';
-    case 'WEEKLY': return '📅 주간 시장 브리핑';
+    case 'MORNING': return '아침 시황';
+    case 'KR_CLOSING': return '국내장 마감 브리핑';
+    case 'US_PREMARKET': return '미국장 개장 전 브리핑';
+    case 'WEEKLY': return '주간 시장 브리핑';
   }
+}
+
+// Fixed-value coins are not market movers; listing them as a "TOP 5" row is noise.
+const STABLECOINS = new Set(['USDT', 'USDC', 'DAI', 'TUSD', 'FDUSD', 'USDE', 'USDS', 'PYUSD', 'BUSD', 'USD1']);
+
+function stablecoin(symbol: string): boolean {
+  return STABLECOINS.has(symbol.toUpperCase().replace(/^KRW-/u, '').replace(/[-/]?KRW$/u, ''));
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  indices: '지수', rankings: '종목 순위', sectors: '업종', news: '뉴스', disclosures: '공시', derivatives: '선물 수급',
+};
+
+const KST_CLOCK = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+
+function kstParts(now: Date): { day: string; time: string } {
+  const parts = Object.fromEntries(KST_CLOCK.formatToParts(now).map((part) => [part.type, part.value]));
+  return { day: `${parts.month} ${parts.day}일 (${parts.weekday})`, time: `${parts.hour}:${parts.minute}` };
+}
+
+export function telegramMarketBriefTitle(kind: TelegramIntelligenceReportKind, destination: TelegramReportDestination, now: Date): string {
+  return `${destinationLabel(destination)} ${reportLabel(kind)} · ${kstParts(now).day}`;
 }
 
 function roomLabel(room: MarketInformationRoomId): string {
@@ -171,12 +195,15 @@ function roomLines(room: BriefRoom): string[] {
       lines.push('• ' + item.label + ': ' + number(item.value) + ' (' + percent(item.changePercent) + ')');
     });
   }
-  const leaders = response.sections.rankings.data.slice(0, 5);
+  const leaders = response.sections.rankings.data
+    .filter((item) => room.room !== 'coins-spot' || !stablecoin(item.symbol))
+    .slice(0, 5);
   if (leaders.length) {
     lines.push('', '[시장 주목 종목 TOP 5 · 관찰용]');
     leaders.forEach((item, index) => lines.push(
-      String(index + 1) + '. ' + (item.name || item.symbol) + ' (' + item.symbol + ') ' +
-      percent(item.changePercent) + ' · 매수 신호 아님',
+      String(index + 1) + '. ' +
+      (item.name && item.name !== item.symbol ? item.name + ' (' + item.symbol + ')' : item.symbol) + ' ' +
+      percent(item.changePercent),
     ));
   } else lines.push('', '[시장 주목 종목] N/A (확인된 순위 없음)');
 
@@ -189,9 +216,10 @@ function roomLines(room: BriefRoom): string[] {
       lines.push('LONG/SHORT 비율: ' + number(derivatives.longShortRatio));
     }
   }
-  const delayed = Object.values(response.sections)
-    .filter((section) => ['error', 'unavailable', 'stale'].includes(section.status)).length;
-  if (delayed) lines.push('', '⚠️ ' + delayed + '개 데이터 항목 확인 지연');
+  const delayed = Object.entries(response.sections)
+    .filter(([, section]) => ['error', 'unavailable', 'stale'].includes(section.status))
+    .map(([key]) => SECTION_LABELS[key] ?? key);
+  if (delayed.length) lines.push('', '⚠️ 확인 지연: ' + delayed.join(', '));
   return lines;
 }
 
@@ -263,12 +291,7 @@ export function buildTelegramMarketBriefInput(input: {
   const rooms = input.snapshot.rooms.filter((room) => allowed.has(room.room));
   const news = newsRows(rooms);
   const warnings = scopedWarnings(input.snapshot, input.destination);
-  const lines = [
-    reportLabel(input.kind) + ' · ' + input.localDate,
-    destinationLabel(input.destination),
-    '',
-    ...rooms.flatMap(roomLines),
-  ];
+  const lines = [...rooms.flatMap(roomLines)];
   if (input.destination === 'KR_STOCK_ROOM') {
     lines.push('', '[오늘의 테마/주도주]', ...themeLines('KR', input.snapshot.krThemes));
   } else if (input.destination === 'US_STOCK_ROOM') {
@@ -292,7 +315,8 @@ export function buildTelegramMarketBriefInput(input: {
     }
   } else lines.push('검증된 최신 뉴스 N/A · 확인된 공시 N/A');
   if (warnings.length) lines.push('', '⚠️ ' + [...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · '));
-  lines.push('', '※ 근거 없는 수익률·신호·목표가는 만들지 않습니다.');
+  const clock = kstParts(input.now);
+  lines.push('', '※ 관찰용 정보이며 매수·매도 신호가 아닙니다.', '기준 시각 ' + clock.day + ' ' + clock.time + ' (한국 시간)');
 
   const buttons: TelegramUrlButton[][] = [];
   for (const [index, item] of news.slice(0, 3).entries()) {
@@ -302,6 +326,8 @@ export function buildTelegramMarketBriefInput(input: {
 
   return {
     type: 'intelligence_report',
+    // A custom title replaces the generic header and the raw UTC timestamp line.
+    title: telegramMarketBriefTitle(input.kind, input.destination, input.now),
     market: input.destination,
     details: lines.join('\n').slice(0, 3_500),
     timestamp: input.now.toISOString(),
