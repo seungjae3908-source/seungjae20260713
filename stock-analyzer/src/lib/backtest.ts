@@ -18,6 +18,8 @@ export type BacktestFormValues = {
   entryFeeRate: number;
   exitFeeRate: number;
   slippageRate: number;
+  /** Optional order delay in bars (0-5); omitted or 0 keeps the default next-bar-open entry. */
+  entryDelayBars?: number;
   fundingRatePerInterval: number;
   fundingIntervalHours: number;
   stopLossMode: 'percent' | 'atr' | 'swing';
@@ -97,6 +99,10 @@ export type BacktestResult = {
   averageRMultiple: number;
   maximumDrawdown: number;
   maximumDrawdownPercent: number;
+  /** Includes unrealized loss of open positions (the figures above are realized-only). */
+  markedMaximumDrawdown?: number;
+  markedMaximumDrawdownPercent?: number;
+  selectionBias?: { runs: number; expectedMaxNoiseSharpe: number | null; observedSharpe: number | null; indistinguishableFromNoise: boolean };
   sharpeRatio: number | null;
   sortinoRatio: number | null;
   calmarRatio: number | null;
@@ -127,6 +133,8 @@ export function toBacktestRequest(values: BacktestFormValues) {
     : values.strategy === 'breakout'
       ? { ...values.strategyParameters.breakout }
       : { ...values.strategyParameters.vwapReclaim };
+  const entryDelayBars = Math.min(5, Math.max(0, Math.trunc(Number(values.entryDelayBars ?? 0)) || 0));
+  if (entryDelayBars > 0) parameters.entryDelayBars = entryDelayBars;
   return {
     market: values.market,
     symbol: values.symbol.trim().toUpperCase(),
@@ -187,6 +195,57 @@ export async function runBacktest(values: BacktestFormValues): Promise<BacktestR
   }
   if (body.result.paperHandoffRunId !== undefined && !/^[0-9a-f-]{36}$/u.test(body.result.paperHandoffRunId)) {
     throw new Error('백테스트 서버 참조를 확인하지 못했습니다.');
+  }
+  return body.result;
+}
+
+export type BacktestPortfolioSleeve = {
+  symbol: string;
+  allocatedCapital: number;
+  result: Pick<BacktestResult, 'totalReturnPercent' | 'totalTrades' | 'winRate' | 'maximumDrawdownPercent'>;
+};
+
+export type BacktestPortfolioResult = {
+  ok: true;
+  mode: 'backtest-only';
+  orderSubmitted: false;
+  market: BacktestMarket;
+  symbols: string[];
+  skipped: Array<{ symbol: string; reason: string }>;
+  initialCapital: number;
+  finalCapital: number;
+  totalReturnPercent: number;
+  annualizedReturnPercent: number | null;
+  totalTrades: number;
+  winRate: number;
+  profitFactor: number | null;
+  maximumDrawdown: number;
+  maximumDrawdownPercent: number;
+  markedMaximumDrawdownUpperBound: number;
+  markedMaximumDrawdownUpperBoundPercent: number;
+  sharpeRatio: number | null;
+  sortinoRatio: number | null;
+  sleeves: BacktestPortfolioSleeve[];
+  warnings: string[];
+  calculatedAt: string;
+};
+
+export function parsePortfolioSymbols(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/u).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+}
+
+export async function runPortfolioBacktest(values: BacktestFormValues, symbols: readonly string[]): Promise<BacktestPortfolioResult> {
+  const response = await authorizedFetch('/api/backtests/portfolio', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...toBacktestRequest(values), symbols }),
+  });
+  const body = await response.json().catch(() => null) as { ok?: boolean; result?: BacktestPortfolioResult; message?: string } | null;
+  if (!response.ok || !body?.ok || !body.result) {
+    throw new Error(body?.message || '포트폴리오 백테스트를 실행하지 못했습니다.');
+  }
+  if (body.result.mode !== 'backtest-only' || body.result.orderSubmitted !== false) {
+    throw new Error('백테스트 안전 계약을 확인하지 못했습니다.');
   }
   return body.result;
 }

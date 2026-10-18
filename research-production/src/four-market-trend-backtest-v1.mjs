@@ -50,7 +50,9 @@ export const FOUR_MARKET_UNIVERSE_V1 = Object.freeze({
 function ensureBars(market, cfg, candles) {
   const clean = (candles ?? []).filter((c) => c.timestamp < HOLDOUT_START).sort((a, b) => a.timestamp - b.timestamp);
   if (cfg.barHours === 24) return clean; // daily candles arrive as daily
-  const hourly = clean.length > 1 && (clean[1].timestamp - clean[0].timestamp) === 3_600_000;
+  // Median spacing of the first bars, so one gap at the very start cannot make hourly data pass as 4h bars.
+  const deltas = clean.slice(1, 60).map((row, i) => row.timestamp - clean[i].timestamp).sort((a, b) => a - b);
+  const hourly = deltas.length > 0 && deltas[Math.floor(deltas.length / 2)] === 3_600_000;
   return hourly ? resampleCandlesV1(clean, cfg.barHours) : clean;
 }
 
@@ -107,7 +109,9 @@ export function fundingCoverageV1(datasets, minCovered = 0.9) {
     const spanMs = candles.length > 1 ? Number(candles.at(-1).timestamp) - Number(candles[0].timestamp) : 0;
     const coveredMs = rates.length > 1 ? Math.max(...rates) - Math.min(...rates) : 0;
     const coveredFraction = spanMs > 0 ? Math.min(1, coveredMs / spanMs) : 0;
-    return { symbol: d.symbol, spanDays: Math.round(spanMs / 86_400_000), fundingRows: rates.length, coveredFraction };
+    // A failed funding fetch is recorded by the fetcher; it can never count as covered.
+    const fundingError = typeof d.fundingError === 'string' && d.fundingError.length > 0 ? d.fundingError : null;
+    return { symbol: d.symbol, spanDays: Math.round(spanMs / 86_400_000), fundingRows: rates.length, coveredFraction: fundingError ? 0 : coveredFraction, fundingError };
   });
   const minFraction = rows.length ? Math.min(...rows.map((r) => r.coveredFraction)) : null;
   return { symbols: rows, minCoveredFraction: minFraction, status: rows.length === 0 ? 'NOT_APPLICABLE' : minFraction >= minCovered ? 'COMPLETE' : 'INCOMPLETE' };
