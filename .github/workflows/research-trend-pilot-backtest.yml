@@ -9,6 +9,7 @@ on:
       - .github/workflows/research-trend-pilot-backtest.yml
       - research-production/src/trend-pilot-backtest-v1.mjs
       - research-production/bin/trend-pilot-backtest.mjs
+      - research-production/src/aggressive-sleeve-backtest-v1.mjs
 
 permissions:
   contents: read
@@ -16,7 +17,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +30,7 @@ jobs:
           set -Eeuo pipefail
           node research-production/bin/trend-pilot-backtest.mjs --fetch "$RUNNER_TEMP/state" | tee trend-pilot-report.txt
           cp "$RUNNER_TEMP/state/latest/trend-pilot-backtest-v1.json" trend-pilot-backtest-v1.json
+          cp "$RUNNER_TEMP/state/latest/aggressive-sleeve-backtest-v1.json" aggressive-sleeve-backtest-v1.json || true
           { echo '```'; cat trend-pilot-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -36,4 +38,5 @@ jobs:
           path: |
             trend-pilot-report.txt
             trend-pilot-backtest-v1.json
+            aggressive-sleeve-backtest-v1.json
           retention-days: 90
