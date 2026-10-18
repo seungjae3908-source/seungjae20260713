@@ -63,7 +63,7 @@ function signalAt(s, i, variant, p) {
 /**
  * @param {{ venue, datasets: {symbol, candles, fundingRates?}[], variant, maxPositions, fill: 'TAKER'|'MAKER', params? }} cfg
  */
-export function simulateLegendCompositeV1({ venue, datasets, variant, maxPositions, fill, params = {} }) {
+export function simulateLegendCompositeV1({ venue, datasets, variant, maxPositions, fill, params = {}, entryFrom = null, closeAtEnd = true }) {
   const spec = LEGEND_VENUES_V1[venue]; if (!spec) throw new Error(`LEGEND_VENUE_UNKNOWN:${venue}`);
   const p = { ...LEGEND_DEFAULTS_V1, ...params };
   const series = datasets.filter((d) => d.candles?.length > p.regimeEmaBars).map((d) => prepare(d, p));
@@ -155,7 +155,7 @@ export function simulateLegendCompositeV1({ venue, datasets, variant, maxPositio
     }
 
     // 3) new signals at this close → next bar
-    if (regime !== 'COLD') {
+    if (regime !== 'COLD' && (entryFrom === null || t >= entryFrom)) {
       const free = maxPositions - open.size - pending.length;
       if (free > 0) {
         const cands = [];
@@ -174,8 +174,10 @@ export function simulateLegendCompositeV1({ venue, datasets, variant, maxPositio
     if (k === timeline.length - 1 || Math.floor(timeline[k + 1] / DAY) !== Math.floor(t / DAY)) curve.push({ t, equity: eq });
     if (eq <= 0.01) { curve.push({ t, equity: Math.max(0, eq) }); break; } // ruined
   }
-  for (const pos of [...open.values()]) closePos(pos, pos.lastPx, timeline.at(-1), 'END');
-  return { trades, curve, maxDrawdown: mdd, exposure: timeline.length ? exposureHours / timeline.length : 0,
+  const openPositions = [...open.values()].map((pos) => ({ symbol: pos.s.symbol, kind: pos.kind, entryT: pos.entryT, entry: pos.entry0, avgEntry: pos.avgEntry, units: pos.units,
+    stop: pos.stop, R: pos.R, lastPx: pos.lastPx, held: pos.held, unrealized: pos.units * (pos.lastPx - pos.avgEntry), unrealizedRet: pos.lastPx / pos.entry0 - 1 }));
+  if (closeAtEnd) for (const pos of [...open.values()]) closePos(pos, pos.lastPx, timeline.at(-1), 'END');
+  return { trades, openPositions: closeAtEnd ? [] : openPositions, cash, curve, maxDrawdown: mdd, exposure: timeline.length ? exposureHours / timeline.length : 0,
     coldShare: timeline.length ? regimeCold / timeline.length : 0, hotShare: timeline.length ? regimeHot / timeline.length : 0 };
 }
 
