@@ -1,18 +1,19 @@
 #!/usr/bin/env node
-// Long → confirmed weakness → short flip backtest report (Korean). Research only.
+// Long → confirmed weakness → short flip backtest reports (Korean). Research only.
 //   node research-production/bin/long-short-flip-backtest.mjs [stateRoot]
 //       reads the research server's cached Bitget 1h candles
 //   node research-production/bin/long-short-flip-backtest.mjs --fetch <dir>
-//       fetches public Bitget 1h candles (and funding where reachable) into <dir> first
+//       fetches public Bitget 1h candles and Bitget funding history into <dir> first
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { BitgetPublicClient } from '../../market-prediction-lab/src/bitget-public-client.js';
 import { collectBitgetCandles } from '../../market-prediction-lab/src/bitget-candle-collector.js';
-import { fetchCombinationFundingRatesV1 } from '../src/combination-search-lane-v1.mjs';
+import { collectFundingRateHistory } from '../../market-prediction-lab/src/derivatives-history.js';
 import { formatLongShortFlipReportKoV1, runLongShortFlipBacktestV1 } from '../src/long-short-flip-backtest-v1.mjs';
+import { formatLongShortFlipReportKoV2, runLongShortFlipBacktestV2 } from '../src/long-short-flip-backtest-v2.mjs';
 
-const FETCH_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT',
+const FETCH_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT', 'AVAXUSDT',
   'DOTUSDT', 'LTCUSDT', 'BCHUSDT', 'ATOMUSDT', 'NEARUSDT', 'UNIUSDT', 'AAVEUSDT', 'FILUSDT', 'APTUSDT', 'TRXUSDT',
   'SUIUSDT', 'PEPEUSDT', 'WIFUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'TIAUSDT', 'SEIUSDT'];
 const DAY = 86_400_000;
@@ -27,13 +28,22 @@ if (args[0] === '--fetch') {
   await mkdir(dir, { recursive: true });
   for (const symbol of FETCH_SYMBOLS) {
     try {
-      const history = await collectBitgetCandles({ client: new BitgetPublicClient({ fetchImpl: globalThis.fetch }), market: 'CRYPTO_FUTURES',
+      const client = new BitgetPublicClient({ fetchImpl: globalThis.fetch });
+      const history = await collectBitgetCandles({ client, market: 'CRYPTO_FUTURES',
         symbol, timeframe: '1h', startTime, endTime, maxCandles: 20_000, productType: 'usdt-futures' });
-      let funding = { rows: [], fundingSource: null };
-      try { funding = await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol, startTime, endTime, fetchImpl: globalThis.fetch, minimumRecords: 0 }); }
-      catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 120)}\n`); }
-      await writeFile(join(dir, `${symbol}.json`), JSON.stringify({ symbol, candles: history.candles, fundingRates: funding.rows, fundingSource: funding.fundingSource }));
-      process.stderr.write(`FETCHED:${symbol}:${history.candles.length}:funding=${funding.rows.length}\n`);
+      // Bitget funding history directly; keep whatever pages it serves (coverage is reported).
+      let fundingRates = [];
+      try {
+        const funding = await collectFundingRateHistory({ client, symbol, startTime, endTime, maxPages: 200 });
+        fundingRates = funding.records.map((row) => ({ timestamp: row.timestamp, rate: row.rate }))
+          .filter((row) => Number.isSafeInteger(row.timestamp) && Number.isFinite(row.rate)
+            && row.timestamp >= startTime && row.timestamp <= endTime);
+      } catch (error) {
+        process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 120)}\n`);
+      }
+      await writeFile(join(dir, `${symbol}.json`), JSON.stringify({ symbol, candles: history.candles, fundingRates, fundingSource: 'BITGET' }));
+      const first = fundingRates.length ? new Date(Math.min(...fundingRates.slice(0, 5000).map((r) => r.timestamp))).toISOString().slice(0, 10) : '-';
+      process.stderr.write(`FETCHED:${symbol}:${history.candles.length}:funding=${fundingRates.length}:from=${first}\n`);
     } catch (error) {
       process.stderr.write(`FETCH_FAILED:${symbol}:${String(error?.message ?? error).slice(0, 160)}\n`);
     }
@@ -41,5 +51,7 @@ if (args[0] === '--fetch') {
 } else {
   root = resolve(args[0] ?? process.env.RESEARCH_STATE_ROOT ?? '/var/lib/investment-research-production');
 }
-const result = await runLongShortFlipBacktestV1({ stateRoot: root });
-process.stdout.write(`${formatLongShortFlipReportKoV1(result)}\n`);
+const v1 = await runLongShortFlipBacktestV1({ stateRoot: root });
+process.stdout.write(`${formatLongShortFlipReportKoV1(v1)}\n\n`);
+const v2 = await runLongShortFlipBacktestV2({ stateRoot: root });
+process.stdout.write(`${formatLongShortFlipReportKoV2(v2)}\n`);
