@@ -581,3 +581,89 @@ export function answerCanonicalResearchQuestion(
     ? `현재 가장 먼저 확인할 근거는 ${blocker}입니다. 이 응답은 AI 추정이 아니라 read-only canonical 상태 조회입니다.`
     : '현재 질문과 직접 연결되는 canonical evidence가 없습니다. 없는 결과를 생성하지 않습니다.';
 }
+
+const RESEARCH_BLOCKER_COPY: Readonly<Record<string, string>> = Object.freeze({
+  EXTERNAL_RESEARCH_NOT_EVIDENCED: '외부 연구 자료가 아직 연결되지 않았습니다.',
+  EXTERNAL_RESEARCH_SOURCE_UNLINKED: '일부 연구 출처가 아직 연결되지 않았습니다.',
+  SHADOW_RUNTIME_PROOF_MISSING: '관찰 검증이 서버에서 실행된 증거가 없습니다.',
+  PAPER_RUNTIME_INACTIVE: '모의매매 서버 실행이 꺼져 있습니다.',
+  PAPER_RUNTIME_PROOF_MISSING: '모의매매 서버 실행 증거가 없습니다.',
+  PAPER_SCHEDULE_STATE_MISSING: '모의매매 실행 일정 상태가 수집되지 않았습니다.',
+  SETTLEMENT_NOT_EVIDENCED: '정산된 모의 거래 기록이 아직 없습니다.',
+  SETTLEMENT_SAMPLE_EMPTY: '정산된 거래 표본이 0건입니다.',
+  PROFITABILITY_NOT_PROVEN: '비용을 뺀 수익성이 아직 증명되지 않았습니다.',
+  FULL_COST_EVIDENCE_NOT_PUBLISHED: '수수료·세금·슬리피지 등 전체 비용 근거가 아직 없습니다.',
+  STRATEGY_HEALTH_EVIDENCE_MISSING: '전략 건강 점검 근거가 수집되지 않았습니다.',
+  PROMOTION_API_UNAVAILABLE: '전략 승격 기록을 불러오지 못했습니다.',
+  PROMOTION_CANDIDATE_EMPTY: '승격 후보가 아직 없습니다.',
+  CHAMPION_EVIDENCE_NOT_PUBLISHED: '대표 전략 근거가 아직 게시되지 않았습니다.',
+  CURRENT_VALIDATED_CHAMPION_NONE: '현재 검증을 통과한 대표 전략이 없습니다.',
+  PREDICTION_COLLAPSE: '예측이 한쪽으로 쏠려 있습니다.',
+  MISSING_CANONICAL_SOURCE_SHA: '근거의 코드 버전(SHA)이 확인되지 않습니다.',
+  RESEARCH_CANDIDATE_EVIDENCE_INVALID: '연구 후보 근거가 형식 검증을 통과하지 못했습니다.',
+  RESEARCH_BRIDGE_NOT_REVIEWABLE: '연구 후보가 승격 검토 단계로 넘어오지 못했습니다.',
+  PRE_HOLDOUT_GATE_FAILED: '최종 검증 전 사전 관문을 통과하지 못했습니다.',
+  MISSING_PRODUCER_OUTBOX: '백테스트 결과를 내보내는 연결이 아직 없습니다.',
+});
+
+/** Pure: Korean one-line reason for a machine blocker code; never throws. */
+export function explainResearchBlocker(code: string | null | undefined): string {
+  if (typeof code !== 'string' || code.trim().length === 0) return '명시된 차단 사유가 없습니다.';
+  const normalized = code.trim();
+  const known = RESEARCH_BLOCKER_COPY[normalized];
+  if (known) return known;
+  if (normalized.startsWith('SOURCE_')) return '연구 출처가 연결되지 않았습니다.';
+  if (/_INVALID$/u.test(normalized)) return '근거가 형식 검증을 통과하지 못했습니다.';
+  if (/_(MISSING|NOT_EVIDENCED|NOT_PUBLISHED)$/u.test(normalized)) return '필요한 근거가 아직 수집되지 않았습니다.';
+  if (/_(UNAVAILABLE|INACTIVE)$/u.test(normalized)) return '해당 기능이 아직 켜지지 않았거나 응답이 없습니다.';
+  return '검증 자료 보완이 필요합니다.';
+}
+
+export type ResearchFunnelStageState = 'passed' | 'running' | 'blocked' | 'unknown';
+
+export interface ResearchFunnelStage {
+  key: ResearchPipelineKey;
+  label: string;
+  state: ResearchFunnelStageState;
+  reason: string | null;
+}
+
+export interface ResearchFunnelSummary {
+  stages: ResearchFunnelStage[];
+  total: number;
+  passedCount: number;
+  firstUnpassed: ResearchFunnelStage | null;
+  headline: string;
+}
+
+const FUNNEL_RUNNING_STATUSES: ReadonlySet<ResearchProductStatus> = new Set(['accumulating', 'running', 'validating', 'waiting']);
+const FUNNEL_BLOCKED_STATUSES: ReadonlySet<ResearchProductStatus> = new Set(['error', 'attention', 'insufficient', 'stale']);
+
+/** Pure: classify one pipeline card for the "where is it stuck" summary. */
+export function classifyFunnelStage(card: ResearchPipelineCard): ResearchFunnelStageState {
+  if ((card.status === 'verified' || card.status === 'normal') && !card.blocker) return 'passed';
+  if (card.blocker || FUNNEL_BLOCKED_STATUSES.has(card.status)) return 'blocked';
+  if (FUNNEL_RUNNING_STATUSES.has(card.status)) return 'running';
+  return 'unknown';
+}
+
+/** Pure: stage-by-stage progress and the first stage that has not passed. */
+export function summarizeResearchFunnel(cards: readonly ResearchPipelineCard[]): ResearchFunnelSummary {
+  const stages: ResearchFunnelStage[] = cards.map((card) => {
+    const state = classifyFunnelStage(card);
+    return {
+      key: card.key,
+      label: card.label,
+      state,
+      reason: state === 'passed' ? null : explainResearchBlocker(card.blocker),
+    };
+  });
+  const passedCount = stages.filter((stage) => stage.state === 'passed').length;
+  const firstUnpassed = stages.find((stage) => stage.state !== 'passed') ?? null;
+  const total = stages.length;
+  let headline: string;
+  if (total === 0) headline = '연구 단계 정보를 불러오지 못했습니다.';
+  else if (!firstUnpassed) headline = `${total}단계를 모두 통과했습니다.`;
+  else headline = `${total}단계 중 ${passedCount}단계 통과 · "${firstUnpassed.label}" 단계에서 멈춰 있습니다.`;
+  return { stages, total, passedCount, firstUnpassed, headline };
+}
