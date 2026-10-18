@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { createCorsOptionsDelegate, productionSecurityHeaders } from './middleware/security';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -82,12 +83,9 @@ function healthPayload(route: '/health' | '/api/health') {
 
 app.disable('x-powered-by');
 
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  }),
-);
+app.use(productionSecurityHeaders);
+
+app.use(cors(createCorsOptionsDelegate(process.env)));
 
 app.use(
   express.json({
