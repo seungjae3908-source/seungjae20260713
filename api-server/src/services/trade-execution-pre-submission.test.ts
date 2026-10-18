@@ -913,3 +913,20 @@ test('protected 4-market automatic Paper cost rules are exact, expiring, and nev
   assert.equal(missing.taxAmount, null);
   assert.equal(missing.trustedPaperCostPolicyId, null);
 });
+
+test('paper fills are never better than the reference: adverse slippage by side, limit cap, no invented edge', async () => {
+  const { paperAdverseFillPrice } = await import('./trade-execution.service');
+  const snap = (v: number | null | undefined) => ({ estimatedSlippagePercent: v });
+  const plan = (side: string, extra: Record<string, unknown> = {}) => ({ side, orderType: 'market', limitPrice: null, estimatedSlippagePercent: null, ...extra }) as never;
+  assert.equal(paperAdverseFillPrice(plan('buy'), snap(0.1), 100), 100.1);
+  assert.equal(paperAdverseFillPrice(plan('long'), snap(0.1), 100), 100.1);
+  assert.equal(paperAdverseFillPrice(plan('sell'), snap(0.1), 100), 99.9);
+  assert.equal(paperAdverseFillPrice(plan('short'), snap(0.1), 100), 99.9);
+  assert.equal(paperAdverseFillPrice(plan('buy'), snap(null), 100), 100, 'no estimate → unchanged');
+  assert.equal(paperAdverseFillPrice(plan('buy'), snap(-1), 100), 100, 'negative estimate ignored');
+  assert.equal(paperAdverseFillPrice(plan('buy', { estimatedSlippagePercent: 0.2 }), snap(undefined), 100), 100.2, 'falls back to plan estimate');
+  assert.equal(paperAdverseFillPrice(plan('buy', { orderType: 'limit', limitPrice: 100.05 }), snap(0.1), 100), 100.05, 'buy limit cap');
+  assert.equal(paperAdverseFillPrice(plan('sell', { orderType: 'limit', limitPrice: 99.95 }), snap(0.1), 100), 99.95, 'sell limit floor');
+  assert.ok(Math.abs(paperAdverseFillPrice(plan('buy'), snap(500), 100) - 110) < 1e-9, 'capped at 10%');
+  assert.ok(Number.isNaN(paperAdverseFillPrice(plan('buy'), snap(0.1), Number.NaN)));
+});
