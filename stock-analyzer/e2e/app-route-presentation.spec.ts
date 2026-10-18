@@ -16,16 +16,13 @@ const group = (id: 'assets' | 'technical' | 'information' | 'settings') => {
 test('actual product routes keep the correct top-level navigation state', () => {
   for (const path of [
     APP_ROUTES.assets,
-    APP_ROUTES.stocksKr,
-    APP_ROUTES.stocksUs,
-    APP_ROUTES.coinsSpot,
-    APP_ROUTES.coinsFutures,
+    APP_ROUTES.unifiedSearchAlias,
     APP_ROUTES.marketOverview,
-    APP_ROUTES.marketRankings,
-    APP_ROUTES.marketBrowser,
     APP_ROUTES.recommendations,
-    APP_ROUTES.themes,
-    APP_ROUTES.newsInformation,
+    APP_ROUTES.watchlist,
+    APP_ROUTES.alerts,
+    APP_ROUTES.stockInfo,
+    APP_ROUTES.stockAnalysis,
   ]) {
     expect(navigationGroupMatches(group('assets'), path), path).toBe(true);
   }
@@ -40,7 +37,6 @@ test('actual product routes keep the correct top-level navigation state', () => 
     expect(navigationGroupMatches(group('technical'), path), path).toBe(true);
   }
   for (const path of [
-    APP_ROUTES.learn,
     APP_ROUTES.aiChat,
     APP_ROUTES.researchCenter,
     APP_ROUTES.portfolio,
@@ -55,15 +51,14 @@ test('actual product routes keep the correct top-level navigation state', () => 
 
 test('route presentation metadata follows final-main market and deep-route ownership', () => {
   const expectations = [
-    [APP_ROUTES.stocksKr, '국내주식', ['종목', '국내주식']],
-    [APP_ROUTES.stocksUs, '미국주식', ['종목', '미국주식']],
-    [APP_ROUTES.coinsSpot, '코인현물', ['종목', '코인현물']],
-    [APP_ROUTES.coinsFutures, '코인선물', ['종목', '코인선물']],
+    [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
+    [APP_ROUTES.recommendations, 'AI 추천', ['종목', 'AI 추천']],
+    [APP_ROUTES.watchlist, '관심종목', ['종목', '관심종목']],
+    [APP_ROUTES.alerts, '가격 알림', ['종목', '가격 알림']],
     [APP_ROUTES.scanner, '검색기', ['기술', '검색기']],
     [APP_ROUTES.aiChart, 'AI차트', ['기술', 'AI차트']],
     [APP_ROUTES.autoTrading, '자동매매', ['기술', '자동매매']],
-    [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
-    [APP_ROUTES.newsInformation, '테마', ['종목', '테마']],
+    [APP_ROUTES.stockAnalysis, '종목 상세 분석', ['종목', '종목 상세 분석']],
     [APP_ROUTES.strategyPromotion, '전략 승격센터', ['기술', '전략 승격센터']],
     [APP_ROUTES.position, '포지션', ['정보', '포지션']],
     [APP_ROUTES.adminUiLayouts, '화면 배치 편집', ['설정', '화면 배치 편집']],
@@ -71,6 +66,13 @@ test('route presentation metadata follows final-main market and deep-route owner
 
   for (const [path, title, breadcrumb] of expectations) {
     expect(resolveAppRoutePresentation(path), path).toMatchObject({ title, breadcrumb });
+  }
+});
+
+test('removed screens have no presentation metadata and no navigation owner', () => {
+  for (const path of ['/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn']) {
+    expect(resolveAppRoutePresentation(path), path).toBeNull();
+    for (const owner of APP_NAVIGATION) expect(navigationGroupMatches(owner, path), `${owner.id} ${path}`).toBe(false);
   }
 });
 

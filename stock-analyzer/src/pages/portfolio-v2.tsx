@@ -5,7 +5,6 @@ import { BrainCircuit, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react'
 import PortfolioPage from '@/pages/portfolio';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
-import { PortfolioAiDiagnosis } from '@/components/portfolio-ai-diagnosis';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
@@ -303,7 +302,6 @@ function AdditionalBuySimulator({ intelligence }: { intelligence: Intelligence }
 }
 
 function IntelligenceDashboard() {
-  const [location] = useLocation();
   const [profile, setProfile] = useState('BALANCED');
   const query = useQuery({
     queryKey: ['portfolio-intelligence-v2', profile],
@@ -319,17 +317,6 @@ function IntelligenceDashboard() {
     ? intelligence.linkedAccountPositions
     : [];
 
-  useEffect(() => {
-    const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
-    const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
-    const focus = new URLSearchParams(locationQuery || browserQuery).get('focus');
-    if (focus !== 'ai') return;
-    const timer = window.setTimeout(() => {
-      document.getElementById('portfolio-ai-diagnosis')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [location]);
-
   return <div className="h-full overflow-y-auto overscroll-contain bg-background pb-24">
     <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5">
       <header className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 rounded-2xl border border-border bg-card p-3">
@@ -338,7 +325,6 @@ function IntelligenceDashboard() {
         <button type="button" aria-label="포트폴리오 인텔리전스 새로고침" onClick={() => void query.refetch()} disabled={query.isFetching} className="flex h-11 w-11 items-center justify-center rounded-xl border border-border"><RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} /></button>
       </header>
 
-      <PortfolioAiDiagnosis />
       {query.isLoading ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-24 animate-pulse rounded-2xl bg-muted/40" />)}</div> : null}
       {query.isError ? <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-center text-sm font-semibold text-destructive">자산 정보를 불러오지 못했습니다. 서버 오류를 정상값으로 바꾸지 않습니다.</div> : null}
 

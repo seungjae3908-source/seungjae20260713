@@ -1,33 +1,10 @@
 import type { MemberCapability } from '../../../packages/member-access/src/index.js';
-import { MARKET_INFORMATION_ROUTES, type MarketInformationId } from './market-information';
-
-function requiredMarketRoom(id: MarketInformationId) {
-  const route = MARKET_INFORMATION_ROUTES.find((item) => item.id === id);
-  if (!route) throw new Error(`시장정보 route가 없습니다: ${id}`);
-  return route;
-}
-
-const MARKET_ROOMS = {
-  kr: requiredMarketRoom('stocks-kr'),
-  us: requiredMarketRoom('stocks-us'),
-  spot: requiredMarketRoom('coins-spot'),
-  futures: requiredMarketRoom('coins-futures'),
-} as const;
 
 export const APP_ROUTES = {
   home: '/',
   homeAlias: '/home',
   assets: '/stocks',
   unifiedSearchAlias: '/search',
-  marketRankings: '/market-rankings',
-  marketBrowser: '/market-browser',
-  stocksKr: MARKET_ROOMS.kr.href,
-  stocksUs: MARKET_ROOMS.us.href,
-  coinsSpot: MARKET_ROOMS.spot.href,
-  coinsFutures: MARKET_ROOMS.futures.href,
-  recommendations: '/recommendations',
-  themes: '/themes',
-  newsInformation: '/news-information',
   watchlist: '/watchlist',
   alerts: '/alerts',
   stockDetailPrefix: '/stock/',
@@ -41,8 +18,8 @@ export const APP_ROUTES = {
   backtests: '/backtests',
   paperTrading: '/paper-trading',
   strategyPromotion: '/strategy-promotion',
-  learn: '/learn',
   marketOverview: '/market-overview',
+  recommendations: '/recommendations',
   aiChat: '/ai-chat',
   researchCenter: '/research-center',
   portfolio: '/portfolio',
@@ -65,8 +42,6 @@ export const APP_ROUTES = {
 export const UNIFIED_SEARCH_ROUTE_CONTRACT = {
   primaryEntry: APP_ROUTES.assets,
   searchAlias: APP_ROUTES.unifiedSearchAlias,
-  marketRankings: APP_ROUTES.marketRankings,
-  marketBrowser: APP_ROUTES.marketBrowser,
 } as const;
 
 export type NavigationGroupId = 'home' | 'assets' | 'technical' | 'information' | 'settings';
@@ -111,7 +86,6 @@ export type NavigationFeatureDecision = 'KEEP_VISIBLE' | 'MERGE' | 'DEPRECATE' |
 
 export const NAVIGATION_FEATURE_DECISIONS = {
   'market-overview': 'KEEP_VISIBLE',
-  'market-browser': 'INTERNAL_ONLY',
   alerts: 'KEEP_VISIBLE',
   recommendations: 'KEEP_VISIBLE',
 } as const satisfies Record<string, NavigationFeatureDecision>;
@@ -134,37 +108,6 @@ export interface AppRoutePresentation {
   testOnly?: boolean;
 }
 
-const MARKET_ROOM_MENU: readonly NavigationMenuItem[] = [
-  {
-    id: 'stocks-kr',
-    href: MARKET_ROOMS.kr.href,
-    label: '국내주식',
-    icon: 'market',
-    capability: MARKET_ROOMS.kr.capability,
-  },
-  {
-    id: 'stocks-us',
-    href: MARKET_ROOMS.us.href,
-    label: '미국주식',
-    icon: 'market',
-    capability: MARKET_ROOMS.us.capability,
-  },
-  {
-    id: 'coins-spot',
-    href: MARKET_ROOMS.spot.href,
-    label: '코인현물',
-    icon: 'market',
-    capability: MARKET_ROOMS.spot.capability,
-  },
-  {
-    id: 'coins-futures',
-    href: MARKET_ROOMS.futures.href,
-    label: '코인선물',
-    icon: 'market',
-    capability: MARKET_ROOMS.futures.capability,
-  },
-] as const;
-
 export const APP_NAVIGATION: readonly NavigationGroup[] = [
   {
     id: 'home',
@@ -181,16 +124,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     exactPaths: [
       APP_ROUTES.assets,
       APP_ROUTES.unifiedSearchAlias,
-      APP_ROUTES.marketRankings,
-      APP_ROUTES.marketBrowser,
-      APP_ROUTES.stocksKr,
-      APP_ROUTES.stocksUs,
-      APP_ROUTES.coinsSpot,
-      APP_ROUTES.coinsFutures,
       APP_ROUTES.marketOverview,
       APP_ROUTES.recommendations,
-      APP_ROUTES.themes,
-      APP_ROUTES.newsInformation,
       APP_ROUTES.watchlist,
       APP_ROUTES.alerts,
       APP_ROUTES.stockInfo,
@@ -199,12 +134,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     pathPrefixes: [APP_ROUTES.stockDetailPrefix],
     menu: [
       { id: 'asset-search', href: APP_ROUTES.assets, label: '통합검색', icon: 'search', capability: 'canAccessBasicInfo' },
-      ...MARKET_ROOM_MENU,
       { id: 'market-overview', href: APP_ROUTES.marketOverview, label: '지수·시황', icon: 'market' },
-      { id: 'market-rankings', href: APP_ROUTES.marketRankings, label: '시장 순위', icon: 'ranking' },
-      { id: 'market-browser', href: APP_ROUTES.marketBrowser, label: '시장 탐색', icon: 'ranking' },
       { id: 'recommendations', href: APP_ROUTES.recommendations, label: 'AI 추천', icon: 'ranking', capability: 'canAccessRiskPreview' },
-      { id: 'themes', href: APP_ROUTES.themes, label: '테마', icon: 'themes' },
       { id: 'watchlist', href: APP_ROUTES.watchlist, label: '관심종목', icon: 'watchlist' },
       { id: 'alerts', href: APP_ROUTES.alerts, label: '가격 알림', icon: 'alerts' },
     ],
@@ -256,11 +187,10 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
   },
   {
     id: 'information',
-    href: APP_ROUTES.learn,
+    href: APP_ROUTES.aiChat,
     label: '정보',
     icon: 'information',
     exactPaths: [
-      APP_ROUTES.learn,
       APP_ROUTES.aiChat,
       APP_ROUTES.researchCenter,
       APP_ROUTES.portfolio,
@@ -268,7 +198,6 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       APP_ROUTES.assetsPortfolio,
     ],
     menu: [
-      { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 정보', icon: 'chat', capability: 'canAccessBasicInfo' },
       { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
       {
@@ -305,15 +234,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
 export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'home', title: '홈', breadcrumb: ['홈'], groupId: 'home', exactPaths: [APP_ROUTES.home, APP_ROUTES.homeAlias] },
   { id: 'asset-search', title: '통합검색', breadcrumb: ['종목', '통합검색'], groupId: 'assets', exactPaths: [APP_ROUTES.assets, APP_ROUTES.unifiedSearchAlias] },
-  { id: 'stocks-kr', title: '국내주식', breadcrumb: ['종목', '국내주식'], groupId: 'assets', exactPaths: [APP_ROUTES.stocksKr] },
-  { id: 'stocks-us', title: '미국주식', breadcrumb: ['종목', '미국주식'], groupId: 'assets', exactPaths: [APP_ROUTES.stocksUs] },
-  { id: 'coins-spot', title: '코인현물', breadcrumb: ['종목', '코인현물'], groupId: 'assets', exactPaths: [APP_ROUTES.coinsSpot] },
-  { id: 'coins-futures', title: '코인선물', breadcrumb: ['종목', '코인선물'], groupId: 'assets', exactPaths: [APP_ROUTES.coinsFutures] },
   { id: 'market-overview', title: '지수·시황', breadcrumb: ['종목', '지수·시황'], groupId: 'assets', exactPaths: [APP_ROUTES.marketOverview] },
-  { id: 'market-rankings', title: '시장 순위', breadcrumb: ['종목', '시장 순위'], groupId: 'assets', exactPaths: [APP_ROUTES.marketRankings] },
-  { id: 'market-browser', title: '시장 탐색', breadcrumb: ['종목', '시장 탐색'], groupId: 'assets', exactPaths: [APP_ROUTES.marketBrowser] },
   { id: 'recommendations', title: 'AI 추천', breadcrumb: ['종목', 'AI 추천'], groupId: 'assets', exactPaths: [APP_ROUTES.recommendations] },
-  { id: 'themes', title: '테마', breadcrumb: ['종목', '테마'], groupId: 'assets', exactPaths: [APP_ROUTES.themes, APP_ROUTES.newsInformation] },
   { id: 'watchlist', title: '관심종목', breadcrumb: ['종목', '관심종목'], groupId: 'assets', exactPaths: [APP_ROUTES.watchlist] },
   { id: 'alerts', title: '가격 알림', breadcrumb: ['종목', '가격 알림'], groupId: 'assets', exactPaths: [APP_ROUTES.alerts] },
   { id: 'stock-detail', title: '종목 상세', breadcrumb: ['종목', '종목 상세'], groupId: 'assets', pathPrefixes: [APP_ROUTES.stockDetailPrefix] },
@@ -327,7 +249,6 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'backtests', title: '과거검증', breadcrumb: ['기술', '과거검증'], groupId: 'technical', exactPaths: [APP_ROUTES.backtests] },
   { id: 'paper-trading', title: '모의매매', breadcrumb: ['기술', '모의매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
   { id: 'strategy-promotion', title: '전략 승격센터', breadcrumb: ['기술', '전략 승격센터'], groupId: 'technical', exactPaths: [APP_ROUTES.strategyPromotion] },
-  { id: 'learn', title: '투자 공부', breadcrumb: ['정보', '투자 공부'], groupId: 'information', exactPaths: [APP_ROUTES.learn] },
   { id: 'ai-chat', title: 'AI 정보', breadcrumb: ['정보', 'AI 정보'], groupId: 'information', exactPaths: [APP_ROUTES.aiChat] },
   { id: 'research-center', title: '연구센터', breadcrumb: ['정보', '연구센터'], groupId: 'information', exactPaths: [APP_ROUTES.researchCenter] },
   { id: 'portfolio', title: '포트폴리오', breadcrumb: ['정보', '포트폴리오'], groupId: 'information', exactPaths: [APP_ROUTES.portfolio, APP_ROUTES.assetsPortfolio] },
@@ -450,7 +371,6 @@ export const MOBILE_NAVIGATION: readonly MobileNavigationTab[] = [
       { id: 'portfolio', href: APP_ROUTES.portfolio, label: '포트폴리오', icon: 'portfolio', capability: 'canAccessPaperTrading' },
       { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 상담', icon: 'chat', capability: 'canAccessBasicInfo' },
-      { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'settings', href: APP_ROUTES.settings, label: '앱 설정', icon: 'settings' },
       { id: 'account', href: APP_ROUTES.account, label: '계정', icon: 'settings' },
       { id: 'admin', href: APP_ROUTES.admin, label: '회원 관리', icon: 'settings', capability: 'canManageMembers' },
@@ -494,7 +414,6 @@ export function sidebarItemMatches(item: NavigationMenuItem, location: string): 
     || path === APP_ROUTES.stockAnalysis
     || path.startsWith(APP_ROUTES.stockDetailPrefix)
   )) return true;
-  if (item.id === 'themes' && path === APP_ROUTES.newsInformation) return true;
   if (item.id === 'scanner' && path === APP_ROUTES.telegramOrder) return true;
   if (item.id === 'backtests' && path === APP_ROUTES.strategyPromotion) return true;
   if (item.id === 'admin' && path.startsWith(`${APP_ROUTES.admin}/`)) return true;

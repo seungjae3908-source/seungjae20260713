@@ -2708,7 +2708,7 @@ test.describe('real staging release readiness', () => {
   });
 
   const certificationRoutes = [
-    '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/learn', '/auto-trading',
+    '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/auto-trading',
   ] as const;
   const functionalRoutes = [
     '/stock/005930',
@@ -2717,7 +2717,6 @@ test.describe('real staging release readiness', () => {
     '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
     '/watchlist',
     '/alerts',
-    '/themes',
     '/market-overview',
     '/more',
   ] as const;
@@ -2817,7 +2816,7 @@ test.describe('real staging release readiness', () => {
     const informationMenu = APP_NAVIGATION.find((group) => group.id === 'information')?.menu ?? [];
     await settle(page);
     await nav.getByRole('button', { name: '정보', exact: true }).click();
-    for (const label of ['투자 공부', 'AI 정보', '포트폴리오']) {
+    for (const label of ['AI 정보', '포트폴리오']) {
       const target = informationMenu.find((menuItem) => menuItem.label === label);
       if (!target) throw new Error(`missing information navigation item: ${label}`);
       const item = page.getByRole('menuitem', { name: label, exact: true });

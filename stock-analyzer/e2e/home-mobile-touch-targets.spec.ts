@@ -129,7 +129,8 @@ for (const width of [390, 1440]) {
       }
 
       await expect(page.getByTestId('home-market-summary')).toBeVisible();
-      await expectTouchTarget(page, '시황', width);
+      // The home market card no longer carries a 시황 shortcut (home shortcuts were removed).
+      await expect(page.getByRole('main').getByRole('button', { name: '시황', exact: true })).toHaveCount(0);
 
       await page.getByRole('tab', { name: '신호', exact: true }).click();
       await expect(page.getByTestId('home-signal-summary')).toBeVisible();
@@ -143,7 +144,8 @@ for (const width of [390, 1440]) {
       await expect(page.getByTestId('home-market-summary')).toBeVisible();
       await expect(page.getByTestId('home-signal-summary')).toBeVisible();
       await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
-      await expectTouchTarget(page, '시황', width);
+      await expect(page.getByRole('main').getByRole('button', { name: '시황', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('region', { name: '빠른 이동' })).toHaveCount(0);
       await expectTouchTarget(page, '검색기', width);
       await expectTouchTarget(page, '전체', width);
     }

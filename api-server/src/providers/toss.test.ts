@@ -463,3 +463,51 @@ test('bounded KR fallback reuses a genuine completed Toss candle read across del
     }
   }
 });
+
+test('DART financials: a failed quarterly fetch is retried instead of cached as "no quarterly data"', async () => {
+  const fs = await import('node:fs/promises');
+  const nodePath = await import('node:path');
+  // The corp_code map is read from disk; seed the bundled location only when it is absent.
+  const bundled = nodePath.resolve(process.cwd(), 'data', 'dart-corpmap.json');
+  const seeded = await fs.access(bundled).then(() => false, () => true);
+  if (seeded) {
+    await fs.mkdir(nodePath.dirname(bundled), { recursive: true });
+    await fs.writeFile(bundled, JSON.stringify({ '005930': '00126380' }));
+  }
+  const previousKey = process.env.DART_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.DART_API_KEY = 'test-key';
+  const row = (account_nm: string, amount: string, add?: string) => ({ fs_div: 'CFS', account_nm, thstrm_amount: amount, thstrm_add_amount: add, frmtrm_amount: amount, bfefrmtrm_amount: amount });
+  const body = (reprt: string) => ({
+    status: '000',
+    message: '정상',
+    list: reprt === '11011'
+      ? [row('매출액', '400'), row('영업이익', '40'), row('당기순이익', '30'), row('자본총계', '1000'), row('부채총계', '500')]
+      : [row('매출액', '100', reprt === '11014' ? '300' : '100'), row('영업이익', '10', '30'), row('당기순이익', '7', '21')],
+  });
+  let quarterlyFails = true;
+  let corpMapDownloads = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.pathname.endsWith('/corpCode.xml')) {
+      corpMapDownloads += 1;
+      throw new TypeError('corp map download not expected in this test');
+    }
+    const reprt = url.searchParams.get('reprt_code') ?? '';
+    if (reprt !== '11011' && quarterlyFails) throw new TypeError('socket hang up');
+    return new Response(JSON.stringify(body(reprt)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const { getFinancials } = await import('./dart');
+    await assert.rejects(() => getFinancials('005930'), (error: { code?: string }) => error.code === 'UPSTREAM_ERROR');
+    quarterlyFails = false;
+    const raw = await getFinancials('005930');
+    const year = new Date().getFullYear() - 1;
+    assert.deepEqual(raw.quarterly.map((q) => q.period), [`${year}Q1`, `${year}Q2`, `${year}Q3`, `${year}Q4`], 'the next request must fetch quarterly statements again');
+    assert.equal(corpMapDownloads, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.DART_API_KEY; else process.env.DART_API_KEY = previousKey;
+    if (seeded) await fs.rm(bundled, { force: true });
+  }
+});
