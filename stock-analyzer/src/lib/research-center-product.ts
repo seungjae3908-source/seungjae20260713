@@ -806,3 +806,133 @@ export function buildPromotionChecklist(item: StrategyPromotionItem | null): Pro
     },
   ];
 }
+
+export interface PaperTradeResult {
+  symbol: string;
+  /** Net return of one closed paper trade after all costs, in percent (e.g. 0.42 = +0.42%). */
+  netReturnPct: number;
+}
+
+export interface PaperScorecard {
+  trades: number;
+  distinctSymbols: number;
+  winRate: number | null;
+  meanPct: number | null;
+  /** Standard error of the mean, percent. Needs at least 2 trades. */
+  standardErrorPct: number | null;
+  /** 95% lower bound: mean - 1.96 x standard error. */
+  lowerBound95Pct: number | null;
+  droppedInvalid: number;
+}
+
+export const PAPER_PROMOTION_MIN_SYMBOLS = 3;
+export const PAPER_PROMOTION_MIN_WIN_RATE = 0.6;
+
+/** Pure: paper-trading scorecard. Invalid rows are counted and ignored; never divides by zero. */
+export function buildPaperScorecard(trades: readonly PaperTradeResult[] | null | undefined): PaperScorecard {
+  const valid: PaperTradeResult[] = [];
+  let droppedInvalid = 0;
+  for (const trade of trades ?? []) {
+    if (trade && typeof trade.symbol === 'string' && trade.symbol.length > 0
+      && typeof trade.netReturnPct === 'number' && Number.isFinite(trade.netReturnPct)) {
+      valid.push(trade);
+    } else {
+      droppedInvalid += 1;
+    }
+  }
+  const n = valid.length;
+  if (n === 0) {
+    return { trades: 0, distinctSymbols: 0, winRate: null, meanPct: null, standardErrorPct: null, lowerBound95Pct: null, droppedInvalid };
+  }
+  const mean = valid.reduce((sum, t) => sum + t.netReturnPct, 0) / n;
+  const wins = valid.filter((t) => t.netReturnPct > 0).length;
+  let standardError: number | null = null;
+  if (n >= 2) {
+    const variance = valid.reduce((sum, t) => sum + (t.netReturnPct - mean) ** 2, 0) / (n - 1);
+    standardError = Math.sqrt(variance) / Math.sqrt(n);
+  }
+  return {
+    trades: n,
+    distinctSymbols: new Set(valid.map((t) => t.symbol)).size,
+    winRate: wins / n,
+    meanPct: mean,
+    standardErrorPct: standardError,
+    lowerBound95Pct: standardError === null ? null : mean - 1.96 * standardError,
+    droppedInvalid,
+  };
+}
+
+/** Pure: the owner-fixed paper-to-live review conditions. Review eligibility only, never an order permission. */
+export function evaluatePaperPromotion(card: PaperScorecard): PromotionChecklistItem[] {
+  const measured = card.trades > 0;
+  const state = (ok: boolean | null): PromotionChecklistState => (ok === null ? 'unmeasured' : ok ? 'met' : 'unmet');
+  return [
+    {
+      key: 'paper-trades',
+      label: `정산된 모의 거래 ${PROMOTION_MIN_TRADES}건 이상`,
+      state: state(measured ? card.trades >= PROMOTION_MIN_TRADES : null),
+      detail: measured ? `${card.trades}건` : '모의 거래 없음',
+    },
+    {
+      key: 'paper-lower-bound',
+      label: '거래당 평균 수익의 95% 하한이 0보다 큼',
+      state: state(card.lowerBound95Pct === null ? null : card.lowerBound95Pct > 0),
+      detail: card.lowerBound95Pct === null ? '표본 2건 미만' : `하한 ${card.lowerBound95Pct.toFixed(3)}% (평균 ${(card.meanPct ?? 0).toFixed(3)}%)`,
+    },
+    {
+      key: 'paper-symbols',
+      label: `서로 다른 ${PAPER_PROMOTION_MIN_SYMBOLS}종목 이상에서 거래`,
+      state: state(measured ? card.distinctSymbols >= PAPER_PROMOTION_MIN_SYMBOLS : null),
+      detail: measured ? `${card.distinctSymbols}종목` : '모의 거래 없음',
+    },
+    {
+      key: 'paper-win-rate',
+      label: `플러스 거래 비율 ${Math.round(PAPER_PROMOTION_MIN_WIN_RATE * 100)}% 이상`,
+      state: state(card.winRate === null ? null : card.winRate >= PAPER_PROMOTION_MIN_WIN_RATE),
+      detail: card.winRate === null ? '모의 거래 없음' : `${(card.winRate * 100).toFixed(1)}%`,
+    },
+  ];
+}
+
+export type SourceReadinessState = 'ready' | 'missing' | 'unknown';
+
+export interface SourceReadinessInput {
+  market: 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' | 'KR_STOCK' | 'US_STOCK';
+  rightsAttestationPinned: boolean | null;
+  archiveSessionsPresent: boolean | null;
+  /** Stocks only: owner-supplied holiday list. Pass null for crypto. */
+  holidayListPresent: boolean | null;
+}
+
+export interface SourceReadinessRow {
+  market: SourceReadinessInput['market'];
+  label: string;
+  state: SourceReadinessState;
+  missing: string[];
+}
+
+const MARKET_LABEL: Readonly<Record<SourceReadinessInput['market'], string>> = Object.freeze({
+  CRYPTO_SPOT: '코인현물(업비트)',
+  CRYPTO_FUTURES: '코인선물(비트겟)',
+  KR_STOCK: '국내주식(키움·토스)',
+  US_STOCK: '미국주식(키움·토스)',
+});
+
+/** Pure: what each market still lacks before its TRAIN source verifier can pass. Unknown stays unknown. */
+export function buildSourceReadiness(inputs: readonly SourceReadinessInput[]): SourceReadinessRow[] {
+  return inputs.map((input) => {
+    const checks: Array<[string, boolean | null]> = [
+      ['권리 확인 서명(해시 고정)', input.rightsAttestationPinned],
+      ['1분 아카이브 세션', input.archiveSessionsPresent],
+    ];
+    if (input.market === 'KR_STOCK' || input.market === 'US_STOCK') checks.push(['휴장일 목록', input.holidayListPresent]);
+    const missing = checks.filter(([, ok]) => ok === false).map(([name]) => name);
+    const unknown = checks.some(([, ok]) => ok === null);
+    return {
+      market: input.market,
+      label: MARKET_LABEL[input.market],
+      state: missing.length > 0 ? 'missing' : unknown ? 'unknown' : 'ready',
+      missing,
+    };
+  });
+}
