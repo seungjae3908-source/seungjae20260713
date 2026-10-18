@@ -15,9 +15,12 @@ import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import { downloadExcelWorkbook } from '@/lib/excel-export';
 import {
+  parsePortfolioSymbols,
   runBacktest,
+  runPortfolioBacktest,
   type BacktestFormValues,
   type BacktestMarket,
+  type BacktestPortfolioResult,
   type BacktestResult,
 } from '@/lib/backtest';
 
@@ -76,6 +79,7 @@ const DEFAULT_VALUES: BacktestFormValues = {
 
 type Props = {
   execute?: (values: BacktestFormValues) => Promise<BacktestResult>;
+  executePortfolio?: (values: BacktestFormValues, symbols: readonly string[]) => Promise<BacktestPortfolioResult>;
   initialResult?: BacktestResult | null;
   compact?: boolean;
 };
@@ -329,12 +333,16 @@ function ResultTable({
   );
 }
 
-export function BacktestResearchPanel({ execute = runBacktest, initialResult = null, compact = false }: Props) {
+export function BacktestResearchPanel({ execute = runBacktest, executePortfolio = runPortfolioBacktest, initialResult = null, compact = false }: Props) {
   const [values, setValues] = useState<BacktestFormValues>(initialValuesFromUrl);
   const [result, setResult] = useState<BacktestResult | null>(initialResult);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [portfolioText, setPortfolioText] = useState('');
+  const [portfolioResult, setPortfolioResult] = useState<BacktestPortfolioResult | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState('');
 
   const update = <K extends keyof BacktestFormValues>(key: K, value: BacktestFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
@@ -385,6 +393,24 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
       setError(cause instanceof Error ? cause.message : '백테스트를 실행하지 못했습니다.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function submitPortfolio() {
+    const symbols = parsePortfolioSymbols(portfolioText);
+    if (symbols.length < 2 || symbols.length > 5) {
+      setPortfolioError('종목을 2~5개 입력해 주세요. (쉼표 또는 띄어쓰기로 구분)');
+      return;
+    }
+    setPortfolioLoading(true);
+    setPortfolioError('');
+    setPortfolioResult(null);
+    try {
+      setPortfolioResult(await executePortfolio(values, symbols));
+    } catch (cause) {
+      setPortfolioError(cause instanceof Error ? cause.message : '포트폴리오 백테스트를 실행하지 못했습니다.');
+    } finally {
+      setPortfolioLoading(false);
     }
   }
 
@@ -585,6 +611,61 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
             {loading ? '백테스트 계산 중' : '백테스트 실행'}
           </button>
         </form>
+
+        <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-portfolio">
+          <h2 className="mb-1 text-center text-base font-black">포트폴리오 백테스트</h2>
+          <p className="mb-3 text-center text-xs text-muted-foreground">위 설정을 그대로 쓰고 종목만 2~5개로 바꿔, 자본을 똑같이 나눠 각각 운용합니다.</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              id="backtest-portfolio-symbols"
+              className={inputClass}
+              value={portfolioText}
+              placeholder="예: BTC, ETH, SOL"
+              aria-label="포트폴리오 종목"
+              onChange={(event) => setPortfolioText(event.target.value.toUpperCase())}
+            />
+            <button type="button" disabled={portfolioLoading || loading} onClick={() => void submitPortfolio()} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-border px-4 text-xs font-black disabled:opacity-60" data-testid="backtest-portfolio-run">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+              {portfolioLoading ? '계산 중' : '포트폴리오 실행'}
+            </button>
+          </div>
+          {portfolioError ? <p className="mt-3 text-xs font-bold text-destructive" role="alert" data-testid="backtest-portfolio-error">{portfolioError}</p> : null}
+          {portfolioResult ? (
+            <div className="mt-4 space-y-3" data-testid="backtest-portfolio-result">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <Metric label="합산 수익률" value={percent(portfolioResult.totalReturnPercent)} testId="portfolio-total-return" />
+                <Metric label="최종 자산" value={money(portfolioResult.finalCapital, portfolioResult.market)} />
+                <Metric label="거래 수" value={`${portfolioResult.totalTrades}회`} />
+                <Metric label="승률" value={percent(portfolioResult.winRate)} />
+                <Metric label="최대 낙폭(청산 기준)" value={`${money(portfolioResult.maximumDrawdown, portfolioResult.market)} · ${percent(portfolioResult.maximumDrawdownPercent)}`} />
+                <Metric label="평가손실 낙폭 상한" value={`${money(portfolioResult.markedMaximumDrawdownUpperBound, portfolioResult.market)} · ${percent(portfolioResult.markedMaximumDrawdownUpperBoundPercent)}`} />
+                <Metric label="샤프지수" value={ratio(portfolioResult.sharpeRatio)} />
+                <Metric label="소르티노지수" value={ratio(portfolioResult.sortinoRatio)} />
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs" data-testid="backtest-portfolio-sleeves">
+                  <thead className="bg-muted"><tr><th className="p-2">종목</th><th className="p-2">배분 자본</th><th className="p-2">수익률</th><th className="p-2">거래</th><th className="p-2">승률</th><th className="p-2">최대 낙폭</th></tr></thead>
+                  <tbody>
+                    {portfolioResult.sleeves.map((sleeve) => (
+                      <tr key={sleeve.symbol} className="border-t border-border">
+                        <td className="p-2 font-bold">{sleeve.symbol}</td>
+                        <td className="p-2">{money(sleeve.allocatedCapital, portfolioResult.market)}</td>
+                        <td className="p-2">{percent(sleeve.result.totalReturnPercent)}</td>
+                        <td className="p-2">{sleeve.result.totalTrades}회</td>
+                        <td className="p-2">{percent(sleeve.result.winRate)}</td>
+                        <td className="p-2">{percent(sleeve.result.maximumDrawdownPercent)}</td>
+                      </tr>
+                    ))}
+                    {portfolioResult.skipped.map((item) => (
+                      <tr key={item.symbol} className="border-t border-border text-muted-foreground"><td className="p-2 font-bold">{item.symbol}</td><td className="p-2" colSpan={5}>제외: {item.reason}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <ul className="grid gap-1 text-xs leading-5">{portfolioResult.warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
+            </div>
+          ) : null}
+        </section>
 
         {error ? (
           <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm" role="alert" data-testid="backtest-error">
