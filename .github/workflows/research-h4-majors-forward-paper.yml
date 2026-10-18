@@ -2,10 +2,10 @@ name: Research H4 Majors Long Forward Paper
 
 # Forward paper ledger (research only) for H4_MAJORS_LONG: public Bitget candles,
 # only signals on/after the unseen forward start count. No keys, no orders.
+# The ledger itself runs on the research server (systemd timer, every 4h);
+# this workflow only validates changes and allows a manual run.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 1 * * *'
   pull_request:
     paths:
       - .github/workflows/research-h4-majors-forward-paper.yml
@@ -14,6 +14,9 @@ on:
       - research-production/test/h4-majors-long-forward-paper-v1.test.mjs
       - research-production/src/long-short-flip-backtest-v1.mjs
       - research-production/src/long-short-flip-backtest-v2.mjs
+      - research-production/deploy/research-production-h4-majors-forward.service
+      - research-production/deploy/research-production-h4-majors-forward.timer
+      - research-production/deploy/install-h4-majors-forward-units.sh
 
 permissions:
   contents: read
