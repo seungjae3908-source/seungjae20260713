@@ -861,6 +861,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <details
         className="rounded-2xl border border-card-border bg-card"
         data-testid="auto-trading-advanced-settings"
+        open
       >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
           <span>{marketMeta.label} · 자동매매 설정</span>
