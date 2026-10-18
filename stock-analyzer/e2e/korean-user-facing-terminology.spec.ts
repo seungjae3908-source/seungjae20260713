@@ -14,11 +14,9 @@ test('primary user-facing navigation uses Korean-first terminology without chang
     readFile(stagingReadinessPath, 'utf8'),
   ]);
 
+  // 국내주식·미국주식·코인현물·코인선물 market rooms were removed with the
+  // 13-feature product scope (2026-10-18), so they are no longer menu labels.
   for (const label of [
-    '국내주식',
-    '미국주식',
-    '코인현물',
-    '코인선물',
     '검색기',
     'AI차트',
     '자동매매',
