@@ -1,7 +1,7 @@
 export const AUTH_SESSION_BOOTSTRAP_TIMEOUT_MS = 8_000;
-// Member profile reads (Supabase) can be slow on a cold connection; 8s was
-// routinely exceeded in production and hid the account state.
-export const AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS = 15_000;
+// The staging release contract requires the frontend deadline to cancel a
+// stalled profile read in under 9s; a slow read still shows the account card.
+export const AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS = 8_000;
 export const APP_API_SESSION_TIMEOUT_MS = 8_000;
 export const APP_API_REQUEST_TIMEOUT_MS = 12_000;
 
