@@ -81,3 +81,19 @@ test('full-size data (two years of hourly candles for several symbols) does not 
   const result = evaluateTrendPilotV1({ datasets });
   assert.equal(result.length, 3);
 });
+
+test('equity-based sizing grows the notional after gains and shrinks it after losses', async () => {
+  const { simulateCompoundingV1 } = await import('../src/trend-pilot-backtest-v1.mjs');
+  const day = 86_400_000;
+  const win = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: 0.05, stopFraction: 0.025 });
+  const up = simulateCompoundingV1([win(0), win(1), win(2)], { startEquityKrw: 2_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
+  assert.equal(up.firstNotionalKrw, 800_000);
+  assert.ok(up.lastNotionalKrw > up.firstNotionalKrw);
+  assert.ok(up.endEquityKrw > 2_000_000);
+  const loss = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: -0.025, stopFraction: 0.025 });
+  const down = simulateCompoundingV1([loss(0), loss(1)], { startEquityKrw: 2_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
+  assert.ok(down.lastNotionalKrw < down.firstNotionalKrw);
+  assert.equal(Math.round(down.endEquityKrw), Math.round(2_000_000 * 0.99 * 0.99));
+  const capped = simulateCompoundingV1([win(0)], { startEquityKrw: 100_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
+  assert.equal(capped.firstNotionalKrw, 5_000_000);
+});
