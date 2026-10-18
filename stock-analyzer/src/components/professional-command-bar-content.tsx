@@ -60,11 +60,12 @@ function formatTapeValue(item: SummaryItem) {
 
 /**
  * Index ticker tape. It only reads market-summary data already cached by the
- * home screen, so the shell never adds its own request.
+ * home and market-overview screens, so the shell never adds its own request.
  */
 function IndexTickerTape() {
   const home = useQuery({ queryKey: ['home-dashboard-market'], queryFn: getMarketSummary, enabled: false });
-  const items = validMarketSummaryItems(home.data?.items ?? []).slice(0, 7);
+  const overview = useQuery({ queryKey: ['market-overview-summary'], queryFn: getMarketSummary, enabled: false });
+  const items = validMarketSummaryItems(home.data?.items ?? overview.data?.items ?? []).slice(0, 7);
   return (
     <div data-testid="index-ticker-tape" aria-label="주요 지수" className="no-scrollbar flex min-w-0 flex-1 items-center gap-5 overflow-hidden whitespace-nowrap text-[12.5px]">
       {items.length ? items.map((item) => {

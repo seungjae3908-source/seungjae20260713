@@ -18,6 +18,8 @@ export const APP_ROUTES = {
   backtests: '/backtests',
   paperTrading: '/paper-trading',
   strategyPromotion: '/strategy-promotion',
+  marketOverview: '/market-overview',
+  recommendations: '/recommendations',
   aiChat: '/ai-chat',
   researchCenter: '/research-center',
   portfolio: '/portfolio',
@@ -83,7 +85,9 @@ export interface NavigationGroup {
 export type NavigationFeatureDecision = 'KEEP_VISIBLE' | 'MERGE' | 'DEPRECATE' | 'INTERNAL_ONLY';
 
 export const NAVIGATION_FEATURE_DECISIONS = {
+  'market-overview': 'KEEP_VISIBLE',
   alerts: 'KEEP_VISIBLE',
+  recommendations: 'KEEP_VISIBLE',
 } as const satisfies Record<string, NavigationFeatureDecision>;
 
 export function navigationMenuItemIsUserVisible(item: Pick<NavigationMenuItem, 'id'>): boolean {
@@ -120,6 +124,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     exactPaths: [
       APP_ROUTES.assets,
       APP_ROUTES.unifiedSearchAlias,
+      APP_ROUTES.marketOverview,
+      APP_ROUTES.recommendations,
       APP_ROUTES.watchlist,
       APP_ROUTES.alerts,
       APP_ROUTES.stockInfo,
@@ -128,6 +134,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     pathPrefixes: [APP_ROUTES.stockDetailPrefix],
     menu: [
       { id: 'asset-search', href: APP_ROUTES.assets, label: '통합검색', icon: 'search', capability: 'canAccessBasicInfo' },
+      { id: 'market-overview', href: APP_ROUTES.marketOverview, label: '지수·시황', icon: 'market' },
+      { id: 'recommendations', href: APP_ROUTES.recommendations, label: 'AI 추천', icon: 'ranking', capability: 'canAccessRiskPreview' },
       { id: 'watchlist', href: APP_ROUTES.watchlist, label: '관심종목', icon: 'watchlist' },
       { id: 'alerts', href: APP_ROUTES.alerts, label: '가격 알림', icon: 'alerts' },
     ],
@@ -226,6 +234,8 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
 export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'home', title: '홈', breadcrumb: ['홈'], groupId: 'home', exactPaths: [APP_ROUTES.home, APP_ROUTES.homeAlias] },
   { id: 'asset-search', title: '통합검색', breadcrumb: ['종목', '통합검색'], groupId: 'assets', exactPaths: [APP_ROUTES.assets, APP_ROUTES.unifiedSearchAlias] },
+  { id: 'market-overview', title: '지수·시황', breadcrumb: ['종목', '지수·시황'], groupId: 'assets', exactPaths: [APP_ROUTES.marketOverview] },
+  { id: 'recommendations', title: 'AI 추천', breadcrumb: ['종목', 'AI 추천'], groupId: 'assets', exactPaths: [APP_ROUTES.recommendations] },
   { id: 'watchlist', title: '관심종목', breadcrumb: ['종목', '관심종목'], groupId: 'assets', exactPaths: [APP_ROUTES.watchlist] },
   { id: 'alerts', title: '가격 알림', breadcrumb: ['종목', '가격 알림'], groupId: 'assets', exactPaths: [APP_ROUTES.alerts] },
   { id: 'stock-detail', title: '종목 상세', breadcrumb: ['종목', '종목 상세'], groupId: 'assets', pathPrefixes: [APP_ROUTES.stockDetailPrefix] },

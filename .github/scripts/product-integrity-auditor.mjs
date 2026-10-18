@@ -211,6 +211,8 @@ export const DEFAULT_CAPABILITIES = [
   ['CAP016', 'Account', 'P1', ['stock-analyzer/src/pages/account.tsx']],
   ['CAP017', 'Alerts', 'P2', ['stock-analyzer/src/pages/alerts.tsx']],
   ['CAP018', 'Watchlist', 'P2', ['stock-analyzer/src/pages/watchlist.tsx']],
+  ['CAP019', 'Recommendations', 'P2', ['stock-analyzer/src/pages/recommendations.tsx']],
+  ['CAP020', 'Market Overview', 'P2', ['stock-analyzer/src/pages/market-overview.tsx']],
   ['CAP022', 'Technical Workspace', 'P1', ['stock-analyzer/src/pages/technical-workspace.tsx']],
   ['CAP023', 'Admin', 'P1', ['stock-analyzer/src/pages/admin.tsx']],
   ['CAP024', 'Agent Hub', 'P2', ['stock-analyzer/src/pages/agent-hub-control.tsx']],

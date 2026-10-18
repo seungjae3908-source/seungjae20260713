@@ -13,8 +13,8 @@ const E2E_USER_ID = '22222222-2222-4222-8222-222222222222';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
 const REMOVED_ROUTES = [
-  '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/market-overview',
-  '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn', '/recommendations',
+  '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures',
+  '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn',
 ] as const;
 
 function fulfill(route: Route, body: unknown, status = 200) {
@@ -144,7 +144,7 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   expect(menuItems.map((item) => item.href)).not.toContain(APP_ROUTES.unifiedSearchAlias);
   expect(UNIFIED_SEARCH_ROUTE_CONTRACT).toEqual({ primaryEntry: '/stocks', searchAlias: '/search' });
   expect(navigationGroupMatches(group('assets'), '/watchlist')).toBe(true);
-  expect(group('assets').menu?.map((item) => item.label)).toEqual(['통합검색', '관심종목', '가격 알림']);
+  expect(group('assets').menu?.map((item) => item.label)).toEqual(['통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림']);
   expect(group('information').menu?.map((item) => item.label)).toEqual(['AI 정보', '연구센터', '포트폴리오']);
   const allHrefs = [
     ...menuItems.map((item) => item.href),
@@ -178,10 +178,10 @@ test('desktop sidebar owns the primary navigation at 1440px and the mobile tab b
   await expect(navigation).toHaveCount(1);
   await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
   await expect(navigation).toHaveAttribute('data-route-title', '통합검색');
-  for (const label of ['홈', '통합검색', '관심종목', '가격 알림', '검색기', '과거검증', '기술매매', '연구센터', '포트폴리오', 'AI 정보', '앱 설정']) {
+  for (const label of ['홈', '통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림', '검색기', '과거검증', '기술매매', '연구센터', '포트폴리오', 'AI 정보', '앱 설정']) {
     await expect(navigation.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
   }
-  for (const removedLabel of ['국내주식', '미국주식', '코인현물', '코인선물', '지수·시황', '시장 순위', '시장 탐색', 'AI 추천', '테마', '투자 공부']) {
+  for (const removedLabel of ['국내주식', '미국주식', '코인현물', '코인선물', '시장 순위', '시장 탐색', '테마', '투자 공부']) {
     await expect(navigation.getByRole('menuitem', { name: removedLabel, exact: true })).toHaveCount(0);
   }
   await expect(navigation.getByRole('menuitem', { name: '통합검색', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -274,7 +274,7 @@ test('removed screen URLs redirect to home instead of 404 and the asset menu lis
   await navigation.getByRole('button', { name: '종목', exact: true }).click();
   const menu = page.getByRole('menu', { name: '종목 메뉴' });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole('menuitem')).toHaveText(['통합검색', '관심종목', '가격 알림']);
+  await expect(menu.getByRole('menuitem')).toHaveText(['통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림']);
   await menu.getByRole('menuitem', { name: '가격 알림', exact: true }).click();
   await expect(page).toHaveURL(/\/alerts$/u);
   await expect(page.getByRole('menu', { name: '종목 메뉴' })).toBeHidden();

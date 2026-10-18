@@ -145,11 +145,12 @@ test('12 journeys include research stage readback and scanner member delivery; r
   assert.equal(GOLDEN_JOURNEYS.length, 12);
   assert.equal(new Set(GOLDEN_JOURNEYS.map(item => item.id)).size, 12);
   for (const id of ['GJ011', 'GJ013']) assert.ok(GOLDEN_JOURNEYS.find(item => item.id === id));
-  // The web Portfolio AI Mentor panel (GJ012/PI011) and the removed Recommendations,
-  // Market Overview and Market Information screens (CAP019-021) are out of product scope.
+  // The web Portfolio AI Mentor panel (GJ012/PI011) and the removed Market Information
+  // screen (CAP021) are out of product scope; Recommendations and Market Overview stay.
   assert.equal(GOLDEN_JOURNEYS.find(item => item.id === 'GJ012'), undefined);
   assert.equal(PRODUCT_EDGES.find(item => item.id === 'PI011'), undefined);
-  for (const id of ['CAP019', 'CAP020', 'CAP021']) assert.equal(DEFAULT_CAPABILITIES.find(item => item.id === id), undefined);
+  assert.equal(DEFAULT_CAPABILITIES.find(item => item.id === 'CAP021'), undefined);
+  for (const id of ['CAP019', 'CAP020']) assert.ok(DEFAULT_CAPABILITIES.find(item => item.id === id));
   assert.equal(new Set(PRODUCT_EDGES.map(item => item.id)).size, PRODUCT_EDGES.length);
 });
 
