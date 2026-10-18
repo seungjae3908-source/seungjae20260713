@@ -443,6 +443,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  // Embedded hosts (scanner, stock detail) already show their own summary, so open on the chart.
+  useEffect(() => {
+    if (embedded) setMobileTab('chart');
+  }, [embedded]);
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
