@@ -178,8 +178,11 @@ function fundingCost(rows, side, entryTime, exitTime) {
 export function simulateLongShortFlipV1({
   candles, fundingRates = [], regimeAllowed = null, variant = LONG_SHORT_FLIP_VARIANTS_V1[1],
   rules = LONG_SHORT_FLIP_RULES_V1, cost = LONG_SHORT_FLIP_COST_V1,
+  // Research runs never read 2026. Only the forward paper ledger turns this off, and it
+  // keeps trades from its own unseen forward window (indicator warm-up only before it).
+  holdoutGuard = true,
 }) {
-  const bars = candles.filter((c) => c.timestamp < LONG_SHORT_FLIP_HOLDOUT_START);
+  const bars = holdoutGuard ? candles.filter((c) => c.timestamp < LONG_SHORT_FLIP_HOLDOUT_START) : candles;
   const ind = flipIndicatorsV1(bars, rules);
   const funding = fundingAtBarsV1(bars, fundingRates);
   const slip = cost.slippageRate + (cost.spreadRate / 2);
