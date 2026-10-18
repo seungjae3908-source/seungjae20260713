@@ -56,6 +56,7 @@ export interface Settings {
   aiVerbosity: AiVerbosity;
   alertTypes: string[];
   defaultScanner: ScannerMode;
+  privacyWatermark: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -64,6 +65,7 @@ const DEFAULTS: Settings = {
   aiVerbosity: 'medium',
   alertTypes: [...ALERT_TYPES],
   defaultScanner: 'swing',
+  privacyWatermark: false,
 };
 
 const STORAGE_KEY = 'sa-settings-v1';
