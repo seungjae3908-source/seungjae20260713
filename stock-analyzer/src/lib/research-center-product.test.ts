@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ResearchCenterOverview } from './research-center';
 import type { ResearchPipelineCard, ResearchPipelineKey, ResearchProductStatus } from './research-center-product.ts';
-import type { StrategyPromotionResponse } from './strategy-promotion';
+import type { PromotionStageStatus, StrategyPromotionItem, StrategyPromotionResponse } from './strategy-promotion';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -10,6 +10,9 @@ import {
   classifyFunnelStage,
   explainResearchBlocker,
   summarizeResearchFunnel,
+  summarizePromotionDrops,
+  buildPromotionChecklist,
+  pickLeadingPromotionItem,
   classifySha,
   formatCanonicalMetric,
   isFullCostReady,
@@ -249,4 +252,59 @@ test('summarizeResearchFunnel handles running, unknown, all-passed and empty inp
   const empty = summarizeResearchFunnel([]);
   assert.equal(empty.total, 0);
   assert.match(empty.headline, /불러오지 못했습니다/u);
+});
+
+function promoItem(stages: Array<[string, PromotionStageStatus, number | null, string[]?]>, overrides: Partial<StrategyPromotionItem> = {}): StrategyPromotionItem {
+  return {
+    identity: {} as StrategyPromotionItem['identity'],
+    promotionState: 'RESEARCH',
+    stages: stages.map(([stage, status, tradeCount, reasons]) => ({
+      stage, status, tradeCount, failureReasons: reasons ?? [], failureReason: null,
+    })) as unknown as StrategyPromotionItem['stages'],
+    drift: { classification: null, status: 'INSUFFICIENT_SAMPLE', reason: '표본 부족', observedSampleSize: null },
+    killState: 'NONE',
+    blockers: [],
+    promotionEligible: false,
+    executionAuthority: 'NONE',
+    liveTradingAuthority: false,
+    privateTradingApiCount: 0,
+    ...overrides,
+  };
+}
+
+test('summarizePromotionDrops tallies stages and ranks reasons', () => {
+  const summary = summarizePromotionDrops([
+    promoItem([['backtest', 'PASS', 10], ['oos', 'FAIL', 4, ['OOS_TOO_SMALL']]], { blockers: ['RESEARCH_BRIDGE_NOT_REVIEWABLE'] }),
+    promoItem([['backtest', 'PASS', 12], ['oos', 'INSUFFICIENT_SAMPLE', 2, ['OOS_TOO_SMALL']]], { blockers: ['RESEARCH_BRIDGE_NOT_REVIEWABLE'] }),
+    promoItem([['backtest', 'NOT_STARTED', null]]),
+  ]);
+  assert.equal(summary.strategyCount, 3);
+  assert.deepEqual(summary.stages.map((row) => row.stage), ['backtest', 'oos']);
+  assert.deepEqual(summary.stages[0], { stage: 'backtest', total: 3, passed: 2, failed: 0, blocked: 0, waiting: 1 });
+  assert.deepEqual(summary.stages[1], { stage: 'oos', total: 2, passed: 0, failed: 1, blocked: 1, waiting: 0 });
+  assert.equal(summary.topReasons[0]?.count, 2);
+  assert.ok(summary.topReasons.some((row) => row.code === 'RESEARCH_BRIDGE_NOT_REVIEWABLE' && row.count === 2));
+  assert.equal(summarizePromotionDrops([]).stages.length, 0);
+  assert.equal(summarizePromotionDrops([promoItem([['a', 'FAIL', 1, ['X_INVALID']]])], 0).topReasons.length, 0);
+});
+
+test('buildPromotionChecklist reports met, unmet and unmeasured conditions truthfully', () => {
+  assert.deepEqual(buildPromotionChecklist(null), []);
+  const lead = pickLeadingPromotionItem([
+    promoItem([['a', 'NOT_STARTED', null]]),
+    promoItem([['a', 'PASS', 31], ['b', 'PASS', 12]]),
+  ]);
+  assert.equal(lead?.stages.length, 2);
+  const rows = Object.fromEntries(buildPromotionChecklist(lead).map((row) => [row.key, row.state]));
+  assert.equal(rows.stages, 'met');
+  assert.equal(rows.trades, 'met');
+  assert.equal(rows.drift, 'unmeasured');
+  assert.equal(rows.kill, 'met');
+  assert.equal(rows.eligible, 'unmet');
+  assert.equal(rows.authority, 'met');
+  const weak = Object.fromEntries(buildPromotionChecklist(promoItem([['a', 'PASS', 5], ['b', 'FAIL', null]], { killState: 'SUSPEND_RECOMMENDED' })).map((row) => [row.key, row.state]));
+  assert.equal(weak.stages, 'unmet');
+  assert.equal(weak.trades, 'unmet');
+  assert.equal(weak.kill, 'unmet');
+  assert.equal(pickLeadingPromotionItem([]), null);
 });
