@@ -91,7 +91,7 @@ export function opsTelegramConfigV1(env = process.env) {
   return Object.freeze({ token, chatId });
 }
 
-async function sendTelegram(config, text, fetchImpl) {
+export async function sendOpsTelegramV1(config, text, fetchImpl) {
   const response = await fetchImpl(`https://api.telegram.org/bot${config.token}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -154,7 +154,7 @@ export async function runOpsWatchdogV1({
     if (!telegram) delivery.push('ALERT_CHANNEL_NOT_CONFIGURED');
     else {
       const text = ['[투자앱 운영 알림]', ...messages.map((row) => row.text), `확인 시각 ${observedAt}`].join('\n');
-      try { await sendTelegram(telegram, text, fetchImpl); delivery.push('SENT'); }
+      try { await sendOpsTelegramV1(telegram, text, fetchImpl); delivery.push('SENT'); }
       catch (error) {
         delivery.push(String(error?.message ?? 'OPS_TELEGRAM_FAILED').slice(0, 60));
         // Not delivered: keep previous alert timestamps so the next run retries.
