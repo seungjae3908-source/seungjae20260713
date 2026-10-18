@@ -369,10 +369,11 @@ activate() {
 
   local env_tmp
   env_tmp="$(mktemp)"
-  # Preserve only safe Research tuning keys from the previous release.
+  # Preserve only safe Research tuning keys from the previous release, plus the
+  # owner-entered ops-alert Telegram channel (alert-only, no trading authority).
   # SHA/path/trading/private/order authority fields are always regenerated below.
   if "${SUDO[@]}" test -f "$ENV_FILE"; then
-    "${SUDO[@]}" grep -E '^(RESEARCH_TEMPORAL_CRYPTO_SYMBOLS|RESEARCH_TEMPORAL_LONG_SHORT_PERIOD|RESEARCH_ADAPTIVE_POLICY_RECORD_PATH|RESEARCH_DATA_FACTORY_EVIDENCE_PATH|RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH|RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH|RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH)=' "$ENV_FILE" > "$env_tmp" || true
+    "${SUDO[@]}" grep -E '^(RESEARCH_TEMPORAL_CRYPTO_SYMBOLS|RESEARCH_TEMPORAL_LONG_SHORT_PERIOD|RESEARCH_ADAPTIVE_POLICY_RECORD_PATH|RESEARCH_DATA_FACTORY_EVIDENCE_PATH|RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH|RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH|RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH|RESEARCH_OPS_TELEGRAM_BOT_TOKEN|RESEARCH_OPS_TELEGRAM_CHAT_ID|RESEARCH_RESULTS_DIGEST_ENABLED)=' "$ENV_FILE" > "$env_tmp" || true
     if [[ -z "${PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-}" ]]; then
       "${SUDO[@]}" grep -E '^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH=' "$ENV_FILE" >> "$env_tmp" || true
     fi

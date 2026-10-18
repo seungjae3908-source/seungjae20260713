@@ -390,6 +390,8 @@ export const AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/telegram-signal-message-v2.service.ts",
   "api-server/src/services/telegram-v3-current-source.service.test.ts",
   "api-server/src/services/telegram-v3-current-source.service.ts",
+  "api-server/src/services/telegram-v3-signal-followup.service.test.ts",
+  "api-server/src/services/telegram-v3-signal-followup.service.ts",
   "api-server/src/services/trade-automation-integration.test.ts",
   "api-server/src/services/trade-automation.service.ts",
   "api-server/src/services/trade-automation.types.ts",

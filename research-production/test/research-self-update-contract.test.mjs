@@ -54,3 +54,30 @@ test('AI schedules left off by a failed activation are restored for the running 
   assert.ok(restore.indexOf('validate-isolated') < restore.indexOf('activate-ai-research.sh" activate'));
   assert.doesNotMatch(restore, /activate-server\.sh/);
 });
+
+test('staged releases stay readable by the research user and failures keep their reason', () => {
+  assert.match(script, /^umask 022$/m);
+  assert.doesNotMatch(script, /^umask 077$/m);
+  assert.match(script, /repair_isolated_release "\$main_sha"\nwrite_status VALIDATING/);
+  assert.match(script, /repair_isolated_release "\$sha"\n  write_status RESTORING_AI/);
+  assert.match(script, /chmod -R u\+rwX,go\+rX,go-w -- "\$release"/);
+  assert.match(script, /reason="\$\(validation_reason "\$work\/validate-\$attempt\.log"\)"/);
+});
+
+test('validation reason falls back to the first error code when no JSON reason exists', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fn = script.slice(script.indexOf('validation_reason() {'), script.indexOf('manual_activation_running() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'self-update-reason-'));
+  const run = (body) => {
+    writeFileSync(join(dir, 'v.log'), body);
+    return execFileSync('bash', ['-c', `${fn}\nvalidation_reason "$1"`, 'x', join(dir, 'v.log')], { encoding: 'utf8' });
+  };
+  assert.equal(run('{"ok":false,"reason":"NATURAL_CYCLE_FAILED"}\n'), 'NATURAL_CYCLE_FAILED');
+  assert.equal(run("noise\nError: Cannot find module '/x/research-ai-isolated-transition-v2.mjs'\n    at y\n"),
+    "Error: Cannot find module '/x/research-ai-isolated-transition-v2.mjs'");
+  assert.equal(run('AI_RESEARCH_CUTOVER_BUSY:research-production-ai-review.service:activating\n'),
+    'AI_RESEARCH_CUTOVER_BUSY:research-production-ai-review.service:activating');
+  assert.equal(run('nothing useful\n'), '');
+});
