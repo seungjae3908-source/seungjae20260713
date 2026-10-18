@@ -1,4 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
+import type { TradingAccountMode } from './trade-automation.types';
 import { autoStopRunForLossLimit } from './trade-automation-run-control.service';
 
 const KILL_SWITCH_CODES = new Set([
@@ -37,12 +38,23 @@ export async function tripKillSwitchForRiskFailure(input: {
   repository: TradingRepository;
   userId: string;
   blockCodes: readonly string[];
+  /**
+   * The mode of the plan/order that failed. A simulated (paper/mock) failure never trips the
+   * GLOBAL halt that also stops real-money orders: live paths detect their own failures.
+   * Omitted = unknown = conservative (global halt as before).
+   */
+  accountMode?: TradingAccountMode | null;
 }) {
   // A daily loss limit also auto-stops this member's 작동 state (recorded with
   // its reason). This never weakens the block itself: the order is still rejected.
   await autoStopRunForLossLimit(input.repository, input.userId, input.blockCodes);
   const reasons = killSwitchReasons(input.blockCodes);
   if (reasons.length === 0) return { tripped: false, reasons };
+  // Simulated failures are data/exchange/state symptoms of the simulation itself. The account-level
+  // DAILY_LOSS_LIMIT keeps its deliberate global effect (existing, tested product rule).
+  if ((input.accountMode === 'paper' || input.accountMode === 'mock') && !reasons.includes('DAILY_LOSS_LIMIT')) {
+    return { tripped: false, reasons, scopedOutSimulated: true as const };
+  }
   await input.repository.setGlobalEmergencyStop(true, input.userId);
   return { tripped: true, reasons };
 }
