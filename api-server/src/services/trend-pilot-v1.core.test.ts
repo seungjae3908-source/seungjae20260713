@@ -111,19 +111,19 @@ test('signal requires enough contiguous closed bars', () => {
   assert.ok((computeAtrSeries(bars)[14] ?? 0) > 0);
 });
 
-test('sizing: balance × 1.5% ÷ stop, capped by max order and 5x margin', () => {
+test('sizing: balance × 2% ÷ stop, capped by max order and 5x margin', () => {
   // 100,000 KRW, BTC 60,000 USDT, ATR 600 → stop = min(1,200, 1,500) = 1,200 (2%)
   const base = { side: 'long' as const, referencePrice: 60_000, atr: 600, equityKrw: 100_000, usdKrw: 1_400, maxOrderKrw: 500_000, openMarginKrw: 0, contract: RULES };
   const plan = computeTrendPilotEntryPlan(base);
   assert.equal(plan.ok, true, plan.blockers.join());
   assert.equal(plan.stopPrice, 58_800);
   assert.equal(plan.capReason, 'RISK');
-  assert.ok(Math.abs(plan.wantedNotionalKrw! - 75_000) < 1e-6);
-  // BTC size step 0.0001 (≈8,400 KRW) floors 0.000892 → 0.0008: never more than the budget
-  assert.equal(plan.quantity, 0.0008);
-  assert.equal(Math.round(plan.notionalKrw!), 67_200);
-  assert.equal(Math.round(plan.riskKrw!), 1_344);
-  assert.ok(plan.marginKrw! <= 15_000);
+  assert.ok(Math.abs(plan.wantedNotionalKrw! - 100_000) < 1e-6);
+  // BTC size step 0.0001 (≈8,400 KRW) floors 0.00119 → 0.0011: never more than the budget
+  assert.equal(plan.quantity, 0.0011);
+  assert.equal(Math.round(plan.notionalKrw!), 92_400);
+  assert.equal(Math.round(plan.riskKrw!), 1_848);
+  assert.ok(plan.marginKrw! <= 20_000);
 
   // Wider ATR is capped at 2.5% of price
   const wide = computeTrendPilotEntryPlan({ ...base, atr: 2_000 });
@@ -133,7 +133,7 @@ test('sizing: balance × 1.5% ÷ stop, capped by max order and 5x margin', () =>
   const short = computeTrendPilotEntryPlan({ ...base, side: 'short' });
   assert.equal(short.stopPrice, 61_200);
 
-  // Compounding: 2,000,000 KRW wants 1.5M → member cap 500k binds
+  // Compounding: 2,000,000 KRW wants 2M → member cap 500k binds
   const big = computeTrendPilotEntryPlan({ ...base, equityKrw: 2_000_000 });
   assert.equal(big.capReason, 'MAX_ORDER');
   assert.ok(big.notionalKrw! <= 500_000);
@@ -194,12 +194,14 @@ test('stop management: breakeven at +1R, ATR trail, tighten-only, time exit', ()
   assert.equal(s.state.stopKind, 'breakeven');
 });
 
-test('guards: daily loss 1.5% and kill switch at -25% from peak', () => {
-  const ok = evaluateTrendPilotGuards({ equityKrw: 100_000, peakEquityKrw: 100_000, dayStartEquityKrw: 100_000, dayRealizedPnlKrw: -1_000, killed: false });
+test('guards: daily loss 2% and kill switch at -40% from peak', () => {
+  const ok = evaluateTrendPilotGuards({ equityKrw: 100_000, peakEquityKrw: 100_000, dayStartEquityKrw: 100_000, dayRealizedPnlKrw: -1_900, killed: false });
   assert.equal(ok.allowEntry, true);
-  const day = evaluateTrendPilotGuards({ equityKrw: 98_500, peakEquityKrw: 100_000, dayStartEquityKrw: 100_000, dayRealizedPnlKrw: -1_500, killed: false });
+  const day = evaluateTrendPilotGuards({ equityKrw: 98_000, peakEquityKrw: 100_000, dayStartEquityKrw: 100_000, dayRealizedPnlKrw: -2_000, killed: false });
   assert.deepEqual(day.blockers, ['DAILY_LOSS_LIMIT']);
-  const kill = evaluateTrendPilotGuards({ equityKrw: 112_500, peakEquityKrw: 150_000, dayStartEquityKrw: 113_000, dayRealizedPnlKrw: -500, killed: false });
+  const notYet = evaluateTrendPilotGuards({ equityKrw: 112_500, peakEquityKrw: 150_000, dayStartEquityKrw: 113_000, dayRealizedPnlKrw: -500, killed: false });
+  assert.equal(notYet.killNow, false, '-25% no longer stops');
+  const kill = evaluateTrendPilotGuards({ equityKrw: 90_000, peakEquityKrw: 150_000, dayStartEquityKrw: 90_500, dayRealizedPnlKrw: -500, killed: false });
   assert.equal(kill.killNow, true);
   assert.equal(kill.allowEntry, false);
   const already = evaluateTrendPilotGuards({ equityKrw: 200_000, peakEquityKrw: 200_000, dayStartEquityKrw: 200_000, dayRealizedPnlKrw: 0, killed: true });

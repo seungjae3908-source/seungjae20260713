@@ -9,9 +9,10 @@
 //   stop    2 × ATR14 (simple mean of true range), never wider than 2.5%
 //   manage  stop → entry after +1R; chandelier trail best − 2.5 × ATR;
 //           a stop only ever tightens; flat after 180 bars
-//   size    balance × 1.5% ÷ stop distance, ≤ member max order, ≤ 5x margin
-//   guards  no new entry after the KST day lost 1.5% of its starting balance;
-//           everything stops at −25% from the balance peak
+//   size    balance × 2% ÷ stop distance, ≤ member max order, ≤ 5x margin
+//   guards  no new entry after the KST day lost 2% of its starting balance;
+//           everything stops at −40% from the balance peak (owner choice 2026-10-18:
+//           risk 2% + kill −40%; backtest +58%, max drawdown −27%)
 // Every function is pure and returns explicit blockers instead of throwing on
 // bad market data, so a caller can fail closed.
 
@@ -30,11 +31,11 @@ export const TREND_PILOT_V1 = Object.freeze({
   breakevenAfterR: 1,
   trailAtrMultiple: 2.5,
   maxHoldBars: 180,
-  riskFraction: 0.015,
+  riskFraction: 0.02,
   leverage: 5,
   marginMode: 'isolated' as const,
-  dailyLossFraction: 0.015,
-  killDrawdownFraction: 0.25,
+  dailyLossFraction: 0.02,
+  killDrawdownFraction: 0.4,
   // Isolated liquidation must stay at least this many stop distances away.
   liquidationSafetyMultiple: 3,
   maintenanceMarginRate: 0.005,
