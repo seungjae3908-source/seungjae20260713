@@ -4,6 +4,9 @@
 //       reads the research server's cached Bitget candles
 //   node research-production/bin/trend-pilot-backtest.mjs --fetch <dir>
 //       fetches public Bitget candles (and funding where reachable) into <dir> first
+//   node research-production/bin/trend-pilot-backtest.mjs --fetch-long <dir>
+//       long-history check: Binance USDⓈ-M public archive (data.binance.vision) 1h candles and
+//       funding from 2020-06 (Bitget serves ~820 days of 1h); same rules, same engine
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -17,9 +20,47 @@ const FETCH_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', '
   'DOTUSDT', 'LTCUSDT', 'BCHUSDT', 'ATOMUSDT', 'NEARUSDT', 'UNIUSDT', 'AAVEUSDT', 'FILUSDT', 'APTUSDT', 'TRXUSDT'];
 const DAY = 86_400_000;
 
+async function binanceArchive(symbol, kind, fromYear, fromMonth) {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(join(tmpdir(), 'bv-')); const rows = [];
+  try {
+    for (let y = fromYear; y <= 2025; y += 1) for (let m = (y === fromYear ? fromMonth : 1); m <= 12; m += 1) {
+      const mm = String(m).padStart(2, '0');
+      const url = kind === 'klines'
+        ? `https://data.binance.vision/data/futures/um/monthly/klines/${symbol}/1h/${symbol}-1h-${y}-${mm}.zip`
+        : `https://data.binance.vision/data/futures/um/monthly/fundingRate/${symbol}/${symbol}-fundingRate-${y}-${mm}.zip`;
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(60_000) }); if (!res.ok) continue;
+        const file = join(dir, `${y}${mm}.zip`); await writeFile(file, Buffer.from(await res.arrayBuffer()));
+        for (const line of execFileSync('unzip', ['-p', file], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 }).split(/\r?\n/u)) {
+          const f = line.split(','); let ts = Number(f[0]); if (!Number.isSafeInteger(ts)) continue; if (ts > 1e14) ts = Math.floor(ts / 1000);
+          if (kind === 'klines') { const [o, h, l, c, v] = f.slice(1, 6).map(Number); if ([o, h, l, c].every((x) => x > 0)) rows.push({ timestamp: ts, open: o, high: Math.max(o, h, c), low: Math.min(o, l, c), close: c, volume: v || 0 }); }
+          else { const r = Number(f[2]); if (Number.isFinite(r)) rows.push({ timestamp: ts, rate: r }); }
+        }
+      } catch { /* missing month */ }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+  rows.sort((a, b) => a.timestamp - b.timestamp);
+  return rows.filter((r, i) => i === 0 || r.timestamp !== rows[i - 1].timestamp);
+}
+
 const args = process.argv.slice(2);
 let root;
-if (args[0] === '--fetch') {
+if (args[0] === '--fetch-long') {
+  root = resolve(args[1] ?? 'trend-pilot-state');
+  const dir = join(root, 'combination-research', 'datasets', 'BITGET_1H');
+  await mkdir(dir, { recursive: true });
+  for (const symbol of FETCH_SYMBOLS) {
+    try {
+      const candles = (await binanceArchive(symbol, 'klines', 2020, 6)).filter((c) => c.timestamp < Date.UTC(2026, 0, 1));
+      const fundingRates = await binanceArchive(symbol, 'funding', 2020, 6);
+      await writeFile(join(dir, `${symbol}.json`), JSON.stringify({ symbol, candles, fundingRates, fundingSource: 'BINANCE_VISION_PROXY' }));
+      process.stderr.write(`FETCHED:${symbol}:${candles.length}:funding=${fundingRates.length}:from=${candles[0] ? new Date(candles[0].timestamp).toISOString().slice(0, 10) : '-'}\n`);
+    } catch (error) { process.stderr.write(`FETCH_FAILED:${symbol}:${String(error?.message ?? error).slice(0, 160)}\n`); }
+  }
+} else if (args[0] === '--fetch') {
   root = resolve(args[1] ?? 'trend-pilot-state');
   const endTime = Date.UTC(2026, 0, 1) - 3_600_000;
   const startTime = endTime - (820 * DAY);
