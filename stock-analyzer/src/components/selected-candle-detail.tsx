@@ -1,5 +1,5 @@
 import type { AnalysisMarket } from '@/lib/analysis-selection';
-import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
+import { chartMarketTimeZone, type NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import type {
   ChartIndicatorResult,
   ChartIndicatorSnapshot,
@@ -59,7 +59,7 @@ function formatIndicator(value: number | null | undefined, digits = 2): string {
   });
 }
 
-function formatCandleTime(time: number, timeframe: UnifiedChartTimeframe): string {
+function formatCandleTime(time: number, timeframe: UnifiedChartTimeframe, market: AnalysisMarket): string {
   const date = new Date(time * 1000);
   if (!Number.isFinite(date.getTime())) return '-';
   return date.toLocaleString('ko-KR', {
@@ -69,6 +69,7 @@ function formatCandleTime(time: number, timeframe: UnifiedChartTimeframe): strin
     hour: timeframe === '1D' ? undefined : '2-digit',
     minute: timeframe === '1D' ? undefined : '2-digit',
     hour12: false,
+    timeZone: chartMarketTimeZone(market),
   });
 }
 
@@ -104,7 +105,7 @@ export function SelectedCandleDetailPanel({
           <p className="text-[11px] font-extrabold text-primary">차트 클릭 상세</p>
           <h2 className="mt-1 text-base font-black">선택 캔들 OHLCV·지표</h2>
           <p data-testid="selected-candle-time" className="mt-1 text-[11px] font-bold text-muted-foreground">
-            {formatCandleTime(candle.time, timeframe)} · {timeframe}
+            {formatCandleTime(candle.time, timeframe, market)} · {timeframe}
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
