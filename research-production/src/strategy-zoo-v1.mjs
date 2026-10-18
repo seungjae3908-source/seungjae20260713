@@ -646,12 +646,13 @@ export function simulateSpecialPortfolio(panel, ruleId, market) {
 }
 
 /** Pure: cross-sectional top-K rotation, executed at the next open, equal weight. */
-export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0.3, minK = 2 } = {}) {
+export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0.3, minK = 2, longShort = false, shortOnly = false } = {}) {
   const spec = STRATEGY_ZOO_MARKETS_V1[market];
   const year = spec.barsPerYear; const month = Math.round(year / 12); const week = market.startsWith('CRYPTO') ? 7 : 5;
   const closes = panel.series.map((s) => s.bars.map((b) => b.close));
   const volumes = panel.series.map((s) => s.bars.map((b) => Number(b.volume) || 0));
   const allBars = panel.series.map((s) => s.bars);
+  const rotFunding = panel.series.map((s) => fundingByDay(s.funding));
   const indexSeries = panel.series.findIndex((s) => s.symbol === spec.index);
   let weights = new Map(); // symbol index → weight (decided at previous rebalance close)
   let pending = null; // weights decided at today's close, executed next open
@@ -673,7 +674,10 @@ export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0
     }
     r -= spec.costPerSide * tu;
     weights = next; pending = null;
-    out.push({ day, ret: r }); turnover += tu; exposure += [...weights.values()].reduce((a, v) => a + v, 0);
+    if (market === 'CRYPTO_FUTURES') {
+      for (const [s2, w2] of weights) if (w2 !== 0) r -= w2 * (rotFunding[s2].get(Math.floor(day / DAY) * DAY) ?? 0);
+    }
+    out.push({ day, ret: r }); turnover += tu; exposure += [...weights.values()].reduce((a, v) => a + Math.abs(v), 0);
     // 2. rebalance decision at today's close
     const periodKey = (ms) => (rule.rebalance === 'month' ? `${new Date(ms).getUTCFullYear()}-${new Date(ms).getUTCMonth()}`
       : rule.rebalance === 'day' ? String(ms) : `${Math.floor((ms / DAY + 3) / 7)}`); // weeks start Monday
@@ -698,7 +702,10 @@ export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0
       scored.sort((a, b) => b.v - a.v);
       const k = Math.max(minK, Math.round(scored.length * topFraction));
       const picks = scored.slice(0, k).filter((x) => !rule.absolute || (x.ret12 !== null && x.ret12 > 0));
-      for (const p of picks) w.set(p.s, 1 / k); // unfilled slots stay in cash
+      const losers = scored.slice(-k).filter((x) => !rule.absolute || (x.ret12 !== null && x.ret12 < 0));
+      if (shortOnly) { for (const p of losers) w.set(p.s, -1 / k); }
+      else if (longShort) { for (const p of picks) w.set(p.s, 0.5 / k); for (const p of losers) w.set(p.s, (w.get(p.s) ?? 0) - (0.5 / k)); }
+      else for (const p of picks) w.set(p.s, 1 / k); // unfilled slots stay in cash
     }
     pending = w; lastKey = key;
   }
@@ -888,6 +895,23 @@ export function verdictV1(row, benchmark) {
 
 // ------------------------------------------------------------------ run
 
+/** Mirror chart (1/price, high↔low): a long rule on it is the symmetric short rule. */
+export function invertBars(bars) {
+  return bars.map((b) => ({ timestamp: b.timestamp, open: 1 / b.open, high: 1 / b.low, low: 1 / b.high, close: 1 / b.close, volume: b.volume }));
+}
+
+/** Futures variants of one timing rule: LONG (long side only), SHORT (mirror-chart long = short), LS (both). */
+function futuresTargets(panel, rule, market, side) {
+  const spec = STRATEGY_ZOO_MARKETS_V1[market];
+  const year = spec.barsPerYear; const month = Math.round(year / 12);
+  return panel.series.map((ser) => {
+    const run = (bars) => rule.make({ bars, close: bars.map((b) => b.close), n: bars.length, year, month, crypto: true });
+    const longSide = side === 'SHORT' ? null : run(ser.bars).map((v) => Math.max(0, Number(v) || 0));
+    const shortSide = side === 'LONG' ? null : run(invertBars(ser.bars)).map((v) => Math.max(0, Number(v) || 0));
+    return ser.bars.map((_, i) => Math.max(-1, Math.min(1, (longSide ? longSide[i] : 0) - (shortSide ? shortSide[i] : 0))));
+  });
+}
+
 function timingTargets(panel, rule, market) {
   const spec = STRATEGY_ZOO_MARKETS_V1[market];
   const year = spec.barsPerYear; const month = Math.round(year / 12);
@@ -916,7 +940,17 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
       simulateTimingPortfolio({ ...panel, series: [panel.series[spy]] }, [new Array(panel.series[spy].bars.length).fill(1)], market));
     for (const model of ALLOCATION_MODELS_V1) add({ id: model.id, family: '자산배분', name: model.name, source: model.source, kind: 'allocation' }, simulateAllocationPortfolio(panel, model, market));
   }
-  for (const rule of allocationOnly ? [] : TIMING_RULES_V1) add({ id: rule.id, family: rule.family, name: rule.name, source: rule.source, kind: 'timing' }, simulateTimingPortfolio(panel, timingTargets(panel, rule, market), market));
+  const SIDE_KO = { LONG: '롱만', SHORT: '숏만', LS: '롱숏' };
+  for (const rule of allocationOnly ? [] : TIMING_RULES_V1) {
+    if (market === 'CRYPTO_FUTURES') {
+      for (const side of ['LONG', 'SHORT', 'LS']) {
+        if (rule.id === 'BUY_HOLD' && side === 'LS') continue;
+        const id = rule.id === 'BUY_HOLD' && side === 'LONG' ? 'BUY_HOLD' : `${rule.id}__${side}`;
+        add({ id, family: rule.family, name: rule.id === 'BUY_HOLD' && side === 'LONG' ? rule.name : `${rule.name} [${SIDE_KO[side]}]`, source: rule.source, kind: 'timing', side },
+          simulateTimingPortfolio(panel, futuresTargets(panel, rule, market, side), market));
+      }
+    } else add({ id: rule.id, family: rule.family, name: rule.name, source: rule.source, kind: 'timing' }, simulateTimingPortfolio(panel, timingTargets(panel, rule, market), market));
+  }
   for (const rule of allocationOnly ? [] : SPECIAL_RULES_V1) {
     if (rule.id === 'OVERNIGHT' && market.startsWith('CRYPTO')) continue;
     if (rule.id === 'WEEKEND_CRYPTO' && !market.startsWith('CRYPTO')) continue;
@@ -925,7 +959,13 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
     add({ id: rule.id, family: rule.family, name: rule.name, source: rule.source, kind: 'special' }, simulateSpecialPortfolio(panel, rule.id, market));
   }
   if (!allocationOnly && panel.series.length >= 8) {
-    for (const rule of ROTATION_RULES_V1) add({ id: rule.id, family: '로테이션', name: rule.name, source: rule.source, kind: 'rotation' }, simulateRotationPortfolio(panel, rule, market));
+    for (const rule of ROTATION_RULES_V1) {
+      add({ id: rule.id, family: '로테이션', name: market === 'CRYPTO_FUTURES' ? `${rule.name} [롱만]` : rule.name, source: rule.source, kind: 'rotation', side: 'LONG' }, simulateRotationPortfolio(panel, rule, market));
+      if (market === 'CRYPTO_FUTURES') {
+        add({ id: `${rule.id}__LS`, family: '로테이션', name: `${rule.name} [상위 롱 + 하위 숏, 시장중립]`, source: rule.source, kind: 'rotation', side: 'LS' }, simulateRotationPortfolio(panel, rule, market, { longShort: true }));
+        add({ id: `${rule.id}__SHORT`, family: '로테이션', name: `${rule.name} [하위 숏만]`, source: rule.source, kind: 'rotation', side: 'SHORT' }, simulateRotationPortfolio(panel, rule, market, { shortOnly: true }));
+      }
+    }
   }
   // multiple-testing deflation over everything tried in this market
   // Robust spread of trial Sharpes (1.4826 × MAD): a few cost-destroyed rules
