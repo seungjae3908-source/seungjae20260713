@@ -242,6 +242,11 @@ export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
         simulateCompoundingV1(primary, { ...TREND_PILOT_COMPOUNDING_V1, riskFraction: 0.015, regimeSizing: true }),
         simulateCompoundingV1(primary, { ...TREND_PILOT_COMPOUNDING_V1, riskFraction: 0.03, regimeSizing: true }),
       ],
+      rSum: {
+        discovery: primary.filter((t) => t.entryTime < split).reduce((a, t) => a + (t.rMultiple ?? 0), 0),
+        validation: primary.filter((t) => t.entryTime >= split).reduce((a, t) => a + (t.rMultiple ?? 0), 0),
+      },
+      validationCompounding: simulateCompoundingV1(primary.filter((t) => t.entryTime >= split), { ...TREND_PILOT_COMPOUNDING_V1, riskFraction: 0.03 }),
       maxR: primary.length ? Math.max(...primary.map((t) => t.rMultiple ?? -Infinity)) : null,
       tradesOver5R: primary.filter((t) => t.rMultiple >= 5).length,
       perSymbol: perSymbol.map((s) => ({ symbol: s.symbol, status: s.status, ...summarizeTradesKrwV1(s.trades) })),
@@ -302,6 +307,7 @@ export function formatTrendPilotReportKoV1(result) {
     lines.push(`  전체: 거래 ${a.trades}회(롱 ${a.longs}·숏 ${a.shorts}) · 승률 ${pct(a.winRate)} · 합계 ${won(a.totalKrw)} · 연 ${won(a.perYearKrw)}`);
     lines.push(`  평균 이익 ${won(a.averageWinKrw)} · 평균 손실 ${won(a.averageLossKrw)} · 최악 1회 ${won(a.worstTradeKrw)} · 최대 낙폭 ${won(-a.maxDrawdownKrw)} · 최장 연패 ${a.longestLosingStreak}회`);
     lines.push(`  하루 손실 3만 원 넘은 날 ${a.daysOverDailyLimit}일 · 검증 구간(${v.splitDate}~) 합계 ${won(val.totalKrw)} (${val.trades}회)`);
+    if (v.rSum) lines.push(`  R 합계: 앞 구간 ${v.rSum.discovery.toFixed(1)}R · 뒤(검증) 구간 ${v.rSum.validation.toFixed(1)}R · 검증 구간만 3% 감수로 굴리면 ${(v.validationCompounding.totalReturn * 100).toFixed(1)}% (낙폭 ${(v.validationCompounding.maxDrawdownFraction * 100).toFixed(1)}%)`);
     lines.push(`  가장 큰 거래 ${Number.isFinite(v.maxR) ? v.maxR.toFixed(1) : '-'}R · 5R 이상 거래 ${v.tradesOver5R ?? 0}회`);
     lines.push(`  참고 · 다른 코인 ${v.otherSymbols.symbols}개 같은 규칙: 합계 ${won(v.otherSymbols.all.totalKrw)} · 승률 ${pct(v.otherSymbols.all.winRate)}`);
     for (const c of v.compounding ?? []) {
