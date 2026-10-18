@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ResearchCenterOverview } from './research-center';
+import type { ResearchPipelineCard, ResearchPipelineKey, ResearchProductStatus } from './research-center-product.ts';
 import type { StrategyPromotionResponse } from './strategy-promotion';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
   buildResearchPipeline,
+  classifyFunnelStage,
+  explainResearchBlocker,
+  summarizeResearchFunnel,
   classifySha,
   formatCanonicalMetric,
   isFullCostReady,
@@ -202,4 +206,47 @@ test('Full Cost complete requires all eight explicit components', () => {
     'commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact',
   ].map((key) => [key, { status: 'PRESENT', valuePercent: key === 'tax' ? 0 : 0.01, quality: key === 'tax' ? 'NOT_APPLICABLE' : 'OBSERVED' }]));
   assert.equal(isFullCostReady({ fullCostReady: true, components }), true);
+});
+
+function funnelCard(key: ResearchPipelineKey, label: string, status: ResearchProductStatus, blocker: string | null): ResearchPipelineCard {
+  return { key, label, status, metrics: [], updatedAt: null, blocker, evidenceState: blocker ? 'MISSING' : 'PRESENT', records: [] };
+}
+
+test('explainResearchBlocker maps known codes, patterns and empty input without throwing', () => {
+  assert.match(explainResearchBlocker('SHADOW_RUNTIME_PROOF_MISSING'), /관찰 검증/u);
+  assert.match(explainResearchBlocker('SOURCE_UNLINKED'), /출처/u);
+  assert.match(explainResearchBlocker('SOMETHING_NEW_INVALID'), /형식 검증/u);
+  assert.match(explainResearchBlocker('SOMETHING_NEW_MISSING'), /수집되지/u);
+  assert.match(explainResearchBlocker('SOMETHING_UNKNOWN'), /보완/u);
+  assert.match(explainResearchBlocker(null), /없습니다/u);
+  assert.match(explainResearchBlocker('   '), /없습니다/u);
+});
+
+test('summarizeResearchFunnel reports the first stage that has not passed', () => {
+  const summary = summarizeResearchFunnel([
+    funnelCard('backtest', '백테스트', 'verified', null),
+    funnelCard('oos', '표본 외 검증', 'verified', null),
+    funnelCard('final-holdout', '최종 검증', 'attention', 'PRE_HOLDOUT_GATE_FAILED'),
+    funnelCard('paper', '모의매매', 'inactive', 'PAPER_RUNTIME_INACTIVE'),
+  ]);
+  assert.equal(summary.total, 4);
+  assert.equal(summary.passedCount, 2);
+  assert.equal(summary.firstUnpassed?.key, 'final-holdout');
+  assert.equal(summary.firstUnpassed?.state, 'blocked');
+  assert.match(summary.headline, /4단계 중 2단계 통과/u);
+  assert.match(summary.headline, /최종 검증/u);
+  assert.equal(summary.stages[0]?.reason, null);
+  assert.match(summary.stages[3]?.reason ?? '', /모의매매/u);
+});
+
+test('summarizeResearchFunnel handles running, unknown, all-passed and empty inputs', () => {
+  assert.equal(classifyFunnelStage(funnelCard('shadow', '관찰 검증', 'accumulating', null)), 'running');
+  assert.equal(classifyFunnelStage(funnelCard('champion', '대표 전략', 'unmeasured', null)), 'unknown');
+  assert.equal(classifyFunnelStage(funnelCard('backtest', '백테스트', 'verified', 'X_MISSING')), 'blocked');
+  const allPassed = summarizeResearchFunnel([funnelCard('backtest', '백테스트', 'normal', null)]);
+  assert.equal(allPassed.firstUnpassed, null);
+  assert.match(allPassed.headline, /모두 통과/u);
+  const empty = summarizeResearchFunnel([]);
+  assert.equal(empty.total, 0);
+  assert.match(empty.headline, /불러오지 못했습니다/u);
 });
