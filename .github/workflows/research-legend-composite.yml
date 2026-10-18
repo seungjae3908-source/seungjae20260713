@@ -10,6 +10,10 @@ on:
         description: 'Comma-separated venues (PERP_1H,UPBIT_1H); empty = all'
         required: false
         default: ''
+      mode:
+        description: 'ROBUST = neighbourhood/risk/trend-pilot study; empty = variant comparison'
+        required: false
+        default: ''
   pull_request:
     paths:
       - .github/workflows/research-legend-composite.yml
@@ -36,6 +40,7 @@ jobs:
       - name: Fetch public hourly data and run the composite
         env:
           LEGEND_VENUES: ${{ inputs.venues }}
+          LEGEND_MODE: ${{ inputs.mode }}
         run: |
           set -Eeuo pipefail
           export NODE_OPTIONS=--max-old-space-size=6144

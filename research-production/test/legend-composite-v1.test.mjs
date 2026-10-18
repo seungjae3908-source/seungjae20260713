@@ -85,3 +85,19 @@ test('evaluation, statistics and Korean report', () => {
   const y = yearlyReturns(curve); assert.ok(Math.abs(y[2021] - 0.5) < 1e-12 && Math.abs(y[2022] + 0.5) < 1e-12);
   assert.ok(Math.abs(curveStats(curve, 0, Date.UTC(2030, 0, 1)).maxDrawdown - 0.5) < 1e-12);
 });
+
+test('robustness grid, trend-pilot replica and monthly combination', async () => {
+  const { robustnessGridV1, trendPilotReplicaTradesV1, monthlyFromCurve, monthlyFromTrades, combineMonthlyV1, formatRobustnessReportKoV1 } = await import('../src/legend-composite-v1.mjs');
+  const sets = Array.from({ length: 3 }, (_, k) => ({ symbol: k ? `C${k}USDT` : 'BTCUSDT', candles: withPump(series(3000, k + 3, { vol: 0.02, drift: 0.0001 }), 1500 + (k * 50)) }));
+  const from = sets[0].candles[0].timestamp; const to = sets[0].candles.at(-1).timestamp + H;
+  const robust = robustnessGridV1({ datasets: sets, span: { from, to }, splitTime: from + ((to - from) * 0.6) });
+  assert.equal(robust.grid.length, 27); assert.equal(robust.risk.length, 3); assert.equal(robust.oneAtATime.length, 4);
+  const trending = series(4000, 9, { drift: 0.002, vol: 0.01 });
+  const tp = trendPilotReplicaTradesV1(trending);
+  assert.ok(tp.length > 0 && tp.every((t) => t.exitT >= t.entryT && Number.isFinite(t.rMultiple)));
+  assert.ok(tp.some((t) => t.side === 'LONG'));
+  const a = monthlyFromCurve(robust.risk[0].curve); const b = monthlyFromTrades(tp, 0.02);
+  const c = combineMonthlyV1(a, b, Date.UTC(2021, 0, 1), Date.UTC(2021, 5, 1));
+  assert.equal(c.months, 5);
+  assert.match(formatRobustnessReportKoV1({ robust, correlation: c, span: { from: '2021-01-01', to: '2021-06-01' }, splitDate: '2021-04-01' }), /견고성/u);
+});
