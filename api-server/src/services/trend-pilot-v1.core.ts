@@ -430,13 +430,9 @@ export function kstDayKey(ms: number): string | null {
 
 // ---------------------------------------------------------------- ledger state
 
-export interface TrendPilotOpenPosition extends TrendPilotPositionState {
-  symbol: TrendPilotSymbol;
-  quantity: number;
-  marginKrw: number;
-  signalBarOpenMs: number;
-  clientOid: string;
-  openedAtMs: number;
+export interface TrendPilotTrail extends TrendPilotPositionState {
+  planId: string;
+  symbol: string;
 }
 
 export interface TrendPilotLedger {
@@ -449,8 +445,8 @@ export interface TrendPilotLedger {
   killed: boolean;
   killedAtMs: number | null;
   killReason: string | null;
-  lastSignalBarOpenMs: Partial<Record<TrendPilotSymbol, number>>;
-  open: TrendPilotOpenPosition[];
+  lastSignalBarOpenMs: Record<string, number>;
+  trails: Record<string, TrendPilotTrail>;
   closedCount: number;
   realizedPnlKrw: number;
   updatedAtMs: number | null;
@@ -459,7 +455,7 @@ export interface TrendPilotLedger {
 export function createTrendPilotLedger(memberId: string): TrendPilotLedger {
   return {
     version: 'trend-pilot-ledger-v1', memberId, peakEquityKrw: null, dayKey: null, dayStartEquityKrw: null,
-    dayRealizedPnlKrw: 0, killed: false, killedAtMs: null, killReason: null, lastSignalBarOpenMs: {}, open: [],
+    dayRealizedPnlKrw: 0, killed: false, killedAtMs: null, killReason: null, lastSignalBarOpenMs: {}, trails: {},
     closedCount: 0, realizedPnlKrw: 0, updatedAtMs: null,
   };
 }
@@ -479,14 +475,14 @@ export function observeTrendPilotEquity(ledger: TrendPilotLedger, equityKrw: num
   };
 }
 
-/** Records a closed position (realized P&L in KRW, fees included by the caller). */
-export function recordTrendPilotClose(ledger: TrendPilotLedger, symbol: TrendPilotSymbol, realizedPnlKrw: number, nowMs: number): TrendPilotLedger {
+/** Records a closed position (realized P&L in KRW when known, else 0) and drops its trail. */
+export function recordTrendPilotClose(ledger: TrendPilotLedger, planId: string, realizedPnlKrw: number, nowMs: number): TrendPilotLedger {
   const pnl = isFiniteNumber(realizedPnlKrw) ? realizedPnlKrw : 0;
   const day = kstDayKey(nowMs);
   const sameDay = day !== null && day === ledger.dayKey;
   return {
     ...ledger,
-    open: ledger.open.filter((p) => p.symbol !== symbol),
+    trails: Object.fromEntries(Object.entries(ledger.trails).filter(([id]) => id !== planId)),
     dayKey: day,
     dayRealizedPnlKrw: (sameDay ? ledger.dayRealizedPnlKrw : 0) + pnl,
     realizedPnlKrw: ledger.realizedPnlKrw + pnl,
@@ -507,10 +503,10 @@ export function rearmTrendPilot(ledger: TrendPilotLedger, equityKrw: number, now
 }
 
 /** Deterministic client order id: one entry per member, symbol and signal bar. */
-export function trendPilotClientOid(memberId: string, symbol: TrendPilotSymbol, signalBarOpenMs: number): string {
+export function trendPilotClientOid(memberId: string, symbol: string, signalBarOpenMs: number): string {
   let hash = 2166136261;
   for (const ch of memberId) { hash ^= ch.charCodeAt(0); hash = Math.imul(hash, 16777619) >>> 0; }
-  return `tp1-${symbol.slice(0, 3).toLowerCase()}-${hash.toString(36)}-${Math.floor(signalBarOpenMs / 1000).toString(36)}`;
+  return `tp1-${symbol.replace(/^KRW-/u, '').slice(0, 4).toLowerCase()}-${hash.toString(36)}-${Math.floor(signalBarOpenMs / 1000).toString(36)}`;
 }
 
 // ---------------------------------------------------------------- Upbit KRW spot (long only)
@@ -592,4 +588,40 @@ export function spotStopTouched(stopPriceKrw: number, lastPriceKrw: number): boo
 export function evaluateTrendPilotSpotSignal(closedBars: ReadonlyArray<TrendPilotCandle>): TrendPilotSignal {
   const signal = evaluateTrendPilotSignal(closedBars);
   return signal.side === 'short' ? { ...signal, side: null } : signal;
+}
+
+/** Reads a stored ledger fail-closed: anything malformed starts a new, killed ledger. */
+export function parseTrendPilotLedger(raw: unknown, memberId: string): TrendPilotLedger {
+  const fresh = createTrendPilotLedger(memberId);
+  if (!raw || typeof raw !== 'object') return fresh;
+  const value = raw as Partial<TrendPilotLedger>;
+  if (value.version !== 'trend-pilot-ledger-v1' || value.memberId !== memberId) {
+    return killTrendPilot(fresh, 'LEDGER_IDENTITY_MISMATCH', Date.now());
+  }
+  const trails: Record<string, TrendPilotTrail> = {};
+  for (const [id, trail] of Object.entries(value.trails ?? {})) {
+    if (!trail || typeof trail !== 'object') continue;
+    const t = trail as TrendPilotTrail;
+    if (t.planId !== id || (t.side !== 'long' && t.side !== 'short')
+      || ![t.entryPrice, t.riskUnit, t.entryAtr, t.stopPrice, t.bestPrice].every(isPositive)
+      || !Number.isSafeInteger(t.entryBarOpenMs)) continue;
+    trails[id] = { ...t };
+  }
+  const lastSignal: Record<string, number> = {};
+  for (const [symbol, ms] of Object.entries(value.lastSignalBarOpenMs ?? {})) if (Number.isSafeInteger(ms)) lastSignal[symbol] = ms as number;
+  return {
+    ...fresh,
+    peakEquityKrw: isPositive(value.peakEquityKrw) ? value.peakEquityKrw : null,
+    dayKey: typeof value.dayKey === 'string' ? value.dayKey : null,
+    dayStartEquityKrw: isPositive(value.dayStartEquityKrw) ? value.dayStartEquityKrw : null,
+    dayRealizedPnlKrw: isFiniteNumber(value.dayRealizedPnlKrw) ? value.dayRealizedPnlKrw : 0,
+    killed: value.killed === true,
+    killedAtMs: isFiniteNumber(value.killedAtMs) ? value.killedAtMs : null,
+    killReason: typeof value.killReason === 'string' ? value.killReason : null,
+    lastSignalBarOpenMs: lastSignal,
+    trails,
+    closedCount: Number.isSafeInteger(value.closedCount) ? value.closedCount as number : 0,
+    realizedPnlKrw: isFiniteNumber(value.realizedPnlKrw) ? value.realizedPnlKrw : 0,
+    updatedAtMs: isFiniteNumber(value.updatedAtMs) ? value.updatedAtMs : null,
+  };
 }
