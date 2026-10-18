@@ -102,21 +102,19 @@ export function AppSidebar() {
       </Link>
       {sections.map((section) => {
         const menuId = `sidebar-${section.id}-menu`;
-        const menuLabel = `${section.label ?? '홈'} 메뉴`;
+        const menuLabel = `${section.label} 메뉴`;
         return (
           <div key={section.id} className="flex flex-col gap-0.5">
-            {section.label ? (
-              <button
-                type="button"
-                id={`sidebar-${section.id}-trigger`}
-                aria-controls={menuId}
-                aria-expanded="true"
-                onClick={() => focusMenuItem(menuId, 0)}
-                className="px-2.5 pb-1 pt-3 text-left text-[11px] font-semibold text-muted-foreground/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-              >
-                {section.label}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              id={`sidebar-${section.id}-trigger`}
+              aria-controls={menuId}
+              aria-expanded="true"
+              onClick={() => focusMenuItem(menuId, 0)}
+              className="px-2.5 pb-1 pt-3 text-left text-[11px] font-semibold text-muted-foreground/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+            >
+              {section.label}
+            </button>
             <div
               id={menuId}
               role="menu"
