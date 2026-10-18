@@ -772,10 +772,13 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
         open.set(key, { ...unsigned, entryValue: leg.price * leg.quantity, exitValue: 0 });
       } else {
         existing.additions.push(leg);
+        // Average cost of the quantity still held: units already closed keep
+        // their realized P&L and must not pull the new average.
+        existing.entryPrice = (existing.entryPrice * existing.remainingQuantity + leg.price * leg.quantity)
+          / (existing.remainingQuantity + leg.quantity);
         existing.entryValue += leg.price * leg.quantity;
         existing.totalQuantity += leg.quantity;
         existing.remainingQuantity += leg.quantity;
-        existing.entryPrice = existing.entryValue / existing.totalQuantity;
         existing.fees = sumCost(existing.fees, leg.fees);
         existing.tax = sumCost(existing.tax, leg.tax);
         existing.costEvidence = mergeCostEvidence(existing.costEvidence, leg.costEvidence);
