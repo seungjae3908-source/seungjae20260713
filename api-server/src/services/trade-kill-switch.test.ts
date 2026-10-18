@@ -46,3 +46,22 @@ test('ordinary single-order rejection does not broaden into global halt', async 
   assert.equal(result.tripped, false);
   assert.equal(await repository.getGlobalEmergencyStop(), false);
 });
+
+test('simulated (paper/mock) failures never trip the global halt that also stops real-money orders; live and unknown still do', async () => {
+  for (const [accountMode, expected] of [['paper', false], ['mock', false], ['live', true], [undefined, true], [null, true]] as const) {
+    const repository = new InMemoryTradingRepository();
+    await repository.setGlobalEmergencyStop(false, USER);
+    const result = await tripKillSwitchForRiskFailure({ repository, userId: USER, blockCodes: ['MARKET_DATA_STALE', 'ORDER_STATE_UNKNOWN'], accountMode });
+    assert.equal(result.tripped, expected, String(accountMode));
+    assert.equal(await repository.getGlobalEmergencyStop(), expected, String(accountMode));
+    assert.deepEqual(result.reasons.sort(), ['MARKET_DATA_STALE', 'ORDER_STATE_UNKNOWN']);
+  }
+});
+
+test('the account-level daily loss limit keeps its global effect even for a paper plan', async () => {
+  const repository = new InMemoryTradingRepository();
+  await repository.setGlobalEmergencyStop(false, USER);
+  const result = await tripKillSwitchForRiskFailure({ repository, userId: USER, blockCodes: ['DAILY_LOSS_LIMIT'], accountMode: 'paper' });
+  assert.equal(result.tripped, true);
+  assert.equal(await repository.getGlobalEmergencyStop(), true);
+});

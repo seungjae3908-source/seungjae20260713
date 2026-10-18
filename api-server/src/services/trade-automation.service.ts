@@ -205,7 +205,7 @@ export class TradeAutomationService {
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, accountMode: input.accountMode });
       return { plan: null, duplicate: false, decision };
     }
 
@@ -254,7 +254,7 @@ export class TradeAutomationService {
       serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, accountMode: plan.accountMode });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
@@ -304,7 +304,7 @@ export class TradeAutomationService {
       serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
-      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes, accountMode: plan.accountMode });
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
@@ -520,6 +520,7 @@ export class TradeAutomationService {
       repository: this.repository,
       userId: order.userId,
       blockCodes: escalationCodes,
+      accountMode: (await this.repository.getPlan(order.userId, order.planId))?.accountMode ?? null,
     });
     return order;
   }
@@ -537,6 +538,7 @@ export class TradeAutomationService {
           repository: this.repository,
           userId,
           blockCodes: ['ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED'],
+          accountMode: (await this.repository.getPlan(userId, order.planId))?.accountMode ?? null,
         });
       }
     }
