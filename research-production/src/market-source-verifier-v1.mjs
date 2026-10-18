@@ -15,8 +15,10 @@ import { deriveArchivedResearchTimeframesV1 } from '../../market-prediction-lab/
  *
  * Crypto futures use UTC 24h sessions, so every missing bar is detectable on a
  * fixed grid. Stock sessions follow exchange calendars; the archive cannot say
- * which sessions SHOULD exist, so the owner must pass `sessionCalendar` and a
- * `allowedSources` list. Without them the stock verifiers HOLD.
+ * which sessions SHOULD exist, so the owner must pass `sessionCalendar`; without
+ * it the stock verifiers HOLD. Stock data comes from the owner's brokers, so the
+ * default allowed sources are KIWOOM_OPEN_API and TOSS_SECURITIES_API; one
+ * attestation covers one provider, so keep one provider per archived dataset.
  *
  * It does NOT prove independent source authenticity, exchange completeness,
  * funding/borrow/corporate-action correctness, out-of-sample behaviour, costs
@@ -44,13 +46,13 @@ export const MARKET_VERIFIER_CONFIG_V1 = Object.freeze({
   }),
   KR_STOCK: Object.freeze({
     attestationSchema: 'kr-stock-research-rights-attestation-v1',
-    defaultSources: Object.freeze([]),
+    defaultSources: Object.freeze(['KIWOOM_OPEN_API', 'TOSS_SECURITIES_API']),
     symbol: /^[0-9]{6}$/u,
     calendar: 'EXCHANGE',
   }),
   US_STOCK: Object.freeze({
     attestationSchema: 'us-stock-research-rights-attestation-v1',
-    defaultSources: Object.freeze([]),
+    defaultSources: Object.freeze(['KIWOOM_OPEN_API', 'TOSS_SECURITIES_API']),
     symbol: /^[A-Z]{1,5}([.-][A-Z])?$/u,
     calendar: 'EXCHANGE',
   }),
