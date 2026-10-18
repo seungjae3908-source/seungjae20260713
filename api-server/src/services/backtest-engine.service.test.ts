@@ -21,7 +21,10 @@ import {
   calculateStrategySignals,
   evaluateSelectionBias,
   expectedMaxNoiseSharpe,
+  fundingHistoryHash,
+  fundingRateSumHeld,
   fundingSettlementsHeld,
+  sanitizeFundingPoints,
   inverseNormalCdf,
   PORTFOLIO_BACKTEST_LIMITS,
   recordSelectionRun,
@@ -533,4 +536,37 @@ test('performance measurement returns finite duration and memory delta', () => {
 
 test('futures 7x analytical ceiling is accepted with no provider order', () => {
   assert.doesNotThrow(() => validateBacktestRequest(request({ market: 'crypto-futures', symbol: 'BTCUSDT', side: 'long', leverage: 7 })));
+});
+
+test('funding rate sum uses the recorded rate per settlement and counts fallbacks for boundaries without one', () => {
+  const H = 3_600_000; const base = { timeframe: '1H', fundingIntervalHours: 8, fundingRatePerInterval: 0.0001 };
+  const points = sanitizeFundingPoints([{ time: 8 * H, rate: 0.0005 }, { time: 16 * H + 30_000, rate: -0.0002 }]);
+  const funding = { lookup: (boundary: number) => { const hit = points.find((point) => Math.abs(point.time - boundary) <= 60_000); return hit ? hit.rate : null; }, tally: { history: 0, fallback: 0 } };
+  const sum = fundingRateSumHeld(7 * H, 25 * H, 'strategy_exit', base, funding); // crosses 08:00, 16:00, 24:00
+  assert.ok(Math.abs(sum - (0.0005 - 0.0002 + 0.0001)) < 1e-12);
+  assert.deepEqual(funding.tally, { history: 2, fallback: 1 });
+});
+test('sanitizeFundingPoints drops invalid or absurd rates and de-duplicates by minute; hash tracks content', () => {
+  const clean = sanitizeFundingPoints([{ time: 100 * 60_000, rate: 0.0001 }, { time: 100 * 60_000 + 5_000, rate: 0.0002 }, { time: -1, rate: 0.1 }, { time: 200 * 60_000, rate: Number.NaN }, { time: 300 * 60_000, rate: 0.5 }]);
+  assert.equal(clean.length, 1);
+  assert.notEqual(fundingHistoryHash(clean), fundingHistoryHash([{ ...clean[0], rate: 0.0003 }]));
+  assert.equal(fundingHistoryHash(clean), fundingHistoryHash(clean));
+});
+test('runBacktest applies real funding history, reports coverage, and leaves results unchanged without it', () => {
+  const rows = breakoutFixture('long', { holdBars: 40 }).map((row, index) => index > 61 ? { ...row, high: row.open * 1.005, low: row.open * 0.995, close: row.open } : row);
+  const base = request({ side: 'long', fundingRatePerInterval: 0.001, endTime: rows.at(-1)!.timestamp, takeProfitValue: 20 });
+  const plain = runBacktest(base, rows);
+  assert.equal(plain.fundingHistory, undefined);
+  assert.ok(plain.warnings.some((warning) => warning.includes('고정 비율')));
+  const H = 3_600_000; const first = Math.floor(START / (8 * H)) * 8 * H;
+  const points = Array.from({ length: 40 }, (_, k) => ({ time: first + k * 8 * H, rate: 0.003 }));
+  const real = runBacktest(base, rows, new Date(), { fundingHistory: points });
+  assert.ok(real.fundingHistory);
+  assert.equal(real.fundingHistory!.fallbackSettlements, 0);
+  assert.equal(real.fundingHistory!.historySettlements, real.fundingHistory!.settlements);
+  assert.equal(real.fundingHistory!.contentHash, fundingHistoryHash(sanitizeFundingPoints(points)));
+  if (plain.totalTrades > 0 && plain.totalFunding > 0) assert.ok(real.totalFunding > plain.totalFunding * 2.9);
+  const sparse = runBacktest(base, rows, new Date(), { fundingHistory: [{ time: first - 800 * H, rate: 0.003 }] });
+  assert.equal(sparse.fundingHistory!.historySettlements, 0);
+  assert.equal(sparse.totalFunding, plain.totalFunding);
 });

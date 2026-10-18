@@ -4,6 +4,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { classifyBacktestError, createBacktestsRouter, resetBacktestRouteStateForTests } from './backtests';
 import { BacktestValidationError } from '../services/backtest-engine.service';
+import { loadBitgetFundingHistory } from '../services/backtest-data.service';
 import { ProviderError } from '../lib/errors';
 import type { NormalizedCandle } from '../services/futures-market-data.service';
 import type { BacktestResult } from '../services/backtest-engine.service';
@@ -299,4 +300,20 @@ test('portfolio backtest endpoint validates the symbol list and returns equal-ca
     assert.equal(payload.result.initialCapital, 10_000);
     assert.equal(payload.result.symbols.length + payload.result.skipped.length, 2);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+import { loadBitgetFundingHistory, loadHistoricalBacktestCandles } from './backtest-data.service';
+
+test('route/data: funding history loader returns sorted in-range settlements and stops at the start of the range', async () => {
+  const H = 3_600_000; let calls = 0;
+  const fetchImpl = (async () => { calls += 1; return new Response(JSON.stringify({ code: '00000', data: [{ symbol: 'BTCUSDT', fundingRate: '0.0002', fundingTime: String(16 * H) }, { symbol: 'BTCUSDT', fundingRate: '-0.0001', fundingTime: String(8 * H) }, { symbol: 'BTCUSDT', fundingRate: '0.0003', fundingTime: String(0) }] }), { status: 200 }); }) as typeof fetch;
+  const result = await loadBitgetFundingHistory({ symbol: 'BTCUSDT', startTime: 8 * H, endTime: 20 * H, fetchImpl });
+  assert.deepEqual(result.points, [{ time: 8 * H, rate: -0.0001 }, { time: 16 * H, rate: 0.0002 }]);
+  assert.equal(calls, 1);
+});
+test('route/data: funding history loader degrades to a warning instead of failing the backtest', async () => {
+  const fetchImpl = (async () => new Response('{}', { status: 500 })) as typeof fetch;
+  const result = await loadBitgetFundingHistory({ symbol: 'BTCUSDT', startTime: 0, endTime: 1_000_000, fetchImpl });
+  assert.deepEqual(result.points, []);
+  assert.ok(result.warnings.length > 0);
 });

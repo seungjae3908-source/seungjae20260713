@@ -17,7 +17,7 @@ import {
   validateBacktestRequest,
   type BacktestRequest,
 } from '../services/backtest-engine.service';
-import { loadHistoricalBacktestCandles } from '../services/backtest-data.service';
+import { loadBitgetFundingHistory, loadHistoricalBacktestCandles } from '../services/backtest-data.service';
 import type { NormalizedCandle } from '../services/futures-market-data.service';
 import { getFuturesContractRules } from '../services/futures-contract-rules.service';
 import { buildBacktestPaperHandoffBundle, type BacktestPaperCanonicalStrategyInput } from '../services/backtest-paper-handoff.service';
@@ -31,6 +31,7 @@ let activeExecutions = 0;
 type BacktestDependencies = {
   loadCandles: typeof loadHistoricalBacktestCandles;
   loadContractRules: typeof getFuturesContractRules;
+  loadFundingHistory: typeof loadBitgetFundingHistory | null;
   execute: typeof runBacktest;
   executePortfolio: typeof runPortfolioBacktest;
   researchCodeSha: () => string;
@@ -224,6 +225,8 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
   const deps: BacktestDependencies = {
     loadCandles: dependencies.loadCandles ?? loadHistoricalBacktestCandles,
     loadContractRules: dependencies.loadContractRules ?? getFuturesContractRules,
+    // When candles are injected (tests), never reach the network for funding either unless a loader is injected too.
+    loadFundingHistory: dependencies.loadFundingHistory !== undefined ? dependencies.loadFundingHistory : dependencies.loadCandles ? null : loadBitgetFundingHistory,
     execute: dependencies.execute ?? runBacktest,
     executePortfolio: dependencies.executePortfolio ?? runPortfolioBacktest,
     researchCodeSha: dependencies.researchCodeSha ?? (() => String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase()),
@@ -261,7 +264,13 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
           maximumLeverage: rules.maximumLeverage,
           contractRulesStatus: rules.status,
         };
-        const result = deps.execute(acceptedRequest, history.candles);
+        let funding: Awaited<ReturnType<typeof loadBitgetFundingHistory>> | null = null;
+        if (request.market === 'crypto-futures' && deps.loadFundingHistory) {
+          try { funding = await deps.loadFundingHistory({ symbol: request.symbol, startTime: request.startTime, endTime: request.endTime, signal: controller.signal }); }
+          catch (error) { if (controller.signal.aborted) throw error; funding = { points: [], warnings: ['펀딩 이력을 불러오지 못해 고정 비율을 씁니다.'], requestCount: 0 }; }
+        }
+        const result = deps.execute(acceptedRequest, history.candles, new Date(), funding?.points.length ? { fundingHistory: funding.points } : {});
+        if (funding) result.warnings = [...result.warnings, ...funding.warnings];
         const paperHandoffBundle = buildBacktestPaperHandoffBundle(acceptedRequest, history.candles, deps.researchCodeSha());
         acceptedRequestForHandoff = acceptedRequest;
         acceptedStrategyIdentityInputs = paperHandoffBundle.strategyIdentityInputs;
