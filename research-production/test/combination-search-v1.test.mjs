@@ -360,3 +360,15 @@ test('funding history falls back to the labelled Binance proxy when Bitget cover
   );
   assert.deepEqual(await fetchCombinationFundingRatesV1({ source: 'UPBIT_1H', symbol: 'KRW-BTC', startTime: start, endTime: end, fetchImpl, minimumRecords: 1 }), { rows: [], fundingSource: null });
 });
+
+test('P_POST_SURGE_BREAK_SHORT needs the low before the high (a surge), not a decline', () => {
+  const build = (path) => path.map((close, i) => ({ timestamp: i * 3_600_000, open: close, high: close * 1.001, low: close * 0.999, close, volume: 100 }));
+  const flat = Array(10).fill(100); const flatHigh = Array(10).fill(121);
+  const surge = [...Array(30).fill(100), ...Array.from({ length: 36 }, (_, i) => 100 + (i * 0.6)), ...Array(10).fill(121), 95];
+  const decline = [...Array(30).fill(121), ...Array.from({ length: 36 }, (_, i) => 121 - (i * 0.6)), ...Array(10).fill(100), 80];
+  const atomsSurge = computeCombinationAtomsV1(build([...flat, ...surge]));
+  const atomsDecline = computeCombinationAtomsV1(build([...flatHigh, ...decline]));
+  const last = surge.length + flat.length - 1;
+  assert.equal(atomsSurge.get('P_POST_SURGE_BREAK_SHORT')[last], 1);
+  assert.notEqual(atomsDecline.get('P_POST_SURGE_BREAK_SHORT')[decline.length + flat.length - 1], 1);
+});

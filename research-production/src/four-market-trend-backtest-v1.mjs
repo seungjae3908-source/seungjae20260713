@@ -50,7 +50,9 @@ export const FOUR_MARKET_UNIVERSE_V1 = Object.freeze({
 function ensureBars(market, cfg, candles) {
   const clean = (candles ?? []).filter((c) => c.timestamp < HOLDOUT_START).sort((a, b) => a.timestamp - b.timestamp);
   if (cfg.barHours === 24) return clean; // daily candles arrive as daily
-  const hourly = clean.length > 1 && (clean[1].timestamp - clean[0].timestamp) === 3_600_000;
+  // Median spacing of the first bars, so one gap at the very start cannot make hourly data pass as 4h bars.
+  const deltas = clean.slice(1, 60).map((row, i) => row.timestamp - clean[i].timestamp).sort((a, b) => a - b);
+  const hourly = deltas.length > 0 && deltas[Math.floor(deltas.length / 2)] === 3_600_000;
   return hourly ? resampleCandlesV1(clean, cfg.barHours) : clean;
 }
 
