@@ -15,8 +15,8 @@ fs.mkdirSync(artifactDir, { recursive: true });
 const CRITICAL_ROUTES = ['/', '/login', '/stocks', '/scanner', '/ai-chart'] as const;
 const FULL_ROUTES = [
   ...CRITICAL_ROUTES,
-  '/watchlist', '/alerts',
-  '/portfolio', '/position', '/backtests', '/paper-trading', '/account',
+  '/market-overview', '/watchlist', '/alerts',
+  '/portfolio', '/position', '/recommendations', '/backtests', '/paper-trading', '/account',
   '/more', '/settings',
 ] as const;
 

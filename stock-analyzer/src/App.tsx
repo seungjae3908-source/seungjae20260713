@@ -30,6 +30,7 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
+import RecommendationsPage from '@/pages/recommendations';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -44,6 +45,7 @@ const loadStockInfoPage = () => import('@/pages/stock-info');
 const StockInfoPage = lazy(loadStockInfoPage);
 const loadDetailPage = () => import('@/pages/detail');
 const DetailPage = lazy(loadDetailPage);
+const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
@@ -249,13 +251,11 @@ const REMOVED_FEATURE_PATHS = [
   '/stocks/us',
   '/coins/spot',
   '/coins/futures',
-  '/market-overview',
   '/market-rankings',
   '/market-browser',
   '/themes',
   '/news-information',
   '/learn',
-  '/recommendations',
 ] as const;
 
 const SIDEBAR_EXCLUDED_PATHS = new Set(['/install']);
@@ -295,6 +295,7 @@ function AiChartAccess() { return gated('canAccessAiChart', builder('AI_CHART', 
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
+function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
 function ResearchCenterAccess() { return gated('canAccessBasicInfo', <ResearchCenterPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
@@ -370,6 +371,7 @@ function ApprovedRouter() {
     <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info/analysis" component={StockInfoAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
+    <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={SettingsAccess} />
     <Route path="/search" component={UnifiedAssetSearchAccess} />
@@ -389,6 +391,7 @@ function ApprovedRouter() {
     <Route path="/admin" component={AdminAccess} />
     <Route path="/more" component={SettingsAccess} />
     <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
+    <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />
     <Route path="/crypto" component={CryptoHomeRedirect} />

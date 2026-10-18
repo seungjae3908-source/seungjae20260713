@@ -26,6 +26,7 @@ const contextBuilder = read('.github/scripts/build-production-postdeploy-context
 const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
 const releaseOrchestrator = read('.github/scripts/production-release-orchestrator.cjs');
 const app = read('stock-analyzer/src/App.tsx');
+const recommendations = read('stock-analyzer/src/pages/recommendations.tsx');
 const recommendationService = read('api-server/src/services/recommendation.service.ts');
 const recommendationDeadline = read('api-server/src/services/recommendation-deadline.ts');
 const productionQaSpec = read('stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts');
@@ -195,14 +196,13 @@ for (const flag of [
   requireText(deployScript, `bool("${flag}")`, `PRODUCTION_PM2_POST_RESTART_FLAG_ASSERTION_MISSING:${flag}`);
 }
 
-// The rule-based "AI 추천" (/recommendations) and /market-browser screens were
-// removed from the web app (13-feature scope); old URLs redirect to home.
-for (const removedPage of ['@/pages/recommendations', '@/pages/stocks']) {
-  forbidText(app, removedPage, `REMOVED_SCREEN_IMPORT_FORBIDDEN:${removedPage}`);
-}
-for (const removedRoute of ["'/recommendations',", "'/market-browser',"]) {
-  requireText(app, removedRoute, `REMOVED_SCREEN_REDIRECT_MISSING:${removedRoute}`);
-}
+requireText(app, "import RecommendationsPage from '@/pages/recommendations';", 'RECOMMENDATIONS_EAGER_ROUTE_IMPORT_REQUIRED');
+forbidText(app, "lazy(() => import('@/pages/recommendations'))", 'RECOMMENDATIONS_LAZY_ROUTE_FALLBACK_FORBIDDEN');
+requireText(recommendations, 'queryKey: recommendationQueryKey(market)', 'RECOMMENDATIONS_SHARED_QUERY_KEY_MISSING');
+// The /market-browser screen (pages/stocks.tsx) was removed from the web app
+// (13-feature scope); its old URL redirects to home.
+forbidText(app, '@/pages/stocks', 'REMOVED_SCREEN_IMPORT_FORBIDDEN:@/pages/stocks');
+requireText(app, "'/market-browser',", "REMOVED_SCREEN_REDIRECT_MISSING:'/market-browser',");
 requireText(app, '<Redirect to="/" replace />', 'REMOVED_SCREEN_REDIRECT_TARGET_MISSING');
 requireText(recommendationDeadline, 'RECOMMENDATION_ANALYSIS_BUDGET_MS = 3_200', 'RECOMMENDATION_COLD_PROVIDER_BUDGET_MISSING');
 requireText(recommendationService, "'provider_timeout'", 'RECOMMENDATION_PROVIDER_TIMEOUT_EVIDENCE_MISSING');

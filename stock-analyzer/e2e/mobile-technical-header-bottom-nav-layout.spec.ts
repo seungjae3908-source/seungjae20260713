@@ -10,8 +10,46 @@ const technicalSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/pages/technical-workspace.tsx'),
   'utf8',
 );
+const recommendationsSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/recommendations.tsx'),
+  'utf8',
+);
+
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
+}
+
+function recommendationRow(index: number) {
+  return {
+    ticker: `00${String(5930 + index).padStart(4, '0')}`,
+    name: `검증 종목 ${index + 1}`,
+    market: 'KR',
+    currency: 'KRW',
+    category: 'undervalued',
+    categoryLabel: '저평가 후보',
+    price: 75_000 + index,
+    changePercent: 0.5,
+    reasons: ['실데이터 기반 검증 fixture'],
+    usedData: ['public-fixture'],
+    missingData: [],
+    risks: [],
+    overheated: false,
+    financialStability: '안정',
+    newsRisk: '낮음',
+    riskLevel: 'LOW',
+    shortTermOutlook: '중립',
+    midTermOutlook: '중립',
+    opinion: '관망',
+    targetPrice: null,
+    targetBasis: '검증 fixture',
+    stopLoss: null,
+    stopBasis: '검증 fixture',
+    score: 60,
+    generatedAt: NOW,
+    dataUpdatedAt: NOW,
+    providers: ['fixture'],
+    dataQuality: 'sufficient',
+  };
 }
 
 function zeroScannerResponse() {
@@ -64,7 +102,7 @@ function zeroScannerResponse() {
   };
 }
 
-async function installApprovedRuntime(page: Page) {
+async function installApprovedRuntime(page: Page, recommendationCount = 0) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -121,6 +159,21 @@ async function installApprovedRuntime(page: Page) {
 
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/market/recommendations') {
+      return fulfill(route, {
+        ok: true,
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
+        aiConfigured: false,
+        analysisDescription: '레이아웃 검증 fixture',
+        market: 'KR',
+        generatedAt: NOW,
+        rows: Array.from({ length: recommendationCount }, (_, index) => recommendationRow(index)),
+        excludedCount: 0,
+        excludedBreakdown: {},
+        dataQualityNote: '검증 fixture',
+      });
+    }
     if (url.pathname === '/api/market/scan') return fulfill(route, zeroScannerResponse());
     if (url.pathname.includes('/chart')) {
       return fulfill(route, { ticker: '005930', timeframe: '1D', provider: 'fixture', fetchedAt: NOW, candles: [] });
@@ -174,6 +227,16 @@ test('Technical workspace does not double-reserve BottomNav height', () => {
   expect(technicalSource).toContain('<BottomNav />');
 });
 
+test('AI recommendations keeps short content flexible and anchors BottomNav after the viewport-filling body', () => {
+  expect(recommendationsSource).toContain('data-testid="recommendations-shell"');
+  expect(recommendationsSource).toContain('flex h-full min-h-0 flex-col overflow-hidden bg-background');
+  expect(recommendationsSource).toContain('data-testid="recommendations-scroll-content"');
+  expect(recommendationsSource).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain');
+  expect(recommendationsSource).toContain('mx-auto w-full max-w-6xl px-3 pb-24 pt-3');
+  expect(recommendationsSource).not.toContain('pb-28');
+  expect(recommendationsSource).toContain('<BottomNav />');
+});
+
 test('390x844 Technical workspace keeps the visual title compact and BottomNav at the viewport floor', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApprovedRuntime(page);
@@ -199,6 +262,44 @@ test('390x844 Technical workspace keeps the visual title compact and BottomNav a
   expect(panelBox).not.toBeNull();
   expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(navBox.y + 1);
   expect(Math.abs(navBox.y + navBox.height - innerHeight)).toBeLessThanOrEqual(1);
+  await expectNoHorizontalOverflow(page);
+});
+
+test('390x844 short AI recommendations keeps BottomNav on the viewport floor', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApprovedRuntime(page, 0);
+  await page.goto('/recommendations');
+
+  await expect(page.getByRole('heading', { name: 'AI 추천', level: 1 })).toBeVisible();
+  const content = page.getByTestId('recommendations-scroll-content');
+  await expect(content).toBeVisible();
+  const contentBox = await content.boundingBox();
+  const { box: navBox, innerHeight } = await navGeometry(page);
+  expect(contentBox).not.toBeNull();
+  expect(contentBox!.y + contentBox!.height).toBeLessThanOrEqual(navBox.y + 1);
+  expect(Math.abs(navBox.y + navBox.height - innerHeight)).toBeLessThanOrEqual(1);
+  expect(await content.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expectNoHorizontalOverflow(page);
+});
+
+test('390x844 long AI recommendations scrolls content without moving or overlapping BottomNav', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApprovedRuntime(page, 24);
+  await page.goto('/recommendations');
+
+  const content = page.getByTestId('recommendations-scroll-content');
+  await expect(content).toBeVisible();
+  expect(await content.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
+  const before = await navGeometry(page);
+  await content.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  const after = await navGeometry(page);
+  expect(Math.abs(before.box.y + before.box.height - before.innerHeight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.box.y + after.box.height - after.innerHeight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(after.box.y - before.box.y)).toBeLessThanOrEqual(1);
+  const contentBox = await content.boundingBox();
+  expect(contentBox).not.toBeNull();
+  expect(contentBox!.y + contentBox!.height).toBeLessThanOrEqual(after.box.y + 1);
   await expectNoHorizontalOverflow(page);
 });
 
