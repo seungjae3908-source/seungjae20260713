@@ -27,6 +27,7 @@ export function ResponsiveTabs<T extends string>({
   compact?: boolean;
   fluid?: boolean;
 }) {
+  const sharesWidth = fluid || options.length <= 4;
   return (
     <div
       role="tablist"
@@ -34,7 +35,7 @@ export function ResponsiveTabs<T extends string>({
       data-testid={testId}
       data-ui-role="tabs"
       className={cn(
-        fluid
+        sharesWidth
           ? 'no-scrollbar grid min-w-0 gap-0.5 overflow-visible border-b border-border'
           : 'no-scrollbar flex min-w-0 gap-0.5 overflow-x-auto overscroll-x-contain border-b border-border min-[1200px]:grid min-[1200px]:overflow-visible',
         'rounded-none bg-transparent p-0',
@@ -43,9 +44,9 @@ export function ResponsiveTabs<T extends string>({
         options.length === 4 && 'min-[1200px]:grid-cols-4',
         options.length === 5 && 'min-[1200px]:grid-cols-5',
         options.length === 6 && 'min-[1200px]:grid-cols-6',
-        fluid && options.length === 2 && 'grid grid-cols-2 overflow-visible',
-        fluid && options.length === 3 && 'grid grid-cols-3 overflow-visible',
-        fluid && options.length === 4 && 'grid grid-cols-4 overflow-visible',
+        sharesWidth && options.length === 2 && 'grid grid-cols-2 overflow-visible',
+        sharesWidth && options.length === 3 && 'grid grid-cols-3 overflow-visible',
+        sharesWidth && options.length === 4 && 'grid grid-cols-4 overflow-visible',
         fluid && options.length === 5 && 'grid grid-cols-5 overflow-visible',
         fluid && options.length === 6 && 'grid grid-cols-6 overflow-visible',
         className,
@@ -69,7 +70,7 @@ export function ResponsiveTabs<T extends string>({
             }}
             className={cn(
               '-mb-px inline-flex min-h-11 shrink-0 items-center justify-center rounded-none border-b-2 text-center text-xs leading-4 transition-colors min-[1200px]:min-w-0',
-              fluid
+              sharesWidth
                 ? 'min-w-0 w-full px-1.5'
                 : compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
