@@ -438,7 +438,7 @@ export function toneKo(value: unknown) {
 }
 // ---------------------------------------------------------------------------
 // Watchlist storage (localStorage) — restored section.
-// Consumed by lib/watchlist.ts, hooks/use-watchlist.ts and pages/watchlist.tsx.
+// Consumed by pages/watchlist.tsx and the shared watchlist star toggles.
 // ---------------------------------------------------------------------------
 export const WATCHLIST_KEY = 'seungjae_watchlist_v1';
 export const WATCHLIST_CHANGE_EVENT = 'seungjae-watchlist-changed';

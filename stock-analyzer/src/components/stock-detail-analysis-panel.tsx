@@ -9,7 +9,7 @@ type Market = 'KR' | 'US';
 type AnalysisTab = 'ai' | 'financials' | 'filings';
 
 const ANALYSIS_TABS = [
-  { value: 'ai', label: 'AI분석' },
+  { value: 'ai', label: '지표 분석' },
   { value: 'financials', label: '재무제표' },
   { value: 'filings', label: '공시' },
 ] as const;

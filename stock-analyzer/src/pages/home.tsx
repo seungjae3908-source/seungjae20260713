@@ -194,7 +194,7 @@ export default function HomePage() {
           label="시세"
           value={dashboardMarketState}
           detail="주식·코인 공개 시세"
-          onClick={() => navigate('/market-overview')}
+          onClick={() => navigate('/stocks')}
         />
         <DashboardStatusCard
           icon={<Radar className="h-5 w-5" />}
@@ -223,7 +223,7 @@ export default function HomePage() {
 
   const marketSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
-      <HomeSectionHeader title="시장" actionLabel="시황" onAction={() => navigate('/market-overview')} />
+      <HomeSectionHeader title="시장" />
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
         {indices.length === 0
           ? <DashboardPlaceholder label={marketState} />
@@ -320,24 +320,16 @@ export default function HomePage() {
           )}
 
           {desktop ? (
-            <>
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]" data-testid="home-desktop-workspace">
-                <div className="min-w-0 space-y-4">
-                  {marketSection}
-                  {signalSection}
-                </div>
-                <aside className="min-w-0 space-y-4">
-                  {portfolioSection}
-                  {watchlistSection}
-                </aside>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]" data-testid="home-desktop-workspace">
+              <div className="min-w-0 space-y-4">
+                {marketSection}
+                {signalSection}
               </div>
-              <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
-                <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
-                <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
-                <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
-                <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
-              </section>
-            </>
+              <aside className="min-w-0 space-y-4">
+                {portfolioSection}
+                {watchlistSection}
+              </aside>
+            </div>
           ) : (
             <section data-testid={`home-mobile-panel-${mobileTab}`}>
               {mobileTab === 'market' ? marketSection : null}
@@ -402,8 +394,4 @@ function MetricCard({ label, value, sub, change }: { label: string; value: strin
 
 function DashboardPlaceholder({ label }: { label: string }) {
   return <div className="col-span-2 flex min-h-20 items-center justify-center rounded-2xl bg-background px-3 text-center text-xs font-medium text-muted-foreground md:col-span-4">{label}</div>;
-}
-
-function QuickLink({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-card-border bg-card px-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 shrink-0 text-primary" /><span className="break-keep">{label}</span></button>;
 }
