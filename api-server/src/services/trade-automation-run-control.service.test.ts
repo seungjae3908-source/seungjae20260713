@@ -14,6 +14,7 @@ import {
   readAutoRunControl,
   recordAutoRunKillSwitch,
   recordAutoRunPolicyToggle,
+  recordAutoRunResume,
   startAutoRun,
   stopAutoRun,
   type AutoRunLiveResolver,
@@ -181,9 +182,9 @@ test('daily loss limit auto-stops a running member, records why, and 작동 can 
   assert.equal(audit[0].action, 'AUTO_STOP');
   assert.equal(audit[0].actor, 'system');
 
-  // The existing global kill switch for DAILY_LOSS_LIMIT stays in force.
-  assert.equal(await repository.getGlobalEmergencyStop(), true);
-  await repository.setGlobalEmergencyStop(false, USER);
+  // Owner decision 2026-10-18: a member's daily loss limit is member-scoped.
+  // It never halts other members through the global switch.
+  assert.equal(await repository.getGlobalEmergencyStop(), false);
   const restarted = await startAutoRun(repository, USER, { isLive: paperOnly, liveConfirmed: false });
   assert.equal(restarted.ok, true);
   assert.equal((await repository.getPolicy(USER)).newEntriesStopped, false);
@@ -264,4 +265,82 @@ test('execution service fills a 작동 automatic Paper order without ever callin
     if (previous == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     else process.env.TRADING_CREDENTIAL_MASTER_KEY = previous;
   }
+});
+
+test('member-scoped kill switch stops only that member; 작동 needs the confirmed resume first', async () => {
+  const OTHER = '44444444-4444-4444-4444-444444444444';
+  const repository = await seeded();
+  await repository.savePolicy(OTHER, memberPolicy());
+  await startAutoRun(repository, USER, { isLive: paperOnly, liveConfirmed: false });
+  await startAutoRun(repository, OTHER, { isLive: paperOnly, liveConfirmed: false });
+  const service = new TradeAutomationService(repository);
+  const running = await repository.getPolicy(USER);
+  const fast = paperPlan({
+    signalId: 'run-fast',
+    marketSnapshot: { ...paperPlan().marketSnapshot, oneMinuteMovePercent: 7 },
+  });
+  const blocked = await service.createPlan(USER, fast, running, false);
+  assert.equal(blocked.plan, null);
+  assert.ok(blocked.decision.blockCodes.includes('FAST_MOVE_DETECTED'));
+  assert.equal(await repository.getGlobalEmergencyStop(), false, 'one member’s fast move never halts everyone');
+  const policy = await repository.getPolicy(USER);
+  assert.equal(policy.newEntriesStopped, true);
+  const { control } = await readAutoRunControl(repository, USER);
+  assert.equal(control.lastAction, 'KILL_SWITCH');
+  assert.equal(control.lastReason, 'FAST_MOVE_DETECTED');
+  assert.equal(autoRunState(policy, control, false), 'KILL_SWITCH');
+  const restart = await startAutoRun(repository, USER, { isLive: paperOnly, liveConfirmed: false });
+  assert.equal(restart.ok, false);
+  assert.equal(!restart.ok && restart.error, 'MEMBER_TRADING_RESUME_REQUIRED');
+  // The other member keeps running.
+  assert.equal(autoRunSwitchOn(await repository.getPolicy(OTHER)), true);
+});
+
+test('stop / 작동 OFF keeps automatic authority for a protective exit of an owned automatic entry only', async () => {
+  const repository = await seeded();
+  const service = new TradeAutomationService(repository);
+  await startAutoRun(repository, USER, { isLive: paperOnly, liveConfirmed: false });
+  const entry = await service.createPlan(USER, paperPlan({ signalId: 'owned-entry' }), await repository.getPolicy(USER), false);
+  assert.equal(entry.plan?.executionMode, 'automatic');
+  const exit = (signalId: string, entryPlanId: string) => paperPlan({
+    signalId, side: 'sell', reduceOnly: true, quantity: 1, quoteAmount: null, estimatedKrw: 100_000,
+    signalReasons: ['AUTO_EXIT', `AUTO_EXIT_ENTRY_PLAN:${entryPlanId}`, 'AUTO_EXIT_REASON:STOP_LOSS'],
+  });
+  for (const stop of ['run-off', 'emergency'] as const) {
+    if (stop === 'run-off') await stopAutoRun(repository, USER, { isLive: paperOnly });
+    else await repository.savePolicy(USER, { ...await repository.getPolicy(USER), mode: 'approval', emergencyStopped: true });
+    const stopped = await repository.getPolicy(USER);
+    // A new entry stays blocked from automatic execution.
+    const newEntry = await service.createPlan(USER, paperPlan({ signalId: `new-entry-${stop}` }), stopped, stop === 'emergency');
+    if (newEntry.plan) {
+      assert.equal(newEntry.plan.executionMode, 'manual');
+      await assert.rejects(() => service.beginAutomaticPlan(USER, newEntry.plan!.id, { protectiveExit: true }), /USER_APPROVAL_REQUIRED/);
+    } else assert.ok(newEntry.decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+    // The protective exit keeps its automatic path.
+    const created = await service.createPlan(USER, exit(`exit-${stop}`, entry.plan!.id), stopped, stop === 'emergency',
+      { protectiveExit: true });
+    assert.equal(created.plan?.executionMode, 'automatic', stop);
+    const submitted = await service.beginAutomaticPlan(USER, created.plan!.id, { protectiveExit: true });
+    assert.equal(submitted.state, 'SUBMITTED', stop);
+    // Without the worker's protective-exit request, or for a plan it does not own, nothing changes.
+    const unflagged = await service.createPlan(USER, exit(`exit-unflagged-${stop}`, entry.plan!.id), stopped, false);
+    assert.equal(unflagged.plan?.executionMode, 'manual');
+    const foreign = await service.createPlan(USER, exit(`exit-foreign-${stop}`, 'not-an-owned-plan'), stopped, false,
+      { protectiveExit: true });
+    assert.equal(foreign.plan?.executionMode, 'manual');
+    await assert.rejects(() => service.beginAutomaticPlan(USER, foreign.plan!.id, { protectiveExit: true }), /USER_APPROVAL_REQUIRED/);
+    await repository.savePolicy(USER, { ...stopped, mode: 'automatic', automaticEnabled: true, emergencyStopped: false });
+  }
+});
+
+test('confirmed resume is audited and leaves the run OFF', async () => {
+  const repository = await seeded(memberPolicy({ emergencyStopped: true }));
+  const before = await repository.getPolicy(USER);
+  const audit = await recordAutoRunResume(repository, USER, { policyBefore: before, isLive: futuresLive });
+  assert.equal(audit.auditRecorded, true);
+  const [entry] = await repository.listRunAudit(USER, 1);
+  assert.equal(entry.action, 'STOP');
+  assert.equal(entry.reason, 'MEMBER_RESUME');
+  assert.equal(entry.actor, 'member');
+  assert.equal((await readAutoRunControl(repository, USER)).control.lastAction, 'STOP');
 });
