@@ -1860,7 +1860,7 @@ export function CryptoTradingWorkspace({
               <p className="mt-3 text-[10px] font-bold leading-relaxed text-muted-foreground">
                 분봉·시간봉·일·주봉 선택과 보조지표를 이 환경설정 안에서 각각 저장합니다.
               </p>
-              <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              <div className="mt-3 flex flex-wrap gap-2">
                 {TIMEFRAMES.filter((item) => indicatorProfileForTimeframe(item.key) === indicatorProfileTab).map((item) => (
                   <button
                     key={`frame:${item.key}`}
