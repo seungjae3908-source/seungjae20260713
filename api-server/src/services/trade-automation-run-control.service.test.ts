@@ -27,6 +27,8 @@ const futuresLive: AutoRunLiveResolver = (assetClass) => assetClass === 'crypto_
 function memberPolicy(overrides: Partial<TradingPolicy> = {}): TradingPolicy {
   return normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
+    // The owner's per-market live switches are ON so the server resolver decides the lane.
+    liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
     mode: 'approval',
     automaticEnabled: false,
     marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: true },
@@ -264,4 +266,12 @@ test('execution service fills a 작동 automatic Paper order without ever callin
     if (previous == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
     else process.env.TRADING_CREDENTIAL_MASTER_KEY = previous;
   }
+});
+
+test('a market stays Paper when the owner switch is OFF even if the server gate is open', () => {
+  const switchedOff = memberPolicy({
+    liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: false },
+  });
+  assert.equal(autoRunMarketLanes(switchedOff, futuresLive).crypto_futures.lane, 'paper');
+  assert.equal(autoRunMarketLanes(memberPolicy(), futuresLive).crypto_futures.lane, 'live');
 });

@@ -69,6 +69,16 @@ import {
   ADMIN_MARKET_INITIAL_KRW,
 } from './admin-four-market-paper-capital.service';
 
+// Tests below exercise LIVE paths that predate the owner's per-market real-order
+// switch: every market switch ON, turned on long before the first-week cap window.
+const LIVE_SWITCHES_ON = {
+  liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+  liveMarketEnabledAt: {
+    domestic_stock: '2026-01-01T00:00:00.000Z', us_stock: '2026-01-01T00:00:00.000Z',
+    crypto_spot: '2026-01-01T00:00:00.000Z', crypto_futures: '2026-01-01T00:00:00.000Z',
+  },
+};
+
 const USER = '11111111-1111-1111-1111-111111111111';
 
 test('current membership, expiry, role ceiling and cached batch ceiling must agree without granting a new role', () => {
@@ -132,7 +142,7 @@ test('stored entry rationale captures actual handoff context and never fabricate
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'automatic',
     automaticEnabled: true,
     marketEnabled: {
@@ -636,7 +646,7 @@ test('unpriced multi-currency Paper settlement cannot masquerade as verified KRW
 
 test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
   const selected = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
   });
   assert.equal(resolveMemberStockBroker(selected, 'KR_STOCK'), 'toss');
@@ -644,12 +654,12 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   assert.equal(resolveMemberStockBroker(selected, 'CRYPTO_SPOT'), null);
   assert.equal(resolveMemberStockBroker(selected, 'CRYPTO_FUTURES'), null);
 
-  const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
+  const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON, stockBrokerByMarket: undefined });
   assert.equal(resolveMemberStockBroker(legacy, 'KR_STOCK'), 'kiwoom');
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
 
   const usToss = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'toss' },
   });
   assert.equal(resolveMemberStockBroker(usToss, 'US_STOCK'), 'toss');
@@ -3302,4 +3312,28 @@ test('작동 ON places the automatic Paper order with no per-order approval; 정
   const stoppedRun = await withFetchMock(() => stoppedWorker.runOnce(new Date(nowMs + 60_000)));
   assert.equal(stoppedRun.createdPlans, 0);
   assert.equal((await repository.listOrders(USER)).length, 1);
+});
+
+test('owner live switch OFF for a market skips its automatic LIVE entries before evaluation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const memberPolicy = normalizeTradingPolicy({
+    ...allFourPolicy(),
+    liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: false, crypto_futures: true },
+  });
+  await repository.savePolicy(USER, memberPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{ userId: USER, policy: memberPolicy, profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true } }];
+    },
+  });
+  // The fixture handoff carries a CRYPTO_SPOT entry; the server scope opens it, the owner switch does not.
+  const result = await withLiveScope('CRYPTO_SPOT', () => withFetchMock(() => worker.runOnce(new Date(nowMs))));
+  assert.ok(result.entries > 0);
+  assert.equal(result.liveEntriesSwitchedOff, result.entries);
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.livePlans, 0);
 });
