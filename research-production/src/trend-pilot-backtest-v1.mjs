@@ -260,6 +260,10 @@ export const TREND_PILOT_LIVE_SCENARIOS_V1 = Object.freeze([
   Object.freeze({ id: 'RISK2', label: '1회 2%', plan: Object.freeze({ riskFraction: 0.02, dailyLossFraction: 0.02 }) }),
   Object.freeze({ id: 'RISK3', label: '1회 3%', plan: Object.freeze({ riskFraction: 0.03, dailyLossFraction: 0.03 }) }),
   Object.freeze({ id: 'NO_GUARDS', label: '1.5% · 하루한도·자동정지 없음', plan: Object.freeze({ dailyLossFraction: 1, killDrawdownFraction: 1.01 }) }),
+  Object.freeze({ id: 'RISK2_K40', label: '1회 2% · 자동정지 -40%', plan: Object.freeze({ riskFraction: 0.02, dailyLossFraction: 0.02, killDrawdownFraction: 0.4 }) }),
+  Object.freeze({ id: 'RISK3_K40', label: '1회 3% · 자동정지 -40%', plan: Object.freeze({ riskFraction: 0.03, dailyLossFraction: 0.03, killDrawdownFraction: 0.4 }) }),
+  Object.freeze({ id: 'RISK3_NOKILL', label: '1회 3% · 자동정지 없음', plan: Object.freeze({ riskFraction: 0.03, dailyLossFraction: 0.03, killDrawdownFraction: 1.01 }) }),
+  Object.freeze({ id: 'RISK5_NOKILL', label: '1회 5% · 자동정지 없음', plan: Object.freeze({ riskFraction: 0.05, dailyLossFraction: 0.05, killDrawdownFraction: 1.01 }) }),
 ]);
 
 function emaSeries(bars, period = 200) {
@@ -367,6 +371,12 @@ export async function runTrendPilotBacktestV1({ stateRoot, now = () => new Date(
     const candles = (cached?.candles ?? []).filter((c) => c.timestamp < HOLDOUT_START);
     if (candles.length >= 24 * 300) datasets.push({ symbol, candles, fundingRates: (cached.fundingRates ?? []).filter((r) => r.timestamp < HOLDOUT_START) });
   }
+  const buyHold = Object.fromEntries(datasets.filter((d) => TREND_PILOT_PRIMARY_SYMBOLS.includes(d.symbol)).map((d) => {
+    let peak = d.candles[0].close; let dd = 0;
+    for (const c of d.candles) { peak = Math.max(peak, c.close); dd = Math.max(dd, (peak - c.close) / peak); }
+    return [d.symbol, { from: new Date(d.candles[0].timestamp).toISOString().slice(0, 10), to: new Date(d.candles.at(-1).timestamp).toISOString().slice(0, 10),
+      firstClose: d.candles[0].close, lastClose: d.candles.at(-1).close, totalReturn: d.candles.at(-1).close / d.candles[0].close - 1, maxDrawdownFraction: dd }];
+  }));
   const primaryReady = TREND_PILOT_PRIMARY_SYMBOLS.every((s) => datasets.some((d) => d.symbol === s));
   const result = {
     contract: TREND_PILOT_CONTRACT_V1, observedAt: now(),
@@ -374,6 +384,7 @@ export async function runTrendPilotBacktestV1({ stateRoot, now = () => new Date(
     notionalKrw: TREND_PILOT_NOTIONAL_KRW, dailyLossLimitKrw: TREND_PILOT_DAILY_LOSS_KRW,
     symbols: datasets.map((d) => d.symbol),
     fundingPrints: Object.fromEntries(datasets.map((d) => [d.symbol, d.fundingRates.length])),
+    buyHold,
     variants: primaryReady ? evaluateTrendPilotV1({ datasets }) : [],
     holdoutRead: false, liveTrading: false, realOrder: false, executionAuthority: 'NONE',
   };
@@ -412,6 +423,7 @@ export function formatTrendPilotReportKoV1(result) {
       lines.push(`  계좌 비례${c.regimeSizing ? '+강한 장세 1.5배' : ''}(시작 ${won(c.startEquityKrw)}, 1회 계좌의 ${(c.riskFraction * 100).toFixed(1)}% 감수): 끝 ${won(c.endEquityKrw)} (${c.totalReturn >= 0 ? '+' : ''}${(c.totalReturn * 100).toFixed(1)}%, 연 ${(c.annualReturn * 100).toFixed(1)}%) · 최대 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}% · 진입 금액 ${won(c.firstNotionalKrw)} → ${won(c.lastNotionalKrw)}`);
     }
   }
+  for (const [symbol, b] of Object.entries(result.buyHold ?? {})) lines.push(`비교 · ${symbol} 그냥 보유(${b.from}~${b.to}): ${(b.totalReturn * 100).toFixed(1)}% · 최대 낙폭 ${(b.maxDrawdownFraction * 100).toFixed(1)}%`);
   const noFunding = Object.entries(result.fundingPrints ?? {}).filter(([, n]) => n < 100).map(([s]) => s);
   if (noFunding.length) lines.push('', `주의: 펀딩비 기록 없이 계산한 종목 ${noFunding.join(', ')} (선물 보유 비용 미반영 → 실제보다 조금 낙관적일 수 있음)`);
   lines.push('', '과거 성적일 뿐 미래 수익 보장 아님. 주문 권한 없음.');
