@@ -184,6 +184,9 @@ test('no entry: not armed, killed, drawdown, daily loss (pilot and policy), budg
   const staleQuote = await run({ readQuote: async () => ({ bid: 1, ask: 1, last: 1, observedAtMs: nowMs - 120_000, oneMinuteMovePercent: 0, orderbookGapPercent: 0, source: 't' }) });
   assert.equal(staleQuote.d.entries.length, 0);
   assert.ok(staleQuote.result.events.some((e) => e.kind === 'ERROR' && e.code === 'TREND_PILOT_QUOTE_NOT_FRESH'));
+  const fast = await run({ readQuote: async () => ({ bid: 62_990, ask: 63_000, last: 63_000, observedAtMs: nowMs - 500, oneMinuteMovePercent: 4.5, orderbookGapPercent: 0.01, source: 't' }) });
+  assert.equal(fast.d.entries.length, 0, 'never enter into a fast move (global kill-switch code)');
+  assert.ok(fast.result.events.some((e) => e.kind === 'ENTRY_SKIPPED' && e.blockers.includes('TREND_PILOT_FAST_MOVE')));
   // a transient failure retries the same bar, at most 3 times
   let ledger: TrendPilotLedger | null = null;
   for (let i = 0; i < 4; i += 1) {
@@ -292,4 +295,6 @@ test('upbit: long-only market buy by KRW amount within cash; helpers', async () 
   assert.equal(initialTrail({ ...pos, initialStopPrice: 100 }), null);
   const ceiling = laneNotionalCeilingKrw(policy({ totalCapitalKrw: 1_000_000, maxAssetPercent: 30 }), { ...COUNTERS, strategyNotionalKrw: 250_000 });
   assert.equal(ceiling.ceilingKrw, 50_000, 'strategy room = 30% of 1,000,000 − 250,000');
+  const market = laneNotionalCeilingKrw(policy(), { ...COUNTERS, marketLimitKrw: 400_000, classNotionalKrw: 350_000 });
+  assert.equal(market.ceilingKrw, 50_000, 'budget market room = maxAssetClassKrw − class notional');
 });

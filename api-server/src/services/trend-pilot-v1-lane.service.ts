@@ -67,6 +67,8 @@ export type TrendPilotAccount = {
 export type TrendPilotAccountCounters = {
   /** Notional sums as the atomic budget claim counts them. */
   accountNotionalKrw: number;
+  /** Budget market limit for this venue's asset class (policy maxAssetClassKrw). */
+  marketLimitKrw?: number;
   classNotionalKrw: number;
   strategyNotionalKrw: number;
   /** Gate exposures: identical, except pilot Bitget positions count by margin. */
@@ -155,6 +157,10 @@ export type TrendPilotLaneTickResult = {
 const MAX_ENTRY_DELAY_AFTER_CLOSE_MS = 25 * 60 * 1000; // inside the 30-minute authorization window
 const MAX_QUOTE_AGE_MS = 15_000; // pre-submission requires a signal observation ≤ 30 s old
 const MAX_ENTRY_ATTEMPTS_PER_BAR = 3;
+// The canonical gates turn FAST_MOVE_DETECTED into a GLOBAL emergency stop
+// (trade-kill-switch.service.ts). Never submit into a ≥ 5% one-minute move;
+// the bar's attempt counter retries on a later tick.
+const FAST_MOVE_SKIP_PERCENT = 4;
 
 function positive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -240,7 +246,8 @@ export function laneNotionalCeilingKrw(policy: TradingPolicy, counters: TrendPil
   const strategyRoom = (capital * policy.maxAssetPercent / 100) - counters.strategyNotionalKrw;
   const instrumentCap = Math.min(policy.maxInstrumentKrw, capital * policy.maxAssetPercent / 100);
   const totalRoom = capital - counters.accountNotionalKrw;
-  const ceilingKrw = Math.min(policy.maxOrderKrw, instrumentCap, strategyRoom, totalRoom);
+  const marketRoom = Number.isFinite(counters.marketLimitKrw) ? counters.marketLimitKrw! - counters.classNotionalKrw : Infinity;
+  const ceilingKrw = Math.min(policy.maxOrderKrw, instrumentCap, strategyRoom, totalRoom, marketRoom);
   if (counters.openPositionCount >= policy.maxOpenPositions) blockers.push('OPEN_POSITION_LIMIT');
   if (policy.maxDailyOrders > 0 && counters.dailyOrderCount >= policy.maxDailyOrders) blockers.push('DAILY_ORDER_LIMIT');
   if (counters.consecutiveLosses >= policy.maxConsecutiveLosses) blockers.push('CONSECUTIVE_LOSS_LIMIT');
@@ -415,6 +422,11 @@ export async function runTrendPilotLaneTick(deps: TrendPilotLaneDependencies): P
         if (live.openPositionCount >= deps.policy.maxOpenPositions) { events.push({ kind: 'ENTRY_SKIPPED', symbol, blockers: ['OPEN_POSITION_LIMIT'] }); break; }
         const quote = await deps.readQuote(symbol);
         if (!freshQuote(quote, nowMs)) throw new Error('TREND_PILOT_QUOTE_NOT_FRESH');
+        if (!Number.isFinite(quote.oneMinuteMovePercent) || Math.abs(quote.oneMinuteMovePercent) >= FAST_MOVE_SKIP_PERCENT) {
+          events.push({ kind: 'ENTRY_SKIPPED', symbol, blockers: ['TREND_PILOT_FAST_MOVE'] });
+          ledger = countAttempt(ledger, symbol, signalBar);
+          continue;
+        }
         const built = venue === 'bitget'
           ? await buildBitgetEntry({ deps, fx, symbol, side: signal.side, atr: signal.atr!, quote, capitalBase, ceilingKrw, openMarginKrw, signalBarOpenMs: signalBar })
           : buildUpbitEntry({ deps, symbol, atr: signal.atr!, quote, capitalBase, ceilingKrw, availableKrw, signalBarOpenMs: signalBar });
