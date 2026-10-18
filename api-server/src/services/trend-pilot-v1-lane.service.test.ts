@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { TREND_PILOT_SPOT_V1, TREND_PILOT_V1, createTrendPilotLedger, type TrendPilotCandle, type TrendPilotLedger } from './trend-pilot-v1.core';
 import { evaluateTrendPilotLiveException, signTrendPilotOccurrence, verifyTrendPilotOccurrence } from './trend-pilot-v1-authorization.service';
+import { signTrendPilotPromotion, TREND_PILOT_PROMOTION_SCHEMA } from './trend-pilot-v1-promotion.service';
 import {
   farTargetPrice, initialTrail, laneExposureKrw, laneNotionalCeilingKrw, laneOpenRiskKrw, runTrendPilotLaneTick,
   type TrendPilotAccountCounters, type TrendPilotLaneDependencies, type TrendPilotLanePosition,
@@ -13,7 +17,20 @@ import type { TradingPlanInput } from './trade-automation.types';
 
 const H4 = TREND_PILOT_V1.intervalMs;
 const KEY = 'k'.repeat(40);
-const ENV = { TREND_PILOT_LIVE_ENABLED: 'true', TREND_PILOT_SIGNING_KEY: KEY } as NodeJS.ProcessEnv;
+const PROMOTION_KEY = 'p'.repeat(40);
+// A passing PAPER track record for both lane strategies (the live exception requires it).
+const PROMOTION_PATH = join(mkdtempSync(join(tmpdir(), 'trend-pilot-promotion-')), 'records.json');
+writeFileSync(PROMOTION_PATH, JSON.stringify({
+  records: [TREND_PILOT_V1.strategyId, TREND_PILOT_SPOT_V1.strategyId].map((strategyId) => signTrendPilotPromotion({
+    schemaVersion: TREND_PILOT_PROMOTION_SCHEMA, strategyId, source: 'PAPER', afterCosts: true,
+    closedTrades: 34, distinctSymbols: 4, winRate: 0.62, meanReturnPercent: 0.8, lowerBound95Percent: 0.1,
+    issuedAtMs: Date.now() - 60_000, expiresAtMs: Date.now() + 7 * 24 * 3_600_000,
+  }, PROMOTION_KEY)),
+}));
+const ENV = {
+  TREND_PILOT_LIVE_ENABLED: 'true', TREND_PILOT_SIGNING_KEY: KEY,
+  TREND_PILOT_PROMOTION_KEY: PROMOTION_KEY, TREND_PILOT_PROMOTION_RECORD_PATH: PROMOTION_PATH,
+} as NodeJS.ProcessEnv;
 
 /** 260 flat bars around 60,000, then a breakout bar closing at 63,000. */
 function breakoutBars(lastOpenMs: number, breakout = true): TrendPilotCandle[] {
@@ -118,6 +135,10 @@ test('bitget: breakout → one signed 5x isolated entry, accepted by the risk ga
     assert.ok(decision.warnings.includes('TREND_PILOT_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED'));
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: true, serverLiveEnabled: true }).blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: false, serverLiveEnabled: false }).blockCodes.includes('LIVE_EXECUTION_DISABLED'));
+    // No paper-promotion evidence => the exception is denied (owner rule: paper first).
+    const noRecord = evaluateTrendPilotLiveException(plan, d.policy, Date.now(), { TREND_PILOT_LIVE_ENABLED: 'true', TREND_PILOT_SIGNING_KEY: KEY } as NodeJS.ProcessEnv);
+    assert.equal(noRecord.allowed, false);
+    assert.deepEqual(noRecord.blockCodes, ['TREND_PILOT_PROMOTION_REQUIRED']);
     // The per-market live switch stays authoritative: lane entries are refused while it is OFF.
     assert.ok(evaluateTradingPlan(plan, policy({ liveMarketEnabled: { crypto_futures: false, crypto_spot: false, domestic_stock: false, us_stock: false } }), { emergencyStopped: false, serverLiveEnabled: true }).blockCodes.includes('LIVE_MARKET_SWITCH_OFF'));
     // altered size or stop → no exception

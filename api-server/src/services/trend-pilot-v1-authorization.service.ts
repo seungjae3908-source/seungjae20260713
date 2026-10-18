@@ -2,11 +2,14 @@
 //
 // The canonical live path normally requires server profitability attestation
 // from the research → Paper promotion pipeline. The owner approved (2026-10-18)
-// a narrow exception for ONE fixed, backtested rule set: BTC/ETH Bitget futures
+// a narrow exception (conditional on the paper-promotion record below) for ONE fixed, backtested rule set: BTC/ETH Bitget futures
 // and six Upbit KRW coins, sized at 2% of equity per trade. The exception only
 // applies when every condition holds; anything missing fails closed and the
 // plan is evaluated by the normal gates (which block it).
 //   * TREND_PILOT_LIVE_ENABLED=true and a TREND_PILOT_SIGNING_KEY (≥32 chars)
+//   * a signed PAPER promotion record for the strategy (TREND_PILOT_PROMOTION_KEY +
+//     TREND_PILOT_PROMOTION_RECORD_PATH): >=30 closed trades, 95% lower bound > 0,
+//     >=3 symbols, >=60% win rate. Missing or failing evidence denies the exception.
 //   * live account, the pilot strategy id for that exchange, a pilot symbol
 //   * the member enabled that strategy id in the stored policy
 //   * Bitget: 5x isolated, long/short; Upbit: KRW market buy only
@@ -23,6 +26,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { TREND_PILOT_SPOT_V1, TREND_PILOT_V1 } from './trend-pilot-v1.core';
+import { checkTrendPilotPromotion } from './trend-pilot-v1-promotion.service';
 import type { TradingPlanInput, TradingPolicy } from './trade-automation.types';
 
 export const TREND_PILOT_LANE_REASON = 'TREND_PILOT_LANE_V1';
@@ -138,6 +142,10 @@ export function evaluateTrendPilotLiveException(
     return deny('TREND_PILOT_EXCHANGE_NOT_ALLOWED');
   }
   if (!policy.enabledStrategies.includes(plan.strategyId)) return deny('TREND_PILOT_STRATEGY_NOT_ENABLED');
+  // Owner rule: no live orders before the PAPER track record passed (>=30 closed trades after
+  // costs, 95% lower bound > 0, >=3 symbols, >=60% wins). Signed record from the research side.
+  const promotion = checkTrendPilotPromotion(plan.strategyId, nowMs, env);
+  if (!promotion.ok) return deny(promotion.code);
   const barMs = verifyTrendPilotOccurrence(plan, key);
   if (barMs === null) return deny('TREND_PILOT_SIGNATURE_INVALID');
   const closedAtMs = barMs + TREND_PILOT_V1.intervalMs;

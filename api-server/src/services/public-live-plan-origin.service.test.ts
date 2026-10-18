@@ -61,3 +61,20 @@ test('unknown/case-coerced account mode cannot inherit a non-live policy or skip
   const mock = { accountMode: 'mock', signalReasons: [] } as unknown as TradingPlanInput;
   assert.equal(publicPlanPolicy(mock, policy), policy, 'explicit broker mock remains non-LIVE and unchanged');
 });
+
+test('the manual-order ticket identity cannot be forged through the public plans API, only the server-built manual route may carry it', () => {
+  const base = { accountMode: 'live', signalReasons: ['member manual rationale'] } as TradingPlanInput;
+  const byReason = { ...base, signalReasons: ['MANUAL_ORDER_TICKET', 'MANUAL_ENTRY'] } as TradingPlanInput;
+  const byStrategy = { ...base, strategyId: 'manual-order-ticket-v1' } as TradingPlanInput;
+  for (const forged of [byReason, byStrategy]) {
+    assert.throws(() => assertPublicLivePlanOrigin(forged), /PUBLIC_MANUAL_ORDER_ORIGIN_FORBIDDEN/);
+    assert.throws(() => publicPlanPolicy(forged, structuredClone(DEFAULT_TRADING_POLICY)), /PUBLIC_MANUAL_ORDER_ORIGIN_FORBIDDEN/);
+    assert.doesNotThrow(() => assertPublicLivePlanOrigin(forged, { allowManualTicket: true }));
+    assert.equal(publicPlanPolicy(forged, structuredClone(DEFAULT_TRADING_POLICY), { allowManualTicket: true }).mode, 'approval');
+  }
+  // paper plans are unaffected and ordinary live plans still pass
+  assert.doesNotThrow(() => assertPublicLivePlanOrigin(base));
+  assert.doesNotThrow(() => assertPublicLivePlanOrigin({ ...byReason, accountMode: 'paper' } as TradingPlanInput));
+  // allowManualTicket never relaxes the automatic-origin checks
+  assert.throws(() => assertPublicLivePlanOrigin({ ...byReason, signalReasons: ['MANUAL_ORDER_TICKET', 'TREND_PILOT_LANE_V1'] } as TradingPlanInput, { allowManualTicket: true }), /PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN/);
+});
