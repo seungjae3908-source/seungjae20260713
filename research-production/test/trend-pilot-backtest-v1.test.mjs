@@ -137,3 +137,20 @@ test('live plan: margin cap, minimum order, daily limit and kill switch', async 
   assert.ok(killed.skipped.killed > 0);
   assert.ok(killed.maxDrawdownFraction >= 0.25 && killed.maxDrawdownFraction < 0.27);
 });
+
+test('evaluateTrendPilotV1 attaches a selection audit and the report states it', async () => {
+  const { evaluateTrendPilotV1, formatTrendPilotReportKoV1, TREND_PILOT_VARIANTS_V1 } = await import('../src/trend-pilot-backtest-v1.mjs');
+  const hour = 3_600_000;
+  const start = Date.UTC(2022, 0, 1);
+  const candles = Array.from({ length: 24 * 900 }, (_, i) => {
+    const price = 100 * (1 + (0.0004 * i)) * (1 + (0.05 * Math.sin(i / 300)));
+    return { timestamp: start + i * hour, open: price, high: price * 1.004, low: price * 0.996, close: price, volume: 1 };
+  });
+  const variants = evaluateTrendPilotV1({ datasets: ['BTCUSDT', 'ETHUSDT'].map((symbol) => ({ symbol, candles, fundingRates: [] })) });
+  assert.equal(variants.length, TREND_PILOT_VARIANTS_V1.length);
+  assert.equal(variants.selectionAudit.contract, 'trend-pilot-selection-audit/v1');
+  assert.equal(variants.selectionAudit.trials, TREND_PILOT_VARIANTS_V1.length);
+  assert.equal(variants.selectionAudit.executionAuthority, 'NONE');
+  const text = formatTrendPilotReportKoV1({ status: 'COMPLETE', notionalKrw: 1_000_000, variants: [...variants], selectionAudit: variants.selectionAudit, buyHold: {}, fundingPrints: {} });
+  assert.ok(variants.selectionAudit.best ? text.includes('선택 편향 점검') : true);
+});
