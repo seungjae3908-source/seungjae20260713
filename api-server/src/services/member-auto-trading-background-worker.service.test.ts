@@ -647,9 +647,15 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
   assert.equal(resolveMemberStockBroker(legacy, 'KR_STOCK'), 'kiwoom');
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
+
+  const usToss = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'toss' },
+  });
+  assert.equal(resolveMemberStockBroker(usToss, 'US_STOCK'), 'toss');
 });
 
-test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom', () => {
+test('stock automatic routing allows Toss or Kiwoom for both domestic and US stocks', () => {
   const base = policy();
   const toss = normalizeTradingPolicy({
     ...base,
@@ -660,7 +666,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
     exchange: 'toss', assetClass: 'domestic_stock', planMarket: 'KR', stockBroker: 'toss',
   });
   assert.deepEqual(marketMapping('US_STOCK', toss), {
-    exchange: 'kiwoom', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'kiwoom',
+    exchange: 'toss', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'toss',
   });
   const kiwoom = normalizeTradingPolicy({
     ...base,

@@ -277,12 +277,12 @@ test('spot live permanently rejects futures, margin, short, leverage, and denied
   assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
 });
 
-test('spot live supports KR Toss/Kiwoom, US Kiwoom, and Upbit spot only', () => {
+test('spot live supports KR and US through Toss or Kiwoom, and Upbit spot only', () => {
   const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
     [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
-    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, false],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
   ];
@@ -332,7 +332,12 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     ...DEFAULT_TRADING_POLICY,
     stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
   });
-  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'kiwoom' });
+  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'toss' });
+  const invalidUsBroker = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'unknown' as 'kiwoom' },
+  });
+  assert.equal(invalidUsBroker.stockBrokerByMarket.us_stock, 'kiwoom');
 
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -391,6 +396,42 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     { emergencyStopped: false, serverLiveEnabled: true },
   );
   assert.equal(usKiwoom.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+
+  const usTossPolicy = normalizeTradingPolicy({
+    ...policy,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+  });
+  const usToss = evaluateTradingPlan(
+    plan({
+      exchange: 'toss',
+      stockBroker: 'toss',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    usTossPolicy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(usToss.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+  const usKiwoomWhileTossSelected = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      stockExchange: 'NASDAQ',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    usTossPolicy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.ok(usKiwoomWhileTossSelected.blockCodes.includes('STOCK_BROKER_MISMATCH'));
 });
 
 test('automatic policy fields restrict eligibility and standing activation removes per-order approval', async () => {

@@ -322,11 +322,14 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/bitget-native-protection-readonly.service.test.ts",
   "api-server/src/services/bitget-native-protection-readonly.service.ts",
   "api-server/src/services/crypto-benchmark-regime.service.ts",
+  "api-server/src/services/four-market-auto-readiness.service.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
   "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
+  "api-server/src/services/member-auto-trading-readiness.service.ts",
   "api-server/src/services/public-live-plan-origin.service.test.ts",
   "api-server/src/services/public-live-plan-origin.service.ts",
+  "api-server/src/services/spot-live-limited-capability.service.ts",
   "api-server/src/services/trade-automation-repository-compatibility.test.ts",
   "api-server/src/services/trade-automation-risk.service.ts",
   "api-server/src/services/trade-execution-snapshot.service.ts",
@@ -345,7 +348,9 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/apply-production-auto-live-budget.mjs",
   "ops/production-auto-live-signal-identity.cjs",
   "ops/production-auto-live-signal-source-audit.mjs",
+  "stock-analyzer/e2e/phase12-trade-automation.spec.ts",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
+  "stock-analyzer/src/components/trade-automation-settings.tsx",
 ]);
 // Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
 // admission bridge. Paths that previously belonged to the immutable Scanner
