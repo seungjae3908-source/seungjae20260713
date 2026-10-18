@@ -6,6 +6,11 @@ import type {
 import { SectorPopularService, type SectorPopularResult } from './sector-popular.service';
 import type { TelegramIntelligenceReportKind, TelegramReportDestination } from './telegram-intelligence-report.service';
 import {
+  collectTelegramBriefSignalStatus,
+  telegramBriefSignalLines,
+  type TelegramBriefSignalStatus,
+} from './telegram-brief-signal-status.service';
+import {
   normalizeTelegramHttpUrl,
   type TelegramAlertInput,
   type TelegramUrlButton,
@@ -28,6 +33,8 @@ export type TelegramMarketBriefSnapshot = {
   krThemes: SectorPopularResult | null;
   usThemes: SectorPopularResult | null;
   warnings: string[];
+  /** Signal V3 engine status; absent when the brief was built without it. */
+  signal?: TelegramBriefSignalStatus | null;
 };
 
 function reportLabel(kind: TelegramIntelligenceReportKind): string {
@@ -147,10 +154,11 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
         return { room, response: null, error: safeError(error) };
       }
     });
-    const [rooms, krThemeResult, usThemeResult] = await Promise.all([
+    const [rooms, krThemeResult, usThemeResult, signal] = await Promise.all([
       Promise.all(roomPromises),
       boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('KR')),
       boundedTelegramBriefRead(() => SectorPopularService.getSectorPopular('US')),
+      boundedTelegramBriefRead(() => collectTelegramBriefSignalStatus()),
     ]);
     const warnings = rooms.flatMap((item) => item.error ? [`${item.room}:${item.error}`] : []);
     if (!krThemeResult) warnings.push('KR_THEME_UNAVAILABLE');
@@ -161,6 +169,7 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
       krThemes: krThemeResult,
       usThemes: usThemeResult,
       warnings,
+      signal,
     };
   } finally {
     clearTimeout(timeout);
@@ -302,6 +311,9 @@ export function buildTelegramMarketBriefInput(input: {
   }
   if (stockDestination(input.destination) && (input.kind === 'MORNING' || input.kind === 'US_PREMARKET')) {
     lines.push('', '[주요 경제 일정]', '검증된 발표 일정: N/A (경제 일정 데이터 미연결)');
+  }
+  if (input.snapshot.signal !== undefined) {
+    lines.push(...telegramBriefSignalLines(input.snapshot.signal, input.destination));
   }
   const newsScope = stockDestination(input.destination) ? '주식' : '코인';
   lines.push('', '[주요 뉴스·공시 · ' + newsScope + ']');
