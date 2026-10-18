@@ -669,7 +669,7 @@ function PaperTab({
           <p className="mt-1 text-xs text-muted-foreground">기준자본 · 실제 잔고 확인 전 평가금액은 미측정</p>
         </div>
         <details className="mt-3 text-xs"><summary className="min-h-11 cursor-pointer py-3">실행 안전장치</summary><div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {['LIVE_TRADING=false', 'AUTO_TRADING=false', 'REAL_ORDER_ENABLED=false', 'PRIVATE_TRADING_API_ALLOWED=false', 'executionAuthority=NONE'].map((item) => <span key={item} className="min-w-0 break-all rounded-lg border border-card-border bg-background px-2 py-1.5 text-center font-mono" title={item}>{item}</span>)}
+          {['LIVE_TRADING=false', 'AUTO_TRADING=false', 'REAL_ORDER_ENABLED=false', 'PRIVATE_TRADING_API_ALLOWED=false', 'executionAuthority=NONE'].map((item) => <span key={item} className="whitespace-nowrap rounded-lg border border-card-border bg-background px-2 py-1.5 text-center font-mono" title={item}>{item}</span>)}
         </div></details>
       </div>
 
@@ -833,11 +833,11 @@ export default function ResearchCenterPage({ activeTab, onTabChange, embedded = 
   return (
     <main className="h-full overflow-y-auto overscroll-contain bg-background pb-28" data-testid="research-center-page">
       <div className="mx-auto w-full max-w-7xl space-y-4 px-3 py-4 sm:px-5 lg:px-6">
-        <header className={embedded ? 'rounded-2xl border border-card-border bg-card px-3 py-2' : 'rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5'}>
+        <header className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
           <div className="flex min-w-0 items-center gap-3">
-            {!embedded ? <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><FlaskConical className="h-5 w-5" aria-hidden="true" /></span> : null}
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><FlaskConical className="h-5 w-5" aria-hidden="true" /></span>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><h1 className={embedded ? 'text-base font-black' : 'text-xl font-black sm:text-2xl'}>{TABS.find((item) => item.key === tab)?.label ?? '연구센터'}</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">조회 전용</span></div>
+              <div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-black sm:text-2xl">{TABS.find((item) => item.key === tab)?.label ?? '연구센터'}</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">조회 전용</span></div>
             </div>
             <button type="button" aria-label="연구센터 새로고침" onClick={refreshAll} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-card-border bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
           </div>
