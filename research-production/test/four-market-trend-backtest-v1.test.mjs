@@ -51,3 +51,18 @@ test('evaluation reports every market, the combined account and a Korean summary
   assert.match(text, /미국주식: 데이터 없음/);
   assert.match(text, /한 계좌로 같이/);
 });
+
+test('futures side comparison reruns long-only and short-only with the same rules', () => {
+  const datasets = [{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles: walk(6000, HOUR, 7, Date.UTC(2024, 0, 1)) }];
+  const result = evaluateFourMarketV1({ datasets });
+  const fc = result.futuresSideComparison;
+  assert.ok(fc.both && fc.longOnly && fc.shortOnly);
+  const longs = fourMarketSymbolTradesV1({ ...datasets[0], sidesOverride: ['long'] }).trades;
+  assert.ok(longs.length > 0 && longs.every((t) => t.side === 'long'));
+  const shorts = fourMarketSymbolTradesV1({ ...datasets[0], sidesOverride: ['short'] }).trades;
+  assert.ok(shorts.every((t) => t.side === 'short'));
+  assert.equal(fc.longOnly.portfolio.trades >= 0, true);
+  assert.match(formatFourMarketReportKoV1(result), /롱·숏 분리 비교/);
+  const none = evaluateFourMarketV1({ datasets: [{ market: 'KR_STOCK', symbol: '005930', candles: walk(1500, DAY, 11, Date.UTC(2020, 0, 1)) }] });
+  assert.equal(none.futuresSideComparison, null);
+});
