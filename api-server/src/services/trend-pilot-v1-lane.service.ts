@@ -408,6 +408,7 @@ export async function runTrendPilotLaneTick(deps: TrendPilotLaneDependencies): P
     for (const symbol of laneSymbols(venue)) {
       if (held.has(symbol)) continue;
       let signalBar: number | null = null;
+      let reservedBeforeSubmit = false; // an order may exist once true: never retry on ambiguity
       try {
         const series = await bars(symbol);
         const signal = venue === 'upbit' ? evaluateTrendPilotSpotSignal(series) : evaluateTrendPilotSignal(series);
@@ -460,10 +461,27 @@ export async function runTrendPilotLaneTick(deps: TrendPilotLaneDependencies): P
             dailyPnlPercent: live.dailyPnlPercent,
           },
         };
+        // Write-ahead reservation: the signal bar is durably marked BEFORE the order is
+        // sent, so a crash or save failure after the exchange accepted it can never
+        // produce a second entry for the same bar. If the reservation cannot be
+        // saved, no order is sent (fail closed).
+        const beforeReservation = ledger;
+        const reservation = markSignal(ledger, symbol, signalBar);
+        try {
+          await deps.saveLedger(reservation);
+        } catch (error) {
+          events.push({ kind: 'ERROR', symbol, code: errorCode(error) });
+          continue;
+        }
+        ledger = reservation;
+        reservedBeforeSubmit = true;
         const submitted = await deps.submitEntry(planInput);
         events.push({ kind: 'ENTRY', symbol, side: planInput.side, status: submitted.status, orderKrw: planInput.estimatedKrw, blockCodes: submitted.blockCodes ?? [] });
-        if (submitted.status === 'SUBMITTED' || submitted.status === 'DUPLICATE') ledger = markSignal(ledger, symbol, signalBar);
-        else ledger = countAttempt(ledger, symbol, signalBar);
+        // Definitely-not-sent outcomes release the reservation into the normal retry counter.
+        if (submitted.status !== 'SUBMITTED' && submitted.status !== 'DUPLICATE') {
+          ledger = countAttempt(beforeReservation, symbol, signalBar);
+          reservedBeforeSubmit = false;
+        }
         if (submitted.status === 'SUBMITTED') {
           held.add(symbol);
           openMarginKrw += exposureKrw;
@@ -481,7 +499,7 @@ export async function runTrendPilotLaneTick(deps: TrendPilotLaneDependencies): P
         }
       } catch (error) {
         events.push({ kind: 'ERROR', symbol, code: errorCode(error) });
-        if (signalBar !== null) ledger = countAttempt(ledger, symbol, signalBar);
+        if (signalBar !== null && !reservedBeforeSubmit) ledger = countAttempt(ledger, symbol, signalBar);
       }
     }
   }
