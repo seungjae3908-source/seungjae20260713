@@ -122,6 +122,8 @@ export const USER_STATUS_KO: Readonly<Record<string, string>> = {
   UNAVAILABLE: '사용 불가',
   PARTIAL: '일부 수집',
   COMPLETE: '완료',
+  UNLINKED: '연결 안 됨',
+  NOT_ON_MAIN: '아직 반영 안 됨',
 };
 
 export const PROMOTION_STAGE_KO: Readonly<Record<string, string>> = {
