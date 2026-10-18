@@ -667,3 +667,142 @@ export function summarizeResearchFunnel(cards: readonly ResearchPipelineCard[]):
   else headline = `${total}단계 중 ${passedCount}단계 통과 · "${firstUnpassed.label}" 단계에서 멈춰 있습니다.`;
   return { stages, total, passedCount, firstUnpassed, headline };
 }
+
+export interface PromotionStageTally {
+  stage: string;
+  total: number;
+  passed: number;
+  failed: number;
+  blocked: number;
+  waiting: number;
+}
+
+export interface PromotionReasonTally {
+  code: string;
+  count: number;
+  explanation: string;
+}
+
+export interface PromotionDropSummary {
+  strategyCount: number;
+  stages: PromotionStageTally[];
+  topReasons: PromotionReasonTally[];
+}
+
+function tallyBucket(status: string): 'passed' | 'failed' | 'blocked' | 'waiting' {
+  if (status === 'PASS') return 'passed';
+  if (status === 'FAIL' || status === 'INVALIDATED') return 'failed';
+  if (status === 'BLOCKED' || status === 'INSUFFICIENT_SAMPLE' || status === 'STALE') return 'blocked';
+  return 'waiting';
+}
+
+/** Pure: how many strategies passed, failed, are blocked or wait at each stage, and why. */
+export function summarizePromotionDrops(
+  items: readonly StrategyPromotionItem[],
+  maxReasons = 5,
+): PromotionDropSummary {
+  const stageOrder: string[] = [];
+  const stages = new Map<string, PromotionStageTally>();
+  const reasons = new Map<string, number>();
+  for (const item of items) {
+    for (const stage of item.stages ?? []) {
+      let tally = stages.get(stage.stage);
+      if (!tally) {
+        tally = { stage: stage.stage, total: 0, passed: 0, failed: 0, blocked: 0, waiting: 0 };
+        stages.set(stage.stage, tally);
+        stageOrder.push(stage.stage);
+      }
+      tally.total += 1;
+      tally[tallyBucket(stage.status)] += 1;
+      if (stage.status !== 'PASS') {
+        const codes = [...(stage.failureReasons ?? []), ...(stage.failureReason ? [stage.failureReason] : [])];
+        for (const code of new Set(codes)) reasons.set(code, (reasons.get(code) ?? 0) + 1);
+      }
+    }
+    for (const code of new Set(item.blockers ?? [])) reasons.set(code, (reasons.get(code) ?? 0) + 1);
+  }
+  const topReasons = [...reasons.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, Math.max(0, maxReasons))
+    .map(([code, count]) => ({ code, count, explanation: explainResearchBlocker(code) }));
+  return {
+    strategyCount: items.length,
+    stages: stageOrder.map((name) => stages.get(name)!),
+    topReasons,
+  };
+}
+
+export type PromotionChecklistState = 'met' | 'unmet' | 'unmeasured';
+
+export interface PromotionChecklistItem {
+  key: string;
+  label: string;
+  state: PromotionChecklistState;
+  detail: string;
+}
+
+export const PROMOTION_MIN_TRADES = 30;
+
+function stagePassCount(item: StrategyPromotionItem): number {
+  return (item.stages ?? []).filter((stage) => stage.status === 'PASS').length;
+}
+
+/** Pure: the strategy furthest along (most passed stages), or null when none exist. */
+export function pickLeadingPromotionItem(items: readonly StrategyPromotionItem[]): StrategyPromotionItem | null {
+  let best: StrategyPromotionItem | null = null;
+  for (const item of items) {
+    if (best === null || stagePassCount(item) > stagePassCount(best)) best = item;
+  }
+  return best;
+}
+
+/** Pure: promotion conditions for one strategy, from fields the promotion API already returns. */
+export function buildPromotionChecklist(item: StrategyPromotionItem | null): PromotionChecklistItem[] {
+  if (!item) return [];
+  const stages = item.stages ?? [];
+  const passed = stages.filter((stage) => stage.status === 'PASS').length;
+  const trades = stages.reduce<number | null>((max, stage) => {
+    const value = typeof stage.tradeCount === 'number' && Number.isFinite(stage.tradeCount) ? stage.tradeCount : null;
+    if (value === null) return max;
+    return max === null ? value : Math.max(max, value);
+  }, null);
+  const drift = item.drift?.classification ?? null;
+  return [
+    {
+      key: 'stages',
+      label: '모든 검증 단계 통과',
+      state: stages.length === 0 ? 'unmeasured' : passed === stages.length ? 'met' : 'unmet',
+      detail: stages.length === 0 ? '단계 기록 없음' : `${stages.length}단계 중 ${passed}단계 통과`,
+    },
+    {
+      key: 'trades',
+      label: `정산된 거래 ${PROMOTION_MIN_TRADES}건 이상`,
+      state: trades === null ? 'unmeasured' : trades >= PROMOTION_MIN_TRADES ? 'met' : 'unmet',
+      detail: trades === null ? '거래 건수 미측정' : `가장 많은 단계의 거래 ${trades}건`,
+    },
+    {
+      key: 'drift',
+      label: '성적 이탈(드리프트) 없음',
+      state: drift === null ? 'unmeasured' : drift === 'HEALTHY' || drift === 'WATCH' ? 'met' : 'unmet',
+      detail: drift === null ? (item.drift?.reason ?? '표본 부족') : `분류 ${drift}`,
+    },
+    {
+      key: 'kill',
+      label: '긴급중단 상태 아님',
+      state: item.killState === 'NONE' ? 'met' : 'unmet',
+      detail: item.killState === 'NONE' ? '없음' : item.killState,
+    },
+    {
+      key: 'eligible',
+      label: '승격 검토 대상으로 표시됨',
+      state: item.promotionEligible ? 'met' : 'unmet',
+      detail: item.promotionEligible ? '검토 가능' : '아직 검토 대상 아님',
+    },
+    {
+      key: 'authority',
+      label: '실행 권한 없음 유지',
+      state: item.executionAuthority === 'NONE' && item.liveTradingAuthority === false ? 'met' : 'unmet',
+      detail: '승격 후보는 검토 대상일 뿐 실전매매 승인이 아닙니다',
+    },
+  ];
+}
