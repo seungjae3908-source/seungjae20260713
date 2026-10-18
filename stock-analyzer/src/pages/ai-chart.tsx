@@ -803,7 +803,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     </div>
   ) : <div className="space-y-4"><SafetyNote /></div>;
 
-  const mobile = !desktop && !externalMode && !embedded;
+  const mobile = !desktop && !externalMode;
 
   return (
     <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
