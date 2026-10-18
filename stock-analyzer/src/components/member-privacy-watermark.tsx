@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth';
+import { useSettings } from '@/lib/settings';
 
 const WATERMARK_COPIES = 30;
 const REFRESH_INTERVAL_MS = 60_000;
@@ -24,6 +25,7 @@ export async function anonymousMemberWatermarkCode(userId: string): Promise<stri
 
 export function MemberPrivacyWatermark() {
   const { user, isApproved } = useAuth();
+  const { settings } = useSettings();
   const [memberCode, setMemberCode] = useState<string | null>(null);
   const [minute, setMinute] = useState(() => formatMinute(new Date()));
 
@@ -48,7 +50,8 @@ export function MemberPrivacyWatermark() {
   }, [memberCode]);
 
   const marks = useMemo(() => Array.from({ length: WATERMARK_COPIES }, (_, index) => index), []);
-  if (!memberCode) return null;
+  // Off by default: the member can turn the watermark on from 설정 → 화면.
+  if (!settings.privacyWatermark || !memberCode) return null;
 
   return (
     <div
