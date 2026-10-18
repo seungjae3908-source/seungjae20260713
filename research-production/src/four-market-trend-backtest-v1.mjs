@@ -55,14 +55,15 @@ function ensureBars(market, cfg, candles) {
 }
 
 /** Pure: trades on one symbol, one position at a time, long and short merged. */
-export function fourMarketSymbolTradesV1({ market, symbol, candles, fundingRates = [] }) {
+export function fourMarketSymbolTradesV1({ market, symbol, candles, fundingRates = [], sidesOverride = null }) {
   const cfg = FOUR_MARKET_UNIVERSE_V1[market];
   if (!cfg) throw new Error(`FOUR_MARKET_UNKNOWN:${market}`);
   const bars = ensureBars(market, cfg, candles);
   if (bars.length < 260) return { status: 'INSUFFICIENT_BARS', bars: bars.length, trades: [] };
   const signals = trendSignalsV1(bars);
   const all = [];
-  for (const side of cfg.sides) {
+  const sides = Array.isArray(sidesOverride) ? cfg.sides.filter((side) => sidesOverride.includes(side)) : cfg.sides;
+  for (const side of sides) {
     const flags = side === 'long' ? signals.long : signals.short;
     const result = runManagedExitBacktestV1({
       backtestInput: { market, side, symbol, timeframe: cfg.barHours === 24 ? '1d' : `${cfg.barHours}h`, candles: bars,
@@ -122,8 +123,21 @@ export function evaluateFourMarketV1({ datasets, plan = FOUR_MARKET_PLAN_V1, spl
   // All four markets share one account; the common span is where crypto data exists.
   const cryptoStart = Math.min(...allTrades.filter((t) => t.market.startsWith('CRYPTO')).map((t) => t.entryTime));
   const combinedTrades = Number.isFinite(cryptoStart) ? allTrades.filter((t) => t.entryTime >= cryptoStart) : allTrades;
+  // Pre-declared comparison (same fixed rules, no tuning): does the short side crowd out longs on coin futures?
+  const futuresRows = datasets.filter((d) => d.market === 'CRYPTO_FUTURES');
+  const futuresVariant = (sidesOverride) => {
+    const trades = futuresRows
+      .map((d) => fourMarketSymbolTradesV1({ ...d, sidesOverride }))
+      .filter((r) => r.status === 'COMPLETE')
+      .flatMap((r) => r.trades);
+    return trades.length ? { rStats: rStats(trades), portfolio: simulateLivePlanV1(trades, plan) } : null;
+  };
+  const futuresSideComparison = futuresRows.length
+    ? { both: futuresVariant(null), longOnly: futuresVariant(['long']), shortOnly: futuresVariant(['short']) }
+    : null;
   return {
     markets,
+    futuresSideComparison,
     combined: {
       from: Number.isFinite(cryptoStart) ? new Date(cryptoStart).toISOString().slice(0, 10) : null,
       portfolio: simulateLivePlanV1(combinedTrades, plan),
@@ -153,6 +167,13 @@ export function formatFourMarketReportKoV1(result) {
   lines.push('', `■ 4개 시장 한 계좌로 같이 (${c.from}~, 코인 데이터가 있는 구간)`);
   lines.push(`  100만 원 → ${won(c.portfolio.endEquityKrw)} (${pct(c.portfolio.totalReturn)}, 월 ${pct(c.portfolio.monthlyCompound)}) · 최대 낙폭 ${pct(-c.portfolio.maxDrawdownFraction)} · 거래 ${c.portfolio.trades}회${c.portfolio.killedAt ? ` · ⚠️ ${c.portfolio.killedAt} 자동정지` : ''} · 증거금 부족으로 건너뜀 ${c.portfolio.skipped.margin}회`);
   lines.push(`  같은 구간 코인선물만: ${pct(c.futuresOnlySameSpan.totalReturn)} · 낙폭 ${pct(-c.futuresOnlySameSpan.maxDrawdownFraction)}`);
+  const fc = result.futuresSideComparison;
+  if (fc?.both && fc.longOnly && fc.shortOnly) {
+    const row = (name, v) => `  ${name}: ${pct(v.portfolio.totalReturn)} · 낙폭 ${pct(-v.portfolio.maxDrawdownFraction)} · 거래 ${v.portfolio.trades}회 · R 합계 ${r1(v.rStats.sumR)}`;
+    lines.push('', '■ 코인선물 롱·숏 분리 비교 (같은 규칙, 같은 기간, 조건 변경 없음)');
+    lines.push(row('롱+숏', fc.both), row('롱만', fc.longOnly), row('숏만', fc.shortOnly));
+    lines.push('  숏이 롱 자리를 막았는지는 "롱만"이 "롱+숏"보다 확실히 낫고 "숏만"이 약할 때 의심합니다. 한 번의 과거 구간 결과일 뿐입니다.');
+  }
   lines.push('', '주식은 1주 단위·장 시간·환전 비용을 단순화했습니다. 과거 성적일 뿐 미래 보장 아님. 주문 권한 없음.');
   return lines.join('\n');
 }
