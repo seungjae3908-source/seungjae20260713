@@ -5,6 +5,7 @@ import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
 import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
 import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.mjs';
+import { runFundingCarryBacktestV1 } from '../src/funding-carry-backtest-v1.mjs';
 import { runExploratoryPaperLedgerV1 } from '../src/exploratory-paper-ledger-v1.mjs';
 import { runGridDcaResearchV1 } from '../src/grid-dca-research-v1.mjs';
 import { runOpsWatchdogV1 } from '../src/ops-watchdog-v1.mjs';
@@ -183,6 +184,15 @@ if (enabled('RESEARCH_RESULTS_DIGEST_ENABLED')) {
   try { digest = await runResearchResultsDigestV1({ stateRoot }); } catch (error) { digestError = safeError(error); }
 }
 
+// Weekly funding-carry backtest on the cached coin-futures funding history.
+let fundingCarry = null;
+let fundingCarryError = null;
+try {
+  fundingCarry = await runFundingCarryBacktestV1({ stateRoot, researchCodeSha });
+} catch (error) {
+  fundingCarryError = safeError(error);
+}
+
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
@@ -212,6 +222,7 @@ const result = Object.freeze({
       trialsEvaluated: lane.trialsEvaluated ?? 0, survivors: lane.survivors ?? 0, watch: lane.watch ?? 0 })),
     aiProviderCalls: 0,
   },
+  fundingCarry: fundingCarry == null ? { error: fundingCarryError } : { status: fundingCarry.status, verdict: fundingCarry.verdict ?? null },
   exitComparison: exitComparison == null ? { error: exitComparisonError } : {
     lanes: exitComparison.lanes.map((lane) => ({ laneId: lane.laneId, status: lane.status, computedAt: lane.computedAt ?? null })),
   },
