@@ -54,6 +54,7 @@ on:
       - api-server/supabase/migrations/2026101701_trade_automation_run_control.sql
       - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/crypto-benchmark-regime.service.ts
+      - api-server/src/services/manual-owner-order.ts
       - api-server/src/services/manual-live-order.service.ts
       - api-server/src/services/live-trading-safety-telegram.service.ts
       - api-server/src/services/four-market-auto-readiness.service.ts
