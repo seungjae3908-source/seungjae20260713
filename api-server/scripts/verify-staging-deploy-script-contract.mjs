@@ -37,6 +37,11 @@ assert(
   'runtime launcher must load the protected staging env file directly with Node',
 );
 assert(
+  deployScript.includes('export NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"')
+    && deployScript.includes('"NODE_OPTIONS=--dns-result-order=ipv4first --no-network-family-autoselection"'),
+  'staging launcher and canary must use the same outbound network options as Production',
+);
+assert(
   deployScript.includes("script: './run-staging.sh'"),
   'PM2 config must execute the dedicated runtime launcher',
 );
