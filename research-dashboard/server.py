@@ -11,6 +11,7 @@ from v3_independence import read_v3_independence_summary
 from video_research_readback import read_video_research_readback
 from lightweight_market_watch_readback import read_active_research_sha, read_watch_status
 from lightweight_market_watch_cadence_readback import read_watch_cadence
+from research_results_readback import read_research_results
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -951,6 +952,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
     formula_backtest = read_formula_queue_readback(root)
+    research_results = read_research_results(root, read_json_optional)
     # A persisted SHA is untrusted until independently matched to the exact
     # root-managed detached Research release currently installed on the host.
     exact_research_sha = read_active_research_sha()
@@ -1018,6 +1020,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'cycles': cycles,
             'formulaBacktest': formula_backtest,
             'liquidityIndependence': liquidity_independence,
+            'results': research_results,
         },
         'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status,
                         'lightweightMarketWatchCadence': market_watch_cadence},

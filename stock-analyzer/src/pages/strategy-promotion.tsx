@@ -97,11 +97,38 @@ function StrategyCard({ item }: { item: StrategyPromotionItem }) {
             <div><dt className="font-bold text-muted-foreground">위험 정책</dt><dd className="break-all">{item.identity.riskPolicyVersion}</dd></div>
           </dl>
           <StageTimeline stages={item.stages} />
-          {item.blockers.length ? <p className="mt-3 break-all text-[10px] text-muted-foreground">차단 사유: {item.blockers.join(' · ')}</p> : null}
+          {item.blockers.length ? <p className="mt-3 break-all text-[10px] text-muted-foreground">차단 사유: {item.blockers.map(promotionBlockerLabel).join(' · ')}</p> : null}
         </div>
       ) : null}
     </article>
   );
+}
+
+const EVIDENCE_SOURCE_KO: Record<string, string> = {
+  CANONICAL_SCANNER_PROFILE: '검색기 전략 정의',
+  BACKTEST_ENGINE: '과거검증 엔진',
+  PREDICTION_LAB: '예측 연구소',
+  PAPER_JOURNAL: '모의매매 일지',
+  SIGNAL_PERFORMANCE: '신호 성과 기록',
+  PROFIT_FIRST_SCANNER: '수익 우선 검색기',
+};
+
+const PROMOTION_CODE_KO: Record<string, string> = {
+  RESEARCH_CANDIDATE_EVIDENCE_INVALID: '연구 후보 근거가 현재 연구 결과와 맞지 않음',
+  RESEARCH_BRIDGE_NOT_REVIEWABLE: '연구 후보 연결이 검토 가능한 상태가 아님',
+  EVIDENCE_READY: '근거 준비됨',
+  THRESHOLDS_NOT_APPLIED: '합격 기준 미적용',
+  PRE_HOLDOUT_GATE_FAILED: '최종 검증 전 관문 미통과',
+  PRE_HOLDOUT_GATE_PASSED: '최종 검증 전 관문 통과',
+  commission: '수수료',
+  tax: '세금',
+  fx: '환전',
+  borrow: '대차 비용',
+  securityLevelSpreadSlippageDecomposition: '종목별 호가차·슬리피지',
+};
+
+function promotionBlockerLabel(code: string): string {
+  return PROMOTION_CODE_KO[code] ?? code;
 }
 
 function bridgeStatusLabel(status: ResearchPromotionBridge['status']): string {
@@ -111,10 +138,10 @@ function bridgeStatusLabel(status: ResearchPromotionBridge['status']): string {
   if (status === 'FULL_COST_COLLECTING') return '전체 비용 근거 수집 중';
   if (status === 'PAPER_EVIDENCE_COLLECTING') return '모의매매 근거 수집 중';
   if (status === 'PAPER_ADOPTION_REVIEW_READY') return '채택 검토 준비';
-  if (status === 'UNMAPPED') return 'Scanner 전략 미매핑';
+  if (status === 'UNMAPPED') return '검색기 전략 미연결';
   if (status === 'NO_CANDIDATE') return '연구 후보 없음';
-  if (status === 'UNAVAILABLE') return 'Research 상태 확인 불가';
-  return '근거 계약 오류';
+  if (status === 'UNAVAILABLE') return '연구 상태 확인 불가';
+  return '연구 후보 근거 불일치 · 재검증 필요';
 }
 
 function truthLabel(value: boolean): string {
@@ -123,15 +150,15 @@ function truthLabel(value: boolean): string {
 
 function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBridge }) {
   return (
-    <section data-testid="research-promotion-bridge" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="Research 후보 연결 상태">
+    <section data-testid="research-promotion-bridge" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 후보 연결 상태">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
-            <h2 className="text-sm font-bold">Research → 전략 승격 연결</h2>
+            <h2 className="text-sm font-bold">연구 → 전략 승격 연결</h2>
           </div>
           <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            실제 Research 후보의 식별자와 표본 단계를 읽기 전용으로 확인합니다. 자동채택·Paper 전달·Scanner 변경 권한은 없습니다.
+            실제 연구 후보의 식별자와 표본 단계를 읽기 전용으로 확인합니다. 자동 채택·모의매매 전달·검색기 변경 권한은 없습니다.
           </p>
         </div>
         <span className="rounded-full border border-card-border bg-background px-3 py-1 text-xs font-semibold">
@@ -141,29 +168,29 @@ function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBri
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-xl bg-background p-3">
-          <p className="text-xs text-muted-foreground">TRAIN</p>
+          <p className="text-xs text-muted-foreground">학습 표본</p>
           <p className="mt-1 text-base font-semibold tabular-nums">{bridge.evidence.trainN ?? '미확인'}</p>
         </div>
         <div className="rounded-xl bg-background p-3">
-          <p className="text-xs text-muted-foreground">Validation</p>
+          <p className="text-xs text-muted-foreground">검증 표본</p>
           <p className="mt-1 text-base font-semibold tabular-nums">{bridge.evidence.validationN ?? '미확인'}</p>
           <p className="mt-1 text-xs text-muted-foreground">{truthLabel(bridge.evidence.validationComplete)}</p>
         </div>
         <div className="rounded-xl bg-background p-3">
-          <p className="text-xs text-muted-foreground">OOS</p>
+          <p className="text-xs text-muted-foreground">표본외 검증</p>
           <p className="mt-1 text-base font-semibold tabular-nums">{bridge.evidence.oosN ?? '미확인'}</p>
           <p className="mt-1 text-xs text-muted-foreground">{truthLabel(bridge.evidence.oosComplete)}</p>
         </div>
         <div className="rounded-xl bg-background p-3">
-          <p className="text-xs text-muted-foreground">Paper Settlement</p>
+          <p className="text-xs text-muted-foreground">모의매매 정산</p>
           <p className="mt-1 text-base font-semibold tabular-nums">{bridge.evidence.settlementN ?? '미확인'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Full Cost {truthLabel(bridge.evidence.fullCostReady)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">전체 비용 {truthLabel(bridge.evidence.fullCostReady)}</p>
         </div>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-xs font-semibold">Research 후보</p>
+          <p className="text-xs font-semibold">연구 후보</p>
           {bridge.candidate ? (
             <>
               <p className="mt-1 break-all text-sm font-semibold">{bridge.candidate.strategyId}</p>
@@ -172,25 +199,25 @@ function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBri
           ) : <p className="mt-1 text-xs text-muted-foreground">현재 연결된 후보 없음</p>}
         </div>
         <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-xs font-semibold">Scanner 매핑</p>
+          <p className="text-xs font-semibold">검색기 연결</p>
           {bridge.scannerProfile ? (
             <>
               <p className="mt-1 break-all text-sm font-semibold">{bridge.scannerProfile.strategyId}</p>
               <p className="mt-1 text-xs text-muted-foreground">{bridge.scannerProfile.market} · {bridge.scannerProfile.timeframe} · {bridge.scannerProfile.direction}</p>
             </>
-          ) : <p className="mt-1 text-xs text-muted-foreground">아직 정확한 Scanner 전략 식별자와 매핑되지 않음</p>}
+          ) : <p className="mt-1 text-xs text-muted-foreground">아직 검색기 전략과 정확히 연결되지 않음</p>}
         </div>
       </div>
 
       {bridge.blockers.length ? (
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
           <p className="text-xs font-semibold">현재 다음 단계 차단 사유</p>
-          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{bridge.blockers.join(' · ')}</p>
+          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{bridge.blockers.map(promotionBlockerLabel).join(' · ')}</p>
         </div>
       ) : null}
 
       <p className="mt-3 text-xs font-semibold text-muted-foreground">
-        자동채택 없음 · Paper 전달 없음 · Scanner 변경 없음 · 실행 권한 NONE
+        자동 채택 없음 · 모의매매 전달 없음 · 검색기 변경 없음 · 주문 권한 없음
       </p>
     </section>
   );
@@ -201,9 +228,9 @@ function adoptionReviewStatusLabel(status: ResearchAdoptionReview['status']): st
   if (status === 'CANDIDATE_MISMATCH') return '후보 불일치 · 증거 전이 금지';
   if (status === 'STATISTICAL_REVIEW_BLOCKED') return '통계 검증 미통과';
   if (status === 'ECONOMIC_EVIDENCE_BLOCKED') return '비용·경제성 근거 부족';
-  if (status === 'FINAL_HOLDOUT_BLOCKED') return '최종 Holdout 미검증';
-  if (status === 'PAPER_EVIDENCE_BLOCKED') return 'Paper·Shadow 근거 부족';
-  if (status === 'RESEARCH_BRIDGE_BLOCKED') return 'Research bridge 미준비';
+  if (status === 'FINAL_HOLDOUT_BLOCKED') return '최종 미사용 검증 전';
+  if (status === 'PAPER_EVIDENCE_BLOCKED') return '모의매매·관찰 근거 부족';
+  if (status === 'RESEARCH_BRIDGE_BLOCKED') return '연구 후보 연결 미준비';
   return '증거 계약 오류';
 }
 
@@ -213,9 +240,9 @@ function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionRevie
     <section data-testid="research-adoption-review" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 채택 검토 게이트">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-bold">#547 통계·경제적 채택 검토 Gate</h2>
+          <h2 className="text-sm font-bold">통계·경제성 채택 검토</h2>
           <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            통계 검증, 비용 후 경제성, 최종 Holdout, Shadow/Paper 근거가 모두 같은 후보에 묶였는지 확인합니다.
+            통계 검증, 비용 후 경제성, 최종 미사용 검증, 관찰·모의매매 근거가 모두 같은 후보에 묶였는지 확인합니다.
           </p>
         </div>
         <span className="rounded-full border border-card-border bg-background px-3 py-1 text-xs font-semibold">
@@ -224,10 +251,10 @@ function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionRevie
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">OOS</p><strong className="mt-1 block text-base tabular-nums">{evidence.oosN ?? '미확인'}</strong></div>
-        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Walk-Forward</p><strong className="mt-1 block text-base tabular-nums">{evidence.walkForwardN ?? '미확인'}</strong></div>
-        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Final Holdout</p><strong className="mt-1 block text-base tabular-nums">{evidence.finalHoldoutN ?? '미확인'}</strong></div>
-        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Shadow</p><strong className="mt-1 block text-base tabular-nums">{evidence.shadowN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">표본외 검증</p><strong className="mt-1 block text-base tabular-nums">{evidence.oosN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">순차 검증</p><strong className="mt-1 block text-base tabular-nums">{evidence.walkForwardN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">최종 미사용 검증</p><strong className="mt-1 block text-base tabular-nums">{evidence.finalHoldoutN ?? '미확인'}</strong></div>
+        <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">관찰</p><strong className="mt-1 block text-base tabular-nums">{evidence.shadowN ?? '미확인'}</strong></div>
         <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Paper</p><strong className="mt-1 block text-base tabular-nums">{evidence.paperN ?? '미확인'}</strong></div>
         <div className="rounded-xl bg-background p-3"><p className="text-xs text-muted-foreground">Settled</p><strong className="mt-1 block text-base tabular-nums">{evidence.settledN ?? '미확인'}</strong></div>
       </div>
@@ -235,33 +262,33 @@ function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionRevie
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <div className="rounded-xl border border-card-border bg-background p-3">
           <p className="text-xs font-semibold">통계 검증</p>
-          <p className="mt-1 text-xs text-muted-foreground">Evidence: {evidence.statisticalEvidenceStatus ?? '미확인'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Decision: {evidence.statisticalDecisionStatus ?? '미확인'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Pre-Holdout: {evidence.preHoldoutGateStatus ?? '미확인'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">근거: {promotionBlockerLabel(evidence.statisticalEvidenceStatus ?? '미확인')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">판정: {promotionBlockerLabel(evidence.statisticalDecisionStatus ?? '미확인')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">최종 검증 전 관문: {promotionBlockerLabel(evidence.preHoldoutGateStatus ?? '미확인')}</p>
         </div>
         <div className="rounded-xl border border-card-border bg-background p-3">
           <p className="text-xs font-semibold">경제성·비용 근거</p>
-          <p className="mt-1 text-xs text-muted-foreground">All-in Cost: {evidence.allInCostComplete ? '완료' : '미완료'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Admission Grade: {evidence.admissionGrade ? '확인됨' : '미확인'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Research Candidate Freeze: {evidence.frozenResearchCandidate ? '완료' : '미완료'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">전체 비용: {evidence.allInCostComplete ? '완료' : '미완료'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">채택 등급: {evidence.admissionGrade ? '확인됨' : '미확인'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">후보 고정: {evidence.frozenResearchCandidate ? '완료' : '미완료'}</p>
         </div>
       </div>
 
       {evidence.unresolvedCostDimensions.length ? (
         <p className="mt-3 break-words text-xs leading-5 text-muted-foreground">
-          미완료 비용 항목: {evidence.unresolvedCostDimensions.join(' · ')}
+          미완료 비용 항목: {evidence.unresolvedCostDimensions.map(promotionBlockerLabel).join(' · ')}
         </p>
       ) : null}
 
       {review.blockers.length ? (
         <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
           <p className="text-xs font-semibold">채택 검토 차단 사유</p>
-          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{review.blockers.join(' · ')}</p>
+          <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{review.blockers.map(promotionBlockerLabel).join(' · ')}</p>
         </div>
       ) : null}
 
       <p className="mt-3 text-xs font-semibold text-muted-foreground">
-        자동채택 없음 · 사람 검토 필수 · Scanner/Paper 변경 없음 · 실행 권한 NONE
+        자동 채택 없음 · 사람 검토 필수 · 검색기·모의매매 변경 없음 · 주문 권한 없음
       </p>
     </section>
   );
@@ -307,7 +334,7 @@ export default function StrategyPromotionPage() {
         {adoptionReviewQuery.data ? <ResearchAdoptionReviewPanel review={adoptionReviewQuery.data} /> : null}
 
         {query.data ? <section className="grid grid-cols-2 gap-2" aria-label="주문 실행 안전 요약">
-          <div className="rounded-2xl border border-card-border bg-card p-3"><p className="text-[10px] text-muted-foreground">실전 주문 권한</p><strong className="text-sm">없음 (NONE)</strong></div>
+          <div className="rounded-2xl border border-card-border bg-card p-3"><p className="text-[10px] text-muted-foreground">실전 주문 권한</p><strong className="text-sm">없음</strong></div>
           <div className="rounded-2xl border border-card-border bg-card p-3"><p className="text-[10px] text-muted-foreground">비공개 거래 API</p><strong className="text-sm">0건</strong></div>
         </section> : null}
 
@@ -317,7 +344,7 @@ export default function StrategyPromotionPage() {
         {query.data && items.length === 0 ? <section data-testid="strategy-promotion-empty" className="rounded-3xl border border-card-border bg-card p-8 text-center text-sm text-muted-foreground">현재 조건에 맞는 전략 검증 근거가 없습니다.</section> : null}
         {query.data ? <section className="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">{items.map((item) => <StrategyCard key={item.identity.strategyId} item={item} />)}</section> : null}
 
-        {query.data ? <section className="rounded-3xl border border-card-border bg-card p-4"><div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">근거 출처 및 담당</h2></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{query.data.evidenceSources.map((source) => <div key={source.id} className="min-w-0 rounded-xl bg-background p-3 text-[10px]"><div className="flex flex-wrap justify-between gap-2"><strong>{source.id}</strong><span>{userFacingCodeLabel(source.status, USER_STATUS_KO)}</span></div><p className="mt-1 break-keep text-muted-foreground">{source.owner} · {source.use}</p></div>)}</div></section> : null}
+        {query.data ? <section className="rounded-3xl border border-card-border bg-card p-4"><div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">근거 출처 및 담당</h2></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{query.data.evidenceSources.map((source) => <div key={source.id} className="min-w-0 rounded-xl bg-background p-3 text-[10px]"><div className="flex flex-wrap justify-between gap-2"><strong>{EVIDENCE_SOURCE_KO[source.id] ?? source.id}</strong><span>{userFacingCodeLabel(source.status, USER_STATUS_KO)}</span></div><p className="mt-1 break-keep text-muted-foreground">{source.owner} · {source.use}</p></div>)}</div></section> : null}
       </div>
       <BottomNav />
     </main>

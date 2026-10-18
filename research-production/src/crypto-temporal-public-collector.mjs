@@ -9,7 +9,11 @@ function latestPriorOpenInterest(ledger,symbol,beforeTimestamp){
     .sort((a,b)=>b.observedAt-a.observedAt)[0]??null;
 }
 
-function genuineObservation({symbol,feature,value,observedAt,availableAt,producerSha,source='bitget-public-v2'}){
+function genuineObservation({symbol,feature,value,observedAt,availableAt:receivedAt,producerSha,source='bitget-public-v2'}){
+  // A provider timestamp can be later than the local receive clock (clock skew,
+  // or a snapshot stamped while the response is in flight). The value is not
+  // usable before either moment, so availability is the later of the two.
+  const availableAt=Math.max(receivedAt,observedAt);
   return Object.freeze({
     market:'CRYPTO_FUTURES',
     symbol,
@@ -96,12 +100,14 @@ export async function collectCryptoFuturesTemporalEvidenceV1({
   let current=ledger;
   const results=[];
   for(const symbol of symbols){
-    const collectedAt=now();
     try{
       const [context,longShort]=await Promise.all([
         collectBitgetFuturesContext({client,symbol}),
         collectLongShortRatioHistory({client,symbol,period:longShortPeriod}),
       ]);
+      // Availability is the moment the responses arrived, not when the requests
+      // started; provider snapshot timestamps fall between the two.
+      const collectedAt=now();
       const observations=buildCryptoFuturesTemporalObservationsV1({
         ledger:current,symbol,context,longShortRecords:longShort.records,collectedAt,producerSha,
       });
