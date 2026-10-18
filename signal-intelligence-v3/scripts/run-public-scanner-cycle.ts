@@ -614,8 +614,12 @@ async function main() {
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
     } catch (error) {
+      // The Telegram V3 consumer rejects the whole snapshot unless every lane
+      // carries this cycle's id, so a failed lane must keep it too.
       coverage.push({
         laneId: lane.id,
+        sourceCycleId,
+        rosterId: state.rosterIds?.[lane.id] ?? null,
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
