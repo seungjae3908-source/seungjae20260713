@@ -380,6 +380,18 @@ test('Sharpe counts idle calendar days so it is not inflated by trade-day-only s
     assert.ok(result.sharpeRatio <= activeOnly + 1e-9);
   }
 });
+test('marked drawdown includes unrealized loss and is never below the realized drawdown', () => {
+  for (const side of ['long', 'short'] as const) {
+    const rows = breakoutFixture(side);
+    const result = runBacktest(request({ side, endTime: rows.at(-1)!.timestamp }), rows);
+    assert.ok(Number.isFinite(result.markedMaximumDrawdown));
+    assert.ok(result.markedMaximumDrawdown >= result.maximumDrawdown - 1e-9);
+    assert.ok(result.markedMaximumDrawdownPercent >= result.maximumDrawdownPercent - 1e-9);
+    if (result.trades.length > 0 && result.maximumDrawdown === 0 && result.trades.some((trade) => trade.maximumAdverseExcursion > 0)) {
+      assert.ok(result.markedMaximumDrawdown > 0, 'a winning run that dipped must still show a drawdown');
+    }
+  }
+});
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
