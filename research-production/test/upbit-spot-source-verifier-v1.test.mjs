@@ -10,6 +10,7 @@ import {
   UPBIT_RIGHTS_ATTESTATION_SCHEMA_V1,
   createArchiveDeriveSessionV1,
   digestUpbitRightsAttestationV1,
+  upbitBareTickerArchiveSymbolV1,
   verifyUpbitSpotTrainSourceV1,
 } from '../src/upbit-spot-source-verifier-v1.mjs';
 
@@ -205,4 +206,51 @@ test('malformed requests and reader failures hold instead of throwing', async ()
     const result = await verifyUpbitSpotTrainSourceV1(request, boom);
     assert.deepEqual(result, { status: 'HOLD', code: 'VERIFIER_INTERNAL_ERROR', executionAuthority: 'NONE' });
   });
+});
+
+test('an archive that stores the bare ticker is read through the symbol mapper', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'upbit-bare-'));
+  try {
+    const bare = 'BTC';
+    for (const sessionStartMs of [START, START + DAY]) {
+      const bars = minuteBars(sessionStartMs).map((bar) => ({ ...bar, symbol: bare }));
+      await persistResearchMinuteSessionV1({
+        root,
+        source: {
+          market: 'CRYPTO_SPOT', venue: 'UPBIT_KRW', symbol: bare, sourceId: 'test-upbit-minute-source',
+          session: { startMs: sessionStartMs, endMs: sessionStartMs + DAY, kind: 'UTC_24H', timeZone: 'UTC', calendarSourceId: 'utc-24h-test' },
+          minuteBars: bars, sourceMinuteRowsSha256: sha(JSON.stringify(bars)), asOfMs: sessionStartMs + DAY + 1000,
+        },
+      });
+    }
+    assert.equal(upbitBareTickerArchiveSymbolV1('KRW-BTC'), 'BTC');
+    const mapped = createArchiveDeriveSessionV1({ root, archiveSymbol: upbitBareTickerArchiveSymbolV1 });
+    const plain = createArchiveDeriveSessionV1({ root });
+    const frames = [];
+    for (const sessionStartMs of [START, START + DAY]) {
+      const result = await mapped({ symbol: SYMBOL, sessionStartMs, asOfMs: NOW, timeframe: '4h' });
+      frames.push(...Object.values(result.intervalData)[0].bars);
+    }
+    const candles = frames.map((bar) => ({ timestamp: bar.startMs, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume }));
+    const request = {
+      researchSha: SHA40, aiEvidenceDigest: sha('evidence'), hypothesisId: 'H1',
+      formulaCandidate: { candidateId: 'cand-1', formulaHash: sha('formula'), market: 'CRYPTO_SPOT' },
+      dataset: {
+        datasetRole: 'TRAIN', datasetIdentity: 'upbit-btc-4h-train', market: 'CRYPTO_SPOT', symbol: SYMBOL,
+        timeframe: '4H', candleCount: candles.length,
+        period: { startTime: START, endTime: START + 2 * DAY, includeFinalHoldout: false },
+        backtestInput: { market: 'CRYPTO_SPOT', timeframe: '4H', side: 'long', candles },
+      },
+      datasetDigest: sha('dataset'), reviewIdentityDigest: sha('review'), reviewedAssociationDigest: ASSOCIATION,
+    };
+    const base = {
+      nowMs: NOW, rightsAttestation: attestation, expectedRightsSha256: digestUpbitRightsAttestationV1(attestation),
+      reviewedAssociationDigests: [ASSOCIATION],
+    };
+    assert.equal((await verifyUpbitSpotTrainSourceV1(request, { ...base, deriveSession: mapped })).status, 'VERIFIED_TRAIN_SOURCE');
+    assert.equal((await verifyUpbitSpotTrainSourceV1(request, { ...base, deriveSession: plain })).code, 'ARCHIVED_SESSION_MISSING_OR_AMBIGUOUS');
+    assert.throws(() => createArchiveDeriveSessionV1({ root, archiveSymbol: 'x' }), /ARCHIVE_SYMBOL_MAPPER_INVALID/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
