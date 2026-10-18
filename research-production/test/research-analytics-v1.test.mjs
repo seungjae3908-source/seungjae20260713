@@ -126,3 +126,11 @@ test('block bootstrap sees deeper drawdowns than iid when losses cluster', () =>
   assert.ok(block.maxDrawdown.p95 > iid.maxDrawdown.p95);
   assert.equal(monteCarloTradeSequenceV1(clustered, { seed: 5 }).meanBlockLength, Math.round(40 ** (1 / 3)));
 });
+
+test('grid does not complete a round trip inside the bar that bought the level', () => {
+  const bar = (low, high, close) => ({ timestamp: 0, open: close, high, low, close });
+  const sameBar = simulateGridV1([bar(95, 125, 110)], { lower: 100, upper: 120, levels: 2, capital: 1_000, feeRate: 0 });
+  assert.equal(sameBar.completedRounds, 0);
+  const nextBar = simulateGridV1([bar(95, 105, 100), bar(100, 125, 120)], { lower: 100, upper: 120, levels: 2, capital: 1_000, feeRate: 0 });
+  assert.ok(nextBar.completedRounds >= 1);
+});
