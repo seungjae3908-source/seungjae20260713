@@ -706,14 +706,14 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
         </div>
       </section>
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-order-plan-preview">
-        <div className="flex items-center justify-between gap-3">
+      <details className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-order-plan-preview">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
           <div>
             <p className="text-[11px] font-extrabold text-primary">진입·청산 계획</p>
             <h2 className="mt-1 text-sm font-black">분할진입 · 손절 · 분할청산</h2>
           </div>
           <span className="rounded-full border border-warning/30 bg-warning/5 px-2 py-1 text-[9px] font-black text-warning">미리보기 전용</span>
-        </div>
+        </summary>
         {hasPlanEvidence ? (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
             <PlanMetric label="진입 1" value={formatPrice(plan.entries[0], selection.market)} />
@@ -733,13 +733,13 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
         <p className="mt-3 text-[10px] font-bold leading-4 text-muted-foreground">
           Scanner/Risk output만 표시합니다. 없는 진입·TP 가격을 차트가 임의 생성하지 않습니다.
         </p>
-      </section>
+      </details>
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-data-provenance">
-        <div className="flex items-center gap-2">
+      <details className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-data-provenance">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
           <Database className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-black">데이터 상태 · 근거 출처</h2>
-        </div>
+        </summary>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold">
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">Scanner 연결</span>
@@ -772,7 +772,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
         <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
           근거 강도는 현재 관측 근거의 합성 강도이며 검증된 승률이 아닙니다. canonical calibration/full-cost provenance가 없으므로 win rate, PF, expectancy, probability, cost-adjusted EV를 생성하지 않습니다.
         </p>
-      </section>
+      </details>
     </section>
   );
 }
