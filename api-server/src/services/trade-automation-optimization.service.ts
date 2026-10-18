@@ -2,6 +2,7 @@ import { attestLiveTradingProfitability } from './trade-profitability-attestatio
 import {
   evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
 } from './formula-ai-live-exception.service';
+import { evaluateTrendPilotLiveException } from './trend-pilot-v1-authorization.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -49,12 +50,13 @@ function stopDistancePercent(plan: TradingPlanInput) {
   return Number.isFinite(distance) && distance > 0 ? distance : null;
 }
 
-function riskBudget(policy: TradingPolicy, plan: TradingPlanInput, distancePercent: number | null) {
+function riskBudget(policy: TradingPolicy, plan: TradingPlanInput, distancePercent: number | null, riskPercentOverride: number | null = null) {
   if (distancePercent == null) return { riskBudgetKrw: null, maximumOrderKrw: null };
   const accountValue = positive(plan.marketSnapshot.accountValueKrw)
     ? plan.marketSnapshot.accountValueKrw : policy.totalCapitalKrw;
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, accountValue));
-  const riskBudgetKrw = capitalBase * policy.riskPerTradePercent[plan.exchange] / 100;
+  const riskPercent = riskPercentOverride ?? policy.riskPerTradePercent[plan.exchange];
+  const riskBudgetKrw = capitalBase * riskPercent / 100;
   const maximumOrderKrw = riskBudgetKrw / (distancePercent / 100);
   return { riskBudgetKrw, maximumOrderKrw };
 }
@@ -70,17 +72,23 @@ export function evaluateTradingOptimization(
   const formulaAiException = plan.accountMode === 'live'
     ? evaluateFormulaAiLiveException(plan, now)
     : null;
+  // Owner-approved fixed-rule pilot (trend-pilot-v1-authorization.service.ts):
+  // replaces research attestation, the per-trade risk cap and the stage cap only.
+  const trendPilotException = plan.accountMode === 'live'
+    ? evaluateTrendPilotLiveException(plan, policy, now)
+    : null;
+  const trendPilotAllowed = trendPilotException?.allowed === true;
   const paperFormulaException = plan.accountMode === 'paper'
     && policy.mode === 'automatic' && policy.pilotStage === 'formula-ai-exception'
     ? evaluateFormulaAiPaperException(plan, now) : null;
-  const profitabilityAttestation = formulaAiException?.allowed
+  const profitabilityAttestation = formulaAiException?.allowed || trendPilotAllowed
     ? null
     : attestLiveTradingProfitability(plan, undefined, {
       now,
       maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
     });
   const economics = plan.accountMode === 'live'
-    ? formulaAiException?.allowed
+    ? formulaAiException?.allowed || trendPilotAllowed
       ? plan.economics
       : profitabilityAttestation?.serverEconomics ?? null
     : plan.economics;
@@ -91,6 +99,11 @@ export function evaluateTradingOptimization(
   }
   if (paperFormulaException?.allowed) {
     warnings.push('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  }
+  if (trendPilotAllowed) {
+    warnings.push('TREND_PILOT_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  } else if (trendPilotException && trendPilotException.blockCodes.length > 0) {
+    for (const code of trendPilotException.blockCodes) add(blockCodes, code);
   }
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
@@ -117,6 +130,7 @@ export function evaluateTradingOptimization(
     && plan.economics == null;
   const historicalEconomicsBypassed =
     (plan.accountMode === 'live' && formulaAiException?.allowed === true)
+    || (plan.accountMode === 'live' && trendPilotAllowed)
     || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true)
     || exploratoryPaperOnly;
   if (exploratoryPaperOnly) {
@@ -154,11 +168,13 @@ export function evaluateTradingOptimization(
   }
 
   const correlatedExposure = plan.marketSnapshot.correlatedExposurePercent;
-  if (finite(correlatedExposure) && correlatedExposure > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
+  // The trend pilot is BTC/ETH (or six KRW majors) by design; its account-level
+  // margin and open-risk caps in the risk gate replace the correlation cap.
+  if (finite(correlatedExposure) && !trendPilotAllowed && correlatedExposure > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
   else if (liveOrAutomatic && !finite(correlatedExposure)) add(blockCodes, 'CORRELATED_EXPOSURE_REQUIRED');
 
   const distancePercent = stopDistancePercent(plan);
-  const budgets = riskBudget(policy, plan, distancePercent);
+  const budgets = riskBudget(policy, plan, distancePercent, trendPilotAllowed ? trendPilotException!.riskPercent : null);
   if (liveOrAutomatic && distancePercent == null) add(blockCodes, 'STOP_DISTANCE_UNAVAILABLE');
   if (budgets.maximumOrderKrw != null && plan.estimatedKrw > budgets.maximumOrderKrw) add(blockCodes, 'RISK_BUDGET_EXCEEDED');
 
@@ -170,6 +186,8 @@ export function evaluateTradingOptimization(
 
   const stageMaximum = policy.pilotStage === 'approval-20'
     ? 0
+    : trendPilotAllowed
+      ? policy.maxOrderKrw
     : policy.pilotStage === 'limited-50'
       ? 50_000
       : policy.pilotStage === 'formula-ai-exception'
@@ -177,7 +195,7 @@ export function evaluateTradingOptimization(
         : policy.maxOrderKrw;
   if (plan.accountMode === 'live') {
     if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
-    else if (policy.pilotStage === 'formula-ai-exception' && !formulaAiException?.allowed) {
+    else if (policy.pilotStage === 'formula-ai-exception' && !formulaAiException?.allowed && !trendPilotAllowed) {
       add(blockCodes, 'PILOT_FORMULA_AI_EXCEPTION_REQUIRED');
     } else if (plan.estimatedKrw > stageMaximum) {
       add(blockCodes, 'PILOT_ORDER_LIMIT');

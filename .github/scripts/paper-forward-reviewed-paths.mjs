@@ -288,7 +288,16 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/e2e/detail-auto-ui-compact.spec.ts",
   "stock-analyzer/e2e/scanner-chart-broadcast.spec.ts",
   "stock-analyzer/src/components/auto-trading-run-control.tsx",
-  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx"
+  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx",
+  // Owner-approved trend pilot live lane (2026-10-18): BTC/ETH Bitget 4h long-short
+  // and Upbit KRW spot long-only at 2% of equity per trade, exact paths only.
+  "api-server/src/services/trade-automation-optimization.service.ts",
+  "api-server/src/services/trend-pilot-v1-authorization.service.ts",
+  "api-server/src/services/trend-pilot-v1-lane.service.test.ts",
+  "api-server/src/services/trend-pilot-v1-lane.service.ts",
+  "api-server/src/services/trend-pilot-v1-runtime.service.ts",
+  "api-server/src/services/trend-pilot-v1.core.test.ts",
+  "api-server/src/services/trend-pilot-v1.core.ts"
 ]);
 // Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
 // directory exemption or permission to deploy/activate. Keep the immutable

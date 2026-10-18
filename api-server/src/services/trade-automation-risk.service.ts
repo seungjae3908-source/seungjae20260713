@@ -14,6 +14,7 @@ import {
 } from './trade-automation.types';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 import { benchmarkDrawdownBlocksLong, isNewCryptoLongEntry } from './crypto-benchmark-regime.service';
+import { evaluateTrendPilotLiveException } from './trend-pilot-v1-authorization.service';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
@@ -217,24 +218,36 @@ export function evaluateTradingPlan(
   if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
   if (!riskReducing && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
   if (!riskReducing && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
-  if (!riskReducing && snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
+  // Owner-approved trend pilot (trend-pilot-v1-authorization.service.ts): a signed,
+  // fixed-rule plan sized at 2% of equity. Its exposure is counted by margin on
+  // Bitget (notional / 5) and the asset-percent caps become "not above the
+  // account"; open risk may hold every pilot position at full risk. All other
+  // checks below still apply unchanged.
+  const trendPilot = !riskReducing ? evaluateTrendPilotLiveException(plan, policy) : null;
+  const trendPilotAllowed = trendPilot?.allowed === true;
+  const exposureKrw = trendPilotAllowed ? plan.estimatedKrw / trendPilot!.exposureDivisor : plan.estimatedKrw;
+  const maxAssetPercent = trendPilotAllowed ? 100 : policy.maxAssetPercent;
+  if (!riskReducing && snapshot.assetExposurePercent > maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
   const capitalBase = Math.max(1, Math.min(policy.totalCapitalKrw, snapshot.accountValueKrw || policy.totalCapitalKrw));
-  if (!riskReducing && snapshot.assetExposurePercent + (plan.estimatedKrw / capitalBase) * 100 > policy.maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
+  if (!riskReducing && snapshot.assetExposurePercent + (exposureKrw / capitalBase) * 100 > maxAssetPercent) add(blockCodes, 'PROJECTED_ASSET_EXPOSURE_LIMIT');
 
   const accountExposureKrw = finiteNonNegative(snapshot.accountExposureKrw) ? snapshot.accountExposureKrw : null;
-  if (!riskReducing && accountExposureKrw != null && accountExposureKrw + plan.estimatedKrw > capitalBase) add(blockCodes, 'ACCOUNT_EXPOSURE_LIMIT');
+  if (!riskReducing && accountExposureKrw != null && accountExposureKrw + exposureKrw > capitalBase) add(blockCodes, 'ACCOUNT_EXPOSURE_LIMIT');
   const instrumentExposureKrw = finiteNonNegative(snapshot.instrumentExposureKrw) ? snapshot.instrumentExposureKrw : 0;
-  if (!riskReducing && instrumentExposureKrw + plan.estimatedKrw > policy.maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
+  if (!riskReducing && instrumentExposureKrw + exposureKrw > policy.maxInstrumentKrw) add(blockCodes, 'INSTRUMENT_AMOUNT_LIMIT');
   const strategyExposureKrw = finiteNonNegative(snapshot.strategyExposureKrw) ? snapshot.strategyExposureKrw : null;
-  const strategyLimitKrw = capitalBase * policy.maxAssetPercent / 100;
-  if (!riskReducing && strategyExposureKrw != null && strategyExposureKrw + plan.estimatedKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
+  const strategyLimitKrw = capitalBase * maxAssetPercent / 100;
+  if (!riskReducing && strategyExposureKrw != null && strategyExposureKrw + exposureKrw > strategyLimitKrw) add(blockCodes, 'STRATEGY_EXPOSURE_LIMIT');
   const assetClass = assetClassForPlan(plan);
   const classExposure = finiteNonNegative(snapshot.assetClassExposureKrw) ? snapshot.assetClassExposureKrw : 0;
-  if (!riskReducing && classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+  if (!riskReducing && classExposure + exposureKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
 
   const openRiskKrw = finiteNonNegative(snapshot.openRiskKrw) ? snapshot.openRiskKrw : null;
   const thisPlanRiskKrw = plannedOpenRiskKrw(plan);
-  const openRiskLimitKrw = capitalBase * policy.totalDailyLossLimitPercent / 100;
+  const openRiskPercent = trendPilotAllowed
+    ? Math.max(policy.totalDailyLossLimitPercent, trendPilot!.openRiskPercent)
+    : policy.totalDailyLossLimitPercent;
+  const openRiskLimitKrw = capitalBase * openRiskPercent / 100;
   if (!riskReducing && openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
 
   if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
@@ -277,7 +290,7 @@ export function evaluateTradingPlan(
     && snapshot.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'ESTIMATED_SLIPPAGE_LIMIT');
   if (!riskReducing && finiteNonNegative(plan.averageSpreadPercent)
     && plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_LIMIT');
-  if (!riskReducing && finiteNonNegative(snapshot.correlatedExposurePercent)
+  if (!riskReducing && !trendPilotAllowed && finiteNonNegative(snapshot.correlatedExposurePercent)
     && snapshot.correlatedExposurePercent > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
   if (!riskReducing && finiteNonNegative(snapshot.availableLiquidityKrw)
     && snapshot.availableLiquidityKrw < plan.estimatedKrw) add(blockCodes, 'LIQUIDITY_LIMIT');
