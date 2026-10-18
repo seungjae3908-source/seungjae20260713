@@ -1,0 +1,121 @@
+name: Research NFI Public Benchmark
+
+# Read-only research benchmark: runs the public NostalgiaForInfinity X8 freqtrade
+# strategy (GPL-3.0, fetched at a pinned commit at run time, never copied into
+# this repository) on public KuCoin spot data month by month, so our own coin
+# research can be compared with a widely used public strategy.
+# No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 2 * *'
+  pull_request:
+    paths:
+      - .github/workflows/research-nfi-benchmark.yml
+      - research-production/benchmarks/nfi-benchmark-summary.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-nfi-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NFI_REPOSITORY: https://github.com/iterativv/NostalgiaForInfinity.git
+  NFI_COMMIT: 813f637b86d95de6252a03bf638e8f7c24d21987
+  NFI_STRATEGY: NostalgiaForInfinityX8
+  EXCHANGE: kucoin
+  TRADING_MODE: spot
+
+jobs:
+  backtest:
+    name: NFI ${{ matrix.timerange }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        timerange:
+          - 20250101-20250201
+          - 20250201-20250301
+          - 20250301-20250401
+          - 20250401-20250501
+          - 20250501-20250601
+          - 20250601-20250701
+          - 20250701-20250801
+          - 20250801-20250901
+          - 20250901-20251001
+          - 20251001-20251101
+          - 20251101-20251201
+          - 20251201-20260101
+    steps:
+      - name: Fetch pinned NFI commit
+        run: |
+          set -Eeuo pipefail
+          git init -q nfi
+          git -C nfi remote add origin "$NFI_REPOSITORY"
+          git -C nfi fetch -q --depth 1 origin "$NFI_COMMIT"
+          git -C nfi checkout -q FETCH_HEAD
+          test "$(git -C nfi rev-parse HEAD)" = "$NFI_COMMIT"
+
+      - name: Pull public backtest image and market data
+        run: |
+          set -Eeuo pipefail
+          docker pull ghcr.io/iterativv/ci-strategy-backtesting:latest
+          docker pull "ghcr.io/iterativv/market-data:$EXCHANGE-$TRADING_MODE"
+          mkdir -p nfi/user_data/data
+          docker run --rm -v "$PWD/nfi/user_data/data:/host_data" "ghcr.io/iterativv/market-data:$EXCHANGE-$TRADING_MODE" \
+            bash -c "cp -r /data/* /host_data/"
+          docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/iterativv/ci-strategy-backtesting:latest > image-digests.txt
+          docker image inspect --format '{{index .RepoDigests 0}}' "ghcr.io/iterativv/market-data:$EXCHANGE-$TRADING_MODE" >> image-digests.txt
+
+      - name: Run freqtrade backtest
+        env:
+          TIMERANGE: ${{ matrix.timerange }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p out && chmod 777 out nfi
+          docker run --rm -v "$PWD/nfi:/testing" -v "$PWD/out:/out" -w /testing --entrypoint "" \
+            ghcr.io/iterativv/ci-strategy-backtesting:latest \
+            freqtrade backtesting --strategy="$NFI_STRATEGY" --timerange="$TIMERANGE" --user-data-dir=user_data \
+              --config=configs/exampleconfig.json --config=configs/exampleconfig_secret.json \
+              --config="configs/trading_mode-$TRADING_MODE.json" --config="configs/blacklist-$EXCHANGE.json" \
+              --config="configs/pairlist-backtest-static-$EXCHANGE-$TRADING_MODE-usdt.json" \
+              --export=trades --export-directory=/out 2>&1 | tail -60
+          cp image-digests.txt out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfi-backtest-${{ matrix.timerange }}
+          path: out/
+          retention-days: 90
+
+  summarize:
+    name: Summarize NFI benchmark
+    needs: backtest
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nfi-backtest-*
+          path: results
+      - name: Build summary
+        run: |
+          set -Eeuo pipefail
+          node research-production/benchmarks/nfi-benchmark-summary.mjs results \
+            --commit "$NFI_COMMIT" --strategy "$NFI_STRATEGY" --exchange "$EXCHANGE" --mode "$TRADING_MODE" \
+            --json nfi-benchmark-summary.json --markdown nfi-benchmark-summary.md
+          cat nfi-benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nfi-benchmark-summary
+          path: |
+            nfi-benchmark-summary.json
+            nfi-benchmark-summary.md
+          retention-days: 365
