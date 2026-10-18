@@ -2,10 +2,11 @@
  * "Signal status" section for the scheduled market-room brief.
  *
  * Read-only: one bounded loopback GET of the Signal V3 snapshot. It never
- * names a symbol or price; individual entry candidates are delivered only by
- * the Signal V3 subscriber after its own full validation. This section only
- * tells each room whether the engine answered, how many current entry
- * candidates it holds, or that there is no new signal.
+ * names an entry candidate or any price; individual entry candidates are
+ * delivered only by the Signal V3 subscriber after its own full validation.
+ * This section only tells each room whether the engine answered, how many
+ * current entry candidates it holds, or that there is no new signal, plus
+ * A-grade watch items by name only (owner request, 2026-10-18).
  */
 import type { TelegramReportDestination } from './telegram-intelligence-report.service';
 import { renderNoSignalLineV2, type SignalMessageMarket } from './telegram-signal-message-v2.service';
@@ -98,10 +99,39 @@ export function telegramBriefSignalLines(
   }
   if (candidates > 0) {
     lines.push(`🟢 현재 진입 후보 ${candidates}개 · 종목별 알림으로 따로 안내`);
-    return lines;
+  } else {
+    const scanned = lanes.reduce((sum, lane) =>
+      sum + (Number.isSafeInteger(lane.scannedCards) && lane.scannedCards > 0 ? lane.scannedCards : 0), 0);
+    lines.push(renderNoSignalLineV2(market, '현재', scanned));
   }
-  const scanned = lanes.reduce((sum, lane) =>
-    sum + (Number.isSafeInteger(lane.scannedCards) && lane.scannedCards > 0 ? lane.scannedCards : 0), 0);
-  lines.push(renderNoSignalLineV2(market, '현재', scanned));
+  lines.push(...aGradeWatchLines(lanes));
   return lines;
+}
+
+const A_GRADE_SHOWN = 5;
+
+/**
+ * A-grade cards are watch items, not entry signals: they are only listed here
+ * by name, without prices or a plan. S-grade candidates keep their own
+ * immediate message from the Signal V3 subscriber.
+ */
+function aGradeWatchLines(lanes: Record<string, any>[]): string[] {
+  const seen = new Map<string, string>();
+  for (const lane of lanes) {
+    if (lane.status === 'BLOCKED_DATA' || lane.status === 'SEARCH_FAILURE') continue;
+    for (const item of Array.isArray(lane.aGradeWatch) ? lane.aGradeWatch.slice(0, 10) : []) {
+      const symbol = typeof item?.symbol === 'string' ? item.symbol.trim() : '';
+      if (!/^[A-Za-z0-9.\-_/]{1,30}$/u.test(symbol) || seen.has(symbol)) continue;
+      const name = typeof item?.name === 'string' && item.name.trim() && item.name.trim().length <= 40
+        ? item.name.trim() : null;
+      seen.set(symbol, name && name !== symbol ? `${name}(${symbol})` : symbol);
+    }
+  }
+  if (!seen.size) return [];
+  const shown = [...seen.values()].slice(0, A_GRADE_SHOWN);
+  const more = seen.size > shown.length ? ` 외 ${seen.size - shown.length}개` : '';
+  return [
+    `👀 A등급 관심 ${seen.size}개: ${shown.join(', ')}${more}`,
+    '· 진입 신호는 아니에요. S등급이 되면 종목별로 바로 알려드려요.',
+  ];
 }
