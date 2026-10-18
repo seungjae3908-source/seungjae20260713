@@ -173,6 +173,95 @@ export function simulateCompoundingV1(trades, { startEquityKrw, riskFraction, ma
   };
 }
 
+// Live pilot plan (owner decision 2026-10-18): start from the real Bitget futures
+// balance (~100,000 KRW), risk 1.5% of the balance per trade, 5x isolated, one
+// order at most 1,000,000 KRW, no new entries for the rest of a KST day once that
+// day lost 1.5% of its starting balance, and a full stop at -25% from the peak.
+export const TREND_PILOT_LIVE_PLAN_V1 = Object.freeze({
+  startEquityKrw: 100_000,
+  riskFraction: 0.015,
+  leverage: 5,
+  maxNotionalKrw: 1_000_000,
+  minNotionalKrw: 7_500, // Bitget USDT futures minimum ≈ 5 USDT
+  dailyLossFraction: 0.015,
+  killDrawdownFraction: 0.25,
+});
+const KST_OFFSET = 9 * HOUR;
+
+/**
+ * Pure: the live pilot plan applied to a trade list. Margin of open positions
+ * (notional / leverage) may not exceed equity; a signal that does not fit, falls
+ * under the minimum order, arrives on a day already at the daily loss limit, or
+ * comes after the kill switch is skipped.
+ */
+export function simulateLivePlanV1(trades, plan = TREND_PILOT_LIVE_PLAN_V1) {
+  const p = { ...TREND_PILOT_LIVE_PLAN_V1, ...plan };
+  const rows = [...trades].filter((t) => Number.isFinite(t.stopFraction) && t.stopFraction > 0 && Number.isFinite(t.rMultiple))
+    .sort((a, b) => a.entryTime - b.entryTime);
+  let equity = p.startEquityKrw; let peak = equity; let maxDrawdown = 0;
+  let killedAt = null; let taken = 0; let wins = 0;
+  const skipped = { margin: 0, minimum: 0, dailyLimit: 0, killed: 0 };
+  const open = [];
+  const dayStart = new Map(); const dayPnl = new Map(); const monthPnl = new Map(); const monthStart = new Map();
+  const dayKey = (ms) => new Date(ms + KST_OFFSET).toISOString().slice(0, 10);
+  const settle = (until) => {
+    open.sort((a, b) => a.exitTime - b.exitTime);
+    while (open.length && open[0].exitTime <= until) {
+      const t = open.shift();
+      const d = dayKey(t.exitTime); const m = d.slice(0, 7);
+      if (!monthStart.has(m)) monthStart.set(m, equity);
+      equity += t.pnl;
+      if (t.pnl > 0) wins += 1;
+      dayPnl.set(d, (dayPnl.get(d) ?? 0) + t.pnl);
+      monthPnl.set(m, (monthPnl.get(m) ?? 0) + t.pnl);
+      peak = Math.max(peak, equity);
+      const dd = peak > 0 ? (peak - equity) / peak : 1;
+      maxDrawdown = Math.max(maxDrawdown, dd);
+      if (killedAt === null && dd >= p.killDrawdownFraction) killedAt = t.exitTime;
+    }
+  };
+  for (const t of rows) {
+    settle(t.entryTime);
+    if (killedAt !== null || equity <= 0) { skipped.killed += 1; continue; }
+    const d = dayKey(t.entryTime);
+    if (!dayStart.has(d)) dayStart.set(d, equity);
+    if ((dayPnl.get(d) ?? 0) <= -(dayStart.get(d) * p.dailyLossFraction)) { skipped.dailyLimit += 1; continue; }
+    const wanted = (equity * p.riskFraction) / t.stopFraction;
+    const usedMargin = open.reduce((sum, o) => sum + (o.notional / p.leverage), 0);
+    const notional = Math.min(p.maxNotionalKrw, wanted, Math.max(0, (equity - usedMargin) * p.leverage));
+    if (notional < p.minNotionalKrw) { if (wanted >= p.minNotionalKrw) skipped.margin += 1; else skipped.minimum += 1; continue; }
+    open.push({ exitTime: t.exitTime, notional, pnl: equity * p.riskFraction * t.rMultiple * (notional / wanted) });
+    taken += 1;
+  }
+  settle(Infinity);
+  const months = [...monthPnl.entries()].sort().map(([m, v]) => ({ month: m, krw: v, fraction: v / monthStart.get(m) }));
+  const span = rows.length ? Math.max(DAY, rows.at(-1).exitTime - rows[0].entryTime) : DAY;
+  const monthsSpan = span / (30.4375 * DAY);
+  return {
+    ...p,
+    endEquityKrw: Math.round(equity),
+    totalReturn: equity / p.startEquityKrw - 1,
+    monthlyCompound: equity > 0 ? ((equity / p.startEquityKrw) ** (1 / monthsSpan)) - 1 : -1,
+    maxDrawdownFraction: maxDrawdown,
+    killedAt: killedAt === null ? null : new Date(killedAt).toISOString().slice(0, 10),
+    trades: taken, winRate: taken ? wins / taken : null, skipped,
+    bestMonthFraction: months.length ? Math.max(...months.map((m) => m.fraction)) : null,
+    worstMonthFraction: months.length ? Math.min(...months.map((m) => m.fraction)) : null,
+    positiveMonths: months.filter((m) => m.krw > 0).length,
+    tradedMonths: months.length,
+    calendarMonths: Math.round(monthsSpan),
+  };
+}
+
+export const TREND_PILOT_LIVE_SCENARIOS_V1 = Object.freeze([
+  Object.freeze({ id: 'PLAN', label: '확정안: 1.5% · 5배', plan: Object.freeze({}) }),
+  Object.freeze({ id: 'LEV2', label: '같은 조건 2배', plan: Object.freeze({ leverage: 2 }) }),
+  Object.freeze({ id: 'RISK1', label: '1회 1%', plan: Object.freeze({ riskFraction: 0.01, dailyLossFraction: 0.01 }) }),
+  Object.freeze({ id: 'RISK2', label: '1회 2%', plan: Object.freeze({ riskFraction: 0.02, dailyLossFraction: 0.02 }) }),
+  Object.freeze({ id: 'RISK3', label: '1회 3%', plan: Object.freeze({ riskFraction: 0.03, dailyLossFraction: 0.03 }) }),
+  Object.freeze({ id: 'NO_GUARDS', label: '1.5% · 하루한도·자동정지 없음', plan: Object.freeze({ dailyLossFraction: 1, killDrawdownFraction: 1.01 }) }),
+]);
+
 function emaSeries(bars, period = 200) {
   const k = 2 / (period + 1);
   let e = null;
@@ -246,6 +335,8 @@ export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
         discovery: primary.filter((t) => t.entryTime < split).reduce((a, t) => a + (t.rMultiple ?? 0), 0),
         validation: primary.filter((t) => t.entryTime >= split).reduce((a, t) => a + (t.rMultiple ?? 0), 0),
       },
+      livePlan: TREND_PILOT_LIVE_SCENARIOS_V1.map((sc) => ({ id: sc.id, label: sc.label, ...simulateLivePlanV1(primary, sc.plan) })),
+      livePlanValidation: simulateLivePlanV1(primary.filter((t) => t.entryTime >= split)),
       validationCompounding: simulateCompoundingV1(primary.filter((t) => t.entryTime >= split), { ...TREND_PILOT_COMPOUNDING_V1, riskFraction: 0.03 }),
       maxR: primary.length ? Math.max(...primary.map((t) => t.rMultiple ?? -Infinity)) : null,
       tradesOver5R: primary.filter((t) => t.rMultiple >= 5).length,
@@ -310,6 +401,13 @@ export function formatTrendPilotReportKoV1(result) {
     if (v.rSum) lines.push(`  R 합계: 앞 구간 ${v.rSum.discovery.toFixed(1)}R · 뒤(검증) 구간 ${v.rSum.validation.toFixed(1)}R · 검증 구간만 3% 감수로 굴리면 ${(v.validationCompounding.totalReturn * 100).toFixed(1)}% (낙폭 ${(v.validationCompounding.maxDrawdownFraction * 100).toFixed(1)}%)`);
     lines.push(`  가장 큰 거래 ${Number.isFinite(v.maxR) ? v.maxR.toFixed(1) : '-'}R · 5R 이상 거래 ${v.tradesOver5R ?? 0}회`);
     lines.push(`  참고 · 다른 코인 ${v.otherSymbols.symbols}개 같은 규칙: 합계 ${won(v.otherSymbols.all.totalKrw)} · 승률 ${pct(v.otherSymbols.all.winRate)}`);
+    for (const c of v.livePlan ?? []) {
+      lines.push(`  [실전안] ${c.label}: 10만 원 → ${won(c.endEquityKrw)} (${c.totalReturn >= 0 ? '+' : ''}${(c.totalReturn * 100).toFixed(1)}%, 월평균 복리 ${(c.monthlyCompound * 100).toFixed(1)}%) · 최대 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}% · 최고의 달 ${pct(c.bestMonthFraction)} · 최악의 달 ${pct(c.worstMonthFraction)} · 플러스 달 ${c.positiveMonths}/${c.tradedMonths} · 거래 ${c.trades}회 · 승률 ${pct(c.winRate)}${c.killedAt ? ` · ⚠️ ${c.killedAt} 자동정지` : ''} · 건너뜀(증거금 ${c.skipped.margin}/최소주문 ${c.skipped.minimum}/하루한도 ${c.skipped.dailyLimit}/정지후 ${c.skipped.killed})`);
+    }
+    if (v.livePlanValidation) {
+      const c = v.livePlanValidation;
+      lines.push(`  [실전안·검증 구간만] 10만 원 → ${won(c.endEquityKrw)} (${(c.totalReturn * 100).toFixed(1)}%, 월 ${(c.monthlyCompound * 100).toFixed(1)}%) · 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}%${c.killedAt ? ` · ⚠️ ${c.killedAt} 자동정지` : ''}`);
+    }
     for (const c of v.compounding ?? []) {
       lines.push(`  계좌 비례${c.regimeSizing ? '+강한 장세 1.5배' : ''}(시작 ${won(c.startEquityKrw)}, 1회 계좌의 ${(c.riskFraction * 100).toFixed(1)}% 감수): 끝 ${won(c.endEquityKrw)} (${c.totalReturn >= 0 ? '+' : ''}${(c.totalReturn * 100).toFixed(1)}%, 연 ${(c.annualReturn * 100).toFixed(1)}%) · 최대 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}% · 진입 금액 ${won(c.firstNotionalKrw)} → ${won(c.lastNotionalKrw)}`);
     }
