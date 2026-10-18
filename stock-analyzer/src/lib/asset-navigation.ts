@@ -125,3 +125,29 @@ export function resolveLegacyCryptoDetailPath(symbol: string, backPath = '/stock
     backPath,
   }, 'Legacy crypto route is ambiguous or unsupported');
 }
+
+export interface LegacyCryptoDetailChoices {
+  base: string;
+  spotPath: string;
+  futuresPath: string;
+}
+
+/**
+ * A bare coin symbol such as BTC is ambiguous (spot or futures), so it is never
+ * routed automatically. Returns both verified detail paths so the user can pick,
+ * or null when the symbol is not a plain base asset.
+ */
+export function resolveLegacyCryptoDetailChoices(symbol: string, backPath = '/stocks'): LegacyCryptoDetailChoices | null {
+  const base = clean(symbol);
+  if (!/^[A-Z0-9]{2,15}$/.test(base) || base.endsWith('USDT')) return null;
+  try {
+    return {
+      base,
+      spotPath: resolveLegacyCryptoDetailPath(`KRW-${base}`, backPath),
+      futuresPath: resolveLegacyCryptoDetailPath(`${base}USDT`, backPath),
+    };
+  } catch (error) {
+    if (error instanceof AssetRouteNotResolved) return null;
+    throw error;
+  }
+}
