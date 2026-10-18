@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   ALLOCATION_MODELS_V1, ROTATION_RULES_V1, SPECIAL_RULES_V1, TIMING_RULES_V1,
   adx, atr, buildPanel, deflatedSharpeV1, ema, evaluateStrategyZooMarketV1, formatStrategyZooReportKoV1,
+  VOLUME_FILTERED_RULES_V1, compareVolumeFilterV1, confirmOneBarV1, gateEntriesV1, relativeVolumeOkV1,
   performanceV1, rsi, simulateTimingPortfolio, sma, supertrendDirection, verdictV1,
 } from '../src/strategy-zoo-v1.mjs';
 
@@ -145,6 +146,51 @@ test('legend trader rules: present, sourced, and parabolic short only shorts on 
   const spot = evaluateStrategyZooMarketV1({ market: 'CRYPTO_SPOT', datasets: [{ symbol: 'KRW-BTC', candles: walk(900, 3, { vol: 0.04 }) }] });
   assert.ok(!spot.rows.find((r) => r.id === 'QULLAMAGGIE_PARABOLIC_SHORT'));
   const cowen = spot.rows.find((r) => r.id === 'COWEN_LOG_RISK'); assert.ok(cowen && cowen.avgExposure > 0);
+});
+
+test('entry gate blocks a signal until it ends, and never blocks exits', () => {
+  const raw = [0, 1, 1, 1, 0, 1, 1, -1, -1, 0];
+  const allowOnlyAt = new Set([5, 7]);
+  assert.deepEqual(gateEntriesV1(raw, (i) => allowOnlyAt.has(i)), [0, 0, 0, 0, 0, 1, 1, -1, -1, 0]);
+  assert.deepEqual(gateEntriesV1(raw, () => true), raw);
+});
+
+test('relative volume needs a full window, positive mean volume and the multiple', () => {
+  const volume = [...Array(20).fill(100), 150, 149, 0];
+  assert.equal(relativeVolumeOkV1(volume, 20), true);
+  assert.equal(relativeVolumeOkV1(volume, 21), false);
+  assert.equal(relativeVolumeOkV1(volume, 10), false);
+  assert.equal(relativeVolumeOkV1(new Array(25).fill(0), 22), false);
+  assert.equal(relativeVolumeOkV1([...Array(20).fill(100), NaN], 20), false);
+});
+
+test('one-bar confirmation delays entries only', () => {
+  assert.deepEqual(confirmOneBarV1([0, 1, 1, 1, 0, 1, 0, -1, -1]), [0, 0, 1, 1, 0, 0, 0, 0, -1]);
+});
+
+test('volume-filtered variants are registered once per base rule and flow into the evaluation', () => {
+  assert.equal(VOLUME_FILTERED_RULES_V1.length, 8);
+  assert.equal(new Set(VOLUME_FILTERED_RULES_V1.map((r) => r.id)).size, 8);
+  const candles = walk(900, 11).map((c, i) => ({ ...c, volume: 1_000 + ((i * 37) % 900) }));
+  const result = evaluateStrategyZooMarketV1({ market: 'CRYPTO_SPOT', datasets: [{ symbol: 'X', candles }] });
+  for (const rule of VOLUME_FILTERED_RULES_V1) assert.ok(result.rows.some((r) => r.id === rule.id), rule.id);
+  const comparisons = compareVolumeFilterV1(result.rows);
+  assert.equal(comparisons.length, 8);
+  assert.ok(comparisons.every((c) => ['KEEP', 'REMOVE', 'NO_DATA'].includes(c.verdict)));
+  assert.match(formatStrategyZooReportKoV1([result]), /거래량 필터 비교/u);
+});
+
+test('a filter that does not improve net return, drawdown and validation Sharpe is marked for removal', () => {
+  const perf = (cagr, mdd, sharpe) => ({ cagr, maxDrawdown: mdd, sharpe });
+  const row = (id, full, validation) => ({ id, full, validation, deflatedSharpe: 0.5 });
+  const rows = [
+    row('BB_BREAKOUT', perf(0.2, 0.4, 1), perf(0.2, 0.3, 1)),
+    row('BB_BREAKOUT__RVOL15', perf(0.25, 0.3, 1.2), perf(0.3, 0.2, 1.4)),
+    row('BB_BREAKOUT__CONFIRM1', perf(0.25, 0.5, 1.2), perf(0.3, 0.2, 1.4)),
+  ];
+  const byId = Object.fromEntries(compareVolumeFilterV1(rows).map((c) => [c.id, c.verdict]));
+  assert.equal(byId['BB_BREAKOUT__RVOL15'], 'KEEP');
+  assert.equal(byId['BB_BREAKOUT__CONFIRM1'], 'REMOVE');
 });
 
 test('grid bot holds more as price falls inside the range and resets on breakout; pyramid steps 0.5 → 1', () => {
