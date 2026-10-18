@@ -69,7 +69,11 @@ export interface TradingRepository {
   /** Server-written audit trail for run/stop/auto-stop/kill-switch. */
   appendRunAudit?(entry: AutoRunAuditEntry): Promise<void>;
   listRunAudit?(userId: string, limit: number): Promise<AutoRunAuditEntry[]>;
+  /** Admin global stop only: members that still have an open (cancelable) order. Server key required. */
+  listOpenOrderUserIds?(): Promise<string[]>;
 }
+
+const OPEN_ORDER_STATES = ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'];
 
 export const DEFAULT_AUTO_RUN_CONTROL: AutoRunControl = Object.freeze({
   liveConfirmedMarkets: [] as TradingAssetClass[],
@@ -324,6 +328,10 @@ export class InMemoryTradingRepository implements TradingRepository {
   async listOrders(userId: string) {
     return [...this.orders.values()].filter((item) => item.userId === userId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).map(normalizedOrder);
+  }
+  async listOpenOrderUserIds() {
+    return [...new Set([...this.orders.values()]
+      .filter((item) => OPEN_ORDER_STATES.includes(item.state)).map((item) => item.userId))].sort();
   }
   async appendEvent(event: TradingOrderEvent) { this.events.push(copy(event)); }
   async listEvents(userId: string) { return this.events.filter((item) => item.userId === userId).map(copy); }
@@ -723,6 +731,14 @@ function createScopedTradingRepository(
     },
     async listOrders(userId) {
       return completeHistory('trade_orders', userId, (value) => normalizedOrder(value as TradingOrder));
+    },
+    async listOpenOrderUserIds() {
+      // Reads member ids only; each member's orders are then handled through
+      // that member's own hard-scoped repository.
+      const { data, error } = await secureClient().from('trade_orders').select('user_id')
+        .in('state', OPEN_ORDER_STATES).limit(1000);
+      if (error) throw databaseError();
+      return [...new Set((data ?? []).map((row) => String((row as { user_id: unknown }).user_id)))].sort();
     },
     async appendEvent(event) {
       owned(event.userId);
