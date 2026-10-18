@@ -172,6 +172,50 @@ function donchianTrail(close, L) {
   return pos;
 }
 
+
+function wma(values, n) {
+  const out = new Array(values.length).fill(null); const denom = (n * (n + 1)) / 2;
+  for (let i = n - 1; i < values.length; i += 1) { let s = 0; for (let k = 0; k < n; k += 1) { if (values[i - k] === null) { s = null; break; } s += values[i - k] * (n - k); } out[i] = s === null ? null : s / denom; }
+  return out;
+}
+
+/** Hull MA: WMA(2·WMA(n/2) − WMA(n), √n). */
+export function hullMa(close, n) {
+  const a = wma(close, Math.floor(n / 2)); const b = wma(close, n);
+  const diff = close.map((_, i) => (a[i] !== null && b[i] !== null ? (2 * a[i]) - b[i] : null));
+  const first = diff.findIndex((v) => v !== null); const m = Math.floor(Math.sqrt(n));
+  const out = new Array(close.length).fill(null); if (first < 0) return out;
+  const tail = wma(diff.slice(first), m); for (let i = 0; i < tail.length; i += 1) out[first + i] = tail[i];
+  return out;
+}
+
+/** Parabolic SAR direction (+1/−1), AF 0.02 step 0.02 max 0.2 (Wilder 1978). */
+export function parabolicSarDirection(bars, step = 0.02, maxAf = 0.2) {
+  const dir = new Array(bars.length).fill(0); if (bars.length < 3) return dir;
+  let up = bars[1].close >= bars[0].close; let sar = up ? bars[0].low : bars[0].high; let ep = up ? bars[1].high : bars[1].low; let af = step;
+  for (let i = 2; i < bars.length; i += 1) {
+    sar += af * (ep - sar);
+    if (up) { sar = Math.min(sar, bars[i - 1].low, bars[i - 2].low); if (bars[i].low < sar) { up = false; sar = ep; ep = bars[i].low; af = step; } else if (bars[i].high > ep) { ep = bars[i].high; af = Math.min(maxAf, af + step); } }
+    else { sar = Math.max(sar, bars[i - 1].high, bars[i - 2].high); if (bars[i].high > sar) { up = true; sar = ep; ep = bars[i].high; af = step; } else if (bars[i].low < ep) { ep = bars[i].low; af = Math.min(maxAf, af + step); } }
+    dir[i] = up ? 1 : -1;
+  }
+  return dir;
+}
+
+/** +DI / −DI (Wilder, n). */
+function directionalIndex(bars, n = 14) {
+  const pdi = new Array(bars.length).fill(null); const mdi = new Array(bars.length).fill(null);
+  let trS = 0; let pS = 0; let mS = 0;
+  for (let i = 1; i < bars.length; i += 1) {
+    const up = bars[i].high - bars[i - 1].high; const dn = bars[i - 1].low - bars[i].low;
+    const p2 = up > dn && up > 0 ? up : 0; const m2 = dn > up && dn > 0 ? dn : 0;
+    const tr = Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - bars[i - 1].close), Math.abs(bars[i].low - bars[i - 1].close));
+    if (i <= n) { trS += tr; pS += p2; mS += m2; if (i < n) continue; } else { trS = trS - (trS / n) + tr; pS = pS - (pS / n) + p2; mS = mS - (mS / n) + m2; }
+    pdi[i] = trS > 0 ? (100 * pS) / trS : 0; mdi[i] = trS > 0 ? (100 * mS) / trS : 0;
+  }
+  return { pdi, mdi };
+}
+
 // ------------------------------------------------------------------ per-symbol timing rules
 // Each returns target exposure T[i] in [-1, 1] decided at close i (null = flat).
 // "state" rules hold until their exit condition fires.
@@ -299,6 +343,91 @@ export const TIMING_RULES_V1 = Object.freeze([
     make: ({ bars, close, n }) => { const e = ema(close, 20); const a = adx(bars, 14); const hi20 = rollingMax(bars.map((b) => b.high), 20); let held = 0;
       return holdUntil(n, (i) => { const ok = i > 0 && t(a[i]) && t(e[i]) && a[i] > 30 && a[i] >= a[i - 1] && bars[i].low <= e[i] && close[i] > e[i]; if (ok) held = 0; return ok; },
         (i) => { held += 1; return (i > 0 && t(hi20[i - 1]) && bars[i].high >= hi20[i - 1]) || (t(e[i]) && close[i] < e[i] * 0.97) || held >= 20; }); } },
+  { id: 'VOLATILITY_SYSTEM', family: '추세', name: 'ATR 2배 종가 변화 반전 시스템', source: 'freqtrade-strategies futures/VolatilitySystem.py (Wilder volatility system)',
+    make: ({ bars, close, n }) => { const a = atr(bars, 14); const out = new Array(n).fill(0); let pos = 0;
+      for (let i = 1; i < n; i += 1) { if (t(a[i - 1])) { const d = close[i] - close[i - 1]; if (d > 2 * a[i - 1]) pos = 1; else if (-d > 2 * a[i - 1]) pos = -1; } out[i] = pos; } return out; } },
+  { id: 'ADX_MOMENTUM', family: '추세', name: 'ADX 모멘텀 (ADX>25, +DI>−DI, MOM>0)', source: 'freqtrade-strategies berlinguyinca/ADXMomentum.py',
+    make: ({ bars, close, n }) => { const a = adx(bars, 14); const { pdi, mdi } = directionalIndex(bars, 25);
+      return holdUntil(n, (i) => i >= 14 && t(a[i]) && t(pdi[i]) && a[i] > 25 && close[i] - close[i - 14] > 0 && pdi[i] > 25 && pdi[i] > mdi[i],
+        (i) => i >= 14 && t(a[i]) && t(mdi[i]) && a[i] > 25 && close[i] - close[i - 14] < 0 && mdi[i] > 25 && mdi[i] > pdi[i]); } },
+  { id: 'EMA8_21_WEEKLY50', family: '추세', name: 'EMA 8/21 교차 + 주봉 50선 필터', source: 'freqtrade-strategies ReinforcedAverageStrategy.py',
+    make: ({ close, n }) => { const f = ema(close, 8); const sl = ema(close, 21); const w = sma(close, 250);
+      return holdUntil(n, (i) => i > 0 && t(sl[i - 1]) && t(w[i]) && f[i - 1] <= sl[i - 1] && f[i] > sl[i] && close[i] > w[i], (i) => i > 0 && t(sl[i]) && sl[i] > f[i]); } },
+  { id: 'EMA20_OBV', family: '추세', name: 'EMA20 돌파 + OBV 확인 (롱숏)', source: 'freqtrade-strategies futures/TrendFollowingStrategy.py',
+    make: ({ bars, close, n }) => { const e = ema(close, 20); const obv = new Array(n).fill(0);
+      for (let i = 1; i < n; i += 1) obv[i] = obv[i - 1] + (close[i] > close[i - 1] ? 1 : close[i] < close[i - 1] ? -1 : 0) * (bars[i].volume ?? 0);
+      const out = new Array(n).fill(0); let pos = 0;
+      for (let i = 1; i < n; i += 1) { if (t(e[i]) && t(e[i - 1])) { if (close[i] > e[i] && close[i - 1] <= e[i - 1] && obv[i] > obv[i - 1]) pos = 1; else if (close[i] < e[i] && close[i - 1] >= e[i - 1] && obv[i] < obv[i - 1]) pos = -1; } out[i] = pos; }
+      return out; } },
+  { id: 'PARABOLIC_SAR', family: '추세', name: '파라볼릭 SAR 반전', source: 'Wilder 1978; je-suis-tm/quant-trading',
+    make: ({ bars }) => parabolicSarDirection(bars) },
+  { id: 'AWESOME_OSCILLATOR', family: '추세', name: '어썸 오실레이터 0선 교차', source: 'Bill Williams; je-suis-tm/quant-trading',
+    make: ({ bars }) => { const hl2 = bars.map((b) => (b.high + b.low) / 2); const a5 = sma(hl2, 5); const a34 = sma(hl2, 34);
+      return bars.map((_, i) => (t(a34[i]) ? (a5[i] - a34[i] > 0 ? 1 : -1) : 0)); } },
+  { id: 'SSL_CHANNEL', family: '추세', name: 'SSL 채널 (10)', source: 'ErwinBeckers TradingView; GitHub ports',
+    make: ({ bars, close }) => { const h = sma(bars.map((b) => b.high), 10); const l = sma(bars.map((b) => b.low), 10); let hlv = 0;
+      return close.map((c, i) => { if (!t(h[i])) return 0; if (c > h[i]) hlv = 1; else if (c < l[i]) hlv = -1; return hlv; }); } },
+  { id: 'CHANDELIER_EXIT', family: '추세', name: '샹들리에 엑시트 (22, 3ATR) 반전', source: 'Chuck LeBeau; everget TradingView',
+    make: ({ bars, close, n }) => { const a = atr(bars, 22); const hh = rollingMax(close, 22); const ll = rollingMin(close, 22);
+      const out = new Array(n).fill(0); let longStop = null; let shortStop = null; let dir = 1;
+      for (let i = 1; i < n; i += 1) { if (!t(a[i])) continue;
+        const ls = hh[i] - 3 * a[i]; const ss = ll[i] + 3 * a[i];
+        longStop = longStop === null || close[i - 1] <= longStop ? ls : Math.max(ls, longStop);
+        shortStop = shortStop === null || close[i - 1] >= shortStop ? ss : Math.min(ss, shortStop);
+        if (dir === -1 && close[i] > shortStop) dir = 1; else if (dir === 1 && close[i] < longStop) dir = -1;
+        out[i] = dir; }
+      return out; } },
+  { id: 'HULL_55', family: '추세', name: '헐 이동평균 55 방향', source: 'Alan Hull; Hull Suite TradingView',
+    make: ({ close }) => { const h = hullMa(close, 55); return close.map((_, i) => (i >= 2 && t(h[i]) && t(h[i - 2]) ? (h[i] > h[i - 2] ? 1 : -1) : 0)); } },
+  { id: 'SQUEEZE_MOMENTUM', family: '돌파', name: '스퀴즈 모멘텀 (LazyBear)', source: 'LazyBear TradingView; pandas-ta squeeze',
+    make: ({ bars, close, n }) => { const m = sma(close, 20); const sd = rollingStd(close, 20); const tr = trueRange(bars); const kc = sma(tr, 20);
+      const hh = rollingMax(bars.map((b) => b.high), 20); const ll = rollingMin(bars.map((b) => b.low), 20);
+      const base = close.map((c, i) => (t(m[i]) && t(hh[i]) ? c - ((((hh[i] + ll[i]) / 2) + m[i]) / 2) : null));
+      const mom = new Array(n).fill(null);
+      for (let i = 39; i < n; i += 1) { let sx = 0; let sy = 0; let sxx = 0; let sxy = 0; let ok = true;
+        for (let k = 0; k < 20; k += 1) { const y = base[i - 19 + k]; if (y === null) { ok = false; break; } sx += k; sy += y; sxx += k * k; sxy += k * y; }
+        if (!ok) continue; const slope = ((20 * sxy) - (sx * sy)) / ((20 * sxx) - (sx * sx)); const icpt = (sy - (slope * sx)) / 20; mom[i] = icpt + (slope * 19); }
+      const sqzOn = close.map((_, i) => t(m[i]) && t(kc[i]) && (m[i] + 2 * sd[i]) < (m[i] + 1.5 * kc[i]) && (m[i] - 2 * sd[i]) > (m[i] - 1.5 * kc[i]));
+      return holdUntil(n, (i) => i > 0 && sqzOn[i - 1] && !sqzOn[i] && t(mom[i]) && t(mom[i - 1]) && mom[i] > 0 && mom[i] > mom[i - 1],
+        (i) => i > 1 && t(mom[i]) && (mom[i] < 0 || (mom[i] < mom[i - 1] && mom[i - 1] < mom[i - 2]))); } },
+  { id: 'MA_SCORE_3_20', family: '추세', name: '이평 점수 (3·5·10·20일선 위 개수 비중)', source: '강환국 변동성 돌파 책 코드; sharebook-kr',
+    make: ({ close }) => { const ms = [3, 5, 10, 20].map((L) => sma(close, L)); return close.map((c, i) => (t(ms[3][i]) ? ms.filter((m) => c > m[i]).length / 4 : 0)); } },
+  { id: 'BTC_MAX_10D', family: '돌파', name: '10일 신고가 종가 다음 1일 보유 (MAX)', source: 'Padysák & Vojtko 2022 (Bitcoin MAX); Quantpedia',
+    make: ({ close }) => { const hi = rollingMax(close, 10); return close.map((c, i) => (t(hi[i]) && c >= hi[i] ? 1 : 0)); } },
+  { id: 'RSRS', family: '추세', name: 'RSRS 저항지지 상대강도 (18일 회귀, 600일 표준화)', source: '광대증권(光大证券) 2017; JoinQuant 최다 복제',
+    make: ({ bars, n }) => { const beta = new Array(n).fill(null); const r2 = new Array(n).fill(null);
+      for (let i = 17; i < n; i += 1) { let sx = 0; let sy = 0; let sxx = 0; let sxy = 0; let syy = 0;
+        for (let k = i - 17; k <= i; k += 1) { const x = bars[k].low; const y = bars[k].high; sx += x; sy += y; sxx += x * x; sxy += x * y; syy += y * y; }
+        const den = (18 * sxx) - (sx * sx); if (den <= 0) continue; beta[i] = ((18 * sxy) - (sx * sy)) / den; const r2d = den * ((18 * syy) - (sy * sy)); r2[i] = r2d > 0 ? (((18 * sxy) - (sx * sy)) ** 2) / r2d : 0; }
+      const out = new Array(n).fill(0); let pos = 0;
+      for (let i = 617; i < n; i += 1) { let m = 0; let q = 0; let c = 0; for (let k = i - 599; k <= i; k += 1) if (beta[k] !== null) { m += beta[k]; q += beta[k] * beta[k]; c += 1; }
+        if (c < 300 || beta[i] === null) { out[i] = pos; continue; } const mean = m / c; const sd = Math.sqrt(Math.max(1e-12, (q / c) - (mean * mean))); const z = ((beta[i] - mean) / sd) * r2[i];
+        if (z > 0.7) pos = 1; else if (z < -0.7) pos = 0; out[i] = pos; }
+      return out; } },
+  { id: 'WAVETREND', family: '역추세', name: '웨이브트렌드 과매도 교차 (LazyBear)', source: 'LazyBear TradingView',
+    make: ({ bars, n }) => { const ap = bars.map((b) => (b.high + b.low + b.close) / 3); const esa = ema(ap, 10); const d = ema(ap.map((v, i) => (t(esa[i]) ? Math.abs(v - esa[i]) : 0)), 10);
+      const ci = ap.map((v, i) => (t(esa[i]) && t(d[i]) && d[i] > 0 ? (v - esa[i]) / (0.015 * d[i]) : 0)); const wt1 = ema(ci, 21); const wt2 = sma(wt1.map((v) => v ?? 0), 4);
+      return holdUntil(n, (i) => i > 40 && t(wt1[i]) && t(wt2[i]) && wt1[i - 1] <= wt2[i - 1] && wt1[i] > wt2[i] && wt1[i] < -53,
+        (i) => i > 40 && t(wt1[i]) && t(wt2[i]) && wt1[i - 1] >= wt2[i - 1] && wt1[i] < wt2[i] && wt1[i] > 53); } },
+  { id: 'UT_BOT', family: '추세', name: 'UT Bot (ATR10 × 1 트레일링 반전)', source: 'QuantNomad/HPotter TradingView',
+    make: ({ bars, close, n }) => { const a = atr(bars, 10); const out = new Array(n).fill(0); let stop = null; let dir = 0;
+      for (let i = 1; i < n; i += 1) { if (!t(a[i])) continue; const loss = a[i];
+        if (stop === null) stop = close[i] - loss;
+        else if (close[i] > stop && close[i - 1] > stop) stop = Math.max(stop, close[i] - loss);
+        else if (close[i] < stop && close[i - 1] < stop) stop = Math.min(stop, close[i] + loss);
+        else stop = close[i] > stop ? close[i] - loss : close[i] + loss;
+        dir = close[i] > stop ? 1 : -1; out[i] = dir; }
+      return out; } },
+  { id: 'MA25_DEVIATION', family: '역추세', name: '25일선 이격도 −8% 매수 (일본 乖離率)', source: 'Monex 移動平均乖離率; 일본 시스트레',
+    make: ({ close, n }) => { const m = sma(close, 25); let held = 0;
+      return holdUntil(n, (i) => { const ok = t(m[i]) && close[i] / m[i] - 1 <= -0.08; if (ok) held = 0; return ok; }, (i) => { held += 1; return (t(m[i]) && close[i] >= m[i]) || held >= 20; }); } },
+  { id: 'PSYCHO_LINE', family: '역추세', name: '심리선 12일 25% 이하 매수 / 75% 이상 매도', source: '일본 サイコロジカルライン',
+    make: ({ close, n }) => { const up = close.map((c, i) => (i > 0 && c > close[i - 1] ? 1 : 0)); const pl = sma(up, 12);
+      return holdUntil(n, (i) => t(pl[i]) && pl[i] <= 0.25, (i) => t(pl[i]) && pl[i] >= 0.75); } },
+  { id: 'KDJ', family: '역추세', name: 'KDJ(9,3,3) 20 아래 골든크로스 매수', source: '중국 커뮤니티 단골 (스토캐스틱 변형)',
+    make: ({ bars, close, n }) => { const hh = rollingMax(bars.map((b) => b.high), 9); const ll = rollingMin(bars.map((b) => b.low), 9); let k = 50; let d = 50; const K = new Array(n).fill(null); const D = new Array(n).fill(null);
+      for (let i = 0; i < n; i += 1) { if (!t(hh[i])) continue; const rsv = hh[i] > ll[i] ? ((close[i] - ll[i]) / (hh[i] - ll[i])) * 100 : 50; k = (2 / 3) * k + (1 / 3) * rsv; d = (2 / 3) * d + (1 / 3) * k; K[i] = k; D[i] = d; }
+      return holdUntil(n, (i) => i > 0 && t(K[i - 1]) && K[i - 1] <= D[i - 1] && K[i] > D[i] && K[i] < 20, (i) => t(K[i]) && ((3 * K[i]) - (2 * D[i]) > 100 || (i > 0 && K[i - 1] >= D[i - 1] && K[i] < D[i]))); } },
   { id: 'TURN_OF_MONTH', family: '달력', name: '월말·월초 효과 (말일~3거래일)', source: 'Ariel 1987; Lakonishok & Smidt 1988',
     make: ({ bars }) => bars.map((b, i) => { const d = new Date(b.timestamp); const next = bars[i + 1];
       const lastOfMonth = next ? new Date(next.timestamp).getUTCMonth() !== d.getUTCMonth() : false;
@@ -313,6 +442,7 @@ export const SPECIAL_RULES_V1 = Object.freeze([
   { id: 'OVERNIGHT', family: '달력', name: '종가 매수·다음날 시가 매도 (오버나이트)', source: 'Cliff, Cooper & Gulen 2008; Kelly & Clark 2011' },
   { id: 'WEEKEND_CRYPTO', family: '달력', name: '코인 주말만 보유 (금 종가→월 시가)', source: 'Caporale & Plastun 2019 (day-of-week in crypto)' },
   { id: 'VOL_BREAKOUT_NOISE', family: '돌파', name: '변동성 돌파 노이즈 k + 이평 점수 + 변동성 비중 (강환국)', source: '강환국, 가상화폐 투자 마스터플랜 (2021)' },
+  { id: 'DUAL_THRUST', family: '돌파', name: '듀얼 스러스트 (N=4, K=0.5, 롱숏 반전)', source: 'Michael Chalek; jesse-ai DUAL_THRUST; je-suis-tm' },
   { id: 'DCA_MARTINGALE', family: '봇', name: 'DCA 물타기 봇 (안전주문 5개 ×2배, +1.5% 익절, 손절 없음)', source: '3Commas/거래소 DCA 봇 기본형' },
   { id: 'FUNDING_CARRY', family: '캐리', name: '펀딩비 반대편 보유 (선물 전용)', source: 'BIS WP 1087 (crypto carry); Bitget/Binance funding docs' },
 ]);
@@ -347,6 +477,8 @@ export const ROTATION_RULES_V1 = Object.freeze([
     score: ({ volume, i, week }) => { if (!volume || i < 55) return null; let w = 0; for (let k = i - week + 1; k <= i; k += 1) w += volume[k]; let a = 0; for (let k = i - 54; k <= i - week; k += 1) a += volume[k]; a /= (55 - week); return a > 0 ? (w / week) / a : null; } },
   { id: 'MOM_1M_WEEKLY_FILTER', name: '1개월 모멘텀 상위 + 지수 200일선 필터 (주간)', source: 'Liu-Tsyvinski-Wu 2022 + regime filter (practitioner)', rebalance: 'week', indexFilter: true,
     score: ({ close, i, month }) => (i >= month ? close[i] / close[i - month] - 1 : null) },
+  { id: 'XS_IBS_DAILY', name: '횡단면 IBS 하위 매수 (매일, 1일 보유)', source: 'QuantConnect GlobalEquityMeanReversionIBSAlpha', rebalance: 'day',
+    score: ({ bars, i }) => { const x = bars?.[i]; return x && x.high > x.low ? -((x.close - x.low) / (x.high - x.low)) : null; } },
   { id: 'MOM_1M_WEEKLY', name: '1개월 모멘텀 상위 (주간, 코인 로테이션)', source: 'Liu, Tsyvinski & Wu 2022 (crypto momentum)', rebalance: 'week',
     score: ({ close, i, month }) => (i >= month ? close[i] / close[i - month] - 1 : null) },
 ]);
@@ -409,6 +541,7 @@ export function simulateTimingPortfolio(panel, targetsBySymbol, market, { weight
 export function simulateSpecialPortfolio(panel, ruleId, market) {
   const spec = STRATEGY_ZOO_MARKETS_V1[market];
   const fundingMaps = panel.series.map((s) => fundingByDay(s.funding));
+  const dtPos = {};
   const perSymbol = panel.series.map((ser, s) => {
     const bars = ser.bars; const close = bars.map((b) => b.close); const s5 = sma(close, 5);
     const r = new Array(bars.length).fill(0); const exp = new Array(bars.length).fill(0); const turn = new Array(bars.length).fill(0);
@@ -434,6 +567,25 @@ export function simulateSpecialPortfolio(panel, ruleId, market) {
           r[j] = w * ((bars[j + 1].open / entry - 1) - (2 * spec.costPerSide)); exp[j] = w; turn[j] = 2 * w;
           if (market === 'CRYPTO_FUTURES') r[j] -= w * (fundingMaps[s].get(Math.floor(b.timestamp / DAY) * DAY) ?? 0);
         }
+      } else if (ruleId === 'DUAL_THRUST') {
+        // stop-and-reverse on today's open ± 0.5 × range of the last 4 bars; fill at the trigger (or the open on a gap)
+        if (j < 5) continue;
+        let hh = -Infinity; let ll = Infinity; let hc = -Infinity; let lc = Infinity;
+        for (let k = j - 4; k < j; k += 1) { hh = Math.max(hh, bars[k].high); ll = Math.min(ll, bars[k].low); hc = Math.max(hc, bars[k].close); lc = Math.min(lc, bars[k].close); }
+        const rng = Math.max(hh - lc, hc - ll); const upT = b.open + 0.5 * rng; const dnT = b.open - 0.5 * rng;
+        const prevPos = dtPos[s] ?? 0; let pos = prevPos; let pnl = prevPos * (b.open / p.close - 1); let fills = 0; let fromPrice = b.open;
+        const hitUp = b.high >= upT; const hitDn = b.low <= dnT;
+        // both touched: assume the adverse one first (conservative)
+        const order = hitUp && hitDn ? (prevPos >= 0 ? ['dn', 'up'] : ['up', 'dn']) : hitUp ? ['up'] : hitDn ? ['dn'] : [];
+        for (const side of order) {
+          const target = side === 'up' ? 1 : -1; if (!spec.shortAllowed && target === -1 && pos === 0) continue;
+          const px = side === 'up' ? Math.max(upT, b.open) : Math.min(dnT, b.open);
+          pnl += pos * (px / fromPrice - 1); const newPos = spec.shortAllowed ? target : (target === 1 ? 1 : 0);
+          fills += Math.abs(newPos - pos); pos = newPos; fromPrice = px;
+        }
+        pnl += pos * (b.close / fromPrice - 1) - (spec.costPerSide * fills);
+        if (market === 'CRYPTO_FUTURES') pnl -= pos * (fundingMaps[s].get(Math.floor(b.timestamp / DAY) * DAY) ?? 0);
+        r[j] = pnl; exp[j] = Math.abs(pos); turn[j] = fills; dtPos[s] = pos;
       } else if (ruleId === 'OVERNIGHT') {
         if (market === 'KR_STOCK' || market === 'US_STOCK') { r[j] = (b.open / p.close - 1) - (2 * spec.costPerSide); exp[j] = 1; turn[j] = 2; }
       } else if (ruleId === 'WEEKEND_CRYPTO') {
@@ -494,6 +646,7 @@ export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0
   const year = spec.barsPerYear; const month = Math.round(year / 12); const week = market.startsWith('CRYPTO') ? 7 : 5;
   const closes = panel.series.map((s) => s.bars.map((b) => b.close));
   const volumes = panel.series.map((s) => s.bars.map((b) => Number(b.volume) || 0));
+  const allBars = panel.series.map((s) => s.bars);
   const indexSeries = panel.series.findIndex((s) => s.symbol === spec.index);
   let weights = new Map(); // symbol index → weight (decided at previous rebalance close)
   let pending = null; // weights decided at today's close, executed next open
@@ -517,11 +670,11 @@ export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0
     weights = next; pending = null;
     out.push({ day, ret: r }); turnover += tu; exposure += [...weights.values()].reduce((a, v) => a + v, 0);
     // 2. rebalance decision at today's close
-    const key = rule.rebalance === 'month' ? `${date.getUTCFullYear()}-${date.getUTCMonth()}`
-      : `${Math.floor((day / DAY + 3) / 7)}`; // ISO-like weeks starting Monday
+    const periodKey = (ms) => (rule.rebalance === 'month' ? `${new Date(ms).getUTCFullYear()}-${new Date(ms).getUTCMonth()}`
+      : rule.rebalance === 'day' ? String(ms) : `${Math.floor((ms / DAY + 3) / 7)}`); // weeks start Monday
+    const key = periodKey(day);
     const nextDay = panel.calendar[d + 1];
-    const nextKey = nextDay === undefined ? null : rule.rebalance === 'month'
-      ? `${new Date(nextDay).getUTCFullYear()}-${new Date(nextDay).getUTCMonth()}` : `${Math.floor((nextDay / DAY + 3) / 7)}`;
+    const nextKey = nextDay === undefined ? null : periodKey(nextDay);
     if (nextKey === key || nextKey === null) { lastKey = key; continue; }
     // last bar of the period → decide
     let indexOk = true;
@@ -532,7 +685,7 @@ export function simulateRotationPortfolio(panel, rule, market, { topFraction = 0
     const scored = [];
     panel.series.forEach((ser, s) => {
       const j = ser.dayIndex.get(day); if (j === undefined) return;
-      const v = rule.score({ close: closes[s], volume: volumes[s], i: j, year, month, week });
+      const v = rule.score({ close: closes[s], volume: volumes[s], bars: allBars[s], i: j, year, month, week });
       if (Number.isFinite(v)) scored.push({ s, v, ret12: j >= year ? closes[s][j] / closes[s][j - year] - 1 : null });
     });
     const w = new Map();
@@ -574,6 +727,41 @@ export const ALLOCATION_MODELS_V1 = Object.freeze([
       const cs = cash.map((x) => [x, sc(x)]).filter(([, v]) => v !== null).sort((a, b) => b[1] - a[1]);
       if (!cs.length || rs.length < 6) return null; const riskyShare = bad === 0 ? 1 : bad === 1 ? 0.5 : 0; const w = {};
       for (const [x] of rs) w[x] = (w[x] ?? 0) + (riskyShare / rs.length); w[cs[0][0]] = (w[cs[0][0]] ?? 0) + (1 - riskyShare); return w; } },
+  { id: 'HAA', name: 'HAA 하이브리드 (TIP 카나리아, 상위 4)', source: 'Keller 2023, SSRN 4346906',
+    weights: ({ u }) => { const tip = u('TIP'); const off = ['SPY', 'IWM', 'VEA', 'VWO', 'VNQ', 'DBC', 'IEF', 'TLT']; const bilU = u('BIL'); const iefU = u('IEF');
+      if (tip === null || bilU === null || iefU === null) return null; const safe = bilU >= iefU ? 'BIL' : 'IEF';
+      if (tip <= 0) return { [safe]: 1 }; const rs = off.map((x) => [x, u(x)]); if (rs.some(([, v]) => v === null)) return null;
+      rs.sort((a, b) => b[1] - a[1]); const w = {}; for (const [x, v] of rs.slice(0, 4)) { const k = v > 0 ? x : safe; w[k] = (w[k] ?? 0) + 0.25; } return w; } },
+  { id: 'BAA_BALANCED', name: 'BAA 균형형 (카나리아 4, 상위 6)', source: 'Keller 2022, SSRN 4166845',
+    weights: ({ sc, sma12 }) => { const can = ['SPY', 'VWO', 'VEA', 'BND'].map((x) => sc(x)); if (can.some((v) => v === null)) return null;
+      const off = ['SPY', 'QQQ', 'IWM', 'VGK', 'EWJ', 'VWO', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD']; const def = ['TIP', 'DBC', 'BIL', 'IEF', 'TLT', 'LQD', 'BND'];
+      const pick = (xs, k) => xs.map((x) => [x, sma12(x)]).filter(([, v]) => v !== null).sort((a, b) => b[1] - a[1]).slice(0, k);
+      const w = {}; if (can.every((v) => v > 0)) { const p = pick(off, 6); if (p.length < 6) return null; for (const [x] of p) w[x] = 1 / 6; return w; }
+      const bil = sma12('BIL') ?? 0; const p = pick(def, 3); if (p.length < 3) return null; for (const [x, v] of p) { const k = v >= bil ? x : 'BIL'; w[k] = (w[k] ?? 0) + 1 / 3; } return w; } },
+  { id: 'BAA_AGGRESSIVE', name: 'BAA 공격형 (상위 1)', source: 'Keller 2022, SSRN 4166845',
+    weights: ({ sc, sma12 }) => { const can = ['SPY', 'VWO', 'VEA', 'BND'].map((x) => sc(x)); if (can.some((v) => v === null)) return null;
+      const off = ['QQQ', 'EFA', 'EEM', 'AGG']; const def = ['TIP', 'DBC', 'BIL', 'IEF', 'TLT', 'LQD', 'BND'];
+      const pick = (xs, k) => xs.map((x) => [x, sma12(x)]).filter(([, v]) => v !== null).sort((a, b) => b[1] - a[1]).slice(0, k);
+      if (can.every((v) => v > 0)) { const p = pick(off, 1); return p.length ? { [p[0][0]]: 1 } : null; }
+      const bil = sma12('BIL') ?? 0; const p = pick(def, 3); if (p.length < 3) return null; const w = {}; for (const [x, v] of p) { const k = v >= bil ? x : 'BIL'; w[k] = (w[k] ?? 0) + 1 / 3; } return w; } },
+  { id: 'PAA', name: 'PAA 보호형 (a=2, 상위 6, 채권 IEF)', source: 'Keller & Keuning 2016, SSRN 2759734',
+    weights: ({ sma12 }) => { const xs = ['SPY', 'QQQ', 'IWM', 'VGK', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'HYG', 'LQD', 'TLT']; const v = xs.map((x) => [x, sma12(x)]);
+      if (v.some(([, y]) => y === null)) return null; const N = 12; const nPos = v.filter(([, y]) => y > 0).length; const bf = Math.min(1, (N - nPos) / (N - 6));
+      const top = v.filter(([, y]) => y > 0).sort((a, b) => b[1] - a[1]).slice(0, 6); const w = { IEF: bf }; for (const [x] of top) w[x] = (w[x] ?? 0) + ((1 - bf) / Math.max(1, top.length)); if (!top.length) w.IEF = 1; return w; } },
+  { id: 'COMPOSITE_DM', name: '복합 듀얼모멘텀 4모듈', source: 'Antonacci, Composite Dual Momentum',
+    weights: ({ r }) => { const mods = [['SPY', 'EFA'], ['HYG', 'LQD'], ['VNQ', 'REM'], ['GLD', 'TLT']]; const bil = r('BIL', 12) ?? 0; const w = {};
+      for (const [a2, b2] of mods) { const ra = r(a2, 12); const rb = r(b2, 12); if (ra === null || rb === null) return null; const best = ra >= rb ? [a2, ra] : [b2, rb]; const k = best[1] > bil ? best[0] : 'BIL'; w[k] = (w[k] ?? 0) + 0.25; }
+      return w; } },
+  { id: 'ADM', name: '가속 듀얼모멘텀 (SPY·SCZ vs TLT)', source: 'EngineeredPortfolio, Accelerating Dual Momentum',
+    weights: ({ r }) => { const sc2 = (x) => { const a1 = r(x, 1); const a3 = r(x, 3); const a6 = r(x, 6); return [a1, a3, a6].every((y) => y !== null) ? a1 + a3 + a6 : null; };
+      const a = sc2('SPY'); const b = sc2('SCZ'); if (a === null || b === null) return null; const best = a >= b ? ['SPY', a] : ['SCZ', b]; return best[1] > 0 ? { [best[0]]: 1 } : { TLT: 1 }; } },
+  { id: 'IVY5', name: 'Ivy 5 (10개월선 위만 20%씩)', source: 'Faber & Richardson, The Ivy Portfolio (2009)',
+    weights: ({ above }) => { const xs = ['VTI', 'VEU', 'VNQ', 'AGG', 'DBC']; if (xs.some((x) => above(x) === null)) return null; const w = {}; for (const x of xs) w[above(x) ? x : 'BIL'] = (w[above(x) ? x : 'BIL'] ?? 0) + 0.2; return w; } },
+  { id: 'ETF_SLOPE_R2', name: 'ETF 회귀기울기×R² 1위 (중국 JoinQuant 미국판)', source: 'JoinQuant 커뮤니티 ETF 轮动',
+    weights: ({ slopeR2 }) => { const xs = ['GLD', 'QQQ', 'IWM', 'SPY', 'TLT'].map((x) => [x, slopeR2(x)]); if (xs.some(([, v]) => v === null)) return null;
+      xs.sort((a, b) => b[1] - a[1]); return xs[0][1] > 0 ? { [xs[0][0]]: 1 } : { BIL: 1 }; } },
+  { id: 'LETF_SMA200', name: '나스닥 200일선 위면 TQQQ, 아래면 채권 (r/LETFs)', source: 'Reddit r/LETFs 200SMA strategy',
+    weights: ({ aboveK }) => { const v = aboveK('QQQ', 1); if (v === null) return null; return v > 1 ? { TQQQ: 1 } : { IEF: 1 }; } },
   { id: 'GTAA5', name: 'GTAA 5 (10개월선 위 자산만 20%씩)', source: 'Faber 2007, A Quantitative Approach to TAA',
     weights: ({ above }) => { const xs = ['SPY', 'EFA', 'IEF', 'VNQ', 'DBC']; if (xs.some((x) => above(x) === null)) return null; const w = {}; for (const x of xs) if (above(x)) w[x] = 0.2; return w; } },
 ]);
@@ -600,6 +788,13 @@ export function simulateAllocationPortfolio(panel, model, market) {
     const ctx = {
       r: (x, m) => { const a = at(x); return a ? retMonths(a.close, a.j, m, month) : null; },
       sc: (x) => { const a = at(x); return a ? score13612w(a.close, a.j, month) : null; },
+      u: (x) => { const a = at(x); if (!a) return null; const v = [1, 3, 6, 12].map((m) => retMonths(a.close, a.j, m, month)); return v.every((y) => y !== null) ? v.reduce((p, q) => p + q, 0) / 4 : null; },
+      sma12: (x) => { const a = at(x); if (!a || a.j < 12 * month) return null; let sum = 0; for (let k = 0; k <= 12; k += 1) sum += a.close[a.j - (k * month)]; return a.close[a.j] / (sum / 13) - 1; },
+      slopeR2: (x, n = 25) => { const a = at(x); if (!a || a.j < n) return null; let sx = 0; let sy = 0; let sxx = 0; let sxy = 0; let syy = 0;
+        for (let k = 0; k < n; k += 1) { const y = Math.log(a.close[a.j - n + 1 + k]); sx += k; sy += y; sxx += k * k; sxy += k * y; syy += y * y; }
+        const den = (n * sxx) - (sx * sx); const slope = ((n * sxy) - (sx * sy)) / den; const r2d = den * ((n * syy) - (sy * sy)); const r2 = r2d > 0 ? (((n * sxy) - (sx * sy)) ** 2) / r2d : 0;
+        return ((Math.exp(slope) ** 250) - 1) * r2; },
+      aboveK: (x, k) => { const a = at(x); if (!a || a.j < 200) return null; let s2 = 0; for (let q = a.j - 199; q <= a.j; q += 1) s2 += a.close[q]; return a.close[a.j] / (s2 / 200) / k; },
       above: (x) => { const a = at(x); if (!a || a.j < 210) return null; let s2 = 0; for (let k = a.j - 209; k <= a.j; k += 1) s2 += a.close[k]; return a.close[a.j] > s2 / 210; },
     };
     const w = model.weights(ctx);

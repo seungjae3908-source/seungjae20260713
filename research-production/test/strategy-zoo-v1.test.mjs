@@ -95,10 +95,10 @@ test('full market evaluation with rotation and Korean report', () => {
 });
 
 test('allocation models run on an ETF panel; DCA and special rules produce series', () => {
-  const etfs = ['SPY', 'EFA', 'EEM', 'AGG', 'LQD', 'IEF', 'SHY', 'BIL', 'VNQ', 'DBC', 'IWM', 'QQQ', 'VGK', 'EWJ', 'VWO', 'GLD', 'TLT', 'HYG', 'BND'];
+  const etfs = ['SPY', 'EFA', 'EEM', 'AGG', 'LQD', 'IEF', 'SHY', 'BIL', 'VNQ', 'DBC', 'IWM', 'QQQ', 'VGK', 'EWJ', 'VWO', 'GLD', 'TLT', 'HYG', 'BND', 'TIP', 'VEA', 'SCZ', 'REM', 'VTI', 'VEU', 'TQQQ'];
   const datasets = etfs.map((symbol, k) => ({ symbol, candles: walk(1200, k + 31, { drift: 0.0001 * (k % 5), vol: 0.012 }) }));
   const res = evaluateStrategyZooMarketV1({ market: 'US_TAA', datasets });
-  for (const id of ['BUY_HOLD', 'SIXTY_FORTY', 'GEM', 'VAA_G4', 'DAA_G12', 'GTAA5']) {
+  for (const id of ['BUY_HOLD', 'SIXTY_FORTY', 'GEM', 'VAA_G4', 'DAA_G12', 'GTAA5', 'HAA', 'BAA_BALANCED', 'BAA_AGGRESSIVE', 'PAA', 'COMPOSITE_DM', 'ADM', 'IVY5', 'ETF_SLOPE_R2', 'LETF_SMA200']) {
     const row = res.rows.find((r) => r.id === id);
     assert.ok(row && row.full.days > 500, id);
   }
