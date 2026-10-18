@@ -13,6 +13,7 @@ import {
   costEvidenceFromValues,
   maskBrokerAccountReference,
   normalizeTossOrderContract,
+  paperPromotionTrades,
   tossJournalIntegrationStatus,
   type JournalCostEvidence,
   type TossOrderContract,
@@ -463,4 +464,26 @@ test('account mask is deterministic per broker and never includes the source ref
   assert.equal(first, second);
   assert.doesNotMatch(first, /account-reference/);
   assert.notEqual(first, maskBrokerAccountReference('KIWOOM', 'account-reference'));
+});
+test('paper promotion trades: only closed APP_PAPER round trips with complete costs, as net return after costs', () => {
+  const pair = (id: string, symbol: string, source: 'APP_PAPER' | 'TOSS_MANUAL', exit: number, extra: Partial<UnifiedTradeOrder> = {}, hour = 1) => [
+    order({ brokerOrderId: `${id}-b`, symbol, source, filledAt: `2026-08-10T0${hour}:00:00.000Z`, observedAt: `2026-08-10T0${hour}:00:01.000Z`, ...extra }),
+    order({ brokerOrderId: `${id}-s`, symbol, source, side: 'SELL', positionEffect: 'CLOSE', averageFillPrice: exit, filledAt: `2026-08-10T0${hour + 1}:00:00.000Z`, observedAt: `2026-08-10T0${hour + 1}:00:01.000Z`, ...extra }),
+  ];
+  const payloads = [
+    ...pair('p1', 'BTC', 'APP_PAPER', 110),
+    ...pair('p2', 'ETH', 'APP_PAPER', 95, {}, 3),
+    ...pair('p3', 'XRP', 'APP_PAPER', 105, { fees: null, tax: null }, 5),
+    ...pair('m1', 'DOGE', 'TOSS_MANUAL', 200, {}, 7),
+    order({ brokerOrderId: 'open-paper', symbol: 'SOL', source: 'APP_PAPER', filledAt: '2026-08-10T08:00:00.000Z', observedAt: '2026-08-10T08:00:01.000Z' }),
+  ];
+  const journal = buildUnifiedTradeJournal(payloads, { range: 'ALL' }, NOW);
+  const result = paperPromotionTrades(journal.trades);
+  assert.deepEqual(result.trades.map((t) => t.symbol), ['BTC', 'ETH']);
+  assert.equal(result.closedPaperCycles, 3);
+  assert.equal(result.excludedCostIncomplete, 1, 'incomplete costs are excluded, never counted as zero-cost');
+  assert.ok(result.trades[0].netReturnPct > 0 && result.trades[1].netReturnPct < 0);
+  assert.ok(result.trades.every((t) => Number.isFinite(t.netReturnPct)));
+  assert.equal(paperPromotionTrades(journal.trades, { strategy: 'no-such' }).trades.length, 0);
+  assert.equal(paperPromotionTrades([]).closedPaperCycles, 0);
 });

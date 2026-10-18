@@ -66,6 +66,7 @@ import {
   TRADE_RANGES,
   TRADE_SOURCES,
   buildUnifiedTradeJournal,
+  paperPromotionTrades,
   normalizeTossOrderContract,
   tossJournalIntegrationStatus,
   type TossOrderContract,
@@ -1171,6 +1172,32 @@ export function createPaperJournalRouter(
       }));
     } catch (cause) {
       return handleError(response, cause, 'UNIFIED_JOURNAL_FAILED', '통합 매매일지를 처리하지 못했습니다.', analysisEnvelope);
+    }
+  });
+
+  // Read-only: closed APP_PAPER round trips as net-return-after-costs rows for the paper
+  // promotion scorecard. No broker calls; the scorecard itself is computed in the UI from
+  // these rows with the owner-fixed criteria.
+  router.get('/paper-journal/promotion-trades', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      const observedAt = now();
+      const [storedPayloads, automationPayloads] = await Promise.all([
+        repositoryFactory(request).listJournalPayloads(ownerId),
+        automationJournalReader(request, ownerId),
+      ]);
+      const paperMirrors = reconcileCanonicalPaperJournalMirrors(storedPayloads, automationPayloads);
+      const journal = buildUnifiedTradeJournal(
+        paperMirrors.payloads,
+        { range: 'ALL', market: 'ALL', source: 'APP_PAPER', strategy: queryText(request.query.strategy), timeframe: null, grade: 'ALL' },
+        observedAt,
+      );
+      return response.json(analysisEnvelope({
+        ok: true,
+        result: { ...paperPromotionTrades(journal.trades, { strategy: queryText(request.query.strategy) }), generatedAt: observedAt.toISOString(), executionAuthority: 'NONE' },
+      }));
+    } catch (cause) {
+      return handleError(response, cause, 'PROMOTION_TRADES_FAILED', '모의 승격 거래 내역을 처리하지 못했습니다.', analysisEnvelope);
     }
   });
 
