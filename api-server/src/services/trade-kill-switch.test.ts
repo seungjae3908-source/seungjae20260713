@@ -75,7 +75,7 @@ test('Paper plans never trip the global stop, even for exchange-outage codes', a
   assert.equal((await repository.getPolicy(USER)).newEntriesStopped, true);
 });
 
-test('risk-reducing exit plans trip no kill switch at all', async () => {
+test('risk-reducing exit plans never stop the member', async () => {
   for (const plan of [
     { accountMode: 'live', reduceOnly: true, exchange: 'upbit', side: 'sell' },
     { accountMode: 'live', reduceOnly: true, exchange: 'bitget', side: 'long' },
@@ -84,13 +84,34 @@ test('risk-reducing exit plans trip no kill switch at all', async () => {
     await repository.setGlobalEmergencyStop(false, USER);
     const result = await tripKillSwitchForRiskFailure({
       repository, userId: USER, plan,
-      blockCodes: ['MARKET_DATA_STALE', 'MARKET_SNAPSHOT_STALE', 'EXCHANGE_TIMEOUT', 'ORDER_STATE_UNKNOWN', 'DAILY_LOSS_LIMIT'],
+      blockCodes: ['MARKET_DATA_STALE', 'MARKET_SNAPSHOT_STALE', 'FAST_MOVE_DETECTED', 'DAILY_LOSS_LIMIT'],
     });
     assert.equal(result.tripped, false);
     assert.equal(await repository.getGlobalEmergencyStop(), false);
     assert.equal((await repository.getPolicy(USER)).newEntriesStopped, false);
     assert.deepEqual(await repository.listRunAudit(USER, 10), []);
   }
+});
+
+test('a venue or order-state failure seen on a LIVE exit still halts new entries globally', async () => {
+  const plan = { accountMode: 'live', reduceOnly: true, exchange: 'upbit', side: 'sell' } as const;
+  for (const code of ['EXCHANGE_TIMEOUT', 'ORDER_STATE_UNKNOWN']) {
+    const repository = new InMemoryTradingRepository();
+    await repository.setGlobalEmergencyStop(false, USER);
+    const result = await tripKillSwitchForRiskFailure({ repository, userId: USER, plan, blockCodes: [code, 'DAILY_LOSS_LIMIT'] });
+    assert.equal(result.tripped, true);
+    assert.equal(result.scope, 'GLOBAL');
+    assert.deepEqual(result.reasons, [code]);
+    assert.equal(await repository.getGlobalEmergencyStop(), true);
+    assert.equal((await repository.getPolicy(USER)).newEntriesStopped, false);
+  }
+  const repository = new InMemoryTradingRepository();
+  await repository.setGlobalEmergencyStop(false, USER);
+  const paper = await tripKillSwitchForRiskFailure({
+    repository, userId: USER, plan: { ...plan, accountMode: 'paper' }, blockCodes: ['EXCHANGE_TIMEOUT'],
+  });
+  assert.equal(paper.tripped, false);
+  assert.equal(await repository.getGlobalEmergencyStop(), false);
 });
 
 test('ordinary single-order rejection does not broaden into global halt', async () => {
