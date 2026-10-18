@@ -21,12 +21,11 @@ const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-
 const ARTIFACT_DIR = path.resolve('production-comprehensive-artifacts');
 fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-// Removed screens (market rooms, market overview/rankings/browser, themes, learn)
-// are not audited. '/recommendations' stays only as a redirect-to-home audit
-// because the receipt builder (api-server/scripts, backend scope) still requires
-// its 1440px route evidence; drop it together with that requirement.
+// Removed screens (market rooms, market rankings/browser, themes, news, learn)
+// are not audited (13-feature scope; old URLs redirect to home).
 const FULL_ROUTES = [
-  '/', '/stocks', '/scanner', '/ai-chart',
+  '/', '/stocks',
+  '/market-overview', '/scanner', '/ai-chart',
   '/ai-chat', '/watchlist', '/alerts',
   '/portfolio', '/position', '/strategy-promotion', '/recommendations', '/backtests',
   '/auto-trading', '/paper-trading', '/account', '/more', '/settings',

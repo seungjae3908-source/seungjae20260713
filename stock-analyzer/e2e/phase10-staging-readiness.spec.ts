@@ -2717,6 +2717,7 @@ test.describe('real staging release readiness', () => {
     '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
     '/watchlist',
     '/alerts',
+    '/market-overview',
     '/more',
   ] as const;
   const assertViewportEvidence = (evidence: AuthenticatedViewportEvidence[]) => {
