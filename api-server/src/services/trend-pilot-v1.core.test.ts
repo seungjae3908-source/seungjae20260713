@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  TREND_PILOT_SPOT_V1,
   TREND_PILOT_V1,
   advanceTrendPilotStop,
   computeAtrSeries,
@@ -307,4 +308,18 @@ test('backtest/live signal parity: the research backtest and the live signal agr
     const backtestSide = full.long[i] ? 'long' : full.short[i] ? 'short' : null;
     assert.equal(signal.side, backtestSide, `bar ${i}`);
   }
+});
+
+test('backtest/live cost parity: the Upbit spot backtest charges at least the live fee both ways, and shorts are never modeled on spot', async (t) => {
+  const url = new URL('../../../research-production/src/four-market-trend-backtest-v1.mjs', import.meta.url);
+  const dependency = new URL('../../../research-production/src/trend-pilot-backtest-v1.mjs', import.meta.url);
+  const { existsSync } = await import('node:fs');
+  if (!existsSync(url) || !existsSync(dependency)) { t.skip('research backtest module not present in this checkout'); return; }
+  const research = await import(url.href) as { FOUR_MARKET_UNIVERSE_V1: Record<string, { cost: { entryFeeRate: number; exitFeeRate: number; slippageRate: number }; sides?: string[] }> };
+  const spot = research.FOUR_MARKET_UNIVERSE_V1.CRYPTO_SPOT;
+  assert.ok(spot.cost.entryFeeRate >= TREND_PILOT_SPOT_V1.feeRate, 'backtest buy fee must not be lighter than live');
+  assert.ok(spot.cost.exitFeeRate >= TREND_PILOT_SPOT_V1.feeRate, 'backtest sell fee must not be lighter than live');
+  assert.ok(spot.cost.slippageRate > 0, 'slippage must be modeled');
+  const futures = research.FOUR_MARKET_UNIVERSE_V1.CRYPTO_FUTURES;
+  assert.ok(futures.cost.entryFeeRate >= 0.0006 && futures.cost.exitFeeRate >= 0.0006, 'Bitget taker fee floor');
 });
