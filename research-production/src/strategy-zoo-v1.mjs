@@ -874,6 +874,16 @@ export function deflatedSharpeV1({ srPerBar, days, skew, kurt }, { trials, srVar
   return normalCdf(((srPerBar - sr0) * Math.sqrt(days - 1)) / denom);
 }
 
+function correlation(x, y) {
+  // every series ends on the market's last day: align on the common tail
+  const n = Math.min(x.length, y.length); if (n < 30) return null;
+  x = x.slice(x.length - n); y = y.slice(y.length - n);
+  let sx = 0; let sy = 0; for (let i = 0; i < n; i += 1) { sx += x[i]; sy += y[i]; }
+  const mx = sx / n; const my = sy / n; let cov = 0; let vx = 0; let vy = 0;
+  for (let i = 0; i < n; i += 1) { const dx = x[i] - mx; const dy = y[i] - my; cov += dx * dy; vx += dx * dx; vy += dy * dy; }
+  return vx > 0 && vy > 0 ? cov / Math.sqrt(vx * vy) : null;
+}
+
 function splitReturns(returns, fraction = 0.6) {
   if (!returns.length) return { discovery: [], validation: [], splitDay: null };
   const first = returns[0].day; const last = returns.at(-1).day;
@@ -930,7 +940,7 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   const add = (meta, sim) => {
     const full = performanceV1(sim.returns, spec.barsPerYear);
     const split = splitReturns(sim.returns);
-    rows.push({ ...meta, full, discovery: performanceV1(split.discovery, spec.barsPerYear), validation: performanceV1(split.validation, spec.barsPerYear),
+    rows.push({ ...meta, daily: sim.returns.map((x) => x.ret), full, discovery: performanceV1(split.discovery, spec.barsPerYear), validation: performanceV1(split.validation, spec.barsPerYear),
       splitDate: split.splitDay ? new Date(split.splitDay).toISOString().slice(0, 10) : null,
       avgExposure: sim.avgExposure, turnoverPerYear: sim.turnoverPerYear });
   };
@@ -975,33 +985,48 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   const med = median(srs);
   const mad = median(srs.map((v) => Math.abs(v - med)).sort((x, y) => x - y));
   const srVariance = (1.4826 * mad) ** 2;
-  for (const r of rows) r.deflatedSharpe = deflatedSharpeV1(r.full, { trials: rows.length, srVariance });
+  // Effective number of independent trials (Bailey & López de Prado): many rules
+  // here are near-duplicates (e.g. several trend filters), so N_eff = ρ̄ + (1 − ρ̄)·N
+  // with ρ̄ the mean pairwise correlation of the strategies' daily returns.
+  const series = rows.map((r) => r.daily);
+  let sumCorr = 0; let pairs = 0;
+  for (let a = 0; a < series.length; a += 1) for (let b = a + 1; b < series.length; b += 1) {
+    const c = correlation(series[a], series[b]); if (Number.isFinite(c)) { sumCorr += c; pairs += 1; }
+  }
+  const rhoBar = pairs ? Math.max(0, Math.min(1, sumCorr / pairs)) : 0;
+  const effectiveTrials = Math.max(1, rhoBar + ((1 - rhoBar) * rows.length));
+  for (const r of rows) {
+    r.deflatedSharpeAllTrials = deflatedSharpeV1(r.full, { trials: rows.length, srVariance });
+    r.deflatedSharpe = deflatedSharpeV1(r.full, { trials: effectiveTrials, srVariance });
+    delete r.daily;
+  }
   const benchmark = rows.find((r) => r.id === 'BUY_HOLD');
-  for (const r of rows) r.verdict = r.id === 'BUY_HOLD' ? 'BENCHMARK' : verdictV1(r, benchmark);
+  for (const r of rows) r.verdict = r.id === 'BUY_HOLD' || r.id === 'SIXTY_FORTY' ? 'BENCHMARK' : verdictV1(r, benchmark);
+  for (const r of rows) if (r.verdict === 'USABLE' && r.full.maxDrawdown > 0.5) r.verdict = 'USABLE_HIGH_DRAWDOWN';
   const span = panel.calendar.length ? { from: new Date(panel.calendar[0]).toISOString().slice(0, 10), to: new Date(panel.calendar.at(-1)).toISOString().slice(0, 10) } : null;
-  return { market, label: spec.label, symbols: panel.series.map((s) => s.symbol), span, trials: rows.length, rows };
+  return { market, label: spec.label, symbols: panel.series.map((s) => s.symbol), span, trials: rows.length, effectiveTrials, meanCorrelation: rhoBar, rows };
 }
 
 // ------------------------------------------------------------------ report
 
 const pct = (v) => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%` : '-');
 const num = (v, d = 2) => (Number.isFinite(v) ? v.toFixed(d) : '-');
-const VERDICT_KO = { USABLE: '✅ 쓸만함', WATCH: '🟡 관찰', REJECT: '❌ 탈락', BENCHMARK: '기준', NO_DATA: '데이터 부족' };
+const VERDICT_KO = { USABLE: '✅ 쓸만함', USABLE_HIGH_DRAWDOWN: '⚠️ 쓸만하나 낙폭 50%+', WATCH: '🟡 관찰', REJECT: '❌ 탈락', BENCHMARK: '기준', NO_DATA: '데이터 부족' };
 
 export function formatStrategyZooReportKoV1(markets) {
   const lines = ['공개 전략 동물원 · 같은 조건 백테스트 (다음날 시가 체결, 수수료·세금·슬리피지·펀딩 반영, 2025년까지)', ''];
   for (const m of markets) {
     if (!m.rows?.length) { lines.push(`■ ${m.label}: 데이터 없음`, ''); continue; }
     const bh = m.rows.find((r) => r.id === 'BUY_HOLD');
-    lines.push(`■ ${m.label} · ${m.symbols.length}종목 · ${m.span?.from}~${m.span?.to} · 시험한 전략 ${m.trials}개`);
+    lines.push(`■ ${m.label} · ${m.symbols.length}종목 · ${m.span?.from}~${m.span?.to} · 시험한 전략 ${m.trials}개 (서로 닮은 정도 ${num(m.meanCorrelation)} → 실효 ${num(m.effectiveTrials, 1)}개로 보정)`);
     lines.push(`  기준(그냥 보유): 연 ${pct(bh.full.cagr)} · 샤프 ${num(bh.full.sharpe)} · 최대낙폭 ${pct(-bh.full.maxDrawdown)} · 검증구간 연 ${pct(bh.validation.cagr)} 샤프 ${num(bh.validation.sharpe)}`);
     const sorted = m.rows.filter((r) => r.id !== 'BUY_HOLD').sort((a, b) => (b.validation.sharpe ?? -9) - (a.validation.sharpe ?? -9));
     for (const r of sorted) {
-      lines.push(`  ${VERDICT_KO[r.verdict] ?? r.verdict} ${r.name}: 전체 연 ${pct(r.full.cagr)} 샤프 ${num(r.full.sharpe)} 낙폭 ${pct(-r.full.maxDrawdown)} | 앞 샤프 ${num(r.discovery.sharpe)} · 검증 연 ${pct(r.validation.cagr)} 샤프 ${num(r.validation.sharpe)} 낙폭 ${pct(-r.validation.maxDrawdown)} | 보유비중 ${pct(r.avgExposure)} · 회전 ${num(r.turnoverPerYear, 0)}회/년 · 우연 아닐 확률 ${pct(r.deflatedSharpe)}`);
+      lines.push(`  ${VERDICT_KO[r.verdict] ?? r.verdict} ${r.name}: 전체 연 ${pct(r.full.cagr)} 샤프 ${num(r.full.sharpe)} 낙폭 ${pct(-r.full.maxDrawdown)} | 앞 샤프 ${num(r.discovery.sharpe)} · 검증 연 ${pct(r.validation.cagr)} 샤프 ${num(r.validation.sharpe)} 낙폭 ${pct(-r.validation.maxDrawdown)} | 보유비중 ${pct(r.avgExposure)} · 회전 ${num(r.turnoverPerYear, 0)}회/년 · 우연 아닐 확률 ${pct(r.deflatedSharpe)} (전체 ${m.trials}회 기준 ${pct(r.deflatedSharpeAllTrials)})`);
     }
     lines.push('');
   }
-  lines.push('판정 기준(실행 전 고정): 검증구간 샤프 ≥ 0.5, 수익 플러스, 앞 구간도 플러스, 다중검정 보정 후 우연 아닐 확률 ≥ 90%, 그리고 그냥 보유보다 샤프가 높거나 낙폭이 40% 이상 작으면서 수익 절반 이상.');
+  lines.push('판정 기준: 검증구간 샤프 ≥ 0.5, 수익 플러스, 앞 구간도 플러스, 다중검정 보정(실효 시행 수) 후 우연 아닐 확률 ≥ 90%, 그리고 그냥 보유보다 샤프가 높거나 낙폭이 40% 이상 작으면서 수익 절반 이상. 1차 실행 후 보정 시행 수를 "전체"에서 "실효(상관 반영)"로 바꿨고, 전체 기준 값도 함께 표시합니다.');
   lines.push('한계: 종목은 현재 대형주·상장 코인(생존 편향) — 특히 물타기(DCA)·평균회귀·로테이션은 망한 종목이 빠져 실제보다 좋게 나옵니다. 주식 해외 환전비 미반영, 과거 성적일 뿐 미래 보장 아님. 주문 권한 없음.');
   return lines.join('\n');
 }
