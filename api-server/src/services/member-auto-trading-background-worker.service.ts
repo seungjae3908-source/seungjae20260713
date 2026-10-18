@@ -2233,6 +2233,7 @@ async function runTrendPilotLanesForMember(input: {
             account: trendPilotAccountFromSnapshot(lane.venue, snapshot, fx.krwPerQuoteCurrency, marks),
             counters: {
               ...trendPilotAccountCounters(input.runtime, lane.assetClass, lane.strategyId, nowMs),
+              marketLimitKrw: policy.maxAssetClassKrw[lane.assetClass],
               consecutiveLosses: journal.consecutiveLosses,
               weeklyPnlPercent: journal.weeklyPnlPercent ?? 0,
               dailyPnlPercent: journal.dailyPnlPercent,
