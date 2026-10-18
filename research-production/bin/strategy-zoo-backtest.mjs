@@ -66,6 +66,20 @@ async function resolveWideUniverse() {
       for (const m of html.matchAll(/main\.naver\?code=(\d{6})/gu)) kr.add(m[1]); } catch (e) { process.stderr.write(`UNIVERSE_KR_FAILED:${sosok}:${page}:${e.message}\n`); }
     await sleep(300);
   }
+  process.stderr.write(`UNIVERSE_KR_NAVER:${kr.size}\n`);
+  if (kr.size < 150) {
+    // Naver may serve an empty ranking outside Korea: fall back to the KRX KIND company list
+    // (all listed companies, no market cap) and take a deterministic stratified sample.
+    for (const [type, take] of [['stockMkt', 200], ['kosdaqMkt', 200]]) {
+      try { const html = await fetchText(`https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&marketType=${type}`);
+        const codes = [...new Set([...html.matchAll(/>(\d{6})</gu)].map((m) => m[1]))].sort();
+        const step = Math.max(1, Math.floor(codes.length / take));
+        codes.filter((_, k) => k % step === 0).slice(0, take).forEach((c) => kr.add(c));
+        process.stderr.write(`UNIVERSE_KR_KIND:${type}:${codes.length}\n`);
+      } catch (e) { process.stderr.write(`UNIVERSE_KR_KIND_FAILED:${type}:${e.message}\n`); }
+      await sleep(300);
+    }
+  }
   wide.KR_STOCK = [...kr];
   // US: Nasdaq screener, stratified sample of mid/small caps (rank 100…1700 by market cap, every 5th)
   let us = [];
@@ -173,7 +187,9 @@ async function fetchAll(root) {
   const data = {};
   const bitget = new BitgetPublicClient({ fetchImpl: globalThis.fetch });
   const wide = await resolveWideUniverse();
+  const only = (process.env.ZOO_MARKETS ?? '').split(',').filter(Boolean);
   for (const [market, symbols] of Object.entries(wide)) {
+    if (only.length && !only.includes(market)) continue;
     data[market] = [];
     for (const symbol of symbols) {
       try {
@@ -226,6 +242,7 @@ await mkdir(join(root, 'latest'), { recursive: true });
 const data = await fetchAll(root);
 const results = [];
 for (const market of ['KR_STOCK', 'US_STOCK', 'US_TAA', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
+  if (!data[market]) continue;
   const all = data[market] ?? [];
   const core = new Set(STRATEGY_ZOO_UNIVERSE_V1[market]);
   const coreSets = all.filter((d) => core.has(d.symbol));
