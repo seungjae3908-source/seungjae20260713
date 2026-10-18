@@ -68,6 +68,8 @@ export type BacktestResult = {
   totalFees: number; totalSlippage: number; totalFunding: number;
   longPerformance: BacktestPerformanceSlice; shortPerformance: BacktestPerformanceSlice;
   monthlyPerformance: BacktestMonthlyPerformance[]; regimePerformance: BacktestRegimePerformance[];
+  /** Filled by the route from the member's recent runs of the same strategy on the same symbol. */
+  selectionBias?: BacktestSelectionBias;
   validationPerformance: BacktestSegmentPerformance[]; walkForward: BacktestWalkForwardWindow[];
   equityCurve: BacktestEquityPoint[]; drawdownCurve: BacktestDrawdownPoint[]; trades: BacktestTrade[];
   warnings: string[]; calculatedAt: string;
@@ -212,4 +214,61 @@ export function runBacktest(request: BacktestRequest, rawCandles: readonly Norma
   const monthlyPerformance = [...monthlyMap.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, monthTrades]) => { const netPnl = monthTrades.reduce((sum, trade) => sum + trade.netPnl, 0); return { month, trades: monthTrades.length, netPnl, returnPercent: netPnl / request.initialCapital * 100 }; }); const regimePerformance = [...regimeMap.entries()].map(([regime, regimeTrades]) => { const perf = performanceSlice(regimeTrades); return { regime, trades: regimeTrades.length, netPnl: perf.netPnl, winRate: perf.winRate }; });
   return { ok: true, mode: 'backtest-only', orderSubmitted: false, market: request.market, symbol: request.symbol, timeframe: request.timeframe, strategy: request.strategy, startTime: request.startTime, endTime: request.endTime, initialCapital: request.initialCapital, finalCapital: dd.equity, totalReturnPercent, annualizedReturnPercent, totalTrades: trades.length, winningTrades: wins.length, losingTrades: losses.length, winRate: slice.winRate, averageWin: wins.length ? wins.reduce((sum, trade) => sum + trade.netPnl, 0) / wins.length : 0, averageLoss: losses.length ? losses.reduce((sum, trade) => sum + trade.netPnl, 0) / losses.length : 0, averageRMultiple: slice.averageRMultiple, expectancy: slice.expectancy, profitFactor: slice.profitFactor, maximumDrawdown: dd.maximumDrawdown, maximumDrawdownPercent: dd.maximumDrawdownPercent, markedMaximumDrawdown: Math.max(markedMaximumDrawdown, dd.maximumDrawdown), markedMaximumDrawdownPercent: Math.max(markedMaximumDrawdownPercent, dd.maximumDrawdownPercent), maximumConsecutiveWins: consecutive.maxWins, maximumConsecutiveLosses: consecutive.maxLosses, sharpeRatio: ratios.sharpe, sortinoRatio: ratios.sortino, calmarRatio: annualizedReturnPercent != null && dd.maximumDrawdownPercent > 0 ? annualizedReturnPercent / dd.maximumDrawdownPercent : null, totalFees: trades.reduce((sum, trade) => sum + trade.entryFee + trade.exitFee, 0), totalSlippage: trades.reduce((sum, trade) => sum + trade.slippageCost, 0), totalFunding: trades.reduce((sum, trade) => sum + trade.fundingCost, 0), longPerformance: performanceSlice(trades.filter((trade) => trade.side === 'long')), shortPerformance: performanceSlice(trades.filter((trade) => trade.side === 'short')), monthlyPerformance, regimePerformance, validationPerformance: validationSegments(request, trades), walkForward: walkForwardWindows(request, trades), equityCurve: dd.equityCurve, drawdownCurve: dd.drawdownCurve, trades, warnings: unique(warnings), calculatedAt: now.toISOString() };
 }
+
+/** Inverse standard normal CDF (Acklam's rational approximation, relative error < 1.2e-9). */
+export function inverseNormalCdf(p: number): number {
+  if (!(p > 0 && p < 1)) return p <= 0 ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+  const low = 0.02425;
+  if (p < low) { const q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+  if (p > 1 - low) { const q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+  const q = p - 0.5; const r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+/**
+ * Best annualized Sharpe that `runs` zero-skill configurations would show by chance over `years`
+ * (Bailey & Lopez de Prado 2014 expected maximum; standard error of an annualized Sharpe ~ 1/sqrt(years)).
+ */
+export function expectedMaxNoiseSharpe(runs: number, years: number): number | null {
+  if (!Number.isFinite(runs) || runs < 2 || !Number.isFinite(years) || years <= 0) return null;
+  const gamma = 0.5772156649015329;
+  return (1 / Math.sqrt(years)) * ((1 - gamma) * inverseNormalCdf(1 - 1 / runs) + gamma * inverseNormalCdf(1 - 1 / (runs * Math.E)));
+}
+export type BacktestSelectionBias = { runs: number; expectedMaxNoiseSharpe: number | null; observedSharpe: number | null; indistinguishableFromNoise: boolean };
+/** Pure: compares the observed Sharpe with what the same number of tries would give by luck. */
+export function evaluateSelectionBias(runs: number, observedSharpe: number | null, startTime: number, endTime: number): BacktestSelectionBias {
+  const years = (endTime - startTime) / (365.25 * 24 * 3_600_000);
+  const expected = expectedMaxNoiseSharpe(runs, years);
+  return { runs, expectedMaxNoiseSharpe: expected, observedSharpe, indistinguishableFromNoise: expected != null && (observedSharpe == null || observedSharpe <= expected) };
+}
+export function selectionBiasWarning(bias: BacktestSelectionBias): string | null {
+  if (bias.runs < 5 || bias.expectedMaxNoiseSharpe == null) return null;
+  const expected = bias.expectedMaxNoiseSharpe.toFixed(2);
+  const observed = bias.observedSharpe == null ? '계산 불가' : bias.observedSharpe.toFixed(2);
+  return bias.indistinguishableFromNoise
+    ? `같은 종목·전략으로 ${bias.runs}가지 조건을 시험했습니다. 우연만으로도 최고 샤프가 약 ${expected}까지 나오는데 이번 결과(${observed})는 그 이하라 우연과 구분되지 않습니다.`
+    : `같은 종목·전략으로 ${bias.runs}가지 조건을 시험했습니다. 우연만으로도 최고 샤프가 약 ${expected}까지 나오므로, 이번 결과(${observed})는 그 값을 넘어야 의미가 있습니다. 조건을 더 바꿔 보면 기준이 올라갑니다.`;
+}
+function stableJson(value: unknown): string { if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`; if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`; return JSON.stringify(value) ?? 'null'; }
+const SELECTION_WINDOW_MS = 24 * 60 * 60_000;
+const SELECTION_MAX_KEYS = 500;
+const selectionRuns = new Map<string, Map<string, number>>();
+
+/** Counts distinct settings a member tried on the same strategy and symbol within 24 hours (including this one). */
+export function recordSelectionRun(memberKey: string, request: BacktestRequest, now = Date.now()): number {
+  const family = `${memberKey}|${request.market}|${request.symbol}|${request.strategy}`;
+  const { startTime: _start, endTime: _end, ...settings } = request;
+  const configuration = stableJson(settings);
+  const runs = selectionRuns.get(family) ?? new Map<string, number>();
+  for (const [key, at] of runs) if (now - at > SELECTION_WINDOW_MS) runs.delete(key);
+  runs.set(configuration, now);
+  selectionRuns.delete(family); selectionRuns.set(family, runs);
+  while (selectionRuns.size > SELECTION_MAX_KEYS) { const oldest = selectionRuns.keys().next().value; if (oldest === undefined) break; selectionRuns.delete(oldest); }
+  return runs.size;
+}
+
+export function resetSelectionRunsForTests() { selectionRuns.clear(); }
 export function measureBacktestPerformance(request: BacktestRequest, candles: readonly NormalizedCandle[]) { const before = process.memoryUsage().heapUsed; const started = performance.now(); const result = runBacktest(request, candles); return { candleCount: candles.length, tradeCount: result.totalTrades, durationMs: performance.now() - started, heapDeltaBytes: process.memoryUsage().heapUsed - before, timedOut: false }; }

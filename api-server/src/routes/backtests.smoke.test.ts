@@ -264,3 +264,19 @@ test('backtest failure classifier maps provider, timeout, network and validation
   assert.deepEqual([insufficient.status, insufficient.code, insufficient.reason], [400, 'INSUFFICIENT_CANDLES', 'INVALID_REQUEST']);
   assert.equal(classifyBacktestError(new BacktestValidationError('PROVIDER_TIMEOUT', 'x')).reason, 'PROVIDER_TIMEOUT');
 });
+
+test('repeated runs of the same strategy count as parameter searching and add a selection-bias warning', async () => {
+  const { server, baseUrl } = await withServer(undefined, true);
+  try {
+    let last: BacktestResult | null = null;
+    for (const stopLossValue of [1, 1.1, 1.2, 1.3, 1.4, 1.5]) {
+      const run = await fetch(`${baseUrl}/api/backtests/run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validBody, stopLossValue }) });
+      assert.equal(run.status, 200);
+      last = (await run.json() as { result: BacktestResult }).result;
+    }
+    assert.equal(last!.selectionBias!.runs, 6);
+    assert.ok(last!.warnings.some((warning) => warning.includes('6가지 조건을 시험')));
+    const same = await fetch(`${baseUrl}/api/backtests/run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validBody, stopLossValue: 1.5 }) });
+    assert.equal(((await same.json()) as { result: BacktestResult }).result.selectionBias!.runs, 6, 'rerunning identical settings is not a new try');
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});

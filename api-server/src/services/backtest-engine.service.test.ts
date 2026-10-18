@@ -16,7 +16,13 @@ import {
 import {
   BacktestValidationError,
   calculateStrategySignals,
+  evaluateSelectionBias,
+  expectedMaxNoiseSharpe,
   fundingSettlementsHeld,
+  inverseNormalCdf,
+  recordSelectionRun,
+  resetSelectionRunsForTests,
+  selectionBiasWarning,
   measureBacktestPerformance,
   runBacktest,
   validateBacktestRequest,
@@ -410,6 +416,39 @@ test('order delay moves the entry later and rejects invalid delays', () => {
   assert.ok(delayed.trades[0].entryTime > immediate.trades[0].entryTime);
   assert.ok(delayed.warnings.some((warning) => warning.includes('주문 지연 2봉')));
   for (const bad of [-1, 6, 1.5]) assert.throws(() => runBacktest(request({ side: 'long', endTime, parameters: { ...request({}).parameters, entryDelayBars: bad } }), rows), /주문 지연/u);
+});
+test('inverse normal CDF matches known quantiles', () => {
+  assert.ok(Math.abs(inverseNormalCdf(0.5)) < 1e-9);
+  assert.ok(Math.abs(inverseNormalCdf(0.975) - 1.959964) < 1e-5);
+  assert.ok(Math.abs(inverseNormalCdf(0.001) + 3.090232) < 1e-5);
+  assert.equal(inverseNormalCdf(0), Number.NEGATIVE_INFINITY);
+});
+test('expected best noise Sharpe grows with the number of tries and shrinks with a longer sample', () => {
+  assert.equal(expectedMaxNoiseSharpe(1, 2), null);
+  assert.equal(expectedMaxNoiseSharpe(10, 0), null);
+  const few = expectedMaxNoiseSharpe(5, 2)!; const many = expectedMaxNoiseSharpe(50, 2)!; const longer = expectedMaxNoiseSharpe(50, 8)!;
+  assert.ok(few > 0 && many > few && longer < many);
+});
+test('selection bias flags a result that luck alone could produce', () => {
+  const start = Date.UTC(2024, 0, 1); const end = Date.UTC(2025, 0, 1);
+  const weak = evaluateSelectionBias(30, 0.4, start, end);
+  assert.equal(weak.indistinguishableFromNoise, true);
+  assert.match(selectionBiasWarning(weak)!, /우연과 구분되지 않습니다/u);
+  const strong = evaluateSelectionBias(30, 5, start, end);
+  assert.equal(strong.indistinguishableFromNoise, false);
+  assert.equal(selectionBiasWarning(evaluateSelectionBias(3, 0.1, start, end)), null);
+  assert.equal(evaluateSelectionBias(1, null, start, end).indistinguishableFromNoise, false);
+});
+test('selection runs count distinct settings, ignore the period, include nested parameters and expire after a day', () => {
+  resetSelectionRunsForTests();
+  const base = { market: 'crypto-futures', symbol: 'BTCUSDT', strategy: 'breakout', stopLossValue: 1, startTime: 1, endTime: 2, parameters: { lookback: 20 } } as unknown as BacktestRequest;
+  const counts = [1, 1.1, 1.2, 1.3, 1.4, 1.5].map((value) => recordSelectionRun('m1', { ...base, stopLossValue: value }));
+  assert.deepEqual(counts, [1, 2, 3, 4, 5, 6]);
+  assert.equal(recordSelectionRun('m1', { ...base, stopLossValue: 1.5, startTime: 9, endTime: 99 }), 6);
+  assert.equal(recordSelectionRun('m1', { ...base, parameters: { lookback: 30 } }), 7);
+  assert.equal(recordSelectionRun('m2', base), 1);
+  assert.equal(recordSelectionRun('m1', { ...base, stopLossValue: 2 }, Date.now() + 25 * 3_600_000), 1);
+  resetSelectionRunsForTests();
 });
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
