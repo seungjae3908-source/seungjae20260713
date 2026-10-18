@@ -581,12 +581,12 @@ const workspaceScope = read('.github/scripts/verify-research-workspace-sync-v3.m
 const paperScopeWorkflow = read('.github/workflows/paper-forward-schedule-validation.yml');
 // Owner-approved 2026-10-17 (PR #1933): the crypto scanner moves into this exact
 // full-review list because its changes regenerate the automatic signal bundle.
-if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 50
-  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 50
+if (AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.length !== 52
+  || new Set(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS).size !== 52
   || JSON.stringify(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS)
     !== JSON.stringify([...AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS].sort())
   || createHash('sha256').update(AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS.join('\n')).digest('hex')
-    !== '6707ff2db3441d2f6d1744b17d8d3383c7a1fa367c92781c247703e6cb358b69') {
+    !== '6902b7936e7c420cf8288e5685c2533b4eb7cf20f2546f2c48ded5a4326985fb') {
   throw new Error('AUTO_GATE_SIGNAL_PIPELINE_SCOPE_DRIFT');
 }
 for (const path of AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS) {
