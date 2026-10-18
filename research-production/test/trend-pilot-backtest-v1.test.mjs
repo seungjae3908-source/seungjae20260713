@@ -79,21 +79,36 @@ test('full-size data (two years of hourly candles for several symbols) does not 
   const { evaluateTrendPilotV1 } = await import('../src/trend-pilot-backtest-v1.mjs');
   const datasets = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].map((symbol, k) => ({ symbol, candles: hourly(19_680, () => 0, k + 2), fundingRates: [] }));
   const result = evaluateTrendPilotV1({ datasets });
-  assert.equal(result.length, 3);
+  assert.equal(result.length, 5);
 });
 
 test('equity-based sizing grows the notional after gains and shrinks it after losses', async () => {
   const { simulateCompoundingV1 } = await import('../src/trend-pilot-backtest-v1.mjs');
   const day = 86_400_000;
-  const win = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: 0.05, stopFraction: 0.025 });
+  const win = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: 0.05, stopFraction: 0.025, rMultiple: 2 });
   const up = simulateCompoundingV1([win(0), win(1), win(2)], { startEquityKrw: 2_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
   assert.equal(up.firstNotionalKrw, 800_000);
   assert.ok(up.lastNotionalKrw > up.firstNotionalKrw);
   assert.ok(up.endEquityKrw > 2_000_000);
-  const loss = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: -0.025, stopFraction: 0.025 });
+  const loss = (k) => ({ entryTime: k * day, exitTime: k * day + 1, returnOnNotional: -0.025, stopFraction: 0.025, rMultiple: -1 });
   const down = simulateCompoundingV1([loss(0), loss(1)], { startEquityKrw: 2_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
   assert.ok(down.lastNotionalKrw < down.firstNotionalKrw);
   assert.equal(Math.round(down.endEquityKrw), Math.round(2_000_000 * 0.99 * 0.99));
   const capped = simulateCompoundingV1([win(0)], { startEquityKrw: 100_000_000, riskFraction: 0.01, maxNotionalKrw: 5_000_000 });
   assert.equal(capped.firstNotionalKrw, 5_000_000);
+});
+
+test('regime sizing takes more risk in strong trends and less otherwise; pyramid variant adds to winners', async () => {
+  const { simulateCompoundingV1, TREND_PILOT_VARIANTS_V1: V, evaluateTrendPilotSymbolV1: run } = await import('../src/trend-pilot-backtest-v1.mjs');
+  const day = 86_400_000;
+  const strong = simulateCompoundingV1([{ entryTime: 0, exitTime: 1, rMultiple: 1, stopFraction: 0.02, strongRegime: true }],
+    { startEquityKrw: 1_000_000, riskFraction: 0.01, maxNotionalKrw: 1e9, regimeSizing: true });
+  assert.equal(strong.endEquityKrw, 1_015_000);
+  const weak = simulateCompoundingV1([{ entryTime: 0, exitTime: day, rMultiple: 1, stopFraction: 0.02, strongRegime: false }],
+    { startEquityKrw: 1_000_000, riskFraction: 0.01, maxNotionalKrw: 1e9, regimeSizing: true });
+  assert.equal(weak.endEquityKrw, 1_007_500);
+  const pyramid = V.find((v) => v.id === 'H4_PYRAMID');
+  const up = run({ symbol: 'BTCUSDT', candles: hourly(4 * 600, (i) => (i > 4 * 250 ? 0.0012 : 0)), variant: pyramid });
+  assert.ok(up.trades.some((t) => t.adds > 0), 'adds while winning');
+  assert.ok(up.trades.every((t) => typeof t.strongRegime === 'boolean'));
 });
