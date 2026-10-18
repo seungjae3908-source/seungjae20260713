@@ -15,6 +15,7 @@
 
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 
 export const OPS_WATCHDOG_CONTRACT_V1 = 'ops-watchdog/v1';
 const MINUTE = 60_000;
@@ -91,12 +92,27 @@ export function opsTelegramConfigV1(env = process.env) {
   return Object.freeze({ token, chatId });
 }
 
+// Node's fetch races IPv6/IPv4 with a 250 ms per-address budget. On a host
+// whose DNS returns AAAA without a global IPv6 route, a ~300 ms IPv4 handshake
+// to api.telegram.org then fails as ETIMEDOUT ("fetch failed") most of the time.
+const OPS_TELEGRAM_FAMILY_ATTEMPT_MS = 2_500;
+
 export async function sendOpsTelegramV1(config, text, fetchImpl) {
-  const response = await fetchImpl(`https://api.telegram.org/bot${config.token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: config.chatId, text, disable_web_page_preview: true }),
-  });
+  if (getDefaultAutoSelectFamilyAttemptTimeout() < OPS_TELEGRAM_FAMILY_ATTEMPT_MS) {
+    setDefaultAutoSelectFamilyAttemptTimeout(OPS_TELEGRAM_FAMILY_ATTEMPT_MS);
+  }
+  let response;
+  try {
+    response = await fetchImpl(`https://api.telegram.org/bot${config.token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: config.chatId, text, disable_web_page_preview: true }),
+    });
+  } catch (error) {
+    // Surface only the network error code ("fetch failed" alone is undiagnosable).
+    const code = String(error?.cause?.code ?? '').replace(/[^A-Z0-9_]/gu, '').slice(0, 24);
+    throw new Error(`OPS_TELEGRAM_NETWORK_${code || 'FAILED'}`);
+  }
   if (!response.ok) throw new Error(`OPS_TELEGRAM_HTTP_${response.status}`);
   return true;
 }
