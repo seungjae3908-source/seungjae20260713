@@ -71,10 +71,16 @@ export async function tripKillSwitchForRiskFailure(input: {
   plan?: KillSwitchPlan | null;
 }) {
   // A protective exit only reduces risk: its failure is retried by the next
-  // tick and never stops this member or anyone else. The order itself is
-  // still rejected by the caller.
+  // tick and never stops this member. A shared venue or order-state failure
+  // seen on an exit still halts new entries for everyone (exits keep running
+  // under a global stop). The order itself is still rejected by the caller.
   if (input.plan && isRiskReducingExitPlan(input.plan)) {
-    return { tripped: false, reasons: [] as string[], scope: null };
+    const systemReasons = killSwitchReasons(input.blockCodes).filter((code) => SYSTEM_KILL_SWITCH_CODES.has(code));
+    if (systemReasons.length === 0 || input.plan.accountMode !== 'live') {
+      return { tripped: false, reasons: [] as string[], scope: null };
+    }
+    await input.repository.setGlobalEmergencyStop(true, input.userId);
+    return { tripped: true, reasons: systemReasons, scope: 'GLOBAL' as const };
   }
   // A daily loss limit also auto-stops this member's 작동 state (recorded with
   // its reason). This never weakens the block itself: the order is still rejected.
