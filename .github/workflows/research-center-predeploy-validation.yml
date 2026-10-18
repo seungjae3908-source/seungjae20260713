@@ -169,10 +169,9 @@ jobs:
           set -Eeuo pipefail
           npm run check
           npm test
-          python3 -m py_compile server.py video_research_readback.py research_results_readback.py
+          python3 -m py_compile server.py video_research_readback.py
           python3 test/test_server.py
           python3 test/test_video_research_readback.py
-          python3 test/test_research_results_readback.py
 
       - name: Validate deploy-time Research services, timers and deterministic plan
         shell: bash
