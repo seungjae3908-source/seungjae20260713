@@ -43,7 +43,7 @@ test('no lookahead: a future spike cannot change earlier returns', () => {
     const a = evaluateStrategyZooMarketV1({ market, datasets: [{ symbol: 'X', candles: base }] });
     const b = evaluateStrategyZooMarketV1({ market, datasets: [{ symbol: 'X', candles: spiked }] });
     const timing = a.rows.filter((r) => r.kind === 'timing');
-    assert.ok(timing.length >= TIMING_RULES_V1.length);
+    assert.ok(timing.length >= TIMING_RULES_V1.filter((r) => !r.nativeShort).length);
     for (const ra of timing) {
       const rb = b.rows.find((r) => r.id === ra.id);
       // compare discovery-period performance (ends well before bar 650)
@@ -126,4 +126,22 @@ test('futures: every timing rule runs long-only, short-only (mirror chart) and l
   const longRow = res.rows.find((r) => r.id === 'BUY_HOLD');
   assert.ok(shortRow.full.totalReturn < 0 || longRow.full.totalReturn < 0 || true);
   assert.ok(res.rows.filter((r) => r.side === 'SHORT').length >= 40);
+});
+
+test('legend trader rules: present, sourced, and parabolic short only shorts on futures', () => {
+  const ids = ['DANTE_224_BREAKOUT', 'DANTE_224_PULLBACK', 'DANTE_112_BOTTOM', 'QULLAMAGGIE_BREAKOUT', 'MINERVINI_VCP', 'DARVAS_BOX', 'BRANDT_PATTERN', 'COWEN_LOG_RISK', 'QULLAMAGGIE_PARABOLIC_SHORT'];
+  for (const id of ids) assert.ok(TIMING_RULES_V1.find((r) => r.id === id && r.source), id);
+  // pump then crack: parabolic short must go short after the first lower-low day
+  const bars = walk(300, 7, { vol: 0.01 });
+  for (let i = 250; i < 256; i += 1) { const p = bars[i - 1].close * 1.08; bars[i] = { ...bars[i], open: p * 0.99, close: p, high: p * 1.01, low: p * 0.98 }; }
+  const crack = bars[255].close * 0.9; bars[256] = { ...bars[256], open: bars[255].close, close: crack, high: bars[255].close, low: crack * 0.99 };
+  for (let i = 257; i < 300; i += 1) { const p = bars[i - 1].close * 0.995; bars[i] = { ...bars[i], open: p, close: p, high: p * 1.005, low: p * 0.995 }; }
+  const ps = TIMING_RULES_V1.find((r) => r.id === 'QULLAMAGGIE_PARABOLIC_SHORT').make({ bars, close: bars.map((b) => b.close), n: bars.length, year: 365, month: 30, crypto: true });
+  assert.ok(ps.every((v) => v <= 0) && ps[256] === -1, 'short after crack');
+  const fut = evaluateStrategyZooMarketV1({ market: 'CRYPTO_FUTURES', datasets: [{ symbol: 'BTCUSDT', candles: bars }] });
+  assert.ok(fut.rows.find((r) => r.id === 'QULLAMAGGIE_PARABOLIC_SHORT' && r.side === 'SHORT'));
+  assert.ok(fut.rows.find((r) => r.id === 'DANTE_224_BREAKOUT__LS'));
+  const spot = evaluateStrategyZooMarketV1({ market: 'CRYPTO_SPOT', datasets: [{ symbol: 'KRW-BTC', candles: walk(900, 3, { vol: 0.04 }) }] });
+  assert.ok(!spot.rows.find((r) => r.id === 'QULLAMAGGIE_PARABOLIC_SHORT'));
+  const cowen = spot.rows.find((r) => r.id === 'COWEN_LOG_RISK'); assert.ok(cowen && cowen.avgExposure > 0);
 });
