@@ -2250,6 +2250,12 @@ test('member emergency stop is sticky and only exact confirmed resume clears it 
     assert.equal(stored.automaticEnabled, false);
     assert.equal(stored.emergencyStopped, false);
     assert.equal(stored.newEntriesStopped, false);
+    // The confirmed resume is audited like every other run change.
+    assert.equal((body as unknown as { auditRecorded: boolean }).auditRecorded, true);
+    const [audit] = await isolated.listRunAudit(USER, 1);
+    assert.equal(audit.action, 'STOP');
+    assert.equal(audit.reason, 'MEMBER_RESUME');
+    assert.equal(audit.actor, 'member');
   } finally {
     await close(server);
     setTradeAutomationRepositoryFactoryForTests(() => repository);
@@ -2429,6 +2435,99 @@ test('admin may align the Production single-entry ceiling to 1M only while every
     assert.equal(replayBody.idempotent, true);
   } finally {
     setTradeLivePolicyAuthorityOverrideForTests(null);
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+async function seedOpenOrder(
+  repository: InMemoryTradingRepository,
+  userId: string,
+  id: string,
+  side: 'buy' | 'sell',
+  reduceOnly: boolean,
+) {
+  const timestamp = new Date().toISOString();
+  await repository.savePlan({
+    id: `${id}-plan`, userId, idempotencyKey: `${id}-key`, state: 'SUBMITTED', version: 1,
+    accountMode: 'paper', executionMode: 'automatic', exchange: 'upbit', strategyId: 'stop-test',
+    signalId: `${id}-signal`, symbol: 'BTC', market: 'KRW', side, orderType: 'limit', quantity: 0.1,
+    quoteAmount: null, limitPrice: 100_000, estimatedKrw: 10_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null, marginMode: null, reduceOnly,
+    invalidateAction: 'hold', signalReasons: reduceOnly ? ['AUTO_EXIT'] : ['entry'],
+    marketSnapshot: { observedAt: timestamp }, approvedAt: timestamp, approvalExpiresAt: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as never);
+  await repository.saveOrder({
+    id, userId, planId: `${id}-plan`, exchange: 'upbit', clientOrderId: `${id}-client`,
+    exchangeOrderId: `${id}-exchange`, state: 'ACCEPTED', version: 1, requestedQuantity: 0.1,
+    filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as never);
+}
+
+test('member emergency stop cancels its own open entry orders and never protective exits', async () => {
+  const OTHER = '22222222-2222-2222-2222-222222222222';
+  const isolated = new InMemoryTradingRepository();
+  await seedOpenOrder(isolated, USER, 'stop-entry', 'buy', false);
+  await seedOpenOrder(isolated, USER, 'stop-exit', 'sell', true);
+  await seedOpenOrder(isolated, OTHER, 'other-entry', 'buy', false);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const { server, baseUrl } = await startServer();
+  try {
+    const stopped = await fetch(`${baseUrl}/api/trade-automation/emergency-stop`, { method: 'POST' });
+    assert.equal(stopped.status, 200);
+    const body = await stopped.json() as Record<string, unknown>;
+    assert.equal(body.emergencyStopped, true);
+    assert.equal(body.existingOrdersCanceled, true);
+    assert.equal(body.entryOrdersCanceled, 1);
+    assert.equal(body.entryOrderCancelFailures, 0);
+    assert.equal(body.protectiveExitOrdersKept, 1);
+    assert.equal(body.protectiveExitsContinue, true);
+    assert.equal((await isolated.getOrder(USER, 'stop-entry'))?.state, 'CANCELED');
+    assert.equal((await isolated.getOrder(USER, 'stop-exit'))?.state, 'ACCEPTED');
+    assert.equal((await isolated.getOrder(OTHER, 'other-entry'))?.state, 'ACCEPTED', 'another member is untouched');
+  } finally {
+    await close(server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('admin global stop cancels every member’s open entry orders and keeps protective exits', async () => {
+  const OTHER = '22222222-2222-2222-2222-222222222222';
+  const isolated = new InMemoryTradingRepository();
+  await seedOpenOrder(isolated, USER, 'admin-entry', 'buy', false);
+  await seedOpenOrder(isolated, OTHER, 'member-entry', 'buy', false);
+  await seedOpenOrder(isolated, OTHER, 'member-exit', 'sell', true);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const admin = await startServer(true, 'admin');
+  try {
+    const stopped = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
+    });
+    assert.equal(stopped.status, 200);
+    const body = await stopped.json() as Record<string, unknown>;
+    assert.equal(body.persistentGlobalEmergencyStopped, true);
+    assert.equal(body.existingOrdersCanceled, true);
+    assert.equal(body.membersWithOpenOrders, 2);
+    assert.equal(body.entryOrdersCanceled, 2);
+    assert.equal(body.protectiveExitOrdersKept, 1);
+    assert.equal((await isolated.getOrder(USER, 'admin-entry'))?.state, 'CANCELED');
+    assert.equal((await isolated.getOrder(OTHER, 'member-entry'))?.state, 'CANCELED');
+    assert.equal((await isolated.getOrder(OTHER, 'member-exit'))?.state, 'ACCEPTED');
+
+    // Resuming new-order evaluation cancels nothing.
+    await seedOpenOrder(isolated, OTHER, 'after-resume-entry', 'buy', false);
+    const resumed = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: false, confirmation: 'RESUME_NEW_ORDER_EVALUATION' }),
+    });
+    const resumedBody = await resumed.json() as Record<string, unknown>;
+    assert.equal(resumedBody.existingOrdersCanceled, false);
+    assert.equal(resumedBody.entryOrdersCanceled, 0);
+    assert.equal((await isolated.getOrder(OTHER, 'after-resume-entry'))?.state, 'ACCEPTED');
+  } finally {
     await close(admin.server);
     setTradeAutomationRepositoryFactoryForTests(() => repository);
   }

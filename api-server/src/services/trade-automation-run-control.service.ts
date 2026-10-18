@@ -316,3 +316,42 @@ export async function autoStopRunForLossLimit(repository: TradingRepository, use
     return { stopped: false as const, reason };
   }
 }
+
+/**
+ * Member-scoped kill switch (owner decision 2026-10-18): a member-level risk
+ * failure stops only this member's new entries. Protective exits of owned
+ * automatic positions keep running. Unlike the daily-loss auto-stop, 작동
+ * cannot restart it; the member's confirmed resume clears it. An existing
+ * stop (including a daily-loss AUTO_STOP) is kept as it is. A policy write
+ * failure throws so the caller fails closed.
+ */
+export async function killSwitchStopMemberEntries(repository: TradingRepository, userId: string, reason: string) {
+  const current = await repository.getPolicy(userId);
+  if (current.newEntriesStopped || current.emergencyStopped) return { stopped: false as const, reason };
+  await repository.savePolicy(userId, { ...current, newEntriesStopped: true });
+  const { control } = await readAutoRunControl(repository, userId);
+  await recordAutoRunChange(repository, {
+    userId, action: 'KILL_SWITCH', reason, actor: 'system',
+    lanes: registeredLiveResolver ? autoRunMarketLanes(current, registeredLiveResolver) : null,
+    control, now: new Date(),
+  });
+  return { stopped: true as const, reason };
+}
+
+/** Record the member's confirmed resume ("자동매매 재개"). The run stays OFF until 작동. */
+export async function recordAutoRunResume(repository: TradingRepository, userId: string, input: {
+  policyBefore: TradingPolicy;
+  isLive: AutoRunLiveResolver;
+  now?: Date;
+}) {
+  const { control } = await readAutoRunControl(repository, userId);
+  return recordAutoRunChange(repository, {
+    userId,
+    action: 'STOP',
+    reason: 'MEMBER_RESUME',
+    actor: 'member',
+    lanes: autoRunMarketLanes(input.policyBefore, input.isLive),
+    control,
+    now: input.now ?? new Date(),
+  });
+}

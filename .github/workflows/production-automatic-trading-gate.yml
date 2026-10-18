@@ -51,6 +51,11 @@ on:
       - api-server/src/services/trade-automation.types.ts
       - api-server/src/services/trade-automation-run-control.service.ts
       - api-server/src/services/trade-automation-run-control.service.test.ts
+      # Owner-approved 2026-10-18: member-scoped kill switch and stop semantics.
+      - api-server/src/services/trade-kill-switch.service.ts
+      - api-server/src/services/trade-kill-switch.test.ts
+      - api-server/src/services/trade-pre-submission-risk.service.ts
+      - api-server/src/services/trade-automation.repository.ts
       - api-server/supabase/migrations/2026101701_trade_automation_run_control.sql
       - api-server/src/services/trade-automation-risk.service.ts
       - api-server/src/services/crypto-benchmark-regime.service.ts
@@ -158,6 +163,34 @@ jobs:
           node-version: "22"
       - name: Validate Production gate, restart-safe staged exits, zero-LIVE Paper wallet, and execution/read-only encrypted credential contracts
         run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - name: Require member-scoped kill switch, running protective exits, and entry-only stop cancellation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          kill_switch=api-server/src/services/trade-kill-switch.service.ts
+          worker=api-server/src/services/member-auto-trading-background-worker.service.ts
+          route=api-server/src/routes/trade-automation.ts
+          # Only exchange/provider-outage and unknown-order-state codes may halt every member.
+          system_codes="$(sed -n '/^const SYSTEM_KILL_SWITCH_CODES = new Set(\[/,/^\]);/p' "$kill_switch")"
+          for code in EXCHANGE_API_FAILURE EXCHANGE_NETWORK_ERROR EXCHANGE_TIMEOUT MARKET_HALTED \
+            PROVIDER_CLOCK_OFFSET_TOO_LARGE ORDER_STATE_UNKNOWN EXECUTION_RECONCILIATION_FAILED \
+            RECOVERY_RECONCILIATION_FAILED; do
+            grep -Fq "'$code'" <<<"$system_codes" || { echo "SYSTEM_KILL_CODE_MISSING:$code" >&2; exit 1; }
+          done
+          for code in DAILY_LOSS_LIMIT MARKET_DATA_STALE FAST_MOVE_DETECTED ONE_MINUTE_VOLATILITY \
+            APPROVAL_PRICE_DRIFT_EXCEEDED ACCOUNT_STATE_MISMATCH ACCOUNT_MODE_MISMATCH; do
+            if grep -Fq "'$code'" <<<"$system_codes"; then echo "MEMBER_KILL_CODE_GLOBALIZED:$code" >&2; exit 1; fi
+          done
+          grep -Fq "const simulated = plan != null && plan.accountMode !== 'live';" "$kill_switch"
+          grep -Fq 'if (input.plan && isRiskReducingExitPlan(input.plan)) {' "$kill_switch"
+          grep -Fq 'await killSwitchStopMemberEntries(input.repository, input.userId, reasons[0]);' "$kill_switch"
+          grep -Fq 'const memberProtectiveExitsEnabled = memberCanRunAutomation;' "$worker"
+          grep -Fq 'if (!memberAutoExecutionEnabled) {' "$worker"
+          grep -Fq 'await cancelOpenEntryOrders(memberRepository, memberId, cancellation);' "$route"
+          grep -Fq 'const audit = await recordAutoRunResume(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });' "$route"
+          if grep -Eq 'existingOrdersCanceled:[[:space:]]*false,' "$route"; then
+            echo 'EMERGENCY_STOP_CANCEL_HARDCODED_FALSE' >&2; exit 1
+          fi
       - name: Validate non-superuser owner-bound budget proof contracts offline
         run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
       - name: Validate canonical public-handoff prearm receipt offline
