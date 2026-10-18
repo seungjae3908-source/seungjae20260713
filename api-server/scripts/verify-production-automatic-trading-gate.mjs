@@ -143,6 +143,10 @@ requireText(tradeIntegrationTest, 'per-market live switch defaults OFF and block
 requireText(tradeAutomationRoute, "router.post('/manual-orders/plan'", 'AUTO_GATE_MANUAL_TICKET_ROUTE_MISSING');
 requireText(tradeAutomationRoute, 'approvalRequired: true,', 'AUTO_GATE_MANUAL_TICKET_APPROVAL_MISSING');
 requireText(tradeIntegrationTest, 'manual order ticket builds a LIVE approval plan from server-read data, never from the browser price', 'AUTO_GATE_MANUAL_TICKET_REGRESSION_MISSING');
+// Owner manual ticket: amount caps and strategy-evidence gates do not apply, never to automatic plans.
+const manualOwnerOrder = read('api-server/src/services/manual-owner-order.ts');
+requireText(manualOwnerOrder, "&& plan.executionMode !== 'automatic';", 'AUTO_GATE_MANUAL_OWNER_NOT_AUTOMATIC_MISSING');
+requireText(tradeIntegrationTest, 'owner manual ticket orders skip amount caps and strategy-evidence gates but keep account protection', 'AUTO_GATE_MANUAL_OWNER_REGRESSION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');

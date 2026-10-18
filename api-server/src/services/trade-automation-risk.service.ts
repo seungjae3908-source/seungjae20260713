@@ -16,6 +16,7 @@ import {
 } from './trade-automation.types';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 import { benchmarkDrawdownBlocksLong, isNewCryptoLongEntry } from './crypto-benchmark-regime.service';
+import { isManualOwnerOrder, MANUAL_OWNER_EXEMPT_AMOUNT_CODES } from './manual-owner-order';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
@@ -230,6 +231,7 @@ export function evaluateTradingPlan(
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
   const riskReducing = isRiskReducingExitPlan(plan);
+  const manualOwner = isManualOwnerOrder(plan as TradingPlanInput & { executionMode?: string });
   if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
@@ -385,7 +387,8 @@ export function evaluateTradingPlan(
     if (error instanceof TradeSplitOrderPlanError) add(blockCodes, error.code);
     else add(blockCodes, 'TRADE_SPLIT_RATIO_INVALID');
   }
-  if (!riskReducing && (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice))) add(blockCodes, 'EXIT_PLAN_REQUIRED');
+  // Manual owner orders need a protective stop; a target is optional.
+  if (!riskReducing && ((!manualOwner && plan.targetPrices.length === 0) || !finitePositive(plan.stopPrice))) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');
 
   const hasOptimizationContext = !riskReducing && (plan.accountMode === 'live'
@@ -395,6 +398,15 @@ export function evaluateTradingPlan(
   if (optimization) {
     for (const code of optimization.blockCodes) add(blockCodes, code);
     for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
+  }
+  if (manualOwner) {
+    // Owner's manual ticket: no policy amount/exposure caps and no strategy-evidence gates.
+    const exempt = new Set<string>(MANUAL_OWNER_EXEMPT_AMOUNT_CODES);
+    const kept = blockCodes.filter((code) => !exempt.has(code));
+    blockCodes.length = 0;
+    blockCodes.push(...kept);
+    if (!finitePositive(plan.estimatedKrw)) add(blockCodes, 'ORDER_AMOUNT_INVALID');
+    warnings.push('MANUAL_OWNER_ORDER:AMOUNT_CAPS_AND_STRATEGY_EVIDENCE_NOT_APPLIED');
   }
   return { allowed: blockCodes.length === 0, blockCodes, warnings, optimization };
 }

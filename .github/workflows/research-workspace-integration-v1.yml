@@ -188,6 +188,8 @@ on:
       - stock-analyzer/src/components/trading-holdings-panel.tsx
       - stock-analyzer/src/lib/manual-order-ticket.ts
       - stock-analyzer/src/pages/detail.tsx
+      - api-server/src/services/manual-owner-order.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
 permissions:
   contents: read
 concurrency:
