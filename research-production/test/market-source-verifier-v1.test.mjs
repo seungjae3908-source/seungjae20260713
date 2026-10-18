@@ -26,11 +26,11 @@ const SPECS = {
   },
   KR_STOCK: {
     venue: 'KRX', symbol: '005930', timeZone: 'Asia/Seoul', kind: 'REGULAR', minutes: 390, timeframe: '30m',
-    starts: [Date.UTC(2025, 5, 2, 0, 0), Date.UTC(2025, 5, 3, 0, 0)], source: 'KRX_MINUTE_DATA_LICENSED',
+    starts: [Date.UTC(2025, 5, 2, 0, 0), Date.UTC(2025, 5, 3, 0, 0)], source: 'KIWOOM_OPEN_API',
   },
   US_STOCK: {
     venue: 'US_SIP', symbol: 'AAPL', timeZone: 'America/New_York', kind: 'REGULAR', minutes: 390, timeframe: '30m',
-    starts: [Date.UTC(2025, 5, 2, 13, 30), Date.UTC(2025, 5, 3, 13, 30)], source: 'US_SIP_MINUTE_DATA_LICENSED',
+    starts: [Date.UTC(2025, 5, 2, 13, 30), Date.UTC(2025, 5, 3, 13, 30)], source: 'TOSS_SECURITIES_API',
   },
 };
 
@@ -157,10 +157,11 @@ for (const market of Object.keys(SPECS)) {
   });
 }
 
-test('stock markets hold without a session calendar or a source allowlist', async () => {
+test('stock markets hold without a session calendar; an unlisted provider is held', async () => {
   await withFixture('KR_STOCK', async ({ request, base }) => {
     assert.equal((await verifyMarketTrainSourceV1('KR_STOCK', request, { ...base, sessionCalendar: undefined })).code, 'SESSION_CALENDAR_MISSING');
-    assert.equal((await verifyMarketTrainSourceV1('KR_STOCK', request, { ...base, allowedSources: null })).code, 'RIGHTS_SOURCE_ALLOWLIST_MISSING');
+    assert.equal((await verifyMarketTrainSourceV1('KR_STOCK', request, { ...base, allowedSources: null })).status, 'VERIFIED_TRAIN_SOURCE');
+    assert.equal((await verifyMarketTrainSourceV1('KR_STOCK', request, { ...base, allowedSources: ['OTHER_PROVIDER'] })).code, 'RIGHTS_ATTESTATION_SHAPE_INVALID');
     assert.equal((await verifyMarketTrainSourceV1('KR_STOCK', request, { ...base, sessionCalendar: async () => [] })).code, 'SESSION_CALENDAR_INVALID');
   });
 });
