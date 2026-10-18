@@ -655,6 +655,19 @@ requireText(read('api-server/src/services/trade-automation-run-control.service.t
 requireText(scannerCandidateRanking,
   'input.backtests?.[`${card.symbol}|${direction}`] ?? input.backtests?.[card.symbol]',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_LOOKUP_MISSING');
+// Journal dedupe (branch journal-dedupe-limit, pending owner review): live app
+// orders (automatic and manual) are deduplicated against exchange history, and
+// exchange-order-id binding stays limited to the verified Upbit owner bridge.
+const journalMirror = read('api-server/src/services/automatic-paper-journal-mirror.service.ts');
+requireText(journalMirror,
+  "'APP_AUTO', 'APP_MANUAL', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',",
+  'AUTO_GATE_JOURNAL_LIVE_APP_SOURCES_MISSING');
+requireText(journalMirror,
+  'if (previousScope !== VERIFIED_UPBIT_BRIDGE_SCOPE\n    || externalScope !== VERIFIED_UPBIT_BRIDGE_SCOPE) return null;',
+  'AUTO_GATE_JOURNAL_ORDER_ID_BINDING_SCOPE_MISSING');
+requireText(read('api-server/src/routes/paper-journal.ts'),
+  '[...externalReconciliation.knownPayloads, ...externalReconciliation.payloads],',
+  'AUTO_GATE_JOURNAL_SUPERSEDED_SNAPSHOT_BINDING_MISSING');
 requireText(scannerCandidateRankingTest,
   'futures quality is selected by symbol and direction without cross-credit',
   'AUTO_GATE_DIRECTIONAL_SCANNER_QUALITY_RANKING_REGRESSION_MISSING');
