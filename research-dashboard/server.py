@@ -1175,7 +1175,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             or runtime_liveness.get('stale') is True
         )
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
-        else 'attention' if failed_tasks > 0
+        else 'attention' if failed_tasks > 0 or blocked_data_tasks > 0
         else 'collecting'
     )
     return {

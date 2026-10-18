@@ -108,7 +108,15 @@ export function appendTemporalEvidenceV1(ledger,rawObservation){
   const observation=normalizeObservation(rawObservation);
   const existing=ledger.observations.find(row=>row.observationId===observation.observationId);
   if(existing){
-    if(existing.evidenceDigest!==observation.evidenceDigest) throw new Error('conflicting temporal observation identity');
+    if(existing.evidenceDigest!==observation.evidenceDigest){
+      // Public feeds re-serve overlapping rows on every poll. The same observation
+      // seen again later (same value, only availableAt/recordedAt differ) keeps the
+      // FIRST-seen row, so point-in-time availability is never moved forward or
+      // back-dated. A different value for the same identity is still a conflict.
+      const reseen=existing.value===observation.value&&existing.publicDataOnly===observation.publicDataOnly
+        &&existing.observedAt===observation.observedAt&&existing.availableAt<=observation.availableAt;
+      if(!reseen) throw new Error('conflicting temporal observation identity');
+    }
     return ledger;
   }
   const observations=Object.freeze(sortRows([...ledger.observations,observation]));
