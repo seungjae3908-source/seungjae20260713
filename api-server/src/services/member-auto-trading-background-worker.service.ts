@@ -25,6 +25,7 @@ import { trendPilotLiveEnabled, trendPilotSigningKey } from './trend-pilot-v1-au
 import { runTrendPilotLaneTick, type TrendPilotLanePosition, type TrendPilotVenue } from './trend-pilot-v1-lane.service';
 import {
   TREND_PILOT_DEFAULT_STATE_DIR,
+  cachedTrendPilotBars,
   createTrendPilotLedgerStore,
   readBitgetTrendPilotBars,
   readBitgetTrendPilotContractRules,
@@ -2094,12 +2095,44 @@ const TREND_PILOT_LANES = Object.freeze([
   Object.freeze({ venue: 'upbit' as TrendPilotVenue, market: 'CRYPTO_SPOT' as const, strategyId: TREND_PILOT_SPOT_V1.strategyId, assetClass: 'crypto_spot' as const }),
 ]);
 
+/** Pure: the pilot's Bitget positions count by margin; everything else by notional. */
+function trendPilotGateExposureKrw(plan: TradingPlan) {
+  const notional = Math.max(0, Number(plan.estimatedKrw) || 0);
+  return plan.exchange === 'bitget' && plan.strategyId === TREND_PILOT_V1.strategyId
+    ? notional / TREND_PILOT_V1.leverage : notional;
+}
+
+/** Canonical account-wide counters (every open live automatic plan), as exposureState computes them. */
+function trendPilotAccountCounters(runtime: MemberRuntimeState, assetClass: TradingAssetClass, strategyId: string, nowMs: number) {
+  const active = openAutomaticPlans(runtime, 'live');
+  const sameClass = active.filter((plan) => marketMappingForPlan(plan).assetClass === assetClass);
+  const sameStrategy = active.filter((plan) => plan.strategyId === strategyId);
+  const notional = (rows: readonly TradingPlan[]) => rows.reduce((t, plan) => t + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
+  const exposure = (rows: readonly TradingPlan[]) => rows.reduce((t, plan) => t + trendPilotGateExposureKrw(plan), 0);
+  return {
+    accountNotionalKrw: notional(active),
+    classNotionalKrw: notional(sameClass),
+    strategyNotionalKrw: notional(sameStrategy),
+    accountExposureKrw: exposure(active),
+    assetClassExposureKrw: exposure(sameClass),
+    strategyExposureKrw: exposure(sameStrategy),
+    openRiskKrw: active.reduce((t, plan) => t + plannedRiskKrw(plan), 0),
+    openPositionCount: active.length,
+    dailyOrderCount: runtime.orders.filter((order) => {
+      const plan = runtime.plans.find((candidate) => candidate.id === order.planId);
+      const at = Date.parse(order.createdAt);
+      return plan?.accountMode === 'live' && Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
+    }).length,
+  };
+}
+
 /**
  * Trend pilot lanes (owner decision 2026-10-18). Called only for members whose
  * automatic policy is on, after the canonical live exit block, while the live
  * exit arm is present. New entries additionally need the live ENTRY arm and
  * warmup. Entries and exits go through executeAutomaticPlan / processAutomaticExit,
  * i.e. the same createPlan → risk gate → pre-submission → execute path.
+ * Never throws: a lane failure is counted and the member loop continues.
  */
 async function runTrendPilotLanesForMember(input: {
   source: MemberAutoTradingBackgroundSource;
@@ -2112,14 +2145,16 @@ async function runTrendPilotLanesForMember(input: {
   entriesArmed: boolean;
   globalStop: boolean;
   isActive: () => boolean;
-}): Promise<{ ordersCreated: number; blocked: number; failures: number; privateRequests: number }> {
-  const summary = { ordersCreated: 0, blocked: 0, failures: 0, privateRequests: 0 };
+}): Promise<{ ordersCreated: number; blocked: number; privateRequests: number }> {
+  const summary = { ordersCreated: 0, blocked: 0, privateRequests: 0 };
   const signingKey = trendPilotSigningKey();
   if (!trendPilotLiveEnabled() || !signingKey) return summary;
   if (!hasCapability(input.member.profile, 'canPlaceOrders')) return summary;
   const nowMs = input.now.getTime();
   const policy = input.member.policy;
   const stateDir = String(process.env.TREND_PILOT_STATE_DIR ?? '').trim() || TREND_PILOT_DEFAULT_STATE_DIR;
+  const rearmToken = String(process.env.TREND_PILOT_REARM ?? '').trim() || null;
+  const normalize = (symbol: string) => symbol.trim().toUpperCase().replace(/^KRW-/u, '');
   for (const lane of TREND_PILOT_LANES) {
     if (!input.isActive()) break;
     if (!policy.enabledStrategies.includes(lane.strategyId)) continue;
@@ -2127,57 +2162,35 @@ async function runTrendPilotLanesForMember(input: {
     if (!policy.marketEnabled[lane.assetClass] || !policy.exchangeEnabled[lane.venue]) continue;
     if (lane.venue === 'bitget' && !hasCapability(input.member.profile, 'canAccessFutures')) continue;
     try {
-      let fx = input.fxCache.get(lane.market);
+      let fx: MemberAutoTradingFxQuote | null = input.fxCache.get(lane.market) ?? null;
       if (!fx) {
-        fx = await input.source.resolveFx(lane.market, nowMs);
-        input.fxCache.set(lane.market, fx);
+        try { fx = await input.source.resolveFx(lane.market, nowMs); input.fxCache.set(lane.market, fx); }
+        catch { fx = null; } // exits still run; entries are blocked without fx
       }
       const tracked = trackedAutomaticPositions(input.runtime, 'live')
         .filter((position) => position.plan.exchange === lane.venue);
       const own = tracked.filter((position) => position.plan.strategyId === lane.strategyId);
-      const normalize = (symbol: string) => symbol.trim().toUpperCase().replace(/^KRW-/u, '');
+      const krwPerQuote = fx?.krwPerQuoteCurrency ?? 0;
       const positions: TrendPilotLanePosition[] = own.flatMap((position) => {
         const entryPrice = position.order.averageFillPrice ?? position.plan.entryPrice ?? position.plan.limitPrice ?? null;
         if (!positive(entryPrice)) return [];
         return [{
           planId: position.plan.id,
           strategyId: position.plan.strategyId,
-          symbol: normalize(position.plan.symbol) === position.plan.symbol.toUpperCase() ? position.plan.symbol.toUpperCase() : normalize(position.plan.symbol),
+          symbol: lane.venue === 'upbit' ? normalize(position.plan.symbol) : position.plan.symbol.toUpperCase(),
           side: position.plan.side === 'short' ? 'short' as const : position.plan.side === 'buy' ? 'buy' as const : 'long' as const,
           entryPrice,
           initialStopPrice: position.plan.stopPrice,
           remainingQuantity: position.remainingQuantity,
-          notionalKrw: position.remainingQuantity * entryPrice * fx!.krwPerQuoteCurrency,
+          notionalKrw: position.remainingQuantity * entryPrice * krwPerQuote,
           leverage: position.plan.leverage ?? 1,
           openedAtMs: Date.parse(position.plan.createdAt),
           activeExit: position.activeExit,
         }];
       });
-      let accountSnapshot: CanonicalAccountSnapshot | null = null;
-      const snapshot = async () => {
-        if (!accountSnapshot) {
-          accountSnapshot = await input.source.readLiveAccountSnapshot(input.member.userId, lane.venue as AccountProvider);
-          summary.privateRequests += 1;
-        }
-        return accountSnapshot;
-      };
-      const foreignSymbols = new Set(tracked.filter((position) => position.plan.strategyId !== lane.strategyId).map((position) => normalize(position.plan.symbol)));
+      const foreignSymbols = new Set(tracked.filter((position) => position.plan.strategyId !== lane.strategyId)
+        .map((position) => normalize(position.plan.symbol)));
       const marks = new Map<string, number>();
-      const journal = input.entriesArmed
-        ? await liveJournalRiskState(input.source, input.repository, input.member.userId, input.runtime,
-          await snapshot(), policy, nowMs, input.fxCache)
-        : { consecutiveLosses: 0, weeklyPnlPercent: 0 };
-      if (input.entriesArmed) {
-        // Manual holdings on the same venue are never stacked with a pilot entry.
-        for (const held of (await snapshot()).positions ?? []) {
-          const quantity = Number(held.quantity ?? 0);
-          if (quantity > 0) foreignSymbols.add(normalize(held.symbol));
-        }
-        for (const p of positions) foreignSymbols.delete(normalize(p.symbol));
-      }
-      const dayKey = new Date(nowMs + (9 * 3_600_000)).toISOString().slice(0, 10);
-      const dailyOrderCount = input.runtime.plans.filter((plan) => plan.accountMode === 'live'
-        && new Date(Date.parse(plan.createdAt) + (9 * 3_600_000)).toISOString().slice(0, 10) === dayKey).length;
       const store = createTrendPilotLedgerStore(stateDir, lane.venue, input.member.userId);
       const tick = await runTrendPilotLaneTick({
         venue: lane.venue,
@@ -2185,18 +2198,23 @@ async function runTrendPilotLanesForMember(input: {
         policy,
         nowMs,
         signingKey,
-        fx: { krwPerQuoteCurrency: fx.krwPerQuoteCurrency, source: fx.source },
+        fx: fx ? { krwPerQuoteCurrency: fx.krwPerQuoteCurrency, source: fx.source } : null,
         entriesArmed: input.entriesArmed && !input.globalStop && !policy.newEntriesStopped && !policy.emergencyStopped,
-        readClosedBars: (symbol) => lane.venue === 'bitget' ? readBitgetTrendPilotBars(symbol, nowMs) : readUpbitTrendPilotBars(symbol, nowMs),
+        rearmToken,
+        readClosedBars: (symbol) => cachedTrendPilotBars(lane.venue, symbol, nowMs,
+          () => (lane.venue === 'bitget' ? readBitgetTrendPilotBars(symbol, nowMs) : readUpbitTrendPilotBars(symbol, nowMs))),
         readQuote: async (symbol) => {
           const quote = lane.venue === 'bitget' ? await readBitgetTrendPilotQuote(symbol, nowMs) : await readUpbitTrendPilotQuote(symbol, nowMs);
           if (lane.venue === 'upbit') marks.set(normalize(symbol), (quote.bid + quote.ask) / 2);
           return quote;
         },
-        readAccount: async () => {
-          const snap = await snapshot();
+        readContractRules: lane.venue === 'bitget' ? readBitgetTrendPilotContractRules : undefined,
+        readEntryContext: async () => {
+          if (!fx) throw new Error('TREND_PILOT_FX_UNAVAILABLE');
+          const snapshot = await input.source.readLiveAccountSnapshot(input.member.userId, lane.venue as AccountProvider);
+          summary.privateRequests += 1;
           if (lane.venue === 'upbit') {
-            for (const row of snap.balances ?? []) {
+            for (const row of snapshot.balances ?? []) {
               const currency = String(row.currency).toUpperCase();
               if (currency === 'KRW' || marks.has(currency) || !(Number(row.total ?? 0) > 0)) continue;
               if (!(TREND_PILOT_SPOT_V1.symbols as readonly string[]).includes(`KRW-${currency}`)) continue;
@@ -2204,17 +2222,26 @@ async function runTrendPilotLanesForMember(input: {
               marks.set(currency, (quote.bid + quote.ask) / 2);
             }
           }
-          return trendPilotAccountFromSnapshot(lane.venue, snap, fx!.krwPerQuoteCurrency, marks);
+          const journal = await liveJournalRiskState(input.source, input.repository, input.member.userId, input.runtime,
+            snapshot, policy, nowMs, input.fxCache);
+          const heldSymbols = new Set<string>();
+          for (const held of snapshot.positions ?? []) {
+            if (Number(held.quantity ?? 0) > 0) heldSymbols.add(normalize(held.symbol));
+          }
+          for (const p of positions) heldSymbols.delete(normalize(p.symbol));
+          return {
+            account: trendPilotAccountFromSnapshot(lane.venue, snapshot, fx.krwPerQuoteCurrency, marks),
+            counters: {
+              ...trendPilotAccountCounters(input.runtime, lane.assetClass, lane.strategyId, nowMs),
+              consecutiveLosses: journal.consecutiveLosses,
+              weeklyPnlPercent: journal.weeklyPnlPercent ?? 0,
+              dailyPnlPercent: journal.dailyPnlPercent,
+            },
+            heldSymbols,
+          };
         },
-        readContractRules: lane.venue === 'bitget' ? readBitgetTrendPilotContractRules : undefined,
         positions,
         foreignSymbols,
-        accountCounters: {
-          dailyOrderCount,
-          openPositionCount: tracked.length,
-          consecutiveLosses: journal.consecutiveLosses,
-          weeklyPnlPercent: journal.weeklyPnlPercent ?? 0,
-        },
         submitEntry: async (planInput) => {
           const preview = await new TradeExecutionService(input.repository).previewLiveRiskSnapshot(
             input.member.userId, planInput, { fxKrwPerQuoteCurrency: fx!.krwPerQuoteCurrency, now: input.now },
@@ -2224,7 +2251,11 @@ async function runTrendPilotLanesForMember(input: {
             ...planInput,
             marketSnapshot: {
               ...preview.snapshot,
-              accountValueKrw: Math.min(preview.snapshot.accountValueKrw, planInput.marketSnapshot.accountValueKrw),
+              // Bitget preview equity is the whole futures account; Upbit's covers KRW
+              // plus the coin being bought only, so the lane's full-account value is used.
+              accountValueKrw: lane.venue === 'bitget'
+                ? Math.min(preview.snapshot.accountValueKrw, planInput.marketSnapshot.accountValueKrw)
+                : planInput.marketSnapshot.accountValueKrw,
               dailyPnlPercent: planInput.marketSnapshot.dailyPnlPercent,
               weeklyPnlPercent: planInput.marketSnapshot.weeklyPnlPercent,
               consecutiveLosses: planInput.marketSnapshot.consecutiveLosses,
@@ -2238,6 +2269,8 @@ async function runTrendPilotLanesForMember(input: {
               openPositionCount: planInput.marketSnapshot.openPositionCount,
               dailyOrderCount: planInput.marketSnapshot.dailyOrderCount,
               benchmarkDrawdownPercent: planInput.marketSnapshot.benchmarkDrawdownPercent ?? null,
+              signalState: 'entry_ready',
+              signalObservedAt: preview.snapshot.observedAt,
               source: `${preview.snapshot.source ?? 'provider-private-preflight'}+trend-pilot-v1`,
             },
             estimatedSlippagePercent: preview.snapshot.estimatedSlippagePercent ?? planInput.estimatedSlippagePercent,
@@ -2268,33 +2301,41 @@ async function runTrendPilotLanesForMember(input: {
           const trackedPosition = own.find((row) => row.plan.id === position.planId);
           if (!trackedPosition) return { status: 'BLOCKED', blockCodes: ['TREND_PILOT_POSITION_NOT_TRACKED'] };
           const long = position.side !== 'short';
-          // TIME_EXIT passes the market price: force the decision by moving the
-          // decision stop beyond it; the provider recheck still confirms it.
-          const override = reason === 'TRAILING_TAKE_PROFIT' || reason === 'STOP_LOSS'
-            ? triggerPrice : (long ? Number.MAX_SAFE_INTEGER : Number.MIN_VALUE);
-          const exit = await processAutomaticExit({
-            source: input.source,
-            repository: input.repository,
-            member: input.member,
-            position: trackedPosition,
-            fxCache: input.fxCache,
-            now: input.now,
-            live: true,
-            isActive: input.isActive,
-            stopPriceOverride: override,
-          });
-          summary.privateRequests += exit.privateRequests;
-          if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) { summary.ordersCreated += 1; return { status: 'SUBMITTED' }; }
-          if (exit.status === 'IDEMPOTENT') return { status: 'DUPLICATE' };
-          summary.blocked += 1;
-          return { status: 'BLOCKED', blockCodes: [exit.status] };
+          // FORCE_CLOSE (holding cap / stop crossed at the close): move the decision
+          // stop beyond any price so the mark and the provider recheck both confirm.
+          const override = reason === 'FORCE_CLOSE'
+            ? (long ? Number.MAX_SAFE_INTEGER : Number.MIN_VALUE)
+            : triggerPrice;
+          try {
+            const exit = await processAutomaticExit({
+              source: input.source,
+              repository: input.repository,
+              member: input.member,
+              position: trackedPosition,
+              fxCache: input.fxCache,
+              now: input.now,
+              live: true,
+              isActive: input.isActive,
+              stopPriceOverride: override,
+            });
+            summary.privateRequests += exit.privateRequests;
+            if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) { summary.ordersCreated += 1; return { status: 'SUBMITTED' }; }
+            if (exit.status === 'IDEMPOTENT') return { status: 'DUPLICATE' };
+            summary.blocked += 1;
+            return { status: 'BLOCKED', blockCodes: [exit.status] };
+          } catch (error) {
+            // Already closed on the exchange (e.g. the preset stop-loss filled):
+            // the execution sync will settle it; not a lane failure.
+            if (errorCode(error) === 'BACKGROUND_EXIT_QUANTITY_EXCEEDS_PROVIDER_POSITION') return { status: 'STALE_POSITION' };
+            throw error;
+          }
         },
         loadLedger: () => store.load(),
         saveLedger: (ledger) => store.save(ledger),
       });
-      for (const event of tick.events) if (event.kind === 'ERROR') summary.failures += 1;
+      for (const event of tick.events) if (event.kind === 'ERROR') summary.blocked += 1;
     } catch {
-      summary.failures += 1;
+      summary.blocked += 1;
     }
   }
   return summary;
@@ -2734,7 +2775,6 @@ export class MemberAutoTradingBackgroundWorker {
           });
           result.privateTradingRequests += pilot.privateRequests;
           result.blocked += pilot.blocked;
-          result.failures += pilot.failures;
           result.liveOrders += pilot.ordersCreated;
           if (pilot.ordersCreated > 0) {
             try { await refreshRuntime(); } catch { result.newEntriesFailClosed = true; continue; }

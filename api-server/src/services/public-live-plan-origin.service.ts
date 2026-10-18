@@ -1,7 +1,7 @@
 import type { TradingPlanInput, TradingPlan, TradingPolicy } from './trade-automation.types';
 
 const serverReasonPrefixes = [
-  'AUTO_EXIT_ENTRY_PLAN:', 'PILOT_DYNAMIC_CAP_V1:',
+  'AUTO_EXIT_ENTRY_PLAN:', 'PILOT_DYNAMIC_CAP_V1:', 'TREND_PILOT_LANE_V1',
   'STRATEGY_RULE_PACK:', 'STRATEGY_RULE_PACK_GATE:',
   'AI_REVIEW_DECISION:', 'AI_REVIEW_LIVE_ELIGIBLE:', 'AI_REVIEW_EVIDENCE:', 'AI_REVIEW_EXPIRES:',
 ];
