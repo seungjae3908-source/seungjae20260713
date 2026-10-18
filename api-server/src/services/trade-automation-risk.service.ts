@@ -2,6 +2,8 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  LIVE_FIRST_WEEK_DAYS,
+  LIVE_FIRST_WEEK_MAX_ORDER_KRW,
   PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
@@ -126,6 +128,18 @@ export function normalizeTradingPolicy(
     crypto_spot: input.liveMarketEnabled?.crypto_spot === true,
     crypto_futures: input.liveMarketEnabled?.crypto_futures === true,
   };
+  const enabledAt = (market: TradingAssetClass) => {
+    const raw = input.liveMarketEnabledAt?.[market];
+    if (!liveMarketEnabled[market] || typeof raw !== 'string') return null;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) && new Date(ms).toISOString() === raw ? raw : null;
+  };
+  const liveMarketEnabledAt: Record<TradingAssetClass, string | null> = {
+    domestic_stock: enabledAt('domestic_stock'),
+    us_stock: enabledAt('us_stock'),
+    crypto_spot: enabledAt('crypto_spot'),
+    crypto_futures: enabledAt('crypto_futures'),
+  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
@@ -134,6 +148,7 @@ export function normalizeTradingPolicy(
     marketEnabled,
     stockBrokerByMarket,
     liveMarketEnabled,
+    liveMarketEnabledAt,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
@@ -314,6 +329,14 @@ export function evaluateTradingPlan(
   // Owner's per-market real-order switch from the settings screen. Exits stay allowed.
   if (plan.accountMode === 'live' && !riskReducing && policy.liveMarketEnabled?.[assetClassForPlan(plan)] !== true) {
     add(blockCodes, 'LIVE_MARKET_SWITCH_OFF');
+  }
+  // First week after the switch went ON: one new LIVE order may not exceed the small cap.
+  // A missing/invalid timestamp counts as inside the first week (fail closed).
+  if (plan.accountMode === 'live' && !riskReducing) {
+    const switchedOnAt = Date.parse(policy.liveMarketEnabledAt?.[assetClassForPlan(plan)] ?? '');
+    const insideFirstWeek = !Number.isFinite(switchedOnAt)
+      || Date.now() - switchedOnAt < LIVE_FIRST_WEEK_DAYS * 86_400_000;
+    if (insideFirstWeek && plan.estimatedKrw > LIVE_FIRST_WEEK_MAX_ORDER_KRW) add(blockCodes, 'LIVE_FIRST_WEEK_ORDER_CAP');
   }
 
   if (plan.exchange === 'bitget') {

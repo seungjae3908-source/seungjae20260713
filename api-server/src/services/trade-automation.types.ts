@@ -98,6 +98,10 @@ export const PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW =
 export const PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3 as const;
 export const PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7 as const;
 
+/** First week after a market's real-order switch is turned ON: small orders only. */
+export const LIVE_FIRST_WEEK_DAYS = 7 as const;
+export const LIVE_FIRST_WEEK_MAX_ORDER_KRW = 100_000 as const;
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -152,6 +156,8 @@ export type TradingPolicy = {
   marketEnabled: Record<TradingAssetClass, boolean>;
   stockBrokerByMarket?: Record<StockTradingAssetClass, StockBroker>;
   liveMarketEnabled?: Record<TradingAssetClass, boolean>;
+  /** When each market's real-order switch was last turned ON (ISO), for the first-week cap. */
+  liveMarketEnabledAt?: Record<TradingAssetClass, string | null>;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];
