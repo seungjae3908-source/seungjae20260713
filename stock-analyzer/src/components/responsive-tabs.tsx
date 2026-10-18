@@ -27,6 +27,8 @@ export function ResponsiveTabs<T extends string>({
   compact?: boolean;
   fluid?: boolean;
 }) {
+  // Up to four tabs split the row evenly on every screen instead of scrolling sideways.
+  const equalWidth = !fluid && options.length <= 4;
   return (
     <div
       role="tablist"
@@ -71,7 +73,8 @@ export function ResponsiveTabs<T extends string>({
               '-mb-px inline-flex min-h-11 shrink-0 items-center justify-center rounded-none border-b-2 text-center text-xs leading-4 transition-colors min-[1200px]:min-w-0',
               fluid
                 ? 'min-w-0 w-full px-1.5'
-                : compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
+                : equalWidth ? 'min-w-0 flex-1 basis-0 px-1.5'
+                  : compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
               selected
                 ? 'border-brand font-semibold text-foreground'

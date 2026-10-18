@@ -906,7 +906,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
             <div><h2 className="text-sm font-extrabold">검색 기준</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">실제 공급자가 지원하는 시간봉만 요청합니다.</p></div>
             <button type="button" onClick={saveCurrentSearch} disabled={!selected.length} className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-extrabold text-primary disabled:opacity-40"><BookmarkPlus className="h-3.5 w-3.5" />저장 검색</button>
           </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+          <div className="mt-3 flex flex-wrap gap-2">
             {SCANNER_TIMEFRAMES.filter((item) => market === "KR" || item.value !== "4H").map((item) => <button key={item.value} type="button" onClick={() => setTimeframe(item.value)} className={cn("shrink-0 rounded-xl border px-3 py-2 text-xs font-extrabold", timeframe === item.value ? "border-primary bg-primary text-primary-foreground" : "border-card-border bg-background text-muted-foreground")}>{item.label}</button>)}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
