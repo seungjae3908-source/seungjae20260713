@@ -1,0 +1,39 @@
+name: Research Trend Pilot Backtest
+
+# Read-only research: BTC/ETH long-short trend-following pilot rules on public
+# Bitget candles (pre-2026). No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/research-trend-pilot-backtest.yml
+      - research-production/src/trend-pilot-backtest-v1.mjs
+      - research-production/bin/trend-pilot-backtest.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch public candles and run the pilot backtest
+        run: |
+          set -Eeuo pipefail
+          node research-production/bin/trend-pilot-backtest.mjs --fetch "$RUNNER_TEMP/state" | tee trend-pilot-report.txt
+          cp "$RUNNER_TEMP/state/latest/trend-pilot-backtest-v1.json" trend-pilot-backtest-v1.json
+          { echo '```'; cat trend-pilot-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trend-pilot-backtest
+          path: |
+            trend-pilot-report.txt
+            trend-pilot-backtest-v1.json
+          retention-days: 90

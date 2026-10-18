@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { runManagedExitBacktestV1 } from '../src/managed-exit-backtest-v1.mjs';
+import {
+  TREND_PILOT_VARIANTS_V1,
+  evaluateTrendPilotSymbolV1,
+  formatTrendPilotReportKoV1,
+  resampleCandlesV1,
+  summarizeTradesKrwV1,
+  trendSignalsV1,
+} from '../src/trend-pilot-backtest-v1.mjs';
+
+const HOUR = 3_600_000;
+const START = Date.UTC(2023, 0, 1);
+
+function hourly(n, drift, seed = 5) {
+  let s = seed; const r = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  let p = 100; const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const o = p; p = Math.max(1, p * (1 + drift(i) + ((r() - 0.5) * 0.006)));
+    out.push({ timestamp: START + (i * HOUR), open: o, close: p, high: Math.max(o, p) * 1.001, low: Math.min(o, p) * 0.999, volume: 10 });
+  }
+  return out;
+}
+
+test('resampling builds complete aligned bars only', () => {
+  const bars = resampleCandlesV1(hourly(30, () => 0), 4);
+  assert.equal(bars.length, 7);
+  assert.equal(bars[0].timestamp, START);
+  assert.equal(bars[1].open, hourly(30, () => 0)[4].open);
+});
+
+test('signals use prior bars only and require the EMA side', () => {
+  const bars = resampleCandlesV1(hourly(4 * 400, (i) => (i > 4 * 300 ? 0.002 : 0)), 4);
+  const s = trendSignalsV1(bars);
+  const cut = trendSignalsV1(bars.slice(0, 330));
+  assert.deepEqual(cut.long.slice(0, 330), s.long.slice(0, 330));
+  assert.ok(s.long.some(Boolean));
+  assert.equal(s.long.some((v, i) => v && s.short[i]), false);
+});
+
+test('stop cap limits the initial loss to 2.5% of entry', () => {
+  const candles = hourly(4 * 300, () => 0);
+  const r = runManagedExitBacktestV1({ backtestInput: { market: 'CRYPTO_FUTURES', side: 'long', symbol: 'BTCUSDT', candles, riskModel: { riskPerTrade: 0.5, leverage: 2 } },
+    plan: { exit: { stopAtrMultiple: 50, maxStopFraction: 0.025, targetR: null, trailing: { atrMultiple: 50 }, maxHoldBars: 5 } },
+    signalEvaluator: ({ index }) => (index === 100 ? {} : null) });
+  const t = r.trades[0];
+  assert.ok(Math.abs((t.entryPrice - t.stopPrice) / t.entryPrice - 0.025) < 1e-9);
+});
+
+test('a strong uptrend makes money on the long side; a strong downtrend on the short side', () => {
+  const variant = TREND_PILOT_VARIANTS_V1.find((v) => v.id === 'H4_CAP25');
+  const up = evaluateTrendPilotSymbolV1({ symbol: 'BTCUSDT', candles: hourly(4 * 600, (i) => (i > 4 * 250 ? 0.0012 : 0)), variant });
+  const upSummary = summarizeTradesKrwV1(up.trades);
+  assert.ok(upSummary.longs > 0 && upSummary.totalKrw > 0, JSON.stringify(upSummary));
+  const down = evaluateTrendPilotSymbolV1({ symbol: 'ETHUSDT', candles: hourly(4 * 600, (i) => (i > 4 * 250 ? -0.0012 : 0)), variant });
+  const downSummary = summarizeTradesKrwV1(down.trades);
+  assert.ok(downSummary.shorts > 0 && downSummary.totalKrw > 0, JSON.stringify(downSummary));
+  for (let i = 1; i < up.trades.length; i += 1) assert.ok(up.trades[i].entryTime >= up.trades[i - 1].exitTime, 'one position at a time');
+});
+
+test('KRW summary counts days over the daily loss limit and streaks', () => {
+  const day = 86_400_000;
+  const s = summarizeTradesKrwV1([
+    { entryTime: 0, exitTime: day, returnOnNotional: -0.02, side: 'long' },
+    { entryTime: day, exitTime: day + 1, returnOnNotional: -0.015, side: 'short' },
+    { entryTime: 2 * day, exitTime: 3 * day, returnOnNotional: 0.08, side: 'long' },
+  ]);
+  assert.equal(s.trades, 3);
+  assert.equal(s.totalKrw, 45_000);
+  assert.equal(s.daysOverDailyLimit, 1);
+  assert.equal(s.longestLosingStreak, 2);
+  assert.equal(s.maxDrawdownKrw, 35_000);
+  assert.match(formatTrendPilotReportKoV1({ status: 'WAITING_FOR_DATA', notionalKrw: 1_000_000 }), /데이터 대기/);
+});
