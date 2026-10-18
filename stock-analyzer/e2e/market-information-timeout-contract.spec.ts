@@ -31,7 +31,15 @@ test('Market Information client timeout cannot preempt the server first-paint fa
   expect(clientSource).toContain("errorCode: 'MARKET_INFORMATION_TIMEOUT'");
   expect(clientSource).not.toContain('MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500');
 
-  expect(serverSource).toContain('new MarketInformationFirstPaintTimeoutError(stockFirstPaintTimeoutMs)');
+  // With a confirmed snapshot in hand the server answers on the shorter snapshot
+  // budget; without one it keeps the full first-paint wait. Either budget stays
+  // inside the browser transport timeout above.
+  const snapshotFirstPaintTimeout = numericConstant(serverSource, 'DEFAULT_STOCK_SNAPSHOT_FIRST_PAINT_TIMEOUT_MS');
+  expect(snapshotFirstPaintTimeout).toBeGreaterThan(0);
+  expect(snapshotFirstPaintTimeout).toBeLessThanOrEqual(serverFirstPaintTimeout);
+  expect(serverSource).toContain('? stockSnapshotFirstPaintTimeoutMs');
+  expect(serverSource).toContain(': stockFirstPaintTimeoutMs;');
+  expect(serverSource).toContain('new MarketInformationFirstPaintTimeoutError(firstPaintBudgetMs)');
   expect(serverSource).toContain('return res.status(200).json(stockFirstPaintFallback(room));');
 });
 
