@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeChartCandles,
+  chartMarketTimeZone,
   parseChartCandleTime,
   type ChartCandleTimeframe,
 } from './chart-candle-normalizer';
@@ -46,9 +47,22 @@ async function waitForAbortAwareDelay(ms: number, signal?: AbortSignal) {
 test('timestamps are parsed without inventing a current-time fallback', () => {
   assert.equal(parseChartCandleTime(1_700_000_000), 1_700_000_000);
   assert.equal(parseChartCandleTime(1_700_000_000_000), 1_700_000_000);
-  assert.equal(parseChartCandleTime('20260102030405'), Date.UTC(2026, 0, 2, 3, 4, 5) / 1_000);
+  // Compact clock times are KST (Kiwoom); date-only values keep UTC midnight.
+  assert.equal(parseChartCandleTime('20260102030405'), Date.UTC(2026, 0, 1, 18, 4, 5) / 1_000);
+  assert.equal(parseChartCandleTime('20260102'), Date.UTC(2026, 0, 2) / 1_000);
   assert.equal(parseChartCandleTime('not-a-time'), null);
   assert.equal(parseChartCandleTime(''), null);
+});
+
+test('a Kiwoom KST compact bar and the same Yahoo UTC bar are one instant', () => {
+  assert.equal(
+    parseChartCandleTime('20261016150000'),
+    parseChartCandleTime('2026-10-16T06:00:00Z'),
+  );
+  assert.equal(parseChartCandleTime('202610161500'), parseChartCandleTime('2026-10-16T06:00:00Z'));
+  assert.equal(chartMarketTimeZone('KR'), 'Asia/Seoul');
+  assert.equal(chartMarketTimeZone('US'), 'America/New_York');
+  assert.equal(chartMarketTimeZone('UPBIT'), 'Asia/Seoul');
 });
 
 test('normalization sorts candles, drops invalid rows, and keeps the latest duplicate', () => {
