@@ -9,6 +9,8 @@ import { renderTelegramAlert } from './telegram-notification.service';
 import {
   collectTelegramBriefSignalStatus, telegramBriefSignalLines,
 } from './telegram-brief-signal-status.service';
+// Signal follow-up tests ride this file's slot in the Telegram test group.
+import './telegram-v3-signal-followup.service.test';
 
 const leaders=Array.from({length:6},(_,i)=>({
   name:'관찰종목'+(i+1),symbol:'T'+(i+1),changePercent:2.5,
