@@ -234,13 +234,25 @@ async function verify(request, options) {
   });
 }
 
-/** Read-only adapter over the private immutable minute archive. */
-export function createArchiveDeriveSessionV1({ root }) {
+/**
+ * Upbit candle datasets name the pair `KRW-BTC`, while the 1-minute collector
+ * (`four-market-minute-intake`) stores the bare ticker `BTC`. Pass this as
+ * `archiveSymbol` when the archive was filled by that collector.
+ */
+export const upbitBareTickerArchiveSymbolV1 = (symbol) => String(symbol).replace(/^KRW-/u, '');
+
+/**
+ * Read-only adapter over the private immutable minute archive. `archiveSymbol`
+ * maps the dataset symbol to the symbol the archive actually stores (default:
+ * unchanged).
+ */
+export function createArchiveDeriveSessionV1({ root, archiveSymbol = (symbol) => symbol }) {
   if (typeof root !== 'string' || root.length === 0) throw new TypeError('ARCHIVE_ROOT_REQUIRED');
+  if (typeof archiveSymbol !== 'function') throw new TypeError('ARCHIVE_SYMBOL_MAPPER_INVALID');
   return ({ symbol, sessionStartMs, asOfMs, timeframe }) => deriveArchivedResearchTimeframesV1({
     root,
     market: 'CRYPTO_SPOT',
-    symbol,
+    symbol: archiveSymbol(symbol),
     sessionStartMs,
     asOfMs,
     timeframes: [timeframe],
