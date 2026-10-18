@@ -101,3 +101,18 @@ test('experiment records are appended once per experiment', async (t) => {
   assert.equal(lines.length, 1);
   assert.equal(JSON.parse(lines[0]).datasetDigests.A, 'h1');
 });
+
+test('walk-forward selection does not use hindsight: a trial rejected on the full sample still competes at each window', () => {
+  const trial = (id, status, means) => ({ trialId: id, status, walkForward: { windows: means.map((meanReturn) => ({ trades: 30, meanReturn })) } });
+  // "late" looks best early but collapses later, so the full-sample verdict rejects it. At window 1..2
+  // a real process would still have picked it; excluding it would hide that failure.
+  const trials = { late: trial('late', 'REJECT', [0.05, 0.05, -0.08, -0.08]), steady: trial('steady', 'WATCH', [0.004, 0.004, 0.004, 0.004]) };
+  const result = rollingSelectionWalkForwardV1(trials, { minimumTrades: 20 });
+  assert.equal(result.folds[0].trialId, 'late');
+  assert.equal(result.folds[1].trialId, 'late');
+  assert.equal(result.folds[2].trialId, 'late');
+  assert.equal(result.verdict, 'SELECTION_FAILS_OUT_OF_SAMPLE');
+  // unequal window counts are truncated to the common length, never read past the end
+  const ragged = { a: trial('a', 'WATCH', [0.01, 0.01, 0.01]), b: trial('b', 'WATCH', [0.02, 0.02]) };
+  assert.equal(rollingSelectionWalkForwardV1(ragged).folds.length, 1);
+});
