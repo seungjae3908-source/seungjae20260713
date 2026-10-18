@@ -79,6 +79,15 @@ function tradingWeekday(clock: LocalClock): boolean {
   return clock.weekday !== 'Sat' && clock.weekday !== 'Sun';
 }
 
+// A KST morning brief to a stock room is skipped when no session closed since the
+// previous one: KR is closed Sat/Sun; on a KST Sunday or Monday morning the last US
+// session is Friday's, already covered by the Saturday brief. Crypto rooms trade 24/7.
+function closedStockMorning(destination: TelegramReportDestination, kst: LocalClock): boolean {
+  if (destination === 'KR_STOCK_ROOM') return kst.weekday === 'Sat' || kst.weekday === 'Sun';
+  if (destination === 'US_STOCK_ROOM') return kst.weekday === 'Sun' || kst.weekday === 'Mon';
+  return false;
+}
+
 function within(clock: LocalClock, startHour: number, startMinute: number, endHour: number, endMinute: number): boolean {
   const current = minuteOfDay(clock);
   const start = startHour * 60 + startMinute;
@@ -114,7 +123,9 @@ function reportPlan(
     ? allDestinations.filter((destination) => destination === 'KR_STOCK_ROOM')
     : kind === 'US_PREMARKET'
       ? allDestinations.filter((destination) => destination === 'US_STOCK_ROOM')
-      : allDestinations;
+      : kind === 'MORNING'
+        ? allDestinations.filter((destination) => !closedStockMorning(destination, clock))
+        : allDestinations;
   return {
     kind,
     scheduledTimezone,
