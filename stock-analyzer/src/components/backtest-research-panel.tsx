@@ -621,7 +621,7 @@ export function BacktestResearchPanel({ execute = runBacktest, executePortfolio 
               className={inputClass}
               value={portfolioText}
               placeholder="예: BTC, ETH, SOL"
-              aria-label="포트폴리오 종목"
+              aria-label="묶음 심볼 입력"
               onChange={(event) => setPortfolioText(event.target.value.toUpperCase())}
             />
             <button type="button" disabled={portfolioLoading || loading} onClick={() => void submitPortfolio()} className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-border px-4 text-xs font-black disabled:opacity-60" data-testid="backtest-portfolio-run">
