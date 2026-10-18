@@ -130,7 +130,8 @@ test('futures: every timing rule runs long-only, short-only (mirror chart) and l
 });
 
 test('legend trader rules: present, sourced, and parabolic short only shorts on futures', () => {
-  const ids = ['DANTE_224_BREAKOUT', 'DANTE_224_PULLBACK', 'DANTE_112_BOTTOM', 'QULLAMAGGIE_BREAKOUT', 'MINERVINI_VCP', 'DARVAS_BOX', 'BRANDT_PATTERN', 'COWEN_LOG_RISK', 'QULLAMAGGIE_PARABOLIC_SHORT'];
+  const ids = ['DANTE_224_BREAKOUT', 'DANTE_224_PULLBACK', 'DANTE_112_BOTTOM', 'QULLAMAGGIE_BREAKOUT', 'MINERVINI_VCP', 'DARVAS_BOX', 'BRANDT_PATTERN', 'COWEN_LOG_RISK', 'QULLAMAGGIE_PARABOLIC_SHORT',
+    'KELL_EMA_CROSSBACK', 'STOCKBEE_MOMENTUM_BURST', 'LIVERMORE_PIVOT_PYRAMID', 'ZANGER_CUP_HANDLE', 'YUMOKMIN_LEADER_NEXTDAY', 'MAYER_MULTIPLE', 'PI_CYCLE_TOP', 'WMA200_BANDS', 'GRID_BOT_20', 'GRID_BOT_10'];
   for (const id of ids) assert.ok(TIMING_RULES_V1.find((r) => r.id === id && r.source), id);
   // pump then crack: parabolic short must go short after the first lower-low day
   const bars = walk(300, 7, { vol: 0.01 });
@@ -190,4 +191,16 @@ test('a filter that does not improve net return, drawdown and validation Sharpe 
   const byId = Object.fromEntries(compareVolumeFilterV1(rows).map((c) => [c.id, c.verdict]));
   assert.equal(byId['BB_BREAKOUT__RVOL15'], 'KEEP');
   assert.equal(byId['BB_BREAKOUT__CONFIRM1'], 'REMOVE');
+});
+
+test('grid bot holds more as price falls inside the range and resets on breakout; pyramid steps 0.5 → 1', () => {
+  const grid = TIMING_RULES_V1.find((r) => r.id === 'GRID_BOT_20');
+  const close = [100, 90, 82, 110, 125, 125];
+  const w = grid.make({ close, n: close.length, bars: close.map((c) => ({ close: c })) });
+  assert.equal(w[0], 0.5); assert.ok(w[1] > w[0] && w[2] > w[1]); assert.ok(w[3] < 0.5); assert.equal(w[4], 0.5);
+  const bars = walk(400, 21, { drift: 0.003, vol: 0.01 });
+  const pyr = TIMING_RULES_V1.find((r) => r.id === 'LIVERMORE_PIVOT_PYRAMID').make({ bars, close: bars.map((b) => b.close), n: bars.length });
+  assert.ok(pyr.includes(0.5) && pyr.includes(1) && pyr.every((v) => [0, 0.5, 1].includes(v)));
+  const res = evaluateStrategyZooMarketV1({ market: 'US_STOCK', datasets: [{ symbol: 'SPY', candles: bars }], universe: 'WIDE' });
+  assert.match(res.label, /확장/);
 });

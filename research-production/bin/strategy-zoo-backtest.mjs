@@ -5,7 +5,7 @@
 //   KR/US stocks + US ETFs: Yahoo daily 2005–2025, dividend/split adjusted (adjclose)
 //   Upbit KRW spot: daily since listing (Upbit days endpoint)
 //   Bitget USDT perpetuals: daily since listing + funding history
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { BitgetPublicClient } from '../../market-prediction-lab/src/bitget-public-client.js';
@@ -34,6 +34,75 @@ export const STRATEGY_ZOO_UNIVERSE_V1 = Object.freeze({
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Fallback mid/small-cap US list if the Nasdaq screener is unreachable (current listings → survivorship bias, reported).
+const US_WIDE_FALLBACK_V1 = ['SMCI', 'CELH', 'ELF', 'DECK', 'AXON', 'ENPH', 'FSLR', 'MSTR', 'COIN', 'PLTR', 'CRWD', 'DDOG', 'NET', 'ZS', 'MDB', 'SNOW', 'HUBS',
+  'TTD', 'ROKU', 'ETSY', 'PINS', 'SNAP', 'UBER', 'LYFT', 'DKNG', 'RBLX', 'U', 'TWLO', 'OKTA', 'DOCU', 'ZM', 'SHOP', 'SQ', 'PYPL', 'AFRM', 'UPST',
+  'SOFI', 'HOOD', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI', 'PLUG', 'RUN', 'SEDG', 'ON', 'MPWR', 'LSCC', 'WOLF', 'CRUS', 'SWKS', 'QRVO', 'MRVL', 'MU',
+  'AMAT', 'LRCX', 'KLAC', 'TER', 'ENTG', 'ONTO', 'AEHR', 'ACLS', 'VRT', 'ANET', 'CIEN', 'LITE', 'COHR', 'IONQ', 'RGTI', 'APP', 'CVNA', 'W', 'CHWY',
+  'FIVE', 'LULU', 'CROX', 'ONON', 'BIRK', 'WING', 'CMG', 'CAVA', 'TXRH', 'SHAK', 'BOOT', 'ANF', 'URBN', 'AEO', 'GPS', 'TPR', 'RL', 'SKX', 'YETI',
+  'POOL', 'TREX', 'BLDR', 'UFPI', 'IBP', 'TOL', 'LEN', 'DHI', 'PHM', 'KBH', 'MTH', 'NVR', 'MHO', 'GRBK', 'SAIA', 'ODFL', 'XPO', 'JBHT', 'KNX',
+  'CAR', 'HTZ', 'AAL', 'UAL', 'DAL', 'LUV', 'JBLU', 'ALK', 'CCL', 'RCL', 'NCLH', 'EXPE', 'ABNB', 'BKNG', 'MAR', 'H', 'WYNN', 'LVS', 'MGM', 'CZR',
+  'PENN', 'CHDN', 'MRNA', 'BNTX', 'NVAX', 'VRTX', 'REGN', 'ALNY', 'SRPT', 'EXAS', 'NTRA', 'DXCM', 'PODD', 'TNDM', 'ISRG', 'IDXX', 'ALGN', 'HZNP',
+  'INCY', 'BMRN', 'NBIX', 'EXEL', 'HALO', 'UTHR', 'CRSP', 'NTLA', 'BEAM', 'EDIT', 'VKTX', 'MDGL', 'CYTK', 'APLS', 'KRYS', 'AXSM', 'ITCI', 'IONS',
+  'OXY', 'DVN', 'FANG', 'APA', 'MRO', 'EQT', 'AR', 'RRC', 'SWN', 'CTRA', 'MTDR', 'SM', 'CHRD', 'PR', 'CIVI', 'NOG', 'TALO', 'CLF', 'X', 'NUE',
+  'STLD', 'AA', 'FCX', 'MP', 'ALB', 'LTHM', 'SQM', 'CCJ', 'UEC', 'URA', 'CENX', 'ATI', 'CRS', 'HWM', 'TDG', 'HEI', 'AXON', 'KTOS', 'AVAV', 'RKLB',
+  'ACHR', 'JOBY', 'GME', 'AMC', 'BBBY', 'TLRY', 'CGC', 'SPCE', 'OPEN', 'Z', 'RDFN', 'EXPI', 'COMP', 'CSGP', 'FICO', 'MSCI', 'SPGI', 'MCO', 'NDAQ',
+  'CBOE', 'IBKR', 'SCHW', 'LPLA', 'RJF', 'EVR', 'LAZ', 'PJT', 'HLI', 'KKR', 'BX', 'APO', 'ARES', 'OWL', 'TPG', 'CG', 'ALLY', 'COF', 'DFS', 'SYF'];
+
+async function fetchText(url) {
+  const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) research', accept: '*/*' }, signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw new Error(`HTTP_${res.status}`);
+  return res.text();
+}
+
+/** Wide universes, resolved at run time from public listings (current members → survivorship bias, stated in the report). */
+async function resolveWideUniverse() {
+  const wide = {};
+  // KR: Naver market-cap ranking, KOSPI (sosok=0) and KOSDAQ (sosok=1) top 200 each
+  const kr = new Set(STRATEGY_ZOO_UNIVERSE_V1.KR_STOCK);
+  for (const sosok of [0, 1]) for (let page = 1; page <= 4; page += 1) {
+    try { const html = await fetchText(`https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`);
+      for (const m of html.matchAll(/main\.naver\?code=(\d{6})/gu)) kr.add(m[1]); } catch (e) { process.stderr.write(`UNIVERSE_KR_FAILED:${sosok}:${page}:${e.message}\n`); }
+    await sleep(300);
+  }
+  process.stderr.write(`UNIVERSE_KR_NAVER:${kr.size}\n`);
+  if (kr.size < 150) {
+    // Naver may serve an empty ranking outside Korea: fall back to the KRX KIND company list
+    // (all listed companies, no market cap) and take a deterministic stratified sample.
+    for (const [type, take] of [['stockMkt', 200], ['kosdaqMkt', 200]]) {
+      try { const html = await fetchText(`https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&marketType=${type}`);
+        const codes = [...new Set([...html.matchAll(/>(\d{6})</gu)].map((m) => m[1]))].sort();
+        const step = Math.max(1, Math.floor(codes.length / take));
+        codes.filter((_, k) => k % step === 0).slice(0, take).forEach((c) => kr.add(c));
+        process.stderr.write(`UNIVERSE_KR_KIND:${type}:${codes.length}\n`);
+      } catch (e) { process.stderr.write(`UNIVERSE_KR_KIND_FAILED:${type}:${e.message}\n`); }
+      await sleep(300);
+    }
+  }
+  wide.KR_STOCK = [...kr];
+  // US: Nasdaq screener, stratified sample of mid/small caps (rank 100…1700 by market cap, every 5th)
+  let us = [];
+  try {
+    const json = await fetchJson('https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true');
+    const rows = (json?.data?.rows ?? []).filter((r) => /^[A-Z]{1,5}$/u.test(r.symbol) && Number(r.marketCap) >= 3e8).sort((a, b) => Number(b.marketCap) - Number(a.marketCap));
+    us = rows.slice(100, 1700).filter((_, k) => k % 5 === 0).map((r) => r.symbol);
+  } catch (e) { process.stderr.write(`UNIVERSE_US_SCREENER_FAILED:${e.message}\n`); }
+  if (us.length < 100) us = [...new Set([...us, ...US_WIDE_FALLBACK_V1])];
+  wide.US_STOCK = [...new Set([...STRATEGY_ZOO_UNIVERSE_V1.US_STOCK, ...us])];
+  // Upbit: every KRW market
+  try { const all = await fetchJson('https://api.upbit.com/v1/market/all?isDetails=false');
+    wide.CRYPTO_SPOT = [...new Set([...STRATEGY_ZOO_UNIVERSE_V1.CRYPTO_SPOT, ...all.map((x) => x.market).filter((m) => m.startsWith('KRW-'))])];
+  } catch (e) { process.stderr.write(`UNIVERSE_UPBIT_FAILED:${e.message}\n`); wide.CRYPTO_SPOT = [...STRATEGY_ZOO_UNIVERSE_V1.CRYPTO_SPOT]; }
+  // Bitget: top 60 USDT perpetuals by 24h quote volume
+  try { const json = await fetchJson('https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES');
+    const top = (json?.data ?? []).filter((x) => /USDT$/u.test(x.symbol)).sort((a, b) => Number(b.usdtVolume ?? b.quoteVolume ?? 0) - Number(a.usdtVolume ?? a.quoteVolume ?? 0)).slice(0, 60).map((x) => x.symbol);
+    wide.CRYPTO_FUTURES = [...new Set([...STRATEGY_ZOO_UNIVERSE_V1.CRYPTO_FUTURES, ...top])];
+  } catch (e) { process.stderr.write(`UNIVERSE_BITGET_FAILED:${e.message}\n`); wide.CRYPTO_FUTURES = [...STRATEGY_ZOO_UNIVERSE_V1.CRYPTO_FUTURES]; }
+  wide.US_TAA = [...STRATEGY_ZOO_UNIVERSE_V1.US_TAA];
+  for (const [m, xs] of Object.entries(wide)) process.stderr.write(`UNIVERSE_WIDE:${m}:${xs.length}\n`);
+  return wide;
+}
 
 async function fetchJson(url, attempt = 0) {
   const res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 research' }, signal: AbortSignal.timeout(20_000) });
@@ -115,11 +184,12 @@ async function fetchBinanceVisionFunding(symbol) {
 }
 
 async function fetchAll(root) {
-  const cache = join(root, 'strategy-zoo-datasets.json');
-  try { return JSON.parse(await readFile(cache, 'utf8')); } catch { /* fetch */ }
   const data = {};
   const bitget = new BitgetPublicClient({ fetchImpl: globalThis.fetch });
-  for (const [market, symbols] of Object.entries(STRATEGY_ZOO_UNIVERSE_V1)) {
+  const wide = await resolveWideUniverse();
+  const only = (process.env.ZOO_MARKETS ?? '').split(',').filter(Boolean);
+  for (const [market, symbols] of Object.entries(wide)) {
+    if (only.length && !only.includes(market)) continue;
     data[market] = [];
     for (const symbol of symbols) {
       try {
@@ -161,7 +231,7 @@ async function fetchAll(root) {
       await sleep(market.startsWith('CRYPTO') ? 120 : 250);
     }
   }
-  await writeFile(cache, JSON.stringify(data));
+  // no dataset cache: the wide universe is too large for one JSON string
   return data;
 }
 
@@ -172,8 +242,16 @@ await mkdir(join(root, 'latest'), { recursive: true });
 const data = await fetchAll(root);
 const results = [];
 for (const market of ['KR_STOCK', 'US_STOCK', 'US_TAA', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
-  const datasets = data[market] ?? [];
-  results.push(datasets.length ? evaluateStrategyZooMarketV1({ market, datasets }) : { market, label: market, rows: [] });
+  if (!data[market]) continue;
+  const all = data[market] ?? [];
+  const core = new Set(STRATEGY_ZOO_UNIVERSE_V1[market]);
+  const coreSets = all.filter((d) => core.has(d.symbol));
+  results.push(coreSets.length ? evaluateStrategyZooMarketV1({ market, datasets: coreSets }) : { market, label: market, rows: [] });
+  if (market !== 'US_TAA' && all.length > coreSets.length) {
+    // wide universe: keep the market index first so index filters still find it
+    results.push(evaluateStrategyZooMarketV1({ market, datasets: all, universe: 'WIDE' }));
+  }
+  process.stderr.write(`EVALUATED:${market}:core=${coreSets.length}:wide=${all.length}\n`);
 }
 process.stdout.write(`${formatStrategyZooReportKoV1(results)}\n`);
 await writeFile(join(root, 'latest', 'strategy-zoo-v1.json'), `${JSON.stringify({ contract: 'strategy-zoo/v1', observedAt: new Date().toISOString(),

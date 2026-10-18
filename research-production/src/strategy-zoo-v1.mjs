@@ -492,6 +492,16 @@ export const VOLUME_FILTERED_RULES_V1 = buildVolumeFilteredRules();
 // Rules written down from famous traders / YouTubers' public descriptions.
 // Discretionary parts (news, earnings, tape reading) cannot be coded; what is
 // coded is the mechanical skeleton each of them teaches. Adaptations are named.
+function gridWeights(close, n, half, levels = 10) {
+  const out = new Array(n).fill(0); let center = null;
+  for (let i = 0; i < n; i += 1) {
+    if (center === null || close[i] > center * (1 + half) || close[i] < center * (1 - half)) center = close[i];
+    const lower = center * (1 - half); const upper = center * (1 + half);
+    out[i] = Math.round(((upper - close[i]) / (upper - lower)) * levels) / levels;
+  }
+  return out;
+}
+
 function LEGEND_TRADER_RULES() {
   const adr = (bars, L = 20) => sma(bars.map((b) => (b.low > 0 ? (b.high / b.low) - 1 : 0)), L);
   return [
@@ -553,11 +563,64 @@ function LEGEND_TRADER_RULES() {
           const x = Math.log(crypto ? Math.max(1, (bars[i].timestamp - GENESIS) / DAY) : i + 250); const y = Math.log(close[i]);
           sx += x; sy += y; sxx += x * x; sxy += x * y; c += 1;
           if (c < 365) continue; const den = (c * sxx) - (sx * sx); if (den <= 0) continue;
-          const b = ((c * sxy) - (sx * sy)) / den; const a0 = (sy - (b * sx)) / c; const r = y - (a0 + (b * x)); resid.push(r);
-          let below = 0; for (const v of resid) if (v <= r) below += 1; const risk = below / resid.length;
+          const b = ((c * sxy) - (sx * sy)) / den; const a0 = (sy - (b * sx)) / c; const r = y - (a0 + (b * x));
+          let lo = 0; let hi = resid.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (resid[mid] <= r) lo = mid + 1; else hi = mid; }
+          resid.splice(lo, 0, r); const risk = (lo + 1) / resid.length;
           out[i] = risk < 0.3 ? 1 : risk < 0.5 ? 0.75 : risk < 0.7 ? 0.5 : risk < 0.85 ? 0.25 : 0;
         }
         return out; } },
+    { id: 'KELL_EMA_CROSSBACK', family: '전설', name: '올리버 켈 EMA 크로스백 (정배열 중 EMA20 눌림 후 EMA10 재돌파, 눌림 저가 손절)', source: 'Oliver Kell, Victory in Stock Trading (2021); USIC 2020 941%',
+      make: ({ bars, close, n }) => { const e10 = ema(close, 10); const e20 = ema(close, 20); const s50 = sma(close, 50); const lows = bars.map((b) => b.low); const lo5 = rollingMin(lows, 5); let stop = null; let below = 0;
+        return holdUntil(n, (i) => { if (i < 60 || !t(s50[i]) || !t(lo5[i])) return false;
+          const touched = [1, 2, 3, 4, 5].some((k) => lows[i - k] <= e20[i - k]);
+          const ok = e10[i] > e20[i] && e20[i] > s50[i] && touched && close[i - 1] <= e10[i - 1] && close[i] > e10[i];
+          if (ok) { stop = lo5[i]; below = 0; } return ok; },
+        (i) => { below = close[i] < e20[i] ? below + 1 : 0; return close[i] < stop || below >= 2; }); } },
+    { id: 'STOCKBEE_MOMENTUM_BURST', family: '전설', name: '스톡비 모멘텀 버스트 (하루 +4%·코인 +8%, 거래량 전일↑, 3일 보유, 당일 저가 손절)', source: 'Pradeep Bonde (Stockbee) 4% breakout / momentum burst',
+      make: ({ bars, close, n, crypto }) => { const th = crypto ? 0.08 : 0.04; const vol = bars.map((b) => b.volume ?? 0); let stop = null; let held = 0;
+        return holdUntil(n, (i) => { if (i < 2) return false; const ok = close[i] / close[i - 1] - 1 >= th && vol[i] > vol[i - 1] && close[i - 1] / close[i - 2] - 1 < th / 2;
+          if (ok) { stop = bars[i].low; held = 0; } return ok; },
+        (i) => { held += 1; return close[i] < stop || held >= 3; }); } },
+    { id: 'LIVERMORE_PIVOT_PYRAMID', family: '전설', name: '리버모어 피벗 돌파 + 피라미딩 (20일 고점 돌파 절반, +5% 확인 시 전량, 10일 저점·−10% 청산)', source: 'Jesse Livermore, How to Trade in Stocks (1940); Reminiscences of a Stock Operator',
+      make: ({ bars, close, n }) => { const hi = rollingMax(bars.map((b) => b.high), 20); const lo = rollingMin(bars.map((b) => b.low), 10); const s200 = sma(close, 200); const out = new Array(n).fill(0); let w = 0; let entry = null;
+        for (let i = 1; i < n; i += 1) {
+          if (w > 0 && ((t(lo[i - 1]) && close[i] < lo[i - 1]) || close[i] < entry * 0.9)) { w = 0; entry = null; }
+          else if (w === 0 && t(hi[i - 1]) && t(s200[i]) && close[i] > hi[i - 1] && close[i] > s200[i]) { w = 0.5; entry = close[i]; }
+          else if (w === 0.5 && close[i] >= entry * 1.05) w = 1;
+          out[i] = w;
+        }
+        return out; } },
+    { id: 'ZANGER_CUP_HANDLE', family: '전설', name: '댄 쟁어 컵앤핸들 (깊이 12~35% 컵 + 상단 핸들, 거래량 1.5배 돌파, −8% 손절, 50일선 청산)', source: "Dan Zanger (zanger report); O'Neil cup-with-handle",
+      make: ({ bars, close, n }) => { const highs = bars.map((b) => b.high); const lows = bars.map((b) => b.low); const vol = bars.map((b) => b.volume ?? 0); const v50 = sma(vol, 50); const s50 = sma(close, 50);
+        const hi10 = rollingMax(highs, 10); const lo10 = rollingMin(lows, 10); let stop = null;
+        return holdUntil(n, (i) => { if (i < 140 || !t(hi10[i - 1]) || !t(s50[i])) return false;
+          let rim = -Infinity; let rimAt = -1; for (let k = i - 130; k <= i - 30; k += 1) if (highs[k] > rim) { rim = highs[k]; rimAt = k; }
+          let bottom = Infinity; for (let k = rimAt; k <= i - 10; k += 1) bottom = Math.min(bottom, lows[k]);
+          const depth = 1 - (bottom / rim); const recovered = Math.max(...highs.slice(i - 15, i - 4)) >= 0.9 * rim;
+          const handle = lo10[i - 1] >= rim - (0.5 * (rim - bottom)) && lo10[i - 1] >= 0.85 * rim;
+          const volOk = !(v50[i - 1] > 0) || vol[i] >= 1.5 * v50[i - 1];
+          const ok = depth >= 0.12 && depth <= 0.35 && recovered && handle && volOk && close[i] > Math.max(rim, hi10[i - 1]) && close[i] > s50[i];
+          if (ok) stop = close[i] * 0.92; return ok; },
+        (i) => close[i] < stop || (t(s50[i]) && close[i] < s50[i])); } },
+    { id: 'YUMOKMIN_LEADER_NEXTDAY', family: '전설', name: '유목민식 주도주 다음날 (거래대금 2.5배 + 하루 +15%·코인 +20% 급등 → 다음날 시가 매수, 하루 보유)', source: '유목민 (전업투자자, 거래대금 상위 주도주 단타) — 일봉 근사',
+      make: ({ bars, close, n, crypto }) => { const th = crypto ? 0.2 : 0.15; const tv = bars.map((b) => (b.volume ?? 0) * b.close); const a = sma(tv, 20);
+        return close.map((c, i) => (i > 0 && t(a[i - 1]) && a[i - 1] > 0 && tv[i] >= 2.5 * a[i - 1] && c / close[i - 1] - 1 >= th ? 1 : 0)); } },
+    { id: 'MAYER_MULTIPLE', family: '전설', name: '메이어 멀티플 (가격÷200일선 2.4 초과 시 매도, 1.5 아래로 오면 재매수)', source: 'Trace Mayer, Mayer Multiple (2017)',
+      make: ({ close, n }) => { const s = sma(close, 200); const out = new Array(n).fill(0); let hold = true;
+        for (let i = 0; i < n; i += 1) { if (!t(s[i])) continue; const mm = close[i] / s[i]; if (hold && mm > 2.4) hold = false; else if (!hold && mm < 1.5) hold = true; out[i] = hold ? 1 : 0; }
+        return out; } },
+    { id: 'PI_CYCLE_TOP', family: '전설', name: '파이 사이클 탑 (111일선 > 350일선×2 이면 매도, 60일 뒤 200일선 회복 시 재매수)', source: 'Philip Swift, Pi Cycle Top (LookIntoBitcoin 2019)',
+      make: ({ close, n }) => { const a = sma(close, 111); const b = sma(close, 350); const s200 = sma(close, 200); const out = new Array(n).fill(0); let hold = true; let outSince = 0;
+        for (let i = 0; i < n; i += 1) { if (!t(b[i])) continue;
+          if (hold && a[i] > 2 * b[i]) { hold = false; outSince = i; } else if (!hold && i - outSince >= 60 && close[i] > s200[i]) hold = true;
+          out[i] = hold ? 1 : 0; }
+        return out; } },
+    { id: 'WMA200_BANDS', family: '전설', name: '200주선 밴드 분할 (200주선 아래 100%, ×1.5 75%, ×2.5 50%, ×4 25%, 그 위 0%)', source: '200-week moving average heatmap (Bitcoin community / LookIntoBitcoin)',
+      make: ({ close }) => { const s = sma(close, 1400); return close.map((c, i) => { if (!t(s[i])) return 0; const m = c / s[i]; return m <= 1 ? 1 : m <= 1.5 ? 0.75 : m <= 2.5 ? 0.5 : m <= 4 ? 0.25 : 0; }); } },
+    { id: 'GRID_BOT_20', family: '봇', name: '그리드 봇 ±20% 10칸 (가격 낮을수록 보유↑, 범위 이탈 시 재시작)', source: 'Binance/Bitget/Pionex spot grid bot 기본형 — 일봉 근사(장중 왕복 수익 미반영)',
+      make: ({ close, n }) => gridWeights(close, n, 0.2) },
+    { id: 'GRID_BOT_10', family: '봇', name: '그리드 봇 ±10% 10칸 (촘촘한 범위, 범위 이탈 시 재시작)', source: 'Binance/Bitget/Pionex spot grid bot 기본형 — 일봉 근사',
+      make: ({ close, n }) => gridWeights(close, n, 0.1) },
     { id: 'QULLAMAGGIE_PARABOLIC_SHORT', family: '전설', name: '쿨라매기 포물선 숏 (5일 +30%·3연속 양봉 뒤 첫 전일저가 이탈 숏, 고점 손절, 10일선 커버)', source: 'Kristjan Kullamägi parabolic short; stonkscapital systemization', nativeShort: true,
       make: ({ bars, close, n }) => { const s10 = sma(close, 10); const out = new Array(n).fill(0); let armed = 0; let peak = null; let pos = 0; let stop = null; let held = 0;
         for (let i = 5; i < n; i += 1) {
@@ -1083,7 +1146,7 @@ function timingTargets(panel, rule, market) {
   });
 }
 
-export function evaluateStrategyZooMarketV1({ market, datasets }) {
+export function evaluateStrategyZooMarketV1({ market, datasets, universe = 'CORE' }) {
   const spec = STRATEGY_ZOO_MARKETS_V1[market];
   if (!spec) throw new Error(`STRATEGY_ZOO_MARKET_UNKNOWN:${market}`);
   const panel = buildPanel(datasets);
@@ -1160,7 +1223,7 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   for (const r of rows) r.verdict = r.id === 'BUY_HOLD' || r.id === 'SIXTY_FORTY' ? 'BENCHMARK' : verdictV1(r, benchmark);
   for (const r of rows) if (r.verdict === 'USABLE' && r.full.maxDrawdown > 0.5) r.verdict = 'USABLE_HIGH_DRAWDOWN';
   const span = panel.calendar.length ? { from: new Date(panel.calendar[0]).toISOString().slice(0, 10), to: new Date(panel.calendar.at(-1)).toISOString().slice(0, 10) } : null;
-  return { market, label: spec.label, symbols: panel.series.map((s) => s.symbol), span, trials: rows.length, effectiveTrials, meanCorrelation: rhoBar, rows };
+  return { market, universe, label: universe === 'WIDE' ? `${spec.label} [확장 유니버스]` : spec.label, symbols: panel.series.map((s) => s.symbol), span, trials: rows.length, effectiveTrials, meanCorrelation: rhoBar, rows };
 }
 
 // ------------------------------------------------------------------ report
