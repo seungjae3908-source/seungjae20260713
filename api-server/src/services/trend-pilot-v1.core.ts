@@ -512,3 +512,84 @@ export function trendPilotClientOid(memberId: string, symbol: TrendPilotSymbol, 
   for (const ch of memberId) { hash ^= ch.charCodeAt(0); hash = Math.imul(hash, 16777619) >>> 0; }
   return `tp1-${symbol.slice(0, 3).toLowerCase()}-${hash.toString(36)}-${Math.floor(signalBarOpenMs / 1000).toString(36)}`;
 }
+
+// ---------------------------------------------------------------- Upbit KRW spot (long only)
+//
+// Owner decision 2026-10-18 (four-market backtest: Upbit 6 coins +157%, recent
+// segment +80%): the same breakout on Upbit KRW spot, long only, no leverage.
+// Upbit has no resting stop orders, so the stop is watched by the worker and
+// closed with a market sell; between checks the loss can exceed the plan.
+
+export const TREND_PILOT_SPOT_V1 = Object.freeze({
+  strategyId: 'TREND_PILOT_UPBIT_SPOT_4H_V1',
+  strategyVersion: 'trend-pilot-spot-v1.0.0',
+  symbols: Object.freeze(['KRW-BTC', 'KRW-ETH', 'KRW-XRP', 'KRW-SOL', 'KRW-DOGE', 'KRW-ADA'] as const),
+  minOrderKrw: 5_000, // Upbit KRW market minimum
+  volumeDecimals: 8,
+  feeRate: 0.0005,
+});
+
+export type TrendPilotSpotSymbol = (typeof TREND_PILOT_SPOT_V1.symbols)[number];
+
+export interface TrendPilotSpotEntryInput {
+  referencePriceKrw: number; // best ask
+  atrKrw: number;
+  equityKrw: number; // KRW cash + market value of all Upbit holdings
+  availableKrw: number; // free KRW cash
+  maxOrderKrw: number;
+  riskFraction?: number;
+}
+
+export interface TrendPilotSpotEntryPlan {
+  ok: boolean;
+  blockers: string[];
+  stopPriceKrw: number | null;
+  riskUnitKrw: number | null;
+  stopFraction: number | null;
+  orderKrw: number | null; // KRW amount for a market buy (fee added on top by Upbit)
+  expectedVolume: number | null;
+  riskKrw: number | null;
+  capReason: 'RISK' | 'MAX_ORDER' | 'CASH' | null;
+}
+
+export function computeTrendPilotSpotEntryPlan(input: TrendPilotSpotEntryInput): TrendPilotSpotEntryPlan {
+  const riskFraction = input.riskFraction ?? TREND_PILOT_V1.riskFraction;
+  const plan: TrendPilotSpotEntryPlan = { ok: false, blockers: [], stopPriceKrw: null, riskUnitKrw: null, stopFraction: null, orderKrw: null, expectedVolume: null, riskKrw: null, capReason: null };
+  const fail = (code: string): TrendPilotSpotEntryPlan => ({ ...plan, blockers: [code] });
+  if (!isPositive(input.referencePriceKrw)) return fail('INVALID_PRICE');
+  if (!isPositive(input.atrKrw)) return fail('INVALID_ATR');
+  if (!isPositive(input.equityKrw)) return fail('NO_EQUITY');
+  if (!isFiniteNumber(input.availableKrw) || input.availableKrw < 0) return fail('INVALID_CASH');
+  if (!isPositive(input.maxOrderKrw)) return fail('INVALID_MAX_ORDER');
+  if (!isPositive(riskFraction) || riskFraction > 0.03) return fail('RISK_FRACTION_OUT_OF_RANGE');
+  const riskUnitKrw = Math.min(input.atrKrw * TREND_PILOT_V1.stopAtrMultiple, input.referencePriceKrw * TREND_PILOT_V1.maxStopFraction);
+  const stopPriceKrw = input.referencePriceKrw - riskUnitKrw;
+  const stopFraction = safeDivide(riskUnitKrw, input.referencePriceKrw);
+  if (!isPositive(stopPriceKrw) || stopFraction === null || stopFraction <= 0) return fail('INVALID_STOP');
+  const wanted = safeDivide(input.equityKrw * riskFraction, stopFraction);
+  if (wanted === null) return fail('INVALID_STOP');
+  // Keep room for the buy fee so the order never exceeds free cash.
+  const cashRoom = Math.max(0, input.availableKrw / (1 + TREND_PILOT_SPOT_V1.feeRate));
+  let orderKrw = wanted;
+  let capReason: TrendPilotSpotEntryPlan['capReason'] = 'RISK';
+  if (input.maxOrderKrw < orderKrw) { orderKrw = input.maxOrderKrw; capReason = 'MAX_ORDER'; }
+  if (cashRoom < orderKrw) { orderKrw = cashRoom; capReason = 'CASH'; }
+  orderKrw = Math.floor(orderKrw);
+  const expectedVolume = floorToStep(orderKrw / input.referencePriceKrw, 10 ** -TREND_PILOT_SPOT_V1.volumeDecimals);
+  const filled = { ...plan, stopPriceKrw, riskUnitKrw, stopFraction, orderKrw, expectedVolume, capReason, riskKrw: expectedVolume === null ? null : expectedVolume * riskUnitKrw };
+  if (orderKrw < TREND_PILOT_SPOT_V1.minOrderKrw) return { ...filled, blockers: ['BELOW_MIN_ORDER'] };
+  if (expectedVolume === null || expectedVolume <= 0) return { ...filled, blockers: ['VOLUME_BELOW_STEP'] };
+  return { ...filled, ok: true };
+}
+
+/** Spot exit while the bar is still open: market sell once the price touches the stop. */
+export function spotStopTouched(stopPriceKrw: number, lastPriceKrw: number): boolean | null {
+  if (!isPositive(stopPriceKrw) || !isPositive(lastPriceKrw)) return null;
+  return lastPriceKrw <= stopPriceKrw;
+}
+
+/** Signal on spot bars: long side only (a short signal is ignored). */
+export function evaluateTrendPilotSpotSignal(closedBars: ReadonlyArray<TrendPilotCandle>): TrendPilotSignal {
+  const signal = evaluateTrendPilotSignal(closedBars);
+  return signal.side === 'short' ? { ...signal, side: null } : signal;
+}
