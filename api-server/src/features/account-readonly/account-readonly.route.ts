@@ -205,6 +205,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
         provider,
         credentials,
       );
+      service.invalidate(userId, provider);
       return res.json({
         ok: true,
         provider,
@@ -230,6 +231,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
 
     try {
       await credentialRepository(userId).remove(userId, provider);
+      service.invalidate(userId, provider);
       return res.json({
         ok: true,
         provider,

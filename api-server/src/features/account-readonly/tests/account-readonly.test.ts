@@ -518,3 +518,44 @@ test('Bitget Classic fallback is selected when UTA returns 40084 for Classic Acc
   assert.equal(result.transferRequests, 0);
   assert.equal(result.withdrawalRequests, 0);
 });
+
+test('a removed key never serves the previous balance as stale', async () => {
+  const { emptySnapshot } = await import('../account-readonly.contract');
+  let keySaved = true;
+  const service = new AccountReadonlyService(
+    { upbit: async () => {
+      if (!keySaved) throw new AccountReadonlyError('ACCOUNT_NOT_CONFIGURED');
+      return emptySnapshot('upbit', 'CONNECTED', '2026-08-26T00:00:00.000Z', null);
+    } },
+    { upbit: true },
+    () => new Date('2026-08-26T00:01:00.000Z'),
+  );
+  assert.equal((await service.read(USER_A, 'upbit')).status, 'CONNECTED');
+  keySaved = false;
+  const afterRemoval = await service.read(USER_A, 'upbit');
+  assert.equal(afterRemoval.status, 'NOT_CONFIGURED');
+  assert.equal(afterRemoval.stale, false);
+});
+
+test('an unreadable key fails as auth error, and invalidate drops the cached balance', async () => {
+  const { emptySnapshot } = await import('../account-readonly.contract');
+  let mode: 'ok' | 'vault' | 'down' = 'ok';
+  const service = new AccountReadonlyService(
+    { bitget: async () => {
+      if (mode === 'vault') throw new AccountReadonlyError('CREDENTIALS_UNAVAILABLE');
+      if (mode === 'down') throw new AccountReadonlyError('PROVIDER_UNAVAILABLE');
+      return emptySnapshot('bitget', 'CONNECTED', '2026-08-26T00:00:00.000Z', null);
+    } },
+    { bitget: true },
+    () => new Date('2026-08-26T00:01:00.000Z'),
+  );
+  await service.read(USER_A, 'bitget');
+  mode = 'vault';
+  assert.equal((await service.read(USER_A, 'bitget')).status, 'AUTH_FAILED');
+
+  mode = 'ok';
+  await service.read(USER_A, 'bitget');
+  service.invalidate(USER_A.userId, 'bitget');
+  mode = 'down';
+  assert.equal((await service.read(USER_A, 'bitget')).status, 'UNAVAILABLE');
+});
