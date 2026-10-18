@@ -296,6 +296,8 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/trend-pilot-v1-lane.service.ts",
   "api-server/src/services/trend-pilot-v1-runtime.service.ts",
   "api-server/src/services/trend-pilot-v1.core.test.ts",
+  "api-server/src/services/trend-pilot-v1-promotion.service.test.ts",
+  "api-server/src/services/trend-pilot-v1-promotion.service.ts",
   "api-server/src/services/trend-pilot-v1.core.ts"
 ]);
 // Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a

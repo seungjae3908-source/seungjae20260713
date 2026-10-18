@@ -1,4 +1,5 @@
 import type { TradingPlanInput, TradingPlan, TradingPolicy } from './trade-automation.types';
+import { MANUAL_ORDER_STRATEGY_ID, MANUAL_ORDER_TICKET_REASON } from './manual-owner-order';
 
 const serverReasonPrefixes = [
   'AUTO_EXIT_ENTRY_PLAN:', 'PILOT_DYNAMIC_CAP_V1:', 'TREND_PILOT_LANE_V1',
@@ -21,9 +22,19 @@ function assertPublicAccountMode(value: unknown) {
  * these machine-issued labels even in approval mode, so merely changing
  * executionMode cannot make a client-forged AI PASS safe. Trusted background
  * producers use the internal service, not HTTP. */
-export function assertPublicLivePlanOrigin(input: TradingPlanInput & { executionMode?: unknown }) {
+export function assertPublicLivePlanOrigin(
+  input: TradingPlanInput & { executionMode?: unknown },
+  options: { allowManualTicket?: boolean } = {},
+) {
   assertPublicAccountMode(input?.accountMode);
   if (input.accountMode !== 'live') return;
+  // The manual-order ticket identity unlocks policy amount/exposure exemptions, so
+  // only the server-built /manual-orders/plan path may carry it; the generic plans
+  // API can never be used to forge it.
+  if (!options.allowManualTicket && (input.strategyId === MANUAL_ORDER_STRATEGY_ID
+    || (Array.isArray(input.signalReasons) && input.signalReasons.some((reason) => reason === MANUAL_ORDER_TICKET_REASON)))) {
+    throw new Error('PUBLIC_MANUAL_ORDER_ORIGIN_FORBIDDEN');
+  }
   if (input.executionMode !== undefined && input.executionMode !== 'manual'
     || !Array.isArray(input.signalReasons)
     || input.signalReasons.some((reason) => typeof reason !== 'string' || serverReason(reason))) {
@@ -34,8 +45,12 @@ export function assertPublicLivePlanOrigin(input: TradingPlanInput & { execution
 /** An AUTO-enabled saved policy must not automatically execute an HTTP-created
  * Live plan. This request-local copy does not turn AUTO off or change any cap,
  * stop, credential, member permission or durable account policy. */
-export function publicPlanPolicy(input: TradingPlanInput, policy: TradingPolicy): TradingPolicy {
-  assertPublicLivePlanOrigin(input);
+export function publicPlanPolicy(
+  input: TradingPlanInput,
+  policy: TradingPolicy,
+  options: { allowManualTicket?: boolean } = {},
+): TradingPolicy {
+  assertPublicLivePlanOrigin(input, options);
   return input.accountMode === 'live' ? { ...policy, mode: 'approval', automaticEnabled: false } : policy;
 }
 
