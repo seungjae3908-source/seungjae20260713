@@ -169,71 +169,6 @@ export interface ResearchFactoryRuntimeSummary {
   controlPlaneDigest: string | null;
 }
 
-export type ResearchResultStatus = 'PRESENT' | 'MISSING' | 'INVALID';
-
-export interface ResearchResultHeader {
-  present: boolean;
-  status: ResearchResultStatus;
-  observedAt: string | null;
-  researchSha: string | null;
-}
-
-export interface CombinationTrialRow {
-  trialId: string | null;
-  finalStatus: string | null;
-  labels: string[];
-  exitId: string | null;
-  qValue: number | null;
-  validationTrades: number | null;
-  validationMeanReturn: number | null;
-  validationWinRate: number | null;
-  beatsBaseline: boolean;
-  holdoutChecked: boolean;
-  holdoutPass: boolean | null;
-}
-
-export interface CombinationLaneSummary {
-  laneId: string;
-  status: string;
-  cumulativeTrials: number | null;
-  survivors: number | null;
-  watch: number | null;
-  rejected: number | null;
-  holdoutUsed: number | null;
-  holdoutBudget: number | null;
-  paperCandidates: Array<{ trialId: string | null; labels: string[]; exitId: string | null; holdoutTrades: number | null; holdoutMeanReturn: number | null }>;
-  top: CombinationTrialRow[];
-}
-
-export interface ExploratoryRuleSummary {
-  ruleId: string | null;
-  laneId: string | null;
-  labels: string[];
-  lifecycle: string | null;
-  open: number | null;
-  strictTrades: number | null;
-  strictMeanR: number | null;
-  strictLower95: number | null;
-  strictWinRate: number | null;
-  promotionEligible: boolean;
-  tradesNeeded: number | null;
-  symbolsNeeded: number | null;
-}
-
-/** Exploratory research results; display only, never promotion or order evidence. */
-export interface ResearchResultsReadback {
-  combination: ResearchResultHeader & { lanes: CombinationLaneSummary[] };
-  exitComparison: ResearchResultHeader & {
-    lanes: Array<{ laneId: string; status: string; signalSetCount: number | null;
-      winners: Array<{ signalSetId: string | null; label: string | null; variantId: string | null; validationMeanR: number | null }> }>;
-  };
-  exploratory: ResearchResultHeader & {
-    totals: { trades: number | null; closed: number | null; open: number | null; promotionEligibleRules: number | null; demotedRules: number | null };
-    rules: ExploratoryRuleSummary[];
-  };
-  executionAuthority: 'NONE';
-}
-
 export interface ResearchFormulaBacktestReadback {
   present: boolean;
   status: 'MISSING' | 'INVALID' | 'WAITING_INPUT' | 'TRAIN_ONLY';
@@ -344,7 +279,6 @@ export interface ResearchCenterOverview {
     blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
     formulaBacktest?: ResearchFormulaBacktestReadback;
-    results?: ResearchResultsReadback;
     liquidityIndependence?: {
       present: boolean;
       status: 'MISSING' | 'INVALID' | 'PRESENT';
