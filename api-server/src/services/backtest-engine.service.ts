@@ -271,4 +271,49 @@ export function recordSelectionRun(memberKey: string, request: BacktestRequest, 
 }
 
 export function resetSelectionRunsForTests() { selectionRuns.clear(); }
+
+export const PORTFOLIO_BACKTEST_LIMITS = Object.freeze({ minimumSymbols: 2, maximumSymbols: 5 });
+export type PortfolioSleeve = { symbol: string; allocatedCapital: number; result: BacktestResult };
+export type PortfolioBacktestResult = {
+  ok: true; mode: 'backtest-only'; orderSubmitted: false; market: BacktestMarket; timeframe: string; strategy: BacktestStrategyType;
+  startTime: number; endTime: number; symbols: string[]; skipped: Array<{ symbol: string; reason: string }>;
+  initialCapital: number; finalCapital: number; totalReturnPercent: number; annualizedReturnPercent: number | null;
+  totalTrades: number; winRate: number; profitFactor: number | null; expectancy: number;
+  maximumDrawdown: number; maximumDrawdownPercent: number;
+  /** Sum of every sleeve's mark-to-market drawdown: assumes the worst moments coincide, so it is an upper bound. */
+  markedMaximumDrawdownUpperBound: number; markedMaximumDrawdownUpperBoundPercent: number;
+  sharpeRatio: number | null; sortinoRatio: number | null;
+  sleeves: PortfolioSleeve[]; equityCurve: BacktestEquityPoint[]; drawdownCurve: BacktestDrawdownPoint[];
+  warnings: string[]; calculatedAt: string;
+};
+/**
+ * Runs the same strategy on several symbols, each with an equal share of the capital (independent sleeves),
+ * and combines the closed trades into one equity curve. Capital is NOT shared between sleeves: a loss in one never
+ * frees or reduces risk budget in another, and the concurrent-position limit applies per sleeve.
+ */
+export function runPortfolioBacktest(base: BacktestRequest, candlesBySymbol: Readonly<Record<string, readonly NormalizedCandle[]>>, now = new Date(), overridesBySymbol: Readonly<Record<string, Partial<BacktestRequest>>> = {}): PortfolioBacktestResult {
+  const symbols = [...new Set(Object.keys(candlesBySymbol).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
+  if (symbols.length < PORTFOLIO_BACKTEST_LIMITS.minimumSymbols || symbols.length > PORTFOLIO_BACKTEST_LIMITS.maximumSymbols) throw new BacktestValidationError('INVALID_PORTFOLIO_SIZE', `포트폴리오 백테스트는 종목 ${PORTFOLIO_BACKTEST_LIMITS.minimumSymbols}~${PORTFOLIO_BACKTEST_LIMITS.maximumSymbols}개만 지원합니다.`);
+  const lookup = new Map(Object.entries(candlesBySymbol).map(([symbol, rows]) => [symbol.trim().toUpperCase(), rows]));
+  const allocatedCapital = base.initialCapital / symbols.length; const sleeves: PortfolioSleeve[] = []; const skipped: Array<{ symbol: string; reason: string }> = []; const warnings: string[] = [];
+  for (const symbol of symbols) {
+    try { sleeves.push({ symbol, allocatedCapital, result: runBacktest({ ...base, ...(overridesBySymbol[symbol] ?? {}), symbol, initialCapital: allocatedCapital }, lookup.get(symbol) ?? [], now) }); }
+    catch (error) { if (error instanceof BacktestValidationError) skipped.push({ symbol, reason: error.message }); else throw error; }
+  }
+  if (!sleeves.length) throw new BacktestValidationError('PORTFOLIO_NO_RESULT', '모든 종목이 백테스트 조건을 만족하지 못했습니다.');
+  if (skipped.length) warnings.push(`${skipped.map((item) => item.symbol).join(', ')} 종목은 데이터 또는 조건 부족으로 제외했고, 제외된 몫의 자본은 현금으로 남습니다.`);
+  const trades = sleeves.flatMap((sleeve) => sleeve.result.trades).sort((a, b) => a.exitTime - b.exitTime || a.entryTime - b.entryTime);
+  const dd = drawdowns(base.initialCapital, trades); const ratios = ratioStatistics(base.initialCapital, trades, { startTime: base.startTime, endTime: base.endTime, market: base.market });
+  const wins = trades.filter((trade) => trade.netPnl > 0); const slice = performanceSlice(trades);
+  const years = (base.endTime - base.startTime) / (365.25 * 24 * 3_600_000);
+  const markedBound = sleeves.reduce((sum, sleeve) => sum + sleeve.result.markedMaximumDrawdown, 0);
+  warnings.push('종목마다 자본을 똑같이 나눈 독립 운용입니다. 한 종목의 손익이 다른 종목의 위험 한도에 영향을 주지 않습니다.', '합산 최대낙폭은 청산된 거래 기준이고, 평가손실 포함 낙폭은 종목별 최악을 모두 더한 상한입니다.');
+  return { ok: true, mode: 'backtest-only', orderSubmitted: false, market: base.market, timeframe: base.timeframe, strategy: base.strategy, startTime: base.startTime, endTime: base.endTime,
+    symbols: sleeves.map((sleeve) => sleeve.symbol), skipped, initialCapital: base.initialCapital, finalCapital: dd.equity, totalReturnPercent: (dd.equity - base.initialCapital) / base.initialCapital * 100,
+    annualizedReturnPercent: years >= 30 / 365.25 && dd.equity > 0 ? ((dd.equity / base.initialCapital) ** (1 / years) - 1) * 100 : null,
+    totalTrades: trades.length, winRate: trades.length ? wins.length / trades.length * 100 : 0, profitFactor: slice.profitFactor, expectancy: slice.expectancy,
+    maximumDrawdown: dd.maximumDrawdown, maximumDrawdownPercent: dd.maximumDrawdownPercent,
+    markedMaximumDrawdownUpperBound: Math.max(markedBound, dd.maximumDrawdown), markedMaximumDrawdownUpperBoundPercent: Math.max(markedBound, dd.maximumDrawdown) / base.initialCapital * 100,
+    sharpeRatio: ratios.sharpe, sortinoRatio: ratios.sortino, sleeves, equityCurve: dd.equityCurve, drawdownCurve: dd.drawdownCurve, warnings: unique(warnings), calculatedAt: now.toISOString() };
+}
 export function measureBacktestPerformance(request: BacktestRequest, candles: readonly NormalizedCandle[]) { const before = process.memoryUsage().heapUsed; const started = performance.now(); const result = runBacktest(request, candles); return { candleCount: candles.length, tradeCount: result.totalTrades, durationMs: performance.now() - started, heapDeltaBytes: process.memoryUsage().heapUsed - before, timedOut: false }; }
