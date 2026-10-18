@@ -304,6 +304,7 @@ export class TradePreSubmissionRiskService {
         repository: this.repository,
         userId: input.userId,
         blockCodes: result.blockCodes,
+        plan: refreshedPlan,
       });
       throw new TradePreSubmissionRiskError(result);
     }
