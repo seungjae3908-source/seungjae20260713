@@ -467,56 +467,21 @@ export function mobileTabMatches(tab: MobileNavigationTab, location: string): bo
 }
 
 /*
- * Desktop sidebar (>=1200px). Sections follow the product grouping
- * 홈 / 종목 / 기술 / 정보 / 계정 and list every user-visible destination.
+ * Desktop sidebar (>=1200px). Sections are the APP_NAVIGATION groups with the
+ * same labels and menu items, so the staging release navigation contract
+ * (group buttons + menu items by label) holds on desktop and mobile alike.
  */
 export interface SidebarSection {
   id: NavigationGroupId;
-  label: string | null;
+  label: string;
   items: readonly NavigationMenuItem[];
 }
 
-export const SIDEBAR_NAVIGATION: readonly SidebarSection[] = [
-  {
-    id: 'home',
-    label: null,
-    items: [{ id: 'home', href: APP_ROUTES.home, label: '홈', icon: 'home' }],
-  },
-  {
-    id: 'assets',
-    label: '종목',
-    items: navigationGroupById('assets').menu ?? [],
-  },
-  {
-    id: 'technical',
-    label: '기술',
-    items: [
-      { id: 'scanner', href: APP_ROUTES.scanner, label: 'AI 검색기', icon: 'search', capability: 'canAccessBasicInfo' },
-      { id: 'ai-chart', href: APP_ROUTES.aiChart, label: 'AI차트', icon: 'chart', capability: 'canAccessAiChart' },
-      { id: 'backtests', href: APP_ROUTES.backtests, label: '과거검증', icon: 'chart', capability: 'canAccessBacktests' },
-      { id: 'auto-trading', href: APP_ROUTES.autoTrading, label: '자동매매', icon: 'power', capability: 'canAccessAutoTrading' },
-    ],
-  },
-  {
-    id: 'information',
-    label: '정보',
-    items: [
-      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },
-      { id: 'portfolio', href: APP_ROUTES.portfolio, label: '포트폴리오', icon: 'portfolio', capability: 'canAccessPaperTrading' },
-      { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 상담', icon: 'chat', capability: 'canAccessBasicInfo' },
-      { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
-    ],
-  },
-  {
-    id: 'settings',
-    label: '계정',
-    items: [
-      { id: 'settings', href: APP_ROUTES.settings, label: '설정', icon: 'settings' },
-      { id: 'account', href: APP_ROUTES.account, label: '계정 연결', icon: 'settings' },
-      { id: 'admin', href: APP_ROUTES.admin, label: '회원 관리', icon: 'settings', capability: 'canManageMembers' },
-    ],
-  },
-] as const;
+export const SIDEBAR_NAVIGATION: readonly SidebarSection[] = APP_NAVIGATION.map((group) => ({
+  id: group.id,
+  label: group.label,
+  items: group.menu ?? [{ id: group.id, href: group.href, label: group.label, icon: group.icon }],
+}));
 
 export function sidebarItemMatches(item: NavigationMenuItem, location: string): boolean {
   const path = cleanAppPath(location);
