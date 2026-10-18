@@ -280,3 +280,23 @@ test('repeated runs of the same strategy count as parameter searching and add a 
     assert.equal(((await same.json()) as { result: BacktestResult }).result.selectionBias!.runs, 6, 'rerunning identical settings is not a new try');
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
+
+test('portfolio backtest endpoint validates the symbol list and returns equal-capital sleeves without orders', async () => {
+  const { server, baseUrl } = await withServer(undefined, true);
+  try {
+    const post = (body: unknown) => fetch(`${baseUrl}/api/backtests/portfolio`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const tooFew = await post({ ...validBody, symbols: ['BTCUSDT'] });
+    assert.equal(tooFew.status, 400);
+    assert.equal((await tooFew.json() as { code: string }).code, 'INVALID_PORTFOLIO_SIZE');
+    const tooMany = await post({ ...validBody, symbols: ['AUSDT', 'BUSDT', 'CUSDT', 'DUSDT', 'EUSDT', 'FUSDT'] });
+    assert.equal(tooMany.status, 400);
+    const ok = await post({ ...validBody, symbols: ['BTCUSDT', 'ETHUSDT'] });
+    const payload = await ok.json() as { ok: boolean; orderSubmitted: boolean; result: { symbols: string[]; sleeves: Array<{ allocatedCapital: number }>; initialCapital: number; skipped: Array<{ symbol: string }> } };
+    // the fixture loader returns BTCUSDT candles for every symbol, so the ETHUSDT sleeve is rejected as a symbol mismatch and skipped
+    assert.equal(ok.status, 200);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.orderSubmitted, false);
+    assert.equal(payload.result.initialCapital, 10_000);
+    assert.equal(payload.result.symbols.length + payload.result.skipped.length, 2);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
