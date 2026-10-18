@@ -394,10 +394,18 @@ async function ensureSnapshot(): Promise<UnifiedAssetSearchSnapshot> {
   return snapshot;
 }
 
+/**
+ * The response reports `dataAsOf` as the oldest provider source time, so a
+ * recently rebuilt index over an old source listing (e.g. the Nasdaq Trader
+ * directory over a weekend) is stale too. The client rejects stale=false with
+ * a dataAsOf older than 24h.
+ */
 function isStale(current: UnifiedAssetSearchSnapshot) {
   const builtAt = validTimestamp(current.builtAt);
+  const sourceAsOf = validTimestamp(snapshotDataAsOf(current));
   return builtAt == null
     || Date.now() - builtAt > STALE_AFTER_MS
+    || (sourceAsOf != null && Date.now() - sourceAsOf > STALE_AFTER_MS)
     || current.providers.some((provider) => provider.status === 'stale');
 }
 
