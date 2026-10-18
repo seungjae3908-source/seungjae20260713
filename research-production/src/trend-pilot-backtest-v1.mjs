@@ -106,7 +106,7 @@ export function summarizeTradesKrwV1(trades, { notionalKrw = TREND_PILOT_NOTIONA
 
 export const TREND_PILOT_COMPOUNDING_V1 = Object.freeze({
   startEquityKrw: 2_000_000,
-  riskFractions: Object.freeze([0.01, 0.015]),
+  riskFractions: Object.freeze([0.01, 0.015, 0.03, 0.05]),
   maxNotionalKrw: 5_000_000, // server-enforced per-order cap
   dailyLossFraction: 0.015,
 });
