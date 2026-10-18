@@ -145,3 +145,14 @@ test('evaluation splits discovery/validation, compares to long-only and reports 
   assert.match(report, /검증 구간/u);
   assert.match(report, /결론:/u);
 });
+
+test('split time handles large pooled datasets without spreading arrays', () => {
+  const big = [{ symbol: 'BTCUSDT', candles: Array.from({ length: 300_000 }, (_, i) => ({ timestamp: START + (i * HOUR) })) }];
+  const split = evaluateLongShortFlipV1 && Math.floor(START + ((299_999 * HOUR) * 0.6));
+  const capped = big[0].candles.filter((c) => c.timestamp < LONG_SHORT_FLIP_HOLDOUT_START);
+  const expected = Math.floor(START + ((capped.at(-1).timestamp - START) * 0.6));
+  assert.ok(split > 0);
+  return import('../src/long-short-flip-backtest-v1.mjs').then(({ flipSplitTimeV1 }) => {
+    assert.equal(flipSplitTimeV1(big), expected);
+  });
+});
