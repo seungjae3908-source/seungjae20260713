@@ -9,7 +9,11 @@ import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
 } from './telegram-market-room.service';
-import { normalizeTelegramHttpUrl, sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
+import {
+  normalizeTelegramHttpUrl, sendTelegramAlertWithReceipt,
+  type TelegramAlertInput, type TelegramAlertResult, type TelegramTrackedAlertResult,
+} from './telegram-notification.service';
+import { recordTelegramV3SignalAnnounced, startTelegramV3SignalFollowup } from './telegram-v3-signal-followup.service';
 import { renderSignalMessageV2, signalMessageInputFromV3Row } from './telegram-signal-message-v2.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
@@ -547,10 +551,34 @@ export class SignalIntelligenceTelegramSubscriber {
   private running = false;
   constructor(
     private readonly store: SignalIntelligenceTelegramDeliveryState,
-    private readonly deliver: typeof sendTelegramAlert = sendTelegramAlert,
+    private readonly deliver: (input: TelegramAlertInput) =>
+      Promise<TelegramAlertResult | TelegramTrackedAlertResult> = sendTelegramAlertWithReceipt,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly deliverWatchlist: WatchlistDeliverer = deliverMemberWatchlistTelegramForSignal,
+    private readonly recordFollowup: typeof recordTelegramV3SignalAnnounced = recordTelegramV3SignalAnnounced,
   ) {}
+
+  // Target/stop/expiry follow-ups. A tracking failure never undoes or repeats
+  // the accepted signal message; it only means no follow-up for it.
+  private async trackFollowup(
+    event: V3Event, row: Record<string, any> | null, alert: TelegramAlertInput,
+    sent: TelegramAlertResult | TelegramTrackedAlertResult, now: Date,
+  ): Promise<void> {
+    const receipt = sent.ok && 'receipt' in sent ? sent.receipt : null;
+    const input = row ? signalMessageInputFromV3Row(row) : null;
+    if (!receipt || !input || !alert.dedupeKey || !alert.destinationChatId) return;
+    try {
+      await this.recordFollowup({
+        key: alert.dedupeKey, market: input.market, symbol: input.symbol, name: input.name,
+        direction: input.direction, timeframe: input.timeframe, entryZone: input.entryZone,
+        stopLoss: input.stopLoss, targets: input.targets, chatId: alert.destinationChatId,
+        receipt, buttons: alert.buttons, entryExpiresAt: input.expiresAt ?? null, announcedAt: now,
+      });
+    } catch {
+      logger.warn({ code: 'TELEGRAM_V3_FOLLOWUP_NOT_TRACKED', market: event.market },
+        'signal Telegram follow-up tracking unavailable; signal message unaffected');
+    }
+  }
 
   async runOnce(now = new Date()): Promise<SignalTelegramRunResult> {
     const result: SignalTelegramRunResult = {
@@ -651,6 +679,7 @@ export class SignalIntelligenceTelegramSubscriber {
           await this.store.mark(alert.dedupeKey, now);
           result.delivered += 1;
           result.publicDelivered += 1;
+          await this.trackFollowup(event, row ?? null, alert, sent, now);
         } else if (classification === 'KNOWN_NO_SEND') {
           // Only a proven rejection or local non-attempt releases the durable
           // reservation. In-flight DUPLICATE remains unresolved, never SENT.
@@ -710,6 +739,7 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
   const statePath = process.env.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH?.trim()
     || path.resolve(process.cwd(), '.runtime/signal-intelligence-telegram-state.json');
   const subscriber = new SignalIntelligenceTelegramSubscriber(new SignalIntelligenceTelegramDeliveryState(statePath));
+  const followup = startTelegramV3SignalFollowup();
   subscriberRuntimeHealth = Object.freeze({state:'RUNNING', inFlight:0, lastSourceStatus:null});
   let previousStatus: SignalTelegramSourceStatus | null = null;
   const tick = async () => {
@@ -750,6 +780,7 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
   console.log('[signal-intelligence-telegram] subscriber started');
   return { stop: () => {
     clearInterval(timer);
+    followup.stop();
     setSubscriberRuntimeHealth({
       state: subscriberRuntimeHealth.inFlight === 0 ? 'STOPPED' : 'STOPPING',
     });

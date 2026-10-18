@@ -20,6 +20,8 @@ export interface MarketInformationRoomReader {
 export interface MarketInformationRouterOptions {
   stockFirstPaintTimeoutMs?: number;
   stockWarmupDeadlineMs?: number;
+  /** Load both stock rooms once at startup; omitted means no provider calls. */
+  warmStockRoomsOnStart?: boolean;
 }
 
 // Overseas providers (ranking universe, sectors, news, SEC filings) routinely
@@ -32,6 +34,12 @@ const DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS = 4_500;
 const STOCK_LAST_GOOD_MAX_AGE_MS = 30 * 60_000;
 const DEFAULT_STOCK_WARMUP_DEADLINE_MS = 12_000;
 const FIRST_PAINT_TIMEOUT_CODE = 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT';
+// A cold US room needs most of the 4.5s first-paint budget on its own, so the
+// page misses its 5s ready budget after a restart. Loading both stock rooms once
+// at startup fills the provider caches; later requests refresh them through
+// stale-while-revalidate. A periodic refresh competed with search for the event
+// loop and pushed coin suggest requests past the client's 4.5s budget.
+const STOCK_ROOMS = ['stocks-kr', 'stocks-us'] as const;
 type StockRoom = Extract<MarketInformationRoomId, 'stocks-kr' | 'stocks-us'>;
 
 class MarketInformationFirstPaintTimeoutError extends Error {
@@ -178,6 +186,14 @@ export function createMarketInformationRouter(
   const rememberLastGood = (room: StockRoom, result: MarketInformationResponse) => {
     if (isUsableRoomResult(result)) lastGoodByRoom.set(room, { result, storedAt: Date.now() });
   };
+  if (options.warmStockRoomsOnStart) {
+    setTimeout(() => {
+      for (const room of STOCK_ROOMS) {
+        void service.getRoom(room, AbortSignal.timeout(stockWarmupDeadlineMs))
+          .then((result) => rememberLastGood(room, result), () => undefined);
+      }
+    }, 0).unref?.();
+  }
 
   router.get('/:room', async (req, res) => {
     const room = req.params.room;
@@ -272,4 +288,7 @@ export function createMarketInformationRouter(
   return router;
 }
 
-export default createMarketInformationRouter();
+// Only the deployed server warms; tests and local runs make no provider calls.
+export default createMarketInformationRouter(MarketInformationService, {
+  warmStockRoomsOnStart: process.env.NODE_ENV === 'production',
+});

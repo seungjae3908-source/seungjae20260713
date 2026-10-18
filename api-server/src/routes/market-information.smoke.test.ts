@@ -332,3 +332,51 @@ test('stock room first-paint timeout serves the last confirmed snapshot marked s
     await server.close();
   }
 });
+
+test('startup warm loads both stock rooms once so a slow first paint serves the warmed snapshot', async () => {
+  const warmed: string[] = [];
+  let slow = false;
+  const server = await start({
+    async getRoom(room, signal): Promise<MarketInformationResponse> {
+      if (!slow) {
+        warmed.push(room);
+        return fixture(room);
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 150);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      return fixture(room);
+    },
+  }, { stockFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 400, warmStockRoomsOnStart: true });
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual([...warmed].sort(), ['stocks-kr', 'stocks-us']);
+
+    slow = true;
+    const response = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as MarketInformationResponse;
+    assert.equal(body.sections.rankings.status, 'stale');
+    assert.match(body.sections.rankings.message ?? '', /마지막으로 확인한 값/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('the router makes no background provider calls unless startup warm is enabled', async () => {
+  let calls = 0;
+  const server = await start({
+    async getRoom(room): Promise<MarketInformationResponse> {
+      calls += 1;
+      return fixture(room);
+    },
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(calls, 0);
+  } finally {
+    await server.close();
+  }
+});

@@ -97,6 +97,8 @@ on:
       - stock-analyzer/src/lib/auth-bootstrap.ts
       - api-server/src/services/telegram-v3-current-source.service.test.ts
       - api-server/src/services/telegram-v3-current-source.service.ts
+      - api-server/src/services/telegram-v3-signal-followup.service.test.ts
+      - api-server/src/services/telegram-v3-signal-followup.service.ts
       - api-server/src/services/signal-intelligence-telegram-subscriber.service.ts
       - api-server/src/services/telegram-signal-message-v2.service.test.ts
       - api-server/src/services/telegram-signal-message-v2.service.ts
