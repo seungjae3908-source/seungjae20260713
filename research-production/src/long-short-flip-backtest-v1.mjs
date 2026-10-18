@@ -277,7 +277,10 @@ export function simulateLongShortFlipV1({
       if (!finite(vwap)) continue;
       confirm = bar.close < ef && bar.close < vwap ? confirm + 1 : 0;
       const brokeLow = finite(ind.priorLow[i]) && bar.close < ind.priorLow[i];
-      const extra = (finite(fr) && fr >= rules.minShortFunding) || ef < es;
+      // v2 strict short: the trend must have turned AND funding (when known) must be crowded long.
+      const extra = rules.strictShort
+        ? ef < es && (!finite(fr) || fr >= rules.minShortFunding)
+        : (finite(fr) && fr >= rules.minShortFunding) || ef < es;
       if (confirm >= rules.confirmBars && brokeLow && extra) {
         pending = { action: 'short', stop: Math.max(bar.close + (rules.stopAtr * atr), bar.high) };
       }

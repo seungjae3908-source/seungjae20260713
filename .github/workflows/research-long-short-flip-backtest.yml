@@ -11,6 +11,8 @@ on:
       - research-production/src/long-short-flip-backtest-v1.mjs
       - research-production/bin/long-short-flip-backtest.mjs
       - research-production/test/long-short-flip-backtest-v1.test.mjs
+      - research-production/src/long-short-flip-backtest-v2.mjs
+      - research-production/test/long-short-flip-backtest-v2.test.mjs
 
 permissions:
   contents: read
@@ -27,12 +29,13 @@ jobs:
         with:
           node-version: 22
       - name: Unit tests
-        run: node --test research-production/test/long-short-flip-backtest-v1.test.mjs
+        run: node --test research-production/test/long-short-flip-backtest-v1.test.mjs research-production/test/long-short-flip-backtest-v2.test.mjs
       - name: Fetch public candles and run the flip backtest
         run: |
           set -Eeuo pipefail
           node research-production/bin/long-short-flip-backtest.mjs --fetch "$RUNNER_TEMP/state" | tee long-short-flip-report.txt
           cp "$RUNNER_TEMP/state/latest/long-short-flip-backtest-v1.json" long-short-flip-backtest-v1.json
+          cp "$RUNNER_TEMP/state/latest/long-short-flip-backtest-v2.json" long-short-flip-backtest-v2.json
           { echo '```'; cat long-short-flip-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -40,4 +43,5 @@ jobs:
           path: |
             long-short-flip-report.txt
             long-short-flip-backtest-v1.json
+            long-short-flip-backtest-v2.json
           retention-days: 90
