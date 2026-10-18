@@ -1147,7 +1147,7 @@ export function createPaperJournalRouter(
         paperMirrors.payloads, liveHistory.payloads, ownerId,
       );
       const journal = buildUnifiedTradeJournal(
-        [...paperMirrors.payloads, ...externalReconciliation.payloads],
+        [...externalReconciliation.knownPayloads, ...externalReconciliation.payloads],
         filters,
         observedAt,
       );

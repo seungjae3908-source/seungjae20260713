@@ -6,6 +6,10 @@ import {
   reconcileCanonicalPaperJournalMirrors,
   reconcileScopedExternalJournalHistory,
 } from './automatic-paper-journal-mirror.service';
+import express from 'express';
+import type { AddressInfo } from 'node:net';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import { createPaperJournalRouter } from '../routes/paper-journal';
 
 function canonical(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -212,4 +216,165 @@ test('source-bound vault account aliases cannot cross brokers, dates or Toss acc
   assert.equal(reconcileScopedExternalJournalHistory(
     [toss],[{...toss,source:'TOSS_API',accountIdMasked:'TOSS-****-REAL'}],owner,
   ).payloads.length,1);
+});
+
+// --- Regression: live app orders vs exchange history, and >5000 rows ---
+const OWNER='11111111-1111-1111-1111-111111111111';
+const ownerHash=(value: string) =>
+  createHash('sha256').update(value).digest('hex').slice(0,10);
+const APP_MASK='UPBIT-****-'+ownerHash('UPBIT:'+OWNER);
+const VAULT_MASK='UPBIT-****-'+ownerHash('upbit:'+OWNER);
+const UUID_A='0b9c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3';
+const EXECUTION={ quantity:1, remainingQuantity:0,
+  orderedAt:'2026-10-11T00:09:00.000Z', observedAt:'2026-10-11T00:11:00.000Z' };
+function liveApp(source: string, overrides: Record<string, unknown> = {}) {
+  // Adapter shape: brokerOrderId is the exchange UUID, lineage holds the
+  // internal canonical order id.
+  return canonical('internal-'+source, {
+    source, canonicalOrderId:null, canonicalLineage:{orderIds:['internal-'+source]},
+    accountIdMasked:APP_MASK, brokerOrderId:UUID_A, fees:0.05, tax:0,
+    ...EXECUTION, ...overrides,
+  });
+}
+function upbitHistory(overrides: Record<string, unknown> = {}) {
+  const { canonicalOrderId:_c, canonicalLineage:_l, ...base } = canonical(UUID_A);
+  return { ...base, source:'UPBIT_API', accountIdMasked:VAULT_MASK,
+    brokerOrderId:UUID_A, fees:0.05, tax:0, ...EXECUTION, ...overrides };
+}
+function tradeCount(
+  known: readonly Record<string, unknown>[], external: readonly Record<string, unknown>[],
+) {
+  const result=reconcileScopedExternalJournalHistory(known,external,OWNER);
+  // Before the fix knownPayloads did not exist: every known row was kept.
+  return (result.knownPayloads ?? known).length+result.payloads.length;
+}
+
+test('APP_MANUAL live order and the same Upbit history fill count once', () => {
+  const app=liveApp('APP_MANUAL');
+  const result=reconcileScopedExternalJournalHistory([app],[upbitHistory()],OWNER);
+  assert.equal(result.payloads.length,0);
+  assert.equal(result.audit.suppressedVerifiedDuplicateCount,1);
+  const journal=buildUnifiedTradeJournal(
+    [app,...result.payloads],{},new Date('2026-10-12T00:00:00.000Z'));
+  assert.equal(journal.trades.length,1);
+  assert.equal(journal.trades[0]!.totalQuantity,1);
+});
+
+test('app snapshot without fee receipt is superseded by the provider row of the same exchange order', () => {
+  for (const source of ['APP_AUTO','APP_MANUAL']) {
+    const app=liveApp(source,{fees:null,tax:null});
+    const provider=upbitHistory({fees:0.05,tax:0});
+    const result=reconcileScopedExternalJournalHistory([app],[provider],OWNER);
+    assert.deepEqual(result.payloads,[provider]);
+    assert.deepEqual(result.knownPayloads,[]);
+    assert.equal(result.audit.supersededKnownSnapshotCount,1);
+    assert.equal(tradeCount([app],[provider]),1);
+  }
+});
+
+test('stale partial snapshot of one exchange order yields to the larger cumulative fill', () => {
+  const partialApp=liveApp('APP_AUTO',{status:'PARTIALLY_FILLED',filledQuantity:0.4,
+    averageFillPrice:99,fees:null});
+  const filledProvider=upbitHistory({status:'FILLED',filledQuantity:1});
+  let result=reconcileScopedExternalJournalHistory([partialApp],[filledProvider],OWNER);
+  assert.deepEqual(result.knownPayloads,[]);
+  assert.deepEqual(result.payloads,[filledProvider]);
+  // Provider history read earlier (partial) than the app ledger (filled).
+  const filledApp=liveApp('APP_AUTO');
+  const partialProvider=upbitHistory({status:'PARTIALLY_FILLED',filledQuantity:0.4,
+    averageFillPrice:99,fees:0.01});
+  result=reconcileScopedExternalJournalHistory([filledApp],[partialProvider],OWNER);
+  assert.deepEqual(result.knownPayloads,[filledApp]);
+  assert.equal(result.payloads.length,0);
+  assert.equal(result.audit.suppressedVerifiedDuplicateCount,1);
+  // A fill completing on a later KST date of the same UUID order still binds.
+  assert.equal(tradeCount([partialApp],
+    [upbitHistory({filledAt:'2026-10-12T16:00:00.000Z'})]),1);
+});
+
+test('exchange-order binding never merges distinct or contradictory trades', () => {
+  const app=liveApp('APP_AUTO',{fees:null});
+  const keepsBoth: ReadonlyArray<readonly [Record<string, unknown>, Record<string, unknown>]>=[
+    // Different exchange order UUID.
+    [app, upbitHistory({brokerOrderId:'1b9c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3'})],
+    // Two FILLED snapshots disagreeing on quantity: not a stale partial.
+    [app, upbitHistory({filledQuantity:2})],
+    [liveApp('APP_AUTO',{fees:null,filledQuantity:2}), upbitHistory()],
+    // Equal quantity but a different average price.
+    [app, upbitHistory({averageFillPrice:120})],
+    // Different position effect.
+    [app, upbitHistory({positionEffect:'CLOSE'})],
+    // Invalid provider cost evidence is preserved for integrity rejection.
+    [app, upbitHistory({fees:-1})],
+    // App row carries only its internal order id (no exchange id).
+    [liveApp('APP_AUTO',{fees:null,canonicalLineage:{orderIds:[UUID_A]}}), upbitHistory()],
+    // Unverified account bridge.
+    [app, upbitHistory({accountIdMasked:'UPBIT-****-FORGED'})],
+    // Simulated orders never bind to real fills.
+    [liveApp('APP_PAPER',{fees:null}), upbitHistory()],
+  ];
+  for (const [known, external] of keepsBoth) {
+    assert.equal(tradeCount([known],[external]),2, JSON.stringify(external));
+  }
+  // Wrong owner cannot verify the bridge.
+  const other=reconcileScopedExternalJournalHistory([app],[upbitHistory()],
+    '22222222-2222-2222-2222-222222222222');
+  assert.equal((other.knownPayloads ?? [app]).length+other.payloads.length,2);
+});
+
+test('journals above 5000 rows reconcile completely instead of throwing', () => {
+  const projected=Array.from({length:6001},(_,i)=>canonical('big-'+i));
+  const stored=Array.from({length:6000},(_,i)=>mirror('big-'+i));
+  const mirrors=reconcileCanonicalPaperJournalMirrors(stored,projected);
+  assert.equal(mirrors.payloads.length,6001);
+  assert.equal(mirrors.audit.persistedMirrorsSuppressed,6000);
+  const external=Array.from({length:6000},(_,i)=>({...canonical('ext-'+i),
+    source:'UPBIT_API',accountIdMasked:'UPBIT-****-ABC'}));
+  const scoped=reconcileScopedExternalJournalHistory(mirrors.payloads,external,OWNER);
+  assert.equal(scoped.knownPayloads.length,6001);
+  assert.equal(scoped.payloads.length,6000);
+});
+
+test('unified ledger route answers 200 for a user with more than 5000 stored rows', async () => {
+  const stored=Array.from({length:5200},(_,i)=>{
+    const { canonicalOrderId:_c, canonicalLineage:_l, ...row }=canonical('route-'+i);
+    return { ...row, ...EXECUTION, source:'APP_MANUAL', accountIdMasked:APP_MASK,
+      brokerOrderId:'route-order-'+i, symbol:'SYM'+i,
+      filledAt:new Date(Date.parse('2026-10-11T00:00:00.000Z')+i*1000).toISOString() };
+  });
+  const manual=liveApp('APP_MANUAL',{fees:null});
+  const repository={ async listJournalPayloads() { return stored; } };
+  const app=express();
+  app.use('/api',(req: any,_res: unknown,next: () => void)=>{ req.member={id:OWNER}; next(); });
+  app.use('/api',createPaperJournalRouter({
+    repositoryFactory:()=>repository as never,
+    now:()=>new Date('2026-10-12T00:00:00.000Z'),
+    reviewProvider:null,
+    accountHistoryReader:(async ()=>({
+      payloads:[upbitHistory()], realizedEvidence:[], requestedRange:'ALL',
+      effectiveDays:30, rangeCapped:false, persisted:false,
+      privateProviderRequests:0, providers:[], truncated:false, safety:{},
+    })) as never,
+    automationJournalReader:async ()=>[manual],
+  }));
+  const previousSha=process.env.DEPLOY_SHA;
+  delete process.env.DEPLOY_SHA;
+  const server=app.listen(0,'127.0.0.1');
+  await new Promise<void>((resolve)=>server.once('listening',()=>resolve()));
+  try {
+    const { port }=server.address() as AddressInfo;
+    const response=await fetch(`http://127.0.0.1:${port}/api/paper-journal/unified-ledger?range=ALL`);
+    assert.equal(response.status,200);
+    const body=await response.json() as any;
+    assert.equal(body.ok,true);
+    // 5200 stored rows + one live order whose exchange copy counts once.
+    const quantity=body.result.trades.reduce(
+      (sum: number, trade: any)=>sum+trade.totalQuantity,0);
+    assert.equal(quantity,5201);
+    assert.equal(body.result.externalHistoryDedupAudit.supersededKnownSnapshotCount,1);
+  } finally {
+    await new Promise<void>((resolve)=>server.close(()=>resolve()));
+    if (previousSha===undefined) delete process.env.DEPLOY_SHA;
+    else process.env.DEPLOY_SHA=previousSha;
+  }
 });
