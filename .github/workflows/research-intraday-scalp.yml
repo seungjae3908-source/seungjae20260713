@@ -1,0 +1,54 @@
+name: Research Intraday Scalp Backtest
+
+# Read-only research: minute/hour pump-catching and scalp rules on public kline
+# archives (Binance USDⓈ-M as Bitget proxy) and Upbit public candles.
+# No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+    inputs:
+      venues:
+        description: 'Comma-separated venues (BITGET_5M,BITGET_1H,UPBIT_1H); empty = all'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/research-intraday-scalp.yml
+      - research-production/src/intraday-scalp-zoo-v1.mjs
+      - research-production/bin/intraday-scalp-backtest.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: node --test research-production/test/intraday-scalp-zoo-v1.test.mjs research-production/test/strategy-zoo-v1.test.mjs
+      - name: Fetch public minute/hour data and run every rule
+        env:
+          INTRADAY_VENUES: ${{ inputs.venues }}
+        run: |
+          set -Eeuo pipefail
+          export NODE_OPTIONS=--max-old-space-size=6144
+          node research-production/bin/intraday-scalp-backtest.mjs --out "$RUNNER_TEMP/intraday" > intraday-report.txt 2> intraday-fetch.log
+          cp "$RUNNER_TEMP/intraday/intraday-scalp-v1.json" intraday-scalp-v1.json
+          grep -c '^FETCHED' intraday-fetch.log || true
+          grep '^FETCH_FAILED' intraday-fetch.log || true
+          { echo '```'; cat intraday-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: intraday-scalp
+          path: |
+            intraday-report.txt
+            intraday-fetch.log
+            intraday-scalp-v1.json
+          retention-days: 90
