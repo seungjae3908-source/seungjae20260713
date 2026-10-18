@@ -45,6 +45,8 @@ on:
       - api-server/src/routes/bounded-market-scan.ts
       - api-server/src/routes/paper-journal.ts
       - api-server/src/routes/paper-journal.smoke.test.ts
+      - api-server/src/services/automatic-paper-journal-mirror.service.ts
+      - api-server/src/services/automatic-paper-journal-mirror.service.test.ts
       - api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
