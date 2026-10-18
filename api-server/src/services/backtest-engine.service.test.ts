@@ -14,7 +14,10 @@ import {
   utcSessionVwapSeries,
 } from './backtest-indicators.service';
 import {
+  BACKTEST_LIMITS,
+  BACKTEST_WARMUP_BARS,
   BacktestValidationError,
+  backtestWarmupMs,
   calculateStrategySignals,
   evaluateSelectionBias,
   expectedMaxNoiseSharpe,
@@ -28,6 +31,7 @@ import {
   runBacktest,
   runPortfolioBacktest,
   validateBacktestRequest,
+  warmupStartTime,
   type BacktestRequest,
 } from './backtest-engine.service';
 
@@ -475,6 +479,40 @@ test('portfolio backtest rejects bad sizes, skips unusable symbols and fails whe
   assert.deepEqual(partial.symbols, ['BTCUSDT']);
   assert.equal(partial.skipped[0].symbol, 'ETHUSDT');
   assert.throws(() => runPortfolioBacktest(base, { BTCUSDT: rows.slice(0, 10), ETHUSDT: relabel(rows.slice(0, 10), 'ETHUSDT') }), /만족하지 못했습니다/u);
+});
+test('history before the start only warms indicators: it never creates trades before the start', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const warm = Array.from({ length: 70 }, (_, k) => makeCandle(-70 + k, 100));
+  const parameters = { lookback: 100, volumePeriod: 20, volumeMultiplier: 1.2 };
+  const cold = runBacktest(request({ side: 'long', endTime, parameters }), rows);
+  const warmed = runBacktest(request({ side: 'long', endTime, parameters }), [...warm, ...rows]);
+  assert.equal(cold.totalTrades, 0, 'a 100-bar breakout window cannot fill from 61 requested bars alone');
+  assert.ok(warmed.totalTrades > 0, 'the 70 earlier bars complete the window');
+  assert.ok(warmed.trades.every((trade) => trade.entryTime >= START && trade.signalTime >= START));
+  assert.ok(warmed.warnings.some((warning) => warning.includes('워밍업')));
+  assert.equal(BACKTEST_WARMUP_BARS, 300);
+  assert.equal(backtestWarmupMs('15m'), 300 * 900_000);
+  assert.equal(backtestWarmupMs('weird'), 0);
+});
+test('crypto signals right after a candle gap are skipped until the indicator window refills', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const padded = [...rows, ...Array.from({ length: 10 }, (_, k) => makeCandle(rows.length + k, 100))]; const gapEnd = padded.at(-1)!.timestamp; const gapped = padded.filter((row) => row.timestamp < START + 50 * STEP || row.timestamp >= START + 55 * STEP);
+  const result = runBacktest(request({ side: 'long', endTime: gapEnd }), gapped);
+  assert.equal(result.totalTrades, 0);
+  assert.ok(result.warnings.some((warning) => warning.includes('캔들 누락 구간 직후')));
+  const stock = runBacktest(request({ side: 'long', endTime: gapEnd, market: 'us-stock', symbol: 'SPY', leverage: 1 }), gapped.map((row) => ({ ...row, market: 'us-stock', symbol: 'SPY' })));
+  assert.ok(!stock.warnings.some((warning) => warning.includes('캔들 누락 구간 직후')), 'weekend/holiday gaps are normal for stocks');
+});
+test('warm-up history is requested but never exceeds the candle or duration limits', () => {
+  const day = 86_400_000; const base = { timeframe: '15m', startTime: START, endTime: START + 10 * day };
+  assert.equal(warmupStartTime(base), START - 300 * 900_000);
+  assert.equal(warmupStartTime({ ...base, timeframe: 'weird' }), START);
+  const nearDurationLimit = { timeframe: '1D', startTime: START, endTime: START + 365 * day };
+  const loadedSpan = nearDurationLimit.endTime - warmupStartTime(nearDurationLimit);
+  assert.ok(loadedSpan <= BACKTEST_LIMITS.maximumDurationMs);
+  const nearCandleLimit = { timeframe: '1m', startTime: START, endTime: START + 19_990 * 60_000 };
+  assert.ok((nearCandleLimit.endTime - warmupStartTime(nearCandleLimit)) / 60_000 <= BACKTEST_LIMITS.maximumCandles);
+  assert.equal(warmupStartTime({ timeframe: '1m', startTime: START, endTime: START + 20_000 * 60_000 }), START);
 });
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
