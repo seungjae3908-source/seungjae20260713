@@ -227,10 +227,12 @@ export function simulateLivePlanV1(trades, plan = TREND_PILOT_LIVE_PLAN_V1) {
     if (!dayStart.has(d)) dayStart.set(d, equity);
     if ((dayPnl.get(d) ?? 0) <= -(dayStart.get(d) * p.dailyLossFraction)) { skipped.dailyLimit += 1; continue; }
     const wanted = (equity * p.riskFraction) / t.stopFraction;
-    const usedMargin = open.reduce((sum, o) => sum + (o.notional / p.leverage), 0);
-    const notional = Math.min(p.maxNotionalKrw, wanted, Math.max(0, (equity - usedMargin) * p.leverage));
+    // Per-trade leverage (1 for spot and stocks) overrides the plan leverage.
+    const leverage = Number.isFinite(t.leverage) && t.leverage >= 1 ? t.leverage : p.leverage;
+    const usedMargin = open.reduce((sum, o) => sum + (o.notional / o.leverage), 0);
+    const notional = Math.min(p.maxNotionalKrw, wanted, Math.max(0, (equity - usedMargin) * leverage));
     if (notional < p.minNotionalKrw) { if (wanted >= p.minNotionalKrw) skipped.margin += 1; else skipped.minimum += 1; continue; }
-    open.push({ exitTime: t.exitTime, notional, pnl: equity * p.riskFraction * t.rMultiple * (notional / wanted) });
+    open.push({ exitTime: t.exitTime, notional, leverage, pnl: equity * p.riskFraction * t.rMultiple * (notional / wanted) });
     taken += 1;
   }
   settle(Infinity);
