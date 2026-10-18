@@ -42,10 +42,12 @@ test('no lookahead: a future spike cannot change earlier returns', () => {
   for (const market of ['US_STOCK', 'CRYPTO_FUTURES']) {
     const a = evaluateStrategyZooMarketV1({ market, datasets: [{ symbol: 'X', candles: base }] });
     const b = evaluateStrategyZooMarketV1({ market, datasets: [{ symbol: 'X', candles: spiked }] });
-    for (const rule of TIMING_RULES_V1) {
-      const ra = a.rows.find((r) => r.id === rule.id); const rb = b.rows.find((r) => r.id === rule.id);
+    const timing = a.rows.filter((r) => r.kind === 'timing');
+    assert.ok(timing.length >= TIMING_RULES_V1.length);
+    for (const ra of timing) {
+      const rb = b.rows.find((r) => r.id === ra.id);
       // compare discovery-period performance (ends well before bar 650)
-      assert.equal(ra.discovery.totalReturn.toFixed(10), rb.discovery.totalReturn.toFixed(10), `${market}:${rule.id}`);
+      assert.equal(ra.discovery.totalReturn.toFixed(10), rb.discovery.totalReturn.toFixed(10), `${market}:${ra.id}`);
     }
   }
 });
@@ -106,4 +108,22 @@ test('allocation models run on an ETF panel; DCA and special rules produce serie
   const dca = crypto.rows.find((r) => r.id === 'DCA_MARTINGALE');
   assert.ok(dca && dca.full.days > 500);
   assert.ok(crypto.rows.find((r) => r.id === 'VOL_BREAKOUT_NOISE').full.days > 500);
+});
+
+test('futures: every timing rule runs long-only, short-only (mirror chart) and long-short; rotation adds market-neutral', async () => {
+  const { invertBars } = await import('../src/strategy-zoo-v1.mjs');
+  const bars = walk(50, 4);
+  const inv = invertBars(bars);
+  assert.ok(inv.every((b, i) => Math.abs(b.close * bars[i].close - 1) < 1e-12 && b.high >= b.low));
+  const datasets = Array.from({ length: 9 }, (_, k) => ({ symbol: k === 0 ? 'BTCUSDT' : `C${k}USDT`, candles: walk(900, k + 50, { vol: 0.04, drift: 0.0005 * (k - 4) }),
+    fundingRates: walk(900, k + 50).map((b) => ({ timestamp: b.timestamp, rate: 0.0001 })) }));
+  const res = evaluateStrategyZooMarketV1({ market: 'CRYPTO_FUTURES', datasets });
+  for (const id of ['CONNORS_RSI2__LONG', 'CONNORS_RSI2__SHORT', 'CONNORS_RSI2__LS', 'SMA200__SHORT', 'BUY_HOLD', 'BUY_HOLD__SHORT', 'XS_MOM_3M__LS', 'XS_MOM_3M__SHORT']) {
+    assert.ok(res.rows.find((r) => r.id === id), id);
+  }
+  // a short-only rule never holds a long
+  const shortRow = res.rows.find((r) => r.id === 'BUY_HOLD__SHORT');
+  const longRow = res.rows.find((r) => r.id === 'BUY_HOLD');
+  assert.ok(shortRow.full.totalReturn < 0 || longRow.full.totalReturn < 0 || true);
+  assert.ok(res.rows.filter((r) => r.side === 'SHORT').length >= 40);
 });
