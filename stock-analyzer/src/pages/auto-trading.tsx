@@ -1012,13 +1012,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
               자동모의 보유종목 조회 대기 · 4시장 가상계좌 원장과 회원 조회 권한이 검증되면 자동으로 표시합니다.
             </p>
           ) : null}
-          {section === 'dashboard' ? <TradingHoldingsPanel market={marketMeta.selectionMarket}
+          <TradingHoldingsPanel market={marketMeta.selectionMarket}
             providers={(runtimeStatus?.connections ?? []).filter(row => row.accountMode === 'live' && row.configured
               && (market === 'domestic_stock' ? row.exchange === 'kiwoom' || row.exchange === 'toss' : row.exchange === selectedProvider))
               .map(row => row.exchange)}
             accountMode={mode === 'auto' ? 'live' : 'paper'} origin={paperOrigin}
             userId={userId} enabled={mode === 'auto' ? canPlaceOrders && !runtimeLoading : paperHoldingsReadAllowed}
-            fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} /> : null}
+            fixture={fixture ? holdingsFixture ?? [] : undefined} canChart={canChart} />
         </div>
       </main>
       {!embedded ? <BottomNav /> : null}
