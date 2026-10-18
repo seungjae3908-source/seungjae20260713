@@ -606,6 +606,9 @@ jobs:
           )
           scope_requested=false
           for path in "${changed[@]}"; do
+            # Paths registered in the exact AUTO live safety scope get the full
+            # Trading guard review instead of the frozen historical holdings blobs.
+            printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null && continue
             case "$path" in
               stock-analyzer/src/pages/auto-trading.tsx|stock-analyzer/src/components/trading-holdings-panel.tsx|stock-analyzer/e2e/auto-trading-professional-ui.spec.ts)
                 scope_requested=true ;;
