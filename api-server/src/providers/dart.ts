@@ -382,8 +382,12 @@ export async function getFinancials(stockCode: string): Promise<FinancialsRaw> {
       // falls back to a coherent sample view instead of showing garbage.
       if (quarterly.some((q) => q.revenue < 0)) quarterly = [];
     } catch (err) {
-      if (err instanceof ProviderError && err.code === 'RATE_LIMITED') throw err;
-      quarterly = [];
+      // A failed interim fetch (timeout, throttling, upstream error) must not
+      // be returned as "no quarterly data": this loader's result is cached for
+      // a day, so swallowing it would pin every caller to the sample fallback
+      // until the cache expires. Fail the load so the next request retries.
+      if (err instanceof ProviderError) throw err;
+      throw new ProviderError('UPSTREAM_ERROR', 'dart', `quarterly statements failed for ${stockCode}`);
     }
 
     return {
