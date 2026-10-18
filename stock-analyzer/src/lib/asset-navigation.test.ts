@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   AssetRouteNotResolved,
   resolveAssetDetailPath,
+  resolveLegacyCryptoDetailChoices,
   resolveLegacyCryptoDetailPath,
 } from './asset-navigation';
 
@@ -67,4 +68,22 @@ test('legacy stock and crypto routes converge on canonical stock-info resolvers'
   assert.match(app, /<Route path="\/crypto\/:symbol" component=\{CryptoDetailRedirect\} \/>/);
   assert.doesNotMatch(app, /coinMarket=spot&symbol=/);
   assert.doesNotMatch(app, /<Route path="\/stock\/:ticker" component=\{DetailPage\} \/>/);
+});
+
+test('a bare coin symbol offers verified spot and futures paths instead of a guess', () => {
+  const choices = resolveLegacyCryptoDetailChoices('btc');
+  assert.ok(choices);
+  assert.equal(choices.base, 'BTC');
+  assert.match(choices.spotPath, /symbol=BTC(&|$)/u);
+  assert.match(choices.spotPath, /coinMarket=spot/u);
+  assert.match(choices.futuresPath, /symbol=BTCUSDT/u);
+  assert.match(choices.futuresPath, /coinMarket=futures/u);
+});
+
+test('symbols that are already specific or malformed get no chooser', () => {
+  assert.equal(resolveLegacyCryptoDetailChoices('BTCUSDT'), null);
+  assert.equal(resolveLegacyCryptoDetailChoices('KRW-BTC'), null);
+  assert.equal(resolveLegacyCryptoDetailChoices('x'), null);
+  assert.equal(resolveLegacyCryptoDetailChoices(''), null);
+  assert.equal(resolveLegacyCryptoDetailChoices('BT C'), null);
 });
