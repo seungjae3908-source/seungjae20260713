@@ -302,7 +302,6 @@ test('portfolio backtest endpoint validates the symbol list and returns equal-ca
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
-import { loadBitgetFundingHistory, loadHistoricalBacktestCandles } from './backtest-data.service';
 
 test('route/data: funding history loader returns sorted in-range settlements and stops at the start of the range', async () => {
   const H = 3_600_000; let calls = 0;
