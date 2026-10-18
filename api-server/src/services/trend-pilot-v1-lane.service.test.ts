@@ -390,3 +390,32 @@ test('lane access: exits survive emergency stop and arm loss; entries need arm, 
     assert.deepEqual(trendPilotLaneAccess({ ...base, ...off }), { runLanes: false, entriesArmed: false }, JSON.stringify(off));
   }
 });
+
+test('paper cost schedule health: expiring/expired/missing/invalid are flagged for enabled markets only; never invents a rate', async () => {
+  const { paperCostRuleHealthV1 } = await import('./trade-execution.service');
+  const { paperCostRuleAlerts, notifyPaperCostRuleHealth } = await import('./live-trading-safety-telegram.service');
+  const now = Date.parse('2026-10-18T00:00:00.000Z');
+  const rule = (market: string, exchange: string, id: string, from: string, until: string) => ({ market, exchange, policyId: `server-paper-cost-v1:${id}`, feeRatePercent: 0.05, taxRatePercent: 0, effectiveAt: from, expiresAt: until });
+  const config = JSON.stringify({ contract: 'member-auto-paper-cost-rules/v1', rules: [
+    rule('CRYPTO_SPOT', 'upbit', 'a', '2026-10-01T00:00:00.000Z', '2026-12-01T00:00:00.000Z'),
+    rule('CRYPTO_FUTURES', 'bitget', 'b', '2026-10-01T00:00:00.000Z', '2026-10-19T00:00:00.000Z'),
+    rule('KR_STOCK', 'toss', 'c', '2026-09-01T00:00:00.000Z', '2026-10-10T00:00:00.000Z'),
+  ] });
+  const health = paperCostRuleHealthV1(now, config);
+  const by = Object.fromEntries(health.map((h) => [h.market, h.state]));
+  assert.deepEqual(by, { KR_STOCK: 'EXPIRED', US_STOCK: 'MISSING', CRYPTO_SPOT: 'ACTIVE', CRYPTO_FUTURES: 'EXPIRING' });
+  assert.ok(Object.values(paperCostRuleHealthV1(now, undefined)).every((h) => h.state === 'MISSING'));
+  assert.ok(paperCostRuleHealthV1(now, '{bad').every((h) => h.state === 'INVALID_CONFIG'));
+  assert.ok(paperCostRuleHealthV1(now, JSON.stringify({ contract: 'x', rules: [] })).every((h) => h.state === 'INVALID_CONFIG'));
+  // only markets the member actually trades are reported
+  const alerts = paperCostRuleAlerts(health, { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: true });
+  assert.deepEqual(alerts.map((a) => a.market), ['crypto_futures']);
+  const sent: string[] = [];
+  await notifyPaperCostRuleHealth({ userId: 'u1', health, marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true }, now: new Date(now) },
+    (async (p: { event: { eventId: string } }) => { sent.push(p.event.eventId); return {}; }) as never);
+  assert.equal(sent.length, 3);
+  assert.equal(new Set(sent).size, 3);
+  const none = await notifyPaperCostRuleHealth({ userId: 'u1', health, marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true }, now: new Date(now) },
+    (async () => { throw new Error('DOWN'); }) as never);
+  assert.deepEqual(none, [null, null, null]);
+});

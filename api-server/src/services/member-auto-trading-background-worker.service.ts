@@ -37,8 +37,8 @@ import {
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
-import { notifyTrendPilotEvents } from './live-trading-safety-telegram.service';
-import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
+import { notifyPaperCostRuleHealth, notifyTrendPilotEvents } from './live-trading-safety-telegram.service';
+import { TradeExecutionService, paperCostRuleHealthV1, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
@@ -2552,6 +2552,16 @@ export class MemberAutoTradingBackgroundWorker {
           }
           adminWalletDbGuardReady = adminDbGuardThisTick === true;
           if (!adminWalletDbGuardReady && !liveModeRequested) result.newEntriesFailClosed = true;
+        }
+        // Expiring/missing Paper cost schedules silently stop full-cost settlement: tell the owner
+        // (once per market per KST day, best-effort) instead of letting the lane go quiet.
+        if (memberAutoExecutionEnabled) {
+          await notifyPaperCostRuleHealth({
+            userId: member.userId,
+            health: paperCostRuleHealthV1(now.getTime()),
+            marketEnabled: member.policy.marketEnabled,
+            now,
+          });
         }
         if (!runtime.paperAccountReady && memberAutoExecutionEnabled && !liveModeRequested) {
           result.newEntriesFailClosed = true;

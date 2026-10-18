@@ -616,6 +616,55 @@ export function protectedAutomaticPaperCostPolicyV1(
   return matches.length === 1 ? matches[0]! : null;
 }
 
+export type PaperCostRuleHealthState = 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'NOT_YET_EFFECTIVE' | 'MISSING' | 'INVALID_CONFIG';
+export type PaperCostRuleHealth = Readonly<{
+  market: MemberAutoTradingFxMarket;
+  state: PaperCostRuleHealthState;
+  expiresAt: string | null;
+  hoursLeft: number | null;
+}>;
+
+/**
+ * Pure, read-only: is each market's simulated cost schedule current? When a schedule is missing or
+ * expired the full-cost proof (tax) stays unknown and automatic Paper settlement blocks silently;
+ * this lets the owner be told BEFORE that happens. It never supplies, extends or guesses a rate.
+ */
+export function paperCostRuleHealthV1(
+  nowMs = Date.now(),
+  configText: string | undefined = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1,
+  warnHours = 72,
+): readonly PaperCostRuleHealth[] {
+  const markets: readonly MemberAutoTradingFxMarket[] = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+  const row = (market: MemberAutoTradingFxMarket, state: PaperCostRuleHealthState, expiresAt: string | null = null, hoursLeft: number | null = null): PaperCostRuleHealth =>
+    Object.freeze({ market, state, expiresAt, hoursLeft });
+  if (!Number.isFinite(nowMs) || nowMs <= 0 || typeof configText !== 'string' || configText.length < 2 || configText.length > 8192) {
+    return markets.map((market) => row(market, 'MISSING'));
+  }
+  let value: unknown;
+  try { value = JSON.parse(configText); } catch { return markets.map((market) => row(market, 'INVALID_CONFIG')); }
+  if (!isRecord(value) || value.contract !== 'member-auto-paper-cost-rules/v1' || !Array.isArray(value.rules) || value.rules.length > 8) {
+    return markets.map((market) => row(market, 'INVALID_CONFIG'));
+  }
+  return markets.map((market) => {
+    let best: PaperCostRuleHealth | null = null;
+    let sawRule = false;
+    for (const candidate of value.rules as unknown[]) {
+      if (!isRecord(candidate) || candidate.market !== market) continue;
+      sawRule = true;
+      const from = typeof candidate.effectiveAt === 'string' ? Date.parse(candidate.effectiveAt) : Number.NaN;
+      const until = typeof candidate.expiresAt === 'string' ? Date.parse(candidate.expiresAt) : Number.NaN;
+      if (!Number.isFinite(from) || !Number.isFinite(until) || from >= until) return row(market, 'INVALID_CONFIG');
+      const hoursLeft = (until - nowMs) / 3_600_000;
+      const state: PaperCostRuleHealthState = from > nowMs ? 'NOT_YET_EFFECTIVE'
+        : until < nowMs ? 'EXPIRED' : hoursLeft <= warnHours ? 'EXPIRING' : 'ACTIVE';
+      const candidateRow = row(market, state, candidate.expiresAt as string, Math.round(hoursLeft * 10) / 10);
+      const rank = (r: PaperCostRuleHealth) => (r.state === 'ACTIVE' ? 3 : r.state === 'EXPIRING' ? 2 : r.state === 'NOT_YET_EFFECTIVE' ? 1 : 0);
+      if (!best || rank(candidateRow) > rank(best)) best = candidateRow;
+    }
+    return best ?? row(market, sawRule ? 'INVALID_CONFIG' : 'MISSING');
+  });
+}
+
 export async function serverPaperFillCostEvidence(
   plan: TradingPlan,
   price: number,
