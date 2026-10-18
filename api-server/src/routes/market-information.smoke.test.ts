@@ -333,7 +333,7 @@ test('stock room first-paint timeout serves the last confirmed snapshot marked s
   }
 });
 
-test('background warm refreshes both stock rooms so a slow first paint serves the warmed snapshot', async () => {
+test('startup warm loads both stock rooms once so a slow first paint serves the warmed snapshot', async () => {
   const warmed: string[] = [];
   let slow = false;
   const server = await start({
@@ -348,7 +348,7 @@ test('background warm refreshes both stock rooms so a slow first paint serves th
       });
       return fixture(room);
     },
-  }, { stockFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 400, stockBackgroundWarmIntervalMs: 60_000 });
+  }, { stockFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 400, warmStockRoomsOnStart: true });
 
   try {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -365,7 +365,7 @@ test('background warm refreshes both stock rooms so a slow first paint serves th
   }
 });
 
-test('the router makes no background provider calls unless a warm interval is configured', async () => {
+test('the router makes no background provider calls unless startup warm is enabled', async () => {
   let calls = 0;
   const server = await start({
     async getRoom(room): Promise<MarketInformationResponse> {
