@@ -104,6 +104,57 @@ export function summarizeTradesKrwV1(trades, { notionalKrw = TREND_PILOT_NOTIONA
   };
 }
 
+export const TREND_PILOT_COMPOUNDING_V1 = Object.freeze({
+  startEquityKrw: 2_000_000,
+  riskFractions: Object.freeze([0.01, 0.015]),
+  maxNotionalKrw: 5_000_000, // server-enforced per-order cap
+  dailyLossFraction: 0.015,
+});
+
+/**
+ * Pure: equity-based sizing. Each trade risks a fixed fraction of the equity at
+ * entry (notional = equity × risk / stop distance, capped), so size grows after
+ * gains and shrinks after losses. Trades are processed in entry order; a trade
+ * that opens while others are open uses the equity at its entry time.
+ */
+export function simulateCompoundingV1(trades, { startEquityKrw, riskFraction, maxNotionalKrw }) {
+  const rows = [...trades].filter((t) => Number.isFinite(t.stopFraction) && t.stopFraction > 0)
+    .sort((a, b) => a.entryTime - b.entryTime);
+  let equity = startEquityKrw;
+  const open = [];
+  const realized = [];
+  let peak = equity; let maxDrawdown = 0; let firstNotional = null; let lastNotional = null;
+  const settle = (until) => {
+    open.sort((a, b) => a.exitTime - b.exitTime);
+    while (open.length && open[0].exitTime <= until) {
+      const t = open.shift();
+      equity += t.pnl; realized.push(t.pnl);
+      peak = Math.max(peak, equity); maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak);
+    }
+  };
+  for (const t of rows) {
+    settle(t.entryTime);
+    if (equity <= 0) break;
+    const notional = Math.min(maxNotionalKrw, (equity * riskFraction) / t.stopFraction);
+    firstNotional ??= notional; lastNotional = notional;
+    open.push({ exitTime: t.exitTime, pnl: notional * t.returnOnNotional });
+  }
+  settle(Infinity);
+  const span = rows.length ? Math.max(DAY, rows.at(-1).exitTime - rows[0].entryTime) : DAY;
+  const years = span / (365 * DAY);
+  return {
+    riskFraction,
+    startEquityKrw,
+    endEquityKrw: Math.round(equity),
+    totalReturn: equity / startEquityKrw - 1,
+    annualReturn: equity > 0 ? ((equity / startEquityKrw) ** (1 / years)) - 1 : -1,
+    maxDrawdownFraction: maxDrawdown,
+    firstNotionalKrw: firstNotional === null ? null : Math.round(firstNotional),
+    lastNotionalKrw: lastNotional === null ? null : Math.round(lastNotional),
+    trades: realized.length,
+  };
+}
+
 function runSide({ symbol, bars, signals, side, variant, fundingRates }) {
   const flags = side === 'long' ? signals.long : signals.short;
   const result = runManagedExitBacktestV1({
@@ -118,6 +169,7 @@ function runSide({ symbol, bars, signals, side, variant, fundingRates }) {
   return result.trades.map((t) => ({
     side, symbol, entryTime: t.entryTime, exitTime: t.exitTime, exitReason: t.exitReason,
     returnOnNotional: t.entryNotional > 0 ? t.netPnl / t.entryNotional : 0,
+    stopFraction: t.entryPrice > 0 ? Math.abs(t.entryPrice - t.stopPrice) / t.entryPrice : null,
   }));
 }
 
@@ -155,6 +207,7 @@ export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
         validation: summarizeTradesKrwV1(primary.filter((t) => t.entryTime >= split)),
       },
       otherSymbols: { symbols: perSymbol.length - TREND_PILOT_PRIMARY_SYMBOLS.length, all: summarizeTradesKrwV1(others) },
+      compounding: TREND_PILOT_COMPOUNDING_V1.riskFractions.map((riskFraction) => simulateCompoundingV1(primary, { ...TREND_PILOT_COMPOUNDING_V1, riskFraction })),
       perSymbol: perSymbol.map((s) => ({ symbol: s.symbol, status: s.status, ...summarizeTradesKrwV1(s.trades) })),
       splitDate: new Date(split).toISOString().slice(0, 10),
     };
@@ -214,6 +267,9 @@ export function formatTrendPilotReportKoV1(result) {
     lines.push(`  평균 이익 ${won(a.averageWinKrw)} · 평균 손실 ${won(a.averageLossKrw)} · 최악 1회 ${won(a.worstTradeKrw)} · 최대 낙폭 ${won(-a.maxDrawdownKrw)} · 최장 연패 ${a.longestLosingStreak}회`);
     lines.push(`  하루 손실 3만 원 넘은 날 ${a.daysOverDailyLimit}일 · 검증 구간(${v.splitDate}~) 합계 ${won(val.totalKrw)} (${val.trades}회)`);
     lines.push(`  참고 · 다른 코인 ${v.otherSymbols.symbols}개 같은 규칙: 합계 ${won(v.otherSymbols.all.totalKrw)} · 승률 ${pct(v.otherSymbols.all.winRate)}`);
+    for (const c of v.compounding ?? []) {
+      lines.push(`  계좌 비례(시작 ${won(c.startEquityKrw)}, 1회 계좌의 ${(c.riskFraction * 100).toFixed(1)}% 감수): 끝 ${won(c.endEquityKrw)} (${c.totalReturn >= 0 ? '+' : ''}${(c.totalReturn * 100).toFixed(1)}%, 연 ${(c.annualReturn * 100).toFixed(1)}%) · 최대 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}% · 진입 금액 ${won(c.firstNotionalKrw)} → ${won(c.lastNotionalKrw)}`);
+    }
   }
   const noFunding = Object.entries(result.fundingPrints ?? {}).filter(([, n]) => n < 100).map(([s]) => s);
   if (noFunding.length) lines.push('', `주의: 펀딩비 기록 없이 계산한 종목 ${noFunding.join(', ')} (선물 보유 비용 미반영 → 실제보다 조금 낙관적일 수 있음)`);
