@@ -15,6 +15,7 @@ on:
       - .github/workflows/research-intraday-scalp.yml
       - research-production/src/intraday-scalp-zoo-v1.mjs
       - research-production/bin/intraday-scalp-backtest.mjs
+      - research-production/src/public-kline-fetch-v1.mjs
 
 permissions:
   contents: read
