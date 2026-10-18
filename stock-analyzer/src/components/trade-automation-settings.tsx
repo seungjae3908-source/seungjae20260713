@@ -640,6 +640,7 @@ export function TradeAutomationSettings({
       <p className="text-xs font-extrabold">실거래 스위치 (시장별)</p>
       <p className="mt-1 break-keep text-[11px] leading-4 text-muted-foreground">
         켜진 시장만 실제 주문이 나갑니다. 끄면 그 시장의 새 실주문이 즉시 멈추고, 보유 포지션 청산은 계속 가능합니다.
+        처음 켠 뒤 7일 동안은 1회 주문이 10만 원 이하로 제한됩니다.
       </p>
       <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {visibleMarkets.map((market) => {
@@ -673,7 +674,7 @@ export function TradeAutomationSettings({
         <h3 className="text-base font-bold">{MARKET_LABELS[liveConfirmMarket]} 실거래를 켤까요?</h3>
         <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
           켜면 이 시장에서 승인한 주문과 자동매매 주문이 <strong className="text-foreground">실제 돈으로</strong> 나갑니다.
-          위험검사, 일일 손실 한도, 비상정지는 그대로 적용됩니다. 언제든 같은 버튼으로 끌 수 있습니다.
+          위험검사, 일일 손실 한도, 비상정지는 그대로 적용되고, 켠 뒤 7일 동안은 1회 주문이 10만 원 이하로 제한됩니다. 언제든 같은 버튼으로 끌 수 있습니다.
         </p>
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button type="button" className="h-10 rounded-xl bg-secondary text-xs font-extrabold" onClick={() => setLiveConfirmMarket(null)}>취소</button>

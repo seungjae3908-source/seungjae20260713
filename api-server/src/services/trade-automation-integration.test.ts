@@ -12,6 +12,12 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import {
+  assetClassOfPlan,
+  liveSafetyAlertCodes,
+  notifyLiveMarketSwitch,
+  notifyLiveSafetyBlock,
+} from './live-trading-safety-telegram.service';
+import {
   BENCHMARK_DRAWDOWN_LONG_BLOCK_PERCENT,
   benchmarkDrawdownBlocksLong,
   createBtcBenchmarkDrawdownReader,
@@ -1493,4 +1499,59 @@ test('per-market live switch defaults OFF and blocks only new LIVE entries in th
     liveMarketEnabled: { domestic_stock: 'yes', us_stock: 1, crypto_spot: null, crypto_futures: undefined } as never,
   });
   assert.deepEqual(Object.values(garbage.liveMarketEnabled ?? {}), [false, false, false, false]);
+});
+
+test('first week after a market switch goes ON caps each new LIVE order at 100,000 KRW', () => {
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const at = (daysAgo: number) => new Date(Date.now() - (daysAgo * 86_400_000)).toISOString();
+  const policyAt = (iso: string | null) => normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    liveMarketEnabledAt: { domestic_stock: null, us_stock: null, crypto_spot: iso, crypto_futures: null },
+  });
+  const capped = (krw: number, iso: string | null) => evaluateTradingPlan(
+    plan({ accountMode: 'live', quoteAmount: krw, estimatedKrw: krw }), policyAt(iso), options,
+  ).blockCodes.includes('LIVE_FIRST_WEEK_ORDER_CAP');
+  assert.equal(capped(100_000, at(1)), false);
+  assert.equal(capped(100_001, at(1)), true);
+  assert.equal(capped(300_000, at(8)), false);
+  // Missing or malformed timestamp is treated as the first week.
+  assert.equal(capped(300_000, null), true);
+  assert.equal(capped(300_000, 'not-a-date'), true);
+  // Paper orders are never capped by this rule.
+  assert.equal(evaluateTradingPlan(plan({ accountMode: 'paper', quoteAmount: 300_000, estimatedKrw: 300_000 }), policyAt(at(1)), options)
+    .blockCodes.includes('LIVE_FIRST_WEEK_ORDER_CAP'), false);
+  // Timestamps of switched-off markets are dropped.
+  assert.equal(policyAt(at(1)).liveMarketEnabledAt?.domestic_stock, null);
+});
+
+
+test('safety alerts fire only for LIVE plans and only for loss limits or the first-week cap', () => {
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'paper' }, ['DAILY_LOSS_LIMIT']), []);
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'live' }, ['SPREAD_TOO_WIDE']), []);
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'live' }, ['DAILY_LOSS_LIMIT', 'LIVE_FIRST_WEEK_ORDER_CAP']),
+    ['DAILY_LOSS_LIMIT', 'LIVE_FIRST_WEEK_ORDER_CAP']);
+  assert.equal(assetClassOfPlan({ exchange: 'bitget', market: 'USDT-FUTURES' }), 'crypto_futures');
+  assert.equal(assetClassOfPlan({ exchange: 'toss', market: 'US' }), 'us_stock');
+});
+
+test('loss-limit alerts are de-duplicated per user, rule and KST day; failures are swallowed', async () => {
+  const seen: string[] = [];
+  const deliver = (async (input: { event: { eventId: string; priority: string }; alert: { details?: string } }) => {
+    seen.push(input.event.eventId);
+    assert.equal(input.event.priority, 'CRITICAL');
+    return { status: 'SKIPPED', reason: 'TELEGRAM_DISCONNECTED', policy: null };
+  }) as never;
+  const plan = { accountMode: 'live' as const, exchange: 'upbit' as const, market: 'KRW', symbol: 'BTC' };
+  const morning = new Date('2026-10-18T00:30:00.000Z');
+  const evening = new Date('2026-10-18T13:00:00.000Z');
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: morning }, deliver);
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: evening }, deliver);
+  assert.equal(seen[0], seen[1], 'same KST day → same event id (deduplicated downstream)');
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: new Date('2026-10-18T16:00:00.000Z') }, deliver);
+  assert.notEqual(seen[2], seen[0], 'next KST day → new alert');
+
+  const throwing = (async () => { throw new Error('telegram down'); }) as never;
+  assert.deepEqual(await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'] }, throwing), [null]);
+  assert.equal(await notifyLiveMarketSwitch({ userId: USER_A, market: 'crypto_spot', enabled: true }, throwing), null);
 });

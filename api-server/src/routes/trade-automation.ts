@@ -62,6 +62,7 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { notifyLiveMarketSwitch } from '../services/live-trading-safety-telegram.service';
 import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
 import {
   enforceMemberTradingPolicy,
@@ -89,6 +90,7 @@ import type {
   TradingSignalState,
 } from '../services/trade-automation.types';
 import {
+  LIVE_FIRST_WEEK_MAX_ORDER_KRW,
   PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
@@ -1613,6 +1615,8 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
       market,
       current.liveMarketEnabled?.[market] === true && candidate.liveMarketEnabled?.[market] === true,
     ])) as Record<TradingAssetClass, boolean>;
+    candidate.liveMarketEnabledAt = normalizeTradingPolicy({ ...current, liveMarketEnabled: candidate.liveMarketEnabled })
+      .liveMarketEnabledAt;
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     await recordAutoRunPolicyToggle(repository, userId, { before: current, after: policy, isLive: autoRunLiveResolver });
@@ -1652,12 +1656,25 @@ router.post('/policy/live-market', async (req: AuthenticatedRequest, res) => {
       }
     }
     const before = normalizeTradingPolicy(current);
+    const wasOn = before.liveMarketEnabled?.[market] === true;
     const policy: TradingPolicy = {
       ...current,
       liveMarketEnabled: { ...before.liveMarketEnabled!, [market]: enabled },
+      liveMarketEnabledAt: {
+        ...before.liveMarketEnabledAt!,
+        // OFF→ON restarts the first-week small-order period.
+        [market]: enabled ? (wasOn ? before.liveMarketEnabledAt?.[market] ?? new Date().toISOString() : new Date().toISOString()) : null,
+      },
     };
     await repository.savePolicy(userId, policy);
-    return res.json({ ok: true, market, enabled, liveMarketEnabled: policy.liveMarketEnabled, orderSubmitted: false });
+    if (wasOn !== enabled) void notifyLiveMarketSwitch({ userId, market, enabled }).catch(() => undefined);
+    return res.json({
+      ok: true, market, enabled,
+      liveMarketEnabled: policy.liveMarketEnabled,
+      liveMarketEnabledAt: policy.liveMarketEnabledAt,
+      firstWeekMaxOrderKrw: LIVE_FIRST_WEEK_MAX_ORDER_KRW,
+      orderSubmitted: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
