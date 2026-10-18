@@ -337,7 +337,7 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     ...DEFAULT_TRADING_POLICY,
     stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'unknown' as 'kiwoom' },
   });
-  assert.equal(invalidUsBroker.stockBrokerByMarket.us_stock, 'kiwoom');
+  assert.equal(invalidUsBroker.stockBrokerByMarket?.us_stock, 'kiwoom');
 
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
