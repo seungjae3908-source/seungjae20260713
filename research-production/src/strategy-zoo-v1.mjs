@@ -617,12 +617,17 @@ export function simulateSpecialPortfolio(panel, ruleId, market) {
       let qty = 0; let cost = 0; let filled = 0; let entry = null; let cash = 1; let prevValue = 1;
       for (let j = 1; j < bars.length; j += 1) {
         const b = bars[j];
-        if (qty === 0) { entry = b.open; const q = sizes[0] / entry; qty = q; cost = sizes[0]; cash -= sizes[0] * (1 + spec.costPerSide); filled = 1; turn[j] += sizes[0]; }
+        // Conservative intrabar order: on a day that opens a cycle or fills a safety
+        // order, the low is assumed to come AFTER the high, so no take-profit that day.
+        let boughtToday = false;
+        const tpBefore = qty > 0 ? (cost / qty) * 1.015 : null;
+        if (qty === 0) { entry = b.open; const q = sizes[0] / entry; qty = q; cost = sizes[0]; cash -= sizes[0] * (1 + spec.costPerSide); filled = 1; turn[j] += sizes[0]; boughtToday = true; }
         while (filled < sizes.length && b.low <= entry * (1 - levels[filled])) {
-          const price = entry * (1 - levels[filled]); qty += sizes[filled] / price; cost += sizes[filled]; cash -= sizes[filled] * (1 + spec.costPerSide); turn[j] += sizes[filled]; filled += 1;
+          const price = Math.min(b.open, entry * (1 - levels[filled])); qty += sizes[filled] / price; cost += sizes[filled]; cash -= sizes[filled] * (1 + spec.costPerSide); turn[j] += sizes[filled]; filled += 1; boughtToday = true;
         }
-        const avg = cost / qty; const tp = avg * 1.015;
-        if (b.high >= tp && filled > 0) { cash += qty * tp * (1 - spec.costPerSide); turn[j] += qty * tp; qty = 0; cost = 0; filled = 0; }
+        if (!boughtToday && tpBefore !== null && b.high >= tpBefore) {
+          const px = Math.max(tpBefore, b.open); cash += qty * px * (1 - spec.costPerSide); turn[j] += qty * px; qty = 0; cost = 0; filled = 0;
+        }
         const value = cash + (qty * b.close);
         r[j] = prevValue > 0 ? value / prevValue - 1 : 0; exp[j] = prevValue > 0 ? (qty * b.close) / prevValue : 0; prevValue = value;
         if (value <= 0.0001) break;
@@ -923,9 +928,13 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
     for (const rule of ROTATION_RULES_V1) add({ id: rule.id, family: '로테이션', name: rule.name, source: rule.source, kind: 'rotation' }, simulateRotationPortfolio(panel, rule, market));
   }
   // multiple-testing deflation over everything tried in this market
-  const srs = rows.map((r) => r.full.srPerBar).filter(Number.isFinite);
-  const meanSr = srs.reduce((a, v) => a + v, 0) / Math.max(1, srs.length);
-  const srVariance = srs.reduce((a, v) => a + ((v - meanSr) ** 2), 0) / Math.max(1, srs.length - 1);
+  // Robust spread of trial Sharpes (1.4826 × MAD): a few cost-destroyed rules
+  // (daily round trips) must not inflate the bar every other rule is held to.
+  const srs = rows.map((r) => r.full.srPerBar).filter(Number.isFinite).sort((x, y) => x - y);
+  const median = (xs) => (xs.length ? (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[(xs.length / 2) - 1] + xs[xs.length / 2]) / 2) : 0);
+  const med = median(srs);
+  const mad = median(srs.map((v) => Math.abs(v - med)).sort((x, y) => x - y));
+  const srVariance = (1.4826 * mad) ** 2;
   for (const r of rows) r.deflatedSharpe = deflatedSharpeV1(r.full, { trials: rows.length, srVariance });
   const benchmark = rows.find((r) => r.id === 'BUY_HOLD');
   for (const r of rows) r.verdict = r.id === 'BUY_HOLD' ? 'BENCHMARK' : verdictV1(r, benchmark);
@@ -953,6 +962,6 @@ export function formatStrategyZooReportKoV1(markets) {
     lines.push('');
   }
   lines.push('판정 기준(실행 전 고정): 검증구간 샤프 ≥ 0.5, 수익 플러스, 앞 구간도 플러스, 다중검정 보정 후 우연 아닐 확률 ≥ 90%, 그리고 그냥 보유보다 샤프가 높거나 낙폭이 40% 이상 작으면서 수익 절반 이상.');
-  lines.push('한계: 종목은 현재 대형주·상장 코인(생존 편향), 주식 해외 환전비 미반영, 과거 성적일 뿐 미래 보장 아님. 주문 권한 없음.');
+  lines.push('한계: 종목은 현재 대형주·상장 코인(생존 편향) — 특히 물타기(DCA)·평균회귀·로테이션은 망한 종목이 빠져 실제보다 좋게 나옵니다. 주식 해외 환전비 미반영, 과거 성적일 뿐 미래 보장 아님. 주문 권한 없음.');
   return lines.join('\n');
 }
