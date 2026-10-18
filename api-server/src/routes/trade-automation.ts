@@ -62,6 +62,13 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import {
+  buildManualLivePlanInput,
+  ManualOrderInputError,
+  type ManualLiveOrderRequest,
+} from '../services/manual-live-order.service';
+import { resolveMemberAutoTradingKrwRate } from '../services/member-auto-trading-fx.service';
+import { notifyLiveMarketSwitch } from '../services/live-trading-safety-telegram.service';
 import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
 import {
   enforceMemberTradingPolicy,
@@ -89,6 +96,7 @@ import type {
   TradingSignalState,
 } from '../services/trade-automation.types';
 import {
+  LIVE_FIRST_WEEK_MAX_ORDER_KRW,
   PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
@@ -1332,7 +1340,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
     const marketProvider: Record<TradingAssetClass, TradingExchange> = {
       domestic_stock: domesticBroker,
-      us_stock: 'kiwoom',
+      us_stock: policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom',
       crypto_spot: 'upbit',
       crypto_futures: 'bitget',
     };
@@ -1607,10 +1615,72 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
       candidate.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
       candidate.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
     }
+    // The general settings save can only turn a market's real-order switch OFF;
+    // turning it ON goes through the dedicated confirmed /policy/live-market call.
+    candidate.liveMarketEnabled = Object.fromEntries(LIVE_SWITCH_MARKETS.map((market) => [
+      market,
+      current.liveMarketEnabled?.[market] === true && candidate.liveMarketEnabled?.[market] === true,
+    ])) as Record<TradingAssetClass, boolean>;
+    candidate.liveMarketEnabledAt = normalizeTradingPolicy({ ...current, liveMarketEnabled: candidate.liveMarketEnabled })
+      .liveMarketEnabledAt;
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     await recordAutoRunPolicyToggle(repository, userId, { before: current, after: policy, isLive: autoRunLiveResolver });
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+const LIVE_SWITCH_MARKETS: readonly TradingAssetClass[] = Object.freeze(['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']);
+
+/**
+ * Owner per-market real-order switch (settings screen button).
+ * OFF always succeeds immediately. ON needs an explicit acknowledgement, the
+ * real-order capability, futures access for crypto futures, and no active stop.
+ * This switch never opens the server live gate by itself; both must be on.
+ */
+router.post('/policy/live-market', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const market = String(req.body?.market ?? '') as TradingAssetClass;
+    const enabled = req.body?.enabled;
+    if (!LIVE_SWITCH_MARKETS.includes(market) || typeof enabled !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'LIVE_MARKET_SWITCH_INPUT_INVALID', orderSubmitted: false });
+    }
+    const current = await repository.getPolicy(userId);
+    if (enabled) {
+      if (req.body?.confirmation?.acknowledged !== true) {
+        return res.status(409).json({ ok: false, error: 'LIVE_MARKET_SWITCH_CONFIRMATION_REQUIRED', orderSubmitted: false });
+      }
+      if (req.member && !hasCapability(req.member, 'canPlaceOrders')) {
+        return res.status(403).json({ ok: false, error: 'LIVE_ORDER_CAPABILITY_REQUIRED', orderSubmitted: false });
+      }
+      if (market === 'crypto_futures' && req.member && !hasCapability(req.member, 'canAccessFutures')) {
+        return res.status(403).json({ ok: false, error: 'FUTURES_ACCESS_REQUIRED', orderSubmitted: false });
+      }
+      if (current.emergencyStopped || current.newEntriesStopped) {
+        return res.status(409).json({ ok: false, error: 'MEMBER_TRADING_RESUME_REQUIRED', orderSubmitted: false });
+      }
+    }
+    const before = normalizeTradingPolicy(current);
+    const wasOn = before.liveMarketEnabled?.[market] === true;
+    const policy: TradingPolicy = {
+      ...current,
+      liveMarketEnabled: { ...before.liveMarketEnabled!, [market]: enabled },
+      liveMarketEnabledAt: {
+        ...before.liveMarketEnabledAt!,
+        // OFF→ON restarts the first-week small-order period.
+        [market]: enabled ? (wasOn ? before.liveMarketEnabledAt?.[market] ?? new Date().toISOString() : new Date().toISOString()) : null,
+      },
+    };
+    await repository.savePolicy(userId, policy);
+    if (wasOn !== enabled) void notifyLiveMarketSwitch({ userId, market, enabled }).catch(() => undefined);
+    return res.json({
+      ok: true, market, enabled,
+      liveMarketEnabled: policy.liveMarketEnabled,
+      liveMarketEnabledAt: policy.liveMarketEnabledAt,
+      firstWeekMaxOrderKrw: LIVE_FIRST_WEEK_MAX_ORDER_KRW,
+      orderSubmitted: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
@@ -2001,6 +2071,68 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       ...(automaticExecution ?? {}),
       duplicate: automaticExecution?.duplicate ?? result.duplicate,
       orderSubmitted: input.accountMode === 'live' && automaticExecution != null,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+/**
+ * Manual order ticket (종목 탭 주문창 / 호가 클릭 / 보유종목 매도·청산).
+ * Builds a LIVE plan server-side from the owner's ticket and fresh read-only
+ * exchange data, then stores it as APPROVAL_PENDING. Nothing is sent to the
+ * exchange here: the order goes out only through POST /plans/:id/approve.
+ */
+router.post('/manual-orders/plan', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!requireLiveOrderCapability(req, res)) return;
+    const { userId, repository, automation, execution } = context(req);
+    const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
+    ]);
+    if (req.body?.market === 'crypto_futures' && req.member && !hasCapability(req.member, 'canAccessFutures')) {
+      return res.status(403).json({ ok: false, error: 'FUTURES_ACCESS_REQUIRED', orderSubmitted: false });
+    }
+    const fxCache = new Map<string, number>();
+    const krwPerQuote = async (market: string) => {
+      if (!fxCache.has(market)) {
+        const quote = await resolveMemberAutoTradingKrwRate(market as Parameters<typeof resolveMemberAutoTradingKrwRate>[0]);
+        fxCache.set(market, quote.krwPerQuoteCurrency);
+      }
+      return fxCache.get(market)!;
+    };
+    let input: TradingPlanInput;
+    try {
+      input = await buildManualLivePlanInput({
+        userId,
+        request: req.body as ManualLiveOrderRequest,
+        policy,
+        repository,
+        krwPerQuote,
+        previewSnapshot: async (seed, fx) => (await execution.previewLiveRiskSnapshot(userId, seed, { fxKrwPerQuoteCurrency: fx })).snapshot,
+      });
+    } catch (error) {
+      if (error instanceof ManualOrderInputError) {
+        return res.status(400).json({ ok: false, error: error.message, orderSubmitted: false });
+      }
+      throw error;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    input.marketSnapshot = {
+      ...input.marketSnapshot,
+      dailyOrderCount: existingOrders.filter((order) => order.createdAt.slice(0, 10) === today).length,
+    };
+    assertPublicLivePlanOrigin(input);
+    const requestPolicy = publicPlanPolicy(input, policy);
+    const result = await automation.createPlan(userId, input, requestPolicy,
+      policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
+    if (!result.plan) {
+      return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
+    }
+    return res.json({
+      ok: true,
+      plan: result.plan,
+      duplicate: result.duplicate,
+      approvalRequired: true,
+      orderSubmitted: false,
     });
   } catch (error) { return errorResponse(res, error); }
 });

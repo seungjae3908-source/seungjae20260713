@@ -2,6 +2,8 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  LIVE_FIRST_WEEK_DAYS,
+  LIVE_FIRST_WEEK_MAX_ORDER_KRW,
   PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
@@ -14,6 +16,7 @@ import {
 } from './trade-automation.types';
 import { normalizeSplitRatios, TradeSplitOrderPlanError } from './trade-split-order-planner.service';
 import { benchmarkDrawdownBlocksLong, isNewCryptoLongEntry } from './crypto-benchmark-regime.service';
+import { isManualOwnerOrder, MANUAL_OWNER_EXEMPT_AMOUNT_CODES } from './manual-owner-order';
 
 const MAX_DATA_DELAY_MS = 5_000;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
@@ -117,10 +120,26 @@ export function normalizeTradingPolicy(
   };
   const stockBrokerByMarket = {
     domestic_stock: input.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
-    // Production execution policy is fixed: US stock orders are Kiwoom-only.
-    // Normalize legacy/user-supplied Toss selections closed instead of carrying
-    // an unsupported route into the automatic worker.
-    us_stock: 'kiwoom' as const,
+    // Owner-approved: US stock orders may route through Kiwoom or Toss.
+    us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+  };
+  const liveMarketEnabled: Record<TradingAssetClass, boolean> = {
+    domestic_stock: input.liveMarketEnabled?.domestic_stock === true,
+    us_stock: input.liveMarketEnabled?.us_stock === true,
+    crypto_spot: input.liveMarketEnabled?.crypto_spot === true,
+    crypto_futures: input.liveMarketEnabled?.crypto_futures === true,
+  };
+  const enabledAt = (market: TradingAssetClass) => {
+    const raw = input.liveMarketEnabledAt?.[market];
+    if (!liveMarketEnabled[market] || typeof raw !== 'string') return null;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) && new Date(ms).toISOString() === raw ? raw : null;
+  };
+  const liveMarketEnabledAt: Record<TradingAssetClass, string | null> = {
+    domestic_stock: enabledAt('domestic_stock'),
+    us_stock: enabledAt('us_stock'),
+    crypto_spot: enabledAt('crypto_spot'),
+    crypto_futures: enabledAt('crypto_futures'),
   };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
@@ -129,6 +148,8 @@ export function normalizeTradingPolicy(
     newEntriesStopped: input.newEntriesStopped === true,
     marketEnabled,
     stockBrokerByMarket,
+    liveMarketEnabled,
+    liveMarketEnabledAt,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
@@ -210,6 +231,7 @@ export function evaluateTradingPlan(
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
   const riskReducing = isRiskReducingExitPlan(plan);
+  const manualOwner = isManualOwnerOrder(plan as TradingPlanInput & { executionMode?: string });
   if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
@@ -306,6 +328,18 @@ export function evaluateTradingPlan(
     if (plan.accountMode !== 'paper' && plan.accountMode !== 'live' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
+  // Owner's per-market real-order switch from the settings screen. Exits stay allowed.
+  if (plan.accountMode === 'live' && !riskReducing && policy.liveMarketEnabled?.[assetClassForPlan(plan)] !== true) {
+    add(blockCodes, 'LIVE_MARKET_SWITCH_OFF');
+  }
+  // First week after the switch went ON: one new LIVE order may not exceed the small cap.
+  // A missing/invalid timestamp counts as inside the first week (fail closed).
+  if (plan.accountMode === 'live' && !riskReducing) {
+    const switchedOnAt = Date.parse(policy.liveMarketEnabledAt?.[assetClassForPlan(plan)] ?? '');
+    const insideFirstWeek = !Number.isFinite(switchedOnAt)
+      || Date.now() - switchedOnAt < LIVE_FIRST_WEEK_DAYS * 86_400_000;
+    if (insideFirstWeek && plan.estimatedKrw > LIVE_FIRST_WEEK_MAX_ORDER_KRW) add(blockCodes, 'LIVE_FIRST_WEEK_ORDER_CAP');
+  }
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
@@ -353,7 +387,8 @@ export function evaluateTradingPlan(
     if (error instanceof TradeSplitOrderPlanError) add(blockCodes, error.code);
     else add(blockCodes, 'TRADE_SPLIT_RATIO_INVALID');
   }
-  if (!riskReducing && (plan.targetPrices.length === 0 || !finitePositive(plan.stopPrice))) add(blockCodes, 'EXIT_PLAN_REQUIRED');
+  // Manual owner orders need a protective stop; a target is optional.
+  if (!riskReducing && ((!manualOwner && plan.targetPrices.length === 0) || !finitePositive(plan.stopPrice))) add(blockCodes, 'EXIT_PLAN_REQUIRED');
   if (plan.invalidateAction === 'close') warnings.push('조건 무효화 시 청산은 위험관리 재검사 후에만 실행됩니다.');
 
   const hasOptimizationContext = !riskReducing && (plan.accountMode === 'live'
@@ -363,6 +398,15 @@ export function evaluateTradingPlan(
   if (optimization) {
     for (const code of optimization.blockCodes) add(blockCodes, code);
     for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
+  }
+  if (manualOwner) {
+    // Owner's manual ticket: no policy amount/exposure caps and no strategy-evidence gates.
+    const exempt = new Set<string>(MANUAL_OWNER_EXEMPT_AMOUNT_CODES);
+    const kept = blockCodes.filter((code) => !exempt.has(code));
+    blockCodes.length = 0;
+    blockCodes.push(...kept);
+    if (!finitePositive(plan.estimatedKrw)) add(blockCodes, 'ORDER_AMOUNT_INVALID');
+    warnings.push('MANUAL_OWNER_ORDER:AMOUNT_CAPS_AND_STRATEGY_EVIDENCE_NOT_APPLIED');
   }
   return { allowed: blockCodes.length === 0, blockCodes, warnings, optimization };
 }

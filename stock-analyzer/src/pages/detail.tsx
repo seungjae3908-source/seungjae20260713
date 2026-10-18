@@ -7,6 +7,8 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { AppErrorBoundary } from '@/components/app-error-boundary';
 import { apiGet } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { openManualOrderTicket } from '@/lib/manual-order-ticket';
 import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
 import { parseStockDetailNews, parseStockDetailProfile, parseStockDetailQuote } from '@/lib/stock-detail-response';
@@ -105,6 +107,7 @@ function LoadingStatus({ label = '확인 중' }: { label?: string }) {
 export default function DetailPage() {
   const [location, navigate] = useLocation();
   const analysisSelection = useAnalysisSelection();
+  const auth = useAuth();
   const initial = useMemo(queryState, [location]);
   const [tab, setTabState] = useState<DetailTab>(initial.tab);
   const ticker = initial.ticker;
@@ -174,6 +177,7 @@ export default function DetailPage() {
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
   const summaryLoading = quote.isLoading || profile.isLoading;
   const routeContextValid = validStockContext(ticker, market);
+  const canPlaceOrders = auth.can('canPlaceOrders');
   const canonicalChartSelection = useMemo<AnalysisSelection>(() => ({
     assetType: 'stock',
     market,
@@ -249,6 +253,17 @@ export default function DetailPage() {
               <button type="button" onClick={() => setTab('news')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><Newspaper className="h-5 w-5 text-primary" /><span className="truncate">뉴스</span></button>
               <button type="button" onClick={() => setTab('analysis')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><ExternalLink className="h-5 w-5 text-primary" /><span className="truncate">상세분석</span></button>
             </section>
+
+            {canPlaceOrders && routeContextValid ? (
+              <section className="grid grid-cols-2 gap-2" aria-label="실주문" data-testid="stock-detail-order-actions">
+                <button type="button" data-testid="stock-detail-open-buy"
+                  onClick={() => openManualOrderTicket({ market: market === 'KR' ? 'domestic_stock' : 'us_stock', symbol: ticker, action: 'buy' })}
+                  className="min-h-12 rounded-2xl bg-red-600 text-sm font-black text-white">매수 주문</button>
+                <button type="button" data-testid="stock-detail-open-sell"
+                  onClick={() => openManualOrderTicket({ market: market === 'KR' ? 'domestic_stock' : 'us_stock', symbol: ticker, action: 'sell' })}
+                  className="min-h-12 rounded-2xl bg-blue-600 text-sm font-black text-white">매도 주문</button>
+              </section>
+            ) : null}
           </div>
         ) : null}
 

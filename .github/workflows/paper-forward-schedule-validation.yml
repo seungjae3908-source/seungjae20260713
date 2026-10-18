@@ -461,6 +461,24 @@ on:
       - research-production/test/research-dataset-snapshot-store.test.mjs
       - api-server/src/services/crypto-benchmark-regime.service.ts
       - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/four-market-auto-readiness.service.ts
+      - api-server/src/services/member-auto-trading-readiness.service.ts
+      - api-server/src/services/spot-live-limited-capability.service.ts
+      - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/phase12-trade-automation.spec.ts
+      - api-server/src/services/four-market-auto-readiness.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/live-trading-safety-telegram.service.ts
+      - api-server/src/services/trade-pre-submission-risk.test.ts
+      - stock-analyzer/src/lib/trade-approval-ui.ts
+      - api-server/src/services/manual-live-order.service.ts
+      - stock-analyzer/e2e/phase13-orderbook.spec.ts
+      - stock-analyzer/src/components/instrument-orderbook-dock.tsx
+      - stock-analyzer/src/components/manual-order-ticket.tsx
+      - stock-analyzer/src/lib/manual-order-ticket.ts
+      - stock-analyzer/src/pages/detail.tsx
+      - api-server/src/services/manual-owner-order.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -523,8 +541,8 @@ jobs:
           auto_safety = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-safety'], text=True
           ).splitlines()
-          if len(auto_safety) != 52 or len(set(auto_safety)) != 52:
-              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_52')
+          if len(auto_safety) != 71 or len(set(auto_safety)) != 71:
+              raise SystemExit('AUTO_LIVE_REVIEWED_SCOPE_MUST_BE_EXACTLY_71')
           auto_supplement = subprocess.check_output(
               ['node', '.github/scripts/paper-forward-reviewed-paths.mjs', '--list-auto-live-supplement'], text=True
           ).splitlines()
@@ -564,7 +582,7 @@ jobs:
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)
           mapfile -t auto_safety < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-safety)
-          test "${#auto_safety[@]}" -eq 52
+          test "${#auto_safety[@]}" -eq 71
           allowed+=("${auto_safety[@]}")
           mapfile -t auto_supplement < <(node .github/scripts/paper-forward-reviewed-paths.mjs --list-auto-live-supplement)
           test "${#auto_supplement[@]}" -eq 19
@@ -590,6 +608,9 @@ jobs:
           )
           scope_requested=false
           for path in "${changed[@]}"; do
+            # Paths registered in the exact AUTO live safety scope get the full
+            # Trading guard review instead of the frozen historical holdings blobs.
+            printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null && continue
             case "$path" in
               stock-analyzer/src/pages/auto-trading.tsx|stock-analyzer/src/components/trading-holdings-panel.tsx|stock-analyzer/e2e/auto-trading-professional-ui.spec.ts)
                 scope_requested=true ;;
@@ -616,6 +637,9 @@ jobs:
           )
           market_scope_requested=false
           for path in "${changed[@]}"; do
+            # Paths registered in the exact AUTO live safety scope get the full
+            # Trading guard review instead of the frozen historical market-scope blobs.
+            printf '%s\n' "${auto_safety[@]}" | grep -Fx "$path" >/dev/null && continue
             printf '%s\n' "${market_scope_ui[@]}" | grep -Fx "$path" >/dev/null && market_scope_requested=true
           done
           if [[ "$market_scope_requested" == true ]]; then

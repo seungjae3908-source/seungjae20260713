@@ -9,6 +9,8 @@ import {
 } from 'react';
 import { AlertTriangle, BookOpen, RefreshCw, X } from 'lucide-react';
 
+import { useAuth } from '@/lib/auth';
+import { openManualOrderTicket, selectManualOrderPrice, type ManualOrderMarket } from '@/lib/manual-order-ticket';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
 export type OrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
@@ -274,7 +276,9 @@ function statusLabel(data: Payload | null): string {
   return 'Unavailable';
 }
 
-function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Level[]; currency: Currency }) {
+function LevelList({ side, levels, currency, onPick }: {
+  side: 'ask' | 'bid'; levels: Level[]; currency: Currency; onPick?: (price: number) => void;
+}) {
   return (
     <div role="list" aria-label={side === 'ask' ? '매도 호가' : '매수 호가'} data-testid={`${side}-levels`}>
       {levels.map((level) => (
@@ -282,7 +286,9 @@ function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Le
           role="listitem"
           data-testid={`${side}-level-${level.rank}`}
           key={`${side}-${level.price}`}
-          className="grid min-h-10 grid-cols-[54px_1fr_1fr_1fr] items-center gap-1 border-b border-border/50 px-3 text-xs last:border-b-0"
+          onClick={onPick ? () => onPick(level.price) : undefined}
+          title={onPick ? '누르면 주문창에 이 가격이 입력됩니다' : undefined}
+          className={`grid min-h-10 grid-cols-[54px_1fr_1fr_1fr] items-center gap-1 border-b border-border/50 px-3 text-xs last:border-b-0 ${onPick ? 'cursor-pointer hover:bg-accent' : ''}`}
         >
           <span className="text-muted-foreground">{side === 'ask' ? 'Ask' : 'Bid'} {level.rank}</span>
           <span className="text-right font-semibold tabular-nums">{formatPrice(level.price, currency)}</span>
@@ -441,6 +447,8 @@ export function InstrumentOrderbookDock({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      // The order ticket opens above this dock and owns its own keyboard handling.
+      if (document.querySelector('[data-testid="manual-order-ticket"]')) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         close();
@@ -469,6 +477,12 @@ export function InstrumentOrderbookDock({
   }, [close, open]);
 
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
+  const auth = useAuth();
+  const canOrder = auth.can('canPlaceOrders');
+  const orderMarket: ManualOrderMarket = market === 'KR' ? 'domestic_stock' : market === 'US' ? 'us_stock'
+    : market === 'UPBIT' ? 'crypto_spot' : 'crypto_futures';
+  const orderSymbol = orderMarket === 'crypto_futures' && !symbol.endsWith('USDT') ? `${symbol}USDT` : symbol;
+  const pickPrice = canOrder ? (price: number) => selectManualOrderPrice({ market: orderMarket, symbol: orderSymbol, price }) : undefined;
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
   const diagnostic = error ?? (data?.status === 'invalid' ? data.reason : null);
 
@@ -501,7 +515,7 @@ export function InstrumentOrderbookDock({
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px]">읽기 전용</span>
                   <span className="rounded-full border border-border px-2 py-0.5 text-[11px]">{statusLabel(data)}</span>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{providerLabel(data?.provider ?? null)} · 주문/취소/정정 기능 없음</p>
+                <p className="mt-1 text-xs text-muted-foreground">{providerLabel(data?.provider ?? null)} · {canOrder ? '호가창에서는 주문이 바로 나가지 않음' : '주문/취소/정정 기능 없음'}</p>
               </div>
               <div className="flex gap-1">
                 <button type="button" aria-label="호가 새로고침" disabled={loading} onClick={() => void loadRef.current()} className="inline-flex h-11 w-11 items-center justify-center rounded-full hover:bg-accent disabled:opacity-50">
@@ -542,8 +556,8 @@ export function InstrumentOrderbookDock({
               <div className="grid grid-cols-[54px_1fr_1fr_1fr] gap-1 border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-semibold">
                 <span>Side</span><span className="text-right">Price</span><span className="text-right">Quantity</span><span className="text-right">Cumulative</span>
               </div>
-              <LevelList side="ask" levels={data?.asks ?? []} currency={currency} />
-              <LevelList side="bid" levels={data?.bids ?? []} currency={currency} />
+              <LevelList side="ask" levels={data?.asks ?? []} currency={currency} onPick={pickPrice} />
+              <LevelList side="bid" levels={data?.bids ?? []} currency={currency} onPick={pickPrice} />
 
               {!loading && data && data.asks.length === 0 && data.bids.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">표시 가능한 실제 호가가 없습니다.</p>
@@ -551,8 +565,23 @@ export function InstrumentOrderbookDock({
               {!data && loading ? <p className="px-4 py-8 text-center text-sm text-muted-foreground">호가를 불러오는 중입니다.</p> : null}
             </div>
 
+            {canOrder ? (
+              <div className="grid grid-cols-2 gap-2 border-t border-border px-3 py-2" data-testid="orderbook-order-actions">
+                <button type="button" data-testid="orderbook-open-ticket-buy"
+                  onClick={() => openManualOrderTicket({ market: orderMarket, symbol: orderSymbol, action: orderMarket === 'crypto_futures' ? 'long' : 'buy' })}
+                  className="h-11 rounded-xl bg-red-600 text-sm font-extrabold text-white">
+                  {orderMarket === 'crypto_futures' ? '롱 주문창' : '매수 주문창'}
+                </button>
+                <button type="button" data-testid="orderbook-open-ticket-sell"
+                  onClick={() => openManualOrderTicket({ market: orderMarket, symbol: orderSymbol, action: orderMarket === 'crypto_futures' ? 'short' : 'sell' })}
+                  className="h-11 rounded-xl bg-blue-600 text-sm font-extrabold text-white">
+                  {orderMarket === 'crypto_futures' ? '숏 주문창' : '매도 주문창'}
+                </button>
+              </div>
+            ) : null}
             <footer className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
               Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다. ORDERBOOK_IMBALANCE != TRADE_SIGNAL
+              {canOrder ? ' · 호가를 누르면 주문창 지정가로 들어갑니다. 주문은 주문창에서 확인 후에만 나갑니다.' : null}
             </footer>
           </section>
         </div>
