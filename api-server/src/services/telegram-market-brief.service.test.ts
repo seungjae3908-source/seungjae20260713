@@ -164,6 +164,23 @@ test('current candidates are counted per market, never named',()=>{
   assert.match(telegramBriefSignalLines(ready(undefined,events),'US_STOCK_ROOM').join('\n'),/해외주식 · 현재 새 신호 없음/u);
 });
 
+test('A-grade watch items are listed by name only, deduped and capped, never with a price',()=>{
+  const coverage=ids.map(id=>lane(id));
+  const us=coverage.filter(row=>row.laneId.startsWith('US_'));
+  Object.assign(us[0],{aGradeWatch:[{symbol:'AAPL',name:'Apple',direction:'BUY'},{symbol:'MSFT',name:'Microsoft'}]});
+  Object.assign(us[1],{aGradeWatch:[{symbol:'AAPL',name:'Apple'},{symbol:'NVDA'},{symbol:'TSLA'},{symbol:'AMD'},
+    {symbol:'META'},{symbol:'bad symbol!'}]});
+  const text=telegramBriefSignalLines(ready(coverage),'US_STOCK_ROOM').join('\n');
+  assert.match(text,/해외주식 · 현재 새 신호 없음/u);
+  assert.match(text,/👀 A등급 관심 6개: Apple\(AAPL\), Microsoft\(MSFT\), NVDA, TSLA, AMD 외 1개/u);
+  assert.match(text,/진입 신호는 아니에요/u);
+  assert.doesNotMatch(text,/bad symbol/u);
+  assert.doesNotMatch(telegramBriefSignalLines(ready(coverage),'KR_STOCK_ROOM').join('\n'),/A등급/u);
+  const blocked=ids.map(id=>lane(id,'BLOCKED_DATA'));
+  Object.assign(blocked[3],{aGradeWatch:[{symbol:'AAPL'}]});
+  assert.doesNotMatch(telegramBriefSignalLines(ready(blocked),'US_STOCK_ROOM').join('\n'),/A등급/u);
+});
+
 test('blocked engine data or a missing engine never reads as "no signal"',()=>{
   const blocked=ids.map(id=>lane(id,id.startsWith('US_')?'BLOCKED_DATA':'VALID_NO_TRADE'));
   assert.match(telegramBriefSignalLines(ready(blocked),'US_STOCK_ROOM').join('\n'),/자료를 확인하는 중 · 판단 보류/u);

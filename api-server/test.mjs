@@ -187,6 +187,7 @@ const groups = {
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
     path.join(root, 'src/services/telegram-market-brief.service.test.ts'),
+    path.join(root, 'src/services/telegram-v3-signal-followup.service.test.ts'),
     path.join(root, 'src/services/telegram-readable-format.service.test.ts'),
     path.join(root, 'src/services/telegram-investment-intelligence.service.test.ts'),
     path.join(root, 'src/services/scanner-telegram-plan-format.service.test.ts'),
