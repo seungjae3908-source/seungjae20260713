@@ -234,3 +234,28 @@ test('ledger: day roll, peak, close accounting, kill and re-arm, client oid', as
   assert.notEqual(a, core.trendPilotClientOid('m2', 'BTCUSDT', T0));
   assert.ok(a.length <= 40);
 });
+
+test('Upbit spot: long only, cash-limited, minimum order, worker-side stop', async () => {
+  const core = await import('./trend-pilot-v1.core');
+  // 100,000 KRW account, BTC 90,000,000, ATR 900,000 → stop 1,800,000 (2%) → wants 100,000
+  const plan = core.computeTrendPilotSpotEntryPlan({ referencePriceKrw: 90_000_000, atrKrw: 900_000, equityKrw: 100_000, availableKrw: 100_000, maxOrderKrw: 500_000 });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.stopPriceKrw, 88_200_000);
+  assert.equal(plan.capReason, 'CASH', 'fee room keeps the buy under free cash');
+  assert.equal(plan.orderKrw, 99_950);
+  assert.ok(plan.riskKrw! <= 2_000);
+  const capped = core.computeTrendPilotSpotEntryPlan({ referencePriceKrw: 90_000_000, atrKrw: 900_000, equityKrw: 5_000_000, availableKrw: 5_000_000, maxOrderKrw: 500_000 });
+  assert.equal(capped.capReason, 'MAX_ORDER');
+  assert.equal(capped.orderKrw, 500_000);
+  assert.deepEqual(core.computeTrendPilotSpotEntryPlan({ referencePriceKrw: 100, atrKrw: 1, equityKrw: 100_000, availableKrw: 3_000, maxOrderKrw: 500_000 }).blockers, ['BELOW_MIN_ORDER']);
+  assert.deepEqual(core.computeTrendPilotSpotEntryPlan({ referencePriceKrw: 100, atrKrw: 0, equityKrw: 1, availableKrw: 1, maxOrderKrw: 1 }).blockers, ['INVALID_ATR']);
+  assert.equal(core.spotStopTouched(88_200_000, 88_100_000), true);
+  assert.equal(core.spotStopTouched(88_200_000, 88_300_000), false);
+  assert.equal(core.spotStopTouched(0, 1), null);
+  // a short breakout is ignored on spot
+  const down: TrendPilotCandle[] = [];
+  for (let i = 0; i < 300; i += 1) { const p = 1000 - i; down.push({ timestamp: T0 + (i * H4), open: p + 0.5, high: p + 1, low: p - 1, close: p }); }
+  down.push({ timestamp: T0 + (300 * H4), open: 700, high: 700, low: 600, close: 600 });
+  assert.equal(core.evaluateTrendPilotSignal(down).side, 'short');
+  assert.equal(core.evaluateTrendPilotSpotSignal(down).side, null);
+});
