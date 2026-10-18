@@ -215,7 +215,7 @@ test('ledger: day roll, peak, close accounting, kill and re-arm, client oid', as
   const day1 = Date.UTC(2026, 9, 18, 1);
   let l = core.observeTrendPilotEquity(core.createTrendPilotLedger('m1'), 100_000, day1);
   assert.equal(l.dayStartEquityKrw, 100_000);
-  l = core.recordTrendPilotClose(l, 'BTCUSDT', -1_500, day1 + 3_600_000);
+  l = core.recordTrendPilotClose(l, 'plan-1', -1_500, day1 + 3_600_000);
   assert.equal(l.dayRealizedPnlKrw, -1_500);
   l = core.observeTrendPilotEquity(l, 98_500, day1 + 7_200_000);
   assert.equal(l.dayStartEquityKrw, 100_000, 'same KST day keeps the start');
@@ -233,6 +233,16 @@ test('ledger: day roll, peak, close accounting, kill and re-arm, client oid', as
   assert.notEqual(a, core.trendPilotClientOid('m1', 'ETHUSDT', T0));
   assert.notEqual(a, core.trendPilotClientOid('m2', 'BTCUSDT', T0));
   assert.ok(a.length <= 40);
+  // stored ledger parsing is fail-closed
+  assert.equal(core.parseTrendPilotLedger(null, 'm1').killed, false);
+  assert.equal(core.parseTrendPilotLedger({ version: 'trend-pilot-ledger-v1', memberId: 'other' }, 'm1').killed, true);
+  const good = { ...core.createTrendPilotLedger('m1'), killed: true, peakEquityKrw: 120_000,
+    trails: { p1: { planId: 'p1', symbol: 'BTCUSDT', side: 'long', entryPrice: 1, riskUnit: 0.1, entryAtr: 0.05, stopPrice: 0.9, stopKind: 'initial', bestPrice: 1, maxFavorableR: 0, entryBarOpenMs: T0, lastProcessedBarOpenMs: null },
+      bad: { planId: 'zz' } } };
+  const parsed = core.parseTrendPilotLedger(JSON.parse(JSON.stringify(good)), 'm1');
+  assert.equal(parsed.killed, true);
+  assert.equal(parsed.peakEquityKrw, 120_000);
+  assert.deepEqual(Object.keys(parsed.trails), ['p1']);
 });
 
 test('Upbit spot: long only, cash-limited, minimum order, worker-side stop', async () => {
