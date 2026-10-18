@@ -379,3 +379,14 @@ test('owner alerts: kill, failed exit and lane-level state errors alert; per-sym
     (async () => { throw new Error('TELEGRAM_DOWN'); }) as never);
   assert.deepEqual(failed, [null, null, null]);
 });
+
+test('lane access: exits survive emergency stop and arm loss; entries need arm, no stop, AUTO ON', async () => {
+  const { trendPilotLaneAccess } = await import('./trend-pilot-v1-lane.service');
+  const base = { liveModeRequested: true, pilotEnabled: true, memberCanRunAutomation: true, mode: 'automatic', automaticEnabled: true, emergencyStopped: false, entriesArmed: true };
+  assert.deepEqual(trendPilotLaneAccess(base), { runLanes: true, entriesArmed: true });
+  assert.deepEqual(trendPilotLaneAccess({ ...base, emergencyStopped: true }), { runLanes: true, entriesArmed: false }, 'emergency stop: exits only');
+  assert.deepEqual(trendPilotLaneAccess({ ...base, entriesArmed: false }), { runLanes: true, entriesArmed: false }, 'arm lost: exits only');
+  for (const off of [{ liveModeRequested: false }, { pilotEnabled: false }, { memberCanRunAutomation: false }, { mode: 'manual' }, { automaticEnabled: false }]) {
+    assert.deepEqual(trendPilotLaneAccess({ ...base, ...off }), { runLanes: false, entriesArmed: false }, JSON.stringify(off));
+  }
+});

@@ -697,3 +697,24 @@ function buildUpbitEntry(input: {
     },
   };
 }
+
+/**
+ * Pure: may the worker run the pilot lanes for this member, and may they open NEW positions?
+ * Exits (reduce-only stop-loss / trailing) run whenever live mode is on, the pilot is enabled
+ * and the member still has AUTO ON with execution rights, even during an emergency stop or
+ * after the entry arm was lost. New entries additionally need the arm + warmup (entriesArmed),
+ * no emergency stop, and no persistent/global stop.
+ */
+export function trendPilotLaneAccess(input: {
+  liveModeRequested: boolean;
+  pilotEnabled: boolean;
+  memberCanRunAutomation: boolean;
+  mode: string;
+  automaticEnabled: boolean;
+  emergencyStopped: boolean;
+  entriesArmed: boolean;
+}): { runLanes: boolean; entriesArmed: boolean } {
+  const runLanes = input.liveModeRequested && input.pilotEnabled && input.memberCanRunAutomation
+    && input.mode === 'automatic' && input.automaticEnabled;
+  return { runLanes, entriesArmed: runLanes && input.entriesArmed && !input.emergencyStopped };
+}
