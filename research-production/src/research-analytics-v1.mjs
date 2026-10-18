@@ -131,8 +131,11 @@ export function regimeDependenceV1(byRegime, { minimumTrades = 10 } = {}) {
  * sight shows a negative or near-zero out-of-sample mean here.
  */
 export function rollingSelectionWalkForwardV1(trials, { minimumTrades = 20 } = {}) {
-  const rows = Object.values(trials ?? {}).filter((row) => row.status !== 'REJECT' && Array.isArray(row.walkForward?.windows));
-  const windows = rows[0]?.walkForward.windows.length ?? 0;
+  // Every trial with window data takes part. A trial's REJECT status was decided with the whole
+  // sample (including windows later than k), so excluding it here would let hindsight shape the
+  // choice at window k and make the out-of-sample score look better than the real process.
+  const rows = Object.values(trials ?? {}).filter((row) => Array.isArray(row.walkForward?.windows));
+  const windows = rows.length ? Math.min(...rows.map((row) => row.walkForward.windows.length)) : 0;
   const folds = [];
   for (let k = 1; k < windows; k += 1) {
     let best = null; let bestMean = -Infinity;
