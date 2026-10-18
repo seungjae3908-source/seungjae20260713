@@ -6,7 +6,11 @@ import { ProductPaperSourceError, productPaperSourceRegistry, type ProductPaperS
 import {
   BACKTEST_LIMITS,
   BacktestValidationError,
+  evaluateSelectionBias,
+  recordSelectionRun,
+  resetSelectionRunsForTests,
   runBacktest,
+  selectionBiasWarning,
   validateBacktestRequest,
   type BacktestRequest,
 } from '../services/backtest-engine.service';
@@ -255,6 +259,10 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
         acceptedRequestForHandoff = acceptedRequest;
         acceptedStrategyIdentityInputs = paperHandoffBundle.strategyIdentityInputs;
         result.paperHandoffs = paperHandoffBundle.handoffs;
+        const runs = recordSelectionRun((req as AuthenticatedRequest).member?.id ?? `ip:${req.ip ?? ''}`, acceptedRequest);
+        result.selectionBias = evaluateSelectionBias(runs, result.sharpeRatio, acceptedRequest.startTime, acceptedRequest.endTime);
+        const biasWarning = selectionBiasWarning(result.selectionBias);
+        if (biasWarning) result.warnings = [...result.warnings, biasWarning];
         const executionMs = performance.now() - started;
         result.warnings = [...new Set([...history.warnings, ...rules.warnings, ...result.warnings, `과거 캔들 제공자 요청 ${history.requestCount}회, 순수 계산 ${executionMs.toFixed(1)}ms`])];
         return result;
@@ -314,4 +322,4 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
 
 const router = createBacktestsRouter();
 export default router;
-export function resetBacktestRouteStateForTests() { activeExecutions = 0; }
+export function resetBacktestRouteStateForTests() { activeExecutions = 0; resetSelectionRunsForTests(); }
