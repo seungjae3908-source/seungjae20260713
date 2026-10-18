@@ -60,12 +60,11 @@ function formatTapeValue(item: SummaryItem) {
 
 /**
  * Index ticker tape. It only reads market-summary data already cached by the
- * home and market-overview screens, so the shell never adds its own request.
+ * home screen, so the shell never adds its own request.
  */
 function IndexTickerTape() {
   const home = useQuery({ queryKey: ['home-dashboard-market'], queryFn: getMarketSummary, enabled: false });
-  const overview = useQuery({ queryKey: ['market-overview-summary'], queryFn: getMarketSummary, enabled: false });
-  const items = validMarketSummaryItems(home.data?.items ?? overview.data?.items ?? []).slice(0, 7);
+  const items = validMarketSummaryItems(home.data?.items ?? []).slice(0, 7);
   return (
     <div data-testid="index-ticker-tape" aria-label="주요 지수" className="no-scrollbar flex min-w-0 flex-1 items-center gap-5 overflow-hidden whitespace-nowrap text-[12.5px]">
       {items.length ? items.map((item) => {
@@ -110,7 +109,7 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
     { id: 'home', label: '홈', description: '투자 대시보드', href: APP_ROUTES.homeAlias, icon: Home, visible: true },
     { id: 'search', label: '통합검색', description: '종목·코인 찾기', href: APP_ROUTES.assets, icon: Search, visible: auth.can('canAccessBasicInfo') },
     { id: 'scanner', label: 'AI 신호검색기', description: '시장 신호 탐색', href: APP_ROUTES.scanner, icon: Radar, visible: auth.can('canAccessBasicInfo') },
-    { id: 'ai-chart', label: 'AI 차트', description: '차트·분석 워크스페이스', href: APP_ROUTES.aiChart, icon: BarChart3, visible: auth.can('canAccessRiskPreview') },
+    { id: 'ai-chart', label: 'AI 차트', description: '차트·분석 워크스페이스', href: APP_ROUTES.aiChart, icon: BarChart3, visible: auth.can('canAccessAiChart') },
     { id: 'portfolio', label: '포트폴리오', description: '자산·손익·위험 확인', href: APP_ROUTES.portfolio, icon: BriefcaseBusiness, visible: auth.can('canAccessPaperTrading') },
     { id: 'alerts', label: '가격 알림', description: '알림 상태 확인', href: APP_ROUTES.alerts, icon: Bell, visible: true },
     { id: 'research', label: '연구센터', description: '검증 근거와 연구 상태', href: APP_ROUTES.researchCenter, icon: Sparkles, visible: auth.can('canAccessBasicInfo') },

@@ -53,9 +53,9 @@ const CODE_REASONS: Record<string, ReasonEntry> = {
 
   // Stock detail
   INVALID_STOCK_INFO_RESPONSE: { title: '종목 정보 형식이 올바르지 않습니다', reason: '서버가 보낸 종목 정보에 필수 값(종목 코드·이름·가격 등)이 빠져 있거나 다른 종목 값이었습니다.', action: RETRY_LATER, retryable: true },
-  AI_ANALYSIS_CONTRACT_INVALID: { title: 'AI 분석 결과 형식이 올바르지 않습니다', reason: '서버가 보낸 분석 결과에 필수 항목이 빠져 있어 표시하지 않았습니다.', action: RETRY_LATER, retryable: true },
-  ANALYSIS_INPUT_UNAVAILABLE: { title: 'AI 분석에 필요한 시세가 없습니다', reason: '현재가와 일봉 데이터를 모두 받지 못해 분석을 만들 수 없습니다.', action: '장중이거나 시세가 확인되는 종목에서 다시 시도해 주세요.', retryable: true },
-  STOCK_ANALYSIS_ROUTE_ERROR: { title: 'AI 분석 생성 실패', reason: '서버에서 분석을 계산하는 중 오류가 발생했습니다.', action: RETRY_LATER, retryable: true },
+  AI_ANALYSIS_CONTRACT_INVALID: { title: '지표 분석 결과 형식이 올바르지 않습니다', reason: '서버가 보낸 분석 결과에 필수 항목이 빠져 있어 표시하지 않았습니다.', action: RETRY_LATER, retryable: true },
+  ANALYSIS_INPUT_UNAVAILABLE: { title: '지표 분석에 필요한 시세가 없습니다', reason: '현재가와 일봉 데이터를 모두 받지 못해 분석을 만들 수 없습니다.', action: '장중이거나 시세가 확인되는 종목에서 다시 시도해 주세요.', retryable: true },
+  STOCK_ANALYSIS_ROUTE_ERROR: { title: '지표 분석 계산 실패', reason: '서버에서 분석을 계산하는 중 오류가 발생했습니다.', action: RETRY_LATER, retryable: true },
   FINANCIAL_PROVIDER_DELAY: { title: '재무 데이터 지연', reason: '재무 데이터 제공기관(DART/SEC)의 응답이 지연되고 있습니다.', action: RETRY_LATER, retryable: true },
   QUOTE_NOT_FOUND: { title: '현재가를 찾지 못했습니다', reason: '시세 제공처에서 이 종목의 현재가를 받지 못했습니다.', action: '장 운영 시간인지 확인한 뒤 다시 시도해 주세요.', retryable: true },
 

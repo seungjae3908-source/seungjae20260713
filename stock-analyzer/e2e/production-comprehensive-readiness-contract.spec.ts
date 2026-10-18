@@ -243,34 +243,31 @@ test('Production login cold recovery distinguishes incomplete hydration from ter
   expect(isDiagnosticFreeIncompleteLogin(incomplete, 1)).toBe(false);
 });
 
-test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {
+test('Production cold-route modules preload for approved sessions without competing with direct AI Chart bootstrap', () => {
   const app = source('src/App.tsx');
-  const marketInformation = source('src/pages/market-information.tsx');
   const moduleWarmup = app.indexOf('void Promise.allSettled([');
-  const marketDataWarmup = app.indexOf("]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures')))", moduleWarmup);
+  const warmupEnd = app.indexOf(']).catch(() => undefined);', moduleWarmup);
   expect(moduleWarmup).toBeGreaterThanOrEqual(0);
-  expect(marketDataWarmup).toBeGreaterThan(moduleWarmup);
-  expect(app).toContain('loadMarketInformationPage()');
-  expect(app).toContain('loadWatchlistPage()');
-  expect(app).toContain('loadScannerPage()');
-  expect(app).toContain('loadPortfolioPage()');
-  expect(app).toContain("prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))");
-  expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/stocks/kr')");
-  expect(app).toContain('if (includeFutures)');
-  expect(app).toContain("prefetchMarketInformationRoom(queryClient, '/coins/futures')");
-  expect(marketInformation).toContain('export async function prefetchMarketInformationRoom(');
-  expect(marketInformation).toContain("queryKey: ['market-information-room', route.id]");
-  expect(app).toContain('loadBacktestsPage()');
-  expect(app).toContain('loadMorePage()');
-  expect(app).toContain('loadStockInfoPage()');
-  expect(app).toContain('loadDetailPage()');
-  expect(app).toContain('loadTechnicalWorkspacePage()');
-  expect(app).toContain('loadSignalScannerPage()');
-  expect(app).toContain('loadAiChartPage()');
-  expect(app).toContain('loadAiChatPage()');
-  expect(app).toContain('loadThemesPage()');
+  expect(warmupEnd).toBeGreaterThan(moduleWarmup);
+  const preloads = app.slice(moduleWarmup, warmupEnd);
+  // Removed market rooms, themes and learn screens are neither preloaded nor prewarmed.
+  expect(app).not.toContain('prewarmPrimaryMarketInformation');
+  expect(app).not.toContain('prefetchMarketInformationRoom');
+  expect(preloads).not.toContain('loadMarketInformationPage()');
+  expect(preloads).not.toContain('loadThemesPage()');
+  expect(preloads).not.toContain('loadLearnPage()');
+  expect(preloads).toContain('loadWatchlistPage()');
+  expect(preloads).toContain('loadScannerPage()');
+  expect(preloads).toContain('loadPortfolioPage()');
+  expect(preloads).toContain('loadBacktestsPage()');
+  expect(preloads).toContain('loadMorePage()');
+  expect(preloads).toContain('loadStockInfoPage()');
+  expect(preloads).toContain('loadDetailPage()');
+  expect(preloads).toContain('loadTechnicalWorkspacePage()');
+  expect(preloads).toContain('loadSignalScannerPage()');
+  expect(preloads).toContain('loadAiChartPage()');
+  expect(preloads).toContain('loadAiChatPage()');
   expect(app).toContain('const directLoginColdRoute');
   expect(app).toContain('void loadAccountPage();');
-  expect(app).toContain('loadLearnPage()');
   expect(app).toContain('if (!auth.isApproved || directAiChartColdRoute) return;');
 });

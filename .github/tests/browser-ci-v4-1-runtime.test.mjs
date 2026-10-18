@@ -48,7 +48,7 @@ test('heavy historical specs are spread across distinct runtime-weighted lanes',
   const owner = new Map(lanes.flatMap((lane) => lane.files.map((file) => [file, lane.lane])));
   const heavy = [
     'final-acceptance-responsive-account.spec.ts',
-    'market-information-search-p0.spec.ts',
+    'phase13-orderbook.spec.ts',
     'signal-scanner.spec.ts',
     'research-copilot.spec.ts',
   ];

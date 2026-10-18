@@ -86,19 +86,6 @@ export function useSummary() {
 	});
 }
 
-export function useBriefing() {
-	return useQuery({
-		queryKey: ['briefing'],
-		queryFn: api.briefing,
-		staleTime: STALE.quote,
-		refetchInterval: 60 * 1000,
-		refetchIntervalInBackground: false,
-		refetchOnWindowFocus: true,
-		refetchOnReconnect: true,
-		retry,
-	});
-}
-
 export function useUndervalued(market: MarketKey, enabled = true) {
 	return useQuery({
 		queryKey: ['undervalued', market],
