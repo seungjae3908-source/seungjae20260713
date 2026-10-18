@@ -1,0 +1,27 @@
+[Unit]
+Description=Investment Research H4 majors long forward paper ledger (research only, no orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+ExecStart=/usr/bin/env node research-production/bin/h4-majors-long-forward-paper.mjs --fetch /var/lib/investment-research-production
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=20m
