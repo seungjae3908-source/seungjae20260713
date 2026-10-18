@@ -322,9 +322,15 @@ export function summarizeFlipTradesV1(trades) {
 
 /** Pure: time split boundary (discovery = first 60% of the pooled period). */
 export function flipSplitTimeV1(datasets) {
-  const times = datasets.flatMap((d) => d.candles.filter((c) => c.timestamp < LONG_SHORT_FLIP_HOLDOUT_START).map((c) => c.timestamp));
-  if (!times.length) return null;
-  const start = Math.min(...times); const end = Math.max(...times);
+  let start = Infinity; let end = -Infinity;
+  for (const d of datasets) {
+    for (const c of d.candles) {
+      if (c.timestamp >= LONG_SHORT_FLIP_HOLDOUT_START) continue;
+      if (c.timestamp < start) start = c.timestamp;
+      if (c.timestamp > end) end = c.timestamp;
+    }
+  }
+  if (!Number.isFinite(start)) return null;
   return Math.floor(start + ((end - start) * LONG_SHORT_FLIP_DISCOVERY_FRACTION));
 }
 
