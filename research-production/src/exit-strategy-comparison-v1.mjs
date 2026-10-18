@@ -27,6 +27,7 @@ import {
   combinationRiskModelV1,
 } from './combination-search-lane-v1.mjs';
 import { runManagedExitBacktestV1 } from './managed-exit-backtest-v1.mjs';
+import { normalQuantileV1 } from './trial-ledger-v1.mjs';
 
 export const EXIT_COMPARISON_CONTRACT_V1 = 'exit-strategy-comparison/v1';
 export const EXIT_COMPARISON_VERSION_V1 = '1.0.0';
@@ -78,6 +79,8 @@ export const EXIT_COMPARISON_POLICY_V1 = Object.freeze({
   minimumValidationTrades: 20,
   minimumUnseenTrades: 10,
   refreshDays: 7,
+  // Bonferroni family-wise one-sided alpha over every compared variant.
+  familyAlpha: 0.05,
 });
 
 // ---------- small utilities ----------
@@ -182,6 +185,13 @@ export function pickExitWinnerV1(variants, policy = EXIT_COMPARISON_POLICY_V1) {
     && row.unseen.meanR > 0);
   if (!eligible.length) return Object.freeze({ status: 'NO_WINNER', variantId: null, reason: 'NO_VARIANT_POSITIVE_ON_VALIDATION_AND_UNSEEN' });
   const best = [...eligible].sort((a, b) => b.validation.meanR - a.validation.meanR || a.variantId.localeCompare(b.variantId))[0];
+  // Selecting the max of m variants inflates the t-stat; require it to clear the Bonferroni critical value.
+  const comparisons = Math.max(1, variants.length);
+  const alpha = policy.familyAlpha ?? 0.05;
+  const criticalT = normalQuantileV1(1 - (alpha / comparisons));
+  if (!Number.isFinite(best.validation.tStat) || best.validation.tStat < criticalT) {
+    return Object.freeze({ status: 'NO_WINNER', variantId: null, reason: 'NOT_SIGNIFICANT_AFTER_MULTIPLE_COMPARISON', candidateVariantId: best.variantId, candidateTStat: best.validation.tStat ?? null, criticalT: round(criticalT, 3), comparisons });
+  }
   const baseline = variants.find((row) => row.variantId === EXIT_COMPARISON_BASELINE_VARIANT_V1);
   return Object.freeze({
     status: 'WINNER',
@@ -190,6 +200,9 @@ export function pickExitWinnerV1(variants, policy = EXIT_COMPARISON_POLICY_V1) {
     baselineValidationMeanR: baseline?.validation.meanR ?? null,
     // Not a significance test against the baseline; trades differ by variant.
     upliftVsBaselineR: baseline && Number.isFinite(baseline.validation.meanR) ? round(best.validation.meanR - baseline.validation.meanR) : null,
+    validationTStat: best.validation.tStat,
+    criticalT: round(criticalT, 3),
+    comparisons,
     validationCiLowAboveZero: Number.isFinite(best.validation.ciLow95) && best.validation.ciLow95 > 0,
   });
 }
