@@ -36,7 +36,9 @@ import {
   formatCanonicalMetric,
   isFullCostReady,
   statusLabel,
+  summarizeResearchFunnel,
   type CostDisplayRow,
+  type ResearchFunnelStageState,
   type ProductMetric,
   type ResearchPipelineCard,
   type ResearchPipelineKey,
@@ -238,6 +240,46 @@ function LoadingState() {
   );
 }
 
+const FUNNEL_STATE_LABEL: Readonly<Record<ResearchFunnelStageState, string>> = Object.freeze({
+  passed: '통과',
+  running: '진행 중',
+  blocked: '막힘',
+  unknown: '미측정',
+});
+const FUNNEL_STATE_STYLE: Readonly<Record<ResearchFunnelStageState, string>> = Object.freeze({
+  passed: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  running: 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+  blocked: 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300',
+  unknown: 'border-card-border bg-muted text-muted-foreground',
+});
+
+/** Read-only: where the research pipeline is stuck and why, in plain Korean. */
+function ResearchFunnelSummaryPanel({ cards }: { cards: ResearchPipelineCard[] }) {
+  const summary = useMemo(() => summarizeResearchFunnel(cards), [cards]);
+  if (summary.total === 0) return null;
+  return (
+    <section className="rounded-2xl border border-card-border bg-card p-3 shadow-sm" aria-labelledby="research-funnel-title" data-testid="research-funnel-summary">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="research-funnel-title" className="text-sm font-black">지금 어디서 막혀 있나</h2>
+        <span className="text-[11px] font-bold text-muted-foreground">{summary.passedCount}/{summary.total} 통과</span>
+      </div>
+      <p className="mt-1 text-xs font-bold" data-testid="research-funnel-headline">{summary.headline}</p>
+      {summary.firstUnpassed?.reason ? (
+        <p className="mt-1 text-xs text-muted-foreground" data-testid="research-funnel-reason">{summary.firstUnpassed.reason}</p>
+      ) : null}
+      <ol className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-6" aria-label="연구 단계별 통과 현황">
+        {summary.stages.map((stage) => (
+          <li key={stage.key} className={`min-w-0 rounded-xl border px-2 py-1.5 ${FUNNEL_STATE_STYLE[stage.state]}`} data-testid={`research-funnel-stage-${stage.key}`}>
+            <p className="truncate text-[11px] font-black">{stage.label}</p>
+            <p className="text-[10px] font-bold">{FUNNEL_STATE_LABEL[stage.state]}</p>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2 text-[10px] text-muted-foreground">읽기 전용 요약 · 주문 권한 없음 · 미측정은 수익성 없음과 다릅니다</p>
+    </section>
+  );
+}
+
 function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
   overview: ResearchCenterOverview;
   promotion: StrategyPromotionResponse | null;
@@ -371,6 +413,8 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
+
+      <ResearchFunnelSummaryPanel cards={cards} />
 
       <FormulaDevelopmentPanel development={overview.research.formulaDevelopment} />
 
