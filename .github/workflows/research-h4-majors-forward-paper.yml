@@ -1,0 +1,49 @@
+name: Research H4 Majors Long Forward Paper
+
+# Forward paper ledger (research only) for H4_MAJORS_LONG: public Bitget candles,
+# only signals on/after the unseen forward start count. No keys, no orders.
+# The ledger itself runs on the research server (systemd timer, every 4h);
+# this workflow only validates changes and allows a manual run.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/research-h4-majors-forward-paper.yml
+      - research-production/src/h4-majors-long-forward-paper-v1.mjs
+      - research-production/bin/h4-majors-long-forward-paper.mjs
+      - research-production/test/h4-majors-long-forward-paper-v1.test.mjs
+      - research-production/src/long-short-flip-backtest-v1.mjs
+      - research-production/src/long-short-flip-backtest-v2.mjs
+      - research-production/deploy/research-production-h4-majors-forward.service
+      - research-production/deploy/research-production-h4-majors-forward.timer
+      - research-production/deploy/install-h4-majors-forward-units.sh
+
+permissions:
+  contents: read
+
+jobs:
+  ledger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: node --test research-production/test/h4-majors-long-forward-paper-v1.test.mjs research-production/test/long-short-flip-backtest-v1.test.mjs research-production/test/long-short-flip-backtest-v2.test.mjs
+      - name: Fetch public candles and update the forward paper ledger
+        run: |
+          set -Eeuo pipefail
+          node research-production/bin/h4-majors-long-forward-paper.mjs --fetch "$RUNNER_TEMP/state" | tee h4-majors-forward-report.txt
+          cp "$RUNNER_TEMP/state/latest/h4-majors-long-forward-paper-v1.json" h4-majors-long-forward-paper-v1.json
+          { echo '```'; cat h4-majors-forward-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h4-majors-long-forward-paper
+          path: |
+            h4-majors-forward-report.txt
+            h4-majors-long-forward-paper-v1.json
+          retention-days: 90
