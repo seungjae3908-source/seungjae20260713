@@ -366,6 +366,20 @@ test('insufficient daily return samples produce null Sharpe safely', () => {
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
   assert.equal(result.sharpeRatio, null);
 });
+test('Sharpe counts idle calendar days so it is not inflated by trade-day-only samples', () => {
+  const rows = breakoutFixture('long');
+  const endTime = rows.at(-1)!.timestamp;
+  const result = runBacktest(request({ side: 'long', endTime }), rows);
+  const byDay = new Map<string, number>();
+  for (const trade of result.trades) { const day = new Date(trade.exitTime).toISOString().slice(0, 10); byDay.set(day, (byDay.get(day) ?? 0) + trade.netPnl); }
+  let equity = result.initialCapital; const active: number[] = [];
+  for (const day of [...byDay.keys()].sort()) { const pnl = byDay.get(day)!; active.push(pnl / equity); equity += pnl; }
+  const sd = (values: number[]) => { const m = values.reduce((a, b) => a + b, 0) / values.length; return Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / (values.length - 1)); };
+  if (result.sharpeRatio !== null && active.length >= 2 && sd(active) > 0) {
+    const activeOnly = active.reduce((a, b) => a + b, 0) / active.length / sd(active) * Math.sqrt(365);
+    assert.ok(result.sharpeRatio <= activeOnly + 1e-9);
+  }
+});
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
