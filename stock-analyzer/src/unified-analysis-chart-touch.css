@@ -153,8 +153,6 @@ button[aria-label="종목 목록으로 돌아가기"] {
  */
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="홈"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="통합검색"]) > main,
-#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="테마"]) > main,
-#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="투자 공부"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="자동매매"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="앱 설정"]) > main {
   padding-bottom: 1rem !important;

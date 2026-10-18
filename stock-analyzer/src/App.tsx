@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wouter';
+import { Redirect, Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -30,8 +30,6 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
-import SearchPage from '@/pages/search';
-import RecommendationsPage from '@/pages/recommendations';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -46,15 +44,7 @@ const loadStockInfoPage = () => import('@/pages/stock-info');
 const StockInfoPage = lazy(loadStockInfoPage);
 const loadDetailPage = () => import('@/pages/detail');
 const DetailPage = lazy(loadDetailPage);
-const loadMarketInformationPage = () => import('@/pages/market-information');
-const MarketInformationPage = lazy(loadMarketInformationPage);
-const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
-const StocksPage = lazy(() => import('@/pages/stocks'));
 const UnifiedAssetSearchPage = lazy(() => import('@/pages/unified-asset-search'));
-const loadThemesPage = () => import('@/pages/themes');
-const ThemesPage = lazy(loadThemesPage);
-const loadLearnPage = () => import('@/pages/learn');
-const LearnPage = lazy(loadLearnPage);
 const loadMorePage = () => import('@/pages/more');
 const MorePage = lazy(loadMorePage);
 const loadPortfolioPage = () => import('@/pages/portfolio');
@@ -141,22 +131,6 @@ function retryUnifiedChartBootstrap(failureCount: number, error: unknown): boole
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
-
-async function prewarmPrimaryMarketInformation(includeFutures: boolean): Promise<void> {
-  const marketInformation = await loadMarketInformationPage();
-  if (typeof window === 'undefined') return;
-  const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
-  if (currentPath !== '/' && !currentPath.endsWith('/home')) return;
-  const prefetches = [
-    marketInformation.prefetchMarketInformationRoom(queryClient, '/stocks/kr'),
-  ];
-  if (includeFutures) {
-    prefetches.push(
-      marketInformation.prefetchMarketInformationRoom(queryClient, '/coins/futures'),
-    );
-  }
-  await Promise.allSettled(prefetches);
-}
 
 function DirectAiChartDataPrewarm() {
   const auth = useAuth();
@@ -269,6 +243,21 @@ function LegacyStockDetailRedirect() {
   return target ? <PageFallback /> : <NotFound />;
 }
 
+// Removed screens (2026-10-18 product scope: 13 features). Old bookmarks land on home instead of 404.
+const REMOVED_FEATURE_PATHS = [
+  '/stocks/kr',
+  '/stocks/us',
+  '/coins/spot',
+  '/coins/futures',
+  '/market-overview',
+  '/market-rankings',
+  '/market-browser',
+  '/themes',
+  '/news-information',
+  '/learn',
+  '/recommendations',
+] as const;
+
 const SIDEBAR_EXCLUDED_PATHS = new Set(['/install']);
 
 function AppShell({ children }: { children: React.ReactNode }) {
@@ -304,7 +293,6 @@ function TelegramSignalOrderAccess() {
 }
 function AiChartAccess() { return gated('canAccessAiChart', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
-function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
@@ -347,13 +335,9 @@ function AutoTradingAccess() { return gated('canAccessAutoTrading', builder('AUT
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
 function AgentHubControlAccess() { return gated('canManageMembers', <AgentHubControlPage />); }
 function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
-function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', builder('STOCK_MARKET', <MarketInformationPage />)); }
-function SpotMarketInformationAccess() { return gated('canAccessSpot', builder('CRYPTO_MARKET', <MarketInformationPage />)); }
-function FuturesMarketInformationAccess() { return gated('canAccessFutures', builder('CRYPTO_MARKET', <MarketInformationPage />)); }
 function UnifiedAssetSearchAccess() { return gated('canAccessBasicInfo', builder('ASSET_SEARCH', <UnifiedAssetSearchPage />)); }
 function SettingsAccess() { return builder('SETTINGS', <MorePage />); }
 function AccountConnectionAccess() { return builder('ACCOUNT_CONNECTION', <AccountPage />); }
-function NewsInformationAccess() { return gated('canAccessBasicInfo', builder('NEWS_INFORMATION', <ThemesPage />)); }
 function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
@@ -381,28 +365,19 @@ function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={HomeAccess} />
     <Route path="/home" component={HomeAccess} />
-    <Route path="/stocks/kr" component={BasicMarketInformationAccess} />
-    <Route path="/stocks/us" component={BasicMarketInformationAccess} />
-    <Route path="/coins/spot" component={SpotMarketInformationAccess} />
-    <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
+    {REMOVED_FEATURE_PATHS.map((path) => <Route key={path} path={path}><Redirect to="/" replace /></Route>)}
     <Route path="/stocks" component={UnifiedAssetSearchAccess} />
     <Route path="/auto-trading" component={AutoTradingAccess} />
     <Route path="/stock-info/analysis" component={StockInfoAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
-    <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={SettingsAccess} />
     <Route path="/search" component={UnifiedAssetSearchAccess} />
-    <Route path="/market-rankings" component={SearchPage} />
-    <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/telegram-order" component={TelegramSignalOrderAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
     <Route path="/research-center" component={ResearchCenterAccess} />
-    <Route path="/themes" component={NewsInformationAccess} />
-    <Route path="/news-information" component={NewsInformationAccess} />
-    <Route path="/learn" component={LearnPage} />
     <Route path="/watchlist" component={WatchlistPage} />
     <Route path="/alerts" component={AlertsPage} />
     <Route path="/portfolio" component={PortfolioAccess} />
@@ -414,7 +389,6 @@ function ApprovedRouter() {
     <Route path="/admin" component={AdminAccess} />
     <Route path="/more" component={SettingsAccess} />
     <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
-    <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />
     <Route path="/crypto" component={CryptoHomeRedirect} />
@@ -465,7 +439,6 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (!auth.isApproved || directAiChartColdRoute) return;
     void Promise.allSettled([
-      loadMarketInformationPage(),
       loadWatchlistPage(),
       loadScannerPage(),
       loadPortfolioPage(),
@@ -478,10 +451,8 @@ function AuthenticatedApp() {
       loadSignalScannerPage(),
       loadAiChartPage(),
       loadAiChatPage(),
-      loadThemesPage(),
-      loadLearnPage(),
       loadAlertsPage(),
-    ]).then(() => prewarmPrimaryMarketInformation(auth.can('canAccessFutures'))).catch(() => undefined);
+    ]).catch(() => undefined);
   }, [auth.isApproved, auth.membershipLevel]);
   useEffect(() => {
     if (auth.isApproved && auth.can('canAccessPaperTrading')) {

@@ -98,7 +98,7 @@ test('상세분석 replaces the embedded legacy full page with focused AI financ
   expect(detailSource).not.toContain('LegacyDetailPage');
   expect(detailSource).not.toContain("@/pages/detail-legacy");
   expect(detailSource).toContain('<StockDetailAnalysisPanel ticker={ticker} market={market} />');
-  expect(detailAnalysisSource).toContain("{ value: 'ai', label: 'AI분석' }");
+  expect(detailAnalysisSource).toContain("{ value: 'ai', label: '지표 분석' }");
   expect(detailAnalysisSource).toContain("{ value: 'financials', label: '재무제표' }");
   expect(detailAnalysisSource).toContain("{ value: 'filings', label: '공시' }");
   expect(detailAnalysisSource).toContain('<AiTab ticker={ticker} currency={currency} active />');
@@ -136,9 +136,13 @@ test('compact copy policy removes attached helper prose but preserves runtime ev
   expect(touchCss).not.toContain('#root p {');
 });
 
-test('modern home search theme learn auto-trading and settings routes lose obsolete BottomNav tail spacers', () => {
-  for (const title of ['홈', '통합검색', '테마', '투자 공부', '자동매매', '앱 설정']) {
+test('modern home search auto-trading and settings routes lose obsolete BottomNav tail spacers', () => {
+  for (const title of ['홈', '통합검색', '자동매매', '앱 설정']) {
     expect(touchCss).toContain(`data-route-title="${title}"`);
+  }
+  // 테마·투자 공부 screens were removed (13-feature scope); no dead selectors remain.
+  for (const removedTitle of ['테마', '투자 공부']) {
+    expect(touchCss).not.toContain(`data-route-title="${removedTitle}"`);
   }
   expect(touchCss).toContain('padding-bottom: 1rem !important;');
   expect(touchCss).toContain('data-route-title="AI 정보"');

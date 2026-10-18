@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -27,13 +26,13 @@ const MARKET_FILTERS: Array<{ key: UnifiedMarketFilter | null; label: string }> 
   { key: 'futures', label: '코인 선물' },
 ];
 
-// Each market tab narrows the search AND points at that market's board, so a
-// tab press visibly changes the screen even before the user types a query.
-const MARKET_CONTEXT: Record<UnifiedMarketFilter, { placeholder: string; hint: string; boardPath: string; boardLabel: string }> = {
-  KR: { placeholder: '국내 종목명·6자리 코드 검색', hint: '국내주식(코스피·코스닥)만 검색합니다.', boardPath: '/stocks/kr', boardLabel: '국내주식 시세·순위 보기' },
-  US: { placeholder: '미국 종목명·티커 검색 (예: AAPL)', hint: '미국주식만 검색합니다.', boardPath: '/stocks/us', boardLabel: '미국주식 시세·순위 보기' },
-  spot: { placeholder: '코인명·심볼 검색 (예: BTC)', hint: '코인 현물(업비트)만 검색합니다.', boardPath: '/coins/spot', boardLabel: '코인 현물 시세·순위 보기' },
-  futures: { placeholder: '선물 심볼 검색 (예: BTCUSDT)', hint: '코인 선물만 검색합니다.', boardPath: '/coins/futures', boardLabel: '코인 선물 시세·순위 보기' },
+// Each market tab narrows the search, so a tab press visibly changes the
+// placeholder and hint even before the user types a query.
+const MARKET_CONTEXT: Record<UnifiedMarketFilter, { placeholder: string; hint: string }> = {
+  KR: { placeholder: '국내 종목명·6자리 코드 검색', hint: '국내주식(코스피·코스닥)만 검색합니다.' },
+  US: { placeholder: '미국 종목명·티커 검색 (예: AAPL)', hint: '미국주식만 검색합니다.' },
+  spot: { placeholder: '코인명·심볼 검색 (예: BTC)', hint: '코인 현물(업비트)만 검색합니다.' },
+  futures: { placeholder: '선물 심볼 검색 (예: BTCUSDT)', hint: '코인 선물만 검색합니다.' },
 };
 
 function assetForMarket(market: UnifiedMarketFilter | null): UnifiedAssetFilter {
@@ -136,15 +135,6 @@ export default function UnifiedAssetSearchPage() {
               onSelect={openAsset}
             />
           </section>
-
-          <button
-            type="button"
-            data-testid="unified-market-board-link"
-            onClick={() => navigate(context?.boardPath ?? '/market-rankings')}
-            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-card px-4 text-sm font-black text-primary sm:mt-4"
-          >
-            <BarChart3 className="h-4 w-4" />{context?.boardLabel ?? '시장 순위'}
-          </button>
         </div>
       </main>
       <BottomNav />
