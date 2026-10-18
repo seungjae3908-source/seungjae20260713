@@ -95,8 +95,14 @@ async function fetchAll(root) {
         let candles; let fundingRates = [];
         if (market === 'CRYPTO_SPOT') candles = await fetchUpbitDaily(symbol);
         else if (market === 'CRYPTO_FUTURES') {
-          candles = (await collectBitgetCandles({ client: bitget, market, symbol, timeframe: '1d', startTime: Date.UTC(2019, 0, 1), endTime: END, maxCandles: 4_000, productType: 'usdt-futures' })).candles
-            .map((c) => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }));
+          // Bitget serves only ~90 daily bars; 4h history goes back years → aggregate full UTC days (6 bars)
+          const h4 = (await collectBitgetCandles({ client: bitget, market, symbol, timeframe: '4h', startTime: Date.UTC(2019, 0, 1), endTime: END, maxCandles: 16_000, productType: 'usdt-futures' })).candles;
+          const days = new Map();
+          for (const c of h4) { const k = Math.floor(c.timestamp / 86_400_000) * 86_400_000; if (!days.has(k)) days.set(k, []); days.get(k).push(c); }
+          candles = [...days.entries()].filter(([, rows]) => rows.length === 6).sort((x, y) => x[0] - y[0]).map(([k, rows]) => {
+            rows.sort((x, y) => x.timestamp - y.timestamp);
+            return { timestamp: k, open: rows[0].open, high: Math.max(...rows.map((x) => x.high)), low: Math.min(...rows.map((x) => x.low)), close: rows.at(-1).close, volume: rows.reduce((t, x) => t + x.volume, 0) };
+          });
           try { fundingRates = (await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol, startTime: Date.UTC(2019, 0, 1), endTime: END, fetchImpl: globalThis.fetch, minimumRecords: 0 })).rows; }
           catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 80)}\n`); }
         } else candles = await fetchYahoo(market, symbol);
