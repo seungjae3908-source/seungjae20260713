@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { normalizeResearchSymbol } from '../../market-prediction-lab/src/research-governance.js';
 import { collectYahooStockHistory } from '../../market-prediction-lab/src/yahoo-stock-history.js';
 import { COMBINATION_UNIVERSE_V1 } from './combination-search-lane-v1.mjs';
 
@@ -86,7 +87,7 @@ async function getText(fetchImpl, url) {
 export async function fetchUpbitKrwListingV2(fetchImpl) {
   const rows = await getJson(fetchImpl, 'https://api.upbit.com/v1/market/all?isDetails=true');
   if (!Array.isArray(rows)) throw new Error('UPBIT_LISTING_SHAPE');
-  return rows.filter((row) => typeof row?.market === 'string' && /^KRW-[A-Z0-9]{1,15}$/u.test(row.market))
+  return rows.filter((row) => typeof row?.market === 'string' && /^KRW-[A-Z0-9]{2,15}$/u.test(row.market))
     .map((row) => ({ symbol: row.market, name: String(row.korean_name ?? row.english_name ?? ''), warning: row.market_warning === 'CAUTION' || row.market_event?.warning === true }));
 }
 
@@ -345,10 +346,22 @@ export async function readResearchUniverseSnapshotV2(stateRoot) {
  * Lane-runner universe: frozen V2 research sets where available, the V1 list
  * otherwise. Same shape as COMBINATION_UNIVERSE_V1.
  */
+// A frozen set can hold a listing the backtest contract rejects (Upbit lists
+// one-letter bases such as KRW-W; the contract needs 2+). One such symbol
+// threw for the whole combination search, so drop it before any lane runs.
+function researchSymbolsV2(source, symbols) {
+  const market = RESEARCH_UNIVERSE_POLICY_V2.sources[source]?.market;
+  if (!market || !Array.isArray(symbols)) return symbols;
+  return symbols.filter((symbol) => {
+    try { return normalizeResearchSymbol(market, symbol) === symbol; } catch { return false; }
+  });
+}
+
 export function combinationUniverseFromSnapshotV2(snapshot, { fallback = COMBINATION_UNIVERSE_V1, minimumSymbols = 12 } = {}) {
   return Object.freeze(Object.fromEntries(Object.entries(fallback).map(([source, spec]) => {
     const frozen = snapshot?.sources?.[source];
-    const symbols = Array.isArray(frozen?.research) && frozen.research.length >= minimumSymbols ? frozen.research : spec.symbols;
+    const research = researchSymbolsV2(source, frozen?.research);
+    const symbols = Array.isArray(research) && research.length >= minimumSymbols ? research : spec.symbols;
     return [source, Object.freeze({ ...spec, symbols: Object.freeze([...symbols]), universeVersion: symbols === spec.symbols ? 'V1' : 'V2' })];
   })));
 }
@@ -357,7 +370,7 @@ export function combinationUniverseFromSnapshotV2(snapshot, { fallback = COMBINA
 export function watchUniverseFromSnapshotV2(snapshot, { fallback = COMBINATION_UNIVERSE_V1 } = {}) {
   return Object.freeze(Object.fromEntries(Object.entries(fallback).map(([source, spec]) => {
     const frozen = snapshot?.sources?.[source];
-    const symbols = [...new Set([...(frozen?.watch ?? []), ...(frozen?.research ?? spec.symbols)])];
+    const symbols = researchSymbolsV2(source, [...new Set([...(frozen?.watch ?? []), ...(frozen?.research ?? spec.symbols)])]);
     return [source, Object.freeze([...symbols])];
   })));
 }
