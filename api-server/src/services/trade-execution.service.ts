@@ -479,7 +479,30 @@ function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
   if (averageFillPrice == null || filledQuantity == null || !Number.isFinite(filledQuantity) || filledQuantity <= 0) {
     throw new Error('PAPER_EXECUTION_FILL_UNAVAILABLE');
   }
-  return { averageFillPrice, filledQuantity };
+  return { averageFillPrice: paperAdverseFillPrice(plan, snapshot, averageFillPrice), filledQuantity };
+}
+
+/**
+ * Pure: a simulated fill is never better than the reference. The estimated slippage
+ * (snapshot first, then plan) moves the price against the order: buys/longs pay more,
+ * sells/shorts receive less. A limit order is never filled worse than its own limit.
+ * Missing or negative/non-finite estimates leave the price unchanged (no invented edge).
+ */
+export function paperAdverseFillPrice(
+  plan: Pick<TradingPlan, 'side' | 'orderType' | 'limitPrice' | 'estimatedSlippagePercent'>,
+  snapshot: Pick<TradingMarketSnapshot, 'estimatedSlippagePercent'>,
+  reference: number,
+): number {
+  if (!(typeof reference === 'number' && Number.isFinite(reference) && reference > 0)) return reference;
+  const estimate = [snapshot.estimatedSlippagePercent, plan.estimatedSlippagePercent]
+    .find((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  if (estimate == null || estimate === 0) return reference;
+  const rate = Math.min(estimate, 10) / 100;
+  const buying = plan.side === 'buy' || plan.side === 'long';
+  const adverse = buying ? reference * (1 + rate) : reference * (1 - rate);
+  const limit = plan.orderType === 'limit' ? positiveNumber(plan.limitPrice) : null;
+  if (limit != null) return buying ? Math.min(adverse, limit) : Math.max(adverse, limit);
+  return adverse;
 }
 
 /**

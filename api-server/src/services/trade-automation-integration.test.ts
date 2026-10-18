@@ -1242,7 +1242,8 @@ test('paper execution has zero outbound calls and restart scan marks an accepted
     const executed = await new TradeExecutionService(repository).execute(USER_A, approved, order);
     assert.equal(executed.state, 'FILLED');
     assert.equal(executed.filledQuantity, 1);
-    assert.equal(executed.averageFillPrice, 100_000);
+    // Simulated fills are never better than the reference: 0.1% estimated slippage is added to a buy.
+    assert.ok(Math.abs(executed.averageFillPrice! - 100_100) < 1e-6, String(executed.averageFillPrice));
     assert.equal(outbound, 0);
     const payloads = await readTradeAutomationJournalPayloads(repository, USER_A);
     const journal = buildUnifiedTradeJournal(payloads, {
