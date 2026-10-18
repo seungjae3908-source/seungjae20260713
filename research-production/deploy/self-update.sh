@@ -15,7 +15,12 @@
 # taken from the target commit. Research has no order authority; this updater
 # never touches the app process, trading, the database or member data.
 set -Eeuo pipefail
-umask 077
+# 022, not 077: release folders and files created by the activation scripts we
+# run must stay readable/traversable by the investment-research user, otherwise
+# isolated validation cannot read its own code (AI_RESTORE_FAILED /
+# VALIDATION_FAILED, observed 2026-10-18). Private data stays protected by the
+# explicit 0700 state directory below and the explicit file modes used here.
+umask 022
 
 REPOSITORY_URL="${RESEARCH_SELF_UPDATE_REPOSITORY_URL:-https://github.com/seungjae3908-source/seungjae20260713.git}"
 RESEARCH_ROOT=/opt/investment-research
