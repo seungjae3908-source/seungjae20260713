@@ -223,3 +223,37 @@ test('US search degrades to static identity metadata without asserting live elig
     resetUnifiedAssetSearchStateForTests();
   }
 });
+
+test('a fresh index built over a source listing older than 24h is reported stale', async () => {
+  const sourceAsOf = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
+  replaceUnifiedAssetSearchSnapshotForTests({
+    ...snapshot,
+    providers: [
+      { provider: 'krx', status: 'ok', count: 1, dataAsOf: builtAt },
+      { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: sourceAsOf },
+      { provider: 'upbit', status: 'ok', count: 1, dataAsOf: builtAt },
+      { provider: 'bitget', status: 'ok', count: 1, dataAsOf: builtAt },
+    ],
+  });
+  const app = express();
+  app.use('/api', unifiedSearchRouter);
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+    const address = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/search/suggest?q=tesla`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.results[0]?.ticker, 'TSLA');
+    assert.equal(body.dataAsOf, sourceAsOf);
+    assert.equal(body.partial, false);
+    assert.equal(body.stale, true);
+    assert.equal(body.state, 'DEGRADED');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    resetUnifiedAssetSearchStateForTests();
+  }
+});
