@@ -180,21 +180,22 @@ test('bottom navigation menu remains inside every required short landscape viewp
   }
 });
 
-test('home keeps the touch tab composition through 1199px and switches at 1200px without reload', async ({ page }) => {
+test('home keeps the stacked mobile composition through 1199px and switches to the dashboard grid at 1200px without reload', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await installMocks(page);
   await page.goto('/');
 
-  const tabs = page.getByTestId('home-mobile-tabs');
-  await expect(tabs).toBeVisible();
-  await expect(tabs).toHaveCSS('display', 'flex');
+  const stack = page.getByTestId('home-mobile-stack');
+  await expect(stack).toBeVisible();
+  await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
 
   await page.setViewportSize({ width: 1180, height: 820 });
-  await expect(tabs).toBeVisible();
-  await expect(tabs).toHaveCSS('display', 'flex');
+  await expect(stack).toBeVisible();
+  await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
 
   await page.setViewportSize({ width: 1200, height: 800 });
-  await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+  await expect(page.getByTestId('home-mobile-stack')).toHaveCount(0);
+  await expect(page.getByTestId('home-desktop-workspace')).toBeVisible();
   await expect(page.getByTestId('home-market-summary')).toBeVisible();
   await expect(page.getByTestId('home-signal-summary')).toBeVisible();
 });

@@ -109,45 +109,53 @@ async function installHomeRuntime(page: Page) {
   });
 }
 
-test('Home source separates desktop and mobile and keeps primary labels Korean-first', () => {
+test('Home source follows the approved mockup: stacked summary cards on mobile, dashboard grid on desktop', () => {
   const home = source('src/pages/home.tsx');
 
-  expect(home).toContain("type MobileHomeTab = 'market' | 'signal' | 'watchlist' | 'portfolio';");
-  expect(home).toContain("{ value: 'market', label: '시장' }");
-  expect(home).toContain("{ value: 'signal', label: '신호' }");
-  expect(home).toContain("{ value: 'watchlist', label: '관심' }");
-  expect(home).toContain("{ value: 'portfolio', label: '자산' }");
-  expect(home).toContain('testId="home-mobile-tabs"');
   expect(home).toContain('title="홈"');
-  expect(home).toContain('data-testid="home-professional-overview"');
+  expect(home).toContain('testId="home-asset-summary"');
+  expect(home).toContain('data-testid="home-market-summary"');
+  expect(home).toContain('testId="home-watchlist-summary"');
+  expect(home).toContain('testId="home-signal-summary"');
+  expect(home).toContain('data-testid="home-briefing-summary"');
   expect(home).toContain('data-testid="home-desktop-workspace"');
-  expect(home).toContain('function HomeSectionHeader');
-  expect(home).toContain('actionLabel="검색기"');
-  expect(home).toContain('title="포트폴리오"');
-  expect(home).toContain('점수 {selection.signalScore}');
-  expect(home).toContain('<span>자산·손익·위험</span>');
-  expect(home).toContain('value="자산 보기"');
+  expect(home).toContain('data-testid="home-mobile-stack"');
+  expect(home).toContain('title="총 평가자산"');
+  expect(home).toContain('title="오늘의 AI 신호"');
+  expect(home).toContain('action="검색기"');
+  expect(home).toContain('action="자산 보기"');
+  expect(home).not.toContain('home-mobile-tabs');
   expect(home).not.toContain('/api/accounts');
   expect(home).not.toContain('Scanner 열기');
-  expect(home).not.toContain('Score {selection.signalScore}');
   expect(home).not.toContain('infoItems={[');
   expect(home).not.toContain('Home에서는 private 계좌');
 });
 
 for (const width of [360, 390, 412, 430]) {
-  test(`Home mobile ${width}px shows professional summary plus one compact detail section without horizontal overflow`, async ({ page }) => {
+  test(`Home mobile ${width}px stacks the mockup cards in order without horizontal overflow`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await installHomeRuntime(page);
     await page.goto('/home');
 
-    await expect(page.getByTestId('home-mobile-tabs')).toBeVisible();
+    await expect(page.getByTestId('home-mobile-stack')).toBeVisible();
     await expect(page.getByTestId('home-single-search')).toBeVisible();
-    await expect(page.getByTestId('home-professional-overview')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '오늘의 투자 상태', exact: true })).toBeVisible();
+    await expect(page.getByTestId('home-desktop-workspace')).toHaveCount(0);
+    await expect(page.getByTestId('home-asset-summary')).toBeVisible();
     await expect(page.getByTestId('home-market-summary')).toBeVisible();
-    await expect(page.getByTestId('home-signal-summary')).toHaveCount(0);
-    await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
-    await expect(page.getByTestId('home-portfolio-summary')).toHaveCount(0);
+    await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
+    await expect(page.getByTestId('home-signal-summary')).toBeVisible();
+    await expect(page.getByTestId('home-briefing-summary')).toBeVisible();
+
+    const order = await page.evaluate(() => Array.from(
+      document.querySelectorAll('[data-testid="home-mobile-stack"] > section'),
+    ).map((node) => node.getAttribute('data-testid')));
+    expect(order.slice(0, 5)).toEqual([
+      'home-asset-summary',
+      'home-market-summary',
+      'home-watchlist-summary',
+      'home-signal-summary',
+      'home-briefing-summary',
+    ]);
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
@@ -159,37 +167,32 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('Home mobile tabs replace the visible detail section instead of stacking all cards', async ({ page }) => {
+test('Home mobile shows index tiles and the watchlist card content from the market summary', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installHomeRuntime(page);
   await page.goto('/home');
 
-  await page.getByRole('tab', { name: '신호' }).click();
-  await expect(page.getByTestId('home-signal-summary')).toBeVisible();
-  await expect(page.getByTestId('home-market-summary')).toHaveCount(0);
-
-  await page.getByRole('tab', { name: '관심' }).click();
-  await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
-  await expect(page.getByTestId('home-signal-summary')).toHaveCount(0);
-
-  await page.getByRole('tab', { name: '자산' }).click();
-  await expect(page.getByTestId('home-portfolio-summary')).toBeVisible();
-  await expect(page.getByText('자산·손익·위험')).toBeVisible();
-  await expect(page.getByTestId('home-watchlist-summary')).toHaveCount(0);
+  const market = page.getByTestId('home-market-summary');
+  await expect(market.getByText('코스피', { exact: true })).toBeVisible();
+  await expect(market.getByText('나스닥', { exact: true })).toBeVisible();
+  await expect(market.getByText('비트코인', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: '검색기', exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: '전체', exact: true })).toBeVisible();
 });
 
-test('Home desktop uses the professional dashboard workspace and does not show mobile tabs', async ({ page }) => {
+test('Home desktop uses the mockup dashboard grid without the mobile search box', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await installHomeRuntime(page);
   await page.goto('/home');
 
-  await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
-  await expect(page.getByTestId('home-professional-overview')).toBeVisible();
+  await expect(page.getByTestId('home-mobile-stack')).toHaveCount(0);
+  await expect(page.getByTestId('home-single-search')).toHaveCount(0);
   await expect(page.getByTestId('home-desktop-workspace')).toBeVisible();
+  await expect(page.getByTestId('home-asset-summary')).toBeVisible();
   await expect(page.getByTestId('home-market-summary')).toBeVisible();
   await expect(page.getByTestId('home-signal-summary')).toBeVisible();
   await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
-  await expect(page.getByTestId('home-portfolio-summary')).toBeVisible();
-  await expect(page.getByRole('main').getByText('포트폴리오', { exact: true })).toBeVisible();
-  await expect(page.getByRole('main').getByText('검색기', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('home-briefing-summary')).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: '자산 보기', exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('button', { name: '검색기', exact: true })).toBeVisible();
 });
