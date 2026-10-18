@@ -323,3 +323,36 @@ test('upbit: long-only market buy by KRW amount within cash; helpers', async () 
   const market = laneNotionalCeilingKrw(policy(), { ...COUNTERS, marketLimitKrw: 400_000, classNotionalKrw: 350_000 });
   assert.equal(market.ceilingKrw, 50_000, 'budget market room = maxAssetClassKrw − class notional');
 });
+
+test('write-ahead: the signal bar is saved BEFORE the order; a failing save sends no order; an ambiguous submit is never retried', async () => {
+  const nowMs = Date.now();
+  // 1) order of operations: the reservation is already durable when submitEntry runs
+  const order: string[] = [];
+  const d1 = deps({
+    nowMs,
+    foreignSymbols: new Set(['ETHUSDT']),
+    submitEntry: async () => { order.push('submit'); return { status: 'SUBMITTED' }; },
+    saveLedger: async (ledger) => { order.push(Object.keys(ledger.lastSignalBarOpenMs).length ? 'save:reserved' : 'save:plain'); },
+  });
+  await runTrendPilotLaneTick(d1);
+  assert.ok(order.indexOf('save:reserved') >= 0 && order.indexOf('save:reserved') < order.indexOf('submit'), order.join());
+
+  // 2) reservation cannot be saved → no order at all
+  const d2 = deps({ nowMs, foreignSymbols: new Set(['ETHUSDT']), saveLedger: async () => { throw new Error('DISK_FULL'); } });
+  const r2 = await runTrendPilotLaneTick(d2);
+  assert.equal(d2.entries.length, 0);
+  assert.ok(r2.events.some((e) => e.kind === 'ERROR' && e.code === 'DISK_FULL'));
+
+  // 3) submit throws after reservation (outcome unknown) → bar stays reserved, next tick does not re-enter
+  let saved: TrendPilotLedger | null = null;
+  const d3 = deps({
+    nowMs, foreignSymbols: new Set(['ETHUSDT']),
+    submitEntry: async () => { throw new Error('NETWORK_TIMEOUT'); },
+    saveLedger: async (ledger) => { saved = ledger; },
+  });
+  await runTrendPilotLaneTick(d3);
+  assert.ok(saved && Object.keys((saved as TrendPilotLedger).lastSignalBarOpenMs).length > 0);
+  const d4 = deps({ nowMs, foreignSymbols: new Set(['ETHUSDT']), loadLedger: async () => saved });
+  await runTrendPilotLaneTick(d4);
+  assert.equal(d4.entries.length, 0);
+});
