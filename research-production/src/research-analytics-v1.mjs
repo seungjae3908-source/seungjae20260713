@@ -232,15 +232,17 @@ export function simulateGridV1(candles, { lower, upper, levels = 10, capital = 1
   let cash = capital; let realized = 0; let fees = 0; let completedRounds = 0;
   let worstEquity = capital; let peakEquity = capital; let maxDrawdown = 0;
   for (const candle of candles) {
+    const filledThisBar = new Set();
     for (const level of grid) {
-      // Conservative intrabar order: buys at lows fill before sells at highs.
+      // Intrabar order is unknowable from OHLC: a level bought in this bar cannot also be sold in it.
       if (level.quantity === 0 && candle.low <= level.buy && cash >= perLevel) {
         const fee = perLevel * feeRate;
         level.quantity = (perLevel - fee) / level.buy; cash -= perLevel; fees += fee;
+        filledThisBar.add(level);
       }
     }
     for (const level of grid) {
-      if (level.quantity > 0 && candle.high >= level.sell && candle.high > level.buy) {
+      if (level.quantity > 0 && !filledThisBar.has(level) && candle.high >= level.sell) {
         const gross = level.quantity * level.sell; const fee = gross * feeRate;
         cash += gross - fee; fees += fee; realized += gross - fee - perLevel; level.quantity = 0; completedRounds += 1;
       }
