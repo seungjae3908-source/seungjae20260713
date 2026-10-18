@@ -848,7 +848,8 @@ requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exac
   for (const [source, title] of [
     [killSwitchTest, 'member-scoped risk failure stops only that member and never the global switch'],
     [killSwitchTest, 'Paper plans never trip the global stop, even for exchange-outage codes'],
-    [killSwitchTest, 'risk-reducing exit plans trip no kill switch at all'],
+    [killSwitchTest, 'risk-reducing exit plans never stop the member'],
+    [killSwitchTest, 'a venue or order-state failure seen on a LIVE exit still halts new entries globally'],
     [killSwitchTest, 'exchange outage on a LIVE plan persists the global new-order halt'],
     [runControlTest, 'member-scoped kill switch stops only that member; 작동 needs the confirmed resume first'],
     [runControlTest, 'stop / 작동 OFF keeps automatic authority for a protective exit of an owned automatic entry only'],
