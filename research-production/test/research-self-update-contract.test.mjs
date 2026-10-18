@@ -54,3 +54,9 @@ test('AI schedules left off by a failed activation are restored for the running 
   assert.ok(restore.indexOf('validate-isolated') < restore.indexOf('activate-ai-research.sh" activate'));
   assert.doesNotMatch(restore, /activate-server\.sh/);
 });
+
+test('self-update keeps release folders readable by the research user (umask 022) while state stays 0700', () => {
+  assert.match(script, /^umask 022$/m);
+  assert.doesNotMatch(script, /^umask 077$/m);
+  assert.match(script, /install -d -o root -g root -m 0700 "\$STATE_DIR"/);
+});
