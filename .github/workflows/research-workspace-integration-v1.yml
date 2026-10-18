@@ -176,6 +176,7 @@ on:
       - api-server/src/services/spot-live-limited-capability.service.ts
       - stock-analyzer/src/components/trade-automation-settings.tsx
       - stock-analyzer/e2e/phase12-trade-automation.spec.ts
+      - api-server/src/services/four-market-auto-readiness.test.ts
 permissions:
   contents: read
 concurrency:
