@@ -226,10 +226,10 @@ async function assertFiniteLoadingAndNoNavOcclusion(page: Page, label: string) {
 }
 
 const ROUTES = [
-  '/home', '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/stocks',
+  '/home', '/stocks',
   '/stock-info?asset=stock&market=KR&symbol=005930', '/market-overview', '/assets', '/settings',
-  '/search', '/market-rankings', '/market-browser', '/scanner', '/ai-chart', '/ai-chat', '/themes',
-  '/learn', '/watchlist', '/alerts', '/portfolio', '/account', '/admin', '/more', '/stock/005930',
+  '/search', '/scanner', '/ai-chart', '/ai-chat',
+  '/watchlist', '/alerts', '/portfolio', '/account', '/admin', '/more', '/stock/005930',
   '/recommendations', '/backtests', '/paper-trading', '/auto-trading',
 ] as const;
 

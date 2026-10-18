@@ -12,72 +12,13 @@ const NOW = '2026-08-08T09:30:00.000Z';
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222222';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
-type RoomId = 'stocks-kr' | 'stocks-us' | 'coins-spot' | 'coins-futures';
+const REMOVED_ROUTES = [
+  '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures',
+  '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn',
+] as const;
 
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
-}
-
-function roomConfig(room: RoomId) {
-  if (room === 'stocks-kr') return { market: 'KR', assetType: 'stock', currency: 'KRW', provider: 'KRX', title: '국내주식 정보' } as const;
-  if (room === 'stocks-us') return { market: 'US', assetType: 'stock', currency: 'USD', provider: 'US', title: '미국주식 정보' } as const;
-  if (room === 'coins-spot') return { market: 'spot', assetType: 'coin-spot', currency: 'KRW', provider: 'UPBIT', title: '코인 현물 정보' } as const;
-  return { market: 'futures', assetType: 'coin-futures', currency: 'USDT', provider: 'BITGET', title: '코인 선물 정보' } as const;
-}
-
-function roomResponse(room: RoomId) {
-  const config = roomConfig(room);
-  const meta = {
-    provider: config.provider,
-    source: `${config.provider} fixture`,
-    market: config.market,
-    assetType: config.assetType,
-    currency: config.currency,
-    providerUpdatedAt: NOW,
-    observedAt: NOW,
-    fetchedAt: NOW,
-    marketTimeZone: config.market === 'KR' ? 'Asia/Seoul' : config.market === 'US' ? 'America/New_York' : 'UTC',
-    marketStatus: config.assetType === 'stock' ? 'CLOSED' : '24H',
-    isDelayed: false,
-    isStale: false,
-    partial: false,
-    unavailableFields: [],
-    errorCode: null,
-    retryable: false,
-  };
-  const emptyArray = { status: 'empty', data: [], meta, message: '검증용 빈 데이터' };
-  return {
-    ok: true,
-    room,
-    market: config.market,
-    assetType: config.assetType,
-    currency: config.currency,
-    fetchedAt: NOW,
-    partial: false,
-    sections: {
-      indices: emptyArray,
-      rankings: emptyArray,
-      sectors: emptyArray,
-      news: emptyArray,
-      disclosures: emptyArray,
-      derivatives: {
-        status: 'empty',
-        data: { referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] },
-        meta,
-        message: '검증용 빈 데이터',
-      },
-    },
-    requestPolicy: {
-      publicMarketDataOnly: true,
-      privateExchangeRequests: 0,
-      accountRequests: 0,
-      balanceRequests: 0,
-      positionRequests: 0,
-      orderRequests: 0,
-      cancelRequests: 0,
-      aiRequests: 0,
-    },
-  };
 }
 
 async function installApprovedRuntime(page: Page) {
@@ -155,8 +96,6 @@ async function installApprovedRuntime(page: Page) {
 
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
-    const room = path.match(/^\/api\/market-information\/(stocks-kr|stocks-us|coins-spot|coins-futures)$/)?.[1] as RoomId | undefined;
-    if (room) return fulfill(route, roomResponse(room));
     if (path === '/api/trade-automation/status') {
       return fulfill(route, {
         policy: {
@@ -194,19 +133,29 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   expect(new Set(menuItems.map((item) => item.href)).size).toBe(menuItems.length);
   expect(menuItems.map((item) => item.href)).toEqual(expect.arrayContaining([
     APP_ROUTES.assets,
-    APP_ROUTES.stocksKr,
-    APP_ROUTES.stocksUs,
-    APP_ROUTES.coinsSpot,
-    APP_ROUTES.coinsFutures,
-    APP_ROUTES.marketOverview,
+    APP_ROUTES.watchlist,
+    APP_ROUTES.alerts,
     APP_ROUTES.scanner,
     APP_ROUTES.aiChart,
     APP_ROUTES.autoTrading,
+    APP_ROUTES.aiChat,
+    APP_ROUTES.researchCenter,
   ]));
   expect(menuItems.map((item) => item.href)).not.toContain(APP_ROUTES.unifiedSearchAlias);
-  expect(UNIFIED_SEARCH_ROUTE_CONTRACT.primaryEntry).toBe('/stocks');
-  expect(UNIFIED_SEARCH_ROUTE_CONTRACT.marketRankings).toBe('/market-rankings');
-  expect(navigationGroupMatches(group('assets'), '/coins/spot')).toBe(true);
+  expect(UNIFIED_SEARCH_ROUTE_CONTRACT).toEqual({ primaryEntry: '/stocks', searchAlias: '/search' });
+  expect(navigationGroupMatches(group('assets'), '/watchlist')).toBe(true);
+  expect(group('assets').menu?.map((item) => item.label)).toEqual(['통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림']);
+  expect(group('information').menu?.map((item) => item.label)).toEqual(['AI 정보', '연구센터', '포트폴리오']);
+  const allHrefs = [
+    ...menuItems.map((item) => item.href),
+    ...MOBILE_NAVIGATION.flatMap((item) => [item.href, ...(item.menu ?? []).map((menu) => menu.href)]),
+    ...APP_NAVIGATION.map((item) => item.href),
+  ];
+  for (const removed of REMOVED_ROUTES) {
+    expect(allHrefs, removed).not.toContain(removed);
+    expect(Object.values(APP_ROUTES), removed).not.toContain(removed);
+    for (const owner of APP_NAVIGATION) expect(navigationGroupMatches(owner, removed), `${owner.id} ${removed}`).toBe(false);
+  }
   expect(navigationGroupMatches(group('technical'), '/auto-trading')).toBe(true);
 
   // Mobile tab bar: 자동매매 is a first-class tab; every sidebar destination stays reachable.
@@ -222,17 +171,20 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
 test('desktop sidebar owns the primary navigation at 1440px and the mobile tab bar is hidden', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/stocks/kr');
-  await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+  await page.goto('/stocks');
+  await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(navigation).toHaveCount(1);
   await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
-  await expect(navigation).toHaveAttribute('data-route-title', '국내주식');
-  for (const label of ['홈', '통합검색', '국내주식', '검색기', '과거검증', '기술매매', '연구센터', '포트폴리오', 'AI 정보', '앱 설정']) {
+  await expect(navigation).toHaveAttribute('data-route-title', '통합검색');
+  for (const label of ['홈', '통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림', '검색기', '과거검증', '기술매매', '연구센터', '포트폴리오', 'AI 정보', '앱 설정']) {
     await expect(navigation.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
   }
-  await expect(navigation.getByRole('menuitem', { name: '국내주식', exact: true })).toHaveAttribute('aria-current', 'page');
+  for (const removedLabel of ['국내주식', '미국주식', '코인현물', '코인선물', '시장 순위', '시장 탐색', '테마', '투자 공부']) {
+    await expect(navigation.getByRole('menuitem', { name: removedLabel, exact: true })).toHaveCount(0);
+  }
+  await expect(navigation.getByRole('menuitem', { name: '통합검색', exact: true })).toHaveAttribute('aria-current', 'page');
   // Section headings are buttons that move focus into their always-visible menu.
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   const technicalMenu = page.getByRole('menu', { name: '기술 메뉴' });
@@ -242,7 +194,7 @@ test('desktop sidebar owns the primary navigation at 1440px and the mobile tab b
   await expect(technicalMenu.getByRole('menuitem').nth(1)).toBeFocused();
   const box = await navigation.boundingBox();
   expect(Math.round(box?.width ?? 0)).toBe(216);
-  await expect(page.locator('nav')).toHaveCount(1);
+  await expect(page.locator('nav[aria-label="주요 메뉴"]')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   assertClean();
 });
@@ -251,8 +203,8 @@ for (const width of [360, 390, 430, 1023, 1024]) {
   test(`five top-level controls and anchored menus avoid overflow at ${width}px`, async ({ page }) => {
     const assertClean = await installApprovedRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
-    await page.goto('/stocks/kr');
-    await expect(page.getByRole('heading', { name: '국내주식 정보' })).toBeVisible();
+    await page.goto('/stocks');
+    await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
 
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await expect(navigation.getByRole('button')).toHaveCount(5);
@@ -277,7 +229,7 @@ for (const width of [360, 390, 430, 1023, 1024]) {
 test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/stocks/kr');
+  await page.goto('/stocks');
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   const assetsTrigger = navigation.getByRole('button', { name: '종목', exact: true });
 
@@ -308,40 +260,32 @@ test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async
   assertClean();
 });
 
-test('market submenu buttons reach the correct KR, US, spot, and futures screens and close immediately', async ({ page }) => {
+test('removed screen URLs redirect to home instead of 404 and the asset menu lists only kept screens', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 430, height: 932 });
-  await page.goto('/stocks/kr');
-
-  const cases = [
-    ['국내주식', '/stocks/kr', '국내주식 정보', '국내주식'],
-    ['미국주식', '/stocks/us', '미국주식 정보', '미국주식'],
-    ['코인현물', '/coins/spot', '코인 현물 정보', '코인현물'],
-    ['코인선물', '/coins/futures', '코인 선물 정보', '코인선물'],
-  ] as const;
-
-  for (const [label, route, heading, routeTitle] of cases) {
-    const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
-    await navigation.getByRole('button', { name: '종목', exact: true }).click();
-    const menu = page.getByRole('menu', { name: '종목 메뉴' });
-    await expect(menu).toBeVisible();
-    await menu.getByRole('menuitem', { name: label, exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`${route.replaceAll('/', '\\/')}$`));
-    await expect(page.getByRole('heading', { name: heading })).toBeVisible();
-    await expect(page.getByRole('menu', { name: '종목 메뉴' })).toBeHidden();
-    await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toHaveAttribute('data-route-title', routeTitle);
-    await expect(page).toHaveTitle(new RegExp(routeTitle));
+  for (const route of REMOVED_ROUTES) {
+    await page.goto(route, { waitUntil: 'commit' });
+    await expect(page, route).toHaveURL(/\/$/u);
+    await expect(page.getByRole('heading', { name: '홈', level: 1 })).toBeVisible();
+    await expect(page.getByText('페이지를 찾을 수 없습니다')).toHaveCount(0);
   }
 
-  await page.getByRole('tab', { name: '선물' }).click();
-  await expect(page.getByText('선물 지표')).toBeVisible();
+  const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
+  await navigation.getByRole('button', { name: '종목', exact: true }).click();
+  const menu = page.getByRole('menu', { name: '종목 메뉴' });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem')).toHaveText(['통합검색', '지수·시황', 'AI 추천', '관심종목', '가격 알림']);
+  await menu.getByRole('menuitem', { name: '가격 알림', exact: true }).click();
+  await expect(page).toHaveURL(/\/alerts$/u);
+  await expect(page.getByRole('menu', { name: '종목 메뉴' })).toBeHidden();
+  await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toHaveAttribute('data-route-title', '가격 알림');
   assertClean();
 });
 
 test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without information-route confusion', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/stocks/kr');
+  await page.goto('/stocks');
 
   const cases = [
     ['검색기', '/scanner', /AI 신호검색기/],
@@ -355,7 +299,7 @@ test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without
     await expect(page).toHaveURL(new RegExp(`${route.replaceAll('/', '\\/')}$`));
     await expect(page.getByRole('heading', { name: heading }).first()).toBeVisible();
     await expect(page.getByRole('navigation', { name: '주요 메뉴' }).getByRole('menuitem', { name: label, exact: true })).toHaveAttribute('aria-current', 'page');
-    await page.goto('/stocks/kr');
+    await page.goto('/stocks');
   }
   assertClean();
 });
@@ -363,7 +307,7 @@ test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without
 test('mobile tab bar exposes 자동매매 directly and the scanner menu reaches AI chart', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/stocks/kr');
+  await page.goto('/stocks');
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await navigation.getByRole('button', { name: '자동매매', exact: true }).click();
   await expect(page).toHaveURL(/\/auto-trading$/u);
@@ -378,25 +322,25 @@ test('mobile tab bar exposes 자동매매 directly and the scanner menu reaches 
 test('direct URL, reload, back/forward, active state, breadcrumb metadata, and visibility return stay stable', async ({ page }) => {
   const assertClean = await installApprovedRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/coins/spot');
-  await expect(page.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
+  await page.goto('/stocks');
+  await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
-  await page.goto('/coins/futures');
+  await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
+  await page.goto('/alerts');
   await page.goBack();
-  await expect(page.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
   await page.goForward();
-  await expect(page.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '알림', level: 1 })).toBeVisible();
 
   const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(navigation.getByRole('button', { name: '종목', exact: true })).toHaveAttribute('aria-current', 'page');
-  await expect(navigation).toHaveAttribute('data-breadcrumb', '종목 / 코인선물');
-  await expect(page.getByRole('list', { name: '현재 위치' })).toContainText('코인선물');
+  await expect(navigation).toHaveAttribute('data-breadcrumb', '종목 / 가격 알림');
+  await expect(page.getByRole('list', { name: '현재 위치' })).toContainText('가격 알림');
 
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  await expect(page.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '알림', level: 1 })).toBeVisible();
   assertClean();
 });

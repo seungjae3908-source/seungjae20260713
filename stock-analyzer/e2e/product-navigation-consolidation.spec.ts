@@ -13,16 +13,18 @@ test('user features have an explicit visibility decision and canonical menu entr
   const visible = (assets?.menu ?? []).filter(navigationMenuItemIsUserVisible);
   const visibleHrefs = visible.map((item) => item.href);
 
+  // The market browser (/market-browser) was removed with the 13-feature
+  // product scope (2026-10-18), so it no longer needs a visibility decision.
   expect(NAVIGATION_FEATURE_DECISIONS).toEqual({
     'market-overview': 'KEEP_VISIBLE',
-    'market-browser': 'INTERNAL_ONLY',
     alerts: 'KEEP_VISIBLE',
     recommendations: 'KEEP_VISIBLE',
   });
   expect(visibleHrefs).toContain(APP_ROUTES.marketOverview);
   expect(visibleHrefs).toContain(APP_ROUTES.alerts);
   expect(visibleHrefs).toContain(APP_ROUTES.recommendations);
-  expect(visibleHrefs).not.toContain(APP_ROUTES.marketBrowser);
+  expect(Object.keys(APP_ROUTES)).not.toContain('marketBrowser');
+  expect(visibleHrefs).not.toContain('/market-browser');
 });
 
 test('stock detail analysis stays on stock-info and mounts the existing rich detail page', async () => {

@@ -13,7 +13,8 @@ test('search and settings primary surfaces are short and Korean-first', () => {
   expect(search).toContain('<CenteredPageHeader title="종목" />');
   expect(search).toContain('grid grid-cols-3 gap-2');
   expect(search).toContain('sm:grid-cols-5');
-  expect(search).toContain('시장 순위');
+  expect(search).not.toContain('시장 순위');
+  expect(search).not.toContain('unified-market-board-link');
   expect(search).not.toContain('infoItems={[');
   expect(search).not.toContain('overflow-x-auto');
 

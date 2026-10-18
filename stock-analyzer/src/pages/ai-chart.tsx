@@ -451,7 +451,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
     if (externalMode && (!externalSyncId || !externalPairId)) return '외부 차트 세션 정보가 없거나 올바르지 않습니다.';
-    if (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current) {
+    // Inside a detail page the query string belongs to that page (asset, tab),
+    // so an incomplete chart selection there is not the user's route error.
+    if (!embedded && hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current) {
       return '시장·종목·시간봉 입력이 올바르지 않아 자동 종목 선택을 하지 않습니다.';
     }
     return null;

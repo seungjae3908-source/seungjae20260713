@@ -50,6 +50,9 @@ test('US auto policy selects disabled Toss and makes zero outbound requests or f
     const body = record(await response.json());
     assert.equal(body.status, 'unavailable');
     assert.equal(body.reason, 'TOSS_ORDERBOOK_READ_DISABLED');
+    // The dock rejects any payload without a currency, so the disabled state
+    // must carry one or the user sees "Invalid" instead of "unavailable".
+    assert.equal(body.currency, 'USD');
     assert.deepEqual(body.asks, []);
     assert.deepEqual(body.bids, []);
     assert.equal(body.provider, null);
