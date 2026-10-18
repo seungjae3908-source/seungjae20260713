@@ -59,32 +59,7 @@ const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
   BACKGROUND_NEW_ENTRIES_FAIL_CLOSED: '서버 안전 차단 때문에 신규 Paper 진입이 불가능합니다.',
   BACKGROUND_CANONICAL_HANDOFF_NOT_READY: '서버의 최신 자동매매 신호 전달이 준비되지 않았습니다.',
   BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY: '체결·매매일지 동기화 상태의 검증이 필요합니다.',
-  BACKGROUND_FOUR_MARKET_PAPER_WALLETS_REQUIRED: '4시장 자동모의 가상계좌가 아직 없습니다.',
-  BACKGROUND_FOUR_MARKETS_NOT_ENABLED: '4개 시장 자동매매 설정이 모두 켜져 있지 않습니다.',
 };
-
-// Who can clear each blocker: the member in the app, or the server operator.
-const PAPER_RUNTIME_SERVER_BLOCKERS = new Set([
-  'BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED',
-  'BACKGROUND_PAPER_ONLY_WORKER_REQUIRED',
-  'BACKGROUND_WORKER_TICK_NOT_HEALTHY',
-  'BACKGROUND_NEW_ENTRIES_FAIL_CLOSED',
-  'BACKGROUND_CANONICAL_HANDOFF_NOT_READY',
-  'BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY',
-]);
-
-function groupPaperRuntimeBlockers(codes: readonly string[]) {
-  const seen = new Set<string>();
-  const member: string[] = [];
-  const server: string[] = [];
-  for (const code of codes) {
-    const label = PAPER_RUNTIME_BLOCKER_LABELS[code] ?? `서버 준비 항목 확인 필요 (${code})`;
-    if (seen.has(label)) continue;
-    seen.add(label);
-    (PAPER_RUNTIME_SERVER_BLOCKERS.has(code) ? server : member).push(label);
-  }
-  return { member, server };
-}
 
 async function readAutomaticPaperRuntimeReadiness(signal?: AbortSignal): Promise<AutomaticPaperRuntimeReadiness> {
   const response = await authorizedFetch('/api/trade-automation/paper-runtime-readiness', { signal });
@@ -776,22 +751,12 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             </span>
           </div>
           {autoPaperRuntimeReadiness && !autoPaperRuntimeReadiness.readyForPaperEvaluation ? (
-            <div className="mt-2 space-y-2 text-xs leading-5 text-amber-700"
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-amber-700"
               data-testid="automatic-paper-worker-blockers">
-              {(() => {
-                const groups = groupPaperRuntimeBlockers(autoPaperRuntimeReadiness.blockers);
-                return ([['앱에서 설정할 것', groups.member], ['서버에서 켜야 할 것', groups.server]] as const)
-                  .filter(([, labels]) => labels.length > 0)
-                  .map(([title, labels]) => (
-                    <div key={title}>
-                      <p className="font-semibold">{title}</p>
-                      <ul className="list-disc space-y-1 pl-5">
-                        {labels.map((label) => <li key={label}>{label}</li>)}
-                      </ul>
-                    </div>
-                  ));
-              })()}
-            </div>
+              {autoPaperRuntimeReadiness.blockers.map((code) => (
+                <li key={code}>{PAPER_RUNTIME_BLOCKER_LABELS[code] ?? '서버 운영 준비도 점검이 필요합니다.'}</li>
+              ))}
+            </ul>
           ) : (
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
               {autoPaperRuntimeError

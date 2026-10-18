@@ -155,7 +155,7 @@ function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBri
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
-            <h2 className="text-sm font-bold">연구 → 전략 승격 연결</h2>
+            <h2 className="text-sm font-bold">Research → 전략 승격 연결</h2>
           </div>
           <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
             실제 연구 후보의 식별자와 표본 단계를 읽기 전용으로 확인합니다. 자동 채택·모의매매 전달·검색기 변경 권한은 없습니다.
@@ -217,7 +217,7 @@ function ResearchPromotionBridgePanel({ bridge }: { bridge: ResearchPromotionBri
       ) : null}
 
       <p className="mt-3 text-xs font-semibold text-muted-foreground">
-        자동 채택 없음 · 모의매매 전달 없음 · 검색기 변경 없음 · 주문 권한 없음
+        자동채택 없음 · Paper 전달 없음 · Scanner 변경 없음 · 실행 권한 NONE
       </p>
     </section>
   );
@@ -240,7 +240,7 @@ function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionRevie
     <section data-testid="research-adoption-review" className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 채택 검토 게이트">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-bold">통계·경제성 채택 검토</h2>
+          <h2 className="text-sm font-bold">#547 통계·경제적 채택 검토 Gate</h2>
           <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
             통계 검증, 비용 후 경제성, 최종 미사용 검증, 관찰·모의매매 근거가 모두 같은 후보에 묶였는지 확인합니다.
           </p>
@@ -288,7 +288,7 @@ function ResearchAdoptionReviewPanel({ review }: { review: ResearchAdoptionRevie
       ) : null}
 
       <p className="mt-3 text-xs font-semibold text-muted-foreground">
-        자동 채택 없음 · 사람 검토 필수 · 검색기·모의매매 변경 없음 · 주문 권한 없음
+        자동채택 없음 · 사람 검토 필수 · Scanner/Paper 변경 없음 · 실행 권한 NONE
       </p>
     </section>
   );
