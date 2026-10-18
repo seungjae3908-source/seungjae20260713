@@ -58,7 +58,7 @@ function validStrategyLeg(leg: { price: number; reason: string } | null | undefi
 
 export function AiTab({ ticker, currency, active }: { ticker: string; currency: Currency; active: boolean }) {
   const { data, isLoading, isError, error, refetch } = useAnalysis(ticker, active);
-  if (isLoading) return <LoadingState label="AI 분석 생성 중..." />;
+  if (isLoading) return <LoadingState label="지표 분석 계산 중..." />;
   if (isError || !data)
     return <ErrorState code={errorCodeOf(error) ?? undefined} onRetry={() => refetch()} />;
   if (!validAnalysisPayload(data))
@@ -75,16 +75,16 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
 
   return (
     <div className="space-y-3">
-      <Panel title="AI 투자 의견">
+      <Panel title="지표 기반 의견">
         <div className="flex items-center justify-between">
           <div className="space-y-2">
             <RatingBadge rating={data.opinion} size="md" />
-            <div className="text-xs text-muted-foreground">AI 신뢰도 {data.confidence}%</div>
+            <div className="text-xs text-muted-foreground">지표 신뢰도 {data.confidence}%</div>
           </div>
           <ScoreRing score={data.confidence} tone={ratingTone(data.opinion)} label="신뢰도" />
         </div>
         <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">
-          AI 신뢰도는 모델의 확신 표현이며 실제 적중확률·수익확률이 아닙니다.
+          시세·기술지표 계산으로 만든 의견입니다(AI 모델 호출 없음). 지표 신뢰도는 실제 적중확률·수익확률이 아닙니다.
         </p>
         <p className="mt-3 break-keep rounded-xl bg-muted/40 p-3 text-xs leading-relaxed text-foreground/90">
           {data.opinionReason}

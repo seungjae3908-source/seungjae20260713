@@ -92,7 +92,26 @@ function parseCompactDate(value: string): number | null {
   ) {
     return null;
   }
-  return Math.floor(timestamp / 1_000);
+  // Compact clock times come from Korean providers (Kiwoom) in KST. Read them
+  // as +09:00 so they land on the same instant as Yahoo/Toss epoch candles,
+  // as the server scanner already does. Date-only values stay at UTC midnight
+  // so the bar keeps its calendar day.
+  const offsetSeconds = digits.length > 8 ? KST_OFFSET_SECONDS : 0;
+  return Math.floor(timestamp / 1_000) - offsetSeconds;
+}
+
+const KST_OFFSET_SECONDS = 9 * 60 * 60;
+
+const CHART_MARKET_TIME_ZONES: Record<string, string> = {
+  KR: 'Asia/Seoul',
+  US: 'America/New_York',
+  UPBIT: 'Asia/Seoul',
+  BITGET: 'Asia/Seoul',
+};
+
+/** Wall-clock zone a market's candles are labelled in (axis, legend, detail). */
+export function chartMarketTimeZone(market: string): string {
+  return CHART_MARKET_TIME_ZONES[market] ?? 'Asia/Seoul';
 }
 
 function numericEpoch(text: string): number | null {

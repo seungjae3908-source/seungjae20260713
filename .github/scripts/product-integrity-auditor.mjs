@@ -175,12 +175,6 @@ PRODUCT_EDGES.push(
     { id: 'same-candidate-client-request', paths: ['stock-analyzer/src/lib/research-copilot.ts'], allOf: ["request('/prewire-same-candidate'", 'validResearchSameCandidate(value, bundle)', 'researchReadback'] },
     { id: 'same-candidate-identity-bound-ui', paths: ['stock-analyzer/src/components/research-copilot-panel.tsx'], allOf: ['readResearchSameCandidate(JSON.parse(dsl), bundle, signal)', '<ResearchSameCandidatePreview'] },
   ] },
-  { id: 'PI011', from: 'Portfolio canonical journal', to: 'AI Advisor analysis', severity: 'P1', lane: 'portfolio-analysis', required: [
-    { id: 'portfolio-ai-ui-mount', paths: ['stock-analyzer/src/pages/portfolio-v2.tsx'], allOf: ['<PortfolioAiDiagnosis'] },
-    { id: 'portfolio-ai-request', paths: ['stock-analyzer/src/components/portfolio-ai-diagnosis.tsx'], allOf: ['/api/paper-journal/portfolio-advisor/query', 'authorizedFetch'] },
-    { id: 'portfolio-advisor-route-registration', paths: ['api-server/src/routes/paper-journal.ts'], allOf: ['registerCanonicalPortfolioAdvisorRoute(router'] },
-    { id: 'portfolio-advisor-canonical-consumer', paths: ['api-server/src/routes/paper-journal-portfolio-advisor.ts'], allOf: ["router.post('/paper-journal/portfolio-advisor/query'", 'clientPortfolioStateKey', 'queryInvestmentCopilot(snapshot, body.message)'] },
-  ] },
   { id: 'PI012', from: 'Scanner Event', to: 'Telegram routing / member holdings alerts', severity: 'P2', lane: 'notifications', required: [
     { id: 'scanner-route-delivery-call', paths: ['api-server/src/routes/crypto-signal-scan.ts', 'api-server/src/routes/bounded-market-scan.ts'], allOf: ['void deliverScannerTelegramAlerts('] },
     { id: 'scanner-freshness-and-routing', paths: ['api-server/src/services/scanner-telegram-delivery.service.ts'], allOf: ['evaluateTelegramSignalFreshness', 'fanoutMemberHoldingScannerAlert', 'markTelegramSignalAnnounced', 'sendTelegramAlert'] },
@@ -219,7 +213,6 @@ export const DEFAULT_CAPABILITIES = [
   ['CAP018', 'Watchlist', 'P2', ['stock-analyzer/src/pages/watchlist.tsx']],
   ['CAP019', 'Recommendations', 'P2', ['stock-analyzer/src/pages/recommendations.tsx']],
   ['CAP020', 'Market Overview', 'P2', ['stock-analyzer/src/pages/market-overview.tsx']],
-  ['CAP021', 'Market Information', 'P2', ['stock-analyzer/src/pages/market-information.tsx']],
   ['CAP022', 'Technical Workspace', 'P1', ['stock-analyzer/src/pages/technical-workspace.tsx']],
   ['CAP023', 'Admin', 'P1', ['stock-analyzer/src/pages/admin.tsx']],
   ['CAP024', 'Agent Hub', 'P2', ['stock-analyzer/src/pages/agent-hub-control.tsx']],
@@ -310,7 +303,6 @@ export const GOLDEN_JOURNEYS = [
   { id: 'GJ009', name: 'Authenticated Candidate → Full Staging', edgeIds: ['PI004', 'CG016'] },
   { id: 'GJ010', name: 'In-app Alerts → Telegram', edgeIds: ['CG014', 'PI006'] },
   { id: 'GJ011', name: 'Research → Candidate → Backtest → Forward / Shadow / Paper evidence readback', edgeIds: ['PI008', 'PI009', 'PI010'] },
-  { id: 'GJ012', name: 'Portfolio → AI Analysis', edgeIds: ['CG015', 'PI011'] },
   { id: 'GJ013', name: 'Scanner → Alert → Telegram / Member routing', edgeIds: ['CG014', 'PI012', 'PI013', 'PI014'] },
 ];
 

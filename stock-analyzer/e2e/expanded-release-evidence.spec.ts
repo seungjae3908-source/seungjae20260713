@@ -160,7 +160,7 @@ const artifact = {
   progressiveLoading: {
     status: 'partial',
     scanner: evidenceCell('partial', [`e2e/scanner-chart-broadcast.spec.ts@${TARGET_SHA}: loading/error/recovery/stale-race paths`], 'slow secondary-provider nonblocking is not a complete scanner matrix.'),
-    stockInfo: evidenceCell('partial', [`e2e/phase12-market-information-room-edge-cases.spec.ts@${TARGET_SHA}: explicit empty/timeout/retry-safe states`], 'shell-first plus slow News/Financial nonblocking is not fully covered.'),
+    stockInfo: evidenceCell('unverified', [], 'The market-information room edge-case fixture was removed with the room screens; stock-info shell-first plus slow News/Financial nonblocking has no exact-main fixture here.'),
     aiChart: evidenceCell('partial', [`e2e/scanner-chart-broadcast.spec.ts@${TARGET_SHA}`, `e2e/unified-chart-context-reset.spec.ts@${TARGET_SHA}`], 'loading cleanup/latest context are covered; full secondary-provider matrix is not.'),
     unifiedSearch: evidenceCell('partial', [`e2e/unified-asset-search.spec.ts@${TARGET_SHA}: latest request wins and separated assets`], 'all progressive shell/partial/abort assertions at 320/390/768/1280 are not present.'),
     paperReadOnly: evidenceCell('partial', [`e2e/phase6-paper-trading.spec.ts@${TARGET_SHA}: safe error clears busy state`], 'representative 320/768/1280 progressive-loading matrix is incomplete.'),
@@ -349,7 +349,6 @@ test('projects scanner-to-AI-chart PricePlan handoff and current AI/progressive 
   const phase9 = await readAnalyzerFile('e2e/phase9-ai-review.spec.ts');
   const phase11 = await readAnalyzerFile('e2e/phase11-ai-workspace.spec.ts');
   const chartBroadcast = await readAnalyzerFile('e2e/scanner-chart-broadcast.spec.ts');
-  const marketEdge = await readAnalyzerFile('e2e/phase12-market-information-room-edge-cases.spec.ts');
   const paper = await readAnalyzerFile('e2e/phase6-paper-trading.spec.ts');
 
   expect(scannerPage).toContain('pricePlan: card.pricePlan');
@@ -360,7 +359,7 @@ test('projects scanner-to-AI-chart PricePlan handoff and current AI/progressive 
   expect(phase9).toContain('429');
   expect(phase11).toContain('요청 취소');
   expect(chartBroadcast).toContain('차트 불러오는 중...');
-  expect(marketEdge).toContain('UPSTREAM_TIMEOUT');
+  await expect(readAnalyzerFile('e2e/phase12-market-information-room-edge-cases.spec.ts')).rejects.toThrow();
   expect(paper).toContain('execution error clears busy state');
 });
 

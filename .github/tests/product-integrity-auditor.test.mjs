@@ -141,10 +141,16 @@ test('P1 non-proven graph edges are emitted into the Error Ledger', () => {
   for (const field of ['domain', 'producer', 'consumer', 'currentProof', 'rootCause', 'owner', 'repair', 'tests', 'remainingRuntimeProof']) assert.ok(field in ledger[0], field);
 });
 
-test('13 journeys include research stage readback, portfolio AI and scanner member delivery', () => {
-  assert.equal(GOLDEN_JOURNEYS.length, 13);
-  assert.equal(new Set(GOLDEN_JOURNEYS.map(item => item.id)).size, 13);
-  for (const id of ['GJ011', 'GJ012', 'GJ013']) assert.ok(GOLDEN_JOURNEYS.find(item => item.id === id));
+test('12 journeys include research stage readback and scanner member delivery; removed portfolio AI mentor is not audited', () => {
+  assert.equal(GOLDEN_JOURNEYS.length, 12);
+  assert.equal(new Set(GOLDEN_JOURNEYS.map(item => item.id)).size, 12);
+  for (const id of ['GJ011', 'GJ013']) assert.ok(GOLDEN_JOURNEYS.find(item => item.id === id));
+  // The web Portfolio AI Mentor panel (GJ012/PI011) and the removed Market Information
+  // screen (CAP021) are out of product scope; Recommendations and Market Overview stay.
+  assert.equal(GOLDEN_JOURNEYS.find(item => item.id === 'GJ012'), undefined);
+  assert.equal(PRODUCT_EDGES.find(item => item.id === 'PI011'), undefined);
+  assert.equal(DEFAULT_CAPABILITIES.find(item => item.id === 'CAP021'), undefined);
+  for (const id of ['CAP019', 'CAP020']) assert.ok(DEFAULT_CAPABILITIES.find(item => item.id === id));
   assert.equal(new Set(PRODUCT_EDGES.map(item => item.id)).size, PRODUCT_EDGES.length);
 });
 

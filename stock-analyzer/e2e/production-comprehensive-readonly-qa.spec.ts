@@ -21,10 +21,12 @@ const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-
 const ARTIFACT_DIR = path.resolve('production-comprehensive-artifacts');
 fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
+// Removed screens (market rooms, market rankings/browser, themes, news, learn)
+// are not audited (13-feature scope; old URLs redirect to home).
 const FULL_ROUTES = [
-  '/', '/stocks', '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures',
-  '/market-overview', '/market-rankings', '/market-browser', '/scanner', '/ai-chart',
-  '/ai-chat', '/themes', '/news-information', '/learn', '/watchlist', '/alerts',
+  '/', '/stocks',
+  '/market-overview', '/scanner', '/ai-chart',
+  '/ai-chat', '/watchlist', '/alerts',
   '/portfolio', '/position', '/strategy-promotion', '/recommendations', '/backtests',
   '/auto-trading', '/paper-trading', '/account', '/more', '/settings',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',

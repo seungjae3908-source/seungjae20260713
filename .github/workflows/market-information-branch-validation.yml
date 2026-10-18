@@ -83,11 +83,6 @@ jobs:
           api-server/src/services/market-information.service.test.ts
           api-server/src/services/public-market-http.ts
           api-server/src/services/public-market-http.test.ts
-          stock-analyzer/src/lib/market-information.ts
-          stock-analyzer/src/lib/market-information.test.ts
-          stock-analyzer/src/pages/market-information.tsx
-          stock-analyzer/e2e/market-information-room.spec.ts
-          stock-analyzer/e2e/phase12-market-information-room-edge-cases.spec.ts
 
       - name: Run market-information unit and integration tests
         run: cd api-server && node ./test.mjs phase12
@@ -106,11 +101,12 @@ jobs:
       - name: Install Chromium
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
 
-      - name: Run market-information browser regression
+      # The web market-information room screens were removed (13-feature scope);
+      # the API and Telegram consumers remain covered by the backend steps above.
+      - name: Run market-information client timeout contract
         run: >-
           pnpm --dir stock-analyzer exec playwright test
-          e2e/market-information-room.spec.ts
-          e2e/phase12-market-information-room-edge-cases.spec.ts
+          e2e/market-information-timeout-contract.spec.ts
           --reporter=line
 
       - name: Run full desktop and mobile browser regression

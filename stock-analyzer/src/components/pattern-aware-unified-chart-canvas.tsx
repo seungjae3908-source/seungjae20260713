@@ -12,10 +12,12 @@ import {
   ColorType,
   CrosshairMode,
   LineStyle,
+  TickMarkType,
   createChart,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { Expand, LocateFixed, Maximize2, Minimize2 } from 'lucide-react';
@@ -26,7 +28,7 @@ import {
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
-import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
+import { chartMarketTimeZone, type NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
   bollingerSeries,
   indicatorSeries,
@@ -204,32 +206,51 @@ function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi)
 }
 
 const LEGEND_NUMBER_FORMATTER = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 8 });
-const LEGEND_DATE_FORMATTER = new Intl.DateTimeFormat('ko-KR', { month: '2-digit', day: '2-digit' });
-const LEGEND_DATETIME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
+const LEGEND_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function legendFormatter(timeZone: string, kind: 'date' | 'datetime' | 'time' | 'month' | 'year'): Intl.DateTimeFormat {
+  const key = `${timeZone}|${kind}`;
+  const cached = LEGEND_FORMATTERS.get(key);
+  if (cached) return cached;
+  const options: Intl.DateTimeFormatOptions =
+    kind === 'date' ? { month: '2-digit', day: '2-digit' }
+      : kind === 'time' ? { hour: '2-digit', minute: '2-digit', hour12: false }
+        : kind === 'month' ? { year: '2-digit', month: '2-digit' }
+          : kind === 'year' ? { year: 'numeric' }
+            : { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
+  const formatter = new Intl.DateTimeFormat('ko-KR', { ...options, timeZone });
+  LEGEND_FORMATTERS.set(key, formatter);
+  return formatter;
+}
 
 function formatLegendNumber(value: number): string {
   return LEGEND_NUMBER_FORMATTER.format(value);
 }
 
-function formatLegendTime(time: number, timeframe: UnifiedChartTimeframe): string {
-  const formatter = timeframe === '1D' ? LEGEND_DATE_FORMATTER : LEGEND_DATETIME_FORMATTER;
-  return formatter.format(new Date(time * 1_000));
+function formatLegendTime(time: number, timeframe: UnifiedChartTimeframe, timeZone: string): string {
+  return legendFormatter(timeZone, timeframe === '1D' ? 'date' : 'datetime').format(new Date(time * 1_000));
+}
+
+// Axis labels in the market's own wall clock (lightweight-charts draws UTC by
+// default, which put KRX bars 9 hours off the legend).
+function formatTickMark(time: Time, tickMarkType: TickMarkType, timeZone: string): string {
+  if (typeof time !== 'number') return '';
+  const date = new Date(time * 1_000);
+  if (tickMarkType === TickMarkType.Year) return legendFormatter(timeZone, 'year').format(date);
+  if (tickMarkType === TickMarkType.Month) return legendFormatter(timeZone, 'month').format(date);
+  if (tickMarkType === TickMarkType.DayOfMonth) return legendFormatter(timeZone, 'date').format(date);
+  return legendFormatter(timeZone, 'time').format(date);
 }
 
 function updateCrosshairLegend(
   element: HTMLDivElement | null,
   candle: Pick<NormalizedChartCandle, 'time' | 'open' | 'high' | 'low' | 'close' | 'volume'> | null,
   timeframe: UnifiedChartTimeframe,
+  timeZone: string,
 ): void {
   if (!element || !candle) return;
   const label = [
-    formatLegendTime(candle.time, timeframe),
+    formatLegendTime(candle.time, timeframe, timeZone),
     `시 ${formatLegendNumber(candle.open)}`,
     `고 ${formatLegendNumber(candle.high)}`,
     `저 ${formatLegendNumber(candle.low)}`,
@@ -337,6 +358,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const crosshairLegendRef = useRef<HTMLDivElement | null>(null);
+  const timeZoneRef = useRef(chartMarketTimeZone(market));
+  timeZoneRef.current = chartMarketTimeZone(market);
   const crosshairActiveRef = useRef(false);
   const latestCandleRef = useRef<NormalizedChartCandle | null>(candles.at(-1) ?? null);
   const instanceRef = useRef<ChartInstance | null>(null);
@@ -385,7 +408,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
       });
       latestCandleRef.current = candle;
       if (!crosshairActiveRef.current) {
-        updateCrosshairLegend(crosshairLegendRef.current, candle, timeframe);
+        updateCrosshairLegend(crosshairLegendRef.current, candle, timeframe, timeZoneRef.current);
       }
       return true;
     },
@@ -437,9 +460,17 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         borderVisible: true,
         scaleMargins: { top: 0.08, bottom: 0.08 },
       },
+      localization: {
+        locale: 'ko-KR',
+        timeFormatter: (time: Time) => typeof time === 'number'
+          ? formatLegendTime(time, timeframe, timeZoneRef.current)
+          : '',
+      },
       timeScale: {
         visible: true,
         borderVisible: true,
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) =>
+          formatTickMark(time, tickMarkType, timeZoneRef.current),
         timeVisible: timeframe !== '1D',
         secondsVisible: false,
         rightOffset: 6,
@@ -543,11 +574,11 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
           low: candleRow.low,
           close: candleRow.close,
           volume: volumeValue,
-        }, timeframe);
+        }, timeframe, timeZoneRef.current);
         return;
       }
       crosshairActiveRef.current = false;
-      updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe);
+      updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, timeZoneRef.current);
     };
     const publishVisibleRange = () => {
       const range = exposeLogicalViewport(wrapperRef.current, chart);
@@ -609,7 +640,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     if (!instance) return;
     latestCandleRef.current = candles.at(-1) ?? null;
     crosshairActiveRef.current = false;
-    updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe);
+    updateCrosshairLegend(crosshairLegendRef.current, latestCandleRef.current, timeframe, timeZoneRef.current);
     const beforeUpdate = logicalViewport(instance.chart)
       ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
 

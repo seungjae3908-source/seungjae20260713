@@ -53,8 +53,11 @@ test('Staging full navigation test targets exactly accessible four-menu technica
 test('Staging full journey information and settings menus stay present',()=>{
  const info=segment(navigation,"    id: 'information',","    id: 'settings',");
  const settings=segment(navigation,"    id: 'settings',","export const APP_ROUTE_PRESENTATIONS:");
- for(const label of ['투자 공부','AI 정보','연구센터','포트폴리오'])
+ for(const label of ['AI 정보','연구센터','포트폴리오'])
   assert.ok(info.includes("label: '"+label+"'"),'missing information route '+label);
+ // 투자 공부 (/learn) was removed with the 13-feature product scope.
+ assert.ok(!info.includes("label: '투자 공부'"),'removed information route must stay removed');
+ assert.ok(!navigation.includes("learn: '/learn'"),'removed /learn route must not return');
  for(const label of ['앱 설정','계정','회원 관리'])
   assert.ok(settings.includes("label: '"+label+"'"),'missing settings route '+label);
  assert.ok(staging.includes("await openMenuRoute('information', '연구센터', '/research-center')"));

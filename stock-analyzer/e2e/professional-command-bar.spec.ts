@@ -120,7 +120,10 @@ test('professional command surface is shell-owned, desktop-idle split, capabilit
   expect(loader).toContain('<Content initialOpen={openOnLoadRef.current} />');
   expect(content).toContain('initialOpen = false');
   expect(content).toContain('useState(initialOpen)');
-  expect(content).toContain("auth.can('canAccessRiskPreview')");
+  // The AI 차트 palette entry must use the exact capability its route gate uses.
+  expect(app).toContain("function AiChartAccess() { return gated('canAccessAiChart',");
+  expect(content).toMatch(/id: 'ai-chart'[^\n]+href: APP_ROUTES\.aiChart[^\n]+visible: auth\.can\('canAccessAiChart'\)/u);
+  expect(content).not.toContain("auth.can('canAccessRiskPreview')");
   expect(content).toContain("auth.can('canAccessPaperTrading')");
   expect(content).toMatch(/id: 'research'[^\n]+href: APP_ROUTES\.researchCenter[^\n]+visible: auth\.can\('canAccessBasicInfo'\)/u);
   expect(app).toContain("function ResearchCenterAccess() { return gated('canAccessBasicInfo', <ResearchCenterPage />); }");

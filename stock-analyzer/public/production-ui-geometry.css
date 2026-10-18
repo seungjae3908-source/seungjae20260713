@@ -207,7 +207,6 @@ button[data-testid="load-multi-timeframe"] {
  * exposed by BottomNav so unrelated modern workspaces are untouched.
  */
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="지수·시황"]),
-#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="시장 순위"]),
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="관심종목"]),
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="가격 알림"]),
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="종목 정보"]),
@@ -224,7 +223,6 @@ button[data-testid="load-multi-timeframe"] {
 
 /* Normal legacy pages expose their body as a direct main sibling of BottomNav. */
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="지수·시황"]) > main,
-#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="시장 순위"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="관심종목"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="가격 알림"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="종목 정보"]) > main,
