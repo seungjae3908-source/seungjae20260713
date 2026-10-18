@@ -83,6 +83,37 @@ async function fetchUpbitDaily(market) {
   return [...byTs.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
+/** Binance USDⓈ-M monthly funding archive → [{timestamp, rate}] (proxy for Bitget). */
+async function fetchBinanceVisionFunding(symbol) {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtemp, rm, writeFile: write } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(join(tmpdir(), 'funding-'));
+  const rows = [];
+  try {
+    for (let y = 2019; y <= 2025; y += 1) {
+      for (let m = 1; m <= 12; m += 1) {
+        const mm = String(m).padStart(2, '0');
+        const url = `https://data.binance.vision/data/futures/um/monthly/fundingRate/${symbol}/${symbol}-fundingRate-${y}-${mm}.zip`;
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+          if (!res.ok) continue;
+          const file = join(dir, `${y}${mm}.zip`);
+          await write(file, Buffer.from(await res.arrayBuffer()));
+          const csv = execFileSync('unzip', ['-p', file], { encoding: 'utf8' });
+          for (const line of csv.split(/\r?\n/u)) {
+            const [t, , rate] = line.split(',');
+            const ts = Number(t); const r = Number(rate);
+            if (Number.isSafeInteger(ts) && Number.isFinite(r)) rows.push({ timestamp: ts, rate: r });
+          }
+        } catch { /* missing month */ }
+      }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+  process.stderr.write(`FUNDING_BINANCE_VISION:${symbol}:${rows.length}\n`);
+  return rows.sort((a, b) => a.timestamp - b.timestamp);
+}
+
 async function fetchAll(root) {
   const cache = join(root, 'strategy-zoo-datasets.json');
   try { return JSON.parse(await readFile(cache, 'utf8')); } catch { /* fetch */ }
@@ -105,10 +136,14 @@ async function fetchAll(root) {
           });
           // Bitget funding history directly (newest → oldest pages). The shared helper falls
           // back to a Binance proxy when the page cap is hit, and Binance is geo-blocked here.
+          // Bitget keeps only ~1 year of funding; Binance's public archive (data.binance.vision)
+          // has monthly files since 2019 and serves as the funding proxy (venues track closely).
+          fundingRates = await fetchBinanceVisionFunding(symbol);
           try {
-            const history = await collectFundingRateHistory({ client: bitget, symbol, startTime: Date.UTC(2019, 0, 1), endTime: END, maxPages: 200 });
-            fundingRates = history.records.map((x) => ({ timestamp: x.timestamp, rate: x.rate })).filter((x) => Number.isSafeInteger(x.timestamp) && Number.isFinite(x.rate));
-          } catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 80)}\n`); }
+            const history = await collectFundingRateHistory({ client: bitget, symbol, startTime: Date.UTC(2024, 0, 1), endTime: END, maxPages: 200 });
+            const own = history.records.map((x) => ({ timestamp: x.timestamp, rate: x.rate })).filter((x) => Number.isSafeInteger(x.timestamp) && Number.isFinite(x.rate));
+            if (own.length) { const from = Math.min(...own.map((x) => x.timestamp)); fundingRates = [...fundingRates.filter((x) => x.timestamp < from), ...own]; }
+          } catch (error) { process.stderr.write(`FUNDING_BITGET_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 80)}\n`); }
           const firstCandle = candles[0]?.timestamp ?? 0;
           const covered = fundingRates.length ? Math.min(...fundingRates.map((x) => x.timestamp)) : null;
           if (covered === null || covered > firstCandle + (30 * 86_400_000)) {
