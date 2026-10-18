@@ -13,7 +13,7 @@ import {
   normalizeAnalysisSelection,
   selectionFromSearch,
 } from '@/lib/analysis-selection';
-import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
+import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailChoices, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
@@ -248,7 +248,17 @@ function CryptoDetailRedirect() {
     mode.setAsset('coin');
     navigate(target, { replace: true });
   }, [mode, navigate, target]);
-  return target ? <PageFallback /> : <NotFound />;
+  if (target) return <PageFallback />;
+  const choices = resolveLegacyCryptoDetailChoices(symbol, backPath);
+  if (!choices) return <NotFound />;
+  return (
+    <main className="mx-auto flex min-h-[60vh] max-w-md flex-col justify-center gap-3 p-6 text-center" data-testid="crypto-symbol-chooser">
+      <h1 className="text-lg font-black">{choices.base} 어느 시장을 볼까요?</h1>
+      <p className="text-xs font-bold text-muted-foreground">같은 이름의 코인이 현물과 선물에 모두 있어서 자동으로 고르지 않습니다.</p>
+      <button type="button" className="min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground" onClick={() => { mode.setAsset('coin'); navigate(choices.spotPath, { replace: true }); }}>현물 (업비트 KRW-{choices.base})</button>
+      <button type="button" className="min-h-11 rounded-xl border border-card-border bg-card px-4 text-sm font-black" onClick={() => { mode.setAsset('coin'); navigate(choices.futuresPath, { replace: true }); }}>선물 (비트겟 {choices.base}USDT)</button>
+    </main>
+  );
 }
 
 function LegacyStockDetailRedirect() {
