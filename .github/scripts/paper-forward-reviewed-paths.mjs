@@ -328,6 +328,7 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "api-server/src/services/kiwoom-readonly-order-recovery.service.test.ts",
   "api-server/src/services/kiwoom-readonly-order-recovery.service.ts",
   "api-server/src/services/live-trading-safety-telegram.service.ts",
+  "api-server/src/services/manual-live-order.service.ts",
   "api-server/src/services/member-auto-trading-ai-review-evidence.service.test.ts",
   "api-server/src/services/member-auto-trading-readiness.service.ts",
   "api-server/src/services/public-live-plan-origin.service.test.ts",
@@ -353,9 +354,15 @@ export const AUTOMATIC_LIVE_SAFETY_REVIEWED_PATHS = Object.freeze([
   "ops/production-auto-live-signal-identity.cjs",
   "ops/production-auto-live-signal-source-audit.mjs",
   "stock-analyzer/e2e/phase12-trade-automation.spec.ts",
+  "stock-analyzer/e2e/phase13-orderbook.spec.ts",
   "stock-analyzer/e2e/production-auto-live-policy-prepare.spec.ts",
+  "stock-analyzer/src/components/instrument-orderbook-dock.tsx",
+  "stock-analyzer/src/components/manual-order-ticket.tsx",
   "stock-analyzer/src/components/trade-automation-settings.tsx",
+  "stock-analyzer/src/components/trading-holdings-panel.tsx",
+  "stock-analyzer/src/lib/manual-order-ticket.ts",
   "stock-analyzer/src/lib/trade-approval-ui.ts",
+  "stock-analyzer/src/pages/detail.tsx",
 ]);
 // Exact cross-owner scope for the public Scanner -> Signal V3 -> automatic
 // admission bridge. Paths that previously belonged to the immutable Scanner

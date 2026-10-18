@@ -17,6 +17,7 @@ import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetai
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
 import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
+import { ManualOrderTicketHost } from '@/components/manual-order-ticket';
 import { ProfessionalCommandBar } from '@/components/professional-command-bar';
 import { AppSidebar, useDesktopShell } from '@/components/app-sidebar';
 import { DesktopSidebarMountedContext } from '@/lib/desktop-shell-context';
@@ -284,7 +285,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     && !auth.loading
     && !path.startsWith('/__')
     && !SIDEBAR_EXCLUDED_PATHS.has(path);
-  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} data-app-sidebar={showSidebar ? 'true' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full overflow-hidden bg-background ${showSidebar ? 'max-w-screen-xl min-[1200px]:max-w-none' : wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}>{showSidebar ? <div data-testid="desktop-sidebar-slot" className="flex h-full shrink-0"><AppSidebar /></div> : null}<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"><OfflineBanner /><ProfessionalCommandBar />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden"><DesktopSidebarMountedContext.Provider value={showSidebar}>{children}</DesktopSidebarMountedContext.Provider></div></div></div><OrderbookRouteDock /></div>;
+  return <div data-testid="app-shell" className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} data-app-sidebar={showSidebar ? 'true' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full overflow-hidden bg-background ${showSidebar ? 'max-w-screen-xl min-[1200px]:max-w-none' : wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}>{showSidebar ? <div data-testid="desktop-sidebar-slot" className="flex h-full shrink-0"><AppSidebar /></div> : null}<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"><OfflineBanner /><ProfessionalCommandBar />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden"><DesktopSidebarMountedContext.Provider value={showSidebar}>{children}</DesktopSidebarMountedContext.Provider></div></div></div><OrderbookRouteDock /><ManualOrderTicketHost /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {

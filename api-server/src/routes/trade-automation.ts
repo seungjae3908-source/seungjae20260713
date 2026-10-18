@@ -62,6 +62,12 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import {
+  buildManualLivePlanInput,
+  ManualOrderInputError,
+  type ManualLiveOrderRequest,
+} from '../services/manual-live-order.service';
+import { resolveMemberAutoTradingKrwRate } from '../services/member-auto-trading-fx.service';
 import { notifyLiveMarketSwitch } from '../services/live-trading-safety-telegram.service';
 import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
 import {
@@ -2065,6 +2071,68 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
       ...(automaticExecution ?? {}),
       duplicate: automaticExecution?.duplicate ?? result.duplicate,
       orderSubmitted: input.accountMode === 'live' && automaticExecution != null,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+/**
+ * Manual order ticket (종목 탭 주문창 / 호가 클릭 / 보유종목 매도·청산).
+ * Builds a LIVE plan server-side from the owner's ticket and fresh read-only
+ * exchange data, then stores it as APPROVAL_PENDING. Nothing is sent to the
+ * exchange here: the order goes out only through POST /plans/:id/approve.
+ */
+router.post('/manual-orders/plan', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!requireLiveOrderCapability(req, res)) return;
+    const { userId, repository, automation, execution } = context(req);
+    const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
+    ]);
+    if (req.body?.market === 'crypto_futures' && req.member && !hasCapability(req.member, 'canAccessFutures')) {
+      return res.status(403).json({ ok: false, error: 'FUTURES_ACCESS_REQUIRED', orderSubmitted: false });
+    }
+    const fxCache = new Map<string, number>();
+    const krwPerQuote = async (market: string) => {
+      if (!fxCache.has(market)) {
+        const quote = await resolveMemberAutoTradingKrwRate(market as Parameters<typeof resolveMemberAutoTradingKrwRate>[0]);
+        fxCache.set(market, quote.krwPerQuoteCurrency);
+      }
+      return fxCache.get(market)!;
+    };
+    let input: TradingPlanInput;
+    try {
+      input = await buildManualLivePlanInput({
+        userId,
+        request: req.body as ManualLiveOrderRequest,
+        policy,
+        repository,
+        krwPerQuote,
+        previewSnapshot: async (seed, fx) => (await execution.previewLiveRiskSnapshot(userId, seed, { fxKrwPerQuoteCurrency: fx })).snapshot,
+      });
+    } catch (error) {
+      if (error instanceof ManualOrderInputError) {
+        return res.status(400).json({ ok: false, error: error.message, orderSubmitted: false });
+      }
+      throw error;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    input.marketSnapshot = {
+      ...input.marketSnapshot,
+      dailyOrderCount: existingOrders.filter((order) => order.createdAt.slice(0, 10) === today).length,
+    };
+    assertPublicLivePlanOrigin(input);
+    const requestPolicy = publicPlanPolicy(input, policy);
+    const result = await automation.createPlan(userId, input, requestPolicy,
+      policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
+    if (!result.plan) {
+      return res.status(409).json({ ok: false, error: 'RISK_CHECK_BLOCKED', decision: result.decision, orderSubmitted: false });
+    }
+    return res.json({
+      ok: true,
+      plan: result.plan,
+      duplicate: result.duplicate,
+      approvalRequired: true,
+      orderSubmitted: false,
     });
   } catch (error) { return errorResponse(res, error); }
 });

@@ -9,6 +9,7 @@
  * Alerts are best-effort: a Telegram or storage failure never changes trading.
  */
 import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service';
+import type { TelegramPolicyMarket } from './telegram-alert-policy.service';
 import type { TradingAssetClass, TradingPlanInput } from './trade-automation.types';
 
 type Deliver = typeof deliverPersonalTelegramAlert;
@@ -19,12 +20,12 @@ const MARKET_LABEL: Record<TradingAssetClass, string> = {
   crypto_spot: '코인현물',
   crypto_futures: '코인선물',
 };
-const POLICY_MARKET = {
+const POLICY_MARKET: Record<TradingAssetClass, TelegramPolicyMarket> = {
   domestic_stock: 'KR',
   us_stock: 'US',
   crypto_spot: 'CRYPTO_SPOT',
   crypto_futures: 'CRYPTO_FUTURES',
-} as const;
+};
 
 export const LIVE_SAFETY_ALERT_CODES = Object.freeze({
   DAILY_LOSS_LIMIT: '일일 손실 한도에 도달해 오늘 새 실거래 주문을 막았습니다.',
