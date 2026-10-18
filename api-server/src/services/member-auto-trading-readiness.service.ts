@@ -77,9 +77,10 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  const usBroker = policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom';
   const routableMarkets = [
     policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker],
-    policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom,
+    policy.marketEnabled.us_stock && policy.exchangeEnabled[usBroker],
     policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit,
     policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget,
   ];

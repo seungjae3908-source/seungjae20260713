@@ -153,7 +153,7 @@ export interface FourMarketAutoReadinessResult {
 
 const PROVIDER_AUTHORITY: Readonly<Record<FourMarketAutoMarket, readonly FourMarketAutoProvider[]>> = Object.freeze({
   KR_STOCK: ['TOSS', 'KIWOOM'],
-  US_STOCK: ['KIWOOM'],
+  US_STOCK: ['KIWOOM', 'TOSS'],
   CRYPTO_SPOT: ['UPBIT'],
   CRYPTO_FUTURES: ['BITGET'],
 });

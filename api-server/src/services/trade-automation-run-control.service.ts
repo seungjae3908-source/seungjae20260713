@@ -56,7 +56,7 @@ export function registerAutoRunLiveResolver(resolver: AutoRunLiveResolver | null
 export function autoRunMarketProvider(policy: TradingPolicy, assetClass: TradingAssetClass): TradingExchange {
   if (assetClass === 'crypto_spot') return 'upbit';
   if (assetClass === 'crypto_futures') return 'bitget';
-  if (assetClass === 'us_stock') return 'kiwoom';
+  if (assetClass === 'us_stock') return policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom';
   return policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
 }
 

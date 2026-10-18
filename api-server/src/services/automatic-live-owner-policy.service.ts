@@ -38,7 +38,7 @@ export function approvedAdministratorAutomaticLivePolicy(current: TradingPolicy)
     marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
     exchangeEnabled: { toss: true, kiwoom: true, upbit: true, bitget: true },
     stockBrokerByMarket: { domestic_stock: current.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom',
-      us_stock: 'kiwoom' },
+      us_stock: current.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom' },
     totalCapitalKrw: PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
     maxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
     maxInstrumentKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
