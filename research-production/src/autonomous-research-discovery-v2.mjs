@@ -180,6 +180,18 @@ export const DEFAULT_VERIFIED_SOURCE_CATALOG_V2 = Object.freeze([
   'user_data/strategies/futures/FSupertrendStrategy.py',
   'user_data/strategies/futures/TrendFollowingStrategy.py',
   'user_data/strategies/futures/VolatilitySystem.py',
+  // Added 2026-10-18 after reading each file at f3340ce: every one sets
+  // exit_long from explicit indicator conditions in populate_exit_trend, has no
+  // negative shift and is not a sample, validation or hyperopt-generated DNA file.
+  'user_data/strategies/futures/FOttStrategy.py',
+  'user_data/strategies/berlinguyinca/BinHV27.py',
+  'user_data/strategies/berlinguyinca/ReinforcedAverageStrategy.py',
+  'user_data/strategies/berlinguyinca/ReinforcedQuickie.py',
+  'user_data/strategies/berlinguyinca/SmoothScalp.py',
+  'user_data/strategies/berlinguyinca/TechnicalExampleStrategy.py',
+  'user_data/strategies/multi_tf.py',
+  'user_data/strategies/mabStra.py',
+  'user_data/strategies/Strategy001_custom_exit.py',
 ].map((sourcePath) => Object.freeze({ repository: FREQTRADE_STRATEGIES, branch: 'main', licensePath: 'LICENSE', sourcePath })));
 
 const SAFETY = Object.freeze({
