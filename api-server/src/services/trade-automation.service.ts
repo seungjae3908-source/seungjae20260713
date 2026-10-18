@@ -4,6 +4,7 @@ import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
+import { notifyLiveSafetyBlock } from './live-trading-safety-telegram.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import {
@@ -206,6 +207,8 @@ export class TradeAutomationService {
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      // Best-effort personal Telegram alert for real-money safety blocks; never awaited.
+      void notifyLiveSafetyBlock({ userId, plan: input, blockCodes: decision.blockCodes }).catch(() => undefined);
       return { plan: null, duplicate: false, decision };
     }
 
@@ -255,6 +258,7 @@ export class TradeAutomationService {
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      void notifyLiveSafetyBlock({ userId, plan, blockCodes: decision.blockCodes }).catch(() => undefined);
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);
@@ -305,6 +309,7 @@ export class TradeAutomationService {
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
+      void notifyLiveSafetyBlock({ userId, plan, blockCodes: decision.blockCodes }).catch(() => undefined);
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
       await this.repository.compareAndSetPlan(expired, 'APPROVAL_PENDING', expectedVersion);
       throw new Error(`TRADE_PLAN_RISK_RECHECK_FAILED:${decision.blockCodes.join(',')}`);

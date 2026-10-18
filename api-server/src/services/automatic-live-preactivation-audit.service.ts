@@ -141,7 +141,7 @@ export async function auditAutomaticLivePreactivation(input: {
     const p = policy();
     const markets = ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures'] as const;
     return p.mode === 'automatic' && p.automaticEnabled && markets.every((m) => p.marketEnabled[m])
-      && providers.every((provider) => p.exchangeEnabled[provider]) && p.stockBrokerByMarket?.us_stock === 'kiwoom'
+      && providers.every((provider) => p.exchangeEnabled[provider]) && (p.stockBrokerByMarket?.us_stock === 'kiwoom' || p.stockBrokerByMarket?.us_stock === 'toss')
       ? [] : ['PREACTIVATION_FOUR_MARKET_POLICY_INCOMPLETE'];
   });
   await check('OWNER_APPROVED_POLICY_ALIGNMENT', () => {

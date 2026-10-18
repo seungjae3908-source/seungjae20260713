@@ -34,6 +34,16 @@ import { ProductPaperSourceRegistry } from '../services/product-paper-source-reg
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
 import { getScannerStrategyProfile } from '../services/scanner-strategy-profile.service';
 
+// Tests below exercise LIVE paths that predate the owner's per-market real-order
+// switch: every market switch ON, turned on long before the first-week cap window.
+const LIVE_SWITCHES_ON = {
+  liveMarketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+  liveMarketEnabledAt: {
+    domestic_stock: '2026-01-01T00:00:00.000Z', us_stock: '2026-01-01T00:00:00.000Z',
+    crypto_spot: '2026-01-01T00:00:00.000Z', crypto_futures: '2026-01-01T00:00:00.000Z',
+  },
+};
+
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
@@ -2089,7 +2099,7 @@ test('member order baseline stays 500k while an administrator may save the 1M ba
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);
   const requestBody = {
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'approval',
     automaticEnabled: false,
     totalCapitalKrw: 1_000_000,
@@ -2138,7 +2148,7 @@ test('member Bitget leverage stops at 3x while an administrator can save exact 7
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);
   const policyBody = {
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'approval',
     automaticEnabled: false,
   };
@@ -2191,7 +2201,7 @@ test('member Bitget leverage stops at 3x while an administrator can save exact 7
 test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
   const isolated = new InMemoryTradingRepository();
   await isolated.savePolicy(USER, normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'approval',
     automaticEnabled: false,
     emergencyStopped: true,
@@ -2259,7 +2269,7 @@ test('member emergency stop is sticky and only exact confirmed resume clears it 
 test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', async () => {
   const isolated = new InMemoryTradingRepository();
   await isolated.savePolicy(USER, normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'automatic',
     automaticEnabled: false,
     pilotStage: 'approval-20',
@@ -2345,7 +2355,7 @@ test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off wi
 test('admin may align the Production single-entry ceiling to 1M only while every live gate is off', async () => {
   const isolated = new InMemoryTradingRepository();
   const original = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     mode: 'approval',
     automaticEnabled: false,
     totalCapitalKrw: 500_000,
@@ -3285,7 +3295,7 @@ test('administrator Paper readiness verifies database wallet guard against authe
 test('작동/정지 route runs automatic trading without per-order approval and audits every toggle', async () => {
   const runRepository = new InMemoryTradingRepository();
   await runRepository.savePolicy(USER, normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
     enabledStrategies: ['breakout-v1'],
@@ -3346,7 +3356,7 @@ test('작동/정지 route runs automatic trading without per-order approval and 
 test('작동 is refused while the global emergency stop is active', async () => {
   const runRepository = new InMemoryTradingRepository();
   await runRepository.savePolicy(USER, normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY,
+    ...DEFAULT_TRADING_POLICY, ...LIVE_SWITCHES_ON,
     marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
   }));

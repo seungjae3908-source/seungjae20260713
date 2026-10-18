@@ -49,8 +49,9 @@ export function resolveAutoRun(status: TradeAutomationStatus | null): AutoRun | 
   const state: AutoRunState = policy.emergencyStopped || policy.newEntriesStopped ? 'KILL_SWITCH'
     : !switchOn ? 'STOPPED' : status.emergencyStopped ? 'GLOBAL_STOP' : 'RUNNING';
   const domestic = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  const us = policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom';
   const exchanges: Record<Market, AutoRun['markets'][Market]['exchange']> = {
-    domestic_stock: domestic, us_stock: 'kiwoom', crypto_spot: 'upbit', crypto_futures: 'bitget',
+    domestic_stock: domestic, us_stock: us, crypto_spot: 'upbit', crypto_futures: 'bitget',
   };
   return {
     state,

@@ -114,3 +114,15 @@ test('universe state machine probes within budget, then freezes; lane universe f
     listingFetchers: { UPBIT_1H: async () => [{ symbol: 'KRW-NEW' }] }, now: () => new Date(Date.UTC(2026, 11, 1)).toISOString() });
   assert.deepEqual((await readResearchUniverseSnapshotV2(root)).sources.UPBIT_1H.research, snapshot.sources.UPBIT_1H.research);
 });
+
+test('frozen sets drop symbols the backtest contract rejects instead of failing the whole search', () => {
+  const research = ['KRW-W', ...Array.from({ length: 12 }, (_, i) => `KRW-C${String(i).padStart(2, '0')}`)];
+  const snapshot = { sources: { UPBIT_1H: { research, watch: ['KRW-T', 'KRW-BTC'] } } };
+  const universe = combinationUniverseFromSnapshotV2(snapshot);
+  assert.equal(universe.UPBIT_1H.universeVersion, 'V2');
+  assert.deepEqual(universe.UPBIT_1H.symbols, research.slice(1));
+  const watch = watchUniverseFromSnapshotV2(snapshot);
+  assert.equal(watch.UPBIT_1H.includes('KRW-T'), false);
+  assert.equal(watch.UPBIT_1H.includes('KRW-W'), false);
+  assert.equal(watch.UPBIT_1H.includes('KRW-BTC'), true);
+});

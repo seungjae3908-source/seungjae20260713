@@ -12,6 +12,20 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import {
+  buildManualLivePlanInput,
+  MANUAL_ORDER_STRATEGY_ID,
+  resolveManualOrderRoute,
+  validateManualProtection,
+} from './manual-live-order.service';
+import { assertPublicLivePlanOrigin } from './public-live-plan-origin.service';
+import { isManualOwnerOrder } from './manual-owner-order';
+import {
+  assetClassOfPlan,
+  liveSafetyAlertCodes,
+  notifyLiveMarketSwitch,
+  notifyLiveSafetyBlock,
+} from './live-trading-safety-telegram.service';
+import {
   BENCHMARK_DRAWDOWN_LONG_BLOCK_PERCENT,
   benchmarkDrawdownBlocksLong,
   createBtcBenchmarkDrawdownReader,
@@ -277,12 +291,12 @@ test('spot live permanently rejects futures, margin, short, leverage, and denied
   assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
 });
 
-test('spot live supports KR Toss/Kiwoom, US Kiwoom, and Upbit spot only', () => {
+test('spot live supports KR and US through Toss or Kiwoom, and Upbit spot only', () => {
   const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
     [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
-    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, false],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
   ];
@@ -332,7 +346,12 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     ...DEFAULT_TRADING_POLICY,
     stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
   });
-  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'kiwoom' });
+  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'toss' });
+  const invalidUsBroker = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'unknown' as 'kiwoom' },
+  });
+  assert.equal(invalidUsBroker.stockBrokerByMarket?.us_stock, 'kiwoom');
 
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -391,6 +410,42 @@ test('stock broker selection is per market, backward compatible, and enforced fo
     { emergencyStopped: false, serverLiveEnabled: true },
   );
   assert.equal(usKiwoom.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+
+  const usTossPolicy = normalizeTradingPolicy({
+    ...policy,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+  });
+  const usToss = evaluateTradingPlan(
+    plan({
+      exchange: 'toss',
+      stockBroker: 'toss',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    usTossPolicy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.equal(usToss.blockCodes.includes('STOCK_BROKER_MISMATCH'), false);
+  const usKiwoomWhileTossSelected = evaluateTradingPlan(
+    plan({
+      exchange: 'kiwoom',
+      stockBroker: 'kiwoom',
+      stockExchange: 'NASDAQ',
+      accountMode: 'paper',
+      market: 'US',
+      symbol: 'AAPL',
+      side: 'buy',
+      quantity: 1,
+      quoteAmount: null,
+    }),
+    usTossPolicy,
+    { emergencyStopped: false, serverLiveEnabled: true },
+  );
+  assert.ok(usKiwoomWhileTossSelected.blockCodes.includes('STOCK_BROKER_MISMATCH'));
 });
 
 test('automatic policy fields restrict eligibility and standing activation removes per-order approval', async () => {
@@ -1423,4 +1478,211 @@ test('reader computes drawdown from closed Bitget candles, caches for a minute a
   assert.equal(await failing(nowMs), null);
   const malformed = createBtcBenchmarkDrawdownReader(async () => ({ code: '40001', data: null }));
   assert.equal(await malformed(nowMs), null);
+});
+
+test('per-market live switch defaults OFF and blocks only new LIVE entries in that market', () => {
+  const defaults = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  assert.deepEqual(defaults.liveMarketEnabled, {
+    domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false,
+  });
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const live = plan({ accountMode: 'live' });
+  const paper = plan({ accountMode: 'paper' });
+  const blocked = (input: TradingPlanInput, policy = defaults) => evaluateTradingPlan(input, policy, options)
+    .blockCodes.includes('LIVE_MARKET_SWITCH_OFF');
+
+  assert.equal(blocked(live), true);
+  assert.equal(blocked(paper), false);
+  const upbitOn = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+  });
+  assert.equal(blocked(live, upbitOn), false);
+  // Another market stays off.
+  assert.equal(blocked(plan({ accountMode: 'live', exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR',
+    symbol: '005930', quantity: 1, quoteAmount: null }), upbitOn), true);
+  // Non-boolean values never switch a market on.
+  const garbage = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: 'yes', us_stock: 1, crypto_spot: null, crypto_futures: undefined } as never,
+  });
+  assert.deepEqual(Object.values(garbage.liveMarketEnabled ?? {}), [false, false, false, false]);
+});
+
+test('first week after a market switch goes ON caps each new LIVE order at 100,000 KRW', () => {
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const at = (daysAgo: number) => new Date(Date.now() - (daysAgo * 86_400_000)).toISOString();
+  const policyAt = (iso: string | null) => normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    liveMarketEnabledAt: { domestic_stock: null, us_stock: null, crypto_spot: iso, crypto_futures: null },
+  });
+  const capped = (krw: number, iso: string | null) => evaluateTradingPlan(
+    plan({ accountMode: 'live', quoteAmount: krw, estimatedKrw: krw }), policyAt(iso), options,
+  ).blockCodes.includes('LIVE_FIRST_WEEK_ORDER_CAP');
+  assert.equal(capped(100_000, at(1)), false);
+  assert.equal(capped(100_001, at(1)), true);
+  assert.equal(capped(300_000, at(8)), false);
+  // Missing or malformed timestamp is treated as the first week.
+  assert.equal(capped(300_000, null), true);
+  assert.equal(capped(300_000, 'not-a-date'), true);
+  // Paper orders are never capped by this rule.
+  assert.equal(evaluateTradingPlan(plan({ accountMode: 'paper', quoteAmount: 300_000, estimatedKrw: 300_000 }), policyAt(at(1)), options)
+    .blockCodes.includes('LIVE_FIRST_WEEK_ORDER_CAP'), false);
+  // Timestamps of switched-off markets are dropped.
+  assert.equal(policyAt(at(1)).liveMarketEnabledAt?.domestic_stock, null);
+});
+
+
+test('safety alerts fire only for LIVE plans and only for loss limits or the first-week cap', () => {
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'paper' }, ['DAILY_LOSS_LIMIT']), []);
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'live' }, ['SPREAD_TOO_WIDE']), []);
+  assert.deepEqual(liveSafetyAlertCodes({ accountMode: 'live' }, ['DAILY_LOSS_LIMIT', 'LIVE_FIRST_WEEK_ORDER_CAP']),
+    ['DAILY_LOSS_LIMIT', 'LIVE_FIRST_WEEK_ORDER_CAP']);
+  assert.equal(assetClassOfPlan({ exchange: 'bitget', market: 'USDT-FUTURES' }), 'crypto_futures');
+  assert.equal(assetClassOfPlan({ exchange: 'toss', market: 'US' }), 'us_stock');
+});
+
+test('loss-limit alerts are de-duplicated per user, rule and KST day; failures are swallowed', async () => {
+  const seen: string[] = [];
+  const deliver = (async (input: { event: { eventId: string; priority: string }; alert: { details?: string } }) => {
+    seen.push(input.event.eventId);
+    assert.equal(input.event.priority, 'CRITICAL');
+    return { status: 'SKIPPED', reason: 'TELEGRAM_DISCONNECTED', policy: null };
+  }) as never;
+  const plan = { accountMode: 'live' as const, exchange: 'upbit' as const, market: 'KRW', symbol: 'BTC' };
+  const morning = new Date('2026-10-18T00:30:00.000Z');
+  const evening = new Date('2026-10-18T13:00:00.000Z');
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: morning }, deliver);
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: evening }, deliver);
+  assert.equal(seen[0], seen[1], 'same KST day → same event id (deduplicated downstream)');
+  await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'], now: new Date('2026-10-18T16:00:00.000Z') }, deliver);
+  assert.notEqual(seen[2], seen[0], 'next KST day → new alert');
+
+  const throwing = (async () => { throw new Error('telegram down'); }) as never;
+  assert.deepEqual(await notifyLiveSafetyBlock({ userId: USER_A, plan, blockCodes: ['DAILY_LOSS_LIMIT'] }, throwing), [null]);
+  assert.equal(await notifyLiveMarketSwitch({ userId: USER_A, market: 'crypto_spot', enabled: true }, throwing), null);
+});
+
+test('manual order ticket routes each market to its broker and enforces stops for entries only', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'kiwoom' },
+    bitgetLeverage: 3,
+  });
+  const kr = resolveManualOrderRoute({ market: 'domestic_stock', symbol: '005930', action: 'buy', orderType: 'market',
+    quantity: 2, stopPrice: 60_000 }, policy);
+  assert.equal(kr.exchange, 'toss');
+  assert.equal(kr.planMarket, 'KR');
+  assert.equal(kr.exit, false);
+
+  assert.throws(() => resolveManualOrderRoute({ market: 'us_stock', symbol: 'AAPL', action: 'buy', orderType: 'market',
+    quantity: 1, stopPrice: 150 }, policy), /MANUAL_ORDER_US_EXCHANGE_REQUIRED/u);
+  const us = resolveManualOrderRoute({ market: 'us_stock', symbol: 'AAPL', action: 'sell', orderType: 'limit',
+    quantity: 1, limitPrice: 200, stockExchange: 'NASDAQ' }, policy);
+  assert.equal(us.exchange, 'kiwoom');
+  assert.equal(us.exit, true);
+
+  const spot = resolveManualOrderRoute({ market: 'crypto_spot', symbol: 'KRW-BTC', action: 'buy', orderType: 'market',
+    quoteAmountKrw: 50_000, stopPrice: 90_000_000 }, policy);
+  assert.equal(spot.symbol, 'BTC');
+  assert.equal(spot.quoteAmountKrw, 50_000);
+  assert.equal(spot.quantity, null);
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_spot', symbol: 'BTC', action: 'buy', orderType: 'market',
+    quantity: 0.01, stopPrice: 1 }, policy), /MANUAL_ORDER_AMOUNT_REQUIRED/u);
+
+  const closeLong = resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'close_long',
+    orderType: 'market', quantity: 0.01 }, policy);
+  assert.equal(closeLong.side, 'short');
+  assert.equal(closeLong.exit, true);
+  assert.equal(closeLong.leverage, 3);
+  assert.equal(closeLong.marginMode, 'isolated');
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'long',
+    orderType: 'market', quantity: 0.01 }, policy), /MANUAL_ORDER_STOP_REQUIRED/u);
+  assert.throws(() => resolveManualOrderRoute({ market: 'crypto_futures', symbol: 'BTCUSDT', action: 'buy',
+    orderType: 'market', quantity: 0.01, stopPrice: 1 }, policy), /MANUAL_ORDER_ACTION_INVALID/u);
+  assert.throws(() => resolveManualOrderRoute({ market: 'domestic_stock', symbol: '005930', action: 'buy',
+    orderType: 'market', quantity: 1.5, stopPrice: 1 }, normalizeTradingPolicy(DEFAULT_TRADING_POLICY)), /MUST_BE_INTEGER/u);
+
+  validateManualProtection('long', false, 100, 95, 110);
+  assert.throws(() => validateManualProtection('long', false, 100, 105, null), /STOP_SIDE_INVALID/u);
+  assert.throws(() => validateManualProtection('short', false, 100, 95, null), /STOP_SIDE_INVALID/u);
+  assert.throws(() => validateManualProtection('buy', false, 100, 95, 90), /TARGET_SIDE_INVALID/u);
+  validateManualProtection('sell', true, 100, null, null);
+});
+
+test('manual order ticket builds a LIVE approval plan from server-read data, never from the browser price', async () => {
+  const repository = new InMemoryTradingRepository();
+  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 2 });
+  const seen: TradingPlanInput[] = [];
+  const built = await buildManualLivePlanInput({
+    userId: USER_A,
+    request: { market: 'crypto_futures', symbol: 'btcusdt', action: 'long', orderType: 'market', quantity: 0.01,
+      stopPrice: 95_000, targetPrice: 110_000 },
+    policy,
+    repository,
+    krwPerQuote: async () => 1_400,
+    previewSnapshot: async (seed) => {
+      seen.push(seed);
+      return { ...plan().marketSnapshot, currentPrice: 100_000, plannedPrice: 100_000, spreadPercent: 0.01,
+        source: 'bitget-live-preview' };
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].accountMode, 'live');
+  assert.equal(built.exchange, 'bitget');
+  assert.equal(built.symbol, 'BTCUSDT');
+  assert.equal(built.side, 'long');
+  assert.equal(built.reduceOnly, false);
+  assert.equal(built.stopPrice, 95_000);
+  assert.deepEqual(built.targetPrices, [110_000]);
+  assert.equal(built.estimatedKrw, 0.01 * 100_000 * 1_400);
+  assert.equal(built.strategyId, MANUAL_ORDER_STRATEGY_ID);
+  assert.ok(built.signalReasons.includes('MANUAL_ORDER_TICKET'));
+  assert.equal(built.marketSnapshot.dailyPnlPercent, 0);
+  assert.match(String(built.marketSnapshot.source), /manual-order-ticket/u);
+  // The plan must pass the public live-origin guard (no forged server reasons).
+  assertPublicLivePlanOrigin(built);
+
+  await assert.rejects(buildManualLivePlanInput({
+    userId: USER_A,
+    request: { market: 'crypto_futures', symbol: 'BTCUSDT', action: 'long', orderType: 'market', quantity: 0.01, stopPrice: 120_000 },
+    policy, repository, krwPerQuote: async () => 1_400,
+    previewSnapshot: async () => ({ ...plan().marketSnapshot, currentPrice: 100_000 }),
+  }), /MANUAL_ORDER_STOP_SIDE_INVALID/u);
+});
+
+test('owner manual ticket orders skip amount caps and strategy-evidence gates but keep account protection', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    liveMarketEnabledAt: { domestic_stock: null, us_stock: null, crypto_spot: new Date().toISOString(), crypto_futures: null },
+  });
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const big = 30_000_000;
+  const manual = plan({
+    accountMode: 'live', strategyId: MANUAL_ORDER_STRATEGY_ID, signalReasons: ['MANUAL_ORDER_TICKET', 'MANUAL_ENTRY'],
+    quoteAmount: big, estimatedKrw: big, targetPrices: [], stopPrice: 90_000,
+    marketSnapshot: { ...plan().marketSnapshot, availableBalance: 50_000_000, accountValueKrw: 60_000_000 },
+  });
+  const decision = evaluateTradingPlan(manual, policy, options);
+  for (const code of ['MAX_ORDER_AMOUNT', 'LIVE_FIRST_WEEK_ORDER_CAP', 'ACCOUNT_EXPOSURE_LIMIT', 'PROJECTED_ASSET_EXPOSURE_LIMIT',
+    'INSTRUMENT_AMOUNT_LIMIT', 'ASSET_CLASS_AMOUNT_LIMIT', 'EXIT_PLAN_REQUIRED', 'ECONOMICS_REQUIRED', 'PILOT_LIVE_DISABLED',
+    'RISK_BUDGET_EXCEEDED', 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED']) {
+    assert.equal(decision.blockCodes.includes(code), false, code);
+  }
+  // Account protection still applies to manual orders.
+  assert.ok(evaluateTradingPlan(manual, policy, { ...options, emergencyStopped: true }).blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+  assert.ok(evaluateTradingPlan({ ...manual, marketSnapshot: { ...manual.marketSnapshot, dailyPnlPercent: -5 } }, policy, options)
+    .blockCodes.includes('DAILY_LOSS_LIMIT'));
+  assert.ok(evaluateTradingPlan({ ...manual, stopPrice: 0 }, policy, options).blockCodes.includes('EXIT_PLAN_REQUIRED'));
+  assert.ok(evaluateTradingPlan(manual, normalizeTradingPolicy(DEFAULT_TRADING_POLICY), options)
+    .blockCodes.includes('LIVE_MARKET_SWITCH_OFF'));
+  assert.ok(evaluateTradingPlan({ ...manual, estimatedKrw: 0 }, policy, options).blockCodes.includes('ORDER_AMOUNT_INVALID'));
+
+  // The same label on an automatic plan or without the ticket reason gets no exemption.
+  const automatic = { ...manual, executionMode: 'automatic' } as TradingPlanInput;
+  assert.ok(evaluateTradingPlan(automatic, policy, options).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  assert.ok(evaluateTradingPlan({ ...manual, signalReasons: ['MANUAL_ENTRY'] }, policy, options).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  assert.equal(isManualOwnerOrder({ ...manual, accountMode: 'paper' }), false);
 });
