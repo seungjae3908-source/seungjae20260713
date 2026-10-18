@@ -11,6 +11,7 @@
 import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service';
 import type { TelegramPolicyMarket } from './telegram-alert-policy.service';
 import type { TradingAssetClass, TradingPlanInput } from './trade-automation.types';
+import type { TrendPilotLaneEvent } from './trend-pilot-v1-lane.service';
 
 type Deliver = typeof deliverPersonalTelegramAlert;
 
@@ -111,6 +112,70 @@ export async function notifyLiveSafetyBlock(
           dedupeKey: eventId,
           duplicateWindowMs: 24 * 3_600_000,
           cooldownMs: 0,
+        },
+        now,
+      }));
+    } catch {
+      results.push(null);
+    }
+  }
+  return results;
+}
+
+export type TrendPilotAlert = { dedupe: string; title: string; details: string; symbol?: string };
+
+/**
+ * Pure: which lane events deserve an owner alert. Only conditions where a held
+ * position may be unprotected or the lane stopped itself: a kill, an exit that
+ * did not go out, and lane-level (symbol-less) errors such as a ledger read/save
+ * failure. Per-symbol data hiccups (stale quote, fast move) stay silent.
+ */
+export function trendPilotAlerts(venue: 'bitget' | 'upbit', events: readonly TrendPilotLaneEvent[]): TrendPilotAlert[] {
+  const venueLabel = venue === 'bitget' ? '코인선물' : '코인현물';
+  const out = new Map<string, TrendPilotAlert>();
+  for (const event of events) {
+    if (event.kind === 'KILL') {
+      out.set(`kill:${venue}`, {
+        dedupe: `kill:${venue}`, title: `${venueLabel} 추세 파일럿 정지`,
+        details: `손실 보호 조건으로 새 진입을 멈췄습니다 (${event.reason}). 보유 포지션은 손절/청산 규칙으로 계속 관리됩니다. 재가동은 직접 승인해야 합니다.`,
+      });
+    } else if (event.kind === 'EXIT' && event.status !== 'SUBMITTED' && event.status !== 'DUPLICATE' && event.status !== 'STALE_POSITION') {
+      out.set(`exit:${venue}:${event.symbol}`, {
+        dedupe: `exit:${venue}:${event.symbol}`, title: `${venueLabel} 청산 주문 실패`, symbol: event.symbol,
+        details: `${event.symbol} ${event.reason} 청산 주문이 나가지 않았습니다 (${event.status}). 포지션을 직접 확인하세요.`,
+      });
+    } else if (event.kind === 'ERROR' && event.symbol === null) {
+      out.set(`state:${venue}:${event.code}`, {
+        dedupe: `state:${venue}:${event.code}`, title: `${venueLabel} 파일럿 상태 오류`,
+        details: `상태 파일 처리 오류(${event.code})로 이번 주기의 새 진입을 건너뛰었습니다. 보유 포지션은 직접 확인하세요.`,
+      });
+    }
+  }
+  return [...out.values()];
+}
+
+export async function notifyTrendPilotEvents(
+  input: { userId: string; venue: 'bitget' | 'upbit'; events: readonly TrendPilotLaneEvent[]; now?: Date },
+  deliver: Deliver = deliverPersonalTelegramAlert,
+) {
+  const alerts = trendPilotAlerts(input.venue, input.events);
+  if (!alerts.length) return [];
+  const now = input.now ?? new Date();
+  const market: TradingAssetClass = input.venue === 'bitget' ? 'crypto_futures' : 'crypto_spot';
+  const results = [];
+  for (const alert of alerts) {
+    // One alert per condition per KST hour: loud enough to notice, quiet enough to not flood.
+    const eventId = `trend-pilot:${input.userId}:${alert.dedupe}:${new Date(now.getTime() + 9 * 3_600_000).toISOString().slice(0, 13)}`;
+    try {
+      results.push(await deliver({
+        userId: input.userId,
+        event: {
+          userId: input.userId, eventId, market: POLICY_MARKET[market],
+          signalType: 'STRATEGY_HEALTH', priority: 'CRITICAL', symbol: alert.symbol, occurredAt: now.toISOString(),
+        },
+        alert: {
+          type: 'system_critical', title: alert.title, symbol: alert.symbol, market: MARKET_LABEL[market],
+          details: alert.details, timestamp: now.toISOString(), dedupeKey: eventId, duplicateWindowMs: 3_600_000, cooldownMs: 0,
         },
         now,
       }));
