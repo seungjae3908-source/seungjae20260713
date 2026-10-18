@@ -356,3 +356,26 @@ test('write-ahead: the signal bar is saved BEFORE the order; a failing save send
   await runTrendPilotLaneTick(d4);
   assert.equal(d4.entries.length, 0);
 });
+
+test('owner alerts: kill, failed exit and lane-level state errors alert; per-symbol data hiccups stay silent; delivery failure never throws', async () => {
+  const { trendPilotAlerts, notifyTrendPilotEvents } = await import('./live-trading-safety-telegram.service');
+  const events = [
+    { kind: 'KILL' as const, drawdownFraction: 0.2, reason: 'DRAWDOWN' },
+    { kind: 'EXIT' as const, symbol: 'BTCUSDT', reason: 'STOP_LOSS', status: 'BLOCKED', stopPrice: 60_000 },
+    { kind: 'EXIT' as const, symbol: 'ETHUSDT', reason: 'STOP_LOSS', status: 'SUBMITTED', stopPrice: 3_000 },
+    { kind: 'ERROR' as const, symbol: null, code: 'LEDGER_READ_FAILED' },
+    { kind: 'ERROR' as const, symbol: 'BTCUSDT', code: 'TREND_PILOT_QUOTE_NOT_FRESH' },
+    { kind: 'ENTRY_SKIPPED' as const, symbol: 'BTCUSDT', blockers: ['X'] },
+  ];
+  const alerts = trendPilotAlerts('bitget', events);
+  assert.deepEqual(alerts.map((a) => a.dedupe).sort(), ['exit:bitget:BTCUSDT', 'kill:bitget', 'state:bitget:LEDGER_READ_FAILED']);
+  assert.deepEqual(trendPilotAlerts('upbit', []), []);
+  const sent: string[] = [];
+  const ok = await notifyTrendPilotEvents({ userId: 'u1', venue: 'upbit', events, now: new Date('2026-10-18T00:00:00Z') },
+    (async (payload: { alert: { title: string } }) => { sent.push(payload.alert.title); return { delivered: true }; }) as never);
+  assert.equal(ok.length, 3);
+  assert.equal(sent.length, 3);
+  const failed = await notifyTrendPilotEvents({ userId: 'u1', venue: 'bitget', events, now: new Date() },
+    (async () => { throw new Error('TELEGRAM_DOWN'); }) as never);
+  assert.deepEqual(failed, [null, null, null]);
+});
