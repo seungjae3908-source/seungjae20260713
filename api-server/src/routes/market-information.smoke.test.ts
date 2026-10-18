@@ -380,3 +380,68 @@ test('the router makes no background provider calls unless startup warm is enabl
     await server.close();
   }
 });
+
+test('a stock room with a confirmed snapshot serves it after the short snapshot budget instead of the full first-paint wait', async () => {
+  let calls = 0;
+  const server = await start({
+    async getRoom(room, signal): Promise<MarketInformationResponse> {
+      calls += 1;
+      if (calls === 1) return fixture(room);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 150);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      return fixture(room);
+    },
+  }, { stockFirstPaintTimeoutMs: 250, stockSnapshotFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 400 });
+
+  try {
+    const first = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    assert.equal(((await first.json()) as MarketInformationResponse).sections.rankings.status, 'ready');
+
+    const started = Date.now();
+    const second = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    const elapsed = Date.now() - started;
+    assert.equal(second.status, 200);
+    const body = await second.json() as MarketInformationResponse;
+    assert.equal(body.sections.rankings.status, 'stale');
+    assert.equal(body.sections.rankings.meta.errorCode, 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT');
+    // The snapshot answered on the 30ms budget, not the 250ms full budget or the 150ms provider.
+    assert.ok(elapsed < 120, `snapshot first paint took ${elapsed}ms`);
+    assert.equal(calls, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test('a stock room without a snapshot keeps the full first-paint budget so a cold provider can still answer', async () => {
+  const server = await start({
+    async getRoom(room, signal): Promise<MarketInformationResponse> {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 80);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
+      return fixture(room);
+    },
+  }, { stockFirstPaintTimeoutMs: 250, stockSnapshotFirstPaintTimeoutMs: 30, stockWarmupDeadlineMs: 400 });
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/market-information/stocks-kr`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as MarketInformationResponse;
+    assert.equal(body.partial, false);
+    assert.equal(body.sections.rankings.status, 'ready');
+  } finally {
+    await server.close();
+  }
+});
+
+test('the snapshot first-paint budget can never exceed the full first-paint budget', () => {
+  assert.throws(
+    () => createMarketInformationRouter({ async getRoom(room) { return fixture(room); } }, {
+      stockFirstPaintTimeoutMs: 100,
+      stockSnapshotFirstPaintTimeoutMs: 101,
+    }),
+    /stockSnapshotFirstPaintTimeoutMs/,
+  );
+});
