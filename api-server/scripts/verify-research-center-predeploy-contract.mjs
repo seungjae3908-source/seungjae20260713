@@ -104,6 +104,12 @@ requireText(overviewContract, 'input.producerBound !== false || input.paperConsu
 requireText(dashboardSource, 'def summarize_formula_queue_readback(summary, registry):', 'dashboard readback');
 requireText(dashboardSource, "if counts['PASS'] or registered:", 'no TRAIN-only PASS or Paper registry promotion');
 requireText(dashboardSource, "'producerBound': False, 'paperConsumerBound': False", 'unattested inputs fail-closed');
+const resultsReadback = await read('research-dashboard/research_results_readback.py');
+requireText(dashboardSource, 'read_research_results(root, read_json_optional)', 'dashboard research results readback');
+requireText(resultsReadback, "'executionAuthority': 'NONE'", 'research results carry no execution authority');
+requireText(resultsReadback, "value.get('executionAuthority') != 'NONE'", 'research results reject producer authority');
+requireText(overviewContract, 'export function sanitizeResearchResults', 'research results DTO sanitizer');
+requireText(overviewContract, 'sanitizeResearchResults(research?.results)', 'overview passes results through sanitizer');
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
