@@ -443,6 +443,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveCycleScopedPolicyReady: boolean;
   liveMarketScope: readonly AutomaticLiveMarket[];
   liveEntriesOutsideMarketScope: number;
+  liveEntriesSwitchedOff: number;
   globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
@@ -768,6 +769,17 @@ export function automaticLiveMarketScope(env: NodeJS.ProcessEnv = process.env): 
   if (tokens.length === 0 || new Set(tokens).size !== tokens.length
     || tokens.some((token) => !(AUTOMATIC_LIVE_MARKETS as readonly string[]).includes(token))) return Object.freeze([]);
   return Object.freeze(AUTOMATIC_LIVE_MARKETS.filter((market) => tokens.includes(market)));
+}
+
+/** Owner's per-market real-order switch from the settings screen (default OFF). */
+export function memberLiveMarketSwitchOn(
+  policy: TradingPolicy,
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+): boolean {
+  const assetClass: TradingAssetClass = market === 'KR_STOCK' ? 'domestic_stock'
+    : market === 'US_STOCK' ? 'us_stock'
+      : market === 'CRYPTO_SPOT' ? 'crypto_spot' : 'crypto_futures';
+  return policy.liveMarketEnabled?.[assetClass] === true;
 }
 
 export function automaticLiveScopeIsAllFour(scope: readonly AutomaticLiveMarket[]) {
@@ -2131,6 +2143,7 @@ export class MemberAutoTradingBackgroundWorker {
       liveCycleScopedPolicyReady: false,
       liveMarketScope,
       liveEntriesOutsideMarketScope: 0,
+      liveEntriesSwitchedOff: 0,
       globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
@@ -2514,6 +2527,12 @@ export class MemberAutoTradingBackgroundWorker {
           if (liveModeRequested && !liveMarketScope.includes(entry.identity.market)) {
             result.skipped += 1;
             result.liveEntriesOutsideMarketScope += 1;
+            continue;
+          }
+          // Owner's per-market real-order switch (settings screen). OFF = no new LIVE entry.
+          if (liveModeRequested && !memberLiveMarketSwitchOn(member.policy, entry.identity.market)) {
+            result.skipped += 1;
+            result.liveEntriesSwitchedOff += 1;
             continue;
           }
           result.evaluated += 1;

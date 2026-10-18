@@ -27,6 +27,7 @@ const APPROVAL_MESSAGES: Record<string, string> = {
   EXCHANGE_TIMEOUT: '거래소 응답 시간이 초과되어 주문 상태를 다시 확인해야 합니다.',
   EXCHANGE_NETWORK_ERROR: '거래소 통신 상태를 확인하지 못했습니다.',
   LIVE_EXECUTION_DISABLED: '실전 주문은 현재 비활성화되어 있습니다.',
+  LIVE_MARKET_SWITCH_OFF: '이 시장의 실거래 스위치가 꺼져 있습니다. 설정에서 켜 주세요.',
   EMERGENCY_STOP_ACTIVE: '긴급정지가 활성화되어 신규 주문이 차단됐습니다.',
   EXPLICIT_CANCEL_CONFIRMATION_REQUIRED: '주문 취소는 사용자 확인 후에만 처리할 수 있습니다.',
   EXPLICIT_AMEND_CONFIRMATION_REQUIRED: '주문 정정은 사용자 확인 후에만 처리할 수 있습니다.',
