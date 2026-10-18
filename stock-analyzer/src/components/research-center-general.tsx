@@ -5,6 +5,7 @@ import { ResearchDetailDialog } from './research-detail-dialog';
 import { useAuth } from '@/lib/auth';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
+import { ResearchResultsPanel } from '@/components/research-results-panel';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
 
 function formatDate(value: number | null | undefined) {
@@ -314,6 +315,8 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                   <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...paperSummary} />
                   <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
+
+                <ResearchResultsPanel results={overview.research.results} />
 
                 {selected && (() => {
                   const info = {

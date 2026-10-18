@@ -5,6 +5,7 @@ import {
   sanitizeResearchCenterOverview,
   sanitizeMarketWatchReadback,
   sanitizeMarketWatchCadenceReadback,
+  sanitizeResearchResults,
 } from './research-center-readonly-contract.service.ts';
 
 const SHA = '1111111111111111111111111111111111111111';
@@ -672,4 +673,45 @@ test('formula queue proof injection and forged stored PASS remain INVALID', () =
     assert.equal(formula.scanned, null);
     assert.equal(formula.executionAuthority, 'NONE');
   }
+});
+
+test('research results default to MISSING and drop unknown or unsafe fields', () => {
+  const empty = sanitizeResearchResults(undefined);
+  assert.equal(empty.combination.present, false);
+  assert.equal(empty.combination.status, 'MISSING');
+  assert.deepEqual(empty.combination.lanes, []);
+  assert.equal(empty.executionAuthority, 'NONE');
+
+  const result = sanitizeResearchResults({
+    combination: {
+      present: true, status: 'PRESENT', observedAt: '2026-10-18T11:00:00.000Z', researchSha: SHA,
+      lanes: [
+        { laneId: 'KR_STOCK_LONG', status: 'SEARCHING', cumulativeTrials: 1240, survivors: 1, watch: 101, rejected: 1114,
+          holdoutUsed: 2, holdoutBudget: 10, orderAllowed: true,
+          paperCandidates: [{ trialId: 't1', labels: ['돌파'], exitId: 'X1', holdoutTrades: 31, holdoutMeanReturn: 0.004 }],
+          top: [{ trialId: 't1', finalStatus: 'SURVIVOR', labels: ['A', 'B'], exitId: 'X1', qValue: 0.03,
+            validationTrades: 60, validationMeanReturn: 0.00686, validationWinRate: 0.67, beatsBaseline: true,
+            holdoutChecked: true, holdoutPass: true, token: 'secret' }] },
+        { laneId: 'bad lane id', status: 'SEARCHING' },
+        { laneId: 'US_STOCK_LONG', status: 'SEARCHING', survivors: -1 },
+      ],
+    },
+    exploratory: { present: true, status: 'PRESENT', totals: { trades: 3, closed: 2, open: 1 },
+      rules: [{ ruleId: 'r1', laneId: 'KR_STOCK_LONG', labels: ['돌파'], lifecycle: 'ACTIVE', strictTrades: 3, promotionEligible: 'yes' }] },
+  });
+  assert.equal(result.combination.present, true);
+  assert.deepEqual(result.combination.lanes.map((lane) => lane.laneId), ['KR_STOCK_LONG', 'US_STOCK_LONG']);
+  assert.equal(result.combination.lanes[1].survivors, null);
+  assert.equal('orderAllowed' in result.combination.lanes[0], false);
+  assert.equal('token' in result.combination.lanes[0].top[0], false);
+  assert.equal(result.exploratory.rules[0].promotionEligible, false);
+  assert.equal(result.exploratory.totals.open, 1);
+  assert.equal(result.exitComparison.status, 'MISSING');
+});
+
+test('overview carries research results without requiring them', () => {
+  const sanitized = sanitizeResearchCenterOverview(validOverview());
+  assert.ok(sanitized);
+  const research = sanitized.research as { results: { combination: { status: string } } };
+  assert.equal(research.results.combination.status, 'MISSING');
 });
