@@ -120,6 +120,12 @@ export function normalizeTradingPolicy(
     // Owner-approved: US stock orders may route through Kiwoom or Toss.
     us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
   };
+  const liveMarketEnabled: Record<TradingAssetClass, boolean> = {
+    domestic_stock: input.liveMarketEnabled?.domestic_stock === true,
+    us_stock: input.liveMarketEnabled?.us_stock === true,
+    crypto_spot: input.liveMarketEnabled?.crypto_spot === true,
+    crypto_futures: input.liveMarketEnabled?.crypto_futures === true,
+  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
@@ -127,6 +133,7 @@ export function normalizeTradingPolicy(
     newEntriesStopped: input.newEntriesStopped === true,
     marketEnabled,
     stockBrokerByMarket,
+    liveMarketEnabled,
     exchangeEnabled: {
       bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
       upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
@@ -304,6 +311,10 @@ export function evaluateTradingPlan(
     if (plan.accountMode !== 'paper' && plan.accountMode !== 'live' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
+  // Owner's per-market real-order switch from the settings screen. Exits stay allowed.
+  if (plan.accountMode === 'live' && !riskReducing && policy.liveMarketEnabled?.[assetClassForPlan(plan)] !== true) {
+    add(blockCodes, 'LIVE_MARKET_SWITCH_OFF');
+  }
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');

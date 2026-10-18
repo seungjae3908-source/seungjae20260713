@@ -64,7 +64,9 @@ export function autoRunMarketLanes(policy: TradingPolicy, isLive: AutoRunLiveRes
   return Object.fromEntries(AUTO_RUN_ASSET_CLASSES.map((assetClass) => {
     const exchange = autoRunMarketProvider(policy, assetClass);
     const enabled = policy.marketEnabled[assetClass] === true && policy.exchangeEnabled[exchange] === true;
-    return [assetClass, { enabled, exchange, lane: isLive(assetClass, exchange) ? 'live' : 'paper' }];
+    // Live only when the server gate is open AND the owner's market switch is ON.
+    const live = isLive(assetClass, exchange) && policy.liveMarketEnabled?.[assetClass] === true;
+    return [assetClass, { enabled, exchange, lane: live ? 'live' : 'paper' }];
   })) as AutoRunMarketLanes;
 }
 

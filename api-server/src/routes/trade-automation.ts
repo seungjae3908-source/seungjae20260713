@@ -1607,10 +1607,57 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
       candidate.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
       candidate.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
     }
+    // The general settings save can only turn a market's real-order switch OFF;
+    // turning it ON goes through the dedicated confirmed /policy/live-market call.
+    candidate.liveMarketEnabled = Object.fromEntries(LIVE_SWITCH_MARKETS.map((market) => [
+      market,
+      current.liveMarketEnabled?.[market] === true && candidate.liveMarketEnabled?.[market] === true,
+    ])) as Record<TradingAssetClass, boolean>;
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     await recordAutoRunPolicyToggle(repository, userId, { before: current, after: policy, isLive: autoRunLiveResolver });
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+const LIVE_SWITCH_MARKETS: readonly TradingAssetClass[] = Object.freeze(['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']);
+
+/**
+ * Owner per-market real-order switch (settings screen button).
+ * OFF always succeeds immediately. ON needs an explicit acknowledgement, the
+ * real-order capability, futures access for crypto futures, and no active stop.
+ * This switch never opens the server live gate by itself; both must be on.
+ */
+router.post('/policy/live-market', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const market = String(req.body?.market ?? '') as TradingAssetClass;
+    const enabled = req.body?.enabled;
+    if (!LIVE_SWITCH_MARKETS.includes(market) || typeof enabled !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'LIVE_MARKET_SWITCH_INPUT_INVALID', orderSubmitted: false });
+    }
+    const current = await repository.getPolicy(userId);
+    if (enabled) {
+      if (req.body?.confirmation?.acknowledged !== true) {
+        return res.status(409).json({ ok: false, error: 'LIVE_MARKET_SWITCH_CONFIRMATION_REQUIRED', orderSubmitted: false });
+      }
+      if (req.member && !hasCapability(req.member, 'canPlaceOrders')) {
+        return res.status(403).json({ ok: false, error: 'LIVE_ORDER_CAPABILITY_REQUIRED', orderSubmitted: false });
+      }
+      if (market === 'crypto_futures' && req.member && !hasCapability(req.member, 'canAccessFutures')) {
+        return res.status(403).json({ ok: false, error: 'FUTURES_ACCESS_REQUIRED', orderSubmitted: false });
+      }
+      if (current.emergencyStopped || current.newEntriesStopped) {
+        return res.status(409).json({ ok: false, error: 'MEMBER_TRADING_RESUME_REQUIRED', orderSubmitted: false });
+      }
+    }
+    const before = normalizeTradingPolicy(current);
+    const policy: TradingPolicy = {
+      ...current,
+      liveMarketEnabled: { ...before.liveMarketEnabled!, [market]: enabled },
+    };
+    await repository.savePolicy(userId, policy);
+    return res.json({ ok: true, market, enabled, liveMarketEnabled: policy.liveMarketEnabled, orderSubmitted: false });
   } catch (error) { return errorResponse(res, error); }
 });
 

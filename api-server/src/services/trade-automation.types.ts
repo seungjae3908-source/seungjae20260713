@@ -105,6 +105,9 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   newEntriesStopped: false,
   marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: false } as Record<TradingAssetClass, boolean>,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' } as Record<StockTradingAssetClass, StockBroker>,
+  // Owner per-market real-order switch (settings screen). Every market starts OFF.
+  // Live entries need this switch AND the server live gate; exits are never blocked.
+  liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false } as Record<TradingAssetClass, boolean>,
   exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[], toss: [] as string[] },
   enabledStrategies: [] as string[],
@@ -148,6 +151,7 @@ export type TradingPolicy = {
   newEntriesStopped: boolean;
   marketEnabled: Record<TradingAssetClass, boolean>;
   stockBrokerByMarket?: Record<StockTradingAssetClass, StockBroker>;
+  liveMarketEnabled?: Record<TradingAssetClass, boolean>;
   exchangeEnabled: Record<TradingExchange, boolean>;
   enabledAssets: Record<TradingExchange, string[]>;
   enabledStrategies: string[];

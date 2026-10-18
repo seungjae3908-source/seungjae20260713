@@ -17,6 +17,7 @@ type Policy = {
   newEntriesStopped: boolean;
   marketEnabled?: MarketSwitches;
   stockBrokerByMarket?: StockBrokerByMarket;
+  liveMarketEnabled?: MarketSwitches;
   exchangeEnabled: Record<Exchange, boolean>;
   enabledAssets: Record<Exchange, string[]>;
   enabledStrategies: string[];
@@ -271,6 +272,8 @@ export function TradeAutomationSettings({
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [liveConfirmMarket, setLiveConfirmMarket] = useState<Market | null>(null);
+  const [liveSwitchBusy, setLiveSwitchBusy] = useState<Market | null>(null);
   const refreshInFlight = useRef(false);
   const statusReadController = useRef<AbortController | null>(null);
   const maximumBitgetLeverage = status?.maximumBitgetLeverage
@@ -356,6 +359,44 @@ export function TradeAutomationSettings({
         exchangeEnabled: exchangesForMarkets(current.marketEnabled, stockBrokerByMarket),
       };
     });
+  }
+
+  const liveSwitches: MarketSwitches = {
+    domestic_stock: status?.policy.liveMarketEnabled?.domestic_stock === true,
+    us_stock: status?.policy.liveMarketEnabled?.us_stock === true,
+    crypto_spot: status?.policy.liveMarketEnabled?.crypto_spot === true,
+    crypto_futures: status?.policy.liveMarketEnabled?.crypto_futures === true,
+  };
+
+  async function setLiveMarket(market: Market, enabled: boolean) {
+    setLiveSwitchBusy(market);
+    try {
+      if (fixture) {
+        setStatus((current) => current ? {
+          ...current,
+          policy: { ...current.policy, liveMarketEnabled: { ...liveSwitches, [market]: enabled } },
+        } : current);
+        setMessage(`${MARKET_LABELS[market]} 실거래 ${enabled ? '켜짐' : '꺼짐'} (테스트)`);
+        return;
+      }
+      const response = await authorizedFetch('/api/trade-automation/policy/live-market', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ market, enabled, ...(enabled ? { confirmation: { acknowledged: true } } : {}) }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; liveMarketEnabled?: MarketSwitches };
+      if (!response.ok || payload.ok !== true || !payload.liveMarketEnabled) {
+        setMessage(LIVE_SWITCH_ERRORS[payload.error ?? ''] ?? `실거래 스위치를 바꾸지 못했어요. (${payload.error ?? response.status})`);
+        return;
+      }
+      setStatus((current) => current ? { ...current, policy: { ...current.policy, liveMarketEnabled: payload.liveMarketEnabled } } : current);
+      setMessage(`${MARKET_LABELS[market]} 실거래 ${enabled ? '켜짐' : '꺼짐'}`);
+    } catch {
+      setMessage('실거래 스위치를 바꾸지 못했어요. 네트워크를 확인해 주세요.');
+    } finally {
+      setLiveSwitchBusy(null);
+      setLiveConfirmMarket(null);
+    }
   }
 
   async function save(confirmed: boolean) {
@@ -594,6 +635,54 @@ export function TradeAutomationSettings({
         </button>
       ))}
     </div>
+
+    <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="live-market-switches">
+      <p className="text-xs font-extrabold">실거래 스위치 (시장별)</p>
+      <p className="mt-1 break-keep text-[11px] leading-4 text-muted-foreground">
+        켜진 시장만 실제 주문이 나갑니다. 끄면 그 시장의 새 실주문이 즉시 멈추고, 보유 포지션 청산은 계속 가능합니다.
+      </p>
+      <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {visibleMarkets.map((market) => {
+          const on = liveSwitches[market];
+          const serverOpen = serverLiveScope ? serverLiveScope.includes(SERVER_SCOPE_KEY[market]) : null;
+          return <li key={market} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-card-border bg-card p-3">
+            <span className="min-w-0">
+              <span className="block text-xs font-extrabold">{MARKET_LABELS[market]}</span>
+              <span className={cn('mt-1 block text-[10px] font-bold', on ? 'text-red-600' : 'text-muted-foreground')} data-testid={`live-market-state-${market}`}>
+                {on ? (serverOpen === false ? '켜짐 · 서버 실거래 범위가 닫혀 있어 아직 모의' : '실거래 켜짐') : '실거래 꺼짐 (모의)'}
+              </span>
+            </span>
+            <button
+              type="button"
+              data-testid={`live-market-toggle-${market}`}
+              aria-pressed={on}
+              disabled={liveSwitchBusy !== null}
+              onClick={() => (on ? void setLiveMarket(market, false) : setLiveConfirmMarket(market))}
+              className={cn('h-9 shrink-0 rounded-xl px-3 text-xs font-extrabold disabled:opacity-50',
+                on ? 'bg-secondary text-foreground' : 'bg-red-600 text-white')}
+            >
+              {liveSwitchBusy === market ? '처리 중' : on ? '실거래 끄기' : '실거래 켜기'}
+            </button>
+          </li>;
+        })}
+      </ul>
+    </div>
+
+    {liveConfirmMarket ? <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-3 sm:items-center sm:justify-center" role="dialog" aria-modal="true" aria-label="실거래 켜기 확인" data-testid="live-market-confirm">
+      <div className="w-full max-w-sm rounded-3xl bg-card p-4 shadow-xl">
+        <h3 className="text-base font-bold">{MARKET_LABELS[liveConfirmMarket]} 실거래를 켤까요?</h3>
+        <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+          켜면 이 시장에서 승인한 주문과 자동매매 주문이 <strong className="text-foreground">실제 돈으로</strong> 나갑니다.
+          위험검사, 일일 손실 한도, 비상정지는 그대로 적용됩니다. 언제든 같은 버튼으로 끌 수 있습니다.
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button type="button" className="h-10 rounded-xl bg-secondary text-xs font-extrabold" onClick={() => setLiveConfirmMarket(null)}>취소</button>
+          <button type="button" data-testid="live-market-confirm-on" className="h-10 rounded-xl bg-red-600 text-xs font-extrabold text-white"
+            disabled={liveSwitchBusy !== null}
+            onClick={() => void setLiveMarket(liveConfirmMarket, true)}>실거래 켜기</button>
+        </div>
+      </div>
+    </div> : null}
 
     {!selectedMarket || selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock' ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
       <p className="text-xs font-extrabold">주식 증권사 선택</p>
@@ -845,6 +934,13 @@ export function TradeAutomationSettings({
     </div>}
   </section>;
 }
+
+const LIVE_SWITCH_ERRORS: Record<string, string> = {
+  LIVE_ORDER_CAPABILITY_REQUIRED: '실주문 권한이 없는 계정입니다. 관리자에게 권한을 요청하세요.',
+  FUTURES_ACCESS_REQUIRED: '코인선물 이용 권한이 없는 계정입니다.',
+  MEMBER_TRADING_RESUME_REQUIRED: '비상정지 상태입니다. 먼저 매매를 재개하세요.',
+  LIVE_MARKET_SWITCH_CONFIRMATION_REQUIRED: '확인 후 다시 시도해 주세요.',
+};
 
 function Switch({ active }: { active: boolean }) {
   return <span className={cn('h-6 w-11 shrink-0 rounded-full p-1 transition-colors', active ? 'bg-primary' : 'bg-muted')}>
