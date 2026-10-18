@@ -7,9 +7,6 @@ const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 const NOW = '2026-08-26T07:30:00.000Z';
 
 const ROUTES = [
-  { path: '/market-overview', title: '지수·시황' },
-  { path: '/market-rankings', title: '시장 순위' },
-  { path: '/market-rankings?asset=coin&coinMarket=spot', title: '시장 순위', label: '시장 순위 · 코인' },
   { path: '/watchlist', title: '관심종목' },
   { path: '/alerts', title: '가격 알림' },
   { path: '/stock-info?asset=stock&market=KR', title: '종목 정보', label: '종목 정보 · 주식' },
@@ -166,6 +163,9 @@ test('remaining scroll-shell CSS is route-title bounded and does not target AI C
     expect(css).toContain(`data-route-title=\"${title}\"`);
   }
   expect(css).not.toContain('data-route-title=\"AI 차트\"');
+  for (const removedTitle of ['지수·시황', '시장 순위']) {
+    expect(css).not.toContain(`data-route-title=\"${removedTitle}\"`);
+  }
   expect(css).toContain('overflow: hidden !important');
   expect(css).toContain('overscroll-behavior: contain');
 });
