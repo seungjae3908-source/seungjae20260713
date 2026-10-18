@@ -198,3 +198,54 @@ export async function runBacktest(values: BacktestFormValues): Promise<BacktestR
   }
   return body.result;
 }
+
+export type BacktestPortfolioSleeve = {
+  symbol: string;
+  allocatedCapital: number;
+  result: Pick<BacktestResult, 'totalReturnPercent' | 'totalTrades' | 'winRate' | 'maximumDrawdownPercent'>;
+};
+
+export type BacktestPortfolioResult = {
+  ok: true;
+  mode: 'backtest-only';
+  orderSubmitted: false;
+  market: BacktestMarket;
+  symbols: string[];
+  skipped: Array<{ symbol: string; reason: string }>;
+  initialCapital: number;
+  finalCapital: number;
+  totalReturnPercent: number;
+  annualizedReturnPercent: number | null;
+  totalTrades: number;
+  winRate: number;
+  profitFactor: number | null;
+  maximumDrawdown: number;
+  maximumDrawdownPercent: number;
+  markedMaximumDrawdownUpperBound: number;
+  markedMaximumDrawdownUpperBoundPercent: number;
+  sharpeRatio: number | null;
+  sortinoRatio: number | null;
+  sleeves: BacktestPortfolioSleeve[];
+  warnings: string[];
+  calculatedAt: string;
+};
+
+export function parsePortfolioSymbols(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/u).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+}
+
+export async function runPortfolioBacktest(values: BacktestFormValues, symbols: readonly string[]): Promise<BacktestPortfolioResult> {
+  const response = await authorizedFetch('/api/backtests/portfolio', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...toBacktestRequest(values), symbols }),
+  });
+  const body = await response.json().catch(() => null) as { ok?: boolean; result?: BacktestPortfolioResult; message?: string } | null;
+  if (!response.ok || !body?.ok || !body.result) {
+    throw new Error(body?.message || '포트폴리오 백테스트를 실행하지 못했습니다.');
+  }
+  if (body.result.mode !== 'backtest-only' || body.result.orderSubmitted !== false) {
+    throw new Error('백테스트 안전 계약을 확인하지 못했습니다.');
+  }
+  return body.result;
+}
