@@ -2120,8 +2120,8 @@ router.post('/manual-orders/plan', async (req: AuthenticatedRequest, res) => {
       ...input.marketSnapshot,
       dailyOrderCount: existingOrders.filter((order) => order.createdAt.slice(0, 10) === today).length,
     };
-    assertPublicLivePlanOrigin(input);
-    const requestPolicy = publicPlanPolicy(input, policy);
+    assertPublicLivePlanOrigin(input, { allowManualTicket: true });
+    const requestPolicy = publicPlanPolicy(input, policy, { allowManualTicket: true });
     const result = await automation.createPlan(userId, input, requestPolicy,
       policy.emergencyStopped || persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true');
     if (!result.plan) {

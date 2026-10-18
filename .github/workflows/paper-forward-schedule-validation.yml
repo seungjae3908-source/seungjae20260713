@@ -74,6 +74,8 @@ on:
       - api-server/src/services/trend-pilot-v1-authorization.service.ts
       - api-server/src/services/trend-pilot-v1-lane.service.test.ts
       - api-server/src/services/trend-pilot-v1-lane.service.ts
+      - api-server/src/services/trend-pilot-v1-promotion.service.test.ts
+      - api-server/src/services/trend-pilot-v1-promotion.service.ts
       - api-server/src/services/trend-pilot-v1-runtime.service.ts
       - api-server/src/services/trend-pilot-v1.core.test.ts
       - api-server/src/services/trend-pilot-v1.core.ts
