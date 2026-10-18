@@ -810,6 +810,53 @@ requireText(tradeAutomationPolicyGuard, 'current.maxEstimatedSlippagePercent', '
 requireText(tradeAutomationPolicyGuardTest, 'member policy save never relaxes stricter hidden safety limits', 'AUTO_POLICY_HIDDEN_SAFETY_REGRESSION_TEST_MISSING');
 requireText(tradeAutomationPolicyGuardTest, 'member policy save may tighten hidden safety limits further', 'AUTO_POLICY_HIDDEN_SAFETY_TIGHTENING_TEST_MISSING');
 requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', 'AUTO_ROUTE_MEMBER_RESUME_SMOKE_MISSING');
+// Owner-approved 2026-10-18 (범위 좁히기): member-scoped kill switch, protective
+// exits keep running while stopped, emergency stop cancels open ENTRY orders
+// only, and the confirmed resume is audited.
+{
+  const killSwitch = read('api-server/src/services/trade-kill-switch.service.ts');
+  const killSwitchTest = read('api-server/src/services/trade-kill-switch.test.ts');
+  const runControl = read('api-server/src/services/trade-automation-run-control.service.ts');
+  const runControlTest = read('api-server/src/services/trade-automation-run-control.service.test.ts');
+  const preSubmissionRisk = read('api-server/src/services/trade-pre-submission-risk.service.ts');
+  for (const code of ['EXCHANGE_API_FAILURE', 'EXCHANGE_NETWORK_ERROR', 'EXCHANGE_TIMEOUT', 'MARKET_HALTED',
+    'PROVIDER_CLOCK_OFFSET_TOO_LARGE', 'ORDER_STATE_UNKNOWN', 'EXECUTION_RECONCILIATION_FAILED',
+    'RECOVERY_RECONCILIATION_FAILED']) {
+    requireText(killSwitch.split('const SYSTEM_KILL_SWITCH_CODES = new Set([')[1] ?? '', `'${code}'`,
+      'AUTO_GATE_SYSTEM_KILL_SWITCH_CODE_MISSING');
+  }
+  forbid(killSwitch.split('const SYSTEM_KILL_SWITCH_CODES = new Set([')[1]?.split(']);')[0] ?? 'MISSING',
+    /'(?:DAILY_LOSS_LIMIT|MARKET_DATA_STALE|FAST_MOVE_DETECTED|ONE_MINUTE_VOLATILITY|APPROVAL_PRICE_DRIFT_EXCEEDED|ACCOUNT_STATE_MISMATCH|ACCOUNT_MODE_MISMATCH)'/u,
+    'AUTO_GATE_MEMBER_KILL_CODE_GLOBALIZED_FORBIDDEN');
+  requireText(killSwitch, "const simulated = plan != null && plan.accountMode !== 'live';", 'AUTO_GATE_PAPER_GLOBAL_KILL_EXEMPTION_MISSING');
+  requireText(killSwitch, 'if (input.plan && isRiskReducingExitPlan(input.plan)) {', 'AUTO_GATE_EXIT_KILL_EXEMPTION_MISSING');
+  requireText(killSwitch, 'await killSwitchStopMemberEntries(input.repository, input.userId, reasons[0]);', 'AUTO_GATE_MEMBER_KILL_SWITCH_MISSING');
+  requireText(killSwitch, 'await input.repository.setGlobalEmergencyStop(true, input.userId);', 'AUTO_GATE_GLOBAL_KILL_SWITCH_MISSING');
+  requireText(runControl, "userId, action: 'KILL_SWITCH', reason, actor: 'system',", 'AUTO_GATE_MEMBER_KILL_SWITCH_AUDIT_MISSING');
+  requireText(runControl, "reason: 'MEMBER_RESUME',", 'AUTO_GATE_MEMBER_RESUME_AUDIT_MISSING');
+  requireText(preSubmissionRisk, 'plan: refreshedPlan,', 'AUTO_GATE_PRESUBMISSION_KILL_SCOPE_PLAN_MISSING');
+  requireText(tradeService, 'private async protectiveExitOfAutomaticEntry(', 'AUTO_GATE_PROTECTIVE_EXIT_AUTHORITY_MISSING');
+  requireText(tradeService, "entry.executionMode === 'automatic'", 'AUTO_GATE_PROTECTIVE_EXIT_OWNED_ENTRY_MISSING');
+  requireText(paperWorker, 'const memberProtectiveExitsEnabled = memberCanRunAutomation;', 'AUTO_GATE_STOPPED_PROTECTIVE_EXITS_MISSING');
+  requireText(paperWorker, 'if (!memberAutoExecutionEnabled && livePositions.length) result.newEntriesFailClosed = true;', 'AUTO_GATE_STOPPED_ENTRY_FAIL_CLOSED_MISSING');
+  requireText(paperWorker, 'protectiveExit: true,', 'AUTO_GATE_WORKER_PROTECTIVE_EXIT_REQUEST_MISSING');
+  requireText(tradeAutomationRoute, 'const audit = await recordAutoRunResume(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });', 'AUTO_ROUTE_MEMBER_RESUME_AUDIT_MISSING');
+  requireText(tradeAutomationRoute, 'const cancellation = await cancelOpenEntryOrders(repository, userId, emptyEntryOrderCancellation());', 'AUTO_ROUTE_MEMBER_STOP_ENTRY_CANCEL_MISSING');
+  requireText(tradeAutomationRoute, 'await cancelOpenEntryOrders(memberRepository, memberId, cancellation);', 'AUTO_ROUTE_GLOBAL_STOP_ENTRY_CANCEL_MISSING');
+  requireText(tradeAutomationRoute, "if (!isEntryOrderPlan(plan)) { summary.protectiveExitOrdersKept += 1; continue; }", 'AUTO_ROUTE_STOP_PROTECTIVE_EXIT_KEEP_MISSING');
+  forbid(tradeAutomationRoute, /existingOrdersCanceled:\s*false,/u, 'AUTO_ROUTE_STOP_CANCEL_HARDCODED_FALSE_FORBIDDEN');
+  for (const [source, title] of [
+    [killSwitchTest, 'member-scoped risk failure stops only that member and never the global switch'],
+    [killSwitchTest, 'Paper plans never trip the global stop, even for exchange-outage codes'],
+    [killSwitchTest, 'risk-reducing exit plans trip no kill switch at all'],
+    [killSwitchTest, 'exchange outage on a LIVE plan persists the global new-order halt'],
+    [runControlTest, 'member-scoped kill switch stops only that member; 작동 needs the confirmed resume first'],
+    [runControlTest, 'stop / 작동 OFF keeps automatic authority for a protective exit of an owned automatic entry only'],
+    [paperWorkerTest, 'emergency stop and 작동 OFF keep armed protective Live exits running while new entries stay blocked'],
+    [tradeAutomationSmoke, 'member emergency stop cancels its own open entry orders and never protective exits'],
+    [tradeAutomationSmoke, 'admin global stop cancels every member’s open entry orders and keeps protective exits'],
+  ]) requireText(source, title, 'AUTO_GATE_KILL_SCOPE_REGRESSION_TEST_MISSING');
+}
 requireText(tradeTypes, "'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_STAGE_TYPE_MISSING');
 requireText(tradeRisk, "input.pilotStage === 'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_NORMALIZATION_MISSING');
 requireText(tradeOptimization, "'PILOT_FORMULA_AI_EXCEPTION_REQUIRED'", 'AUTO_FORMULA_AI_PILOT_RISK_BINDING_MISSING');
