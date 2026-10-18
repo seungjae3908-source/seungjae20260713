@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 
 import { TREND_PILOT_SPOT_V1, TREND_PILOT_V1, createTrendPilotLedger, type TrendPilotCandle, type TrendPilotLedger } from './trend-pilot-v1.core';
 import { evaluateTrendPilotLiveException, signTrendPilotOccurrence, verifyTrendPilotOccurrence } from './trend-pilot-v1-authorization.service';
-import { farTargetPrice, initialTrail, laneExposureKrw, laneOpenRiskKrw, runTrendPilotLaneTick, type TrendPilotLaneDependencies, type TrendPilotLanePosition } from './trend-pilot-v1-lane.service';
+import {
+  farTargetPrice, initialTrail, laneExposureKrw, laneNotionalCeilingKrw, laneOpenRiskKrw, runTrendPilotLaneTick,
+  type TrendPilotAccountCounters, type TrendPilotLaneDependencies, type TrendPilotLanePosition,
+} from './trend-pilot-v1-lane.service';
+import { assertPublicLivePlanOrigin, publicPlanPolicy } from './public-live-plan-origin.service';
 import { normalizeTradingPolicy, evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingPlanInput } from './trade-automation.types';
 
@@ -31,57 +35,71 @@ function policy(overrides: Record<string, unknown> = {}) {
     exchangeEnabled: { bitget: true, upbit: true, kiwoom: false, toss: false },
     enabledStrategies: [TREND_PILOT_V1.strategyId, TREND_PILOT_SPOT_V1.strategyId],
     totalCapitalKrw: 10_000_000, maxOrderKrw: 1_000_000, maxInstrumentKrw: 1_000_000,
-    totalDailyLossLimitPercent: 2, dailyLossLimitPercent: 2,
+    totalDailyLossLimitPercent: 2, dailyLossLimitPercent: 2, maxConsecutiveLosses: 20, maxOpenPositions: 8,
     ...overrides,
   }, 1_000_000);
 }
 
-function deps(over: Partial<TrendPilotLaneDependencies> & { nowMs: number }): TrendPilotLaneDependencies & { saved: TrendPilotLedger[]; entries: TradingPlanInput[]; exits: Array<{ planId: string; reason: string; price: number }> } {
+const COUNTERS: TrendPilotAccountCounters = {
+  accountNotionalKrw: 0, classNotionalKrw: 0, strategyNotionalKrw: 0, accountExposureKrw: 0, assetClassExposureKrw: 0,
+  strategyExposureKrw: 0, openRiskKrw: 0, openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
+  weeklyPnlPercent: 0, dailyPnlPercent: 0,
+};
+
+type Harness = TrendPilotLaneDependencies & { saved: TrendPilotLedger[]; entries: TradingPlanInput[]; exits: Array<{ planId: string; reason: string; price: number }>; contextReads: number };
+
+function deps(over: Partial<TrendPilotLaneDependencies> & { nowMs: number; equityKrw?: number; counters?: Partial<TrendPilotAccountCounters> }): Harness {
   const saved: TrendPilotLedger[] = [];
   const entries: TradingPlanInput[] = [];
   const exits: Array<{ planId: string; reason: string; price: number }> = [];
   const lastOpen = over.nowMs - H4 - (5 * 60_000); // a bar that closed 5 minutes ago
+  const harness = { saved, entries, exits, contextReads: 0 } as unknown as Harness;
   const base: TrendPilotLaneDependencies = {
     venue: 'bitget', userId: 'u1', policy: policy(), nowMs: over.nowMs, signingKey: KEY,
-    fx: { krwPerQuoteCurrency: 1_400, source: 'UPBIT:KRW-USDT' },
+    fx: { krwPerQuoteCurrency: 1_400, source: 'UPBIT:KRW-USDT' }, entriesArmed: true, rearmToken: null,
     readClosedBars: async () => breakoutBars(lastOpen),
     readQuote: async () => ({ bid: 62_990, ask: 63_000, last: 63_000, observedAtMs: over.nowMs - 1_000, oneMinuteMovePercent: 0.05, orderbookGapPercent: 0.01, source: 'test' }),
-    readAccount: async () => ({ equityKrw: 100_000, availableKrw: 100_000, observedAtMs: over.nowMs - 1_000 }),
     readContractRules: async () => ({ minTradeNum: 0.0001, sizeStep: 0.0001, minTradeUsdt: 5, priceStep: 0.1 }),
-    positions: [], foreignSymbols: new Set(), entriesArmed: true,
-    accountCounters: { dailyOrderCount: 0, openPositionCount: 0, consecutiveLosses: 0, weeklyPnlPercent: 0 },
+    readEntryContext: async () => {
+      harness.contextReads += 1;
+      return { account: { equityKrw: over.equityKrw ?? 100_000, availableKrw: over.equityKrw ?? 100_000, observedAtMs: over.nowMs - 1_000 }, counters: { ...COUNTERS, ...over.counters }, heldSymbols: new Set() };
+    },
+    positions: [], foreignSymbols: new Set(),
     submitEntry: async (plan) => { entries.push(plan); return { status: 'SUBMITTED' }; },
     submitExit: async (position, reason, price) => { exits.push({ planId: position.planId, reason, price }); return { status: 'SUBMITTED' }; },
     loadLedger: async () => null,
     saveLedger: async (ledger) => { saved.push(ledger); },
   };
-  return Object.assign({ ...base, ...over }, { saved, entries, exits });
+  const { equityKrw: _e, counters: _c, ...rest } = over;
+  return Object.assign(harness, base, rest);
 }
 
-test('signature binds strategy, symbol, side, bar and stop; exception fails closed', () => {
-  const occ = { strategyId: TREND_PILOT_V1.strategyId, exchange: 'bitget' as const, symbol: 'BTCUSDT', side: 'long', signalBarOpenMs: 1_760_000_000_000 - (1_760_000_000_000 % H4), stopPrice: 61_500 };
+test('signature binds strategy, symbol, side, signal id, bar, stop, size and amount', () => {
+  const bar = 1_760_000_000_000 - (1_760_000_000_000 % H4);
+  const occ = { strategyId: TREND_PILOT_V1.strategyId, exchange: 'bitget' as const, symbol: 'BTCUSDT', side: 'long', signalId: 'sig-1', signalBarOpenMs: bar, stopPrice: 61_500, quantity: 0.0011, estimatedKrw: 92_400 };
   const id = signTrendPilotOccurrence(occ, KEY);
-  const plan = { strategyId: occ.strategyId, exchange: 'bitget' as const, symbol: 'BTCUSDT', side: 'long' as const, stopPrice: 61_500, signalOccurrenceId: id };
-  assert.equal(verifyTrendPilotOccurrence(plan, KEY), occ.signalBarOpenMs);
-  assert.equal(verifyTrendPilotOccurrence({ ...plan, stopPrice: 61_000 }, KEY), null, 'stop tampering');
-  assert.equal(verifyTrendPilotOccurrence({ ...plan, side: 'short' }, KEY), null, 'side tampering');
-  assert.equal(verifyTrendPilotOccurrence({ ...plan, symbol: 'ETHUSDT' }, KEY), null, 'symbol tampering');
+  const plan = { strategyId: occ.strategyId, exchange: 'bitget' as const, symbol: 'BTCUSDT', side: 'long' as const, stopPrice: 61_500, signalOccurrenceId: id, signalId: 'sig-1', quantity: 0.0011, estimatedKrw: 92_400 };
+  assert.equal(verifyTrendPilotOccurrence(plan, KEY), bar);
+  for (const [field, value] of [['stopPrice', 61_000], ['side', 'short'], ['symbol', 'ETHUSDT'], ['signalId', 'sig-2'], ['quantity', 0.01], ['estimatedKrw', 900_000]] as const) {
+    assert.equal(verifyTrendPilotOccurrence({ ...plan, [field]: value }, KEY), null, `${field} tampering`);
+  }
   assert.equal(verifyTrendPilotOccurrence(plan, 'x'.repeat(40)), null, 'other key');
   assert.throws(() => signTrendPilotOccurrence(occ, 'short'));
 });
 
-test('bitget: breakout → one signed 5x isolated entry sized from equity, accepted by the risk gate', async () => {
+test('bitget: breakout → one signed 5x isolated entry, accepted by the risk gate; manual replay refused', async () => {
   const nowMs = Date.now();
   const d = deps({ nowMs });
   const result = await runTrendPilotLaneTick(d);
   assert.equal(result.allowEntry, true, result.guardBlockers.join());
-  const errs = result.events.filter((e) => e.kind === 'ERROR');
-  assert.deepEqual(errs, []);
-  assert.equal(d.entries.filter((p) => p.symbol === 'BTCUSDT').length, 1);
+  assert.deepEqual(result.events.filter((e) => e.kind === 'ERROR'), []);
   const plan = d.entries.find((p) => p.symbol === 'BTCUSDT')!;
+  assert.ok(plan);
   assert.equal(plan.side, 'long');
   assert.equal(plan.leverage, 5);
   assert.equal(plan.marginMode, 'isolated');
+  assert.equal(plan.marketSnapshot.signalState, 'entry_ready');
+  assert.ok(plan.marketSnapshot.signalObservedAt);
   assert.ok(plan.stopPrice < 63_000 && plan.stopPrice >= 63_000 * (1 - 0.025) - 0.1);
   assert.ok(plan.estimatedKrw > 50_000 && plan.estimatedKrw <= 1_000_000);
   assert.ok(plan.targetPrices[0] > 63_000 * 1.2);
@@ -90,22 +108,27 @@ test('bitget: breakout → one signed 5x isolated entry sized from equity, accep
   await runTrendPilotLaneTick(again);
   assert.equal(again.entries.length, 0);
 
-  // The canonical risk gate accepts this plan under the pilot exception …
   const previous = { ...process.env };
   Object.assign(process.env, ENV);
   try {
     const decision = evaluateTradingPlan(plan, d.policy, { emergencyStopped: false, serverLiveEnabled: true });
     assert.deepEqual(decision.blockCodes, [], decision.blockCodes.join());
     assert.ok(decision.warnings.includes('TREND_PILOT_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED'));
-    // … and still enforces the ordinary caps
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: true, serverLiveEnabled: true }).blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
     assert.ok(evaluateTradingPlan(plan, d.policy, { emergencyStopped: false, serverLiveEnabled: false }).blockCodes.includes('LIVE_EXECUTION_DISABLED'));
-    assert.ok(evaluateTradingPlan({ ...plan, estimatedKrw: 2_000_000 }, d.policy, { emergencyStopped: false, serverLiveEnabled: true }).blockCodes.includes('MAX_ORDER_AMOUNT'));
-    // a forged or altered plan gets no exception
-    const forged = { ...plan, stopPrice: plan.stopPrice - 500 };
-    const forgedDecision = evaluateTradingPlan(forged, d.policy, { emergencyStopped: false, serverLiveEnabled: true });
-    assert.ok(forgedDecision.blockCodes.includes('TREND_PILOT_SIGNATURE_INVALID'));
-    assert.ok(forgedDecision.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
+    // altered size or stop → no exception
+    for (const forged of [{ ...plan, stopPrice: plan.stopPrice - 500 }, { ...plan, estimatedKrw: plan.estimatedKrw * 2, quantity: (plan.quantity ?? 0) * 2 }, { ...plan, signalId: 'replay-2' }]) {
+      const blocked = evaluateTradingPlan(forged, d.policy, { emergencyStopped: false, serverLiveEnabled: true });
+      assert.ok(blocked.blockCodes.includes('TREND_PILOT_SIGNATURE_INVALID'), blocked.blockCodes.join());
+      assert.ok(blocked.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
+    }
+    // the public plans API: the lane reason is server-only, and the request-local
+    // policy is approval mode, which the exception refuses
+    assert.throws(() => assertPublicLivePlanOrigin({ ...plan, executionMode: 'manual' } as never), /PUBLIC_AUTOMATIC_LIVE_ORIGIN_FORBIDDEN/u);
+    const stripped = { ...plan, signalReasons: plan.signalReasons.filter((r) => r !== 'TREND_PILOT_LANE_V1') };
+    const manualPolicy = publicPlanPolicy(stripped, d.policy);
+    assert.equal(evaluateTrendPilotLiveException(plan, manualPolicy, nowMs, ENV).allowed, false);
+    assert.deepEqual(evaluateTrendPilotLiveException(plan, manualPolicy, nowMs, ENV).blockCodes, ['TREND_PILOT_AUTOMATIC_POLICY_REQUIRED']);
     const notEnabled = evaluateTradingPlan(plan, policy({ enabledStrategies: ['OTHER'] }), { emergencyStopped: false, serverLiveEnabled: true });
     assert.ok(notEnabled.blockCodes.includes('TREND_PILOT_STRATEGY_NOT_ENABLED'));
     process.env.TREND_PILOT_LIVE_ENABLED = 'false';
@@ -113,59 +136,74 @@ test('bitget: breakout → one signed 5x isolated entry sized from equity, accep
   } finally {
     for (const k of Object.keys(ENV)) { if (previous[k] === undefined) delete process.env[k]; else process.env[k] = previous[k]; }
   }
-  // stale signal: same plan, checked 2 hours later
   const stale = evaluateTrendPilotLiveException(plan, d.policy, nowMs + (2 * 3_600_000), ENV);
   assert.deepEqual(stale.blockCodes, ['TREND_PILOT_SIGNAL_STALE']);
 });
 
-test('no entry: not armed, killed, daily loss, held symbol, late signal, no breakout', async () => {
+test('no entry: not armed, killed, drawdown, daily loss (pilot and policy), budget, held, late, flat, stale quote', async () => {
   const nowMs = Date.now();
-  const lastOpen = nowMs - H4 - (5 * 60_000);
-  const notArmed = deps({ nowMs, entriesArmed: false });
-  await runTrendPilotLaneTick(notArmed);
-  assert.equal(notArmed.entries.length, 0);
+  const run = async (over: Partial<TrendPilotLaneDependencies> & { equityKrw?: number; counters?: Partial<TrendPilotAccountCounters> }) => {
+    const d = deps({ nowMs, ...over });
+    const result = await runTrendPilotLaneTick(d);
+    return { d, result };
+  };
+  assert.equal((await run({ entriesArmed: false })).d.entries.length, 0);
+  assert.equal((await run({ fx: null })).result.guardBlockers.includes('TREND_PILOT_FX_UNAVAILABLE'), true);
 
-  const killedLedger = { ...createTrendPilotLedger('u1'), killed: true, killReason: 'KILL_DRAWDOWN_REACHED' };
-  const killed = deps({ nowMs, loadLedger: async () => killedLedger });
-  const killedResult = await runTrendPilotLaneTick(killed);
-  assert.equal(killed.entries.length, 0);
-  assert.ok(killedResult.guardBlockers.includes('KILL_SWITCH_ACTIVE'));
+  const killed = await run({ loadLedger: async () => ({ ...createTrendPilotLedger('u1'), killed: true, killedAtMs: 123, killReason: 'KILL_DRAWDOWN_REACHED' }) });
+  assert.equal(killed.d.entries.length, 0);
+  assert.ok(killed.result.guardBlockers.includes('KILL_SWITCH_ACTIVE'));
+  // owner re-arm with the exact token
+  const rearmed = await run({ rearmToken: 'bitget:123', loadLedger: async () => ({ ...createTrendPilotLedger('u1'), killed: true, killedAtMs: 123, killReason: 'KILL_DRAWDOWN_REACHED' }) });
+  assert.ok(rearmed.result.events.some((e) => e.kind === 'REARM'));
+  assert.ok(rearmed.d.entries.length >= 1);
+  const wrongToken = await run({ rearmToken: 'bitget:999', loadLedger: async () => ({ ...createTrendPilotLedger('u1'), killed: true, killedAtMs: 123, killReason: 'x' }) });
+  assert.equal(wrongToken.d.entries.length, 0);
 
-  // drawdown −40% from the stored peak arms the kill switch
-  const peakLedger = { ...createTrendPilotLedger('u1'), peakEquityKrw: 170_000 };
-  const dd = deps({ nowMs, loadLedger: async () => peakLedger });
-  const ddResult = await runTrendPilotLaneTick(dd);
-  assert.ok(ddResult.events.some((e) => e.kind === 'KILL'));
-  assert.equal(dd.saved.at(-1)!.killed, true);
-  assert.equal(dd.entries.length, 0);
+  const dd = await run({ loadLedger: async () => ({ ...createTrendPilotLedger('u1'), peakEquityKrw: 170_000 }) });
+  assert.ok(dd.result.events.some((e) => e.kind === 'KILL'));
+  assert.equal(dd.d.saved.at(-1)!.killed, true);
+  assert.equal(dd.d.entries.length, 0);
+  const notYet = await run({ loadLedger: async () => ({ ...createTrendPilotLedger('u1'), peakEquityKrw: 140_000 }) });
+  assert.equal(notYet.d.saved.at(-1)!.killed, false, '−28.6% does not kill at the −40% line');
 
-  // equity 2% below today's start → daily stop
   const day = new Date(nowMs + 9 * 3_600_000).toISOString().slice(0, 10);
   const dayLedger = { ...createTrendPilotLedger('u1'), peakEquityKrw: 102_100, dayKey: day, dayStartEquityKrw: 102_100 };
-  const daily = deps({ nowMs, loadLedger: async () => dayLedger });
-  const dailyResult = await runTrendPilotLaneTick(daily);
-  assert.ok(dailyResult.guardBlockers.includes('DAILY_LOSS_LIMIT'));
-  assert.equal(daily.entries.length, 0);
+  assert.ok((await run({ loadLedger: async () => dayLedger })).result.guardBlockers.includes('DAILY_LOSS_LIMIT'));
+  // the member's tighter policy daily limit (1%) applies to the pilot too
+  const tight = { ...dayLedger, peakEquityKrw: 101_200, dayStartEquityKrw: 101_200 };
+  assert.ok((await run({ loadLedger: async () => tight, policy: policy({ dailyLossLimitPercent: 1 }) })).result.guardBlockers.includes('DAILY_LOSS_LIMIT'));
+  // journal already at the policy line → stop before the gate trips the global emergency stop
+  assert.ok((await run({ counters: { dailyPnlPercent: -2 } })).result.guardBlockers.includes('POLICY_DAILY_LOSS_LIMIT'));
+  assert.ok((await run({ counters: { consecutiveLosses: 20 } })).result.guardBlockers.includes('CONSECUTIVE_LOSS_LIMIT'));
+  assert.ok((await run({ counters: { accountNotionalKrw: 10_000_000 } })).result.guardBlockers.includes('BUDGET_ROOM_EXHAUSTED'));
 
-  const held = deps({ nowMs, foreignSymbols: new Set(['BTCUSDT', 'ETHUSDT']) });
-  await runTrendPilotLaneTick(held);
-  assert.equal(held.entries.length, 0);
-
-  const late = deps({ nowMs, readClosedBars: async () => breakoutBars(nowMs - H4 - (40 * 60_000)) });
-  await runTrendPilotLaneTick(late);
-  assert.equal(late.entries.length, 0);
-
-  const flat = deps({ nowMs, readClosedBars: async () => breakoutBars(lastOpen, false) });
-  await runTrendPilotLaneTick(flat);
-  assert.equal(flat.entries.length, 0);
-
-  const staleQuote = deps({ nowMs, readQuote: async () => ({ bid: 1, ask: 1, last: 1, observedAtMs: nowMs - 120_000, oneMinuteMovePercent: 0, orderbookGapPercent: 0, source: 't' }) });
-  const staleResult = await runTrendPilotLaneTick(staleQuote);
-  assert.equal(staleQuote.entries.length, 0);
-  assert.ok(staleResult.events.some((e) => e.kind === 'ERROR' && e.code === 'TREND_PILOT_QUOTE_NOT_FRESH'));
+  assert.equal((await run({ foreignSymbols: new Set(['BTCUSDT', 'ETHUSDT']) })).d.entries.length, 0);
+  assert.equal((await run({ readClosedBars: async () => breakoutBars(nowMs - H4 - (40 * 60_000)) })).d.entries.length, 0);
+  assert.equal((await run({ readClosedBars: async () => breakoutBars(nowMs - H4 - (5 * 60_000), false) })).d.entries.length, 0);
+  const staleQuote = await run({ readQuote: async () => ({ bid: 1, ask: 1, last: 1, observedAtMs: nowMs - 120_000, oneMinuteMovePercent: 0, orderbookGapPercent: 0, source: 't' }) });
+  assert.equal(staleQuote.d.entries.length, 0);
+  assert.ok(staleQuote.result.events.some((e) => e.kind === 'ERROR' && e.code === 'TREND_PILOT_QUOTE_NOT_FRESH'));
+  // a transient failure retries the same bar, at most 3 times
+  let ledger: TrendPilotLedger | null = null;
+  for (let i = 0; i < 4; i += 1) {
+    const t = await run({ submitEntry: async () => ({ status: 'BLOCKED', blockCodes: ['MARKET_DATA_DELAYED'] }), loadLedger: async () => ledger, foreignSymbols: new Set(['ETHUSDT']) });
+    ledger = t.d.saved.at(-1)!;
+    const attempted = t.result.events.filter((e) => e.kind === 'ENTRY').length;
+    assert.equal(attempted, i < 3 ? 1 : 0, `attempt ${i + 1}`);
+  }
 });
 
-test('open position: trail moves on closed bars and a crossed trail exits; account failure still manages exits', async () => {
+function trendBars(lastOpen: number): TrendPilotCandle[] {
+  const bars: TrendPilotCandle[] = [];
+  for (let i = 0; i < 231; i += 1) bars.push({ timestamp: lastOpen - ((233 - i) * H4), open: 60_000, high: 60_300, low: 59_700, close: 60_000 });
+  bars.push({ timestamp: lastOpen - (2 * H4), open: 60_000, high: 62_000, low: 59_900, close: 61_800 });
+  bars.push({ timestamp: lastOpen - H4, open: 61_800, high: 64_000, low: 61_500, close: 63_800 });
+  bars.push({ timestamp: lastOpen, open: 63_800, high: 64_200, low: 63_000, close: 63_500 });
+  return bars;
+}
+
+test('open position: trail moves on closed bars, a crossed trail exits; account failure never blocks exits', async () => {
   const nowMs = Date.now();
   const lastOpen = Math.floor(nowMs / H4) * H4 - H4;
   const position: TrendPilotLanePosition = {
@@ -173,15 +211,11 @@ test('open position: trail moves on closed bars and a crossed trail exits; accou
     initialStopPrice: 58_800, remainingQuantity: 0.001, notionalKrw: 84_000, leverage: 5,
     openedAtMs: lastOpen - (3 * H4) + 60_000, activeExit: false,
   };
-  const bars: TrendPilotCandle[] = [];
-  for (let i = 0; i < 231; i += 1) bars.push({ timestamp: lastOpen - ((233 - i) * H4), open: 60_000, high: 60_300, low: 59_700, close: 60_000 });
-  bars.push({ timestamp: lastOpen - (2 * H4), open: 60_000, high: 62_000, low: 59_900, close: 61_800 });
-  bars.push({ timestamp: lastOpen - H4, open: 61_800, high: 64_000, low: 61_500, close: 63_800 });
-  bars.push({ timestamp: lastOpen, open: 63_800, high: 64_200, low: 63_000, close: 63_500 });
   const d = deps({
-    nowMs, positions: [position], readClosedBars: async () => bars,
+    nowMs, positions: [position], readClosedBars: async () => trendBars(lastOpen),
     readQuote: async () => ({ bid: 61_900, ask: 61_910, last: 61_900, observedAtMs: nowMs - 500, oneMinuteMovePercent: -0.5, orderbookGapPercent: 0.01, source: 't' }),
-    readAccount: async () => { throw new Error('TREND_PILOT_ACCOUNT_STALE'); },
+    readEntryContext: async () => { throw new Error('TREND_PILOT_ACCOUNT_STALE'); },
+    loadLedger: async () => createTrendPilotLedger('u1'),
   });
   const result = await runTrendPilotLaneTick(d);
   const trail = d.saved.at(-1)!.trails.p1;
@@ -192,28 +226,52 @@ test('open position: trail moves on closed bars and a crossed trail exits; accou
   assert.equal(d.entries.length, 0, 'no account → no entries');
   assert.ok(result.events.some((e) => e.kind === 'ERROR' && e.code === 'TREND_PILOT_ACCOUNT_STALE'));
 
-  // an exit already in flight is not duplicated; a closed position drops its trail
-  const inflight = deps({ nowMs, positions: [{ ...position, activeExit: true }], readClosedBars: async () => bars, loadLedger: async () => d.saved.at(-1)! });
+  const inflight = deps({ nowMs, positions: [{ ...position, activeExit: true }], readClosedBars: async () => trendBars(lastOpen), loadLedger: async () => d.saved.at(-1)! });
   await runTrendPilotLaneTick(inflight);
   assert.equal(inflight.exits.length, 0);
-  const closed = deps({ nowMs, positions: [], readClosedBars: async () => bars, loadLedger: async () => d.saved.at(-1)! });
+  const closed = deps({ nowMs, positions: [], readClosedBars: async () => trendBars(lastOpen), loadLedger: async () => d.saved.at(-1)! });
   await runTrendPilotLaneTick(closed);
   assert.deepEqual(Object.keys(closed.saved.at(-1)!.trails), []);
   assert.equal(closed.saved.at(-1)!.closedCount, 1);
+
+  // a missing ledger with an open position fails closed (kill until re-armed)
+  const lost = deps({ nowMs, positions: [position], readClosedBars: async () => trendBars(lastOpen) });
+  await runTrendPilotLaneTick(lost);
+  assert.equal(lost.saved.at(-1)!.killed, true);
+  assert.equal(lost.saved.at(-1)!.killReason, 'LEDGER_MISSING_WITH_POSITIONS');
 });
 
-test('upbit: long-only market buy by KRW amount; helpers', async () => {
+test('holding cap: a closed-bar exit is forced and retried every tick until accepted', async () => {
+  const nowMs = Date.now();
+  const lastOpen = Math.floor(nowMs / H4) * H4 - H4;
+  const position: TrendPilotLanePosition = {
+    planId: 'p9', strategyId: TREND_PILOT_V1.strategyId, symbol: 'ETHUSDT', side: 'short', entryPrice: 3_000,
+    initialStopPrice: 3_060, remainingQuantity: 0.03, notionalKrw: 126_000, leverage: 5,
+    openedAtMs: lastOpen - (179 * H4) + 60_000, activeExit: false,
+  };
+  const flat: TrendPilotCandle[] = [];
+  for (let i = 0; i < 240; i += 1) flat.push({ timestamp: lastOpen - ((239 - i) * H4), open: 3_000, high: 3_010, low: 2_990, close: 3_000 });
+  let ledger: TrendPilotLedger | null = createTrendPilotLedger('u1');
+  const blocked = deps({ nowMs, positions: [position], readClosedBars: async () => flat, loadLedger: async () => ledger,
+    submitExit: async () => ({ status: 'BLOCKED', blockCodes: ['BLOCKED_RECHECK'] }) });
+  await runTrendPilotLaneTick(blocked);
+  ledger = blocked.saved.at(-1)!;
+  assert.equal(ledger.trails.p9.pendingExit, 'TIME_EXIT');
+  const retry = deps({ nowMs: nowMs + 30_000, positions: [position], readClosedBars: async () => flat, loadLedger: async () => ledger });
+  await runTrendPilotLaneTick(retry);
+  assert.deepEqual(retry.exits.map((e) => e.reason), ['FORCE_CLOSE'], 'retried on the next tick without a new bar');
+});
+
+test('upbit: long-only market buy by KRW amount within cash; helpers', async () => {
   const nowMs = Date.now();
   const lastOpen = nowMs - H4 - (5 * 60_000);
   const krwBars = breakoutBars(lastOpen).map((b) => ({ ...b, open: b.open * 1500, high: b.high * 1500, low: b.low * 1500, close: b.close * 1500 }));
   const d = deps({
-    nowMs, venue: 'upbit', fx: { krwPerQuoteCurrency: 1, source: 'NATIVE_KRW' }, readContractRules: undefined,
+    nowMs, venue: 'upbit', fx: { krwPerQuoteCurrency: 1, source: 'NATIVE_KRW' }, readContractRules: undefined, equityKrw: 300_000,
     readClosedBars: async () => krwBars,
     readQuote: async () => ({ bid: 94_480_000, ask: 94_500_000, last: 94_500_000, observedAtMs: nowMs - 500, oneMinuteMovePercent: 0.1, orderbookGapPercent: 0.02, source: 't' }),
-    readAccount: async () => ({ equityKrw: 300_000, availableKrw: 300_000, observedAtMs: nowMs - 500 }),
   });
   await runTrendPilotLaneTick(d);
-  assert.equal(d.entries.length, TREND_PILOT_SPOT_V1.symbols.length > 0 ? d.entries.length : 0);
   assert.ok(d.entries.length >= 1);
   for (const plan of d.entries) {
     assert.equal(plan.exchange, 'upbit');
@@ -232,4 +290,6 @@ test('upbit: long-only market buy by KRW amount; helpers', async () => {
   assert.equal(laneOpenRiskKrw(pos, 99, 1_000), 0, 'stop past entry → no open risk');
   assert.equal(farTargetPrice('short', 100, 10), 10);
   assert.equal(initialTrail({ ...pos, initialStopPrice: 100 }), null);
+  const ceiling = laneNotionalCeilingKrw(policy({ totalCapitalKrw: 1_000_000, maxAssetPercent: 30 }), { ...COUNTERS, strategyNotionalKrw: 250_000 });
+  assert.equal(ceiling.ceilingKrw, 50_000, 'strategy room = 30% of 1,000,000 − 250,000');
 });

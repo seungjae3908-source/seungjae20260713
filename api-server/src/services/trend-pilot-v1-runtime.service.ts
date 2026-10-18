@@ -46,6 +46,28 @@ async function fetchJson(fetchImpl: typeof fetch, url: string): Promise<unknown>
   return response.json();
 }
 
+// ---------------------------------------------------------------- shared bar cache
+// Closed 4h bars only change when a bar closes, so one read per symbol per bar
+// serves every member and every 30-second tick (keeps public-API load flat).
+const barCache = new Map<string, { validUntilMs: number; bars: TrendPilotCandle[] }>();
+
+export async function cachedTrendPilotBars(venue: TrendPilotVenue, symbol: string, nowMs: number, loader: () => Promise<TrendPilotCandle[]>): Promise<TrendPilotCandle[]> {
+  const key = `${venue}:${symbol.toUpperCase()}`;
+  const hit = barCache.get(key);
+  if (hit && nowMs < hit.validUntilMs) return hit.bars;
+  const bars = await loader();
+  const last = bars.at(-1);
+  // valid until the next bar has closed and had 90 s to appear upstream
+  const nextCloseMs = last ? last.timestamp + (2 * TREND_PILOT_V1.intervalMs) + 90_000 : nowMs + 60_000;
+  // a bar set that is already behind (provider lag) is re-read within a minute
+  barCache.set(key, { validUntilMs: Math.max(nowMs + 60_000, Math.min(nextCloseMs, nowMs + TREND_PILOT_V1.intervalMs)), bars });
+  return bars;
+}
+
+export function resetTrendPilotBarCacheForTests() {
+  barCache.clear();
+}
+
 // ---------------------------------------------------------------- Bitget
 
 export async function readBitgetTrendPilotBars(symbol: string, nowMs: number): Promise<TrendPilotCandle[]> {
@@ -178,8 +200,9 @@ export function trendPilotAccountFromSnapshot(
     const position = (snapshot.positions ?? []).find((p) => String(p.symbol).toUpperCase().replace(/^KRW-/u, '') === currency);
     if (position && positive(position.marketValue)) { equity += position.marketValue; continue; }
     if (position && positive(position.currentPrice)) { equity += quantity * position.currentPrice; continue; }
-    if (position && positive(position.averageEntryPrice) && quantity * position.averageEntryPrice < 5_000) continue; // dust
-    throw new Error('TREND_PILOT_UPBIT_HOLDING_UNPRICED');
+    // No live mark: value a manual holding at cost so it neither blocks the lane
+    // nor swings the guards; a holding without any price is left out.
+    if (position && positive(position.averageEntryPrice)) { equity += quantity * position.averageEntryPrice; continue; }
   }
   return { equityKrw: equity, availableKrw: krw.available, observedAtMs };
 }

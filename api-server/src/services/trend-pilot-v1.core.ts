@@ -395,6 +395,8 @@ export interface TrendPilotGuardInput {
   dayStartEquityKrw: number;
   dayRealizedPnlKrw: number;
   killed: boolean;
+  /** Tighter daily stop from the member policy (never looser than the pilot's 2%). */
+  dailyLossFraction?: number;
 }
 
 export interface TrendPilotGuardResult {
@@ -418,7 +420,8 @@ export function evaluateTrendPilotGuards(input: TrendPilotGuardInput): TrendPilo
     ? safeDivide(-Math.min(0, input.dayRealizedPnlKrw), input.dayStartEquityKrw) : null;
   const killNow = !input.killed && drawdownFraction !== null && drawdownFraction >= TREND_PILOT_V1.killDrawdownFraction - EPSILON;
   if (killNow) blockers.push('KILL_DRAWDOWN_REACHED');
-  if (dayLossFraction !== null && dayLossFraction >= TREND_PILOT_V1.dailyLossFraction - EPSILON) blockers.push('DAILY_LOSS_LIMIT');
+  const dailyLimit = isPositive(input.dailyLossFraction) ? Math.min(input.dailyLossFraction, TREND_PILOT_V1.dailyLossFraction) : TREND_PILOT_V1.dailyLossFraction;
+  if (dayLossFraction !== null && dayLossFraction >= dailyLimit - EPSILON) blockers.push('DAILY_LOSS_LIMIT');
   return { allowEntry: blockers.length === 0, killNow, drawdownFraction, dayLossFraction, blockers };
 }
 
@@ -433,6 +436,9 @@ export function kstDayKey(ms: number): string | null {
 export interface TrendPilotTrail extends TrendPilotPositionState {
   planId: string;
   symbol: string;
+  /** A closed-bar exit (holding cap or stop crossed at the close) waits here until
+   * a forced reduce-only close is accepted; retried every tick, never dropped. */
+  pendingExit?: 'TIME_EXIT' | 'STOP_BREACHED_ON_CLOSE' | null;
 }
 
 export interface TrendPilotLedger {
@@ -446,6 +452,8 @@ export interface TrendPilotLedger {
   killedAtMs: number | null;
   killReason: string | null;
   lastSignalBarOpenMs: Record<string, number>;
+  /** Blocked entry attempts for the current signal bar (bounded retries). */
+  signalAttempts: Record<string, { bar: number; count: number }>;
   trails: Record<string, TrendPilotTrail>;
   closedCount: number;
   realizedPnlKrw: number;
@@ -455,7 +463,7 @@ export interface TrendPilotLedger {
 export function createTrendPilotLedger(memberId: string): TrendPilotLedger {
   return {
     version: 'trend-pilot-ledger-v1', memberId, peakEquityKrw: null, dayKey: null, dayStartEquityKrw: null,
-    dayRealizedPnlKrw: 0, killed: false, killedAtMs: null, killReason: null, lastSignalBarOpenMs: {}, trails: {},
+    dayRealizedPnlKrw: 0, killed: false, killedAtMs: null, killReason: null, lastSignalBarOpenMs: {}, signalAttempts: {}, trails: {},
     closedCount: 0, realizedPnlKrw: 0, updatedAtMs: null,
   };
 }
@@ -605,7 +613,12 @@ export function parseTrendPilotLedger(raw: unknown, memberId: string): TrendPilo
     if (t.planId !== id || (t.side !== 'long' && t.side !== 'short')
       || ![t.entryPrice, t.riskUnit, t.entryAtr, t.stopPrice, t.bestPrice].every(isPositive)
       || !Number.isSafeInteger(t.entryBarOpenMs)) continue;
-    trails[id] = { ...t };
+    const pendingExit = t.pendingExit === 'TIME_EXIT' || t.pendingExit === 'STOP_BREACHED_ON_CLOSE' ? t.pendingExit : null;
+    trails[id] = { ...t, pendingExit };
+  }
+  const attempts: Record<string, { bar: number; count: number }> = {};
+  for (const [symbol, row] of Object.entries(value.signalAttempts ?? {})) {
+    if (row && Number.isSafeInteger(row.bar) && Number.isSafeInteger(row.count) && row.count >= 0) attempts[symbol] = { bar: row.bar, count: row.count };
   }
   const lastSignal: Record<string, number> = {};
   for (const [symbol, ms] of Object.entries(value.lastSignalBarOpenMs ?? {})) if (Number.isSafeInteger(ms)) lastSignal[symbol] = ms as number;
@@ -619,6 +632,7 @@ export function parseTrendPilotLedger(raw: unknown, memberId: string): TrendPilo
     killedAtMs: isFiniteNumber(value.killedAtMs) ? value.killedAtMs : null,
     killReason: typeof value.killReason === 'string' ? value.killReason : null,
     lastSignalBarOpenMs: lastSignal,
+    signalAttempts: attempts,
     trails,
     closedCount: Number.isSafeInteger(value.closedCount) ? value.closedCount as number : 0,
     realizedPnlKrw: isFiniteNumber(value.realizedPnlKrw) ? value.realizedPnlKrw : 0,

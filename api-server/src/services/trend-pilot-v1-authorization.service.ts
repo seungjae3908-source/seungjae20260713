@@ -10,8 +10,11 @@
 //   * live account, the pilot strategy id for that exchange, a pilot symbol
 //   * the member enabled that strategy id in the stored policy
 //   * Bitget: 5x isolated, long/short; Upbit: KRW market buy only
+//   * the member's stored policy is automatic and enabled (never a manual plan)
 //   * the signal occurrence id carries an HMAC that only the server lane can make,
-//     bound to strategy, exchange, symbol, side, signal bar and stop price
+//     bound to strategy, exchange, symbol, side, signal id, signal bar, stop,
+//     quantity and order amount (a replay with another size or id fails)
+//   * TREND_PILOT_LANE_V1 is a server-only reason: the public plans API rejects it
 //   * the signal bar closed less than 30 minutes before the check
 // Every other risk check (max order, margin, daily loss, emergency stop, arm,
 // position isolation, …) still runs; the exception only replaces research
@@ -32,8 +35,11 @@ export type TrendPilotOccurrence = {
   exchange: 'bitget' | 'upbit';
   symbol: string;
   side: string;
+  signalId: string;
   signalBarOpenMs: number;
   stopPrice: number;
+  quantity: number | null;
+  estimatedKrw: number;
 };
 
 export type TrendPilotLiveException = {
@@ -58,14 +64,15 @@ export function trendPilotSigningKey(env: NodeJS.ProcessEnv = process.env): stri
   return key.length >= MIN_KEY_LENGTH ? key : null;
 }
 
-function canonicalStop(value: number): string {
-  return Number(value).toPrecision(12);
+function canonicalNumber(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(Number(value)) ? '-' : Number(value).toPrecision(12);
 }
 
 function digest(occurrence: TrendPilotOccurrence, key: string): string {
   const message = [
     OCCURRENCE_PREFIX, occurrence.strategyId, occurrence.exchange, occurrence.symbol.toUpperCase(),
-    occurrence.side, String(occurrence.signalBarOpenMs), canonicalStop(occurrence.stopPrice),
+    occurrence.side, occurrence.signalId, String(occurrence.signalBarOpenMs), canonicalNumber(occurrence.stopPrice),
+    canonicalNumber(occurrence.quantity), canonicalNumber(occurrence.estimatedKrw),
   ].join('|');
   return createHmac('sha256', key).update(message).digest('hex').slice(0, 32);
 }
@@ -73,12 +80,13 @@ function digest(occurrence: TrendPilotOccurrence, key: string): string {
 /** Server lane only: the signal occurrence id for an entry plan. */
 export function signTrendPilotOccurrence(occurrence: TrendPilotOccurrence, key: string): string {
   if (!key || key.length < MIN_KEY_LENGTH) throw new Error('TREND_PILOT_SIGNING_KEY_REQUIRED');
-  if (!Number.isSafeInteger(occurrence.signalBarOpenMs) || !(occurrence.stopPrice > 0)) throw new Error('TREND_PILOT_OCCURRENCE_INVALID');
+  if (!Number.isSafeInteger(occurrence.signalBarOpenMs) || !(occurrence.stopPrice > 0)
+    || !(occurrence.estimatedKrw > 0) || !occurrence.signalId) throw new Error('TREND_PILOT_OCCURRENCE_INVALID');
   return `${OCCURRENCE_PREFIX}:${occurrence.signalBarOpenMs}:${digest(occurrence, key)}`;
 }
 
 /** Recomputes the HMAC from the plan's own fields. */
-export function verifyTrendPilotOccurrence(plan: Pick<TradingPlanInput, 'strategyId' | 'exchange' | 'symbol' | 'side' | 'stopPrice' | 'signalOccurrenceId'>, key: string | null): number | null {
+export function verifyTrendPilotOccurrence(plan: Pick<TradingPlanInput, 'strategyId' | 'exchange' | 'symbol' | 'side' | 'stopPrice' | 'signalOccurrenceId' | 'signalId' | 'quantity' | 'estimatedKrw'>, key: string | null): number | null {
   if (!key) return null;
   const parts = String(plan.signalOccurrenceId ?? '').split(':');
   if (parts.length !== 3 || parts[0] !== OCCURRENCE_PREFIX) return null;
@@ -87,7 +95,8 @@ export function verifyTrendPilotOccurrence(plan: Pick<TradingPlanInput, 'strateg
   if (plan.exchange !== 'bitget' && plan.exchange !== 'upbit') return null;
   const expected = digest({
     strategyId: plan.strategyId, exchange: plan.exchange, symbol: plan.symbol, side: plan.side,
-    signalBarOpenMs: barMs, stopPrice: plan.stopPrice,
+    signalId: plan.signalId, signalBarOpenMs: barMs, stopPrice: plan.stopPrice,
+    quantity: plan.quantity ?? null, estimatedKrw: plan.estimatedKrw,
   }, key);
   const given = Buffer.from(parts[2], 'utf8');
   const wanted = Buffer.from(expected, 'utf8');
@@ -106,6 +115,7 @@ export function evaluateTrendPilotLiveException(
   const blockCodes: string[] = [];
   const deny = (code: string): TrendPilotLiveException => ({ ...DENIED, blockCodes: [...blockCodes, code] });
   if (!trendPilotLiveEnabled(env)) return deny('TREND_PILOT_LIVE_DISABLED');
+  if (policy.mode !== 'automatic' || policy.automaticEnabled !== true) return deny('TREND_PILOT_AUTOMATIC_POLICY_REQUIRED');
   const key = trendPilotSigningKey(env);
   if (!key) return deny('TREND_PILOT_SIGNING_KEY_REQUIRED');
 
