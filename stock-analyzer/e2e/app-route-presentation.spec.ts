@@ -17,6 +17,8 @@ test('actual product routes keep the correct top-level navigation state', () => 
   for (const path of [
     APP_ROUTES.assets,
     APP_ROUTES.unifiedSearchAlias,
+    APP_ROUTES.marketOverview,
+    APP_ROUTES.recommendations,
     APP_ROUTES.watchlist,
     APP_ROUTES.alerts,
     APP_ROUTES.stockInfo,
@@ -49,6 +51,8 @@ test('actual product routes keep the correct top-level navigation state', () => 
 
 test('route presentation metadata follows final-main market and deep-route ownership', () => {
   const expectations = [
+    [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
+    [APP_ROUTES.recommendations, 'AI 추천', ['종목', 'AI 추천']],
     [APP_ROUTES.watchlist, '관심종목', ['종목', '관심종목']],
     [APP_ROUTES.alerts, '가격 알림', ['종목', '가격 알림']],
     [APP_ROUTES.scanner, '검색기', ['기술', '검색기']],
@@ -66,7 +70,7 @@ test('route presentation metadata follows final-main market and deep-route owner
 });
 
 test('removed screens have no presentation metadata and no navigation owner', () => {
-  for (const path of ['/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/market-overview', '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn', '/recommendations']) {
+  for (const path of ['/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/market-rankings', '/market-browser', '/themes', '/news-information', '/learn']) {
     expect(resolveAppRoutePresentation(path), path).toBeNull();
     for (const owner of APP_NAVIGATION) expect(navigationGroupMatches(owner, path), `${owner.id} ${path}`).toBe(false);
   }

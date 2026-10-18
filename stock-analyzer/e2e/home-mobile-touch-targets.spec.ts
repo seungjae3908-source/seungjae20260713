@@ -129,7 +129,7 @@ for (const width of [390, 1440]) {
       }
 
       await expect(page.getByTestId('home-market-summary')).toBeVisible();
-      // The market-overview screen was removed, so the market card has no 시황 link.
+      // The home market card no longer carries a 시황 shortcut (home shortcuts were removed).
       await expect(page.getByRole('main').getByRole('button', { name: '시황', exact: true })).toHaveCount(0);
 
       await page.getByRole('tab', { name: '신호', exact: true }).click();
