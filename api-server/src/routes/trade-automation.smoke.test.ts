@@ -3476,3 +3476,12 @@ test('production API entrypoint does not reflect arbitrary web origins', () => {
   assert.ok(policy.includes('new URL(origin).host.toLowerCase() === host'), 'production admits only the request host as origin');
   assert.ok(!policy.includes('endsWith') && !policy.includes('includes(host'), 'no suffix or substring origin matching');
 });
+
+test('production API entrypoint sets baseline browser security headers', () => {
+  const indexSource = readFileSync(path.resolve(process.cwd(), process.cwd().endsWith('api-server') ? '' : 'api-server', 'src/index.ts'), 'utf8');
+  const hardening = indexSource.indexOf("res.setHeader('X-Content-Type-Options', 'nosniff');");
+  assert.ok(hardening > 0, 'index.ts must send nosniff');
+  assert.ok(indexSource.includes("res.setHeader('X-Frame-Options', 'DENY');"), 'index.ts must forbid framing');
+  assert.ok(indexSource.includes("res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');"), 'index.ts must limit referrers');
+  assert.ok(hardening < indexSource.indexOf('express.static('), 'headers must apply before the static web app is served');
+});
