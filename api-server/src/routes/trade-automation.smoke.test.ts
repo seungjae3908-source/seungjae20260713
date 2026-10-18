@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 // Owner-approved 2026-10-17: run-control unit tests run inside this registered suite.
 import '../services/trade-automation-run-control.service.test';
 import type { AddressInfo } from 'node:net';
@@ -3463,4 +3465,14 @@ test('작동 is refused while the global emergency stop is active', async () => 
     await close(server);
     setTradeAutomationRepositoryFactoryForTests(() => repository);
   }
+});
+
+test('production API entrypoint does not reflect arbitrary web origins', () => {
+  const indexSource = readFileSync(path.resolve(process.cwd(), process.cwd().endsWith('api-server') ? '' : 'api-server', 'src/index.ts'), 'utf8');
+  assert.ok(!/origin:\s*true/.test(indexSource), 'index.ts must not reflect every Origin');
+  assert.ok(indexSource.includes('corsOriginAllowed(req.headers.origin'), 'index.ts must use the origin policy');
+  const policy = indexSource.slice(indexSource.indexOf('function corsOriginAllowed('), indexSource.indexOf('const configuredCorsOrigins'));
+  assert.ok(policy.includes('if (!origin || !production) return true;'), 'only Origin-less or non-production requests skip the policy');
+  assert.ok(policy.includes('new URL(origin).host.toLowerCase() === host'), 'production admits only the request host as origin');
+  assert.ok(!policy.includes('endsWith') && !policy.includes('includes(host'), 'no suffix or substring origin matching');
 });
