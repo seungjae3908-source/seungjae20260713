@@ -7,6 +7,7 @@ import {
   BACKTEST_LIMITS,
   BacktestValidationError,
   evaluateSelectionBias,
+  warmupStartTime,
   recordSelectionRun,
   resetSelectionRunsForTests,
   runBacktest,
@@ -25,6 +26,7 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const EXECUTION_TIMEOUT_MS = 25_000;
 const MAX_CONCURRENT_EXECUTIONS = 2;
 let activeExecutions = 0;
+
 
 type BacktestDependencies = {
   loadCandles: typeof loadHistoricalBacktestCandles;
@@ -246,7 +248,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
       const request = parseRequest(req.body);
       const execution = (async () => {
         const [history, rules] = await Promise.all([
-          deps.loadCandles({ market: request.market, symbol: request.symbol, timeframe: request.timeframe, startTime: request.startTime, endTime: request.endTime, signal: controller.signal }),
+          deps.loadCandles({ market: request.market, symbol: request.symbol, timeframe: request.timeframe, startTime: warmupStartTime(request), endTime: request.endTime, signal: controller.signal }),
           request.market === 'crypto-futures' ? deps.loadContractRules(request.symbol) : Promise.resolve({ symbol: request.symbol, quantityStep: null, quantityPrecision: null, minimumQuantity: null, minimumNotional: null, maximumLeverage: 1, maintenanceMarginRate: null, status: 'live' as const, updatedAt: new Date().toISOString(), warnings: [] as string[] }),
         ]);
         const started = performance.now();
@@ -329,7 +331,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
       const execution = (async () => {
         const loaded = await Promise.all(symbols.map(async (symbol) => {
           const [history, rules] = await Promise.all([
-            deps.loadCandles({ market: base.market, symbol, timeframe: base.timeframe, startTime: base.startTime, endTime: base.endTime, signal: controller.signal }),
+            deps.loadCandles({ market: base.market, symbol, timeframe: base.timeframe, startTime: warmupStartTime(base), endTime: base.endTime, signal: controller.signal }),
             base.market === 'crypto-futures' ? deps.loadContractRules(symbol) : Promise.resolve({ symbol, quantityStep: null, quantityPrecision: null, minimumQuantity: null, minimumNotional: null, maximumLeverage: 1, maintenanceMarginRate: null, status: 'live' as const, updatedAt: new Date().toISOString(), warnings: [] as string[] }),
           ]);
           return { symbol, history, rules };
