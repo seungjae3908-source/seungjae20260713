@@ -185,6 +185,8 @@ function exportBacktestWorkbook(values: BacktestFormValues, result: BacktestResu
         ['손익비', result.profitFactor ?? '자료 없음'],
         ['최대 낙폭', result.maximumDrawdown],
         ['최대 낙폭 %', result.maximumDrawdownPercent],
+        ['평가손실 포함 최대 낙폭', result.markedMaximumDrawdown ?? '자료 없음'],
+        ['평가손실 포함 최대 낙폭 %', result.markedMaximumDrawdownPercent ?? '자료 없음'],
         ['평균 손익배수', result.averageRMultiple],
         ['수수료', result.totalFees],
         ['슬리피지', result.totalSlippage],
@@ -519,6 +521,9 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               <Field label="청산 수수료">
                 <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.exitFeeRate} onChange={(event) => update('exitFeeRate', Number(event.target.value))} />
               </Field>
+              <Field label="주문 지연 (봉)">
+                <input className={inputClass} type="number" min="0" max="5" step="1" inputMode="numeric" value={values.entryDelayBars ?? 0} onChange={(event) => update('entryDelayBars', Math.min(5, Math.max(0, Math.trunc(Number(event.target.value)) || 0)))} />
+              </Field>
               <Field label="슬리피지">
                 <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.slippageRate} onChange={(event) => update('slippageRate', Number(event.target.value))} />
               </Field>
@@ -616,6 +621,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <Metric label="기대값" value={money(result.expectancy, result.market)} />
                 <Metric label="손익비" value={ratio(result.profitFactor)} />
                 <Metric label="최대 낙폭" value={`${money(result.maximumDrawdown, result.market)} · ${percent(result.maximumDrawdownPercent)}`} />
+                {result.markedMaximumDrawdownPercent != null && result.markedMaximumDrawdown != null ? <Metric label="평가손실 포함 최대 낙폭" value={`${money(result.markedMaximumDrawdown, result.market)} · ${percent(result.markedMaximumDrawdownPercent)}`} testId="marked-drawdown" /> : null}
                 <Metric label="평균 손익배수" value={ratio(result.averageRMultiple)} />
                 <Metric label="샤프지수" value={ratio(result.sharpeRatio)} />
                 <Metric label="소르티노지수" value={ratio(result.sortinoRatio)} />

@@ -18,6 +18,8 @@ export type BacktestFormValues = {
   entryFeeRate: number;
   exitFeeRate: number;
   slippageRate: number;
+  /** Optional order delay in bars (0-5); omitted or 0 keeps the default next-bar-open entry. */
+  entryDelayBars?: number;
   fundingRatePerInterval: number;
   fundingIntervalHours: number;
   stopLossMode: 'percent' | 'atr' | 'swing';
@@ -97,6 +99,10 @@ export type BacktestResult = {
   averageRMultiple: number;
   maximumDrawdown: number;
   maximumDrawdownPercent: number;
+  /** Includes unrealized loss of open positions (the figures above are realized-only). */
+  markedMaximumDrawdown?: number;
+  markedMaximumDrawdownPercent?: number;
+  selectionBias?: { runs: number; expectedMaxNoiseSharpe: number | null; observedSharpe: number | null; indistinguishableFromNoise: boolean };
   sharpeRatio: number | null;
   sortinoRatio: number | null;
   calmarRatio: number | null;
@@ -127,6 +133,8 @@ export function toBacktestRequest(values: BacktestFormValues) {
     : values.strategy === 'breakout'
       ? { ...values.strategyParameters.breakout }
       : { ...values.strategyParameters.vwapReclaim };
+  const entryDelayBars = Math.min(5, Math.max(0, Math.trunc(Number(values.entryDelayBars ?? 0)) || 0));
+  if (entryDelayBars > 0) parameters.entryDelayBars = entryDelayBars;
   return {
     market: values.market,
     symbol: values.symbol.trim().toUpperCase(),
