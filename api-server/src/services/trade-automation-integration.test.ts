@@ -18,6 +18,7 @@ import {
   validateManualProtection,
 } from './manual-live-order.service';
 import { assertPublicLivePlanOrigin } from './public-live-plan-origin.service';
+import { isManualOwnerOrder } from './manual-owner-order';
 import {
   assetClassOfPlan,
   liveSafetyAlertCodes,
@@ -1649,4 +1650,39 @@ test('manual order ticket builds a LIVE approval plan from server-read data, nev
     policy, repository, krwPerQuote: async () => 1_400,
     previewSnapshot: async () => ({ ...plan().marketSnapshot, currentPrice: 100_000 }),
   }), /MANUAL_ORDER_STOP_SIDE_INVALID/u);
+});
+
+test('owner manual ticket orders skip amount caps and strategy-evidence gates but keep account protection', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    liveMarketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+    liveMarketEnabledAt: { domestic_stock: null, us_stock: null, crypto_spot: new Date().toISOString(), crypto_futures: null },
+  });
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const big = 30_000_000;
+  const manual = plan({
+    accountMode: 'live', strategyId: MANUAL_ORDER_STRATEGY_ID, signalReasons: ['MANUAL_ORDER_TICKET', 'MANUAL_ENTRY'],
+    quoteAmount: big, estimatedKrw: big, targetPrices: [], stopPrice: 90_000,
+    marketSnapshot: { ...plan().marketSnapshot, availableBalance: 50_000_000, accountValueKrw: 60_000_000 },
+  });
+  const decision = evaluateTradingPlan(manual, policy, options);
+  for (const code of ['MAX_ORDER_AMOUNT', 'LIVE_FIRST_WEEK_ORDER_CAP', 'ACCOUNT_EXPOSURE_LIMIT', 'PROJECTED_ASSET_EXPOSURE_LIMIT',
+    'INSTRUMENT_AMOUNT_LIMIT', 'ASSET_CLASS_AMOUNT_LIMIT', 'EXIT_PLAN_REQUIRED', 'ECONOMICS_REQUIRED', 'PILOT_LIVE_DISABLED',
+    'RISK_BUDGET_EXCEEDED', 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED']) {
+    assert.equal(decision.blockCodes.includes(code), false, code);
+  }
+  // Account protection still applies to manual orders.
+  assert.ok(evaluateTradingPlan(manual, policy, { ...options, emergencyStopped: true }).blockCodes.includes('EMERGENCY_STOP_ACTIVE'));
+  assert.ok(evaluateTradingPlan({ ...manual, marketSnapshot: { ...manual.marketSnapshot, dailyPnlPercent: -5 } }, policy, options)
+    .blockCodes.includes('DAILY_LOSS_LIMIT'));
+  assert.ok(evaluateTradingPlan({ ...manual, stopPrice: 0 }, policy, options).blockCodes.includes('EXIT_PLAN_REQUIRED'));
+  assert.ok(evaluateTradingPlan(manual, normalizeTradingPolicy(DEFAULT_TRADING_POLICY), options)
+    .blockCodes.includes('LIVE_MARKET_SWITCH_OFF'));
+  assert.ok(evaluateTradingPlan({ ...manual, estimatedKrw: 0 }, policy, options).blockCodes.includes('ORDER_AMOUNT_INVALID'));
+
+  // The same label on an automatic plan or without the ticket reason gets no exemption.
+  const automatic = { ...manual, executionMode: 'automatic' } as TradingPlanInput;
+  assert.ok(evaluateTradingPlan(automatic, policy, options).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  assert.ok(evaluateTradingPlan({ ...manual, signalReasons: ['MANUAL_ENTRY'] }, policy, options).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  assert.equal(isManualOwnerOrder({ ...manual, accountMode: 'paper' }), false);
 });

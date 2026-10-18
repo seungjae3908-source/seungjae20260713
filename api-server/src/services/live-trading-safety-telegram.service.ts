@@ -31,7 +31,7 @@ export const LIVE_SAFETY_ALERT_CODES = Object.freeze({
   DAILY_LOSS_LIMIT: '일일 손실 한도에 도달해 오늘 새 실거래 주문을 막았습니다.',
   WEEKLY_LOSS_LIMIT: '주간 손실 한도에 도달해 새 실거래 주문을 막았습니다.',
   CONSECUTIVE_LOSS_LIMIT: '연속 손실 한도에 도달해 새 실거래 주문을 막았습니다.',
-  LIVE_FIRST_WEEK_ORDER_CAP: '실거래를 켠 첫 7일이라 10만 원이 넘는 주문을 막았습니다.',
+  LIVE_FIRST_WEEK_ORDER_CAP: '실거래를 켠 첫 7일이라 10만 원이 넘는 자동매매 주문을 막았습니다.',
 } as const);
 
 function kstDay(now: Date) {
@@ -68,7 +68,7 @@ export async function notifyLiveMarketSwitch(
         type: 'system_critical',
         title: `${MARKET_LABEL[input.market]} 실거래 ${input.enabled ? '켜짐' : '꺼짐'}`,
         details: input.enabled
-          ? '이 시장에서 실제 주문이 나갈 수 있습니다. 첫 7일은 1회 10만 원 이하로 제한됩니다. 설정에서 언제든 끌 수 있습니다.'
+          ? '이 시장에서 실제 주문이 나갈 수 있습니다. 첫 7일 자동매매 주문은 1회 10만 원 이하로 제한됩니다. 설정에서 언제든 끌 수 있습니다.'
           : '이 시장의 새 실거래 주문을 멈췄습니다. 보유 포지션 청산은 계속 가능합니다.',
         timestamp: now.toISOString(),
         dedupeKey: eventId,

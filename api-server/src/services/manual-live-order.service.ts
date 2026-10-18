@@ -22,7 +22,9 @@ import type {
 } from './trade-automation.types';
 import type { TradingRepository } from './trade-automation.repository';
 
-export const MANUAL_ORDER_STRATEGY_ID = 'manual-order-ticket-v1';
+import { MANUAL_ORDER_STRATEGY_ID, MANUAL_ORDER_TICKET_REASON } from './manual-owner-order';
+
+export { MANUAL_ORDER_STRATEGY_ID } from './manual-owner-order';
 
 export type ManualOrderAction = 'buy' | 'sell' | 'long' | 'short' | 'close_long' | 'close_short';
 
@@ -199,7 +201,7 @@ export async function buildManualLivePlanInput(input: {
     marginMode: route.marginMode,
     reduceOnly: route.exit,
     invalidateAction: 'hold',
-    signalReasons: ['MANUAL_ORDER_TICKET', route.exit ? 'MANUAL_EXIT' : 'MANUAL_ENTRY'],
+    signalReasons: [MANUAL_ORDER_TICKET_REASON, route.exit ? 'MANUAL_EXIT' : 'MANUAL_ENTRY'],
     marketSnapshot: seedSnapshot,
     entryPrice: null,
     entryZoneLow: null,

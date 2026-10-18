@@ -1,3 +1,4 @@
+import { isManualOwnerOrder } from './manual-owner-order';
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
 import {
   evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
@@ -67,13 +68,16 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
+  // The owner's manual ticket is not a strategy: no research-evidence, pilot or risk-budget
+  // gates. Spread/slippage ceilings and the total daily loss budget still apply.
+  const manualOwner = isManualOwnerOrder(plan as TradingPlanInput & { executionMode?: string });
   const formulaAiException = plan.accountMode === 'live'
     ? evaluateFormulaAiLiveException(plan, now)
     : null;
   const paperFormulaException = plan.accountMode === 'paper'
     && policy.mode === 'automatic' && policy.pilotStage === 'formula-ai-exception'
     ? evaluateFormulaAiPaperException(plan, now) : null;
-  const profitabilityAttestation = formulaAiException?.allowed
+  const profitabilityAttestation = formulaAiException?.allowed || manualOwner
     ? null
     : attestLiveTradingProfitability(plan, undefined, {
       now,
@@ -115,8 +119,8 @@ export function evaluateTradingOptimization(
   const exploratoryPaperOnly = plan.accountMode === 'paper'
     && policy.mode === 'automatic' && policy.pilotStage !== 'formula-ai-exception'
     && plan.economics == null;
-  const historicalEconomicsBypassed =
-    (plan.accountMode === 'live' && formulaAiException?.allowed === true)
+  const historicalEconomicsBypassed = manualOwner
+    || (plan.accountMode === 'live' && formulaAiException?.allowed === true)
     || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true)
     || exploratoryPaperOnly;
   if (exploratoryPaperOnly) {
@@ -145,22 +149,24 @@ export function evaluateTradingOptimization(
         else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
       }
     }
-    if (!finite(plan.estimatedSlippagePercent)) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
-    else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
-    if (!finite(plan.averageSpreadPercent)) add(blockCodes, 'AVERAGE_SPREAD_REQUIRED');
-    else if (plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_TOO_WIDE');
+    if (!finite(plan.estimatedSlippagePercent)) {
+      if (!manualOwner) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
+    } else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
+    if (!finite(plan.averageSpreadPercent)) {
+      if (!manualOwner) add(blockCodes, 'AVERAGE_SPREAD_REQUIRED');
+    } else if (plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_TOO_WIDE');
   } else if (!economics) {
     warnings.push('모의 주문에는 기대값 데이터가 없어도 실행할 수 있지만 실계좌 전환은 차단됩니다.');
   }
 
   const correlatedExposure = plan.marketSnapshot.correlatedExposurePercent;
   if (finite(correlatedExposure) && correlatedExposure > policy.maxCorrelatedExposurePercent) add(blockCodes, 'CORRELATED_EXPOSURE_LIMIT');
-  else if (liveOrAutomatic && !finite(correlatedExposure)) add(blockCodes, 'CORRELATED_EXPOSURE_REQUIRED');
+  else if (liveOrAutomatic && !manualOwner && !finite(correlatedExposure)) add(blockCodes, 'CORRELATED_EXPOSURE_REQUIRED');
 
   const distancePercent = stopDistancePercent(plan);
   const budgets = riskBudget(policy, plan, distancePercent);
   if (liveOrAutomatic && distancePercent == null) add(blockCodes, 'STOP_DISTANCE_UNAVAILABLE');
-  if (budgets.maximumOrderKrw != null && plan.estimatedKrw > budgets.maximumOrderKrw) add(blockCodes, 'RISK_BUDGET_EXCEEDED');
+  if (!manualOwner && budgets.maximumOrderKrw != null && plan.estimatedKrw > budgets.maximumOrderKrw) add(blockCodes, 'RISK_BUDGET_EXCEEDED');
 
   const accountValue = positive(plan.marketSnapshot.accountValueKrw)
     ? plan.marketSnapshot.accountValueKrw : policy.totalCapitalKrw;
@@ -175,7 +181,7 @@ export function evaluateTradingOptimization(
       : policy.pilotStage === 'formula-ai-exception'
         ? (formulaAiException?.allowed ? policy.maxOrderKrw : 0)
         : policy.maxOrderKrw;
-  if (plan.accountMode === 'live') {
+  if (plan.accountMode === 'live' && !manualOwner) {
     if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
     else if (policy.pilotStage === 'formula-ai-exception' && !formulaAiException?.allowed) {
       add(blockCodes, 'PILOT_FORMULA_AI_EXCEPTION_REQUIRED');
