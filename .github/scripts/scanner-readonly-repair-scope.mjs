@@ -4,7 +4,7 @@ import { AUTOMATIC_SIGNAL_PIPELINE_REVIEWED_PATHS } from './paper-forward-review
 // This is an immutable scope classification for the user's Draft scanner repair,
 // not trading approval. Every shared byte must match the verified source commit.
 // Further edits restore the full gate; no prefix, rename or wildcard exemption.
-export const SCANNER_REPAIR_SOURCE_SHA = `c2b636da30e9a9c9bd885572f21ac39e284f9027`;
+export const SCANNER_REPAIR_SOURCE_SHA = 'cbb3f645563b820393b85592affa2c0552f22344';
 // Keep the pre-policy workflow baseline immutable even when a later source-only
 // regression fixture is pinned. A repin must not bless removal of safety steps.
 export const SCANNER_REPAIR_WORKFLOW_BASE_SHA = '6139042aaef5e7fec6bcc39648ccdddb949121e6';
