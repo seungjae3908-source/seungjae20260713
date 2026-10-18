@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useLocation } from 'wouter';
 import {
   BarChart3,
@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
+import { DesktopSidebarMountedContext } from '@/lib/desktop-shell-context';
 import {
   MOBILE_NAVIGATION,
   cleanAppPath,
@@ -69,8 +70,8 @@ function menuPlacement(groupId: MobileTabId) {
 
 /**
  * Mobile/tablet tab bar (<1200px). Pages render it at their bottom edge; on
- * desktop the AppShell sidebar takes over and this bar is hidden by CSS so the
- * document title and route metadata effects keep running.
+ * desktop the AppShell sidebar takes over and this bar renders nothing (its
+ * document title effect keeps running), so only one primary <nav> exists.
  */
 
 export function BottomNav() {
@@ -82,6 +83,7 @@ export function BottomNav() {
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRefs = useRef<Partial<Record<MobileTabId, HTMLButtonElement | null>>>({});
   const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const desktopSidebarMounted = useContext(DesktopSidebarMountedContext);
   const visibleGroups = MOBILE_NAVIGATION.filter((item) => !item.capability || auth.can(item.capability));
 
   useEffect(() => {
@@ -196,6 +198,8 @@ export function BottomNav() {
       menuItemRefs.current[targetIndex]?.focus();
     }
   }
+
+  if (desktopSidebarMounted) return null;
 
   return (
     <nav

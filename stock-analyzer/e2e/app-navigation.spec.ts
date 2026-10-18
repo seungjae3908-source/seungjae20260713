@@ -216,7 +216,7 @@ test('navigation metadata has five owners, actual final-main routes, and no dupl
   for (const section of SIDEBAR_NAVIGATION) {
     for (const item of section.items) expect(mobileHrefs.has(item.href), item.href).toBe(true);
   }
-  expect(SIDEBAR_NAVIGATION.map((section) => section.label)).toEqual([null, '종목', '기술', '정보', '계정']);
+  expect(SIDEBAR_NAVIGATION.map((section) => section.label)).toEqual(['홈', '종목', '기술', '정보', '설정']);
 });
 
 test('desktop sidebar owns the primary navigation at 1440px and the mobile tab bar is hidden', async ({ page }) => {
@@ -229,7 +229,7 @@ test('desktop sidebar owns the primary navigation at 1440px and the mobile tab b
   await expect(navigation).toHaveCount(1);
   await expect(navigation).toHaveAttribute('data-testid', 'desktop-sidebar');
   await expect(navigation).toHaveAttribute('data-route-title', '국내주식');
-  for (const label of ['홈', '통합검색', '국내주식', 'AI 검색기', '과거검증', '자동매매', '연구센터', '포트폴리오', 'AI 상담', '설정']) {
+  for (const label of ['홈', '통합검색', '국내주식', '검색기', '과거검증', '기술매매', '연구센터', '포트폴리오', 'AI 정보', '앱 설정']) {
     await expect(navigation.getByRole('menuitem', { name: label, exact: true })).toBeVisible();
   }
   await expect(navigation.getByRole('menuitem', { name: '국내주식', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -242,7 +242,7 @@ test('desktop sidebar owns the primary navigation at 1440px and the mobile tab b
   await expect(technicalMenu.getByRole('menuitem').nth(1)).toBeFocused();
   const box = await navigation.boundingBox();
   expect(Math.round(box?.width ?? 0)).toBe(216);
-  await expect(page.locator('nav[data-mobile-tab-bar]')).toBeHidden();
+  await expect(page.locator('nav')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   assertClean();
 });
@@ -344,9 +344,9 @@ test('desktop sidebar reaches scanner, AI chart, and auto-trading routes without
   await page.goto('/stocks/kr');
 
   const cases = [
-    ['AI 검색기', '/scanner', /AI 신호검색기/],
+    ['검색기', '/scanner', /AI 신호검색기/],
     ['AI차트', '/ai-chart', /AI 차트 생중계/],
-    ['자동매매', '/auto-trading', /자동매매/],
+    ['기술매매', '/auto-trading', /자동매매/],
   ] as const;
 
   for (const [label, route, heading] of cases) {
