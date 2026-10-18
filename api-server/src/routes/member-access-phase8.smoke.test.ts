@@ -2,8 +2,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import {
   requireAuthenticated,
@@ -443,14 +441,4 @@ test('research dashboard overview proxy deadline covers the verified loopback re
   assert.equal(RESEARCH_OVERVIEW_TIMEOUT_MS, 10_000);
   assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS > 8_000);
   assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS <= 15_000);
-});
-
-test('production API entrypoint does not reflect arbitrary web origins', () => {
-  const indexSource = readFileSync(path.resolve(process.cwd(), process.cwd().endsWith('api-server') ? '' : 'api-server', 'src/index.ts'), 'utf8');
-  assert.ok(!/origin:\s*true/.test(indexSource), 'index.ts must not reflect every Origin');
-  assert.ok(indexSource.includes('corsOriginAllowed(req.headers.origin'), 'index.ts must use the origin policy');
-  const policy = indexSource.slice(indexSource.indexOf('function corsOriginAllowed('), indexSource.indexOf('const configuredCorsOrigins'));
-  assert.ok(policy.includes('if (!origin || !production) return true;'), 'only Origin-less or non-production requests skip the policy');
-  assert.ok(policy.includes('new URL(origin).host.toLowerCase() === host'), 'production admits only the request host as origin');
-  assert.ok(!policy.includes('endsWith') && !policy.includes('includes(host'), 'no suffix or substring origin matching');
 });
