@@ -288,7 +288,10 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "stock-analyzer/e2e/detail-auto-ui-compact.spec.ts",
   "stock-analyzer/e2e/scanner-chart-broadcast.spec.ts",
   "stock-analyzer/src/components/auto-trading-run-control.tsx",
-  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx"
+  "stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx",
+  // Owner-approved member-scoped kill switch (범위 좁히기, 2026-10-18): exact paths only.
+  "api-server/src/services/trade-kill-switch.test.ts",
+  "api-server/src/services/trade-pre-submission-risk.service.ts"
 ]);
 // Owner-approved on 2026-10-12: exactly these 50 AUTO safety paths, not a
 // directory exemption or permission to deploy/activate. Keep the immutable

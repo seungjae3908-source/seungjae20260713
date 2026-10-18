@@ -2402,7 +2402,9 @@ test('member Telegram live admission requires a SENT receipt after this chat bin
   assert.equal(memberTelegramProofMatchesCurrentBinding(null, accepted, now), false);
 });
 
-test('stopped automatic member with a stored Live fill remains visible without reactivating exits or new entries', async () => {
+// Owner decision 2026-10-18: a stop blocks new entries only. Without the
+// exact-SHA arm its protective exits still wait (warmup/arm), never "policy".
+test('stopped automatic member with a stored Live fill remains visible; unarmed exits wait and no new entries', async () => {
   const env = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
     'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
@@ -2456,7 +2458,8 @@ test('stopped automatic member with a stored Live fill remains visible without r
     for (const key of env) process.env[key] = 'true';
     const result = await worker.runOnce(new Date(now));
     assert.equal(result.liveTrackedPositions, 1);
-    assert.equal(result.liveExitsSuppressedByPolicy, 1);
+    assert.equal(result.liveExitsSuppressedByPolicy, 0);
+    assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);
     assert.equal(result.newEntriesFailClosed, true);
     assert.equal(result.liveEntryWarmupComplete, false);
     assert.equal(result.createdPlans, 0);
@@ -2495,6 +2498,59 @@ async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, n
     createdAt: timestamp, updatedAt: timestamp,
   } as any);
 }
+
+test('emergency stop and 작동 OFF keep armed protective Live exits running while new entries stay blocked', async () => {
+  const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH'] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const root = await mkdtemp(join(tmpdir(), 'auto-stopped-protective-exit-'));
+  const armPath = join(root, 'arm.json');
+  try {
+    for (const key of flags.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'd'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({ schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha: 'd'.repeat(40), armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString() }), { mode: 0o600 });
+    for (const stoppedPolicy of [
+      normalizeTradingPolicy({ ...policy(), mode: 'approval', automaticEnabled: false, emergencyStopped: true }),
+      normalizeTradingPolicy({ ...policy(), automaticEnabled: false }),
+    ]) {
+      const repository = new InMemoryTradingRepository();
+      await repository.savePolicy(USER, stoppedPolicy);
+      await seedRetainedLiveAutoFill(repository, nowMs);
+      const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+      let providerReads = 0;
+      const worker = new MemberAutoTradingBackgroundWorker({ ...base,
+        async listEligibleMembers() {
+          return [{ userId: USER, policy: stoppedPolicy,
+            profile: { role: 'admin', membership_level: 'admin', status: 'approved', is_active: true } }] as never;
+        },
+        async readLiveAccountSnapshot() {
+          providerReads += 1;
+          // Stop before order creation: no actual or simulated financial POST.
+          throw new Error('BACKGROUND_EXIT_READONLY_TEST_BOUNDARY');
+        },
+      });
+      const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+      assert.equal(result.liveTrackedPositions, 1);
+      assert.equal(result.liveExitsSuppressedByPolicy, 0);
+      assert.equal(result.liveExitsSuppressedByWarmupOrArm, 0);
+      assert.equal(providerReads, 1, 'the stop-loss exit reaches its guarded provider boundary');
+      assert.equal(result.newEntriesFailClosed, true);
+      assert.equal(result.createdPlans, 0);
+      assert.equal(result.liveOrders, 0);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of flags) {
+      const value = previous[key];
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
 
 test('restart with a current arm and missing entry handoff still evaluates only owned guarded Live exits', async () => {
   const flags = ['MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
