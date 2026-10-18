@@ -112,3 +112,28 @@ test('regime sizing takes more risk in strong trends and less otherwise; pyramid
   assert.ok(up.trades.some((t) => t.adds > 0), 'adds while winning');
   assert.ok(up.trades.every((t) => typeof t.strongRegime === 'boolean'));
 });
+
+test('live plan: margin cap, minimum order, daily limit and kill switch', async () => {
+  const { simulateLivePlanV1 } = await import('../src/trend-pilot-backtest-v1.mjs');
+  const H = 3_600_000; const t0 = Date.UTC(2025, 0, 1);
+  const trade = (i, r, stop = 0.02, hold = 2) => ({ entryTime: t0 + (i * 24 * H), exitTime: t0 + (i * 24 * H) + (hold * H), rMultiple: r, stopFraction: stop });
+  // 1.5% of 100k / 2% stop = 75k notional → fits 5x margin, P&L = 1,500 × R
+  const win = simulateLivePlanV1([trade(0, 2)]);
+  assert.equal(win.endEquityKrw, 103_000);
+  // Tight stop: wanted 1.5M → capped by the 1M per-order cap first, then 5x margin (500k)
+  const tight = simulateLivePlanV1([trade(0, 1, 0.001)]);
+  assert.equal(tight.endEquityKrw, 100_000 + Math.round(1_500 * (500_000 / 1_500_000)));
+  const lev2 = simulateLivePlanV1([trade(0, 1, 0.001)], { leverage: 2 });
+  assert.ok(lev2.endEquityKrw < tight.endEquityKrw);
+  // Under the minimum order
+  assert.equal(simulateLivePlanV1([trade(0, 1, 0.5)]).skipped.minimum, 1);
+  // Daily limit: a -1R loss closes before the second same-day signal
+  const sameDay = [{ entryTime: t0, exitTime: t0 + H, rMultiple: -1, stopFraction: 0.02 }, { entryTime: t0 + (2 * H), exitTime: t0 + (3 * H), rMultiple: 3, stopFraction: 0.02 }];
+  assert.equal(simulateLivePlanV1(sameDay).skipped.dailyLimit, 1);
+  // Kill switch after -25%
+  const losses = Array.from({ length: 30 }, (_, i) => trade(i, -1));
+  const killed = simulateLivePlanV1(losses);
+  assert.ok(killed.killedAt);
+  assert.ok(killed.skipped.killed > 0);
+  assert.ok(killed.maxDrawdownFraction >= 0.25 && killed.maxDrawdownFraction < 0.27);
+});
