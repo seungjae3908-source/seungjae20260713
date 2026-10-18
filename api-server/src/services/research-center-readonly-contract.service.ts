@@ -896,6 +896,132 @@ export function sanitizeMarketWatchCadenceReadback(value: unknown) {
   };
 }
 
+// Exploratory research results (combination search, exit comparison, exploratory
+// forward paper ledger). Display-only; a malformed row is dropped, never coerced.
+const RESEARCH_RESULT_STATUSES = new Set(['PRESENT', 'MISSING', 'INVALID']);
+const RESEARCH_RESULT_ID_PATTERN = /^[A-Za-z0-9:_.-]{1,120}$/u;
+
+function resultCount(value: unknown): number | null {
+  const count = countOrNull(value);
+  return count === undefined ? null : count;
+}
+
+function resultNumber(value: unknown): number | null {
+  const number = finiteOrNull(value);
+  return number === undefined ? null : number;
+}
+
+function resultId(value: unknown): string | null {
+  return typeof value === 'string' && RESEARCH_RESULT_ID_PATTERN.test(value) ? value : null;
+}
+
+function resultLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 6).map((label) => safeTextOrNull(label, 80)).filter((label): label is string => typeof label === 'string');
+}
+
+function resultRows(value: unknown, maximum: number): UnknownRecord[] {
+  return Array.isArray(value) ? value.slice(0, maximum).map(record).filter((row): row is UnknownRecord => row !== null) : [];
+}
+
+function resultHeader(input: UnknownRecord | null) {
+  const status = typeof input?.status === 'string' && RESEARCH_RESULT_STATUSES.has(input.status) ? input.status : 'MISSING';
+  const observedAt = safeTextOrNull(input?.observedAt, 40);
+  const researchSha = typeof input?.researchSha === 'string' && SHA_PATTERN.test(input.researchSha) ? input.researchSha : null;
+  return { present: input?.present === true && status === 'PRESENT', status, observedAt: observedAt ?? null, researchSha };
+}
+
+export function sanitizeResearchResults(value: unknown) {
+  const input = record(value);
+  const combination = record(input?.combination);
+  const exitComparison = record(input?.exitComparison);
+  const exploratory = record(input?.exploratory);
+  const totals = record(exploratory?.totals);
+  return {
+    combination: {
+      ...resultHeader(combination),
+      lanes: resultRows(combination?.lanes, 20).flatMap((lane) => {
+        const laneId = resultId(lane.laneId);
+        const status = safeTextOrNull(lane.status, 40);
+        if (!laneId || !status) return [];
+        return [{
+          laneId,
+          status,
+          cumulativeTrials: resultCount(lane.cumulativeTrials),
+          survivors: resultCount(lane.survivors),
+          watch: resultCount(lane.watch),
+          rejected: resultCount(lane.rejected),
+          holdoutUsed: resultCount(lane.holdoutUsed),
+          holdoutBudget: resultCount(lane.holdoutBudget),
+          paperCandidates: resultRows(lane.paperCandidates, 10).map((row) => ({
+            trialId: resultId(row.trialId),
+            labels: resultLabels(row.labels),
+            exitId: resultId(row.exitId),
+            holdoutTrades: resultCount(row.holdoutTrades),
+            holdoutMeanReturn: resultNumber(row.holdoutMeanReturn),
+          })),
+          top: resultRows(lane.top, 5).map((row) => ({
+            trialId: resultId(row.trialId),
+            finalStatus: safeTextOrNull(row.finalStatus, 20) ?? null,
+            labels: resultLabels(row.labels),
+            exitId: resultId(row.exitId),
+            qValue: resultNumber(row.qValue),
+            validationTrades: resultCount(row.validationTrades),
+            validationMeanReturn: resultNumber(row.validationMeanReturn),
+            validationWinRate: resultNumber(row.validationWinRate),
+            beatsBaseline: row.beatsBaseline === true,
+            holdoutChecked: row.holdoutChecked === true,
+            holdoutPass: typeof row.holdoutPass === 'boolean' ? row.holdoutPass : null,
+          })),
+        }];
+      }),
+    },
+    exitComparison: {
+      ...resultHeader(exitComparison),
+      lanes: resultRows(exitComparison?.lanes, 20).flatMap((lane) => {
+        const laneId = resultId(lane.laneId);
+        if (!laneId) return [];
+        return [{
+          laneId,
+          status: safeTextOrNull(lane.status, 40) ?? 'UNKNOWN',
+          signalSetCount: resultCount(lane.signalSetCount),
+          winners: resultRows(lane.winners, 20).map((row) => ({
+            signalSetId: resultId(row.signalSetId),
+            label: safeTextOrNull(row.label, 80) ?? null,
+            variantId: resultId(row.variantId),
+            validationMeanR: resultNumber(row.validationMeanR),
+          })),
+        }];
+      }),
+    },
+    exploratory: {
+      ...resultHeader(exploratory),
+      totals: {
+        trades: resultCount(totals?.trades),
+        closed: resultCount(totals?.closed),
+        open: resultCount(totals?.open),
+        promotionEligibleRules: resultCount(totals?.promotionEligibleRules),
+        demotedRules: resultCount(totals?.demotedRules),
+      },
+      rules: resultRows(exploratory?.rules, 20).map((row) => ({
+        ruleId: resultId(row.ruleId),
+        laneId: resultId(row.laneId),
+        labels: resultLabels(row.labels),
+        lifecycle: safeTextOrNull(row.lifecycle, 20) ?? null,
+        open: resultCount(row.open),
+        strictTrades: resultCount(row.strictTrades),
+        strictMeanR: resultNumber(row.strictMeanR),
+        strictLower95: resultNumber(row.strictLower95),
+        strictWinRate: resultNumber(row.strictWinRate),
+        promotionEligible: row.promotionEligible === true,
+        tradesNeeded: resultCount(row.tradesNeeded),
+        symbolsNeeded: resultCount(row.symbolsNeeded),
+      })),
+    },
+    executionAuthority: 'NONE' as const,
+  };
+}
+
 export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | null {
   const payload = record(value);
   const state = record(payload?.state);
@@ -914,6 +1040,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   const formulaBacktest = sanitizeFormulaBacktestReadback(research?.formulaBacktest);
+  const results = sanitizeResearchResults(research?.results);
   const lightweightMarketWatch = sanitizeMarketWatchReadback(dataFactory?.lightweightMarketWatch);
   const lightweightMarketWatchCadence = sanitizeMarketWatchCadenceReadback(dataFactory?.lightweightMarketWatchCadence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
@@ -949,7 +1076,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       authorityEvidenceComplete: safety.authorityEvidenceComplete,
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
-    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest },
+    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest, results },
     dataFactory: { temporalCryptoFutures, lightweightMarketWatch, lightweightMarketWatchCadence },
     factory,
     paper: { runtime, ledger, candidatePerformance },
