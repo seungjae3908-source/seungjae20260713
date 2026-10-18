@@ -433,7 +433,91 @@ export const TIMING_RULES_V1 = Object.freeze([
       const lastOfMonth = next ? new Date(next.timestamp).getUTCMonth() !== d.getUTCMonth() : false;
       let k = 0; for (let j = i; j >= 0 && new Date(bars[j].timestamp).getUTCMonth() === d.getUTCMonth(); j -= 1) k += 1;
       return lastOfMonth || k <= 2 ? 1 : 0; }) },
+  ...LEGEND_TRADER_RULES(),
 ]);
+
+// Rules written down from famous traders / YouTubers' public descriptions.
+// Discretionary parts (news, earnings, tape reading) cannot be coded; what is
+// coded is the mechanical skeleton each of them teaches. Adaptations are named.
+function LEGEND_TRADER_RULES() {
+  const adr = (bars, L = 20) => sma(bars.map((b) => (b.low > 0 ? (b.high / b.low) - 1 : 0)), L);
+  return [
+    { id: 'DANTE_224_BREAKOUT', family: '전설', name: '단테 224일선 돌파 (4개월+ 아래 있다가 상향 돌파, 224선 −5% 이탈 청산)', source: '주식단테 유튜브 (224일선 돌파 매매)',
+      make: ({ close, n, month }) => { const s = sma(close, 224); const below = close.map((c, i) => (t(s[i]) && c < s[i] ? 1 : 0)); const look = 4 * month; const cnt = sma(below, look);
+        return holdUntil(n, (i) => i > 0 && t(s[i]) && t(cnt[i - 1]) && cnt[i - 1] >= 0.9 && close[i] > s[i] && t(s[i - 20]) && s[i] >= s[i - 20] * 0.97,
+          (i) => t(s[i]) && close[i] < s[i] * 0.95); } },
+    { id: 'DANTE_224_PULLBACK', family: '전설', name: '단테 224일선 눌림 (정배열 + 224선 ±8% 접근 매수, −8% 이탈 손절, +35% 이격 익절)', source: '주식단테 유튜브 (224일선 사정거리 ±8~10%)',
+      make: ({ close, n }) => { const s = sma(close, 224); const m = sma(close, 112);
+        return holdUntil(n, (i) => i >= 20 && t(s[i - 20]) && t(m[i]) && s[i] > s[i - 20] && m[i] > s[i] && close[i] >= s[i] * 0.98 && close[i] <= s[i] * 1.08,
+          (i) => t(s[i]) && (close[i] < s[i] * 0.92 || close[i] > s[i] * 1.35)); } },
+    { id: 'DANTE_112_BOTTOM', family: '전설', name: '단테 112일선 바닥 (역배열 종목 112선 돌파 매수, 224선 도달 매도)', source: '주식단테 유튜브 (역배열 112일선 저점 매매)',
+      make: ({ close, n }) => { const s = sma(close, 224); const m = sma(close, 112);
+        return holdUntil(n, (i) => i > 0 && t(s[i]) && t(m[i - 1]) && m[i] < s[i] && close[i - 1] <= m[i - 1] && close[i] > m[i],
+          (i) => t(s[i]) && (close[i] >= s[i] || close[i] < m[i] * 0.95)); } },
+    { id: 'QULLAMAGGIE_BREAKOUT', family: '전설', name: '쿨라매기 돌파 (급등주 1·3·6개월 +25/50/150% + 변동폭 큼 + 깃발 돌파, 진입일 저가 손절, 10일선 청산)', source: 'Kristjan Kullamägi (Qullamaggie) streams/blog; ADR 5%(코인)·3%(주식) 적응',
+      make: ({ bars, close, n, month, crypto }) => { const a = adr(bars); const s10 = sma(close, 10); const s50 = sma(close, 50); const hi = rollingMax(bars.map((b) => b.high), 10); const lo = rollingMin(bars.map((b) => b.low), 10);
+        const adrMin = crypto ? 0.05 : 0.03; let stop = null; let held = 0;
+        return holdUntil(n, (i) => { if (i < 6 * month + 11 || !t(a[i]) || !t(hi[i - 1]) || !t(s50[i])) return false; const j = i - 10;
+          const mom = close[j] / close[j - month] - 1 >= 0.25 || close[j] / close[j - 3 * month] - 1 >= 0.5 || close[j] / close[j - 6 * month] - 1 >= 1.5;
+          const tight = (hi[i - 1] - lo[i - 1]) / close[i - 1] <= 4 * a[i];
+          const ok = a[i] >= adrMin && mom && tight && close[i] > s50[i] && close[i] > hi[i - 1] && (close[i] / close[i - 1] - 1) <= 2 * a[i];
+          if (ok) { stop = bars[i].low; held = 0; } return ok; },
+        (i) => { held += 1; return close[i] < stop || (held >= 3 && t(s10[i]) && close[i] < s10[i]); }); } },
+    { id: 'MINERVINI_VCP', family: '전설', name: '미너비니 VCP (트렌드 템플릿 + 변동폭·거래량 수축 후 돌파, −8% 손절, 50일선 청산)', source: 'Minervini, Trade Like a Stock Market Wizard (2013); USIC 2021 334.8%',
+      make: ({ bars, close, n }) => { const s50 = sma(close, 50); const s150 = sma(close, 150); const s200 = sma(close, 200); const h252 = rollingMax(close, 252); const l252 = rollingMin(close, 252);
+        const highs = bars.map((b) => b.high); const lows = bars.map((b) => b.low); const vol = bars.map((b) => b.volume ?? 0); const v10 = sma(vol, 10); const v50 = sma(vol, 50);
+        const hi10 = rollingMax(highs, 10); const lo10 = rollingMin(lows, 10); const hi30 = rollingMax(highs, 30); const lo30 = rollingMin(lows, 30); let stop = null;
+        return holdUntil(n, (i) => { if (i < 273 || !t(s200[i - 20]) || !t(hi30[i - 1])) return false;
+          const template = close[i] > s50[i] && s50[i] > s150[i] && s150[i] > s200[i] && s200[i] > s200[i - 20] && close[i] >= 0.75 * h252[i] && close[i] >= 1.3 * l252[i];
+          const recent = (hi10[i - 1] - lo10[i - 1]) / close[i - 1]; const wide = (hi30[i - 1] - lo30[i - 1]) / close[i - 1];
+          const dryUp = !(v50[i - 1] > 0) || v10[i - 1] < v50[i - 1];
+          const ok = template && recent <= 0.5 * wide && recent <= 0.15 && dryUp && close[i] > hi10[i - 1];
+          if (ok) stop = close[i] * 0.92; return ok; },
+        (i) => close[i] < stop || (t(s50[i]) && close[i] < s50[i])); } },
+    { id: 'DARVAS_BOX', family: '전설', name: '다바스 박스 (52주 고점권 박스 상단 돌파, 박스 하단 트레일링 손절)', source: 'Nicolas Darvas, How I Made $2,000,000 in the Stock Market (1960)',
+      make: ({ bars, close, n }) => { const highs = bars.map((b) => b.high); const lows = bars.map((b) => b.low); const h252 = rollingMax(highs, 252); const out = new Array(n).fill(0);
+        let top = null; let bottom = null; let topAge = 0; let pos = 0; let stop = null;
+        for (let i = 1; i < n; i += 1) {
+          if (pos === 1) { if (close[i] < stop) pos = 0; }
+          else if (top !== null && bottom !== null && topAge >= 3 && t(h252[i - 1]) && top >= 0.9 * h252[i - 1] && close[i] > top) { pos = 1; stop = bottom; }
+          if (top === null || highs[i] > top) { top = highs[i]; topAge = 0; bottom = null; } else { topAge += 1; bottom = bottom === null ? lows[i] : Math.min(bottom, lows[i]); }
+          if (pos === 1 && topAge >= 3 && bottom !== null) stop = Math.max(stop, bottom);
+          out[i] = pos;
+        }
+        return out; } },
+    { id: 'BRANDT_PATTERN', family: '전설', name: '브란트 8주 수렴 패턴 돌파 (돌파일 저가 손절, 패턴 높이 목표)', source: 'Peter Brandt, Diary of a Professional Commodity Trader (2011) — Last Day Rule',
+      make: ({ bars, close, n }) => { const highs = bars.map((b) => b.high); const lows = bars.map((b) => b.low); const h40 = rollingMax(highs, 40); const l40 = rollingMin(lows, 40);
+        const h20 = rollingMax(highs, 20); const l20 = rollingMin(lows, 20); let stop = null; let target = null; let held = 0;
+        return holdUntil(n, (i) => { if (i < 61 || !t(h40[i - 1]) || !t(h20[i - 21])) return false; const height = h40[i - 1] - l40[i - 1];
+          const early = h20[i - 21] - l20[i - 21]; const late = h20[i - 1] - l20[i - 1];
+          const ok = height / close[i - 1] <= 0.35 && late <= 0.8 * early && close[i] > h40[i - 1];
+          if (ok) { stop = bars[i].low; target = close[i] + height; held = 0; } return ok; },
+        (i) => { held += 1; return close[i] < stop || close[i] >= target || held >= 40; }); } },
+    { id: 'COWEN_LOG_RISK', family: '전설', name: '코웬식 로그회귀 리스크 (과거만 쓴 회귀 잔차 백분위: 낮으면 많이, 높으면 0)', source: 'Benjamin Cowen, Into the Cryptoverse (log regression bands / risk metric) — 재현판',
+      make: ({ bars, close, n, crypto }) => { const GENESIS = Date.UTC(2009, 0, 3); const out = new Array(n).fill(0); const resid = [];
+        let sx = 0; let sy = 0; let sxx = 0; let sxy = 0; let c = 0;
+        for (let i = 0; i < n; i += 1) {
+          const x = Math.log(crypto ? Math.max(1, (bars[i].timestamp - GENESIS) / DAY) : i + 250); const y = Math.log(close[i]);
+          sx += x; sy += y; sxx += x * x; sxy += x * y; c += 1;
+          if (c < 365) continue; const den = (c * sxx) - (sx * sx); if (den <= 0) continue;
+          const b = ((c * sxy) - (sx * sy)) / den; const a0 = (sy - (b * sx)) / c; const r = y - (a0 + (b * x)); resid.push(r);
+          let below = 0; for (const v of resid) if (v <= r) below += 1; const risk = below / resid.length;
+          out[i] = risk < 0.3 ? 1 : risk < 0.5 ? 0.75 : risk < 0.7 ? 0.5 : risk < 0.85 ? 0.25 : 0;
+        }
+        return out; } },
+    { id: 'QULLAMAGGIE_PARABOLIC_SHORT', family: '전설', name: '쿨라매기 포물선 숏 (5일 +30%·3연속 양봉 뒤 첫 전일저가 이탈 숏, 고점 손절, 10일선 커버)', source: 'Kristjan Kullamägi parabolic short; stonkscapital systemization', nativeShort: true,
+      make: ({ bars, close, n }) => { const s10 = sma(close, 10); const out = new Array(n).fill(0); let armed = 0; let peak = null; let pos = 0; let stop = null; let held = 0;
+        for (let i = 5; i < n; i += 1) {
+          if (pos === -1) { held += 1; if (close[i] > stop || (t(s10[i]) && close[i] <= s10[i]) || held >= 10) pos = 0; }
+          const run = close[i] / close[i - 5] - 1 >= 0.3 && close[i] > close[i - 1] && close[i - 1] > close[i - 2] && close[i - 2] > close[i - 3];
+          if (run) { armed = 3; peak = Math.max(peak ?? 0, bars[i].high); } else if (armed > 0) {
+            if (pos === 0 && close[i] < bars[i - 1].low) { pos = -1; stop = Math.max(peak, bars[i].high); held = 0; armed = 0; peak = null; } else { armed -= 1; peak = Math.max(peak ?? 0, bars[i].high); if (!armed) peak = null; }
+          }
+          out[i] = pos;
+        }
+        return out; } },
+  ];
+}
 
 // Rules that need their own intraday return model (daily OHLC only).
 export const SPECIAL_RULES_V1 = Object.freeze([
@@ -967,7 +1051,10 @@ export function evaluateStrategyZooMarketV1({ market, datasets }) {
   }
   const SIDE_KO = { LONG: '롱만', SHORT: '숏만', LS: '롱숏' };
   for (const rule of allocationOnly ? [] : TIMING_RULES_V1) {
-    if (market === 'CRYPTO_FUTURES') {
+    if (rule.nativeShort) {
+      // a rule that only exists as a short: futures only, run as written
+      if (market === 'CRYPTO_FUTURES') add({ id: rule.id, family: rule.family, name: `${rule.name} [숏만]`, source: rule.source, kind: 'timing', side: 'SHORT' }, simulateTimingPortfolio(panel, timingTargets(panel, rule, market), market));
+    } else if (market === 'CRYPTO_FUTURES') {
       for (const side of ['LONG', 'SHORT', 'LS']) {
         if (rule.id === 'BUY_HOLD' && side === 'LS') continue;
         const id = rule.id === 'BUY_HOLD' && side === 'LONG' ? 'BUY_HOLD' : `${rule.id}__${side}`;
