@@ -10,6 +10,8 @@ on:
       - research-production/src/trend-pilot-backtest-v1.mjs
       - research-production/bin/trend-pilot-backtest.mjs
       - research-production/src/aggressive-sleeve-backtest-v1.mjs
+      - research-production/src/four-market-trend-backtest-v1.mjs
+      - research-production/bin/four-market-trend-backtest.mjs
 
 permissions:
   contents: read
@@ -32,6 +34,12 @@ jobs:
           cp "$RUNNER_TEMP/state/latest/trend-pilot-backtest-v1.json" trend-pilot-backtest-v1.json
           cp "$RUNNER_TEMP/state/latest/aggressive-sleeve-backtest-v1.json" aggressive-sleeve-backtest-v1.json || true
           { echo '```'; cat trend-pilot-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Four-market trend backtest (KR/US stocks, coin spot, coin futures)
+        run: |
+          set -Eeuo pipefail
+          node research-production/bin/four-market-trend-backtest.mjs --fetch "$RUNNER_TEMP/four" | tee four-market-report.txt
+          cp "$RUNNER_TEMP/four/latest/four-market-trend-backtest-v1.json" four-market-trend-backtest-v1.json
+          { echo '```'; cat four-market-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: trend-pilot-backtest
@@ -39,4 +47,6 @@ jobs:
             trend-pilot-report.txt
             trend-pilot-backtest-v1.json
             aggressive-sleeve-backtest-v1.json
+            four-market-report.txt
+            four-market-trend-backtest-v1.json
           retention-days: 90
