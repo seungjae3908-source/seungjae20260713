@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 
 import { BitgetPublicClient } from '../../market-prediction-lab/src/bitget-public-client.js';
 import { collectBitgetCandles } from '../../market-prediction-lab/src/bitget-candle-collector.js';
-import { fetchCombinationFundingRatesV1 } from '../src/combination-search-lane-v1.mjs';
+import { collectFundingRateHistory } from '../../market-prediction-lab/src/derivatives-history.js';
 import { evaluateStrategyZooMarketV1, formatStrategyZooReportKoV1 } from '../src/strategy-zoo-v1.mjs';
 
 const END = Date.UTC(2026, 0, 1) - 1;
@@ -103,8 +103,19 @@ async function fetchAll(root) {
             rows.sort((x, y) => x.timestamp - y.timestamp);
             return { timestamp: k, open: rows[0].open, high: Math.max(...rows.map((x) => x.high)), low: Math.min(...rows.map((x) => x.low)), close: rows.at(-1).close, volume: rows.reduce((t, x) => t + x.volume, 0) };
           });
-          try { fundingRates = (await fetchCombinationFundingRatesV1({ source: 'BITGET_1H', symbol, startTime: Date.UTC(2019, 0, 1), endTime: END, fetchImpl: globalThis.fetch, minimumRecords: 0 })).rows; }
-          catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 80)}\n`); }
+          // Bitget funding history directly (newest → oldest pages). The shared helper falls
+          // back to a Binance proxy when the page cap is hit, and Binance is geo-blocked here.
+          try {
+            const history = await collectFundingRateHistory({ client: bitget, symbol, startTime: Date.UTC(2019, 0, 1), endTime: END, maxPages: 200 });
+            fundingRates = history.records.map((x) => ({ timestamp: x.timestamp, rate: x.rate })).filter((x) => Number.isSafeInteger(x.timestamp) && Number.isFinite(x.rate));
+          } catch (error) { process.stderr.write(`FUNDING_UNAVAILABLE:${symbol}:${String(error?.message ?? error).slice(0, 80)}\n`); }
+          const firstCandle = candles[0]?.timestamp ?? 0;
+          const covered = fundingRates.length ? Math.min(...fundingRates.map((x) => x.timestamp)) : null;
+          if (covered === null || covered > firstCandle + (30 * 86_400_000)) {
+            // never backtest a perpetual on days without funding: trim candles to the funding span
+            candles = covered === null ? [] : candles.filter((c) => c.timestamp >= covered);
+            process.stderr.write(`FUNDING_TRIMMED:${symbol}:from=${covered ? new Date(covered).toISOString().slice(0, 10) : 'none'}\n`);
+          }
         } else candles = await fetchYahoo(market, symbol);
         if (candles.length < 300) throw new Error(`SHORT_HISTORY_${candles.length}`);
         data[market].push({ symbol, candles, fundingRates });
