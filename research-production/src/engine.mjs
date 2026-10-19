@@ -5,6 +5,8 @@ import { cp, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from '
 import { cpus } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
+import { formulaBacktestQueueRootV1 } from './autonomous-research-closed-loop-v1.mjs';
+
 export const PAPER_FORWARD_PILOT_INITIAL_CAPITAL_KRW = 1_000_000;
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 const FORBIDDEN_ACTIVATION_KEYS = Object.freeze([
@@ -236,7 +238,10 @@ export function buildTaskPlan({
     };
     const args = [...task.args];
     if (task.kind === 'formula-backtest') {
-      env.FORMULA_BACKTEST_STATE_ROOT = resolve(stateRoot);
+      // Same release-scoped queue the autonomous closed loop produces into;
+      // the summaries are then published to the shared latest/ directory.
+      env.FORMULA_BACKTEST_STATE_ROOT = formulaBacktestQueueRootV1(stateRoot, pinnedSha);
+      env.FORMULA_BACKTEST_PUBLISH_ROOT = resolve(stateRoot);
     }
     if (task.kind === 'paper') {
       // Four-market Paper KRW target only; not a USDT balance and never a live funding instruction.

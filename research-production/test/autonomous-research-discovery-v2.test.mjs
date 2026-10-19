@@ -9,6 +9,10 @@ import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v
 import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, rotateCatalogWindowV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 import { readdir as readdirForLanes } from 'node:fs/promises';
 import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { classifyDiscoveryErrorV2, discoveryRetryPolicyV2, isTransientReasonV2, priorGithubSourceIdsV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { isPlaceholderStrategyFamilyV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
+
 
 const SHA = 'a'.repeat(40);
 const NEXT_SHA = 'd'.repeat(40);
@@ -704,3 +708,184 @@ test('a non-transient provider error is not retried', async (t) => {
   assert.equal(calls, 1);
   assert.equal(result.actualProviderCalls.retried, 0);
 });
+
+// ---------- discovery hardening (moved from autonomous-research-discovery-hardening-v2.test.mjs) ----------
+// Block-scoped so its helpers never clash with the tests above.
+{
+const SHA = 'a'.repeat(40);
+const AT = '2026-10-14T01:00:00.000Z';
+const SOURCE_SHA = 'b'.repeat(40);
+const sourceText = `class ParticipationBreakout:
+    entry_rule = "rvol above baseline and close above prior highest close"
+    exit_rule = "close below trend average"
+    stoploss_rule = "fixed protective stop"
+`;
+
+function aiAnswer({ summary, findings, requiredEvidence }) {
+  return JSON.stringify({
+    summary, findings,
+    hypotheses: [{
+      hypothesisId: 'ParticipationBreakoutPublicSource',
+      thesis: '거래량 참여와 가격 돌파의 결합을 비용 반영 TRAIN에서 반증 가능하게 검증한다.',
+      requiredEvidence,
+      falsification: '원문 locator 불일치 또는 비용 반영 성과 부재 시 개선하거나 기각한다.',
+      intendedRegime: '거래량 참여가 동반된 추세 확장 구간',
+      independenceRationale: '기존 실패 가족과 다른 거래량 참여 및 돌파 결합이다.',
+    }],
+    risks: ['원문 규칙과 정규화된 변형을 분리해야 한다.'],
+    disposition: 'RESEARCH_PROPOSAL_ONLY',
+  });
+}
+const planAnswer = aiAnswer({ summary: '공개 전략 저장소 후보',
+  findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+  requiredEvidence: ['SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'] });
+const extraction = (family) => aiAnswer({ summary: 'Participation Breakout declared variant', findings: [], requiredEvidence: [
+  'MARKET=CRYPTO_SPOT', 'TIMEFRAME=1h', 'DIRECTION=LONG', `FAMILY=${family}`, 'TEMPLATE=RVOL_BREAKOUT_V1',
+  'ENTRY_LOCATOR=entry_rule = "rvol above baseline and close above prior highest close"',
+  'EXIT_LOCATOR=exit_rule = "close below trend average"',
+  'RISK_LOCATOR=stoploss_rule = "fixed protective stop"'] });
+
+function provider(family) {
+  let calls = 0;
+  const prompts = [];
+  return { prompts, count: () => calls,
+    invoke: async ({ policy, prompt }) => { calls += 1; prompts.push(prompt);
+      return { provider: policy.provider, model: policy.model, answer: calls % 2 === 1 ? planAnswer : extraction(family) }; } };
+}
+
+function sourceFetch() {
+  return async (url) => {
+    if (String(url).endsWith('/commits/main.atom')) return { status: 200, text: async () => `<?xml version="1.0"?><feed><updated>2026-10-01T00:00:00Z</updated><entry><id>tag:github.com,2008:Grit::Commit/${SOURCE_SHA}</id><updated>2026-10-01T00:00:00Z</updated><author><name>public-author</name></author></entry></feed>` };
+    if (String(url).endsWith('/strategies/ParticipationBreakout.py')) return { status: 200, text: async () => sourceText };
+    if (String(url).endsWith('/LICENSE')) return { status: 200, text: async () => 'MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy.\n' };
+    return { status: 404, text: async () => '' };
+  };
+}
+
+function datasetLoader() {
+  const start = Date.parse('2025-01-01T00:00:00.000Z');
+  let close = 100;
+  const rows = Array.from({ length: 720 }, (_, index) => {
+    const burst = index % 30 === 0 ? 0.025 : index % 17 === 0 ? -0.012 : 0.0003;
+    const open = close; close = open * (1 + burst);
+    return { timestamp: start + index * 3_600_000, open, high: Math.max(open, close) * 1.002, low: Math.min(open, close) * 0.998, close, volume: index % 30 === 0 ? 500 : 100 + (index % 7), quoteVolume: null };
+  });
+  return Promise.resolve({ source: 'test-public-candles', exchange: 'UPBIT', providerMarket: 'KRW-BTC', timeframe: '60m',
+    candleCount: rows.length, firstTimestamp: rows[0].timestamp, lastTimestamp: rows.at(-1).timestamp, candles: rows });
+}
+
+const ENV = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'synthetic_test_key' };
+
+async function fixture(t) {
+  const root = await mkdtemp(join(tmpdir(), 'discovery-hardening-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  return root;
+}
+
+async function stagedFamilies(root) {
+  const inbox = join(root, 'autonomous-research', 'releases', SHA, 'inbox');
+  let names = [];
+  try { names = await readdir(inbox); } catch { names = []; }
+  return Promise.all(names.map(async (name) => JSON.parse(await readFile(join(inbox, name), 'utf8')).strategy.family));
+}
+
+for (const family of ['UPPER_SNAKE_CASE', 'upper snake case', 'STRATEGY_FAMILY_NAME', 'RSI_BREAKOUT_RECOVERY_V1', 'NONE']) {
+  test(`AI output family "${family}" is never staged as a strategy family`, async (t) => {
+    const root = await fixture(t);
+    const ai = provider(family);
+    const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: ENV, now: () => AT,
+      invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+    assert.equal(result.status, 'AI_DISCOVERY_UNAVAILABLE');
+    assert.equal(result.reason, 'AI_DISCOVERY_OUTPUT_FAMILY_PLACEHOLDER');
+    assert.equal(result.stagedDossierDigest, null);
+    assert.deepEqual(await stagedFamilies(root), [], 'zero placeholder families staged');
+    // A formatting slip retries soon and does not blacklist the source.
+    assert.equal(result.retryAfterAt, Date.parse(AT) + 15 * 60_000);
+    assert.equal(isSourceSpecificReasonV2(result.reason), false);
+  });
+}
+
+test('a real family is still staged, and the prompt no longer offers the literal placeholder', async (t) => {
+  const root = await fixture(t);
+  const ai = provider('PARTICIPATION_BREAKOUT');
+  const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: ENV, now: () => AT,
+    invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.deepEqual(await stagedFamilies(root), ['PARTICIPATION_BREAKOUT']);
+  assert.doesNotMatch(ai.prompts[1], /FAMILY=<UPPER_SNAKE_CASE>|FAMILY=UPPER_SNAKE_CASE,/u);
+});
+
+test('placeholder detection keeps real families', () => {
+  for (const family of ['UPPER_SNAKE_CASE', 'FAMILY', 'NONE', 'RVOL_BREAKOUT_V1', '<FAMILY>', '']) assert.equal(isPlaceholderStrategyFamilyV1(family), true, family);
+  for (const family of ['PARTICIPATION_BREAKOUT', 'POWER_TOWER', 'SWING_HIGH_TO_SKY', 'SUPERTREND_V2']) assert.equal(isPlaceholderStrategyFamilyV1(family), false, family);
+});
+
+test('network errors are transient (short retry, source kept); permanent errors keep the long backoff', async (t) => {
+  const fetchFailed = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+  assert.equal(classifyDiscoveryErrorV2(fetchFailed), 'AI_DISCOVERY_NETWORK_ECONNRESET');
+  assert.equal(classifyDiscoveryErrorV2(new TypeError('fetch failed')), 'AI_DISCOVERY_NETWORK_FETCH_FAILED');
+  assert.equal(classifyDiscoveryErrorV2(Object.assign(new Error('aborted'), { name: 'AbortError' })), 'AI_DISCOVERY_NETWORK_TIMEOUT');
+  assert.equal(classifyDiscoveryErrorV2(new Error('AI_DISCOVERY_TEMPLATE_UNSUPPORTED')), 'AI_DISCOVERY_TEMPLATE_UNSUPPORTED');
+  for (const reason of ['AI_DISCOVERY_NETWORK_ECONNRESET', 'AI_DISCOVERY_NETWORK_FETCH_FAILED', 'FETCH_FAILED', 'FREE_AI_RATE_LIMITED', 'FREE_AI_TIMEOUT', 'PUBLIC_SOURCE_HTTP_503']) {
+    assert.equal(isTransientReasonV2(reason), true, reason);
+  }
+  for (const reason of ['AI_DISCOVERY_TEMPLATE_UNSUPPORTED', 'PUBLIC_SOURCE_HTTP_404', 'AI_DISCOVERY_SOURCE_NOT_STRATEGY', 'AUTONOMOUS_DISCOVERY_DATASET_INVALID']) {
+    assert.equal(isTransientReasonV2(reason), false, reason);
+  }
+
+  // End to end: the dataset download fails with undici's "fetch failed".
+  const root = await fixture(t);
+  const failingLoader = async () => { throw new TypeError('fetch failed'); };
+  const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: ENV, now: () => AT,
+    invoke: provider('PARTICIPATION_BREAKOUT').invoke, fetchImpl: sourceFetch(), datasetLoader: failingLoader });
+  assert.equal(result.reason, 'AI_DISCOVERY_NETWORK_FETCH_FAILED');
+  assert.equal(result.retryAfterAt, Date.parse(AT) + 15 * 60_000, 'not the 6h semantic backoff');
+});
+
+test('a legacy FETCH_FAILED record with a 6h wait no longer blocks discovery past the transient window', async (t) => {
+  const root = await fixture(t);
+  const directive = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
+  await writeFile(join(root, 'latest', 'autonomous-research-discovery-v2.json'), JSON.stringify({
+    status: 'AI_DISCOVERY_UNAVAILABLE', reason: 'FETCH_FAILED', directiveDigest: directive.directiveDigest,
+    observedAt: AT, retryAfterAt: Date.parse(AT) + 6 * 3_600_000, researchCodeSha: SHA,
+  }), { mode: 0o600 });
+  const ai = provider('PARTICIPATION_BREAKOUT');
+  const options = { verifiedSourceCatalog: [], stateRoot: root, researchCodeSha: SHA, env: ENV, invoke: ai.invoke, fetchImpl: sourceFetch(), datasetLoader };
+  const early = await runAutonomousResearchDiscoveryV2({ ...options, now: () => new Date(Date.parse(AT) + 10 * 60_000).toISOString() });
+  assert.equal(early.status, 'DEFERRED_RETRY');
+  assert.equal(ai.count(), 0, 'no duplicate call inside the backoff window');
+  const later = await runAutonomousResearchDiscoveryV2({ ...options, now: () => new Date(Date.parse(AT) + 16 * 60_000).toISOString() });
+  assert.equal(later.status, 'DOSSIER_STAGED', JSON.stringify(later));
+});
+
+test('retry waits and provider retry count come from bounded configuration', () => {
+  const defaults = discoveryRetryPolicyV2({});
+  assert.equal(defaults.transientMs, 15 * 60_000);
+  assert.equal(defaults.semanticMs, 6 * 3_600_000);
+  assert.deepEqual(defaults.providerRetryDelaysMs, [20_000, 40_000]);
+  const tuned = discoveryRetryPolicyV2({ RESEARCH_AI_DISCOVERY_TRANSIENT_RETRY_MINUTES: '30', RESEARCH_AI_DISCOVERY_SEMANTIC_RETRY_HOURS: '12', RESEARCH_AI_DISCOVERY_PROVIDER_RETRIES: '1' });
+  assert.equal(tuned.transientMs, 30 * 60_000);
+  assert.equal(tuned.semanticMs, 12 * 3_600_000);
+  assert.deepEqual(tuned.providerRetryDelaysMs, [20_000]);
+  const unsafe = discoveryRetryPolicyV2({ RESEARCH_AI_DISCOVERY_TRANSIENT_RETRY_MINUTES: '0', RESEARCH_AI_DISCOVERY_PROVIDER_RETRIES: '99' });
+  assert.equal(unsafe.transientMs, 15 * 60_000, 'below the floor falls back to the default');
+  assert.deepEqual(unsafe.providerRetryDelaysMs, [20_000, 40_000]);
+});
+
+test('regression: attempted-source history is complete, not the lexicographically last 20', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'discovery-history-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ids = [];
+  for (let index = 0; index < 30; index += 1) {
+    const release = index.toString(16).padStart(2, '0').repeat(20);
+    const sourceId = `github:freqtrade/freqtrade-strategies:${'f'.repeat(40)}:user_data/strategies/S${String(index).padStart(3, '0')}.py`;
+    ids.push(sourceId);
+    await mkdir(join(root, 'autonomous-research', 'releases', release), { recursive: true });
+    await writeFile(join(root, 'autonomous-research', 'releases', release, 'state.json'), JSON.stringify({ records: [{ sourceId }] }));
+  }
+  const prior = await priorGithubSourceIdsV2(root);
+  assert.equal(prior.length, 30);
+  assert.ok(prior.includes(ids[0]), 'the alphabetically first source is still known');
+});
+}
