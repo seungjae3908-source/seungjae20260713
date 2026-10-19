@@ -5,12 +5,14 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
   FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1,
+  acquireExclusiveFileLockV1,
   buildFormulaProducedTrainInputV1,
   processFormulaAutoBacktestQueueV1,
 } from '../../market-prediction-lab/src/formula-auto-backtest-queue-v1.js';
 import { createResearchFailureObservationV1 } from '../../market-prediction-lab/src/autonomous-alpha-factory-phase3-v1.js';
 import {
   appendResearchFailureObservationV1,
+  assertResearchFailureMemoryV1,
   buildResearchFailureDecisionV1,
   createResearchFailureMemoryV1,
 } from './research-failure-memory.mjs';
@@ -38,6 +40,51 @@ const SOURCE_TYPES = new Set([
   'PUBLIC_TRADING_RECORD',
 ]);
 const NOVELTY_PRIORITY = Object.freeze({ NOVEL_FAMILY: 0, NOVEL_VARIANT: 1, KNOWN_VARIANT: 2 });
+
+// ---------- formula queue location ----------
+// Single source of truth for where the formula backtest queue lives.
+//
+// The queue is exact-release evidence: its intake admits only producer records
+// of the running research SHA and its registries keep entries of that SHA
+// only. Producer (autonomous closed loop) and consumers (closed loop, hourly
+// forward profile) must therefore resolve the same release-scoped root.
+// Cross-release memory (failure memory, attempted sources) lives under
+// `autonomous-research/durable` instead; see autonomous-research-closed-loop-v1.
+export const FORMULA_QUEUE_PUBLISHED_FILES_V1 = Object.freeze([
+  'formula-backtest-queue.json',
+  'formula-paper-strategy-registry.json',
+  'formula-research-paper-experiment-registry.json',
+]);
+
+export function formulaBacktestQueueRootV1(stateRoot, researchCodeSha) {
+  const sha = String(researchCodeSha ?? '').trim().toLowerCase();
+  if (!SHA40.test(sha)) throw new TypeError('researchCodeSha must be exact SHA');
+  if (!stateRoot) throw new TypeError('stateRoot required');
+  return join(resolve(String(stateRoot)), 'autonomous-research', 'releases', sha);
+}
+
+export function formulaBacktestProducerOutboxV1(stateRoot, researchCodeSha) {
+  return join(formulaBacktestQueueRootV1(stateRoot, researchCodeSha), 'formula-backtest', 'producer-outbox');
+}
+
+// ---------- strategy family names ----------
+// Strategy family names written by the free AI are data, but a family that is
+// only the format hint ("UPPER_SNAKE_CASE"), a generic word, or a template id
+// carries no identity and breaks novel-family selection and failure memory.
+
+const PLACEHOLDER_FAMILIES = new Set([
+  'UPPER_SNAKE_CASE', 'SNAKE_CASE', 'FAMILY', 'FAMILY_NAME', 'STRATEGY', 'STRATEGY_FAMILY', 'STRATEGY_NAME',
+  'STRATEGY_FAMILY_NAME', 'TEMPLATE', 'NAME', 'NONE', 'NULL', 'UNKNOWN', 'N_A', 'NA', 'TBD', 'TODO', 'PLACEHOLDER', 'EXAMPLE', 'VALUE', 'OTHER',
+]);
+// Bounded formula templates the discovery lane may map a source onto.
+export const STRATEGY_TEMPLATE_IDS_V1 = Object.freeze(['ADX_ROC_CONTINUATION_V1', 'RVOL_BREAKOUT_V1', 'RSI_BREAKOUT_RECOVERY_V1']);
+const PLACEHOLDER_TEMPLATE_IDS = new Set(STRATEGY_TEMPLATE_IDS_V1);
+
+export function isPlaceholderStrategyFamilyV1(family) {
+  const value = String(family ?? '').trim().toUpperCase();
+  if (!value) return true;
+  return PLACEHOLDER_FAMILIES.has(value) || value.includes('<') || PLACEHOLDER_TEMPLATE_IDS.has(value);
+}
 
 function exactKeys(value, expected) {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -420,7 +467,21 @@ function recordForHypothesis(dossier, observedAt) {
   });
 }
 
-function recordForBlockedDuplicate(dossier, decision, observedAt) {
+// Outcome of an earlier record, kept distinct from "blocked as duplicate".
+function priorOutcome(record) {
+  if (record?.disposition === 'BACKTEST_CANDIDATE') return 'SUCCESS';
+  if (record?.disposition === 'IMPROVE' || record?.disposition === 'REJECT') return 'FAILED';
+  return record?.blockedBy?.priorOutcome ?? 'UNKNOWN';
+}
+
+/**
+ * A blocked duplicate never re-runs. A failure-memory block keeps the
+ * original IMPROVE disposition (the identity did fail); a block because an
+ * earlier release already completed the identity is DUPLICATE_BLOCKED, so a
+ * successful candidate is not counted again nor turned into a failed family.
+ * blockedBy preserves the original outcome either way.
+ */
+function recordForBlockedDuplicate(dossier, decision, observedAt, blockedBy) {
   return deepFreeze({
     dossierDigest: dossier.dossierDigest,
     strategyIdentityDigest: dossier.strategy.strategyIdentityDigest,
@@ -429,8 +490,9 @@ function recordForBlockedDuplicate(dossier, decision, observedAt) {
     family: dossier.strategy.family,
     classification: dossier.strategy.classification,
     lifecycle: Object.freeze(['DISCOVERED', 'DUPLICATE_BLOCKED']),
-    disposition: 'IMPROVE',
+    disposition: blockedBy?.kind === 'PRIOR_RELEASE' ? 'DUPLICATE_BLOCKED' : 'IMPROVE',
     reason: decision.status,
+    blockedBy: deepFreeze(blockedBy ?? { kind: 'FAILURE_MEMORY', priorOutcome: 'FAILED' }),
     itemDigest: dossier.producerInput?.itemDigest ?? null,
     metrics: null,
     paperRegistered: false,
@@ -470,8 +532,9 @@ function candidateSort(failedFamilies) {
   };
 }
 
-function directiveFromRecords({ researchCodeSha, observedAt, records, failureMemory }) {
-  const failed = records.filter((row) => ['IMPROVE', 'REJECT'].includes(row.disposition));
+function directiveFromRecords({ researchCodeSha, observedAt, records, priorRecords = [], failureMemory }) {
+  // Failures of earlier releases still block the same identity and family.
+  const failed = [...priorRecords, ...records].filter((row) => ['IMPROVE', 'REJECT'].includes(row.disposition));
   const failureCodes = failureMemory.observations.flatMap((entry) => entry.failureObservation.failureCodes);
   return {
     schemaVersion: 1,
@@ -480,7 +543,8 @@ function directiveFromRecords({ researchCodeSha, observedAt, records, failureMem
     observedAt,
     completedDossierCount: records.length,
     blockedStrategyIdentityDigests: Object.freeze([...new Set(failed.map((row) => row.strategyIdentityDigest))].sort().slice(0, 64)),
-    failedFamilies: Object.freeze([...new Set(failed.map((row) => row.family))].sort().slice(0, 64)),
+    // Placeholder families recorded by older releases carry no identity.
+    failedFamilies: Object.freeze([...new Set(failed.map((row) => row.family).filter((family) => !isPlaceholderStrategyFamilyV1(family)))].sort().slice(0, 64)),
     failureCodes: Object.freeze([...new Set(failureCodes)].sort().slice(0, 64)),
     selectionPolicy: deepFreeze({
       continueResearch: true,
@@ -592,11 +656,58 @@ function summary(state, dossiers, failureMemory, observedAt) {
     actualPaperExitCount: 0,
     dispositions: Object.freeze(counts),
     failureObservationCount: failureMemory.observations.length,
+    duplicateBlockedCount: state.records.filter((row) => row.disposition === 'DUPLICATE_BLOCKED').length,
     continueResearch: true,
     waitingForFuturePaperSignalBlocksResearch: false,
     runtimeActivated: false,
     executionAuthority: 'NONE',
   });
+}
+
+// ---------- cross-release (durable) memory ----------
+//
+// Exact-release evidence (dossiers, results, state.json) stays under
+// releases/<sha>. What must survive a deploy is what was already tried and
+// what failed: otherwise every self-update re-runs the same strategies.
+
+async function releaseNames(releasesRoot) {
+  try { return (await readdir(releasesRoot)).filter((name) => SHA40.test(name)).sort(); }
+  catch (error) { if (error?.code === 'ENOENT') return []; throw error; }
+}
+
+/** Records of every other release (read-only), used to block repeats. */
+async function loadPriorReleaseRecords(releasesRoot, researchCodeSha) {
+  const rows = [];
+  for (const name of await releaseNames(releasesRoot)) {
+    if (name === researchCodeSha) continue;
+    let value = null;
+    try { value = await safeJson(join(releasesRoot, name, 'state.json'), { optional: true }); } catch { value = null; }
+    try { if (value != null) assertState(value, name); } catch { value = null; }
+    for (const row of value?.records ?? []) {
+      if (HASH64.test(row?.strategyIdentityDigest ?? '') && typeof row?.disposition === 'string') {
+        rows.push(deepFreeze({ ...row, releaseSha: name }));
+      }
+    }
+  }
+  return Object.freeze(rows);
+}
+
+/**
+ * Durable failure memory = its own file united with every release-scoped
+ * memory (older releases kept writing only those). Unreadable legacy files are
+ * skipped and counted, never rewritten.
+ */
+async function loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha }) {
+  let memory = await safeJson(join(durableRoot, 'failure-memory.json'), { optional: true });
+  memory = memory == null ? createResearchFailureMemoryV1({ researchSha: researchCodeSha }) : assertResearchFailureMemoryV1(memory);
+  let legacySkipped = 0;
+  for (const name of await releaseNames(releasesRoot)) {
+    let legacy = null;
+    try { legacy = await safeJson(join(releasesRoot, name, 'failure-memory.json'), { optional: true }); if (legacy) assertResearchFailureMemoryV1(legacy); }
+    catch { legacy = null; legacySkipped += 1; }
+    for (const entry of legacy?.observations ?? []) memory = appendResearchFailureObservationV1(memory, entry.failureObservation);
+  }
+  return { memory, legacySkipped };
 }
 
 export async function runAutonomousResearchClosedLoopV1({
@@ -605,6 +716,7 @@ export async function runAutonomousResearchClosedLoopV1({
   maximumStrategiesPerCycle = 4,
   now = () => new Date().toISOString(),
   processQueue = processFormulaAutoBacktestQueueV1,
+  lockOptions = {},
 } = {}) {
   const root = stateRoot(rawRoot);
   const researchCodeSha = exactSha(rawSha);
@@ -616,12 +728,39 @@ export async function runAutonomousResearchClosedLoopV1({
   const observedAt = iso(now(), 'now');
   const autonomousRoot = join(root, 'autonomous-research');
   const releasesRoot = join(autonomousRoot, 'releases');
-  const loopRoot = join(releasesRoot, researchCodeSha);
+  // Same root the hourly forward consumer resolves (formula-queue-paths-v1).
+  const loopRoot = formulaBacktestQueueRootV1(root, researchCodeSha);
+  const durableRoot = join(autonomousRoot, 'durable');
   const latestRoot = join(root, 'latest');
   await secureDirectory(autonomousRoot, { create: true });
   await secureDirectory(releasesRoot, { create: true });
   await secureDirectory(loopRoot, { create: true });
+  await secureDirectory(durableRoot, { create: true });
   await secureDirectory(latestRoot, { create: true });
+  let lock;
+  try {
+    lock = await acquireExclusiveFileLockV1(join(durableRoot, 'closed-loop.lock'), {
+      waitMs: 0, busyCode: 'AUTONOMOUS_RESEARCH_DURABLE_STATE_BUSY', ...lockOptions,
+    });
+  } catch (error) {
+    if (error?.code !== 'AUTONOMOUS_RESEARCH_DURABLE_STATE_BUSY') throw error;
+    // Another closed loop holds the cross-release state: defer this tick.
+    // Nothing is written, so the previous summary and directive stay intact.
+    return deepFreeze({
+      status: 'DEFERRED_DURABLE_STATE_BUSY', deferred: true, lockHolderState: error.lockHolderState ?? null,
+      researchCodeSha, observedAt, executionAuthority: 'NONE',
+    });
+  }
+  try {
+    return await runClosedLoopLocked({ root, researchCodeSha, maximumStrategiesPerCycle, observedAt, processQueue,
+      releasesRoot, loopRoot, durableRoot, latestRoot });
+  } finally {
+    await lock.release();
+  }
+}
+
+async function runClosedLoopLocked({ root, researchCodeSha, maximumStrategiesPerCycle, observedAt, processQueue,
+  releasesRoot, loopRoot, durableRoot, latestRoot }) {
   const statePath = join(loopRoot, 'state.json');
   const memoryPath = join(loopRoot, 'failure-memory.json');
   const memorySummaryPath = join(loopRoot, 'failure-memory-summary.json');
@@ -634,9 +773,27 @@ export async function runAutonomousResearchClosedLoopV1({
     if (error?.code === 'ENOENT') failureMemory = createResearchFailureMemoryV1({ researchSha: researchCodeSha });
     else throw error;
   }
+  const durableMemoryPath = join(durableRoot, 'failure-memory.json');
+  const durableSummaryPath = join(durableRoot, 'failure-memory-summary.json');
+  let { memory: durableMemory, legacySkipped } = await loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha });
+  for (const entry of failureMemory.observations) durableMemory = appendResearchFailureObservationV1(durableMemory, entry.failureObservation);
+  const rememberFailure = async (failure) => {
+    failureMemory = appendResearchFailureObservationV1(failureMemory, failure);
+    durableMemory = appendResearchFailureObservationV1(durableMemory, failure);
+    await persistResearchFailureMemoryV1({ memoryPath, summaryPath: memorySummaryPath, memory: failureMemory });
+    await persistResearchFailureMemoryV1({ memoryPath: durableMemoryPath, summaryPath: durableSummaryPath, memory: durableMemory });
+  };
+  const priorRecords = await loadPriorReleaseRecords(releasesRoot, researchCodeSha);
+  // Prefer an identity's original record over an earlier duplicate block of it.
+  const priorIdentities = new Map();
+  for (const row of priorRecords) {
+    const known = priorIdentities.get(row.strategyIdentityDigest);
+    if (!known || (known.disposition === 'DUPLICATE_BLOCKED' && row.disposition !== 'DUPLICATE_BLOCKED')) priorIdentities.set(row.strategyIdentityDigest, row);
+  }
   const dossiers = await loadDossiers(loopRoot, researchCodeSha);
   const completed = new Set(state.records.map((row) => row.dossierDigest));
-  const failedFamilies = new Set(state.records.filter((row) => ['IMPROVE', 'REJECT'].includes(row.disposition)).map((row) => row.family));
+  const failedFamilies = new Set([...priorRecords, ...state.records]
+    .filter((row) => ['IMPROVE', 'REJECT'].includes(row.disposition)).map((row) => row.family));
   const candidates = dossiers.filter((row) => !completed.has(row.dossierDigest)).sort(candidateSort(failedFamilies));
   let attempted = 0;
   let queueExecutions = 0;
@@ -659,17 +816,35 @@ export async function runAutonomousResearchClosedLoopV1({
           unresolvedRules: dossier.strategy.unresolvedRules,
         },
       });
-      failureMemory = appendResearchFailureObservationV1(failureMemory, failure);
-      await persistResearchFailureMemoryV1({ memoryPath, summaryPath: memorySummaryPath, memory: failureMemory });
+      await rememberFailure(failure);
     } else {
-      const failureDecision = buildResearchFailureDecisionV1(failureMemory, {
+      const failureDecision = buildResearchFailureDecisionV1(durableMemory, {
         strategyIdentityDigest: dossier.strategy.strategyIdentityDigest,
       });
+      const prior = priorIdentities.get(dossier.strategy.strategyIdentityDigest);
       if (failureDecision.automaticSameStrategyRetryAllowed === false) {
-        record = recordForBlockedDuplicate(dossier, failureDecision, observedAt);
+        record = recordForBlockedDuplicate(dossier, failureDecision, observedAt, {
+          kind: 'FAILURE_MEMORY', priorOutcome: 'FAILED', failureCount: failureDecision.failureCount,
+          latestStage: failureDecision.latestStage, latestStatus: failureDecision.latestStatus,
+          latestFailureDigest: failureDecision.latestFailureDigest,
+        });
+      } else if (prior) {
+        // Already completed by an earlier release: never re-run the same identity.
+        record = recordForBlockedDuplicate(dossier, { status: 'COMPLETED_IN_PRIOR_RELEASE' }, observedAt, {
+          kind: 'PRIOR_RELEASE', priorOutcome: priorOutcome(prior), priorDisposition: prior.disposition,
+          priorReleaseSha: prior.releaseSha, priorDossierDigest: prior.dossierDigest ?? null,
+        });
       } else {
         await stageProducerInput(loopRoot, dossier);
-        await processQueue({ stateRoot: loopRoot, researchCodeSha, maximumItems: 50 });
+        try {
+          // Bounded wait: the coordinator tick has a fixed wall-clock budget.
+          await processQueue({ stateRoot: loopRoot, researchCodeSha, maximumItems: 50, lockWaitMs: 30_000 });
+        } catch (error) {
+          // The hourly forward consumer holds the shared queue; resume next tick.
+          if (String(error?.message ?? '') !== 'FORMULA_QUEUE_BUSY') throw error;
+          deferredThisCycle += 1;
+          continue;
+        }
         queueExecutions += 1;
         const storedResult = await safeJson(
           join(loopRoot, 'formula-backtest', 'results', `${dossier.producerInput.itemDigest}.json`),
@@ -697,8 +872,7 @@ export async function runAutonomousResearchClosedLoopV1({
             observedAt: iso(result.evaluatedAt, 'result.evaluatedAt'),
             evidence: { itemDigest: result.itemDigest, resultState: result.state, resultReason: result.reason },
           });
-          failureMemory = appendResearchFailureObservationV1(failureMemory, failure);
-          await persistResearchFailureMemoryV1({ memoryPath, summaryPath: memorySummaryPath, memory: failureMemory });
+          await rememberFailure(failure);
         }
       }
     }
@@ -709,10 +883,11 @@ export async function runAutonomousResearchClosedLoopV1({
   if (failureMemory.observations.length === 0) {
     await persistResearchFailureMemoryV1({ memoryPath, summaryPath: memorySummaryPath, memory: failureMemory });
   }
+  await persistResearchFailureMemoryV1({ memoryPath: durableMemoryPath, summaryPath: durableSummaryPath, memory: durableMemory });
   // Persist an empty exact-release state too. Without it, a release that has
   // only produced its first directive has no durable restart identity.
   await atomicJson(statePath, state);
-  const directive = buildDirective({ researchCodeSha, observedAt, records: state.records, failureMemory });
+  const directive = buildDirective({ researchCodeSha, observedAt, records: state.records, priorRecords, failureMemory: durableMemory });
   await secureDirectory(join(loopRoot, 'directives'), { create: true });
   await writeOnce(join(loopRoot, 'directives', `${directive.directiveDigest}.json`), directive);
   await atomicJson(join(loopRoot, 'latest-directive.json'), directive);
@@ -720,6 +895,9 @@ export async function runAutonomousResearchClosedLoopV1({
   const report = summary(state, dossiers, failureMemory, observedAt);
   const result = deepFreeze({
     ...report,
+    durableFailureObservationCount: durableMemory.observations.length,
+    priorReleaseRecordCount: priorRecords.length,
+    legacyFailureMemorySkipped: legacySkipped,
     attemptedThisCycle: attempted,
     queueExecutions,
     deferredThisCycle,
@@ -729,8 +907,7 @@ export async function runAutonomousResearchClosedLoopV1({
   });
   await atomicJson(join(latestRoot, 'autonomous-research-closed-loop.json'), result);
   await atomicJson(join(loopRoot, 'latest-summary.json'), result);
-  for (const name of ['formula-backtest-queue.json', 'formula-paper-strategy-registry.json',
-    'formula-research-paper-experiment-registry.json']) {
+  for (const name of FORMULA_QUEUE_PUBLISHED_FILES_V1) {
     const value = await safeJson(join(loopRoot, 'latest', name), { optional: true });
     if (value != null) await atomicJson(join(latestRoot, name), value);
   }

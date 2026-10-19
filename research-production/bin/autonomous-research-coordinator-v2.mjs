@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 
-import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
+import { runAutonomousResearchCycleV2, writeCoordinatorOutcomeV2 } from '../src/autonomous-research-cycle-v2.mjs';
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
 import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
 import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.mjs';
@@ -184,7 +184,7 @@ if (enabled('RESEARCH_RESULTS_DIGEST_ENABLED')) {
 }
 
 const failed = cycleError != null || reviewError != null;
-const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION'].includes(cycle?.status)
+const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION', 'DEFERRED_DURABLE_STATE_BUSY'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
 const result = Object.freeze({
   schemaVersion: 2,
@@ -230,5 +230,17 @@ const result = Object.freeze({
   realOrder: false,
   executionAuthority: 'NONE',
 });
+// The systemd exit code is not visible to the watchdog (it runs inside this
+// process); persist the outcome so the next tick can tell FAILED from waiting.
+try {
+  await writeCoordinatorOutcomeV2(stateRoot, {
+    observedAt: new Date().toISOString(), researchCodeSha, status: result.status, exitCode: failed ? 1 : unavailable ? 75 : 0,
+    cycleStatus: result.cycleStatus, reviewStatus: result.reviewStatus,
+    cycleError: result.cycleError, reviewError: result.reviewError,
+    discoveryRetryAfterAt: cycle?.retryAfterAt ?? null,
+  });
+} catch (error) {
+  process.stderr.write(`${JSON.stringify({ coordinatorOutcomeWriteError: safeError(error) })}\n`);
+}
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 process.exitCode = failed ? 1 : unavailable ? 75 : 0;

@@ -13,7 +13,9 @@ import { collectBitgetCandles } from '../../market-prediction-lab/src/bitget-can
 import { BitgetPublicClient } from '../../market-prediction-lab/src/bitget-public-client.js';
 import { collectYahooStockHistory } from '../../market-prediction-lab/src/yahoo-stock-history.js';
 import {
+  STRATEGY_TEMPLATE_IDS_V1,
   createAutonomousResearchDossierV1,
+  isPlaceholderStrategyFamilyV1,
   loadAutonomousResearchNextDirectiveV1,
   stageAutonomousResearchDossierV1,
 } from './autonomous-research-closed-loop-v1.mjs';
@@ -30,7 +32,7 @@ const SAFE_REPOSITORY = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,80})\/([A-Za-
 const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/u;
 const SAFE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9_.@+/-]{1,240}$/u;
 const SAFE_FAMILY = /^[A-Z][A-Z0-9_]{2,79}$/u;
-const TEMPLATE_IDS = new Set(['ADX_ROC_CONTINUATION_V1', 'RVOL_BREAKOUT_V1', 'RSI_BREAKOUT_RECOVERY_V1']);
+const TEMPLATE_IDS = new Set(STRATEGY_TEMPLATE_IDS_V1);
 const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_PROMPT_SOURCE_CHARS = 24_000;
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -384,6 +386,9 @@ function parseRuleExtraction(answer, sourceText, lane = RESEARCH_LANES_V2[0]) {
     throw new Error('AI_DISCOVERY_CURRENT_DATASET_UNSUPPORTED');
   }
   if (!SAFE_FAMILY.test(family) || !TEMPLATE_IDS.has(templateId)) throw new Error('AI_DISCOVERY_TEMPLATE_UNSUPPORTED');
+  // The model sometimes copies the format hint or the template id instead of
+  // naming the strategy family; such a candidate is never staged.
+  if (isPlaceholderStrategyFamilyV1(family)) throw new Error('AI_DISCOVERY_OUTPUT_FAMILY_PLACEHOLDER');
   return Object.freeze({
     title: safeTagValue(parsed.review.summary, 'AI_DISCOVERY_TITLE', 500),
     statement: safeTagValue(parsed.hypothesis.thesis, 'AI_DISCOVERY_THESIS', 700),
@@ -407,7 +412,7 @@ function discoveryPrompt(directive, priorSourceIds = [], failedSources = [], cat
     `failedFamilies=${directive.failedFamilies.join(',') || 'NONE'}`,
     `failureCodes=${directive.failureCodes.join(',') || 'NONE'}`,
     `blockedStrategyIdentities=${directive.blockedStrategyIdentityDigests.join(',') || 'NONE'}`,
-    `alreadyAttemptedSources=${priorSourceIds.join(',') || 'NONE'}`,
+    `alreadyAttemptedSources=${priorSourceIds.slice(-PROMPT_PRIOR_SOURCE_LIMIT).join(',') || 'NONE'}`,
     `rejectedSources=${failedSources.join(',') || 'NONE'}`,
     'Select one genuinely different, publicly readable strategy source from a GitHub repository with an explicit OSI license.',
     'SOURCE_PATH must be a single strategy file that itself implements concrete entry and exit trading logic. Never choose performance reports, tearsheets, statistics, plotting, tests, configuration, utilities or framework plumbing. Never choose a rejectedSources entry.',
@@ -444,13 +449,13 @@ function extractionPrompt({ plan, revision, sourceSha256, sourceText, lane = RES
     `Current executable dataset is ${lane.market}/${lane.timeframe}/${lane.direction} with OHLCV (${lane.venueLabel}). If transfer is needed, it is a DECLARED_VARIANT, not the original strategy.`,
     ...(lane.direction === 'SHORT' ? ['This lane studies the mirrored SHORT form of the chosen template; still copy the source lines exactly.'] : []),
     'Choose exactly one deterministic safe template: ADX_ROC_CONTINUATION_V1, RVOL_BREAKOUT_V1, RSI_BREAKOUT_RECOVERY_V1.',
-    `Required TAG=value records: MARKET=${lane.market}, TIMEFRAME=${lane.timeframe}, DIRECTION=${lane.direction}, FAMILY=UPPER_SNAKE_CASE, TEMPLATE=one allowed template, ENTRY_LOCATOR=exact source substring, EXIT_LOCATOR=exact source substring, RISK_LOCATOR=exact source substring or NONE.`,
+    `Required TAG=value records: MARKET=${lane.market}, TIMEFRAME=${lane.timeframe}, DIRECTION=${lane.direction}, FAMILY=the strategy family name in upper snake case (for example VOLUME_BREAKOUT_RETEST; never the literal words UPPER_SNAKE_CASE and never a template id), TEMPLATE=one allowed template, ENTRY_LOCATOR=exact source substring, EXIT_LOCATOR=exact source substring, RISK_LOCATOR=exact source substring or NONE.`,
     'Each locator must be a contiguous exact substring from the source after whitespace is collapsed. Do not include line-number prefixes.',
     'Write each TAG exactly once, in hypotheses[0].requiredEvidence; never repeat a TAG in findings.',
     'Locators: copy one short single line (under 160 characters) verbatim from the source, without the line-number prefix, quotes or backticks around it.',
     BREVITY_RULE,
     'Return exactly this JSON and nothing else. Copy every sentence verbatim; replace only the <...> placeholders (escape any double quote inside a locator):',
-    answerTemplate(DISCOVERY_FIXED_TEXT_V2.extractionSummary, [`MARKET=${lane.market}`, `TIMEFRAME=${lane.timeframe}`, `DIRECTION=${lane.direction}`, 'FAMILY=<UPPER_SNAKE_CASE>',
+    answerTemplate(DISCOVERY_FIXED_TEXT_V2.extractionSummary, [`MARKET=${lane.market}`, `TIMEFRAME=${lane.timeframe}`, `DIRECTION=${lane.direction}`, 'FAMILY=<STRATEGY_FAMILY_NAME>',
       'TEMPLATE=<ADX_ROC_CONTINUATION_V1 or RVOL_BREAKOUT_V1 or RSI_BREAKOUT_RECOVERY_V1>', 'ENTRY_LOCATOR=<exact source line>',
       'EXIT_LOCATOR=<exact source line>', 'RISK_LOCATOR=<exact source line or NONE>']),
     '--- BEGIN UNTRUSTED SOURCE ---',
@@ -768,8 +773,41 @@ async function readJsonOptional(path) {
   catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
 }
 
-function isTransientReason(reason) {
-  return /(?:RATE_LIMITED|TIMEOUT|NETWORK|HTTP_(?:408|425|429|5\d\d)|PROVIDER_UNAVAILABLE)/u.test(String(reason ?? ''));
+// FETCH_FAILED, ECONN*, EAI_AGAIN... cover records written before network
+// errors were classified (Node's undici reports them as "fetch failed").
+// OUTPUT_FAMILY_PLACEHOLDER is an AI formatting slip, not a property of the
+// source, so it neither blacklists the source nor waits the semantic backoff.
+export function isTransientReasonV2(reason) {
+  return /(?:RATE_LIMITED|TIMEOUT|NETWORK|HTTP_(?:408|425|429|5\d\d)|PROVIDER_UNAVAILABLE|FETCH_FAILED|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|UND_ERR|SOCKET|TERMINATED|OUTPUT_FAMILY_PLACEHOLDER)/u.test(String(reason ?? ''));
+}
+const isTransientReason = isTransientReasonV2;
+
+const NETWORK_ERROR_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_CLOSED']);
+
+/** Error -> stable reason code; network failures become AI_DISCOVERY_NETWORK_<CODE>. */
+export function classifyDiscoveryErrorV2(error) {
+  const code = String(error?.cause?.code ?? error?.code ?? '').toUpperCase();
+  const message = String(error?.message ?? '');
+  if (NETWORK_ERROR_CODES.has(code)) return `AI_DISCOVERY_NETWORK_${code}`;
+  if (error?.name === 'AbortError' || code === 'ABORT_ERR') return 'AI_DISCOVERY_NETWORK_TIMEOUT';
+  if (/^(?:fetch failed|terminated|other side closed|socket hang up)$/iu.test(message.trim())) return 'AI_DISCOVERY_NETWORK_FETCH_FAILED';
+  return safeError(error);
+}
+
+function boundedNumber(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= minimum && number <= maximum ? number : fallback;
+}
+
+/** Retry policy from configuration, bounded so a typo cannot hammer a free provider. */
+export function discoveryRetryPolicyV2(env = process.env) {
+  const retries = Math.trunc(boundedNumber(env?.RESEARCH_AI_DISCOVERY_PROVIDER_RETRIES, PROVIDER_RETRY_DELAYS_MS.length, 0, 4));
+  return Object.freeze({
+    transientMs: boundedNumber(env?.RESEARCH_AI_DISCOVERY_TRANSIENT_RETRY_MINUTES, TRANSIENT_RETRY_MS / 60_000, 5, 360) * 60_000,
+    semanticMs: boundedNumber(env?.RESEARCH_AI_DISCOVERY_SEMANTIC_RETRY_HOURS, SEMANTIC_RETRY_MS / 3_600_000, 1, 48) * 3_600_000,
+    providerRetryDelaysMs: Object.freeze(Array.from({ length: retries }, (_, index) => PROVIDER_RETRY_DELAYS_MS[0] * (2 ** index))),
+  });
 }
 
 // Failures tied to one chosen source (missing file, non-strategy file, filtered
@@ -808,13 +846,19 @@ function untriedCatalog(catalog, priorSourceIds, failedSources) {
   }));
 }
 
+export async function priorGithubSourceIdsV2(root) {
+  return priorGithubSourceIds(root);
+}
+
 async function priorGithubSourceIds(root) {
   const autonomousRoot = join(root, 'autonomous-research');
   const states = [];
   const legacy = await readJsonOptional(join(autonomousRoot, 'state.json'));
   if (legacy != null) states.push(legacy);
   let releases = [];
-  try { releases = (await readdir(join(autonomousRoot, 'releases'))).filter((name) => /^[a-f0-9]{40}$/u.test(name)).sort().slice(-100); }
+  // Every release, not a lexicographic slice: release names are SHAs, so
+  // slice(-N) dropped arbitrary releases rather than old ones.
+  try { releases = (await readdir(join(autonomousRoot, 'releases'))).filter((name) => /^[a-f0-9]{40}$/u.test(name)).sort(); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; }
   for (const release of releases) {
     const state = await readJsonOptional(join(autonomousRoot, 'releases', release, 'state.json'));
@@ -823,12 +867,15 @@ async function priorGithubSourceIds(root) {
   return Object.freeze([...new Set(states.flatMap((state) => Array.isArray(state?.records) ? state.records : [])
     .map((row) => String(row?.sourceId ?? '').trim())
     .filter((sourceId) => /^github:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+:[a-f0-9]{40}:[A-Za-z0-9_.@+/-]{1,240}$/u.test(sourceId)))]
-    .sort().slice(-20));
+    .sort());
 }
 
-function retryAfterForReason(reason, observedAt) {
+// The duplicate check uses every attempted source; only the prompt is bounded.
+const PROMPT_PRIOR_SOURCE_LIMIT = 60;
+
+function retryAfterForReason(reason, observedAt, retryPolicy = discoveryRetryPolicyV2({})) {
   const short = isTransientReason(reason) || isSourceSpecificReasonV2(reason);
-  return Date.parse(observedAt) + (short ? TRANSIENT_RETRY_MS : SEMANTIC_RETRY_MS);
+  return Date.parse(observedAt) + (short ? retryPolicy.transientMs : retryPolicy.semanticMs);
 }
 
 async function persistResult(root, result) {
@@ -857,7 +904,7 @@ export async function runAutonomousResearchDiscoveryV2({
   fetchImpl = globalThis.fetch,
   datasetLoader = loadResearchLaneHistoryV2,
   verifiedSourceCatalog = DEFAULT_VERIFIED_SOURCE_CATALOG_V2,
-  providerRetryDelaysMs = PROVIDER_RETRY_DELAYS_MS,
+  providerRetryDelaysMs = null,
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
   researchLanes = RESEARCH_LANES_V2,
 } = {}) {
@@ -894,8 +941,12 @@ export async function runAutonomousResearchDiscoveryV2({
   }
   // Recompute from the reason so an older long deferral for a source-specific
   // failure (written by an earlier release) does not keep blocking discovery.
-  const priorRetryAt = isSourceSpecificReasonV2(prior?.reason)
-    ? Math.min(Number(prior?.retryAfterAt) || 0, Date.parse(prior?.observedAt ?? '') + TRANSIENT_RETRY_MS)
+  // The same applies to transient failures recorded with the old 6h wait
+  // (e.g. FETCH_FAILED before network errors were classified).
+  const retryPolicy = discoveryRetryPolicyV2(env);
+  const retryDelaysMs = Array.isArray(providerRetryDelaysMs) ? providerRetryDelaysMs : retryPolicy.providerRetryDelaysMs;
+  const priorRetryAt = isSourceSpecificReasonV2(prior?.reason) || isTransientReason(prior?.reason)
+    ? Math.min(Number(prior?.retryAfterAt) || 0, Date.parse(prior?.observedAt ?? '') + retryPolicy.transientMs)
     : Number(prior?.retryAfterAt);
   if (prior?.directiveDigest === directive.directiveDigest && priorRetryAt > Date.parse(observedAt)) {
     return Object.freeze({ ...prior, status: 'DEFERRED_RETRY', actualProviderCalls: { attempted: 0, succeeded: 0, failed: 0 },
@@ -910,9 +961,9 @@ export async function runAutonomousResearchDiscoveryV2({
       try { return await invoke(request); }
       catch (error) {
         const code = String(error?.message ?? '');
-        if (!RETRYABLE_PROVIDER_ERROR.test(code) || retry >= providerRetryDelaysMs.length) throw error;
+        if (!RETRYABLE_PROVIDER_ERROR.test(code) || retry >= retryDelaysMs.length) throw error;
         calls.retried += 1;
-        await sleep(providerRetryDelaysMs[retry]);
+        await sleep(retryDelaysMs[retry]);
       }
     }
   };
@@ -1007,13 +1058,13 @@ export async function runAutonomousResearchDiscoveryV2({
     return result;
   } catch (error) {
     if (calls.succeeded < calls.attempted) calls.failed += 1;
-    const reason = safeError(error);
+    const reason = classifyDiscoveryErrorV2(error);
     const result = buildResult({
       status: 'AI_DISCOVERY_UNAVAILABLE', observedAt, researchCodeSha, directiveDigest: directive.directiveDigest, directiveConsumed: true,
       provider: policy.provider, model: policy.model, reason,
       actualProviderCalls: calls, actualSourceFetches: fetches,
       candidate, stagedDossierDigest: null, nextAction: 'RETRY_AFTER_BOUNDED_BACKOFF',
-      retryAfterAt: retryAfterForReason(reason, observedAt),
+      retryAfterAt: retryAfterForReason(reason, observedAt, retryPolicy),
     });
     await persistResult(root, result);
     return result;

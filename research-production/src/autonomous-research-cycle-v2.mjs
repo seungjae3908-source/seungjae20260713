@@ -30,7 +30,9 @@ async function atomicJson(path, value) {
   await rename(temporary, path);
 }
 
-function cycleStatus(discovery) {
+function cycleStatus(discovery, loopDeferred = false) {
+  // A closed loop deferred by the cross-release state lock is a wait, not a failure.
+  if (loopDeferred) return 'DEFERRED_DURABLE_STATE_BUSY';
   if (discovery.status === 'WAITING_FREE_AI_CONFIGURATION') return 'WAITING_FREE_AI_CONFIGURATION';
   if (discovery.status === 'AI_DISCOVERY_UNAVAILABLE' || discovery.status === 'DEFERRED_RETRY') return 'PARTIAL_AI_DISCOVERY_UNAVAILABLE';
   if (discovery.status === 'WAITING_DIRECTIVE') return 'WAITING_DIRECTIVE';
@@ -89,7 +91,9 @@ export async function runAutonomousResearchCycleV2({
   ]);
   const shouldRunAgain = ['DOSSIER_STAGED', 'ALREADY_DISCOVERED'].includes(discovery.status);
   const after = shouldRunAgain ? await runLoop(loopOptions) : before;
-  const summary = after ?? Object.freeze({
+  // `after` is the last loop that ran (it is `before` when no second run happened).
+  const loopDeferred = after?.deferred === true;
+  const summary = (after?.deferred === true ? null : after) ?? Object.freeze({
     discoveredStrategyCount: 0,
     completedStrategyCount: Number(pendingDirective?.completedDossierCount ?? 0),
     formulaGeneratedCount: 0,
@@ -105,7 +109,7 @@ export async function runAutonomousResearchCycleV2({
   const result = Object.freeze({
     schemaVersion: 2,
     contract: AUTONOMOUS_RESEARCH_CYCLE_CONTRACT_V2,
-    status: cycleStatus(discovery),
+    status: cycleStatus(discovery, loopDeferred),
     observedAt,
     researchCodeSha,
     directiveConsumed: discovery.directiveConsumed === true,
@@ -155,4 +159,15 @@ export async function runAutonomousResearchCycleV2({
   });
   await atomicJson(join(resolve(stateRoot), 'latest', 'autonomous-research-cycle-v2.json'), result);
   return result;
+}
+
+// Read by ops-watchdog-v1 (target ai-coordinator) on the next tick.
+export const COORDINATOR_OUTCOME_CONTRACT_V2 = 'autonomous-research-coordinator-outcome/v2';
+
+export async function writeCoordinatorOutcomeV2(stateRoot, outcome) {
+  const exitCode = Number(outcome?.exitCode);
+  if (![0, 1, 75].includes(exitCode)) throw new Error('COORDINATOR_EXIT_CODE_INVALID');
+  await atomicJson(join(stateRoot, 'latest', 'autonomous-research-coordinator-v2.json'), {
+    contract: COORDINATOR_OUTCOME_CONTRACT_V2, ...outcome, exitCode, executionAuthority: 'NONE',
+  });
 }

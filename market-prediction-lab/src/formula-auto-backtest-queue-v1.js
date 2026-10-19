@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readFile, readdir, realpath, rename } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { hostname } from 'node:os';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { assertFormulaCandidateV1 } from './autonomous-strategy-formula-generator-v1.js';
 import {
@@ -838,12 +839,71 @@ async function atomicJson(path, value) {
   await rename(temp, path);
 }
 
+// The autonomous closed loop (10-minute tick) and the hourly forward profile
+// consume the same release queue. Results are write-once, so two concurrent
+// evaluations of one item would collide; one holder at a time instead. A busy
+// queue is a deferral (FORMULA_QUEUE_BUSY), never a forced takeover.
 export async function processFormulaAutoBacktestQueueV1({
   stateRoot,
   maximumItems = 50,
   researchCodeSha = null,
+  lockWaitMs = 120_000,
+  lockPollMs = 500,
+  now = () => Date.now(),
+  lockOptions = {},
 } = {}) {
   const root = ensureStateRoot(stateRoot);
+  const lock = await acquireExclusiveFileLockV1(join(root, 'formula-backtest', 'queue.lock'), {
+    waitMs: lockWaitMs, pollMs: lockPollMs, now, busyCode: 'FORMULA_QUEUE_BUSY', ...lockOptions,
+  });
+  try {
+    return await processFormulaAutoBacktestQueueUnlocked({ root, maximumItems, researchCodeSha });
+  } finally {
+    await lock.release();
+  }
+}
+
+/** Summary for a run that found the queue held by another consumer. */
+export function formulaQueueBusySummaryV1({ lockHolderState = null } = {}) {
+  return Object.freeze({
+    schemaVersion: 1,
+    contract: FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1,
+    status: 'DEFERRED_QUEUE_BUSY',
+    automationReadiness: 'BLOCKED_DATA_QUEUE_BUSY',
+    lockHolderState,
+    scanned: 0,
+    paperOrderAuthorityGranted: false,
+    liveTrading: false,
+    autoTrading: false,
+    realOrder: false,
+    executionAuthority: 'NONE',
+  });
+}
+
+// Copies the queue's latest summaries from a release-scoped queue root to the
+// shared latest/ directory read by Paper and the dashboard.
+export async function publishFormulaQueueSummariesV1({ queueRoot, publishRoot } = {}) {
+  const from = ensureStateRoot(queueRoot);
+  const to = ensureStateRoot(publishRoot);
+  const published = [];
+  for (const [name, contract] of [
+    ['formula-backtest-queue.json', FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1],
+    ['formula-paper-strategy-registry.json', FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1],
+    ['formula-research-paper-experiment-registry.json', FORMULA_RESEARCH_PAPER_EXPERIMENT_REGISTRY_CONTRACT_V1],
+  ]) {
+    let value;
+    try { value = JSON.parse(await readFile(join(from, 'latest', name), 'utf8')); }
+    catch (error) { if (error?.code === 'ENOENT') continue; throw error; }
+    if (value?.contract !== contract || value.executionAuthority !== 'NONE' || value.liveTrading !== false) {
+      throw new Error('FORMULA_QUEUE_PUBLISH_SUMMARY_UNSAFE');
+    }
+    await atomicJson(join(to, 'latest', name), value);
+    published.push(name);
+  }
+  return Object.freeze(published);
+}
+
+async function processFormulaAutoBacktestQueueUnlocked({ root, maximumItems, researchCodeSha }) {
   const inbox = join(root, 'formula-backtest', 'inbox');
   const resultsRoot = join(root, 'formula-backtest', 'results');
   const latestPath = join(root, 'latest', 'formula-backtest-queue.json');
@@ -1108,4 +1168,152 @@ export async function processFormulaAutoBacktestQueueV1({
   await atomicJson(paperRegistryPath, paperRegistry);
   await atomicJson(researchPaperRegistryPath, researchPaperRegistry);
   return Object.freeze(summary);
+}
+
+// ---------- exclusive file lock (shared by research jobs) ----------
+// Exclusive lock file shared by research jobs on one state root.
+//
+// Holder identity is host + kernel boot id + pid + the process start time
+// (/proc/<pid>/stat field 22), so a recycled pid is not mistaken for the
+// original holder. A lock is reclaimed only when its holder is PROVEN gone:
+// same host, and either a different boot or no process with that pid and
+// start time. A live holder, or one on another host / with an unknown boot id,
+// is never reclaimed automatically, however old the lock is; the caller gets
+// LOCK_BUSY and must defer.
+//
+// Why read-then-unlink is safe here: while the lock file exists nobody can
+// replace it (creation is O_EXCL), and only two parties ever remove it: its
+// own holder on release, and the single reclaimer that holds `<lock>.reclaim`
+// (also O_EXCL) after proving the holder dead. So between reading a token and
+// unlinking, the file cannot have become someone else's lock. A reclaim guard
+// left by a crashed reclaimer is never removed automatically (RECLAIM_GUARD_STALE):
+// it needs an operator, because removing it could admit two reclaimers.
+export const EXCLUSIVE_FILE_LOCK_CONTRACT_V1 = 'exclusive-file-lock/v1';
+
+async function readText(path) {
+  try { return (await readFile(path, 'utf8')).trim(); } catch { return null; }
+}
+
+/** Start time (clock ticks since boot) of a pid, or null if it does not exist. */
+export async function processStartTicksV1(pid, procRoot = '/proc') {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  const stat = await readText(`${procRoot}/${pid}/stat`);
+  if (!stat) return null;
+  // The command name is parenthesised and may contain spaces; fields follow it.
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  const ticks = fields[19];
+  return /^\d+$/u.test(ticks ?? '') ? ticks : null;
+}
+
+export async function currentLockIdentityV1({ procRoot = '/proc', pid = process.pid } = {}) {
+  return Object.freeze({
+    host: hostname(),
+    bootId: await readText(`${procRoot}/sys/kernel/random/boot_id`),
+    // /proc may hide other users' processes (hidepid, ProtectProc), so only a
+    // holder with our own uid can be proven dead from a missing /proc entry.
+    uid: typeof process.getuid === 'function' ? process.getuid() : null,
+    pid,
+    startTicks: await processStartTicksV1(pid, procRoot),
+  });
+}
+
+/**
+ * ALIVE: proven running; DEAD: proven gone; UNKNOWN: cannot be proven either
+ * way (other host, unknown boot, malformed or legacy lock).
+ */
+export async function lockHolderStateV1(holder, { self, procRoot = '/proc' } = {}) {
+  if (!holder || typeof holder !== 'object' || typeof holder.host !== 'string' || !Number.isSafeInteger(holder.pid)) return 'UNKNOWN';
+  if (holder.host !== self.host || !holder.bootId || !self.bootId) return 'UNKNOWN';
+  if (holder.bootId !== self.bootId) return 'DEAD';
+  if (!Number.isSafeInteger(holder.uid) || holder.uid !== self.uid) return 'UNKNOWN';
+  const ticks = await processStartTicksV1(holder.pid, procRoot);
+  if (ticks == null) return 'DEAD';
+  if (typeof holder.startTicks !== 'string') return 'UNKNOWN';
+  return ticks === holder.startTicks ? 'ALIVE' : 'DEAD';
+}
+
+async function readLock(path) {
+  const text = await readText(path);
+  if (text == null) return { exists: false, holder: null };
+  try { return { exists: true, holder: JSON.parse(text) }; } catch { return { exists: true, holder: null }; }
+}
+
+async function createExclusive(path, body) {
+  const handle = await open(path, 'wx', 0o600);
+  try { await handle.writeFile(`${JSON.stringify(body)}\n`, 'utf8'); } finally { await handle.close(); }
+}
+
+/** Remove `path` only if it still carries `token` (see the safety note above). */
+async function unlinkIfToken(path, token) {
+  const { holder } = await readLock(path);
+  if (holder?.token !== token) return false;
+  try { await unlink(path); return true; } catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+}
+
+/**
+ * Remove a lock proven dead, as the only reclaimer. Returns null when it was
+ * reclaimed (or vanished), otherwise the state that blocks reclaiming.
+ */
+async function reclaimDeadLock(path, deadToken, self, procRoot, now) {
+  const guardPath = `${path}.reclaim`;
+  const guardToken = randomBytes(16).toString('hex');
+  try {
+    await createExclusive(guardPath, { contract: EXCLUSIVE_FILE_LOCK_CONTRACT_V1, ...self, token: guardToken, acquiredAt: now() });
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const { exists, holder } = await readLock(guardPath);
+    if (!exists) return 'RECLAIM_RETRY';
+    const guardState = await lockHolderStateV1(holder, { self, procRoot });
+    return guardState === 'DEAD' ? 'RECLAIM_GUARD_STALE' : 'RECLAIM_IN_PROGRESS';
+  }
+  try {
+    const { holder } = await readLock(path);
+    if (holder?.token === deadToken && await lockHolderStateV1(holder, { self, procRoot }) === 'DEAD') {
+      await unlinkIfToken(path, deadToken);
+    }
+    return null;
+  } finally {
+    await unlinkIfToken(guardPath, guardToken);
+  }
+}
+
+/**
+ * Acquire the lock, waiting up to waitMs while it is held. Returns
+ * { token, release } on success; throws Error(busyCode) with .lockHolderState
+ * (ALIVE, UNKNOWN, RECLAIM_IN_PROGRESS or RECLAIM_GUARD_STALE) otherwise.
+ */
+export async function acquireExclusiveFileLockV1(path, {
+  waitMs = 0,
+  pollMs = 500,
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+  busyCode = 'LOCK_BUSY',
+  procRoot = '/proc',
+  identity = null,
+} = {}) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const self = identity ?? await currentLockIdentityV1({ procRoot });
+  const deadline = now() + Math.max(0, waitMs);
+  let lastState = null;
+  for (;;) {
+    const token = randomBytes(16).toString('hex');
+    try {
+      await createExclusive(path, { contract: EXCLUSIVE_FILE_LOCK_CONTRACT_V1, ...self, token, acquiredAt: now() });
+      return Object.freeze({ token, release: () => unlinkIfToken(path, token) });
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+    const { exists, holder } = await readLock(path);
+    if (!exists) continue;
+    lastState = await lockHolderStateV1(holder, { self, procRoot });
+    if (lastState === 'DEAD' && typeof holder?.token === 'string') {
+      const blocked = await reclaimDeadLock(path, holder.token, self, procRoot, now);
+      if (blocked == null || blocked === 'RECLAIM_RETRY') continue;
+      lastState = blocked;
+    }
+    if (now() >= deadline) {
+      throw Object.assign(new Error(busyCode), { code: busyCode, lockHolderState: lastState });
+    }
+    await sleep(pollMs);
+  }
 }
