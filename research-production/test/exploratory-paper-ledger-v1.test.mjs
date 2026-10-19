@@ -8,11 +8,13 @@ import { RESEARCH_LANES_V2 } from '../src/autonomous-research-discovery-v2.mjs';
 import { COMBINATION_ATOM_LIBRARY_VERSION, computeCombinationAtomsV1 } from '../src/combination-atoms-v1.mjs';
 import { FORWARD_PAPER_START_MS } from '../src/extended-exit-backtest-v1.mjs';
 import {
+  assertPaperOnlyRulesV1,
   formatExploratoryPaperReportKoV1,
   runExploratoryPaperLedgerV1,
   sampleSummaryV1,
   selectExploratoryRulesV1,
   simulateRuleOnSymbolV1,
+  updateTradeJournalV1,
 } from '../src/exploratory-paper-ledger-v1.mjs';
 
 const KR = RESEARCH_LANES_V2.find((lane) => lane.id === 'KR_STOCK_LONG');
@@ -152,4 +154,66 @@ test('a rule whose strict forward sample is clearly losing is demoted and never 
   const later = await runExploratoryPaperLedgerV1({ stateRoot: root, lanes: [KR], watchUniverse: { YAHOO_KR_1D: symbols }, candleFetcher,
     now: () => new Date(FORWARD_PAPER_START_MS + (96 * DAY)).toISOString() });
   for (const rule of demoted) assert.equal(later.rules.find((row) => row.ruleId === rule.ruleId).lifecycle, 'DEMOTED');
+});
+
+test('trade journal: closed rows are written once and kept when the recomputation forgets them; conflicts and trims are counted', () => {
+  const t0 = Date.UTC(2026, 8, 1);
+  const trade = (id, status, entryTime, extra = {}) => ({ tradeId: id, ruleId: 'r', laneId: 'KR_STOCK_LONG', market: 'KR_STOCK', symbol: '005930', side: 'long',
+    signalTime: entryTime - DAY, entryTime, exitTime: status === 'CLOSED' ? entryTime + DAY : null, entryPrice: 100, exitPrice: status === 'CLOSED' ? 101 : null,
+    exitReason: status === 'CLOSED' ? 'target' : null, status, equityReturn: 0.01, rMultiple: 1, legs: 1, mode: 'EXPLORE', strict: true, ...extra });
+  const first = updateTradeJournalV1(null, [trade('a', 'CLOSED', t0), trade('b', 'OPEN', t0 + DAY)], { nowMs: t0 + (2 * DAY) });
+  assert.equal(first.stats.recorded, 2);
+  assert.equal(first.stats.closed, 1);
+  assert.equal(first.journal.trades.a.closedRecordedAt, t0 + (2 * DAY));
+  // Next tick: b closes, a is recomputed differently (ignored, counted), c is new, nothing vanished.
+  const second = updateTradeJournalV1(first.journal, [trade('a', 'CLOSED', t0, { rMultiple: 2 }), trade('b', 'CLOSED', t0 + DAY), trade('c', 'OPEN', t0 + (2 * DAY))], { nowMs: t0 + (3 * DAY) });
+  assert.equal(second.journal.trades.a.rMultiple, 1, 'a closed row is immutable');
+  assert.equal(second.stats.conflicts, 1);
+  assert.equal(second.journal.trades.b.status, 'CLOSED');
+  assert.equal(second.journal.trades.b.recordedAt, t0 + (2 * DAY), 'first-seen time kept');
+  assert.equal(second.stats.closedNow, 1);
+  assert.equal(second.stats.vanished, 0);
+  // Candle cache trimmed: a and b are no longer produced, but the journal keeps them.
+  const third = updateTradeJournalV1(second.journal, [trade('c', 'CLOSED', t0 + (2 * DAY))], { nowMs: t0 + (4 * DAY) });
+  assert.equal(third.stats.vanished, 2);
+  assert.deepEqual(Object.keys(third.journal.trades).sort(), ['a', 'b', 'c']);
+  assert.equal(third.journal.safety.executionAuthority, 'NONE');
+  const trimmed = updateTradeJournalV1(third.journal, [], { nowMs: t0 + (5 * DAY), maximumTrades: 2 });
+  assert.equal(trimmed.stats.trimmed, 1);
+  assert.deepEqual(Object.keys(trimmed.journal.trades), ['b', 'c'], 'oldest entry dropped first');
+});
+
+test('ledger tick persists the trade journal across ticks and reports it; duplicates never count twice', async (t) => {
+  const root = await tempRoot(t);
+  await mkdir(join(root, 'combination-research', 'lanes', 'KR_STOCK_LONG'), { recursive: true });
+  await writeFile(join(root, 'combination-research', 'lanes', 'KR_STOCK_LONG', 'state.json'), JSON.stringify(laneState()));
+  const symbols = ['005930', '000660', '035420', '005380'];
+  const nowMs = FORWARD_PAPER_START_MS + (100 * DAY);
+  const candleFetcher = async ({ symbol, endTime }) => dailyTrend(520, Number(symbol) % 97 + 1).filter((row) => row.timestamp < endTime);
+  const first = await runExploratoryPaperLedgerV1({ stateRoot: root, lanes: [KR], watchUniverse: { YAHOO_KR_1D: symbols }, candleFetcher, now: () => new Date(nowMs).toISOString() });
+  assert.equal(first.journal.recorded, first.totals.trades);
+  assert.equal(first.totals.duplicateTradesDropped, 0);
+  const journal = JSON.parse(await readFile(join(root, 'exploratory-paper', 'trade-journal.json'), 'utf8'));
+  assert.equal(journal.contract, 'exploratory-paper-trade-journal/v1');
+  assert.equal(Object.keys(journal.trades).length, first.totals.trades);
+  // The watch list shrinks (symbol dropped): its trades vanish from the recomputation but stay in the journal.
+  const second = await runExploratoryPaperLedgerV1({ stateRoot: root, lanes: [KR], watchUniverse: { YAHOO_KR_1D: symbols.slice(0, 2) }, candleFetcher,
+    now: () => new Date(nowMs + 60_000).toISOString() });
+  assert.ok(second.totals.trades < first.totals.trades);
+  assert.equal(second.journal.recorded, first.totals.trades, 'journal keeps every trade ever recorded');
+  assert.equal(second.journal.vanished, first.totals.trades - second.totals.trades);
+  assert.match(formatExploratoryPaperReportKoV1(second), /거래 기록 원장: 누적 \d+건/u);
+  assert.match(formatExploratoryPaperReportKoV1(second), /재계산에서 사라진 거래/u);
+});
+
+test('rule files that claim order authority or live trading are refused before anything runs', async (t) => {
+  assert.equal(assertPaperOnlyRulesV1([{ ruleId: 'x' }, { ruleId: 'y', executionAuthority: 'NONE' }]), true);
+  assert.throws(() => assertPaperOnlyRulesV1([{ ruleId: 'x', executionAuthority: 'LIVE' }], 'user-rules'), /EXPLORATORY_PAPER_AUTHORITY_INVALID:user-rules/u);
+  assert.throws(() => assertPaperOnlyRulesV1([{ ruleId: 'x', realOrder: true }]), /EXPLORATORY_PAPER_AUTHORITY_INVALID/u);
+  assert.throws(() => assertPaperOnlyRulesV1([{ ruleId: 'x', autoTrading: true }]), /EXPLORATORY_PAPER_AUTHORITY_INVALID/u);
+  const root = await tempRoot(t);
+  await mkdir(join(root, 'exploratory-paper'), { recursive: true });
+  await writeFile(join(root, 'exploratory-paper', 'user-rules.json'), JSON.stringify({ rules: [{ laneId: 'KR_STOCK_LONG', ruleId: 'w1', executionAuthority: 'ORDER' }] }));
+  await assert.rejects(runExploratoryPaperLedgerV1({ stateRoot: root, lanes: [KR], watchUniverse: { YAHOO_KR_1D: [] }, candleFetcher: async () => [] }),
+    /EXPLORATORY_PAPER_AUTHORITY_INVALID:user-rules/u);
 });
