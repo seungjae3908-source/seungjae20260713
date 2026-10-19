@@ -18,6 +18,9 @@ import {
   evaluateFormulaAutoBacktestQueueItemV1,
   processFormulaAutoBacktestQueueV1,
 } from '../src/formula-auto-backtest-queue-v1.js';
+import { rm } from 'node:fs/promises';
+import { acquireExclusiveFileLockV1, currentLockIdentityV1, lockHolderStateV1, processStartTicksV1 } from '../src/formula-auto-backtest-queue-v1.js';
+
 
 function candles() {
   const start = Date.UTC(2020, 0, 1);
@@ -618,3 +621,107 @@ test('hourly formula runner classifies absent producer as BLOCKED_DATA exit 2 wi
   assert.equal(result.liveTrading, false);
   assert.equal(result.realOrder, false);
 });
+
+// ---------- exclusive file lock (moved from exclusive-file-lock-v1.test.js) ----------
+// Block-scoped so its helpers never clash with the tests above.
+{
+async function tempDir(t) {
+  const root = await mkdtemp(join(tmpdir(), 'exclusive-lock-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+const DEAD_PID = 4_194_303;
+
+test('normal acquire and release leaves no lock behind', async (t) => {
+  const path = join(await tempDir(t), 'q.lock');
+  const lock = await acquireExclusiveFileLockV1(path);
+  const stored = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(stored.token, lock.token);
+  assert.equal(stored.pid, process.pid);
+  assert.equal(await lock.release(), true);
+  await assert.rejects(readFile(path, 'utf8'), { code: 'ENOENT' });
+});
+
+test('a live holder blocks; the waiter succeeds once the holder releases', async (t) => {
+  const path = join(await tempDir(t), 'q.lock');
+  const first = await acquireExclusiveFileLockV1(path);
+  await assert.rejects(acquireExclusiveFileLockV1(path, { busyCode: 'QUEUE_BUSY' }),
+    (error) => error.code === 'QUEUE_BUSY' && error.lockHolderState === 'ALIVE');
+  const waiting = acquireExclusiveFileLockV1(path, { waitMs: 5_000, pollMs: 20 });
+  setTimeout(() => { first.release(); }, 100);
+  const second = await waiting;
+  assert.notEqual(second.token, first.token);
+  await second.release();
+});
+
+test('release never deletes a lock that now belongs to someone else', async (t) => {
+  const path = join(await tempDir(t), 'q.lock');
+  const lock = await acquireExclusiveFileLockV1(path);
+  const self = await currentLockIdentityV1();
+  await writeFile(path, JSON.stringify({ ...self, token: 'someone-else' }));
+  assert.equal(await lock.release(), false);
+  assert.equal(JSON.parse(await readFile(path, 'utf8')).token, 'someone-else');
+});
+
+test('racing reclaimers of one crashed lock: exactly one holder at a time', async (t) => {
+  const dir = await tempDir(t);
+  const self = await currentLockIdentityV1();
+  for (let round = 0; round < 25; round += 1) {
+    const path = join(dir, `race-${round}.lock`);
+    await writeFile(path, JSON.stringify({ ...self, pid: DEAD_PID, startTicks: '1', token: `dead-${round}` }));
+    const results = await Promise.allSettled(Array.from({ length: 4 }, () => acquireExclusiveFileLockV1(path)));
+    const winners = results.filter((row) => row.status === 'fulfilled');
+    assert.equal(winners.length, 1, `round ${round}`);
+    assert.ok(results.filter((row) => row.status === 'rejected').every((row) => row.reason.code === 'LOCK_BUSY'));
+    await assert.rejects(readFile(`${path}.reclaim`, 'utf8'), { code: 'ENOENT' }, 'reclaim guard released');
+    assert.equal(JSON.parse(await readFile(path, 'utf8')).token, winners[0].value.token);
+  }
+});
+
+test('holder state: proven alive, proven dead (gone, recycled pid, other boot) or unknown', async (t) => {
+  const proc = await tempDir(t);
+  await mkdir(join(proc, '4242'), { recursive: true });
+  // The command name may contain spaces and parentheses.
+  await writeFile(join(proc, '4242', 'stat'), `4242 (node (worker) x) S ${Array.from({ length: 18 }, (_, i) => i + 4).join(' ')} 987654 rest\n`);
+  assert.equal(await processStartTicksV1(4242, proc), '987654');
+  // Field 22 of the real /proc entry of this process.
+  const real = (await readFile(`/proc/${process.pid}/stat`, 'utf8')).trim();
+  assert.equal(await processStartTicksV1(process.pid), real.slice(real.lastIndexOf(')') + 2).split(' ')[19]);
+  assert.equal(await processStartTicksV1(DEAD_PID), null);
+  const self = { host: 'h', bootId: 'b1', uid: 1000, pid: 1, startTicks: '1' };
+  const holder = { host: 'h', bootId: 'b1', uid: 1000, pid: 4242, startTicks: '987654', token: 'x' };
+  assert.equal(await lockHolderStateV1(holder, { self, procRoot: proc }), 'ALIVE');
+  assert.equal(await lockHolderStateV1({ ...holder, startTicks: '1' }, { self, procRoot: proc }), 'DEAD', 'recycled pid');
+  assert.equal(await lockHolderStateV1({ ...holder, pid: 4243 }, { self, procRoot: proc }), 'DEAD', 'pid gone');
+  assert.equal(await lockHolderStateV1({ ...holder, bootId: 'b0' }, { self, procRoot: proc }), 'DEAD', 'rebooted host');
+  assert.equal(await lockHolderStateV1({ ...holder, host: 'other' }, { self, procRoot: proc }), 'UNKNOWN', 'other host');
+  assert.equal(await lockHolderStateV1({ ...holder, bootId: null }, { self, procRoot: proc }), 'UNKNOWN');
+  assert.equal(await lockHolderStateV1(holder, { self: { ...self, bootId: null }, procRoot: proc }), 'UNKNOWN');
+  assert.equal(await lockHolderStateV1({ ...holder, startTicks: undefined }, { self, procRoot: proc }), 'UNKNOWN');
+  // Another user's process may be hidden from /proc: never proven dead.
+  assert.equal(await lockHolderStateV1({ ...holder, uid: 0, pid: 4243 }, { self, procRoot: proc }), 'UNKNOWN', 'other uid');
+  assert.equal(await lockHolderStateV1({ ...holder, uid: undefined, pid: 4243 }, { self, procRoot: proc }), 'UNKNOWN', 'legacy lock without uid');
+  assert.equal(await lockHolderStateV1(null, { self, procRoot: proc }), 'UNKNOWN');
+});
+
+test('an unknown or malformed holder is never reclaimed, however old', async (t) => {
+  const path = join(await tempDir(t), 'q.lock');
+  for (const content of ['{not json', JSON.stringify({ pid: DEAD_PID, at: 0 }), JSON.stringify({ host: 'other', bootId: 'x', pid: DEAD_PID, startTicks: '1', token: 't' })]) {
+    await writeFile(path, content);
+    await assert.rejects(acquireExclusiveFileLockV1(path), (error) => error.code === 'LOCK_BUSY' && error.lockHolderState === 'UNKNOWN');
+    assert.equal(await readFile(path, 'utf8'), content);
+  }
+});
+
+test('a reclaim guard left by a crashed reclaimer blocks reclaiming and is never removed automatically', async (t) => {
+  const path = join(await tempDir(t), 'q.lock');
+  const self = await currentLockIdentityV1();
+  await writeFile(path, JSON.stringify({ ...self, pid: DEAD_PID, startTicks: '1', token: 'dead' }));
+  const guard = JSON.stringify({ ...self, pid: DEAD_PID, startTicks: '1', token: 'dead-guard' });
+  await writeFile(`${path}.reclaim`, guard);
+  await assert.rejects(acquireExclusiveFileLockV1(path), (error) => error.code === 'LOCK_BUSY' && error.lockHolderState === 'RECLAIM_GUARD_STALE');
+  assert.equal(await readFile(`${path}.reclaim`, 'utf8'), guard);
+  assert.equal(JSON.parse(await readFile(path, 'utf8')).token, 'dead');
+});
+}
