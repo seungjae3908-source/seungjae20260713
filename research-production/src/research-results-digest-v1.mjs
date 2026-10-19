@@ -9,11 +9,16 @@
 // a ledger rule that met the promotion bar (30 trades, 95% lower bound > 0,
 // 3 symbols). Milestones are announced once.
 //
+// The daily summary also carries the operations state (watchdog, collector,
+// AI coordinator outcome, failure memory) and marks a result as old when its
+// own timestamp is past the job's cadence, so a stale file is never reported
+// as today's result.
+//
 // Read-only over latest/*.json. No trade rows, no account data, no secrets.
 // None of this is a formal candidate or profit evidence; real orders stay
 // behind the separate S-grade automatic-trading gate. executionAuthority NONE.
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { opsTelegramConfigV1, sendOpsTelegramV1 } from './ops-watchdog-v1.mjs';
@@ -28,6 +33,9 @@ export const RESEARCH_RESULTS_DIGEST_POLICY_V1 = Object.freeze({
   maxMessageChars: 3_800,
   // Upper bound of remembered milestone keys so state stays small.
   maxRememberedMilestones: 2_000,
+  // A result older than this (by its own observedAt, else file mtime) is
+  // reported with its age, never as current.
+  staleAfterMs: Object.freeze({ combination: 3 * 60 * 60_000, exitComparison: 10 * 24 * 60 * 60_000, exploratory: 3 * 60 * 60_000 }),
 });
 
 const KST_OFFSET_MS = 9 * 60 * 60_000;
@@ -59,14 +67,48 @@ async function atomicJson(path, value) {
   await rename(temporary, path);
 }
 
-/** Reads one latest/*.json result; a corrupt or unexpected file counts as absent. */
-async function readResult(stateRoot, name, contract) {
+/**
+ * Reads one latest/*.json result with its age; a corrupt or unexpected file
+ * counts as absent. `accept` is the contract string or a predicate.
+ */
+async function readResult(stateRoot, name, accept, nowMs) {
+  const path = join(stateRoot, 'latest', name);
   try {
-    const value = await readJson(join(stateRoot, 'latest', name));
-    return value && value.contract === contract ? value : null;
+    const value = await readJson(path);
+    const ok = value && (typeof accept === 'function' ? accept(value) === true : value.contract === accept);
+    if (!ok) return { value: null, ageMs: null };
+    const own = [value.observedAt, value.generatedAt, value.updatedAt].map((row) => (typeof row === 'number' ? row : Date.parse(String(row ?? '')))).find(Number.isFinite);
+    const mtime = (await stat(path)).mtimeMs;
+    const stamp = Number.isFinite(own) ? Math.min(own, mtime) : mtime;
+    return { value, ageMs: Number.isFinite(nowMs) ? Math.max(0, nowMs - stamp) : null };
   } catch {
-    return null;
+    return { value: null, ageMs: null };
   }
+}
+
+const hours = (ms) => (Number.isFinite(ms) ? `${(ms / 3_600_000).toFixed(1)}시간 전` : '-');
+const ageNote = (ageMs, staleAfterMs) => (Number.isFinite(ageMs) && ageMs > staleAfterMs ? ` (오래된 결과 · ${hours(ageMs)})` : '');
+const TEMPORAL_KO = Object.freeze({ complete: '완료', partial_failure: '일부 실패', failed_closed: '실패', deferred_busy: '다른 실행 중이라 미룸' });
+const COORDINATOR_KO = Object.freeze({ 0: '정상', 1: '실패', 75: '대기(AI 미사용 가능 또는 다른 작업 중)' });
+
+/** Pure: the operations lines of the daily summary (empty when nothing is known). */
+export function formatOperationsStateKoV1({ watchdog = null, temporal = null, coordinator = null, closedLoop = null, nowMs = Date.now() } = {}) {
+  const lines = [];
+  if (watchdog) {
+    const late = Array.isArray(watchdog.late) ? watchdog.late : (watchdog.problems ?? []).filter((id) => !(watchdog.failed ?? []).includes(id));
+    const failed = Array.isArray(watchdog.failed) ? watchdog.failed : [];
+    lines.push(`  감시: 정상 ${count(watchdog.healthy)} · 늦음 ${late.length}${late.length ? `(${late.join(', ')})` : ''} · 실패 ${failed.length}${failed.length ? `(${failed.join(', ')})` : ''}`);
+  }
+  if (temporal) {
+    const lastComplete = Number.isFinite(Number(temporal.lastCompleteAt)) ? hours(nowMs - Number(temporal.lastCompleteAt)) : (temporal.status === 'complete' && Number.isFinite(Number(temporal.generatedAt)) ? hours(nowMs - Number(temporal.generatedAt)) : '기록 없음');
+    lines.push(`  선물 보조지표 수집: ${TEMPORAL_KO[temporal.status] ?? '확인 필요'} · 연속 실패 ${count(temporal.consecutiveFailures)}회 · 마지막 완료 ${lastComplete}`);
+  }
+  if (coordinator) {
+    lines.push(`  AI 연구 조정: ${COORDINATOR_KO[Number(coordinator.exitCode)] ?? '확인 필요'}${closedLoop ? ` · 실패 기억 누적 ${count(closedLoop.durableFailureObservationCount)}건 · 이전 버전 기록 ${count(closedLoop.priorReleaseRecordCount)}건` : ''}`);
+  } else if (closedLoop) {
+    lines.push(`  실패 기억 누적 ${count(closedLoop.durableFailureObservationCount)}건 · 이전 버전 기록 ${count(closedLoop.priorReleaseRecordCount)}건`);
+  }
+  return lines;
 }
 
 export function kstDateV1(nowMs) {
@@ -111,31 +153,36 @@ export function extractResearchMilestonesV1({ combination = null, exitComparison
 }
 
 /** Pure: the daily Korean summary, bounded to one Telegram message. */
-export function formatResearchResultsDigestKoV1({ combination = null, exitComparison = null, exploratory = null, selfUpdate = null, observedAt, newMilestones = [], policy = RESEARCH_RESULTS_DIGEST_POLICY_V1 }) {
+export function formatResearchResultsDigestKoV1({ combination = null, exitComparison = null, exploratory = null, selfUpdate = null, observedAt, newMilestones = [],
+  ages = {}, operations = null, policy = RESEARCH_RESULTS_DIGEST_POLICY_V1 }) {
   const lines = ['[투자앱 연구 결과]', `기준 시각 ${observedAt} · 탐색용 결과(실주문 근거 아님)`];
   if (newMilestones.length > 0) {
     lines.push('', '새 소식');
     for (const row of newMilestones) lines.push(row.text);
   }
-  lines.push('', '조합 탐색');
+  const stale = policy.staleAfterMs ?? RESEARCH_RESULTS_DIGEST_POLICY_V1.staleAfterMs;
+  lines.push('', `조합 탐색${combination ? ageNote(ages.combination, stale.combination) : ''}`);
   if (!combination) lines.push('  아직 결과 없음');
   for (const lane of combination?.lanes ?? []) {
     if (lane.status === 'WAITING_FOR_DATA') { lines.push(`  ${laneName(lane.laneId)}: 데이터 대기`); continue; }
     lines.push(`  ${laneName(lane.laneId)}: 누적 시도 ${count(lane.cumulativeTrials ?? lane.trialsEvaluated)} · 합격 ${count(lane.survivors)} · 관찰 ${count(lane.watch)} · 탈락 ${count(lane.rejected)} · 보류 표본 통과 ${(lane.paperCandidates ?? []).length}`);
   }
-  lines.push('', '청산 방식 비교');
+  lines.push('', `청산 방식 비교${exitComparison ? ageNote(ages.exitComparison, stale.exitComparison) : ''}`);
   if (!exitComparison) lines.push('  아직 결과 없음');
   for (const lane of exitComparison?.lanes ?? []) {
     if (lane.status !== 'COMPLETE') { lane.status === 'WAITING_FOR_DATA' ? lines.push(`  ${laneName(lane.laneId)}: 데이터 대기`) : lines.push(`  ${laneName(lane.laneId)}: 다음 계산 대기`); continue; }
     const winners = (lane.signalSets ?? []).filter((set) => set?.winner?.status === 'WINNER');
     lines.push(`  ${laneName(lane.laneId)}: ${winners.length ? winners.map((set) => `${set.label ?? set.signalSetId} → ${variantLabelKoV1(set.winner.variantId)}`).join(' / ') : `신호 ${(lane.signalSets ?? []).length}개 모두 채택 기준 미달`}`);
   }
-  lines.push('', '탐색용 모의 장부');
+  lines.push('', `탐색용 모의 장부${exploratory ? ageNote(ages.exploratory, stale.exploratory) : ''}`);
   if (!exploratory) lines.push('  아직 결과 없음');
   else {
     const totals = exploratory.totals ?? {};
     lines.push(`  규칙 ${(exploratory.rules ?? []).length}개 · 거래 ${count(totals.trades)}건(종료 ${count(totals.closed)} · 보유 ${count(totals.open)}) · 승격 기준 충족 ${count(totals.promotionEligibleRules)} · 강등 ${count(totals.demotedRules)}`);
+    if (exploratory.journal) lines.push(`  거래 기록 원장: 누적 ${count(exploratory.journal.recorded)}건${count(exploratory.journal.vanished) ? ` · 재계산에서 사라진 거래 ${count(exploratory.journal.vanished)}건` : ''}`);
   }
+  const operationLines = operations ? formatOperationsStateKoV1({ ...operations, nowMs: Date.parse(observedAt) }) : [];
+  if (operationLines.length > 0) lines.push('', '운영 상태', ...operationLines);
   if (selfUpdate) lines.push('', `연구 서버 업데이트: ${SELF_UPDATE_KO[selfUpdate.status] ?? '확인 필요'} · 설치 ${String(selfUpdate.currentSha ?? '-').slice(0, 7)}`);
   lines.push('', '실주문은 S급 신호와 별도 자동매매 관문만 사용합니다.');
   const text = lines.join('\n');
@@ -161,12 +208,20 @@ export async function runResearchResultsDigestV1({
   if (!stateRoot) throw new Error('RESEARCH_DIGEST_STATE_ROOT_REQUIRED');
   const observedAt = now();
   const nowMs = Date.parse(observedAt);
-  const [combination, exitComparison, exploratory, selfUpdate] = await Promise.all([
-    readResult(stateRoot, 'combination-research-v1.json', 'combination-search-lane/v1'),
-    readResult(stateRoot, 'exit-strategy-comparison-v1.json', 'exit-strategy-comparison/v1'),
-    readResult(stateRoot, 'exploratory-paper-ledger-v1.json', 'exploratory-paper-ledger/v1'),
-    readResult(stateRoot, 'self-update-v1.json', 'research-self-update/v1'),
+  const [combinationRead, exitComparisonRead, exploratoryRead, selfUpdateRead, watchdogRead, temporalRead, coordinatorRead, closedLoopRead] = await Promise.all([
+    readResult(stateRoot, 'combination-research-v1.json', 'combination-search-lane/v1', nowMs),
+    readResult(stateRoot, 'exit-strategy-comparison-v1.json', 'exit-strategy-comparison/v1', nowMs),
+    readResult(stateRoot, 'exploratory-paper-ledger-v1.json', 'exploratory-paper-ledger/v1', nowMs),
+    readResult(stateRoot, 'self-update-v1.json', 'research-self-update/v1', nowMs),
+    readResult(stateRoot, 'ops-watchdog-v1.json', 'ops-watchdog/v1', nowMs),
+    readResult(stateRoot, 'temporal-crypto-futures.json', (value) => value.schemaVersion === 'crypto-futures-temporal-public-collection-v1', nowMs),
+    readResult(stateRoot, 'autonomous-research-coordinator-v2.json', 'autonomous-research-coordinator-outcome/v2', nowMs),
+    readResult(stateRoot, 'autonomous-research-closed-loop.json', 'autonomous-research-closed-loop-summary/v1', nowMs),
   ]);
+  const combination = combinationRead.value; const exitComparison = exitComparisonRead.value;
+  const exploratory = exploratoryRead.value; const selfUpdate = selfUpdateRead.value;
+  const ages = { combination: combinationRead.ageMs, exitComparison: exitComparisonRead.ageMs, exploratory: exploratoryRead.ageMs };
+  const operations = { watchdog: watchdogRead.value, temporal: temporalRead.value, coordinator: coordinatorRead.value, closedLoop: closedLoopRead.value };
   const statePath = join(stateRoot, 'research-results-digest', 'state.json');
   const previous = await readJson(statePath);
   const milestones = extractResearchMilestonesV1({ combination, exitComparison, exploratory });
@@ -175,7 +230,7 @@ export async function runResearchResultsDigestV1({
   let delivery = 'NOTHING_DUE';
   if (decision.kind !== 'NONE') {
     const text = decision.kind === 'DAILY'
-      ? formatResearchResultsDigestKoV1({ combination, exitComparison, exploratory, selfUpdate, observedAt, newMilestones: decision.fresh, policy })
+      ? formatResearchResultsDigestKoV1({ combination, exitComparison, exploratory, selfUpdate, observedAt, newMilestones: decision.fresh, ages, operations, policy })
       : ['[투자앱 연구 결과 · 새 소식]', ...decision.fresh.map((row) => row.text), '탐색용 결과(실주문 근거 아님)'].join('\n').slice(0, policy.maxMessageChars);
     if (!telegram) delivery = 'ALERT_CHANNEL_NOT_CONFIGURED';
     else {
@@ -202,6 +257,8 @@ export async function runResearchResultsDigestV1({
     delivery,
     alertChannel: telegram ? 'TELEGRAM' : 'NOT_CONFIGURED',
     inputs: { combination: combination != null, exitComparison: exitComparison != null, exploratory: exploratory != null, selfUpdate: selfUpdate != null },
+    operationsInputs: { watchdog: operations.watchdog != null, temporal: operations.temporal != null, coordinator: operations.coordinator != null, closedLoop: operations.closedLoop != null },
+    staleInputs: Object.entries(ages).filter(([key, ageMs]) => Number.isFinite(ageMs) && ageMs > policy.staleAfterMs[key]).map(([key]) => key),
     formalCandidate: false,
     profitabilityProven: false,
     executionAuthority: 'NONE',
