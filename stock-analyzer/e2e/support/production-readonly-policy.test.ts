@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyProductionRequest,
+  isIgnorableProductionConsoleError,
   isIgnorableProductionRequestFailure,
   privateAccountDisconnectedFixture,
 } from './production-readonly-policy';
@@ -119,6 +120,33 @@ test('Cloudflare same-origin RUM POST navigation abort is ignored without maskin
   );
   assert.equal(
     isIgnorableProductionRequestFailure(`${ORIGIN}/api/watchlist`, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+});
+
+test('Cloudflare Insights beacon script failures are ignored without masking other hosts or methods', () => {
+  const beacon = 'https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092';
+  assert.equal(isIgnorableProductionRequestFailure(beacon, 'GET', 'net::ERR_FAILED', ORIGIN), true);
+  assert.equal(isIgnorableProductionRequestFailure(beacon, 'GET', 'net::ERR_ABORTED', ORIGIN), true);
+  assert.equal(isIgnorableProductionRequestFailure(beacon, 'POST', 'net::ERR_FAILED', ORIGIN), false);
+  assert.equal(isIgnorableProductionRequestFailure(beacon, 'GET', 'net::ERR_CONNECTION_RESET', ORIGIN), false);
+  assert.equal(
+    isIgnorableProductionRequestFailure('https://static.cloudflareinsights.com/other.js', 'GET', 'net::ERR_FAILED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure('https://cdn.example/beacon.min.js', 'GET', 'net::ERR_FAILED', ORIGIN),
+    false,
+  );
+  assert.equal(isIgnorableProductionRequestFailure(`${ORIGIN}/api/quotes`, 'GET', 'net::ERR_FAILED', ORIGIN), false);
+
+  const corsText = `Access to script at '${beacon}' from origin '${ORIGIN}' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.`;
+  assert.equal(isIgnorableProductionConsoleError(corsText, ''), true);
+  assert.equal(isIgnorableProductionConsoleError('Failed to load resource: net::ERR_FAILED', beacon), true);
+  assert.equal(isIgnorableProductionConsoleError('Failed to load resource: net::ERR_FAILED', `${ORIGIN}/api/quotes`), false);
+  assert.equal(isIgnorableProductionConsoleError('TypeError: x is undefined', ''), false);
+  assert.equal(
+    isIgnorableProductionConsoleError(`Access to fetch at '${ORIGIN}/api/quotes' from origin '${ORIGIN}' has been blocked by CORS policy`, ''),
     false,
   );
 });
