@@ -81,3 +81,88 @@ test('validation reason falls back to the first error code when no JSON reason e
     'AI_RESEARCH_CUTOVER_BUSY:research-production-ai-review.service:activating');
   assert.equal(run('nothing useful\n'), '');
 });
+
+test('AI units pinned to a previous release by a failed activation are restored, not reported UP_TO_DATE', () => {
+  assert.match(script, /AI_RUNTIME_UNITS=\(research-production-ai-review\.service research-production-workspace-worker\.service\)/);
+  assert.match(script, /ai_runtime_healthy\(\) \{ ai_schedules_enabled && ai_runtime_bound_to_current; \}/);
+  // Both "already main" branches consult the binding, not only the timer state.
+  const upToDate = script.slice(script.indexOf('if [[ "$main_sha" == "$current_sha" ]]; then'), script.indexOf('ensure_mirror\ngit -C "$MIRROR" cat-file'));
+  assert.match(upToDate, /if ai_runtime_healthy; then\n    write_status UP_TO_DATE/);
+  assert.match(upToDate, /restore_ai_for_current "\$current_sha" "\$\(ai_restore_reason\)"/);
+  const noChange = script.slice(script.indexOf('if [[ -z "$changed" ]]; then'), script.indexOf('write_status NO_RESEARCH_CHANGE'));
+  assert.match(noChange, /if ! ai_runtime_healthy && git -C "\$MIRROR" cat-file -e/);
+  assert.doesNotMatch(noChange, /ai_schedules_enabled/);
+});
+
+test('ai_runtime_bound_to_current compares the resolved unit working directory with the current release', async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, chmodSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fn = script.slice(script.indexOf('ai_runtime_bound_to_current() {'), script.indexOf('ai_runtime_healthy() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'self-update-binding-'));
+  const releases = join(dir, 'releases');
+  mkdirSync(join(releases, 'a'.repeat(40)), { recursive: true });
+  mkdirSync(join(releases, 'b'.repeat(40)), { recursive: true });
+  symlinkSync(join(releases, 'b'.repeat(40)), join(dir, 'current'));
+  // A fake systemctl answers WorkingDirectory per unit from environment variables.
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'systemctl'), '#!/usr/bin/env bash\ncase "$2" in\n  research-production-ai-review.service) printf "%s\\n" "$WD_REVIEW" ;;\n  research-production-workspace-worker.service) printf "%s\\n" "$WD_WORKER" ;;\n  *) exit 1 ;;\nesac\n');
+  chmodSync(join(bin, 'systemctl'), 0o755);
+  const run = (review, worker) => {
+    try {
+      execFileSync('bash', ['-c', `AI_RUNTIME_UNITS=(research-production-ai-review.service research-production-workspace-worker.service)\nCURRENT="$1"\n${fn}\nai_runtime_bound_to_current`, 'x', join(dir, 'current')],
+        { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, WD_REVIEW: review, WD_WORKER: worker } });
+      return true;
+    } catch { return false; }
+  };
+  // Normal activation: units point at the current symlink.
+  assert.equal(run(join(dir, 'current'), join(dir, 'current')), true);
+  // Also fine when a unit names the current release directory itself.
+  assert.equal(run(join(releases, 'b'.repeat(40)), join(dir, 'current')), true);
+  // A rollback pinned the review unit to the previous release: not bound.
+  assert.equal(run(join(releases, 'a'.repeat(40)), join(dir, 'current')), false);
+  assert.equal(run(join(dir, 'current'), join(releases, 'a'.repeat(40))), false);
+  assert.equal(run('', join(dir, 'current')), false);
+  assert.equal(run(join(dir, 'current'), join(dir, 'missing')), false);
+});
+
+test('a validation that only collided with a running research one-shot is deferred, not counted as a failure', () => {
+  const tail = script.slice(script.indexOf('if [[ "$validated" != true ]]; then'), script.indexOf('paper_policy='));
+  assert.match(tail, /if \[\[ "\$reason" == AI_RESEARCH_CUTOVER_BUSY:\* \]\]; then/);
+  const busy = tail.slice(0, tail.indexOf('record_failure'));
+  assert.match(busy, /write_status DEFERRED_RESEARCH_BUSY .*retry next hour; running release unchanged/);
+  assert.match(busy, /exit 0/);
+  assert.match(tail.slice(tail.indexOf('record_failure')), /record_failure "\$main_sha" validation\n  write_status VALIDATION_FAILED/);
+  // Both Korean status maps name the new status.
+  assert.match(readFileSync(new URL('../src/research-results-digest-v1.mjs', import.meta.url), 'utf8'), /DEFERRED_RESEARCH_BUSY: '/);
+  assert.match(readFileSync(new URL('../bin/research-center-report-ko.mjs', import.meta.url), 'utf8'), /DEFERRED_RESEARCH_BUSY: '/);
+});
+
+test('an imminent AI tick is waited out before validation or cutover instead of colliding with it', async () => {
+  assert.match(script, /AI_REVIEW_TIMER=research-production-ai-review\.timer/);
+  const wait = script.slice(script.indexOf('wait_for_idle_oneshots() {'), script.indexOf('repair_isolated_release() {'));
+  assert.match(wait, /if \[\[ -z "\$busy" \]\] && ai_tick_imminent; then busy="\$AI_REVIEW_TIMER:imminent"; fi/);
+  const { mkdtempSync, mkdirSync, writeFileSync, chmodSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fn = script.slice(script.indexOf('ai_tick_imminent() {'), script.indexOf('wait_for_idle_oneshots() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'self-update-tick-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'systemctl'), '#!/usr/bin/env bash\nprintf "%s\\n" "$NEXT_ELAPSE"\n');
+  chmodSync(join(bin, 'systemctl'), 0o755);
+  const run = (next) => {
+    try {
+      execFileSync('bash', ['-c', `AI_REVIEW_TIMER=t.timer\nAI_TICK_GUARD_SECONDS=180\n${fn}\nai_tick_imminent`],
+        { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NEXT_ELAPSE: next } });
+      return true;
+    } catch { return false; }
+  };
+  const stamp = (offsetSeconds) => new Date(Date.now() + offsetSeconds * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+  assert.equal(run(stamp(60)), true);
+  assert.equal(run(stamp(600)), false);
+  assert.equal(run(stamp(-60)), false);
+  assert.equal(run('n/a'), false);
+  assert.equal(run(''), false);
+});
