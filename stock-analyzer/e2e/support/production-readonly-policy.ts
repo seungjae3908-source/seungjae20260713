@@ -66,6 +66,27 @@ export function classifyProductionRequest(
   return { action: 'allow' };
 }
 
+// Cloudflare edge injects its Web Analytics beacon script into every page. When
+// the beacon host refuses the script (CORS, blocked network), the app keeps
+// working; only this exact third-party script is exempt from QA diagnostics.
+const CLOUDFLARE_INSIGHTS_HOST = 'static.cloudflareinsights.com';
+
+function isCloudflareInsightsBeaconUrl(url: URL): boolean {
+  return url.protocol === 'https:'
+    && url.hostname === CLOUDFLARE_INSIGHTS_HOST
+    && url.pathname.startsWith('/beacon.min.js');
+}
+
+export function isIgnorableProductionConsoleError(text: string, locationUrl: string): boolean {
+  try {
+    if (locationUrl && isCloudflareInsightsBeaconUrl(new URL(locationUrl))) return true;
+  } catch {
+    // An unparsable location is not the beacon; fall through to the text check.
+  }
+  return text.startsWith(`Access to script at 'https://${CLOUDFLARE_INSIGHTS_HOST}/beacon.min.js`)
+    && text.includes('has been blocked by CORS policy');
+}
+
 export function isIgnorableProductionRequestFailure(
   rawUrl: string,
   method: string,
@@ -86,6 +107,8 @@ export function isIgnorableProductionRequestFailure(
     && normalizedMethod === 'POST'
     && normalizedError === 'net::ERR_ABORTED';
   if (cloudflareRumNavigationAbort) return true;
+  if (isCloudflareInsightsBeaconUrl(url) && normalizedMethod === 'GET'
+    && (normalizedError === 'net::ERR_FAILED' || normalizedError === 'net::ERR_ABORTED')) return true;
 
   const readOnlyAbort = (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
     && normalizedError === 'net::ERR_ABORTED';

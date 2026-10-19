@@ -3,6 +3,7 @@ import path from 'node:path';
 import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
+  isIgnorableProductionConsoleError,
   isIgnorableProductionRequestFailure,
 } from './support/production-readonly-policy';
 
@@ -158,6 +159,7 @@ function sanitizeLoginDiagnostics(items: Diagnostic[]) {
 function attachDiagnostics(page: Page, diagnostics: Diagnostic[]) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
+    if (isIgnorableProductionConsoleError(message.text(), message.location().url)) return;
     diagnostics.push({ kind: 'console', path: currentPath(page), detail: message.text().slice(0, 600) });
   });
   page.on('pageerror', (error) => {
