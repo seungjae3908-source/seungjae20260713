@@ -41,9 +41,29 @@ test('persisted ledger tampering is detected before any new evidence is accepted
   assert.throws(()=>appendTemporalEvidenceV1(tampered,row({observedAt:T+3600000,availableAt:T+3600000,recordedAt:T+3600000})),/digest mismatch/);
 });
 
-test('conflicting observation identity fails closed',()=>{
+test('conflicting observation identity fails closed and names the differing field',()=>{
   const ledger=appendTemporalEvidenceV1(createTemporalEvidenceLedgerV1({researchSha:SHA}),row());
-  assert.throws(()=>appendTemporalEvidenceV1(ledger,row({value:0.02})),/conflicting temporal observation identity/);
+  assert.throws(()=>appendTemporalEvidenceV1(ledger,row({value:0.02})),/conflicting temporal observation identity:value/);
+  assert.throws(()=>appendTemporalEvidenceV1(ledger,row({value:0.02,availableAt:T+3600000})),/identity:value/);
+  const late=appendTemporalEvidenceV1(createTemporalEvidenceLedgerV1({researchSha:SHA}),row({availableAt:T+3600000}));
+  assert.throws(()=>appendTemporalEvidenceV1(late,row({availableAt:T})),/identity:availableAt-backdated/);
+});
+
+test('re-served overlapping observation keeps the first-seen availability and never moves it',()=>{
+  // A rolling long/short window is re-fetched every hour; the collector stamps
+  // availableAt with each poll time, so the same (symbol, feature, observedAt)
+  // row arrives again with a later availableAt and the same value.
+  const first=appendTemporalEvidenceV1(createTemporalEvidenceLedgerV1({researchSha:SHA}),row({feature:'longShortRatio',value:1.25,availableAt:T+60000}));
+  const again=appendTemporalEvidenceV1(first,row({feature:'longShortRatio',value:1.25,availableAt:T+3660000}));
+  assert.equal(again,first,'re-seen observation is a no-op');
+  assert.equal(again.observations.length,1);
+  assert.equal(again.observations[0].availableAt,T+60000,'first-seen availability is kept');
+  assert.equal(again.ledgerDigest,first.ledgerDigest);
+  const batch=appendTemporalEvidenceBatchV1(first,[
+    row({feature:'longShortRatio',value:1.25,availableAt:T+7260000}),
+    row({feature:'longShortRatio',value:1.3,observedAt:T+3600000,availableAt:T+7260000}),
+  ]);
+  assert.equal(batch.observations.length,2,'only the genuinely new bucket is appended');
 });
 
 test('future or not-yet-available evidence cannot leak into an earlier anchor',()=>{
