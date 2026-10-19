@@ -520,6 +520,37 @@ test('durable: failure memory and duplicate prevention survive a release change 
   assert.equal(queueCalls, 0);
 });
 
+test('durable: a failure recorded through the operator ingest store blocks the same identity; a lock error is recognised by its code', async (t) => {
+  const root = await tempRoot(t);
+  const row = dossier(SHA_A);
+  // bin/research-failure-memory-ingest.mjs writes here, outside any release.
+  const ingestDir = join(root, 'failure-memory');
+  await mkdir(ingestDir, { recursive: true, mode: 0o700 });
+  const failure = createResearchFailureObservationV1({
+    strategyIdentityDigest: row.strategy.strategyIdentityDigest,
+    stage: 'HISTORICAL_BACKTEST', status: 'FAIL', failureCodes: ['INSUFFICIENT_SAMPLE'],
+    observedAt: OBSERVED_AT, evidence: { itemDigest: row.producerInput.itemDigest },
+  });
+  const ingested = appendResearchFailureObservationV1(createResearchFailureMemoryV1({ researchSha: SHA_A }), failure);
+  const ingestText = `${JSON.stringify(ingested, null, 2)}\n`;
+  await writeFile(join(ingestDir, 'research-failure-memory.json'), ingestText, { mode: 0o600 });
+  await stageAutonomousResearchDossierV1({ stateRoot: root, dossier: row });
+  let queueCalls = 0;
+  const result = await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA_A, now: () => OBSERVED_AT,
+    processQueue: async () => { queueCalls += 1; } });
+  assert.equal(queueCalls, 0, 'the ingested failure blocks the identity');
+  assert.equal(result.durableFailureObservationCount, 1);
+  assert.equal(sha256(await readFile(join(ingestDir, 'research-failure-memory.json'), 'utf8')), sha256(ingestText), 'ingest store never rewritten');
+
+  // A busy queue signalled only through the error code (message differs) still defers.
+  const other = dossier(SHA_A, 3);
+  await stageAutonomousResearchDossierV1({ stateRoot: root, dossier: other });
+  const deferred = await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA_A, now: () => OBSERVED_AT,
+    processQueue: async () => { throw Object.assign(new Error('queue held by forward consumer'), { code: 'FORMULA_QUEUE_BUSY' }); } });
+  assert.equal(deferred.deferredThisCycle, 1);
+  assert.equal(deferred.actualBacktestCount, 0);
+});
+
 test('durable: an identity completed (not failed) by an earlier release is not re-run either', async (t) => {
   const root = await tempRoot(t);
   await stageAutonomousResearchDossierV1({ stateRoot: root, dossier: dossier(SHA_A) });
