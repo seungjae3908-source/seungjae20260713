@@ -51,6 +51,10 @@ test('provider credentials load after policy files so empty policy values cannot
   const videoPolicy=await readFile(new URL('../deploy/research-video.env.example', import.meta.url),'utf8');
   assert.doesNotMatch(aiPolicy,/^GROQ_API_KEY=/m);
   assert.doesNotMatch(aiPolicy,/^GEMINI_API_KEY=/m);
+  // The isolated release validation reads this policy file with a strict key
+  // allowlist; a copied example must not carry a key it rejects (GROQ_MODEL once did).
+  const policyKeys=aiPolicy.split('\n').filter((line)=>/^[A-Z0-9_]+=/.test(line)).map((line)=>line.split('=')[0]);
+  assert.deepEqual([...new Set(policyKeys)].sort(),['AI_CHAT_PROVIDER','RESEARCH_AI_FREE_TIER_CONFIRMED','RESEARCH_AI_MAX_CALLS_PER_SCAN']);
   assert.doesNotMatch(videoPolicy,/^YOUTUBE_DATA_API_KEY=/m);
 });
 

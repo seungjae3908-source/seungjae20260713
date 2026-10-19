@@ -26,6 +26,7 @@ try {
     aiPolicyEnvPath: resolve(options['ai-policy-env'] ?? '/etc/investment-research/research-ai.env'),
     videoPolicyEnvPath: resolve(options['video-policy-env'] ?? '/etc/investment-research/research-video.env'),
     maximumCycles: Number(options.cycles ?? 1),
+    ...(options['source-retries'] != null ? { maximumSourceRetries: Number(options['source-retries']) } : {}),
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
