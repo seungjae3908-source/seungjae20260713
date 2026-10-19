@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   decideResearchDigestV1,
   extractResearchMilestonesV1,
+  formatOperationsStateKoV1,
   formatResearchResultsDigestKoV1,
   kstDateV1,
   runResearchResultsDigestV1,
@@ -167,4 +168,44 @@ test('corrupt or foreign result files are treated as absent, not as results', as
   assert.deepEqual(result.inputs, { combination: false, exitComparison: false, exploratory: false, selfUpdate: false });
   assert.equal(result.newMilestones, 0);
   assert.match(sent[0], /조합 탐색\n {2}아직 결과 없음/u);
+});
+
+test('operations lines separate late from failed, name the collector state and the failure memory size', () => {
+  const nowMs = Date.parse(AFTER_DIGEST);
+  const lines = formatOperationsStateKoV1({
+    watchdog: { contract: 'ops-watchdog/v1', healthy: 9, problems: ['forward', 'temporal-evidence'], late: ['forward'], failed: ['temporal-evidence'] },
+    temporal: { status: 'partial_failure', consecutiveFailures: 3, lastCompleteAt: nowMs - (5 * 3_600_000), generatedAt: nowMs - 600_000 },
+    coordinator: { exitCode: 75 },
+    closedLoop: { durableFailureObservationCount: 42, priorReleaseRecordCount: 7 },
+    nowMs,
+  });
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /감시: 정상 9 · 늦음 1\(forward\) · 실패 1\(temporal-evidence\)/u);
+  assert.match(lines[1], /선물 보조지표 수집: 일부 실패 · 연속 실패 3회 · 마지막 완료 5\.0시간 전/u);
+  assert.match(lines[2], /AI 연구 조정: 대기.*실패 기억 누적 42건 · 이전 버전 기록 7건/u);
+  assert.deepEqual(formatOperationsStateKoV1({}), []);
+  // An older watchdog record without late/failed lists still reads.
+  const legacy = formatOperationsStateKoV1({ watchdog: { healthy: 3, problems: ['forward'] }, nowMs });
+  assert.match(legacy[0], /늦음 1\(forward\) · 실패 0/u);
+});
+
+test('the daily digest marks old results with their age and carries the operations state; fresh results carry no age note', async (t) => {
+  const old = { ...combination(), observedAt: '2026-10-17T10:00:00.000Z' };
+  const root = await setup(t, {
+    'combination-research-v1.json': old,
+    'exploratory-paper-ledger-v1.json': { ...exploratory(), observedAt: AFTER_DIGEST, journal: { recorded: 12, vanished: 2 } },
+    'ops-watchdog-v1.json': { contract: 'ops-watchdog/v1', healthy: 10, problems: [], late: [], failed: [] },
+    'temporal-crypto-futures.json': { schemaVersion: 'crypto-futures-temporal-public-collection-v1', status: 'complete', consecutiveFailures: 0, lastCompleteAt: Date.parse(AFTER_DIGEST) - 600_000, generatedAt: Date.parse(AFTER_DIGEST) - 600_000 },
+    'autonomous-research-coordinator-v2.json': { contract: 'autonomous-research-coordinator-outcome/v2', exitCode: 0, status: 'COMPLETE' },
+    'autonomous-research-closed-loop.json': { contract: 'autonomous-research-closed-loop-summary/v1', durableFailureObservationCount: 5, priorReleaseRecordCount: 1 },
+  });
+  const sent = [];
+  const result = await runResearchResultsDigestV1({ stateRoot: root, env: ENV, fetchImpl: telegram(sent), now: () => AFTER_DIGEST });
+  assert.equal(result.kind, 'DAILY');
+  assert.deepEqual(result.staleInputs, ['combination']);
+  assert.deepEqual(result.operationsInputs, { watchdog: true, temporal: true, coordinator: true, closedLoop: true });
+  assert.match(sent[0], /조합 탐색 \(오래된 결과 · 15\.0시간 전\)/u);
+  assert.match(sent[0], /탐색용 모의 장부\n {2}규칙/u, 'a fresh result has no age note');
+  assert.match(sent[0], /거래 기록 원장: 누적 12건 · 재계산에서 사라진 거래 2건/u);
+  assert.match(sent[0], /운영 상태\n {2}감시: 정상 10 · 늦음 0 · 실패 0\n {2}선물 보조지표 수집: 완료 · 연속 실패 0회 · 마지막 완료 0\.2시간 전\n {2}AI 연구 조정: 정상 · 실패 기억 누적 5건/u);
 });

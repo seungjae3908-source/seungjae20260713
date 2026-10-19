@@ -697,13 +697,18 @@ async function loadPriorReleaseRecords(releasesRoot, researchCodeSha) {
  * memory (older releases kept writing only those). Unreadable legacy files are
  * skipped and counted, never rewritten.
  */
-async function loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha }) {
+async function loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha, ingestPath = null }) {
   let memory = await safeJson(join(durableRoot, 'failure-memory.json'), { optional: true });
   memory = memory == null ? createResearchFailureMemoryV1({ researchSha: researchCodeSha }) : assertResearchFailureMemoryV1(memory);
   let legacySkipped = 0;
-  for (const name of await releaseNames(releasesRoot)) {
+  const sources = (await releaseNames(releasesRoot)).map((name) => join(releasesRoot, name, 'failure-memory.json'));
+  // The operator ingest tool (bin/research-failure-memory-ingest.mjs) keeps its
+  // own store under <root>/failure-memory; failures recorded there block the
+  // same identities here, so the two stores never disagree.
+  if (ingestPath) sources.push(ingestPath);
+  for (const path of sources) {
     let legacy = null;
-    try { legacy = await safeJson(join(releasesRoot, name, 'failure-memory.json'), { optional: true }); if (legacy) assertResearchFailureMemoryV1(legacy); }
+    try { legacy = await safeJson(path, { optional: true }); if (legacy) assertResearchFailureMemoryV1(legacy); }
     catch { legacy = null; legacySkipped += 1; }
     for (const entry of legacy?.observations ?? []) memory = appendResearchFailureObservationV1(memory, entry.failureObservation);
   }
@@ -775,7 +780,8 @@ async function runClosedLoopLocked({ root, researchCodeSha, maximumStrategiesPer
   }
   const durableMemoryPath = join(durableRoot, 'failure-memory.json');
   const durableSummaryPath = join(durableRoot, 'failure-memory-summary.json');
-  let { memory: durableMemory, legacySkipped } = await loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha });
+  let { memory: durableMemory, legacySkipped } = await loadDurableFailureMemory({ durableRoot, releasesRoot, researchCodeSha,
+    ingestPath: join(root, 'failure-memory', 'research-failure-memory.json') });
   for (const entry of failureMemory.observations) durableMemory = appendResearchFailureObservationV1(durableMemory, entry.failureObservation);
   const rememberFailure = async (failure) => {
     failureMemory = appendResearchFailureObservationV1(failureMemory, failure);
@@ -841,7 +847,8 @@ async function runClosedLoopLocked({ root, researchCodeSha, maximumStrategiesPer
           await processQueue({ stateRoot: loopRoot, researchCodeSha, maximumItems: 50, lockWaitMs: 30_000 });
         } catch (error) {
           // The hourly forward consumer holds the shared queue; resume next tick.
-          if (String(error?.message ?? '') !== 'FORMULA_QUEUE_BUSY') throw error;
+          // The lock error carries its code; the message is only a fallback.
+          if (error?.code !== 'FORMULA_QUEUE_BUSY' && String(error?.message ?? '') !== 'FORMULA_QUEUE_BUSY') throw error;
           deferredThisCycle += 1;
           continue;
         }
