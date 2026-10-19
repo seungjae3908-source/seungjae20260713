@@ -36,7 +36,7 @@ if (selfUpdate) {
     UP_TO_DATE: '최신', NO_RESEARCH_CHANGE: '연구 변경 없음(앱만 바뀜)', VALIDATING: '격리 시험 중', CUTTING_OVER: '교체 중',
     UPDATED: '업데이트 완료', VALIDATION_FAILED: '격리 시험 실패(기존 버전 유지)', CUTOVER_FAILED: '교체 실패(기존 버전 복구)',
     AI_ACTIVATION_FAILED: 'AI 일정 전환 실패(이전 상태 복구)', WAITING_AFTER_FAILURE: '최근 실패, 나중에 재시도',
-    DEFERRED_MANUAL_ACTIVATION: '수동 활성화 진행 중이라 미룸', RESTORING_AI: '꺼진 AI 연구 일정 복구 중', AI_RESTORED: '꺼진 AI 연구 일정 복구 완료', AI_RESTORE_FAILED: 'AI 연구 일정 복구 실패(기본 연구는 계속)', MAIN_UNREADABLE: 'main 확인 실패', NO_CURRENT_RELEASE: '현재 버전 없음',
+    DEFERRED_MANUAL_ACTIVATION: '수동 활성화 진행 중이라 미룸', DEFERRED_RESEARCH_BUSY: '연구 작업 중이라 다음 시간에 재시도', RESTORING_AI: '꺼진 AI 연구 일정 복구 중', AI_RESTORED: '꺼진 AI 연구 일정 복구 완료', AI_RESTORE_FAILED: 'AI 연구 일정 복구 실패(기본 연구는 계속)', MAIN_UNREADABLE: 'main 확인 실패', NO_CURRENT_RELEASE: '현재 버전 없음',
   };
   out.push(`[자동 업데이트] ${selfUpdate.observedAt} · ${SELF_UPDATE_KO[selfUpdate.status] ?? selfUpdate.status} · 현재 ${String(selfUpdate.currentSha ?? '-').slice(0, 7)} → main ${String(selfUpdate.targetSha ?? '-').slice(0, 7)}${selfUpdate.detail ? ` · ${selfUpdate.detail}` : ''}`);
 }
