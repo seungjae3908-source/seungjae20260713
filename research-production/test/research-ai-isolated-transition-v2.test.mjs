@@ -132,6 +132,89 @@ test('isolated transition retains a bounded provider blocker instead of touching
   assert.equal(sourceDirective.researchCodeSha, SOURCE_SHA);
 });
 
+test('isolated transition retries a source-specific discovery failure against another source, bounded', async (t) => {
+  const x = await fixture(t);
+  const outcomes = [
+    { reason: 'EXIT_LOCATOR_NOT_FOUND_IN_SOURCE', sourcePath: 'user_data/strategies/A.py' },
+    { reason: 'PUBLIC_SOURCE_HTTP_404', sourcePath: 'user_data/strategies/B.py' },
+    null,
+  ];
+  let runs = 0;
+  const result = await runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: x.source, isolatedStateRoot: x.isolated, repoRoot: x.repo, researchSha: TARGET_SHA,
+    providerEnvPath: x.providerEnvPath, aiPolicyEnvPath: x.aiPolicyEnvPath, videoPolicyEnvPath: x.videoPolicyEnvPath,
+    maximumCycles: 1, maximumSourceRetries: 2, now: () => AT,
+    runCycle: async ({ stateRoot }) => {
+      const failure = outcomes[runs];
+      runs += 1;
+      if (failure) {
+        // The real discovery persists its latest pointer with a deferral; the
+        // transition must retire it so the retry is not DEFERRED_RETRY.
+        await writeFile(join(stateRoot, 'latest', 'autonomous-research-discovery-v2.json'), JSON.stringify({
+          status: 'AI_DISCOVERY_UNAVAILABLE', reason: failure.reason, retryAfterAt: Date.parse(AT) + 600_000,
+        }), { mode: 0o600 });
+        return { ...cycle(1), status: 'PARTIAL_AI_DISCOVERY_UNAVAILABLE', discoveryStatus: 'AI_DISCOVERY_UNAVAILABLE',
+          reason: failure.reason, stagedDossierDigest: null,
+          actualProviderCalls: { attempted: 2, succeeded: 2, failed: 0 },
+          actualSourceFetches: { attempted: 3, succeeded: failure.reason.includes('404') ? 2 : 3, failed: failure.reason.includes('404') ? 1 : 0 },
+          selectedNextStrategy: { repository: 'https://github.com/example/public', sourcePath: failure.sourcePath },
+          formulaGeneratedCount: 0, actualBacktestCount: 0 };
+      }
+      const ok = cycle(1);
+      const stateRootPath = join(stateRoot, 'autonomous-research', 'releases', TARGET_SHA);
+      await mkdir(stateRootPath, { recursive: true, mode: 0o700 });
+      await writeFile(join(stateRootPath, 'state.json'), JSON.stringify({
+        contract: 'autonomous-research-closed-loop-state/v1', researchCodeSha: TARGET_SHA,
+        records: [{ dossierDigest: ok.stagedDossierDigest, itemDigest: '1'.repeat(64), disposition: 'IMPROVE',
+          metrics: { trades: 4 }, executionAuthority: 'NONE' }],
+      }), { mode: 0o600 });
+      return ok;
+    },
+    runReview: async () => ({ status: 'COMPLETE', provider: 'gemini', model: 'gemini-3.1-flash-lite',
+      providerNetworkCalls: 1, cacheHits: 0, reviews: [{}], blockedProfiles: [], safety: { executionAuthority: 'NONE' } }),
+    runVideo: async () => ({ status: 'COMPLETE', provider: 'YOUTUBE_DATA_API_V3', providerNetworkCalls: 1, sourceCount: 0, safety: { executionAuthority: 'NONE' } }),
+  });
+  assert.equal(runs, 3);
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.naturalCycleCount, 1);
+  assert.deepEqual(result.discoverySourceRetries.map((row) => [row.attempt, row.reason, row.sourcePath]), [
+    [1, 'EXIT_LOCATOR_NOT_FOUND_IN_SOURCE', 'user_data/strategies/A.py'],
+    [2, 'PUBLIC_SOURCE_HTTP_404', 'user_data/strategies/B.py'],
+  ]);
+  const retired = JSON.parse(await readFile(join(x.isolated, 'transition-evidence', 'natural-cycle-1-source-retry-1.json'), 'utf8'));
+  assert.equal(retired.reason, 'EXIT_LOCATOR_NOT_FOUND_IN_SOURCE', 'the failed discovery pointer is kept as evidence');
+  await assert.rejects(readFile(join(x.isolated, 'latest', 'autonomous-research-discovery-v2.json')), /ENOENT/,
+    'the deferral pointer no longer blocks the retry');
+  const sourceDirective = JSON.parse(await readFile(join(x.source, 'latest', 'autonomous-research-next-directive.json'), 'utf8'));
+  assert.equal(sourceDirective.researchCodeSha, SOURCE_SHA, 'production state untouched');
+});
+
+test('isolated transition stops after the source retry budget and never retries provider failures', async (t) => {
+  const x = await fixture(t);
+  let runs = 0;
+  await assert.rejects(runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: x.source, isolatedStateRoot: x.isolated, repoRoot: x.repo, researchSha: TARGET_SHA,
+    providerEnvPath: x.providerEnvPath, aiPolicyEnvPath: x.aiPolicyEnvPath, videoPolicyEnvPath: x.videoPolicyEnvPath,
+    maximumCycles: 1, maximumSourceRetries: 1,
+    runCycle: async () => { runs += 1; return { ...cycle(1), status: 'PARTIAL_AI_DISCOVERY_UNAVAILABLE', discoveryStatus: 'AI_DISCOVERY_UNAVAILABLE',
+      reason: 'ENTRY_LOCATOR_NOT_FOUND_IN_SOURCE', actualProviderCalls: { attempted: 2, succeeded: 2, failed: 0 } }; },
+    runReview: async () => ({}), runVideo: async () => ({}),
+  }), /ISOLATED_TRANSITION_NATURAL_CYCLE_NOT_PROVEN:ENTRY_LOCATOR_NOT_FOUND_IN_SOURCE/);
+  assert.equal(runs, 2, 'one retry, then fail closed');
+
+  const y = await fixture(t);
+  runs = 0;
+  await assert.rejects(runResearchAiIsolatedTransitionV2({
+    sourceStateRoot: y.source, isolatedStateRoot: y.isolated, repoRoot: y.repo, researchSha: TARGET_SHA,
+    providerEnvPath: y.providerEnvPath, aiPolicyEnvPath: y.aiPolicyEnvPath, videoPolicyEnvPath: y.videoPolicyEnvPath,
+    maximumCycles: 1, maximumSourceRetries: 2,
+    runCycle: async () => { runs += 1; return { ...cycle(1), status: 'PARTIAL_AI_DISCOVERY_UNAVAILABLE', discoveryStatus: 'AI_DISCOVERY_UNAVAILABLE',
+      reason: 'FREE_AI_PROVIDER_UNAVAILABLE', actualProviderCalls: { attempted: 1, succeeded: 0, failed: 1 } }; },
+    runReview: async () => ({}), runVideo: async () => ({}),
+  }), /NATURAL_CYCLE_NOT_PROVEN:FREE_AI_PROVIDER_UNAVAILABLE/);
+  assert.equal(runs, 1, 'provider failures are not retried');
+});
+
 test('isolated transition still rejects an unknown fast-historical schema', async (t) => {
   const x = await fixture(t);
   await writeFile(join(x.source, 'latest', 'fast-historical.json'), `${JSON.stringify({
