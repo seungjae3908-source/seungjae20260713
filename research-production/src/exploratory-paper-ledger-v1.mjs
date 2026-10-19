@@ -70,7 +70,11 @@ export const EXPLORATORY_PAPER_POLICY_V1 = Object.freeze({
   // Lifecycle: enough strict trades and a 95% UPPER bound below zero = demoted.
   demotionMinimumTrades: 20,
   lateDetectionBars: 2,
+  // Append-only trade journal (evidence that survives candle-cache changes).
+  journalMaximumTrades: 20_000,
 });
+
+export const EXPLORATORY_TRADE_JOURNAL_CONTRACT_V1 = 'exploratory-paper-trade-journal/v1';
 
 // ---------- helpers ----------
 
@@ -157,6 +161,70 @@ async function fetchForwardFunding({ symbol, startTime, endTime, fetchImpl }) {
     cursor = last + 1;
   }
   return rows.sort((a, b) => a.timestamp - b.timestamp).filter((row, i, all) => i === 0 || row.timestamp > all[i - 1].timestamp);
+}
+
+// ---------- paper-only guard ----------
+
+/**
+ * Registry and owner rule files are inputs this lane trusts for strategy
+ * selection only. Any row that claims order authority, live or automatic
+ * trading is refused before anything runs: this lane never carries it.
+ */
+export function assertPaperOnlyRulesV1(rows, label = 'rules') {
+  for (const row of rows ?? []) {
+    if (!row || typeof row !== 'object') continue;
+    const authority = Object.hasOwn(row, 'executionAuthority') && row.executionAuthority !== 'NONE';
+    const flags = row.realOrder === true || row.liveTrading === true || row.autoTrading === true || row.automaticLiveFeed === true;
+    if (authority || flags) throw new Error(`EXPLORATORY_PAPER_AUTHORITY_INVALID:${label}`);
+  }
+  return true;
+}
+
+// ---------- trade journal ----------
+
+function journalRow(trade, nowMs, prior) {
+  return {
+    tradeId: trade.tradeId, ruleId: trade.ruleId, laneId: trade.laneId, market: trade.market, symbol: trade.symbol, side: trade.side,
+    signalTime: trade.signalTime, entryTime: trade.entryTime, exitTime: trade.exitTime, entryPrice: trade.entryPrice, exitPrice: trade.exitPrice,
+    exitReason: trade.exitReason, status: trade.status, equityReturn: trade.equityReturn, rMultiple: trade.rMultiple, legs: trade.legs,
+    mode: trade.mode, strict: trade.strict, recordedAt: prior?.recordedAt ?? nowMs, closedRecordedAt: trade.status === 'CLOSED' ? prior?.closedRecordedAt ?? nowMs : null,
+  };
+}
+
+/**
+ * Pure: folds this tick's recomputed trades into the append-only journal.
+ * A CLOSED row is written once and never changed afterwards (a later
+ * recomputation that disagrees is counted as a conflict, the original stays);
+ * an OPEN row is updated until it closes. Trades no longer produced by the
+ * recomputation (candle cache trimmed or corrected) stay in the journal and
+ * are counted as vanished, so lost evidence is visible instead of silent.
+ */
+export function updateTradeJournalV1(journal, trades, { nowMs, maximumTrades = EXPLORATORY_PAPER_POLICY_V1.journalMaximumTrades } = {}) {
+  const rows = { ...(journal?.trades ?? {}) };
+  const stats = { added: 0, closedNow: 0, updatedOpen: 0, conflicts: 0, vanished: 0, trimmed: 0 };
+  const live = new Set();
+  for (const trade of trades) {
+    live.add(trade.tradeId);
+    const prior = rows[trade.tradeId];
+    if (!prior) { rows[trade.tradeId] = journalRow(trade, nowMs, null); stats.added += 1; if (trade.status === 'CLOSED') stats.closedNow += 1; continue; }
+    if (prior.status === 'CLOSED') {
+      if (trade.status !== 'CLOSED' || prior.exitTime !== trade.exitTime || prior.rMultiple !== trade.rMultiple) stats.conflicts += 1;
+      continue;
+    }
+    rows[trade.tradeId] = journalRow(trade, nowMs, prior);
+    if (trade.status === 'CLOSED') stats.closedNow += 1; else stats.updatedOpen += 1;
+  }
+  for (const row of Object.values(rows)) if (!live.has(row.tradeId)) stats.vanished += 1;
+  let ordered = Object.values(rows).sort((a, b) => a.entryTime - b.entryTime || a.tradeId.localeCompare(b.tradeId));
+  if (ordered.length > maximumTrades) { stats.trimmed = ordered.length - maximumTrades; ordered = ordered.slice(stats.trimmed); }
+  const next = {
+    contract: EXPLORATORY_TRADE_JOURNAL_CONTRACT_V1, updatedAt: nowMs,
+    firstRecordedAt: journal?.firstRecordedAt ?? nowMs,
+    trades: Object.fromEntries(ordered.map((row) => [row.tradeId, row])),
+    safety: Object.freeze({ paperOnly: true, realOrder: false, executionAuthority: 'NONE' }),
+  };
+  const closed = ordered.filter((row) => row.status === 'CLOSED').length;
+  return { journal: next, stats: Object.freeze({ ...stats, recorded: ordered.length, closed, open: ordered.length - closed, firstRecordedAt: next.firstRecordedAt }) };
 }
 
 // ---------- rule selection ----------
@@ -277,6 +345,8 @@ export async function runExploratoryPaperLedgerV1({
   const log = [];
   const registry = (await readJson(join(base, 'registry.json'))) ?? { contract: EXPLORATORY_PAPER_CONTRACT_V1, rules: {}, firstSeen: {} };
   const userRules = (await readJson(join(base, 'user-rules.json')))?.rules ?? [];
+  assertPaperOnlyRulesV1(Object.values(registry.rules ?? {}), 'registry');
+  assertPaperOnlyRulesV1(Array.isArray(userRules) ? userRules : [], 'user-rules');
   const laneStates = {};
   for (const lane of lanes) laneStates[lane.id] = await readJson(join(stateRoot, 'combination-research', 'lanes', lane.id, 'state.json'));
   const selected = selectExploratoryRulesV1({ lanes, laneStates, userRules: Array.isArray(userRules) ? userRules : [], policy, researchPolicy });
@@ -352,7 +422,7 @@ export async function runExploratoryPaperLedgerV1({
 
   // Deterministic recomputation of all trades (atoms computed once per symbol,
   // shared by the long and short futures lanes).
-  const trades = [];
+  const simulated = [];
   const prepared = new Map();
   for (const lane of lanes) {
     const ls = laneSourceSpec(lane, universe);
@@ -379,7 +449,7 @@ export async function runExploratoryPaperLedgerV1({
       const { candles, atoms, liquidity } = ready;
       for (const rule of laneRules) {
         try {
-          trades.push(...simulateRuleOnSymbolV1({ lane, rule, symbol, candles, atoms, fundingRates: cached.fundingRates ?? [], liquidity, nowMs }));
+          simulated.push(...simulateRuleOnSymbolV1({ lane, rule, symbol, candles, atoms, fundingRates: cached.fundingRates ?? [], liquidity, nowMs }));
         } catch (error) {
           log.push(`${rule.ruleId}:${symbol}:SIMULATION_FAILED:${String(error?.message ?? error).slice(0, 80)}`);
         }
@@ -387,6 +457,18 @@ export async function runExploratoryPaperLedgerV1({
     }
   }
 
+  // One row per trade identity: the same (rule, symbol, entry) can only be
+  // produced once per tick, so a duplicate is a bug upstream and must never
+  // be counted twice. Dropped duplicates are reported.
+  const seenTradeIds = new Set();
+  const trades = [];
+  let duplicateTradesDropped = 0;
+  for (const trade of simulated) {
+    if (seenTradeIds.has(trade.tradeId)) { duplicateTradesDropped += 1; continue; }
+    seenTradeIds.add(trade.tradeId);
+    trades.push(trade);
+  }
+  if (duplicateTradesDropped > 0) log.push(`DUPLICATE_TRADES_DROPPED:${duplicateTradesDropped}`);
   // First time each trade was seen (detection delay; late = backfilled data).
   for (const trade of trades) registry.firstSeen[trade.tradeId] ??= nowMs;
   // Keep detection times only for trades that still exist (bounded registry).
@@ -442,6 +524,14 @@ export async function runExploratoryPaperLedgerV1({
     return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, sampleSummaryV1(v)]));
   };
   await atomicJson(join(base, 'registry.json'), registry);
+  // Append-only evidence of every paper trade, independent of the candle cache.
+  const journalPath = join(base, 'trade-journal.json');
+  const priorJournal = await readJson(journalPath);
+  const { journal, stats: journalStats } = updateTradeJournalV1(priorJournal?.contract === EXPLORATORY_TRADE_JOURNAL_CONTRACT_V1 ? priorJournal : null, decorated,
+    { nowMs, maximumTrades: policy.journalMaximumTrades });
+  await atomicJson(journalPath, journal);
+  if (journalStats.vanished > 0) log.push(`JOURNAL_TRADES_VANISHED_FROM_RECOMPUTATION:${journalStats.vanished}`);
+  if (journalStats.conflicts > 0) log.push(`JOURNAL_CLOSED_TRADE_CONFLICTS:${journalStats.conflicts}`);
   const recent = [...decorated].sort((a, b) => b.entryTime - a.entryTime).slice(0, 400);
   const result = Object.freeze({
     schemaVersion: 1,
@@ -461,7 +551,9 @@ export async function runExploratoryPaperLedgerV1({
       byMode: group('mode'), byMarket: group('market'), byLane: group('laneId'),
       promotionEligibleRules: ruleStats.filter((row) => row.promotionEligible).length,
       demotedRules: ruleStats.filter((row) => row.lifecycle === 'DEMOTED').length,
+      duplicateTradesDropped,
     },
+    journal: journalStats,
     // Cross-rule risk and the drawdown distribution of the whole forward book.
     portfolio: portfolioRiskV1(decorated),
     monteCarlo: monteCarloTradeSequenceV1(decorated.filter((row) => row.status === 'CLOSED').map((row) => row.equityReturn), { paths: 1_000 }),
@@ -487,6 +579,8 @@ export function formatExploratoryPaperReportKoV1(result) {
   lines.push(`[탐색용 모의매매(EXPLORATORY)] ${result.observedAt}`);
   lines.push(`실제 주문 0 · 정식 후보/자동매매와 분리 · 2026-08-10 이후 데이터만 사용(연구가 본 적 없는 구간)`);
   lines.push(`거래 ${result.totals.trades}건 (종료 ${result.totals.closed} · 보유 중 ${result.totals.open}) · 졸업 조건 충족 규칙 ${result.totals.promotionEligibleRules}개 · 강등 ${result.totals.demotedRules}개`);
+  const j = result.journal;
+  if (j) lines.push(`거래 기록 원장: 누적 ${j.recorded}건(종료 ${j.closed})${j.vanished ? ` · 재계산에서 사라진 거래 ${j.vanished}건(원장에는 보존)` : ''}${j.conflicts ? ` · 종료 거래 불일치 ${j.conflicts}건` : ''}`);
   for (const [mode, row] of Object.entries(result.totals.byMode)) lines.push(`  ${MODE_KO[mode] ?? mode}: ${row.n}건 · 평균 ${r(row.mean)} · 승률 ${row.winRate == null ? '-' : `${Math.round(row.winRate * 100)}%`}`);
   const p = result.portfolio;
   if (p?.rules) lines.push(`포트폴리오: 규칙 ${p.rules}개 · 합계 ${r(p.totalR)} · 최대낙폭 ${r(-p.maxDrawdownR)} · 동시 보유 최대 ${p.maxConcurrentPositions}건 · 평균 상관 ${p.averageAbsoluteCorrelation ?? '-'}${p.concentrationWarning ? ' (규칙들이 비슷하게 움직임 — 분산 효과 작음)' : ''}`);

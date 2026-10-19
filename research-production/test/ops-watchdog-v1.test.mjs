@@ -94,3 +94,66 @@ test('ops Telegram send widens the IPv6/IPv4 race budget and names network failu
   await assert.rejects(sendOpsTelegramV1(config, 'x', async () => { throw timeout; }), /^Error: OPS_TELEGRAM_NETWORK_ETIMEDOUT$/);
   await assert.rejects(sendOpsTelegramV1(config, 'x', async () => { throw new TypeError('fetch failed'); }), /OPS_TELEGRAM_NETWORK_FAILED/);
 });
+
+test('an outcome target distinguishes a job that ran and failed from one that is late; both recover', async (t) => {
+  const root = await setup(t);
+  const sent = [];
+  const target = { id: 'collector', label: '수집기', kind: 'OUTCOME', path: 'latest/collector.json', maxAgeMs: 60 * 60_000,
+    failedWhen: (value) => value.status === 'partial_failure' };
+  const at = (h, m = 0) => new Date(Date.UTC(2026, 9, 18, h, m)).toISOString();
+  const write = (status, hour) => writeFile(join(root, 'latest', 'collector.json'), JSON.stringify({ status, generatedAt: Date.UTC(2026, 9, 18, hour) }));
+  await write('complete', 0);
+  const ok = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(0, 10) });
+  assert.equal(ok.targets[0].status, 'OK');
+  assert.deepEqual(ok.failed, []);
+  // Ran at 01:00 and failed: FAILED right away, even though the file is fresh.
+  await write('partial_failure', 1);
+  const failed = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(1, 10) });
+  assert.equal(failed.targets[0].status, 'FAILED');
+  assert.deepEqual(failed.failed, ['collector']);
+  assert.deepEqual(failed.late, []);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /실패 감지: 수집기 — 마지막 실행 결과 partial_failure/u);
+  // Then it stopped running altogether: late is a different alert, not a reminder.
+  const late = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(3) });
+  assert.equal(late.targets[0].status, 'FAILED', 'a failed result stays FAILED until a new run is recorded');
+  await write('complete', 3);
+  const recovered = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(3, 5) });
+  assert.equal(recovered.targets[0].status, 'OK');
+  assert.match(sent.at(-1), /복구: 수집기/u);
+  // No run for three hours: STALE (late), reported apart from failed.
+  const stale = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(6, 30) });
+  assert.equal(stale.targets[0].status, 'STALE');
+  assert.deepEqual(stale.late, ['collector']);
+  assert.deepEqual(stale.failed, []);
+  assert.match(sent.at(-1), /멈춤 감지: 수집기 — 마지막 성공/u);
+  // A corrupt result file is an ERROR, not OK and not a crash.
+  await writeFile(join(root, 'latest', 'collector.json'), '{not json');
+  const broken = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: fetcher({ sent }), now: () => at(6, 40) });
+  assert.equal(broken.targets[0].status, 'ERROR');
+});
+
+test('late turning into failed (or back) is announced as a new alert, not swallowed by the reminder window', () => {
+  const nowMs = Date.UTC(2026, 9, 18);
+  const row = { id: 'c', label: '수집기', kind: 'OUTCOME', status: 'STALE', ageMs: 4 * 3_600_000 };
+  const first = decideOpsAlertsV1({ previous: {}, observed: [row], nowMs });
+  assert.equal(first.messages[0].kind, 'ALERT');
+  const failed = decideOpsAlertsV1({ previous: first.next, observed: [{ ...row, status: 'FAILED', detail: 'failed_closed', ageMs: 60_000 }], nowMs: nowMs + 600_000 });
+  assert.equal(failed.messages.length, 1);
+  assert.equal(failed.messages[0].kind, 'ALERT');
+  assert.match(failed.messages[0].text, /실패 감지/u);
+  const same = decideOpsAlertsV1({ previous: failed.next, observed: [{ ...row, status: 'FAILED', detail: 'failed_closed', ageMs: 60_000 }], nowMs: nowMs + 1_200_000 });
+  assert.equal(same.messages.length, 0, 'still failing inside the reminder window: quiet');
+});
+
+test('the production target list watches the collector, the AI coordinator outcome and the self-update, failing on their failure statuses', async () => {
+  const { OPS_WATCH_TARGETS_V1 } = await import('../src/ops-watchdog-v1.mjs');
+  const byId = Object.fromEntries(OPS_WATCH_TARGETS_V1.map((row) => [row.id, row]));
+  for (const id of ['temporal-evidence', 'ai-coordinator', 'self-update', 'closed-loop']) assert.ok(byId[id], `${id} watched`);
+  assert.equal(byId['ai-coordinator'].failedWhen({ exitCode: 1, status: 'FAILED_CLOSED' }), true);
+  assert.equal(byId['ai-coordinator'].failedWhen({ exitCode: 75, status: 'WAITING_OR_PARTIAL_AI' }), false, 'waiting is not failure');
+  assert.equal(byId['temporal-evidence'].failedWhen({ status: 'partial_failure' }), true);
+  assert.equal(byId['temporal-evidence'].failedWhen({ status: 'deferred_busy' }), false);
+  assert.equal(byId['self-update'].failedWhen({ status: 'VALIDATION_FAILED' }), true);
+  assert.equal(byId['self-update'].failedWhen({ status: 'NO_RESEARCH_CHANGE' }), false);
+});
