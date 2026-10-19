@@ -8,6 +8,7 @@ import {
   rebindAutonomousResearchNextDirectiveV1,
 } from './autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from './autonomous-research-cycle-v2.mjs';
+import { isSourceSpecificReasonV2 } from './autonomous-research-discovery-v2.mjs';
 import { runResearchAiReviewScan } from './research-ai-review-worker.mjs';
 import { runResearchVideoDiscoveryScan } from './research-video-discovery-worker.mjs';
 
@@ -15,6 +16,13 @@ const SHA40 = /^[a-f0-9]{40}$/u;
 const MAX_ENV_BYTES = 64 * 1024;
 const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const PROFILE_NAMES = Object.freeze(['forward', 'fast-historical', 'long-history']);
+// Discovery failures tied to the one source the free AI proposed (missing file,
+// non-strategy file, a rule quote that is not in the fetched source). The
+// isolated discovery remembers that source and proposes another, so a bounded
+// number of such cycles is retried instead of failing the whole validation.
+// Provider outages, rate limits and missing configuration are never retried here.
+const DEFAULT_SOURCE_RETRIES = 2;
+const MAX_SOURCE_RETRIES = 4;
 // fast-historical is produced by historical-pipelines.mjs, which writes the
 // historical-cycle-v2 summary. forward/long-history still use cycle-v1.
 const PROFILE_SCHEMAS = Object.freeze({
@@ -156,6 +164,20 @@ async function seedProfile({ sourceStateRoot, isolatedStateRoot, profile, resear
   });
 }
 
+function sourceSpecificDiscoveryFailure(cycle) {
+  return cycle?.discoveryStatus === 'AI_DISCOVERY_UNAVAILABLE' && isSourceSpecificReasonV2(cycle?.reason)
+    && cycle?.actualProviderCalls?.failed === 0 && cycle?.actualProviderCalls?.succeeded >= 1;
+}
+
+async function retireDiscoveryPointer(isolatedStateRoot, evidenceName) {
+  const pointer = join(isolatedStateRoot, 'latest', 'autonomous-research-discovery-v2.json');
+  try {
+    await rename(pointer, join(isolatedStateRoot, 'transition-evidence', evidenceName));
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
 function verifyCycle(cycle) {
   if (cycle?.status !== 'COMPLETE' || cycle?.directiveConsumed !== true || cycle?.discoveryStatus !== 'DOSSIER_STAGED'
     || cycle?.actualProviderCalls?.attempted !== 2 || cycle?.actualProviderCalls?.succeeded !== 2
@@ -198,6 +220,7 @@ export async function runResearchAiIsolatedTransitionV2({
   aiPolicyEnvPath,
   videoPolicyEnvPath,
   maximumCycles = 1,
+  maximumSourceRetries = DEFAULT_SOURCE_RETRIES,
   inheritedEnv = process.env,
   now = () => new Date().toISOString(),
   runCycle = runAutonomousResearchCycleV2,
@@ -211,6 +234,9 @@ export async function runResearchAiIsolatedTransitionV2({
   if (overlaps(sourceStateRoot, isolatedStateRoot)) throw new Error('ISOLATED_TRANSITION_STATE_ROOT_OVERLAP');
   if (!Number.isSafeInteger(maximumCycles) || maximumCycles < 1 || maximumCycles > 2) {
     throw new Error('ISOLATED_TRANSITION_CYCLE_LIMIT_INVALID');
+  }
+  if (!Number.isSafeInteger(maximumSourceRetries) || maximumSourceRetries < 0 || maximumSourceRetries > MAX_SOURCE_RETRIES) {
+    throw new Error('ISOLATED_TRANSITION_SOURCE_RETRY_LIMIT_INVALID');
   }
   await verifySourceRoot(sourceStateRoot);
   await prepareEmptyRoot(isolatedStateRoot);
@@ -240,8 +266,22 @@ export async function runResearchAiIsolatedTransitionV2({
   if (!reviewSeed) throw new Error('ISOLATED_TRANSITION_REVIEW_EVIDENCE_MISSING');
 
   const cycles = [];
+  const sourceRetries = [];
   for (let index = 0; index < maximumCycles; index += 1) {
-    const cycle = await runCycle({ stateRoot: isolatedStateRoot, researchCodeSha: researchSha, env });
+    let cycle;
+    for (let attempt = 0; ; attempt += 1) {
+      cycle = await runCycle({ stateRoot: isolatedStateRoot, researchCodeSha: researchSha, env });
+      if (!sourceSpecificDiscoveryFailure(cycle) || attempt >= maximumSourceRetries) break;
+      // The discovery wrote this failure into the isolated failed-source memory
+      // and a deferral into its latest pointer. The pointer moves into the
+      // evidence folder so the next attempt runs now against a different source.
+      // Only the isolated root is touched.
+      await retireDiscoveryPointer(isolatedStateRoot, `natural-cycle-${index + 1}-source-retry-${attempt + 1}.json`);
+      sourceRetries.push(Object.freeze({
+        cycle: index + 1, attempt: attempt + 1, reason: String(cycle.reason),
+        repository: cycle.selectedNextStrategy?.repository ?? null, sourcePath: cycle.selectedNextStrategy?.sourcePath ?? null,
+      }));
+    }
     verifyCycle(cycle);
     if (cycles.some((previous) => previous.selectedNextStrategy?.sourceRevision === cycle.selectedNextStrategy?.sourceRevision
       && previous.selectedNextStrategy?.sourcePath === cycle.selectedNextStrategy?.sourcePath)) {
@@ -286,6 +326,7 @@ export async function runResearchAiIsolatedTransitionV2({
     directiveSeed,
     seededProfiles: Object.freeze(profiles),
     naturalCycleCount: cycles.length,
+    discoverySourceRetries: Object.freeze(sourceRetries),
     strategies: Object.freeze(cycles.map((cycle, index) => Object.freeze({
       repository: cycle.selectedNextStrategy.repository,
       sourcePath: cycle.selectedNextStrategy.sourcePath,
