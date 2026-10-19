@@ -80,7 +80,10 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
   assert.deepEqual(plan.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
-  assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, resolve(stateRoot));
+  // Must be the release queue the autonomous closed loop produces into, not the
+  // shared root (which never had a producer outbox).
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, join(resolve(stateRoot), 'autonomous-research', 'releases', SHA));
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_PUBLISH_ROOT, resolve(stateRoot));
   assert.deepEqual(formulaQueue.acceptedExitCodes, [0, 2]);
   assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
   assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
