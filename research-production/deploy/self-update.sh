@@ -45,6 +45,15 @@ ONESHOT_SERVICES=(
   research-production-approved-job-intake.service
 )
 WATCH_SERVICE=research-production-market-watch.service
+# The ten-minute AI tick (*:09/10) fires right after this timer (*:37): a
+# validation that starts seconds before it collides with the tick and fails
+# busy, so an imminent tick is let through and finished first.
+AI_REVIEW_TIMER=research-production-ai-review.timer
+AI_TICK_GUARD_SECONDS="${RESEARCH_SELF_UPDATE_AI_TICK_GUARD_SECONDS:-180}"
+# AI units that must run the current release. A failed AI activation rolls
+# them back to the previous release and re-enables their timers, so "timers
+# on" alone does not prove the AI schedules run the release that is current.
+AI_RUNTIME_UNITS=(research-production-ai-review.service research-production-workspace-worker.service)
 
 [[ "$(id -u)" -eq 0 ]] || { echo "SELF_UPDATE_ROOT_REQUIRED" >&2; exit 64; }
 if [[ -r "$CONFIG" ]] && grep -Eq '^RESEARCH_SELF_UPDATE_ENABLED=(false|0)$' "$CONFIG"; then
@@ -103,6 +112,17 @@ record_failure() {
   ' "$FAILURES" "$1" "$2"
 }
 
+ai_tick_imminent() {
+  # true when the AI tick fires within the guard window (it would collide)
+  local next now
+  next="$(systemctl show "$AI_REVIEW_TIMER" -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+  [[ -n "$next" && "$next" != "n/a" ]] || return 1
+  next="$(date -d "$next" +%s 2>/dev/null || true)"
+  [[ "$next" =~ ^[0-9]+$ ]] || return 1
+  now="$(date +%s)"
+  (( next >= now && next - now <= AI_TICK_GUARD_SECONDS ))
+}
+
 wait_for_idle_oneshots() {
   local deadline=$(( $(date +%s) + IDLE_WAIT_SECONDS )) service busy
   while :; do
@@ -110,6 +130,7 @@ wait_for_idle_oneshots() {
     for service in "${ONESHOT_SERVICES[@]}"; do
       if systemctl is-active --quiet "$service"; then busy="$service"; break; fi
     done
+    if [[ -z "$busy" ]] && ai_tick_imminent; then busy="$AI_REVIEW_TIMER:imminent"; fi
     [[ -z "$busy" ]] && return 0
     (( $(date +%s) < deadline )) || { echo "SELF_UPDATE_ONESHOT_STILL_RUNNING:$busy" >&2; return 1; }
     sleep 20
@@ -143,13 +164,34 @@ if [[ -L "$CURRENT" ]]; then current_sha="$(basename "$(readlink -f "$CURRENT")"
 main_sha="$(git ls-remote "$REPOSITORY_URL" refs/heads/main | awk '{print $1}')"
 [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]] || { write_status MAIN_UNREADABLE "" "$current_sha" "git ls-remote failed"; exit 1; }
 
-ai_schedules_enabled() { systemctl is-enabled --quiet research-production-ai-review.timer; }
+ai_schedules_enabled() { systemctl is-enabled --quiet "$AI_REVIEW_TIMER"; }
+
+ai_runtime_bound_to_current() {
+  # true when every AI unit's working directory resolves to the current release
+  local unit directory current
+  current="$(readlink -f -- "$CURRENT" 2>/dev/null || true)"
+  [[ -n "$current" ]] || return 1
+  for unit in "${AI_RUNTIME_UNITS[@]}"; do
+    directory="$(systemctl show "$unit" -p WorkingDirectory --value 2>/dev/null || true)"
+    [[ -n "$directory" && "$(readlink -f -- "$directory" 2>/dev/null || true)" == "$current" ]] || return 1
+  done
+}
+
+ai_runtime_detail() {
+  # where the AI review unit actually runs, for the status file
+  local directory
+  directory="$(systemctl show "${AI_RUNTIME_UNITS[0]}" -p WorkingDirectory --value 2>/dev/null || true)"
+  directory="$(readlink -f -- "$directory" 2>/dev/null || printf '%s' "${directory:-unknown}")"
+  printf 'AI units run %s' "$(basename -- "$directory" | cut -c1-7)"
+}
+
+ai_runtime_healthy() { ai_schedules_enabled && ai_runtime_bound_to_current; }
 
 # Self-heal: a release cutover leaves AI schedules off until AI activation
 # succeeds. If they are off for the running release, validate it in isolation
 # and turn them back on without any release change.
 restore_ai_for_current() {
-  local sha="$1" work_dir attempt reason=""
+  local sha="$1" why="${2:-AI schedules were off}" work_dir attempt reason=""
   if manual_activation_running; then
     write_status DEFERRED_MANUAL_ACTIVATION "$sha" "$sha" "an owner-approved activation is running"
     return 0
@@ -163,7 +205,7 @@ restore_ai_for_current() {
     git -C "$MIRROR" show "$sha:research-production/deploy/$script" > "$work_dir/$script"
   done
   repair_isolated_release "$sha"
-  write_status RESTORING_AI "$sha" "$sha" "AI schedules were off; isolated validation then re-enable"
+  write_status RESTORING_AI "$sha" "$sha" "$why; isolated validation then re-enable"
   for attempt in $(seq 1 "$VALIDATION_ATTEMPTS"); do
     wait_for_idle_oneshots || continue
     if env TARGET_SHA="$sha" RESEARCH_AI_ISOLATED_CYCLES=2 REPOSITORY_URL="$REPOSITORY_URL" \
@@ -178,7 +220,7 @@ restore_ai_for_current() {
   done
   rm -rf -- "$work_dir"
   record_failure "restore-$sha" ai-restore
-  write_status AI_RESTORE_FAILED "$sha" "$sha" "${reason:+$reason; }AI schedules still off; core research timers keep running"
+  write_status AI_RESTORE_FAILED "$sha" "$sha" "${reason:+$reason; }$why; core research timers keep running"
   return 1
 }
 
@@ -190,13 +232,17 @@ ensure_mirror() {
   git -C "$MIRROR" fetch -q --depth 500 origin "+refs/heads/main:refs/heads/main"
 }
 
+ai_restore_reason() {
+  if ! ai_schedules_enabled; then printf 'AI schedules were off'; else ai_runtime_detail; fi
+}
+
 if [[ "$main_sha" == "$current_sha" ]]; then
-  if ai_schedules_enabled; then
+  if ai_runtime_healthy; then
     write_status UP_TO_DATE "$main_sha" "$current_sha" ""
     exit 0
   fi
   ensure_mirror
-  restore_ai_for_current "$current_sha"
+  restore_ai_for_current "$current_sha" "$(ai_restore_reason)"
   exit $?
 fi
 
@@ -211,8 +257,8 @@ else
   changed="HISTORY_UNAVAILABLE"
 fi
 if [[ -z "$changed" ]]; then
-  if ! ai_schedules_enabled && git -C "$MIRROR" cat-file -e "$current_sha^{commit}" 2>/dev/null; then
-    restore_ai_for_current "$current_sha"
+  if ! ai_runtime_healthy && git -C "$MIRROR" cat-file -e "$current_sha^{commit}" 2>/dev/null; then
+    restore_ai_for_current "$current_sha" "$(ai_restore_reason)"
     exit $?
   fi
   write_status NO_RESEARCH_CHANGE "$main_sha" "$current_sha" "only app or workflow paths changed"
@@ -253,6 +299,12 @@ for attempt in $(seq 1 "$VALIDATION_ATTEMPTS"); do
   sleep 60
 done
 if [[ "$validated" != true ]]; then
+  if [[ "$reason" == AI_RESEARCH_CUTOVER_BUSY:* ]]; then
+    # A collision with a running research one-shot is not a verdict on the
+    # target: do not count it as a failure (that would delay it six hours).
+    write_status DEFERRED_RESEARCH_BUSY "$main_sha" "$current_sha" "$reason; retry next hour; running release unchanged"
+    exit 0
+  fi
   record_failure "$main_sha" validation
   write_status VALIDATION_FAILED "$main_sha" "$current_sha" "${reason:-isolated validation failed}; running release unchanged"
   exit 1
