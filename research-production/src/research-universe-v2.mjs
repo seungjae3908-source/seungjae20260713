@@ -39,6 +39,13 @@ export const RESEARCH_UNIVERSE_POLICY_V2 = Object.freeze({
   watchPerSource: 300,
   liquidityWindowDays: 120,
   listingRefreshDays: 7,
+  // A symbol whose probe failed for its own reason (unsupported, no history)
+  // is retried this many times before it is excluded; rate limits (429),
+  // 5xx and network errors are the SOURCE's problem: they never count against
+  // a symbol, they pause that source for a backoff (Retry-After when given).
+  permanentFailureAttempts: 3,
+  transientBackoffMs: 15 * 60_000,
+  maximumTransientBackoffMs: 6 * 60 * 60_000,
   // Minimum median daily traded value (local currency of the venue) and the
   // minimum number of daily candles before 2026 (listing age).
   sources: Object.freeze({
@@ -70,16 +77,73 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+function httpError(response) {
+  const retryAfter = Number(response.headers?.get?.('retry-after'));
+  return Object.assign(new Error(`UNIVERSE_HTTP_${response.status}`), {
+    status: response.status,
+    retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? Math.round(retryAfter * 1000) : null,
+  });
+}
+
 async function getJson(fetchImpl, url, init) {
   const response = await fetchImpl(url, { headers: { accept: 'application/json', 'user-agent': 'seungjae-research/2.0' }, ...init });
-  if (!response.ok) throw Object.assign(new Error(`UNIVERSE_HTTP_${response.status}`), { status: response.status });
+  if (!response.ok) throw httpError(response);
   return response.json();
 }
 
 async function getText(fetchImpl, url) {
   const response = await fetchImpl(url, { headers: { accept: 'text/plain', 'user-agent': 'seungjae-research/2.0' } });
-  if (!response.ok) throw Object.assign(new Error(`UNIVERSE_HTTP_${response.status}`), { status: response.status });
+  if (!response.ok) throw httpError(response);
   return response.text();
+}
+
+const TRANSIENT_NETWORK_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EPIPE',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+
+/** Rate limit, server error or network failure: retry later, blame no symbol. */
+export function isTransientUniverseErrorV1(error) {
+  const status = Number(error?.status);
+  if (status === 429 || status === 408 || (status >= 500 && status <= 599)) return true;
+  const code = String(error?.code ?? error?.cause?.code ?? '');
+  if (TRANSIENT_NETWORK_CODES.has(code)) return true;
+  const message = String(error?.message ?? '');
+  // Provider collectors name the status in their message (YAHOO_STOCK_HTTP_429, UPBIT_HISTORY_HTTP_503...).
+  if (/_HTTP_(?:408|429|5\d\d)(?:\D|$)/u.test(message)) return true;
+  if (error?.name === 'AbortError' || /^fetch failed$/iu.test(message) || /request timeout/iu.test(message)) return true;
+  return false;
+}
+
+function transientBackoffMs(error, count, policy) {
+  const requested = Number(error?.retryAfterMs);
+  const base = Number.isFinite(requested) && requested > 0 ? requested : policy.transientBackoffMs;
+  return Math.min(base * Math.min(2 ** Math.max(0, count - 1), 8), policy.maximumTransientBackoffMs);
+}
+
+function noteTransient(entry, source, stage, error, observedAtMs, policy, log) {
+  const count = Number(entry.transient?.count ?? 0) + 1;
+  const backoffUntil = new Date(observedAtMs + transientBackoffMs(error, count, policy)).toISOString();
+  entry.transient = { count, stage, lastReason: String(error?.message ?? error).slice(0, 120), lastAt: new Date(observedAtMs).toISOString(), backoffUntil };
+  log.push(`${source}:TRANSIENT_BACKOFF:${stage}:${entry.transient.lastReason.slice(0, 60)}:until=${backoffUntil}`);
+}
+
+function inBackoff(entry, observedAtMs) {
+  return Boolean(entry?.transient?.backoffUntil) && Date.parse(entry.transient.backoffUntil) > observedAtMs;
+}
+
+function pendingSymbols(entry, observedAtMs, policy) {
+  return (entry.listing ?? []).filter((symbol) => {
+    if (entry.probes[symbol]) return false;
+    const failure = entry.failures[symbol];
+    if (failure && failure.attempts >= policy.permanentFailureAttempts) return false;
+    return !(failure && Date.parse(failure.retryAfter) > observedAtMs);
+  });
+}
+
+/** Even split of the probe budget: 15 across 4 sources -> 4,4,4,3. */
+export function splitProbeBudgetV2(total, parts) {
+  if (parts <= 0) return [];
+  const base = Math.floor(total / parts);
+  return Array.from({ length: parts }, (_, index) => base + (index < total % parts ? 1 : 0));
 }
 
 // ---------- listings ----------
@@ -274,13 +338,16 @@ export async function refreshResearchUniverseV2({
   const state = (await readJson(universePath(stateRoot))) ?? { contract: RESEARCH_UNIVERSE_CONTRACT_V2, sources: {} };
   const snapshot = (await readJson(snapshotPath(stateRoot))) ?? { contract: RESEARCH_UNIVERSE_CONTRACT_V2, sources: {} };
   const log = [];
-  let probesLeft = maximumProbes;
-  for (const source of Object.keys(policy.sources)) {
+  const sourceIds = Object.keys(policy.sources);
+
+  // Pass 1: listings. A frozen snapshot is never re-listed: membership changes
+  // only by an explicit new snapshot (delete the frozen source to rebuild it).
+  for (const source of sourceIds) {
     const entry = state.sources[source] ??= { listing: null, listedAt: null, probes: {}, failures: {} };
+    if (snapshot.sources[source]) continue;
+    if (inBackoff(entry, observedAtMs)) { log.push(`${source}:BACKOFF:${entry.transient.backoffUntil}`); continue; }
     const listingAge = entry.listedAt ? observedAtMs - Date.parse(entry.listedAt) : Infinity;
-    // A frozen snapshot is never re-listed: membership changes only by an
-    // explicit new snapshot (delete the frozen source to rebuild it).
-    if (!snapshot.sources[source] && (entry.listing == null || listingAge > policy.listingRefreshDays * DAY)) {
+    if (entry.listing == null || listingAge > policy.listingRefreshDays * DAY) {
       try {
         const listing = await listingFetchers[source](fetchImpl);
         entry.listing = listing.map((row) => row.symbol).sort();
@@ -288,27 +355,53 @@ export async function refreshResearchUniverseV2({
         entry.listedAt = observedAt;
         log.push(`${source}:LISTED:${entry.listing.length}`);
       } catch (error) {
-        log.push(`${source}:LISTING_FAILED:${String(error?.message ?? error).slice(0, 120)}`);
-        continue;
+        if (isTransientUniverseErrorV1(error)) noteTransient(entry, source, 'LISTING', error, observedAtMs, policy, log);
+        else log.push(`${source}:LISTING_FAILED:${String(error?.message ?? error).slice(0, 120)}`);
       }
     }
-    if (snapshot.sources[source] || !entry.listing) continue;
-    for (const symbol of entry.listing) {
-      if (probesLeft <= 0 || clock() - startedMs >= budgetMs) break;
-      if (entry.probes[symbol]) continue;
-      const failure = entry.failures[symbol];
-      if (failure && failure.attempts >= 3) continue;
-      if (failure && Date.parse(failure.retryAfter) > observedAtMs) continue;
-      probesLeft -= 1;
+  }
+
+  // Pass 2: probes. The budget is split evenly across the sources that still
+  // have work (rotating which one gets the remainder and the leftovers), so a
+  // large listing never starves the other markets.
+  const active = sourceIds.filter((source) => !snapshot.sources[source] && state.sources[source]?.listing
+    && !inBackoff(state.sources[source], observedAtMs) && pendingSymbols(state.sources[source], observedAtMs, policy).length > 0);
+  const rotation = Number.isInteger(state.probeRotation) ? state.probeRotation : 0;
+  const order = active.length ? [...active.slice(rotation % active.length), ...active.slice(0, rotation % active.length)] : [];
+  state.probeRotation = rotation + 1;
+  const quotas = splitProbeBudgetV2(maximumProbes, order.length);
+  const quotaBySource = {};
+  let spare = 0;
+  for (const [index, source] of order.entries()) {
+    const entry = state.sources[source];
+    let allowance = quotas[index] + spare;
+    quotaBySource[source] = allowance;
+    spare = 0;
+    for (const symbol of pendingSymbols(entry, observedAtMs, policy)) {
+      if (allowance <= 0 || clock() - startedMs >= budgetMs) break;
+      allowance -= 1;
       try {
         entry.probes[symbol] = await prober({ source, symbol, fetchImpl, policy });
         delete entry.failures[symbol];
+        if (entry.transient) entry.transient = { ...entry.transient, count: 0, backoffUntil: null };
       } catch (error) {
-        const attempts = Number(failure?.attempts ?? 0) + 1;
+        if (isTransientUniverseErrorV1(error)) {
+          // The source is rate limiting or down: pause it, keep the symbol pending.
+          noteTransient(entry, source, 'PROBE', error, observedAtMs, policy, log);
+          break;
+        }
+        const attempts = Number(entry.failures[symbol]?.attempts ?? 0) + 1;
         entry.failures[symbol] = { attempts, reason: String(error?.message ?? error).slice(0, 120), retryAfter: new Date(observedAtMs + (attempts * 3_600_000)).toISOString() };
       }
     }
-    const pending = entry.listing.filter((symbol) => !entry.probes[symbol] && !(entry.failures[symbol]?.attempts >= 3));
+    spare = Math.max(0, allowance);
+  }
+
+  // Freeze every listed source whose symbols are all probed or excluded.
+  for (const source of sourceIds) {
+    const entry = state.sources[source];
+    if (snapshot.sources[source] || !entry?.listing) continue;
+    const pending = entry.listing.filter((symbol) => !entry.probes[symbol] && !(entry.failures[symbol]?.attempts >= policy.permanentFailureAttempts));
     if (pending.length === 0) {
       const probes = Object.values(entry.probes);
       const research = selectStratifiedUniverseV2(probes, policy.researchPerSource);
@@ -335,7 +428,12 @@ export async function refreshResearchUniverseV2({
   }
   await atomicJson(universePath(stateRoot), state);
   await atomicJson(snapshotPath(stateRoot), snapshot);
-  return Object.freeze({ contract: RESEARCH_UNIVERSE_CONTRACT_V2, observedAt, log, frozenSources: Object.keys(snapshot.sources) });
+  return Object.freeze({
+    contract: RESEARCH_UNIVERSE_CONTRACT_V2, observedAt, log, frozenSources: Object.keys(snapshot.sources),
+    quotas: quotaBySource,
+    backoff: Object.fromEntries(sourceIds.filter((source) => inBackoff(state.sources[source], observedAtMs))
+      .map((source) => [source, { until: state.sources[source].transient.backoffUntil, count: state.sources[source].transient.count, stage: state.sources[source].transient.stage }])),
+  });
 }
 
 export async function readResearchUniverseSnapshotV2(stateRoot) {

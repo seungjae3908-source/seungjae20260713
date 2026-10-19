@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,8 @@ import { COMBINATION_UNIVERSE_V1 } from '../src/combination-search-lane-v1.mjs';
 import {
   RESEARCH_UNIVERSE_POLICY_V2,
   combinationUniverseFromSnapshotV2,
+  isTransientUniverseErrorV1,
+  splitProbeBudgetV2,
   fetchBitgetUsdtPerpListingV2,
   fetchUpbitKrwListingV2,
   fetchUsListingV2,
@@ -125,4 +127,82 @@ test('frozen sets drop symbols the backtest contract rejects instead of failing 
   assert.equal(watch.UPBIT_1H.includes('KRW-T'), false);
   assert.equal(watch.UPBIT_1H.includes('KRW-W'), false);
   assert.equal(watch.UPBIT_1H.includes('KRW-BTC'), true);
+});
+
+test('rate limits, server errors and network failures are transient; symbol-level errors are not', () => {
+  assert.equal(isTransientUniverseErrorV1(Object.assign(new Error('UNIVERSE_HTTP_429'), { status: 429 })), true);
+  assert.equal(isTransientUniverseErrorV1(Object.assign(new Error('UNIVERSE_HTTP_503'), { status: 503 })), true);
+  assert.equal(isTransientUniverseErrorV1(new Error('YAHOO_STOCK_HTTP_429')), true);
+  assert.equal(isTransientUniverseErrorV1(new Error('UPBIT_HISTORY_HTTP_502')), true);
+  assert.equal(isTransientUniverseErrorV1(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })), true);
+  assert.equal(isTransientUniverseErrorV1(new Error('YAHOO_STOCK_SYMBOL_UNSUPPORTED:ABC.KS')), false);
+  assert.equal(isTransientUniverseErrorV1(new Error('YAHOO_STOCK_INSUFFICIENT_HISTORY_12')), false);
+  assert.equal(isTransientUniverseErrorV1(Object.assign(new Error('UNIVERSE_HTTP_404'), { status: 404 })), false);
+  assert.deepEqual(splitProbeBudgetV2(15, 4), [4, 4, 4, 3]);
+  assert.deepEqual(splitProbeBudgetV2(2, 4), [1, 1, 0, 0]);
+  assert.deepEqual(splitProbeBudgetV2(10, 0), []);
+});
+
+test('the probe budget is shared across markets; a 429 pauses only that source and blames no symbol', async (t) => {
+  const root = await tempRoot(t);
+  const policy = { ...RESEARCH_UNIVERSE_POLICY_V2, researchPerSource: 5, watchPerSource: 10,
+    sources: { UPBIT_1H: RESEARCH_UNIVERSE_POLICY_V2.sources.UPBIT_1H, YAHOO_US_1D: RESEARCH_UNIVERSE_POLICY_V2.sources.YAHOO_US_1D } };
+  const listingFetchers = {
+    UPBIT_1H: async () => Array.from({ length: 6 }, (_, i) => ({ symbol: `KRW-A${i}` })),
+    YAHOO_US_1D: async () => Array.from({ length: 200 }, (_, i) => ({ symbol: `U${String(i).padStart(3, '0')}` })),
+  };
+  const probed = [];
+  let usRateLimited = true;
+  const prober = async ({ source, symbol }) => {
+    probed.push(`${source}:${symbol}`);
+    if (source === 'YAHOO_US_1D' && usRateLimited) throw Object.assign(new Error('UNIVERSE_HTTP_429'), { status: 429, retryAfterMs: 120_000 });
+    if (symbol === 'KRW-A5') throw new Error('UPBIT_HISTORY_INSUFFICIENT_12');
+    return { symbol, liquid: true, medianDailyValue: 1e10, historyDays: 900, candles: 900, zeroValueShare: 0 };
+  };
+  const t0 = Date.UTC(2026, 9, 18, 0, 0);
+  const first = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, maximumProbes: 8, now: () => new Date(t0).toISOString() });
+  // 8 probes split 4/4; the US source hit a rate limit on its first probe and stopped.
+  assert.equal(first.quotas.UPBIT_1H, 4);
+  assert.equal(probed.filter((row) => row.startsWith('UPBIT')).length, 4, 'the Korean exchange kept its share');
+  assert.equal(probed.filter((row) => row.startsWith('YAHOO_US')).length, 1, 'one 429 pauses the source');
+  assert.ok(first.backoff.YAHOO_US_1D, 'US source in backoff');
+  assert.equal(Date.parse(first.backoff.YAHOO_US_1D.until), t0 + 120_000, 'Retry-After honoured');
+  assert.ok(first.log.some((line) => line.startsWith('YAHOO_US_1D:TRANSIENT_BACKOFF:PROBE')));
+  const state = JSON.parse(await readFile(join(root, 'research-universe-v2', 'state.json'), 'utf8'));
+  assert.deepEqual(state.sources.YAHOO_US_1D.failures, {}, 'a rate limit is never a symbol failure');
+
+  // One minute later the US source is still paused: its share is not probed, Upbit continues.
+  probed.length = 0;
+  const second = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, maximumProbes: 8, now: () => new Date(t0 + 60_000).toISOString() });
+  assert.equal(probed.filter((row) => row.startsWith('YAHOO_US')).length, 0);
+  assert.ok(second.log.some((line) => line.startsWith('YAHOO_US_1D:BACKOFF')));
+  assert.ok(second.frozenSources.includes('UPBIT_1H') || probed.filter((row) => row.startsWith('UPBIT')).length > 0);
+
+  // After the backoff the US source resumes and the symbol-level failure counted once.
+  usRateLimited = false;
+  probed.length = 0;
+  const third = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, maximumProbes: 8, now: () => new Date(t0 + 180_000).toISOString() });
+  assert.ok(probed.filter((row) => row.startsWith('YAHOO_US')).length >= 4, 'US probing resumed');
+  assert.deepEqual(third.backoff, {});
+  const after = JSON.parse(await readFile(join(root, 'research-universe-v2', 'state.json'), 'utf8'));
+  assert.equal(after.sources.UPBIT_1H.failures['KRW-A5']?.attempts, 1, 'a real symbol error counts');
+  assert.equal(after.sources.YAHOO_US_1D.transient.count, 0, 'a successful probe clears the transient counter');
+});
+
+test('a source listing that fails with 5xx is retried after a backoff instead of counting against anything', async (t) => {
+  const root = await tempRoot(t);
+  const policy = { ...RESEARCH_UNIVERSE_POLICY_V2, sources: { BITGET_1H: RESEARCH_UNIVERSE_POLICY_V2.sources.BITGET_1H } };
+  let calls = 0;
+  const listingFetchers = { BITGET_1H: async () => { calls += 1; if (calls === 1) throw Object.assign(new Error('UNIVERSE_HTTP_503'), { status: 503 }); return [{ symbol: 'BTCUSDT' }]; } };
+  const prober = async ({ symbol }) => ({ symbol, liquid: true, medianDailyValue: 1e9, historyDays: 900, candles: 900, zeroValueShare: 0 });
+  const t0 = Date.UTC(2026, 9, 18);
+  const first = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, now: () => new Date(t0).toISOString() });
+  assert.ok(first.backoff.BITGET_1H);
+  assert.equal(first.backoff.BITGET_1H.stage, 'LISTING');
+  const paused = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, now: () => new Date(t0 + 60_000).toISOString() });
+  assert.equal(calls, 1, 'no listing call while paused');
+  assert.deepEqual(paused.frozenSources, []);
+  const resumed = await refreshResearchUniverseV2({ stateRoot: root, policy, listingFetchers, prober, now: () => new Date(t0 + (16 * 60_000)).toISOString() });
+  assert.equal(calls, 2);
+  assert.deepEqual(resumed.frozenSources, ['BITGET_1H']);
 });
