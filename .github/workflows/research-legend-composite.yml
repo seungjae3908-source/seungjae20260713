@@ -1,0 +1,60 @@
+name: Research Legend Composite Backtest
+
+# Read-only research: legend-trader composite (trail, pyramid, regime, concentration) on public kline
+# archives (Binance USDⓈ-M as Bitget proxy) and Upbit public candles.
+# No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+    inputs:
+      venues:
+        description: 'Comma-separated venues (PERP_1H,UPBIT_1H); empty = all'
+        required: false
+        default: ''
+      mode:
+        description: 'ROBUST = neighbourhood/risk/trend-pilot study; empty = variant comparison'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/research-legend-composite.yml
+      - research-production/src/legend-composite-v1.mjs
+      - research-production/bin/legend-composite-backtest.mjs
+      - research-production/src/public-kline-fetch-v1.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: node --test research-production/test/legend-composite-v1.test.mjs research-production/test/intraday-scalp-zoo-v1.test.mjs
+      - name: Fetch public hourly data and run the composite
+        env:
+          LEGEND_VENUES: ${{ inputs.venues }}
+          LEGEND_MODE: ${{ inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          export NODE_OPTIONS=--max-old-space-size=6144
+          node research-production/bin/legend-composite-backtest.mjs --out "$RUNNER_TEMP/legend" > legend-report.txt 2> legend-fetch.log
+          cp "$RUNNER_TEMP/legend/legend-composite-v1.json" legend-composite-v1.json
+          grep -c '^FETCHED' legend-fetch.log || true
+          grep '^FETCH_FAILED' legend-fetch.log || true
+          { echo '```'; cat legend-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legend-composite
+          path: |
+            legend-report.txt
+            legend-fetch.log
+            legend-composite-v1.json
+          retention-days: 90

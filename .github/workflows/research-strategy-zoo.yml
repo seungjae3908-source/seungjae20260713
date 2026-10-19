@@ -1,0 +1,53 @@
+name: Research Strategy Zoo Backtest
+
+# Read-only research: published trading strategies (papers, books, practitioners,
+# communities, exchange bots, GitHub) backtested on public daily data of the four
+# app markets plus US ETFs. No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+    inputs:
+      markets:
+        description: 'Comma-separated markets to run (empty = all)'
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/research-strategy-zoo.yml
+      - research-production/src/strategy-zoo-v1.mjs
+      - research-production/bin/strategy-zoo-backtest.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: node --test research-production/test/strategy-zoo-v1.test.mjs
+      - name: Fetch public daily data and run every strategy
+        run: |
+          set -Eeuo pipefail
+          export NODE_OPTIONS=--max-old-space-size=6144
+          export ZOO_MARKETS="${{ inputs.markets }}"
+          node research-production/bin/strategy-zoo-backtest.mjs --fetch "$RUNNER_TEMP/zoo" > strategy-zoo-report.txt 2> strategy-zoo-fetch.log
+          cp "$RUNNER_TEMP/zoo/latest/strategy-zoo-v1.json" strategy-zoo-v1.json
+          grep -c '^FETCHED' strategy-zoo-fetch.log || true
+          grep '^FETCH_FAILED' strategy-zoo-fetch.log || true
+          { echo '```'; cat strategy-zoo-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strategy-zoo
+          path: |
+            strategy-zoo-report.txt
+            strategy-zoo-fetch.log
+            strategy-zoo-v1.json
+          retention-days: 90
