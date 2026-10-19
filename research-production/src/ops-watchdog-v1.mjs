@@ -115,9 +115,13 @@ async function checkHttp(target, nowMs, fetchImpl, timeoutMs) {
     let body = null;
     try { body = await response.json(); } catch { body = null; }
     const generatedAt = Date.parse(String(body?.generatedAt ?? body?.snapshot?.generatedAt ?? ''));
-    const ageMs = Number.isFinite(Number(body?.ageMs)) ? Number(body.ageMs) : Number.isFinite(generatedAt) ? nowMs - generatedAt : null;
-    if (!response.ok) return { status: response.status === 503 && ageMs != null ? 'STALE' : 'DOWN', ageMs, httpStatus: response.status };
-    if (target.maxAgeMs != null && ageMs != null && ageMs > target.maxAgeMs) return { status: 'STALE', ageMs, httpStatus: response.status };
+    // The signal scanner (8790) reports snapshotAgeMs/snapshotFresh; older
+    // services report ageMs or generatedAt. Any of them gives the data age.
+    const reportedAge = [body?.ageMs, body?.snapshotAgeMs].map(Number).find((value) => Number.isFinite(value) && value >= 0);
+    const ageMs = reportedAge != null ? reportedAge : Number.isFinite(generatedAt) ? nowMs - generatedAt : null;
+    const freshFlagOff = body?.snapshotFresh === false;
+    if (!response.ok) return { status: response.status === 503 && (ageMs != null || freshFlagOff) ? 'STALE' : 'DOWN', ageMs, httpStatus: response.status };
+    if (freshFlagOff || (target.maxAgeMs != null && ageMs != null && ageMs > target.maxAgeMs)) return { status: 'STALE', ageMs, httpStatus: response.status };
     return { status: 'OK', ageMs, httpStatus: response.status };
   } catch {
     return { status: 'DOWN', ageMs: null, httpStatus: null };
@@ -137,24 +141,42 @@ export function opsTelegramConfigV1(env = process.env) {
 // whose DNS returns AAAA without a global IPv6 route, a ~300 ms IPv4 handshake
 // to api.telegram.org then fails as ETIMEDOUT ("fetch failed") most of the time.
 const OPS_TELEGRAM_FAMILY_ATTEMPT_MS = 2_500;
+// A hung Telegram request would otherwise hold the hourly watchdog open until
+// the unit's own timeout; the message is retried on the next run anyway.
+const OPS_TELEGRAM_REQUEST_TIMEOUT_MS = 10_000;
 
-export async function sendOpsTelegramV1(config, text, fetchImpl) {
+export async function sendOpsTelegramV1(config, text, fetchImpl, { timeoutMs = OPS_TELEGRAM_REQUEST_TIMEOUT_MS } = {}) {
   if (getDefaultAutoSelectFamilyAttemptTimeout() < OPS_TELEGRAM_FAMILY_ATTEMPT_MS) {
     setDefaultAutoSelectFamilyAttemptTimeout(OPS_TELEGRAM_FAMILY_ATTEMPT_MS);
   }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
     response = await fetchImpl(`https://api.telegram.org/bot${config.token}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: config.chatId, text, disable_web_page_preview: true }),
+      signal: controller.signal,
     });
   } catch (error) {
+    if (error?.name === 'AbortError' || controller.signal.aborted) throw new Error('OPS_TELEGRAM_NETWORK_TIMEOUT');
     // Surface only the network error code ("fetch failed" alone is undiagnosable).
     const code = String(error?.cause?.code ?? '').replace(/[^A-Z0-9_]/gu, '').slice(0, 24);
     throw new Error(`OPS_TELEGRAM_NETWORK_${code || 'FAILED'}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!response.ok) throw new Error(`OPS_TELEGRAM_HTTP_${response.status}`);
+  // A 2xx with ok:false (for example a wrong chat id) is still not a delivery.
+  let body = null;
+  if (typeof response.json === 'function') {
+    try { body = await response.json(); } catch { body = null; }
+  }
+  if (body != null && body.ok !== true) {
+    const code = Number.isSafeInteger(body.error_code) ? body.error_code : 'UNKNOWN';
+    throw new Error(`OPS_TELEGRAM_API_NOT_OK_${code}`);
+  }
   return true;
 }
 

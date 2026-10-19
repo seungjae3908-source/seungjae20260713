@@ -95,6 +95,37 @@ test('ops Telegram send widens the IPv6/IPv4 race budget and names network failu
   await assert.rejects(sendOpsTelegramV1(config, 'x', async () => { throw new TypeError('fetch failed'); }), /OPS_TELEGRAM_NETWORK_FAILED/);
 });
 
+test('ops Telegram send times out a hung request and rejects a 2xx whose body says ok:false', async () => {
+  const config = { token: TOKEN, chatId: '-1001234567' };
+  await assert.rejects(sendOpsTelegramV1(config, 'x', (url, init) => new Promise((_, reject) => {
+    init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+  }), { timeoutMs: 20 }), /^Error: OPS_TELEGRAM_NETWORK_TIMEOUT$/);
+  await assert.rejects(sendOpsTelegramV1(config, 'x', async () => ({ ok: true, status: 200, json: async () => ({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }) })),
+    /^Error: OPS_TELEGRAM_API_NOT_OK_400$/);
+  assert.equal(await sendOpsTelegramV1(config, 'x', async () => ({ ok: true, status: 200, json: async () => ({ ok: true, result: {} }) })), true);
+});
+
+test('an HTTP target reporting snapshotAgeMs/snapshotFresh (signal scanner /health) is seen as stale, not OK', async (t) => {
+  const root = await setup(t);
+  const sent = [];
+  const target = { id: 'signal-scanner', label: '신호 검색기(5분)', kind: 'HTTP', url: 'http://127.0.0.1:8790/health', maxAgeMs: 30 * 60_000 };
+  const scanner = (body, status = 200) => async (url, init) => {
+    if (String(url).startsWith('https://api.telegram.org/')) { sent.push(JSON.parse(init.body).text); return { ok: true, status: 200, json: async () => ({ ok: true }) }; }
+    return { ok: status < 400, status, json: async () => body };
+  };
+  const fresh = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: scanner({ status: 'ok', snapshotAgeMs: 120_000, snapshotFresh: true }) });
+  assert.equal(fresh.healthy, 1);
+  const stale = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: scanner({ status: 'ok', snapshotAgeMs: 50 * 60_000, snapshotFresh: false }) });
+  assert.equal(stale.healthy, 0);
+  assert.deepEqual(stale.late, ['signal-scanner']);
+  assert.equal(stale.targets[0].status, 'STALE');
+  assert.equal(stale.targets[0].ageMs, 50 * 60_000);
+  const flagged = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: scanner({ status: 'ok', snapshotFresh: false }) });
+  assert.equal(flagged.targets[0].status, 'STALE', 'the service\'s own freshness flag is trusted even without an age');
+  const unavailable = await runOpsWatchdogV1({ stateRoot: root, targets: [target], env: ENV, fetchImpl: scanner({ error: 'SNAPSHOT_STALE', snapshotAgeMs: 40 * 60_000 }, 503) });
+  assert.equal(unavailable.targets[0].status, 'STALE', '503 with an age is stale data, not a dead service');
+});
+
 test('an outcome target distinguishes a job that ran and failed from one that is late; both recover', async (t) => {
   const root = await setup(t);
   const sent = [];
