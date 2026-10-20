@@ -24,7 +24,8 @@ from .http import PublicHttpClient, RetryPolicy
 from .leverage import ALLOWED_LEVERAGES, check_paper_leverage_against_venue, parse_leverage
 from .money import (DEFAULT_STRATEGY_CAPITAL_KRW, AllocationLedger, FxMissingError, krw_to_margin_units,
                     margin_units_to_krw, require_fx)
-from .quality import check_funding, check_ohlcv
+from .original_runner import README_CLAIMS
+from .quality import check_funding, check_ohlcv, check_window
 from .storage import (Checkpoint, atomic_write_bytes, atomic_write_json, cleanup_partials, read_json, run_lock, sha256_file,
                       write_manifest)
 
@@ -32,9 +33,35 @@ HOUR_MS = 3_600_000
 SYMBOL = "BTCUSDT"
 
 # README 가 주장한 구간(README.md:72). 원본 코드는 이 구간을 실제로 쓰지 않는다.
+# 학습 2022-01-01~2023-06-30, 테스트 2023-07-01~2024-12-31 (끝 날짜 미포함 표기).
 WINDOWS = {
     "readme_train": ("2022-01-01", "2023-07-01"),
     "readme_test": ("2023-07-01", "2025-01-01"),
+}
+
+# README 주장 수치는 검증 결과와 별도로 보존한다(원본 generate_visualizations.py 상수). 검증으로 확인된 값이 아니다.
+README_CLAIMS_UNVERIFIED = {
+    "values": dict(README_CLAIMS),
+    "note": "원본 README 표의 주장. 이 패키지의 재현·비용 반영 결과와 별개로 기록만 하며, 재현되지 않으면 미재현으로 표시한다.",
+}
+
+# 데이터셋별 출처·기대 주기·검사 종류. 창별 품질 검사와 결과 근거 기록에 쓴다.
+DATASETS = {
+    "klines": {"source": "data.binance.vision futures/um monthly klines 1h (sha256 CHECKSUM 검증)", "interval_ms": HOUR_MS,
+               "kind": "ohlcv", "max_missing_ratio": 0.01},
+    "spotKlines": {"source": "data.binance.vision spot monthly klines 1h (sha256 CHECKSUM 검증)", "interval_ms": HOUR_MS,
+                   "kind": "ohlcv", "max_missing_ratio": 0.01},
+    "markPriceKlines": {"source": "data.binance.vision futures/um monthly markPriceKlines 1h (sha256 CHECKSUM 검증)",
+                        "interval_ms": HOUR_MS, "kind": "ohlcv", "max_missing_ratio": 0.0},
+    "fundingRate": {"source": "data.binance.vision futures/um monthly fundingRate (8h 정산, sha256 CHECKSUM 검증)",
+                    "interval_ms": 8 * HOUR_MS, "kind": "funding", "max_missing_ratio": 0.0},
+    "hyperliquid": {"source": "api.hyperliquid.xyz info fundingHistory BTC (1h 정산)", "interval_ms": HOUR_MS,
+                    "kind": "funding", "max_missing_ratio": 0.0},
+}
+# 전략별 필수 데이터셋. 마크가격은 선택(창 안에 완전할 때만 청산·펀딩 정산 가격으로 사용).
+STRATEGY_DATASETS = {
+    "carry_binance": ("klines", "spotKlines", "fundingRate"),
+    "xvenue_funding": ("klines", "fundingRate", "hyperliquid"),
 }
 
 
@@ -174,11 +201,13 @@ def build_market(data_dir: Path, *, now_ms: Optional[int] = None) -> tuple[Marke
     raw = Paths(Path(data_dir)).raw
     quality = {}
     frames = {}
+    datasets = {}
     for kind, leg in (("klines", "binance_perp"), ("spotKlines", "binance_spot"), ("markPriceKlines", "binance_perp_mark")):
         df = _load_kind(raw, kind)
         d, rep = check_ohlcv(df, f"{kind}:{SYMBOL}", max_missing_ratio=0.01)
         quality[rep.name] = rep.to_dict()
         frames[leg] = d.set_index("ts")
+        datasets[kind] = {"frame": d, **DATASETS[kind]}
     bars = pd.DataFrame(index=frames["binance_perp"].index)
     for c in ("open", "high", "low", "close"):
         bars[f"binance_perp_{c}"] = frames["binance_perp"][c]
@@ -196,6 +225,7 @@ def build_market(data_dir: Path, *, now_ms: Optional[int] = None) -> tuple[Marke
     fb_raw = _load_kind(raw, "fundingRate")
     fb, rep = check_funding(fb_raw, "fundingRate:BTCUSDT", expected_interval_ms=8 * HOUR_MS)
     quality[rep.name] = rep.to_dict()
+    datasets["fundingRate"] = {"frame": fb, **DATASETS["fundingRate"]}
     fh_files = sorted((raw / "hyperliquid").glob("BTC-funding-*.parquet"))
     fh_raw = bn.load_parquets(fh_files)
     if not fh_raw.empty:
@@ -204,10 +234,70 @@ def build_market(data_dir: Path, *, now_ms: Optional[int] = None) -> tuple[Marke
     else:
         fh = fh_raw
         quality["hyperliquid:BTC funding"] = {"ok": False, "blocking": ["EMPTY"]}
+    datasets["hyperliquid"] = {"frame": fh, **DATASETS["hyperliquid"]}
     market = MarketData(bars, {"binance": prepare_funding(fb, 8), "hyperliquid": prepare_funding(fh, 1)},
                         {"hl_perp": "Binance USDT-M BTCUSDT 1시간봉을 하이퍼리퀴드 가격 대용으로 사용(펀딩은 실제 하이퍼리퀴드 이력)",
-                         "binance_perp_mark": mark_note})
+                         "binance_perp_mark": mark_note},
+                        datasets)
     return market, quality
+
+
+def window_quality(market: MarketData, ws: str, we: str) -> dict:
+    """한 평가 창에 대해 데이터셋별 보유 범위·결측·결함을 독립적으로 검사한다(다른 창과 무관)."""
+    out = {}
+    for name, ds in market.datasets.items():
+        rep = check_window(ds["frame"], name, _ms(ws), _ms(we), ds["interval_ms"], source=ds["source"], kind=ds["kind"],
+                           max_missing_ratio=ds.get("max_missing_ratio", 0.0),
+                           gap_tolerance=1.5 if ds["kind"] == "funding" else 1.0)
+        out[name] = rep.to_dict()
+    return out
+
+
+def strategy_window_verdict(strategy: str, wq: dict) -> tuple[str, dict]:
+    """전략이 필요로 하는 데이터셋만 보고 창 판정을 내린다. (상태, 데이터셋별 상태·사유)."""
+    required = STRATEGY_DATASETS[strategy]
+    detail = {}
+    status = "OK"
+    for name in required:
+        r = wq.get(name)
+        if r is None:
+            detail[name] = {"status": "INCOMPLETE", "reasons": ["DATASET_MISSING"]}
+            if status != "BLOCKED":
+                status = "INCOMPLETE"
+            continue
+        detail[name] = {"status": r["status"], "reasons": r["reasons"], "rows_in_window": r["rows_in_window"],
+                        "first_in_window": r["first_in_window"], "last_in_window": r["last_in_window"],
+                        "expected_rows": r["expected_rows"], "missing_intervals": r["missing_intervals"],
+                        "lead_missing_hours": r["lead_missing_hours"], "tail_missing_hours": r["tail_missing_hours"]}
+        if r["status"] == "BLOCKED":
+            status = "BLOCKED"
+        elif r["status"] == "INCOMPLETE" and status != "BLOCKED":
+            status = "INCOMPLETE"
+    return status, detail
+
+
+def market_for_window(market: MarketData, ws: str, we: str, wq: dict) -> tuple[MarketData, str]:
+    """창에 맞춘 시장 데이터. 마크가격은 그 창 안에서 완전할 때만 붙이고, 아니면 체결가로 대신한다(창별 판정)."""
+    start_ms, end_ms = _ms(ws), _ms(we)
+    bars = market.bars[(market.bars.index >= start_ms) & (market.bars.index < end_ms)]
+    bars = bars[[c for c in bars.columns if "_mark_" not in c]].copy()
+    mark_ds = market.datasets.get("markPriceKlines")
+    mark_rep = wq.get("markPriceKlines")
+    if mark_ds is not None and mark_rep is not None and mark_rep["status"] == "OK":
+        mark = mark_ds["frame"].set_index("ts").reindex(bars.index)
+        if mark[["high", "low", "close"]].notna().all().all():
+            bars["binance_perp_mark_high"] = mark["high"]
+            bars["binance_perp_mark_low"] = mark["low"]
+            bars["binance_perp_mark_close"] = mark["close"]
+            note = "Binance markPriceKlines 사용(이 창 안에 결측 없음)"
+        else:
+            note = "마크가격이 봉 인덱스와 맞지 않아 청산·펀딩 정산에 체결가 사용"
+    else:
+        reasons = mark_rep["reasons"] if mark_rep else ["DATASET_MISSING"]
+        note = f"이 창의 마크가격 결측/결함 {reasons} → 청산·펀딩 정산에 체결가 사용(창별 판정)"
+    proxies = dict(market.price_proxies)
+    proxies["binance_perp_mark"] = note
+    return MarketData(bars, market.funding, proxies, market.datasets), note
 
 
 def load_fx(data_dir: Path) -> dict:
@@ -293,17 +383,33 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                 probe.allocate_plan(s, capital_krw)
         except FundError as e:
             plan_error = str(e)
+    window_quality_all = {}
     for wname, (ws, we) in windows.items():
         fx_start = pick_fx(fx, ws)
         last_day = str((pd.Timestamp(we) - pd.Timedelta(days=1)).date())
         fx_end = pick_fx(fx, last_day)
+        # 창별 독립 품질 검사: 학습·테스트 창은 서로의 결측에 영향받지 않는다
+        wq = window_quality(market, ws, we)
+        wmarket, mark_note = market_for_window(market, ws, we, wq)
+        window_quality_all[wname] = {"window": [ws, we], "datasets": wq, "mark_price_note": mark_note}
         for s in strategies:
+            verdict, detail = strategy_window_verdict(s, wq)
+            evidence = {"evaluation_start": ws, "evaluation_end_exclusive": we, "verdict": verdict,
+                        "datasets": {n: {**detail[n], "source": wq[n]["source"] if n in wq else None,
+                                         "missing_ranges": (wq[n]["missing_ranges"][:10] if n in wq else [])}
+                                     for n in detail},
+                        "mark_price": mark_note,
+                        "price_proxies": wmarket.price_proxies}
             for prof in profiles:
                 pr = profs[prof]
                 for lev in levs:
-                    row = {"window": wname, "strategy": s, "cost_profile": prof, "leverage": lev}
-                    if quality_blocking and not accept_quality_issues:
-                        row.update(status="BLOCKED_DATA_QUALITY", error=json.dumps(quality_blocking, ensure_ascii=False))
+                    row = {"window": wname, "strategy": s, "cost_profile": prof, "leverage": lev,
+                           "data_verdict": verdict,
+                           "data_reasons": json.dumps({n: d["reasons"] for n, d in detail.items() if d["reasons"]},
+                                                      ensure_ascii=False)}
+                    if verdict != "OK" and not accept_quality_issues:
+                        status = "BLOCKED_DATA_QUALITY" if verdict == "BLOCKED" else "INCOMPLETE_DATA"
+                        row.update(status=status, error=row["data_reasons"])
                         summary_rows.append(row)
                         continue
                     try:
@@ -328,7 +434,7 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                         fund_kw = {"fund": fund, "fund_fx_krw_per_unit": q.krw_per_unit, "fund_strategy_id": s}
                         capital_units = fund.allowed_entry_margin_krw(s)["allowed_krw"] / q.krw_per_unit
                     try:
-                        res = run_backtest(market, params_map[s], leverage=lev, capital=capital_units, cost=pr["cost"],
+                        res = run_backtest(wmarket, params_map[s], leverage=lev, capital=capital_units, cost=pr["cost"],
                                            venue_fees=pr["venue_fees"], mmr=mmr, start_ms=_ms(ws), end_ms=_ms(we),
                                            stale_funding_hours={"binance": 9, "hyperliquid": 2}, **fund_kw)
                         if fund is not None:
@@ -355,12 +461,18 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                         check_paper_leverage_against_venue(lev, "hyperliquid", "BTC-PERP"),
                     ]
                     res["mmr_source"] = mmr_source
+                    res["data_evidence"] = evidence
+                    res["readme_claims_unverified"] = README_CLAIMS_UNVERIFIED
                     res["mode"] = "BACKTEST_PAPER_ONLY"
                     res["live_orders"] = 0
                     f = out / "runs" / wname / s / prof / f"lev{lev}.json"
                     atomic_write_json(f, res, overwrite=False)
                     files.append(f)
                     row.update(status="OK", capital_units=capital_units, fx=q.krw_per_unit, fx_unit=q.unit,
+                               data_first=min((d["first_in_window"] for d in detail.values() if d.get("first_in_window")),
+                                              default=None),
+                               data_last=max((d["last_in_window"] for d in detail.values() if d.get("last_in_window")),
+                                             default=None),
                                net_pnl_units=m["net_pnl"], net_return=m["net_return"],
                                net_pnl_krw_start_fx=margin_units_to_krw(m["net_pnl"], q) if m["net_pnl"] != 0 else 0.0,
                                max_notional_per_leg=m["max_notional_per_leg"], fees=m["fees_total"],
@@ -378,7 +490,11 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
     meta = {
         "run_id": run_id, "label": label, "config": config, "code_version": __version__, "git_sha": _git_sha(),
         "python": platform.python_version(), "pandas": pd.__version__,
-        "data_fingerprint": fp, "data_quality": quality, "quality_blocking": quality_blocking,
+        "data_fingerprint": fp, "data_quality": quality, "quality_blocking_global_informational": quality_blocking,
+        "quality_policy": "per_window: 각 평가 창을 독립 검사해 전략별 필수 데이터셋이 모두 OK 일 때만 실행. "
+                          "INCOMPLETE(원본 데이터 없음/성긴 주기)·BLOCKED(값 결함)는 PASS 가 아니며 보간하지 않음",
+        "window_quality": window_quality_all,
+        "readme_claims_unverified": README_CLAIMS_UNVERIFIED,
         "accept_quality_issues": accept_quality_issues, "price_proxies": market.price_proxies,
         "mmr": mmr, "mmr_source": mmr_source,
         "cost_profiles": {k: {"cost": v["cost"].to_dict(), "venue_fees": v["venue_fees"],

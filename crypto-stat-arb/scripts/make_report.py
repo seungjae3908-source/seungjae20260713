@@ -21,8 +21,13 @@ def suite_tables(result_dir: Path) -> str:
     meta = json.loads((result_dir / "meta.json").read_text())
     out = [f"### 결과 묶음 `{result_dir.name}`", "",
            f"- 코드 SHA: `{meta.get('git_sha')}` / 데이터 지문: `{meta.get('data_fingerprint')}` / 실주문: {meta.get('live_orders')}건",
-           f"- 품질 차단 항목: {json.dumps(meta.get('quality_blocking'), ensure_ascii=False)}",
+           f"- 품질 정책: {meta.get('quality_policy', '전체 데이터셋 단위(구버전)')}",
+           f"- 전체 데이터셋 품질 참고(차단 아님): {json.dumps(meta.get('quality_blocking_global_informational', meta.get('quality_blocking')), ensure_ascii=False)}",
            f"- 가격 대용: {json.dumps(meta.get('price_proxies'), ensure_ascii=False)}", ""]
+    claims = meta.get("readme_claims_unverified")
+    if claims:
+        out += ["- README 주장(검증 결과와 별도 보존, 검증된 값 아님): " + json.dumps(claims.get("values"), ensure_ascii=False), ""]
+    out += window_quality_table(meta.get("window_quality") or {})
     groups = {}
     for r in rows:
         groups.setdefault((r["window"], r["strategy"], r["cost_profile"]), []).append(r)
@@ -32,7 +37,8 @@ def suite_tables(result_dir: Path) -> str:
                 "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in sorted(rs, key=lambda x: x["leverage"]):
             if r["status"] != "OK":
-                out.append(f"| {r['leverage']}x | {r['status']} | " + " | ".join(["-"] * 18) + " |")
+                reason = str(r.get("error") or "")[:160]
+                out.append(f"| {r['leverage']}x | {r['status']} {reason} | " + " | ".join(["-"] * 18) + " |")
                 continue
             out.append("| " + " | ".join([
                 f"{r['leverage']}x", "OK", fmt(r["capital_units"]), fmt(r["max_notional_per_leg"]),
@@ -43,6 +49,31 @@ def suite_tables(result_dir: Path) -> str:
                 fmt(r.get("fund_reserve_krw"), "krw")]) + " |")
         out.append("")
     return "\n".join(out)
+
+
+def window_quality_table(wq: dict) -> list:
+    """창별·데이터셋별 실제 보유 범위와 결측. 평가 시작·종료, 출처, 표본 수, 결측 구간을 그대로 적는다."""
+    if not wq:
+        return []
+    out = ["#### 평가 창별 데이터 품질(창마다 독립 판정, 보간 없음)", "",
+           "| 창 | 평가 시작 | 평가 끝(미포함) | 데이터셋 | 출처 | 기대 주기(h) | 표본 수 | 기대 수 | 첫 시각 | 마지막 시각 | 창 안 결측 | 앞 결측(h) | 뒤 결측(h) | 관측 주기(h) | 판정 | 사유 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for w, info in wq.items():
+        ws, we = info.get("window", ["-", "-"])
+        for name, r in (info.get("datasets") or {}).items():
+            out.append("| " + " | ".join([
+                w, ws, we, name, str(r.get("source", "-")), f"{r.get('expected_interval_hours', '-')}",
+                fmt(r.get("rows_in_window"), "int"), fmt(r.get("expected_rows"), "int"),
+                str(r.get("first_in_window") or "-"), str(r.get("last_in_window") or "-"),
+                fmt(r.get("missing_intervals"), "int"), fmt(r.get("lead_missing_hours")), fmt(r.get("tail_missing_hours")),
+                "-" if r.get("observed_median_interval_hours") is None else fmt(r.get("observed_median_interval_hours")),
+                str(r.get("status")), "; ".join(r.get("reasons") or [])]) + " |")
+        out.append(f"| {w} | | | 마크가격 처리 | {info.get('mark_price_note', '-')} | | | | | | | | | | | |")
+        for name, r in (info.get("datasets") or {}).items():
+            for rng in (r.get("missing_ranges") or [])[:5]:
+                out.append(f"| {w} | | | {name} 결측 구간 | {rng[0]} ~ {rng[1]} ({rng[2]}개) | | | | | | | | | | | |")
+    out.append("")
+    return out
 
 
 def original_table(path: Path) -> str:

@@ -39,6 +39,8 @@ class QualityReport:
     outlier_jumps: int = 0
     stale_seconds: Optional[float] = None
     blocking: list = field(default_factory=list)
+    # 연속 구간별 실제 공시 간격(시간). 예: 하이퍼리퀴드 펀딩이 초기에는 8시간, 이후 1시간 간격이면 두 구간으로 나뉜다.
+    cadence_segments: list = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -48,6 +50,7 @@ class QualityReport:
         d = dict(self.__dict__)
         d["ok"] = self.ok
         d["missing_ranges"] = self.missing_ranges[:20]
+        d["cadence_segments"] = self.cadence_segments[:20]
         return d
 
 
@@ -143,6 +146,7 @@ def check_funding(df: pd.DataFrame, name: str, *, max_abs_rate: float = 0.03, no
     rep.outlier_jumps = int(bad.sum())
     if rep.outlier_jumps:
         rep.blocking.append(f"FUNDING_OUT_OF_RANGE:{rep.outlier_jumps}")
+    rep.cadence_segments = cadence_segments(d["ts"])
     if expected_interval_ms:
         gaps = d["ts"].diff().dropna()
         big = gaps[gaps > expected_interval_ms * 1.5]
@@ -162,3 +166,159 @@ def require_ok(*reports: QualityReport) -> None:
     bad = {r.name: r.blocking for r in reports if not r.ok}
     if bad:
         raise DataQualityError(f"데이터 결함으로 전략 평가 중단: {bad}")
+
+
+def cadence_segments(ts: pd.Series, *, min_rows: int = 3) -> list:
+    """정렬·중복 제거된 ts 를 연속 간격(시간 단위 반올림)별로 묶는다. [시작, 끝, 간격(h), 행수]."""
+    t = ts.to_numpy(dtype="int64")
+    if len(t) < 2:
+        return []
+    hours = np.rint(np.diff(t) / HOUR_MS).astype("int64")
+    segs = []
+    start = 0
+    for i in range(1, len(hours) + 1):
+        if i == len(hours) or hours[i] != hours[start]:
+            rows = i - start + 1
+            if rows >= min_rows:
+                segs.append([_iso(t[start]), _iso(t[i]), int(hours[start]), int(rows)])
+            start = i
+    return segs
+
+
+@dataclass
+class WindowQualityReport:
+    """한 평가 창(start 포함, end 미포함) 안에서 한 데이터셋의 실제 보유 범위와 결함.
+
+    status: OK / INCOMPLETE(원본 데이터가 창 일부 또는 전부에 없음, 또는 기대 주기보다 성긴 공시) / BLOCKED(값 결함).
+    결측은 채우지 않는다. INCOMPLETE 인 창은 비용 반영 평가에 쓰지 않는다.
+    """
+    name: str
+    source: str
+    window_start: str
+    window_end: str
+    expected_interval_hours: float
+    rows_in_window: int = 0
+    first_in_window: Optional[str] = None
+    last_in_window: Optional[str] = None
+    expected_rows: int = 0
+    missing_intervals: int = 0           # 창 안쪽 결측(첫 행~마지막 행 사이)
+    missing_ranges: list = field(default_factory=list)
+    lead_missing_hours: float = 0.0      # 창 시작 ~ 첫 행
+    tail_missing_hours: float = 0.0      # 마지막 행 ~ 창 끝
+    observed_median_interval_hours: Optional[float] = None
+    cadence_mismatch_intervals: int = 0  # 기대 주기의 1.5배를 넘는 간격 수
+    coarse_segments: list = field(default_factory=list)  # 창 안에서 기대 주기보다 성긴 연속 구간 [시작, 끝, 간격(h), 행수]
+    coverage_ratio: float = 0.0          # 실제 행수 / 기대 행수
+    defects: list = field(default_factory=list)
+    status: str = "INCOMPLETE"
+    reasons: list = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "OK"
+
+    def to_dict(self) -> dict:
+        d = dict(self.__dict__)
+        d["ok"] = self.ok
+        d["missing_ranges"] = self.missing_ranges[:20]
+        return d
+
+
+def _ohlcv_defects(vals: pd.DataFrame, max_abs_log_jump: float) -> list:
+    out = []
+    n_nonpos = int(((vals <= 0) | ~np.isfinite(vals)).any(axis=1).sum())
+    if n_nonpos:
+        out.append(f"NONPOSITIVE_PRICE:{n_nonpos}")
+    if set(("open", "high", "low", "close")) <= set(vals.columns):
+        hi_bad = vals["high"] < vals[["open", "close"]].max(axis=1) - 1e-9
+        lo_bad = vals["low"] > vals[["open", "close"]].min(axis=1) + 1e-9
+        n = int((hi_bad | lo_bad).sum())
+        if n:
+            out.append(f"OHLC_INCONSISTENT:{n}")
+    if "close" in vals.columns and len(vals) > 1:
+        lr = np.log(vals["close"].clip(lower=1e-12)).diff().abs()
+        n = int((lr > max_abs_log_jump).sum())
+        if n:
+            out.append(f"OUTLIER_JUMPS:{n}")
+    return out
+
+
+def check_window(d: pd.DataFrame, name: str, start_ms: int, end_ms: int, interval_ms: int, *, source: str,
+                 kind: str, max_missing_ratio: float = 0.0, gap_tolerance: float = 1.0,
+                 max_abs_log_jump: float = 0.25, max_abs_rate: float = 0.03) -> WindowQualityReport:
+    """check_ohlcv/check_funding 가 돌려준(정렬·중복 제거된) 프레임을 한 창에 대해 다시 검사한다.
+
+    kind: "ohlcv" | "funding". 창별로 독립 판정하므로 다른 창의 결측이 이 창을 막지 않는다.
+    - 창 시작 전에 데이터가 없으면(첫 행이 늦음) lead_missing_hours, 창 끝 전에 끊기면 tail_missing_hours.
+    - 기대 주기보다 성긴 공시(예: 1시간 기대인데 8시간 간격)는 CADENCE_MISMATCH 로 INCOMPLETE. 1시간 데이터로 취급하지 않는다.
+    - 값 결함(0 이하 가격, OHLC 모순, 급등락, 펀딩 범위 초과)은 BLOCKED.
+    """
+    if end_ms <= start_ms:
+        raise ValueError("창 끝은 시작보다 커야 합니다")
+    rep = WindowQualityReport(name, source, _iso(start_ms), _iso(end_ms), interval_ms / HOUR_MS)
+    grid_start = -(-start_ms // interval_ms) * interval_ms  # 창 시작을 주기 격자로 올림
+    rep.expected_rows = max(0, int((end_ms - 1 - grid_start) // interval_ms) + 1) if end_ms > grid_start else 0
+    if d is None or d.empty or "ts" not in d.columns:
+        rep.reasons.append("NO_DATA_IN_WINDOW")
+        rep.lead_missing_hours = (end_ms - start_ms) / HOUR_MS
+        return rep
+    ts_all = d["ts"].to_numpy(dtype="int64")
+    lo = int(np.searchsorted(ts_all, start_ms, side="left"))
+    hi = int(np.searchsorted(ts_all, end_ms, side="left"))
+    w = d.iloc[lo:hi]
+    rep.rows_in_window = len(w)
+    if rep.rows_in_window == 0:
+        rep.reasons.append("NO_DATA_IN_WINDOW")
+        rep.lead_missing_hours = (end_ms - start_ms) / HOUR_MS
+        return rep
+    ts = w["ts"].to_numpy(dtype="int64")
+    rep.first_in_window, rep.last_in_window = _iso(ts[0]), _iso(ts[-1])
+    rep.lead_missing_hours = max(0.0, (ts[0] - grid_start) / HOUR_MS)
+    rep.tail_missing_hours = max(0.0, (end_ms - ts[-1] - interval_ms) / HOUR_MS)
+    if len(ts) > 1:
+        gaps = np.diff(ts)
+        rep.observed_median_interval_hours = float(np.median(gaps) / HOUR_MS)
+        big_idx = np.nonzero(gaps > interval_ms * gap_tolerance)[0]
+        missing = 0
+        for i in big_idx:
+            n = int(gaps[i] // interval_ms) - 1
+            if n <= 0:
+                continue
+            missing += n
+            if len(rep.missing_ranges) < 20:
+                rep.missing_ranges.append([_iso(ts[i] + interval_ms), _iso(ts[i + 1] - interval_ms), n])
+        rep.missing_intervals = missing
+        rep.cadence_mismatch_intervals = int(sum(1 for i in big_idx if gaps[i] >= interval_ms * 1.5))
+        # 성긴 주기의 연속 구간(3행 이상)은 해당 주기의 데이터일 뿐 기대 주기 데이터가 아니다 → 창 전체를 INCOMPLETE 로 본다
+        rep.coarse_segments = [seg for seg in cadence_segments(w["ts"])
+                               if seg[2] * HOUR_MS >= interval_ms * 1.5][:20]
+        if rep.coarse_segments:
+            first = rep.coarse_segments[0]
+            rep.reasons.append(f"CADENCE_MISMATCH:observed={first[2]:g}h_expected={interval_ms / HOUR_MS:g}h"
+                               f":{first[0]}~{first[1]}({first[3]}rows,segments={len(rep.coarse_segments)})")
+    rep.coverage_ratio = (rep.rows_in_window / rep.expected_rows) if rep.expected_rows else 0.0
+    if rep.lead_missing_hours > (interval_ms / HOUR_MS) * gap_tolerance:
+        rep.reasons.append(f"COVERAGE_STARTS_LATE:{rep.first_in_window}")
+    if rep.tail_missing_hours > (interval_ms / HOUR_MS) * gap_tolerance:
+        rep.reasons.append(f"COVERAGE_ENDS_EARLY:{rep.last_in_window}")
+    total_missing = rep.expected_rows - rep.rows_in_window
+    if rep.expected_rows and total_missing > 0 and total_missing / rep.expected_rows > max_missing_ratio:
+        rep.reasons.append(f"MISSING_RATIO:{total_missing}/{rep.expected_rows}")
+    if kind == "ohlcv":
+        cols = [c for c in ("open", "high", "low", "close") if c in w.columns]
+        rep.defects = _ohlcv_defects(w[cols].astype(float), max_abs_log_jump)
+    elif kind == "funding":
+        rates = w["rate"].astype(float)
+        bad = int(((~np.isfinite(rates)) | (rates.abs() > max_abs_rate)).sum())
+        if bad:
+            rep.defects.append(f"FUNDING_OUT_OF_RANGE:{bad}")
+    else:
+        raise ValueError(f"알 수 없는 kind: {kind}")
+    if rep.defects:
+        rep.status = "BLOCKED"
+        rep.reasons = rep.defects + rep.reasons
+    elif rep.reasons:
+        rep.status = "INCOMPLETE"
+    else:
+        rep.status = "OK"
+    return rep

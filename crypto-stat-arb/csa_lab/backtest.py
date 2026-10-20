@@ -103,6 +103,8 @@ class MarketData:
     bars: pd.DataFrame                 # index=ts, 열: {leg}_open/high/low/close, 선택 {leg}_mark_high/low/close
     funding: dict[str, pd.DataFrame]   # venue -> ts, rate, interval_hours
     price_proxies: dict = field(default_factory=dict)  # leg -> 설명(다른 거래소 가격을 대용했을 때)
+    # 창별 품질 검사용 원천 프레임(정렬·중복 제거됨): 이름 -> {"frame": DataFrame, "source": str, "interval_ms": int, "kind": str}
+    datasets: dict = field(default_factory=dict)
 
     def validate(self, legs: list[str]) -> None:
         if self.bars.empty:

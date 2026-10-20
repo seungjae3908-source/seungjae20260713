@@ -71,6 +71,8 @@ done_ G_faults $?
 stage "REPORT"
 python scripts/make_report.py "$OUT1" "$W/original-readme-test" "$W/original-default" "$W/original-demo" \
   "$W/data/collect_report.json" "$W/bitget_leverage_evidence.json" | tee "$W/REPORT.md"
-echo "--- data quality ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['data_quality'],ensure_ascii=False,indent=1))"
+echo "--- data quality (whole collection, informational) ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['data_quality'],ensure_ascii=False,indent=1))"
+echo "--- window quality (per evaluation window, decides BLOCKED/INCOMPLETE) ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['window_quality'],ensure_ascii=False,indent=1))"
+echo "--- summary status counts ---"; python -c "import json,collections;r=json.load(open('$OUT1/summary.json'));print(collections.Counter((x['window'],x['strategy'],x['status']) for x in r))"
 cat "$LOG"
 exit $STATUS
