@@ -448,6 +448,50 @@ test('an old feed-stage 404 recorded under a misnamed branch does not blacklist 
   assert.equal(real.reason, 'AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
 });
 
+test('previous rejection guard does not blacklist a staged source and retries a different catalog pick', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const repository = 'https://github.com/example/public-strategies';
+  const firstPath = 'strategies/ParticipationBreakout.py';
+  const secondPath = 'strategies/Second.py';
+  await mkdir(join(root, 'autonomous-research', 'discovery'), { recursive: true });
+  await writeFile(join(root, 'autonomous-research', 'state.json'), JSON.stringify({
+    records: [{ sourceId: `github:example/public-strategies:${SOURCE_SHA}:${firstPath}` }],
+  }));
+  await writeFile(join(root, 'autonomous-research', 'discovery', 'prior-rejection.json'), JSON.stringify({
+    contract: 'autonomous-research-discovery/v2',
+    status: 'AI_DISCOVERY_UNAVAILABLE',
+    reason: 'AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED',
+    candidate: { repository, branch: 'main', sourcePath: firstPath, licensePath: 'LICENSE' },
+    actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 },
+  }));
+  const plan = (path) => aiAnswer({ summary: '검증된 공개 전략 후보',
+    findings: [`REPOSITORY=${repository}`, 'BRANCH=main'],
+    requiredEvidence: [`SOURCE_PATH=${path}`, 'LICENSE_PATH=LICENSE'] });
+  let calls = 0;
+  const baseFetch = sourceFetch();
+  const fetchImpl = async (url, init) => {
+    if (String(url).endsWith('/strategies/Second.py')) return baseFetch(String(url).replace('/strategies/Second.py', '/strategies/ParticipationBreakout.py'), init);
+    return baseFetch(url, init);
+  };
+  const result = await runAutonomousResearchDiscoveryV2({
+    verifiedSourceCatalog: [
+      { repository, branch: 'main', licensePath: 'LICENSE', sourcePath: firstPath },
+      { repository, branch: 'main', licensePath: 'LICENSE', sourcePath: secondPath },
+    ],
+    stateRoot: root, researchCodeSha: SHA, env: { ...env(), RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '2' }, now: () => AT,
+    invoke: async ({ policy }) => {
+      calls += 1;
+      return { provider: policy.provider, model: policy.model, answer: calls === 1 ? plan(firstPath) : calls === 2 ? plan(secondPath) : extractionAnswer };
+    },
+    fetchImpl, datasetLoader, researchLanes: [RESEARCH_LANES_V2[0]],
+  });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.equal(result.candidate.sourcePath, secondPath);
+  assert.equal(result.sourceAttemptsThisRun, 2);
+  assert.ok(calls >= 3);
+});
+
 test('a 404 commit feed for an unknown repository falls back to the default-branch feed once', async (t) => {
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
