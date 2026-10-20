@@ -21,6 +21,7 @@ import {
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   type TradingPlanInput,
 } from './trade-automation.types';
@@ -486,10 +487,18 @@ test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk c
     () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 8 as 7 }),
     /BITGET_LEVERAGE_POLICY_INVALID/,
   );
-  assert.throws(
-    () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
-    /BITGET_LEVERAGE_POLICY_INVALID/,
+  // 1x (no amplification) is a valid Bitget leverage on every role; 0 and non-integers are not.
+  assert.equal(normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 }).bitgetLeverage, 1);
+  assert.equal(
+    normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW).bitgetLeverage,
+    1,
   );
+  for (const invalid of [0, -1, 1.5, 'abc', Number.NaN]) {
+    assert.throws(
+      () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: invalid as unknown as 2 }),
+      /BITGET_LEVERAGE_POLICY_INVALID/,
+    );
+  }
   const policy = normalizeTradingPolicy(
     { ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 },
     PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
@@ -545,6 +554,58 @@ test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk c
     );
     assert.equal(prepared.path, '/api/v2/mix/account/set-leverage');
     assert.equal(JSON.parse(prepared.body ?? '{}').leverage, String(leverage));
+  }
+});
+
+test('Bitget 1x is accepted on policy and plan paths with full-notional margin and no liquidation shortcut', () => {
+  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 });
+  assert.equal(policy.bitgetLeverage, 1);
+  const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'long', quantity: 0.01,
+    quoteAmount: null, estimatedKrw: 100_000, leverage: 1, marginMode: 'isolated',
+    marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: null, availableBalance: 99_999 } });
+  const insufficient = evaluateTradingPlan(input, policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(insufficient.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), false);
+  assert.equal(insufficient.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'), false);
+  // 1x means the whole 100,000 KRW notional is margin: 99,999 available is not enough.
+  assert.ok(insufficient.blockCodes.includes('INSUFFICIENT_MARGIN'));
+  const funded = evaluateTradingPlan({ ...input,
+    marketSnapshot: { ...input.marketSnapshot, availableBalance: 100_000 } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(funded.blockCodes.includes('INSUFFICIENT_MARGIN'), false);
+  for (const invalid of [0, -1, 1.5, 8]) {
+    const decision = evaluateTradingPlan({ ...input, leverage: invalid }, policy,
+      { emergencyStopped: false, serverLiveEnabled: true });
+    assert.ok(decision.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), `leverage ${invalid} must be blocked`);
+  }
+  // A 1x policy still blocks any plan above it.
+  const abovePolicy = evaluateTradingPlan({ ...input, leverage: 2 }, policy,
+    { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(abovePolicy.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'));
+  const prepared = prepareBitgetLeverage({ apiKey: 'key', secretKey: 'secret', passphrase: 'pass' }, 'BTCUSDT', 1, '1000');
+  assert.equal(JSON.parse(prepared.body ?? '{}').leverage, '1');
+});
+
+test('Upbit spot and KR/US stock plans reject any leverage or margin field from the request body', () => {
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const cases = [
+    plan({ exchange: 'upbit', market: 'KRW', side: 'buy', orderType: 'market', quantity: null, quoteAmount: 10_000, estimatedKrw: 10_000 }),
+    plan({ exchange: 'kiwoom', market: 'KR', side: 'buy', orderType: 'limit', quantity: 1, quoteAmount: null, estimatedKrw: 10_000 }),
+    plan({ exchange: 'toss', market: 'US', side: 'buy', orderType: 'market', quantity: null, quoteAmount: 10_000, estimatedKrw: 10_000 }),
+  ];
+  for (const base of cases) {
+    const clean = evaluateTradingPlan({ ...base, leverage: null, marginMode: null }, policy,
+      { emergencyStopped: false, serverLiveEnabled: true });
+    assert.equal(clean.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'), false, `${base.exchange} without leverage`);
+    for (const leverage of [1, 2, 3, 10, 1.5, 0]) {
+      const decision = evaluateTradingPlan({ ...base, leverage }, policy,
+        { emergencyStopped: false, serverLiveEnabled: true });
+      assert.ok(decision.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'),
+        `${base.exchange} leverage ${leverage} must be rejected`);
+      assert.equal(decision.allowed, false);
+    }
+    const margin = evaluateTradingPlan({ ...base, leverage: null, marginMode: 'isolated' }, policy,
+      { emergencyStopped: false, serverLiveEnabled: true });
+    assert.ok(margin.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'));
   }
 });
 
@@ -1423,4 +1484,73 @@ test('reader computes drawdown from closed Bitget candles, caches for a minute a
   assert.equal(await failing(nowMs), null);
   const malformed = createBtcBenchmarkDrawdownReader(async () => ({ code: '40001', data: null }));
   assert.equal(await malformed(nowMs), null);
+});
+
+test('Bitget leverage 1~10 requests stay consistent with member 500k and administrator 1M entry caps', () => {
+  // Member: saved policy leverage is clamped to 3; administrator: clamped to 7.
+  const memberPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7, totalCapitalKrw: 5_000_000, maxOrderKrw: 5_000_000,
+  });
+  const administratorPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7, totalCapitalKrw: 5_000_000, maxOrderKrw: 5_000_000,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.equal(memberPolicy.bitgetLeverage, 3);
+  assert.equal(memberPolicy.maxOrderKrw, 500_000);
+  assert.equal(administratorPolicy.bitgetLeverage, 7);
+  assert.equal(administratorPolicy.maxOrderKrw, 1_000_000);
+  for (const invalid of [0, 8, 9, 10]) {
+    const unsafe = { ...DEFAULT_TRADING_POLICY, bitgetLeverage: invalid as unknown as 1 };
+    assert.throws(() => normalizeTradingPolicy(unsafe),
+      /BITGET_LEVERAGE_POLICY_INVALID/, `policy leverage ${invalid} must be rejected`);
+    assert.throws(() => normalizeTradingPolicy(unsafe, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW),
+      /BITGET_LEVERAGE_POLICY_INVALID/, `admin policy leverage ${invalid} must be rejected`);
+  }
+  const options = { emergencyStopped: false, serverLiveEnabled: true };
+  const futures = (leverage: number, estimatedKrw: number) => plan({
+    exchange: 'bitget', market: 'USDT-FUTURES', side: 'long', quantity: 0.01, quoteAmount: null,
+    estimatedKrw, leverage, marginMode: 'isolated',
+    marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: null, availableBalance: 10_000_000 },
+  });
+  const tiers = [
+    { label: 'member', policy: memberPolicy, cap: 500_000, maxLeverage: 3 },
+    { label: 'administrator', policy: administratorPolicy, cap: 1_000_000, maxLeverage: 7 },
+  ];
+  for (const tier of tiers) {
+    for (let leverage = 1; leverage <= 10; leverage += 1) {
+      const atCap = evaluateTradingPlan(futures(leverage, tier.cap), tier.policy, options);
+      const overCap = evaluateTradingPlan(futures(leverage, tier.cap + 1), tier.policy, options);
+      // The KRW entry cap is enforced on the order notional regardless of leverage.
+      assert.equal(atCap.blockCodes.includes('MAX_ORDER_AMOUNT'), false, `${tier.label} ${leverage}x at cap`);
+      assert.ok(overCap.blockCodes.includes('MAX_ORDER_AMOUNT'), `${tier.label} ${leverage}x over cap`);
+      if (leverage > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) {
+        // 8~10x: rejected by the hard limit for every role, so the cap alone never admits them.
+        assert.ok(atCap.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), `${tier.label} ${leverage}x hard limit`);
+        assert.equal(atCap.allowed, false);
+      } else {
+        assert.equal(atCap.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), false, `${tier.label} ${leverage}x within hard limit`);
+        assert.equal(atCap.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'), leverage > tier.maxLeverage,
+          `${tier.label} ${leverage}x policy limit`);
+      }
+    }
+  }
+  // Spot and stock paths reject the same 1~10 sweep for both roles, with or without a cap breach.
+  const cash = [
+    plan({ exchange: 'upbit', market: 'KRW', side: 'buy', orderType: 'market', quantity: null, quoteAmount: 10_000, estimatedKrw: 10_000 }),
+    plan({ exchange: 'kiwoom', market: 'KR', side: 'buy', orderType: 'limit', quantity: 1, quoteAmount: null, estimatedKrw: 10_000 }),
+    plan({ exchange: 'toss', market: 'US', side: 'buy', orderType: 'market', quantity: null, quoteAmount: 10_000, estimatedKrw: 10_000 }),
+  ];
+  for (const tier of tiers) {
+    for (const base of cash) {
+      for (let leverage = 1; leverage <= 10; leverage += 1) {
+        for (const marginMode of [null, 'isolated'] as const) {
+          const decision = evaluateTradingPlan({ ...base, leverage, marginMode }, tier.policy, options);
+          assert.ok(decision.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'),
+            `${tier.label} ${base.exchange} ${leverage}x margin=${marginMode}`);
+          assert.equal(decision.allowed, false);
+        }
+      }
+      const marginOnly = evaluateTradingPlan({ ...base, leverage: null, marginMode: 'isolated' }, tier.policy, options);
+      assert.ok(marginOnly.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'), `${tier.label} ${base.exchange} margin only`);
+    }
+  }
 });
