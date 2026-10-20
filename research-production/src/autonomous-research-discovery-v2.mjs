@@ -498,8 +498,22 @@ function identifyLicense(text) {
 async function verifyGithubSource(plan, fetchImpl) {
   let fetches = 0;
   const atomUrl = `${plan.repository}/commits/${encodeURIComponent(plan.branch)}.atom`;
+  const atomAccept = 'application/atom+xml,application/xml;q=0.9,text/xml;q=0.8';
   fetches += 1;
-  const atom = await fetchBoundedText(atomUrl, { fetchImpl, accept: 'application/atom+xml,application/xml;q=0.9,text/xml;q=0.8' });
+  let atom;
+  let branchResolution = 'NAMED';
+  try {
+    atom = await fetchBoundedText(atomUrl, { fetchImpl, accept: atomAccept });
+  } catch (error) {
+    // A wrong branch name is the model's most common 404. GitHub serves the
+    // default branch's feed at /commits.atom; the revision it names is what the
+    // raw fetches below use, so the named branch is not needed to pin the source.
+    if (!(error instanceof Error) || error.message !== 'PUBLIC_SOURCE_HTTP_404') throw error;
+    try {
+      atom = await fetchBoundedText(`${plan.repository}/commits.atom`, { fetchImpl, accept: atomAccept });
+      branchResolution = 'DEFAULT_BRANCH_FALLBACK';
+    } catch { throw error; }
+  }
   const entry = /<entry>([\s\S]*?)<\/entry>/u.exec(atom)?.[1] ?? '';
   const revision = /Grit::Commit\/([a-f0-9]{40})/u.exec(entry)?.[1] ?? null;
   const publishedAt = /<updated>([^<]+)<\/updated>/u.exec(entry)?.[1] ?? null;
@@ -517,6 +531,7 @@ async function verifyGithubSource(plan, fetchImpl) {
   const licenseStatus = identifyLicense(licenseText);
   return Object.freeze({
     fetches,
+    branchResolution,
     revision,
     publishedAt: publishedDate.toISOString(),
     author: safeTagValue(author, 'GITHUB_AUTHOR', 200),
@@ -841,6 +856,20 @@ async function priorFailedSources(root) {
   return Object.freeze([...failed].sort().slice(-40));
 }
 
+// The free model names the branch itself when the verified catalog window is
+// exhausted, and on 2026-10-19/20 it answered BRANCH=master for a repository
+// whose branch is main, so the commit feed returned PUBLIC_SOURCE_HTTP_404.
+// When every catalog entry of that repository agrees on one branch, that branch
+// is used and the model's answer is kept as branchCorrectedFrom.
+export function pinKnownRepositoryBranchV2(plan, catalog) {
+  if (!plan || !Array.isArray(catalog)) return plan;
+  const branches = new Set(catalog.filter((entry) => entry?.repository === plan.repository).map((entry) => entry.branch));
+  if (branches.size !== 1) return plan;
+  const [branch] = branches;
+  if (!SAFE_BRANCH.test(String(branch)) || branch === plan.branch) return plan;
+  return Object.freeze({ ...plan, branch, branchCorrectedFrom: plan.branch });
+}
+
 function untriedCatalog(catalog, priorSourceIds, failedSources) {
   return Object.freeze(catalog.filter((entry) => {
     const match = SAFE_REPOSITORY.exec(entry.repository);
@@ -984,10 +1013,10 @@ export async function runAutonomousResearchDiscoveryV2({
     const planned = await invokeWithRetry({ policy, prompt: discoveryPrompt(directive, priorSourceIds, failedSources, rotateCatalogWindowV2(catalog, (await discoveryAttemptCount(root)) + Math.floor(Date.parse(observedAt) / 600_000))), fetchImpl, timeoutMs: REQUEST_TIMEOUT_MS });
     calls.succeeded += 1;
     if (planned?.provider !== policy.provider || planned?.model !== policy.model) throw new Error('AI_DISCOVERY_PROVIDER_IDENTITY_MISMATCH');
-    const plan = parseSourcePlan(planned.answer);
+    const plan = pinKnownRepositoryBranchV2(parseSourcePlan(planned.answer), Array.isArray(verifiedSourceCatalog) ? verifiedSourceCatalog : []);
     candidate = { repository: plan.repository, branch: plan.branch, sourcePath: plan.sourcePath, licensePath: plan.licensePath,
       strategyId: plan.proposedStrategyId, family: null, templateId: null, sourceRevision: null, sourceSha256: null,
-      researchLane: lane.id };
+      researchLane: lane.id, ...(plan.branchCorrectedFrom ? { branchCorrectedFrom: plan.branchCorrectedFrom } : {}) };
     if (failedSources.includes(`${plan.repository}:${plan.sourcePath}`)) throw new Error('AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
     if (isNonStrategySourcePathV2(plan.sourcePath)) throw new Error('AI_DISCOVERY_SOURCE_NOT_STRATEGY');
     if (catalog.length && !catalog.some((entry) => entry.repository === plan.repository && entry.branch === plan.branch
@@ -1004,7 +1033,8 @@ export async function runAutonomousResearchDiscoveryV2({
       fetches.failed += 1;
       throw error;
     }
-    candidate = { ...candidate, sourceRevision: source.revision, sourceSha256: source.sourceSha256 };
+    candidate = { ...candidate, sourceRevision: source.revision, sourceSha256: source.sourceSha256,
+      ...(source.branchResolution !== 'NAMED' ? { branchResolution: source.branchResolution } : {}) };
     const verifiedSourceId = `github:${plan.owner}/${plan.repo}:${source.revision}:${plan.sourcePath}`;
     if (priorSourceIds.includes(verifiedSourceId)) throw new Error('AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED');
 
