@@ -56,6 +56,18 @@ SYSTEMD_UNIT_OWNER="${SYSTEMD_UNIT_OWNER:-root:root}"
 RUNTIME_SNAPSHOT_OWNER="${RUNTIME_SNAPSHOT_OWNER:-root:root}"
 RUNTIME_SNAPSHOT_ENV_OWNER="${RUNTIME_SNAPSHOT_ENV_OWNER:-root:investment-research}"
 
+# ExecStart as systemd shows it also carries the last run's start_time,
+# stop_time, pid and exit status, which change every time a one-shot runs. Only
+# the command identity (path and argv) is hashed, so a rollback compared after
+# the activation one-shot ran is not reported as AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH.
+exec_identity_sha() {
+  local shown identity
+  shown="$("${SUDO[@]}" systemctl show "$1" -p ExecStart --value)"
+  # Fall back to the whole property when systemd prints it without the structured fields.
+  identity="$(printf '%s\n' "$shown" | grep -oE '(path|argv\[\])=[^;]*' || true)"
+  printf '%s\n' "${identity:-$shown}" | sha256sum | awk '{print $1}'
+}
+
 require_idle_one_shots() {
   local service
   for service in "${services[@]}"; do
@@ -181,7 +193,7 @@ if (unit.endsWith('.service')) {
 fs.writeFileSync(output, value, { mode: 0o644, flag: 'wx' });
 NODE
       unit_sha="$("${SUDO[@]}" sha256sum "$fragment" | awk '{print $1}')"
-      exec_sha="$("${SUDO[@]}" systemctl show "$unit" -p ExecStart --value | sha256sum | awk '{print $1}')"
+      exec_sha="$(exec_identity_sha "$unit")"
       restore_sha="$("${SUDO[@]}" sha256sum "$restore_unit_backup/$unit" | awk '{print $1}')"
       printf 'unit\t%s\ttrue\t%s\t%s\t%s\t%s\t%s\t%s\n' "$unit" "$enabled" "$active" "$fragment" "$unit_sha" "$exec_sha" "$restore_sha" \
         | "${SUDO[@]}" tee -a "$manifest" >/dev/null
@@ -317,7 +329,7 @@ restore_runtime_snapshot() {
     if [[ "$exists" == true ]]; then
       actual_sha="$("${SUDO[@]}" sha256sum "$SYSTEMD_UNIT_ROOT/$name" | awk '{print $1}')"
       [[ "$actual_sha" == "$restore_sha" ]] || { echo "AI_RESEARCH_ROLLBACK_UNIT_HASH_MISMATCH:$name" >&2; return 1; }
-      actual_exec_sha="$("${SUDO[@]}" systemctl show "$name" -p ExecStart --value | sha256sum | awk '{print $1}')"
+      actual_exec_sha="$(exec_identity_sha "$name")"
       [[ "$actual_exec_sha" == "$exec_sha" ]] || { echo "AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH:$name" >&2; return 1; }
       if [[ "$name" == *.service ]]; then
         [[ "$("${SUDO[@]}" systemctl show "$name" -p WorkingDirectory --value)" == "$previous_release" \
