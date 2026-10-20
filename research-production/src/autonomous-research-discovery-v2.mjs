@@ -870,7 +870,8 @@ async function priorFailedSources(root, catalog = []) {
   for (const name of names) {
     let row = null;
     try { row = await readJsonOptional(join(directory, name)); } catch { row = null; }
-    if (row?.status !== 'AI_DISCOVERY_UNAVAILABLE' || isTransientReason(row?.reason) || isBranchMistake404(row, catalogBranches)) continue;
+    if (row?.status !== 'AI_DISCOVERY_UNAVAILABLE' || isTransientReason(row?.reason) || isBranchMistake404(row, catalogBranches)
+      || ['AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', 'AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG', 'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'].includes(row?.reason)) continue;
     const repository = String(row?.candidate?.repository ?? '').replace(/\/$/u, '');
     const sourcePath = String(row?.candidate?.sourcePath ?? '');
     if (SAFE_REPOSITORY.test(repository) && SAFE_PATH.test(sourcePath)) failed.add(`${repository}:${sourcePath}`);
@@ -1131,6 +1132,15 @@ export async function runAutonomousResearchDiscoveryV2({
     await persistResult(root, result);
     const sourceKey = SAFE_REPOSITORY.test(String(candidate?.repository ?? '')) && SAFE_PATH.test(String(candidate?.sourcePath ?? ''))
       ? `${String(candidate.repository).replace(/\/$/u, '')}:${candidate.sourcePath}` : null;
+    // Selection/duplicate guards are not evidence that the public source itself is bad.
+    // Temporarily suppress that pick for this run and ask the model for another catalog entry;
+    // do not persist these guard outcomes as a permanent source blacklist.
+    const selectionOnlyReason = ['AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', 'AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG',
+      'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'].includes(reason);
+    if (sourceAttempt < retryPolicy.sourceAttempts && selectionOnlyReason && calls.failed === 0 && sourceKey) {
+      failedSources = Object.freeze([...new Set([...failedSources, sourceKey])].sort().slice(-40));
+      continue;
+    }
     if (sourceAttempt < retryPolicy.sourceAttempts && isSourceSpecificReasonV2(reason) && calls.failed === 0 && sourceKey) {
       // Only this source failed and the provider answered; remember it and ask
       // for a different one now. The failed record above stays on disk.
