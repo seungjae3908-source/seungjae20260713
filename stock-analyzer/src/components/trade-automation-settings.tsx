@@ -27,7 +27,7 @@ type Policy = {
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
-  bitgetLeverage: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
   pilotStage: 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 };
 
@@ -177,7 +177,7 @@ const MARKET_DESCRIPTIONS: Record<Market, string> = {
   crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated · 역할별 레버리지 상한',
 };
 
-const BITGET_LEVERAGE_OPTIONS = [1, 2, 3, 4, 5, 6, 7] as const;
+const BITGET_LEVERAGE_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 
 const DEFAULT_MARKETS: MarketSwitches = {
   domestic_stock: true,
@@ -728,7 +728,7 @@ export function TradeAutomationSettings({
         onChange={(event) => setDraft((value) => ({
           ...value,
           bitgetLeverage: Math.min(
-            maximumBitgetLeverage, Math.max(1, Number(event.target.value)),
+            maximumBitgetLeverage, Math.max(2, Number(event.target.value)),
           ) as Policy['bitgetLeverage'],
         }))}
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3"
@@ -737,7 +737,7 @@ export function TradeAutomationSettings({
           .filter((leverage) => leverage <= maximumBitgetLeverage)
           .map((leverage) => (
             <option key={leverage} value={leverage}>
-              {leverage}배{leverage === 1 ? ' (무배율)' : leverage === 2 ? ' (기본)' : leverage === maximumBitgetLeverage ? ' (최대)' : ''}
+              {leverage}배{leverage === 2 ? ' (기본)' : leverage === maximumBitgetLeverage ? ' (최대)' : ''}
             </option>
           ))}
       </select>
