@@ -22,7 +22,10 @@ def _zip(name, text):
 
 class FakeExchange:
     def __init__(self, start="2023-01-01", end="2023-04-01", seed=7, b_rate=0.0002, h_rate=0.0, fail_first=0,
-                 drop_kline_ts=None):
+                 drop_kline_ts=None, hl_start=None, hl_coarse_until=None, drop_mark_ts=None):
+        """hl_start: 하이퍼리퀴드 펀딩 이력이 시작되는 날짜(그 전은 원천에 없음).
+        hl_coarse_until: 이 날짜 전까지 하이퍼리퀴드 펀딩이 8시간 간격으로만 존재(실제 2023-05~06 초기 구간 모사).
+        drop_mark_ts: 마크가격 봉만 빠지는 시각 목록."""
         self.t0 = int(pd.Timestamp(start, tz="UTC").value // 10**6)
         self.t1 = int(pd.Timestamp(end, tz="UTC").value // 10**6)
         n = (self.t1 - self.t0) // H
@@ -34,16 +37,20 @@ class FakeExchange:
         self.fail_first = fail_first
         self.calls = 0
         self.drop = set(drop_kline_ts or [])
+        self.drop_mark = set(drop_mark_ts or [])
+        self.hl_start = int(pd.Timestamp(hl_start, tz="UTC").value // 10**6) if hl_start else self.t0
+        self.hl_coarse_until = int(pd.Timestamp(hl_coarse_until, tz="UTC").value // 10**6) if hl_coarse_until else None
 
     def _month_rows(self, month, step):
         a = int(pd.Timestamp(month + "-01", tz="UTC").value // 10**6)
         b = int((pd.Timestamp(month + "-01", tz="UTC") + pd.offsets.MonthBegin(1)).value // 10**6)
         return [t for t in range(a, b, step) if self.t0 <= t < self.t1]
 
-    def _kline_csv(self, month, mult=1.0):
+    def _kline_csv(self, month, mult=1.0, drop=None):
         lines = []
+        drop = self.drop if drop is None else drop
         for t in self._month_rows(month, H):
-            if t in self.drop:
+            if t in drop:
                 continue
             i = (t - self.t0) // H
             c = self.close[i] * mult
@@ -68,7 +75,7 @@ class FakeExchange:
             if "fundingRate" in u.path:
                 blob = _zip("f.csv", self._funding_csv(month))
             elif "markPriceKlines" in u.path:
-                blob = _zip("m.csv", self._kline_csv(month, 1.0001))
+                blob = _zip("m.csv", self._kline_csv(month, 1.0001, drop=self.drop | self.drop_mark))
             elif "/spot/" in u.path:
                 blob = _zip("s.csv", self._kline_csv(month, 0.9995))
             else:
@@ -83,9 +90,14 @@ class FakeExchange:
             if body["type"] == "meta":
                 return 200, {}, json.dumps({"universe": [{"name": "BTC", "maxLeverage": 40}]}).encode()
             if body["type"] == "fundingHistory":
-                st = max(body["startTime"], self.t0)
-                rows = [{"coin": "BTC", "fundingRate": str(self.h_rate), "premium": "0", "time": t}
-                        for t in range(st - st % H, min(body["endTime"], self.t1), H)][:500]
+                st = max(body["startTime"], self.t0, self.hl_start)
+                rows = []
+                for t in range(st - st % H, min(body["endTime"], self.t1), H):
+                    if self.hl_coarse_until is not None and t < self.hl_coarse_until and (t - self.t0) % (8 * H) != 0:
+                        continue  # 초기 구간은 8시간 간격 공시만 존재
+                    rows.append({"coin": "BTC", "fundingRate": str(self.h_rate), "premium": "0", "time": t})
+                    if len(rows) >= 500:
+                        break
                 return 200, {}, json.dumps(rows).encode()
         if u.hostname == "api.upbit.com":
             q = urllib.parse.parse_qs(u.query)

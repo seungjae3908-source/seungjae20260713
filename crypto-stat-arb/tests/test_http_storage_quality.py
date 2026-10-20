@@ -12,7 +12,7 @@ from csa_lab.data.binance import ChecksumMismatch, fetch_month, parse_checksum, 
 from csa_lab.http import (ForbiddenRequestError, HttpStatusError, PublicHttpClient, RetryExhausted, RetryPolicy,
                           check_request_allowed)
 from csa_lab.logsafe import mask_secrets, setup_logger
-from csa_lab.quality import DataQualityError, check_funding, check_ohlcv, require_ok
+from csa_lab.quality import DataQualityError, cadence_segments, check_funding, check_ohlcv, check_window, require_ok
 from csa_lab.storage import (Checkpoint, IntegrityError, LockBusyError, atomic_write_bytes, atomic_write_json,
                              cleanup_partials, run_lock, sha256_bytes, verify_manifest, write_manifest)
 
@@ -231,6 +231,75 @@ def test_funding_quality():
     df3 = df.copy()
     df3.loc[2, "rate"] = 0.5
     assert not check_funding(df3, "f")[1].ok
+
+
+def test_funding_cadence_segments_and_window_independence():
+    # 하이퍼리퀴드 초기 구간 모사: 10일은 8시간 간격, 그 뒤 20일은 1시간 간격
+    ts = [T0 + i * 8 * H for i in range(30)] + [T0 + 240 * H + i * H for i in range(480)]
+    df = pd.DataFrame({"ts": ts, "rate": 0.0001})
+    d, rep = check_funding(df, "hl", expected_interval_ms=H)
+    assert not rep.ok and rep.blocking == ["FUNDING_GAPS:210"]  # 전체 데이터셋 보고는 그대로(참고용)
+    assert [(s[2], s[3]) for s in rep.cadence_segments] == [(8, 31), (1, 480)]
+    assert cadence_segments(d["ts"]) == rep.cadence_segments
+    # 8시간 구간을 1시간 데이터로 취급하지 않는다: 그 창은 INCOMPLETE(CADENCE_MISMATCH)
+    early = check_window(d, "hl", T0, T0 + 240 * H, H, source="s", kind="funding", gap_tolerance=1.5)
+    assert early.status == "INCOMPLETE" and early.rows_in_window == 30 and early.expected_rows == 240
+    assert any(r.startswith("CADENCE_MISMATCH:observed=8h") for r in early.reasons)
+    assert early.observed_median_interval_hours == 8 and early.coverage_ratio == pytest.approx(30 / 240)
+    # 같은 데이터셋의 뒤쪽 창은 완전하므로 OK: 다른 창의 결측이 이 창을 막지 않는다
+    late = check_window(d, "hl", T0 + 240 * H, T0 + 720 * H, H, source="s", kind="funding", gap_tolerance=1.5)
+    assert late.status == "OK" and late.rows_in_window == 480 and late.missing_intervals == 0 and late.reasons == []
+    # 원천 시작 전 구간이 포함된 창: 첫 행이 늦음 → INCOMPLETE, 채우지 않음
+    before = check_window(d, "hl", T0 - 48 * H, T0 + 24 * H, H, source="s", kind="funding", gap_tolerance=1.5)
+    assert before.status == "INCOMPLETE" and before.lead_missing_hours == 48
+    assert any(r.startswith("COVERAGE_STARTS_LATE") for r in before.reasons)
+    # 원천 끝 이후 구간이 포함된 창
+    after = check_window(d, "hl", T0 + 700 * H, T0 + 800 * H, H, source="s", kind="funding", gap_tolerance=1.5)
+    assert after.status == "INCOMPLETE" and after.tail_missing_hours == 80
+    assert any(r.startswith("COVERAGE_ENDS_EARLY") for r in after.reasons)
+    # 데이터가 전혀 없는 창
+    none = check_window(d, "hl", T0 + 2000 * H, T0 + 2100 * H, H, source="s", kind="funding")
+    assert none.status == "INCOMPLETE" and none.reasons == ["NO_DATA_IN_WINDOW"] and none.rows_in_window == 0
+    # 값 결함은 BLOCKED(결측보다 우선)
+    bad = d.copy()
+    bad.loc[300, "rate"] = 0.5
+    blocked = check_window(bad, "hl", T0 + 240 * H, T0 + 720 * H, H, source="s", kind="funding", gap_tolerance=1.5)
+    assert blocked.status == "BLOCKED" and blocked.reasons[0] == "FUNDING_OUT_OF_RANGE:1"
+    dd = blocked.to_dict()
+    assert dd["ok"] is False and dd["source"] == "s" and dd["window_start"].startswith("2023-01-11")
+
+
+def test_ohlcv_window_missing_ratio_and_defects():
+    base = _ohlcv(1000)
+    d, _ = check_ohlcv(base, "k", max_missing_ratio=0.01)
+    ok = check_window(d, "k", T0, T0 + 1000 * H, H, source="s", kind="ohlcv", max_missing_ratio=0.01)
+    assert ok.status == "OK" and ok.rows_in_window == 1000 and ok.expected_rows == 1000
+    # 1% 이하 결측(5/500)은 창 OK 로 두되 결측 구간은 기록
+    gap = base.drop(index=[100, 101, 102, 103, 104])
+    d, _ = check_ohlcv(gap, "k", max_missing_ratio=0.01)
+    w1 = check_window(d, "k", T0, T0 + 500 * H, H, source="s", kind="ohlcv", max_missing_ratio=0.01)
+    assert w1.status == "OK" and w1.missing_intervals == 5 and w1.missing_ranges == [[
+        pd.Timestamp(T0 + 100 * H, unit="ms", tz="UTC").isoformat(),
+        pd.Timestamp(T0 + 104 * H, unit="ms", tz="UTC").isoformat(), 5]]
+    # 같은 5개 결측도 창이 작으면 비율 초과 → INCOMPLETE
+    w2 = check_window(d, "k", T0 + 90 * H, T0 + 120 * H, H, source="s", kind="ohlcv", max_missing_ratio=0.01)
+    assert w2.status == "INCOMPLETE" and w2.reasons == ["MISSING_RATIO:5/30"]
+    # 결측이 없는 다른 창은 영향 없음
+    w3 = check_window(d, "k", T0 + 500 * H, T0 + 1000 * H, H, source="s", kind="ohlcv", max_missing_ratio=0.01)
+    assert w3.status == "OK" and w3.missing_intervals == 0
+    # 마크가격처럼 허용 비율 0 인 데이터셋은 결측 1개도 INCOMPLETE
+    w4 = check_window(d, "k", T0, T0 + 500 * H, H, source="s", kind="ohlcv", max_missing_ratio=0.0)
+    assert w4.status == "INCOMPLETE"
+    # 급등락은 BLOCKED
+    jump = base.copy()
+    jump.loc[700, ["open", "high", "low", "close"]] = [200, 200, 200, 200]
+    d, _ = check_ohlcv(jump, "k")
+    w5 = check_window(d, "k", T0 + 600 * H, T0 + 800 * H, H, source="s", kind="ohlcv")
+    assert w5.status == "BLOCKED" and any(r.startswith("OUTLIER_JUMPS") for r in w5.reasons)
+    w6 = check_window(d, "k", T0, T0 + 600 * H, H, source="s", kind="ohlcv")
+    assert w6.status == "OK"
+    with pytest.raises(ValueError):
+        check_window(d, "k", T0 + 10 * H, T0, H, source="s", kind="ohlcv")
 
 
 # ---------- Binance 월별 파일 파서·체크섬 ----------
