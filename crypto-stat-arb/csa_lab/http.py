@@ -21,6 +21,7 @@ ALLOWED_GET_HOSTS = {
     "api.upbit.com",
     "api.frankfurter.app",
     "www.deribit.com",
+    "api.bitget.com",  # /api/v2/mix/market/* 공개 계약 정보만(서명 불필요)
 }
 # Hyperliquid 의 공개 info 엔드포인트는 POST 지만 조회 전용이다.
 ALLOWED_POST = {("api.hyperliquid.xyz", "/info")}

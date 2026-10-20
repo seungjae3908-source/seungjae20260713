@@ -6,6 +6,8 @@ import {
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MIN_BITGET_LEVERAGE,
+  type BitgetLeverage,
   type TradingAssetClass,
   type TradingMarketSnapshot,
   type TradingPlanInput,
@@ -87,7 +89,7 @@ export function normalizeTradingPolicy(
   const leverage = input.bitgetLeverage == null
     ? DEFAULT_TRADING_POLICY.bitgetLeverage
     : Number(input.bitgetLeverage);
-  if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+  if (!Number.isInteger(leverage) || leverage < PRODUCTION_MIN_BITGET_LEVERAGE || leverage > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) {
     throw new Error('BITGET_LEVERAGE_POLICY_INVALID');
   }
   const pilotStage = input.pilotStage === 'limited-50'
@@ -157,7 +159,7 @@ export function normalizeTradingPolicy(
     // Stored policies from before role-scoped leverage are read fail-closed.
     // Administrator 4x-7x values remain exact; member values above 3x are
     // reduced to the member ceiling before any Paper or Live worker sees them.
-    bitgetLeverage: Math.min(leverage, maximumBitgetLeverage) as 2 | 3 | 4 | 5 | 6 | 7,
+    bitgetLeverage: Math.min(leverage, maximumBitgetLeverage) as BitgetLeverage,
     riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
     pilotStage,
     riskPerTradePercent: {
@@ -309,13 +311,19 @@ export function evaluateTradingPlan(
 
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
-    if (!Number.isInteger(plan.leverage) || (plan.leverage ?? 0) < 2 || (plan.leverage ?? 0) > 7) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
+    if (!Number.isInteger(plan.leverage) || (plan.leverage ?? 0) < PRODUCTION_MIN_BITGET_LEVERAGE || (plan.leverage ?? 0) > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if (Number.isInteger(plan.leverage) && (plan.leverage ?? 0) > policy.bitgetLeverage) add(blockCodes, 'BITGET_LEVERAGE_POLICY_LIMIT');
     if (plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_ISOLATED_MARGIN_REQUIRED');
     if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !riskReducing) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
     const requiredMargin = plan.estimatedKrw / Math.max(1, plan.leverage ?? 1);
     if (!riskReducing && snapshot.availableBalance < requiredMargin) add(blockCodes, 'INSUFFICIENT_MARGIN');
     if (!riskReducing && finitePositive(snapshot.liquidationDistancePercent) && snapshot.liquidationDistancePercent <= MIN_LIQUIDATION_DISTANCE_PERCENT) add(blockCodes, 'BITGET_LIQUIDATION_RISK');
+  }
+  if (plan.exchange !== 'bitget' && (plan.leverage != null || plan.marginMode != null)) {
+    // Upbit spot and KR/US stock plans are 1x cash trades. A leverage or margin
+    // field arriving from any client, config or request body is rejected here
+    // (Paper and Live alike) before the spot/stock live capability guards.
+    add(blockCodes, 'LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK');
   }
   if (plan.exchange === 'upbit') {
     if (plan.market !== 'KRW' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'UPBIT_SPOT_ONLY');

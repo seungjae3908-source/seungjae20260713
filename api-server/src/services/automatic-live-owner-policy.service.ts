@@ -1,4 +1,5 @@
-import { PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+import { PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW, PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW, PRODUCTION_MIN_BITGET_LEVERAGE,
   type TradingPolicy } from './trade-automation.types';
 import { isFormulaAiLiveExceptionStrategyId } from './formula-ai-live-exception.service';
 import { STRATEGY_RULE_PACKS } from './evidence-backed-auto-strategy-catalog.service';
@@ -30,7 +31,7 @@ export function approvedAdministratorAutomaticLivePolicy(current: TradingPolicy)
   if (!strategies.every(isFormulaAiLiveExceptionStrategyId)) {
     throw new Error('PREACTIVATION_UNKNOWN_STRATEGY_REQUIRES_EXECUTION_EVIDENCE');
   }
-  if (!Number.isInteger(current.bitgetLeverage) || current.bitgetLeverage < 2 || current.bitgetLeverage > 7) {
+  if (!Number.isInteger(current.bitgetLeverage) || current.bitgetLeverage < PRODUCTION_MIN_BITGET_LEVERAGE || current.bitgetLeverage > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) {
     throw new Error('PREACTIVATION_ADMIN_LEVERAGE_INVALID');
   }
   return {
