@@ -1,4 +1,5 @@
 import type { TradingPlanInput } from './trade-automation.types';
+import { PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE, PRODUCTION_MIN_BITGET_LEVERAGE } from './trade-automation.types';
 import {
   STRATEGY_RULE_PACKS,
   type StrategyRulePackId,
@@ -83,7 +84,7 @@ export function evaluateFormulaAiLiveException(
 
   if (plan.exchange === 'bitget') {
     if (plan.marginMode !== 'isolated') blockers.push('FORMULA_AI_EXCEPTION_FUTURES_ISOLATED_REQUIRED');
-    if (!Number.isInteger(plan.leverage) || Number(plan.leverage) < 2 || Number(plan.leverage) > 7) {
+    if (!Number.isInteger(plan.leverage) || Number(plan.leverage) < PRODUCTION_MIN_BITGET_LEVERAGE || Number(plan.leverage) > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) {
       blockers.push('FORMULA_AI_EXCEPTION_FUTURES_LEVERAGE_INVALID');
     }
   }
