@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import type { TradingPlanInput } from './trade-automation.types';
+import type { BitgetLeverage, TradingPlanInput } from './trade-automation.types';
 
 export type BitgetReadonlyEndpointFamily = 'UTA_V3' | 'CLASSIC';
 export type BitgetReadonlyProbe = 'ACCOUNT_SETTINGS' | 'ACCOUNT_INFO' | 'ASSETS' | 'POSITIONS' | 'OPEN_ORDERS';
@@ -270,6 +270,11 @@ function bitgetRequest(
   readonlyDiagnostic?: BitgetReadonlyRequestDiagnostic,
 ): PreparedExchangeRequest {
   const body = data ? jsonBody(data) : '';
+  // Callers may hand over a query that already starts with '?' (the native
+  // protection reads do). Bitget signs `path?query` exactly once, so the
+  // leading '?' must not be signed twice (`path??query`) or every private
+  // read on that path fails with a signature error.
+  const signedQuery = query.startsWith('?') ? query.slice(1) : query;
   return {
     method,
     path,
@@ -278,7 +283,7 @@ function bitgetRequest(
     ...(readonlyDiagnostic ? { bitgetReadonlyDiagnostic: readonlyDiagnostic } : {}),
     headers: {
       'ACCESS-KEY': credentials.apiKey,
-      'ACCESS-SIGN': buildBitgetSignature(credentials.secretKey, timestamp, method, path, query, body),
+      'ACCESS-SIGN': buildBitgetSignature(credentials.secretKey, timestamp, method, path, signedQuery, body),
       'ACCESS-TIMESTAMP': timestamp,
       'ACCESS-PASSPHRASE': credentials.passphrase,
       'Content-Type': 'application/json',
@@ -570,7 +575,7 @@ export function prepareBitgetMarginMode(
   }, '', timestamp);
 }
 
-export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: 2 | 3 | 4 | 5 | 6 | 7, timestamp?: string) {
+export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: BitgetLeverage, timestamp?: string) {
   return bitgetRequest(credentials, 'POST', '/api/v2/mix/account/set-leverage', {
     symbol: symbol.toUpperCase(), productType: 'USDT-FUTURES', marginCoin: 'USDT', leverage: String(leverage),
   }, '', timestamp);
@@ -632,14 +637,56 @@ export function prepareUpbitOrder(
     identifier,
   };
   if (plan.orderType === 'limit') {
-    parameters.volume = String(plan.quantity ?? '');
-    parameters.price = String(plan.limitPrice ?? '');
+    parameters.volume = upbitVolumeString(plan.quantity);
+    parameters.price = upbitLimitPriceString(plan.limitPrice);
   } else if (plan.side === 'buy') {
-    parameters.price = String(plan.quoteAmount ?? '');
+    parameters.price = upbitKrwAmountString(plan.quoteAmount);
   } else {
-    parameters.volume = String(plan.quantity ?? '');
+    parameters.volume = upbitVolumeString(plan.quantity);
   }
   return upbitRequest(credentials, 'POST', '/v1/orders', parameters, nonce);
+}
+
+/** Upbit accepts at most 8 decimal places of volume. Round DOWN so the sent
+ * quantity never exceeds what the risk check approved or what is held. */
+export function upbitVolumeString(quantity: unknown): string {
+  const value = Number(quantity);
+  if (!Number.isFinite(value) || value <= 0) throw new Error('UPBIT_ORDER_VOLUME_INVALID');
+  const floored = Math.floor(value * 1e8 + 1e-6) / 1e8;
+  if (floored <= 0) throw new Error('UPBIT_ORDER_VOLUME_BELOW_PRECISION');
+  return floored.toFixed(8).replace(/\.?0+$/u, '');
+}
+
+/** Market BUY spends a KRW amount; whole KRW only, rounded DOWN. */
+export function upbitKrwAmountString(amount: unknown): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) throw new Error('UPBIT_ORDER_AMOUNT_INVALID');
+  const floored = Math.floor(value + 1e-6);
+  if (floored <= 0) throw new Error('UPBIT_ORDER_AMOUNT_BELOW_PRECISION');
+  return String(floored);
+}
+
+export function upbitLimitPriceString(price: unknown): string {
+  const value = Number(price);
+  if (!Number.isFinite(value) || value <= 0) throw new Error('UPBIT_ORDER_PRICE_INVALID');
+  return String(value);
+}
+
+/** Real `/v1/orders/chance` nests the minimum under `market.bid|ask.min_total`;
+ * the flat `bid|ask.min_total` form is kept for older fixtures. Unknown → null. */
+export function upbitMinimumOrderTotal(chance: Record<string, unknown>, side: 'buy' | 'sell'): number | null {
+  const key = side === 'buy' ? 'bid' : 'ask';
+  const market = chance.market;
+  const nested = market && typeof market === 'object' && !Array.isArray(market)
+    ? (market as Record<string, unknown>)[key] : null;
+  const flat = chance[key];
+  for (const candidate of [nested, flat]) {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      const value = Number((candidate as Record<string, unknown>).min_total);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+  }
+  return null;
 }
 
 export function prepareUpbitOrderTest(credentials: UpbitCredentials, plan: TradingPlanInput, identifier: string, nonce?: string) {

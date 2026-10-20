@@ -25,9 +25,29 @@ import { allowServerProfitabilityAttestationForTests } from './trade-profitabili
 import { setTradeProfitabilityAttestationRunnerForTests } from './trade-profitability-attestation.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingMarketSnapshot,
   type TradingPlanInput,
 } from './trade-automation.types';
+import {
+  buildMarketCapitalAllocation,
+  evaluateTradingPlan,
+  finalAllowedEntryKrw,
+  marketCapitalEntryBlockCodes,
+  normalizeTradingPolicy,
+  projectMarketLedger,
+  requestedEntryExceedsAllowed,
+} from './trade-automation-risk.service';
+import { currentLiveMemberAccessMatchesBatch } from './member-auto-trading-background-worker.service';
+import {
+  buildBitgetSignature,
+  prepareBitgetPendingProtection,
+  prepareBitgetSinglePosition,
+  upbitKrwAmountString,
+  upbitMinimumOrderTotal,
+  upbitVolumeString,
+} from './trade-exchange-adapters.service';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -289,7 +309,13 @@ async function setup() {
   return { repository, approved, order: orderResult.order };
 }
 
-function installUpbitMock(currentPrice: number, openOrders: Record<string, unknown>[] = []) {
+type UpbitMockOverride = (input: { pathname: string; method: string; json: (body: unknown, status?: number) => Response }) =>
+  Response | Promise<Response> | undefined;
+
+/** Fake Upbit with the REAL response shapes: /v1/accounts, /v1/ticker and
+ * /v1/orderbook are top-level arrays and the order minimum is nested under
+ * market.bid|ask.min_total, exactly as api.upbit.com returns them. */
+function installUpbitMock(currentPrice: number, openOrders: Record<string, unknown>[] = [], override?: UpbitMockOverride) {
   let actualOrderPosts = 0;
   let orderTestPosts = 0;
   let totalProviderRequests = 0;
@@ -302,19 +328,30 @@ function installUpbitMock(currentPrice: number, openOrders: Record<string, unkno
       status,
       headers: { 'content-type': 'application/json' },
     });
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    if (url.pathname === '/v1/orders' && method === 'POST') actualOrderPosts += 1;
+    const overridden = override ? await override({ pathname: url.pathname, method, json }) : undefined;
+    if (overridden) return overridden;
     if (url.pathname === '/v1/accounts') {
-      return json({ data: [
-        { currency: 'KRW', balance: '1000000', locked: '0' },
-        { currency: 'BTC', balance: '0', locked: '0' },
-      ] });
+      return json([
+        { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+        { currency: 'BTC', balance: '0', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      ]);
     }
     if (url.pathname === '/v1/orders/chance') {
       return json({
-        market: { state: 'active' },
-        bid: { min_total: '5000' },
-        ask: { min_total: '5000' },
         bid_fee: '0.0005',
         ask_fee: '0.0005',
+        maker_bid_fee: '0.0005',
+        maker_ask_fee: '0.0005',
+        market: {
+          id: 'KRW-BTC', name: 'BTC/KRW', order_types: ['limit'], order_sides: ['ask', 'bid'],
+          bid: { currency: 'KRW', min_total: '5000' },
+          ask: { currency: 'BTC', min_total: '5000' },
+          max_total: '1000000000', state: 'active',
+        },
+        bid_account: { currency: 'KRW', balance: '1000000', locked: '0' },
+        ask_account: { currency: 'BTC', balance: '0', locked: '0' },
       });
     }
     if (url.pathname === '/v1/orders/open') {
@@ -323,10 +360,10 @@ function installUpbitMock(currentPrice: number, openOrders: Record<string, unkno
       return json(openOrders.filter((item) => String(item.state ?? 'wait') === requestedState));
     }
     if (url.pathname === '/v1/ticker') {
-      return json({ data: [{ market: 'KRW-BTC', trade_price: currentPrice, timestamp: now }] });
+      return json([{ market: 'KRW-BTC', trade_price: currentPrice, timestamp: now, trade_timestamp: now }]);
     }
     if (url.pathname === '/v1/orderbook') {
-      return json({ data: [{
+      return json([{
         market: 'KRW-BTC',
         timestamp: now,
         orderbook_units: [
@@ -334,14 +371,13 @@ function installUpbitMock(currentPrice: number, openOrders: Record<string, unkno
           { ask_price: currentPrice + 10, ask_size: 10, bid_price: currentPrice - 110, bid_size: 10 },
           { ask_price: currentPrice + 20, ask_size: 10, bid_price: currentPrice - 120, bid_size: 10 },
         ],
-      }] });
+      }]);
     }
     if (url.pathname === '/v1/orders/test') {
       orderTestPosts += 1;
       return json({ accepted: true });
     }
-    if (url.pathname === '/v1/orders' && (init?.method ?? 'GET') === 'POST') {
-      actualOrderPosts += 1;
+    if (url.pathname === '/v1/orders' && method === 'POST') {
       return json({ uuid: 'exchange-order-1' });
     }
     if (url.pathname === '/v1/order') {
@@ -912,4 +948,273 @@ test('protected 4-market automatic Paper cost rules are exact, expiring, and nev
   assert.equal(missing.feeAmount, null);
   assert.equal(missing.taxAmount, null);
   assert.equal(missing.trustedPaperCostPolicyId, null);
+});
+
+test('the exchange minimum read from the real nested market.bid.min_total rejects a small buy before any POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], ({ pathname, json }) => pathname === '/v1/orders/chance' ? json({
+    bid_fee: '0.0005', ask_fee: '0.0005',
+    market: { id: 'KRW-BTC', state: 'active', bid: { currency: 'KRW', min_total: '50000' }, ask: { currency: 'BTC', min_total: '50000' } },
+  }) : undefined);
+  const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'UPBIT_MINIMUM_ORDER');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().actualOrderPosts, 0);
+});
+
+test('a 401 on the private account read rejects before the order test, the intent and any POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], ({ pathname, json }) => pathname === '/v1/accounts'
+    ? json({ error: { name: 'invalid_access_key', message: 'unauthorized' } }, 401) : undefined);
+  const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'UPBIT_AUTH_FAILED');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().actualOrderPosts, 0);
+});
+
+test('an order POST that times out with an unknown result parks the order for reconciliation and is never resent', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], ({ pathname, method }) => {
+    if (pathname === '/v1/orders' && method === 'POST') throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    return undefined;
+  });
+  const execution = new TradeExecutionService(repository);
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(result.state, 'RECOVERY_REQUIRED');
+  assert.equal(result.lastErrorCode, 'UPBIT_TIMEOUT');
+  assert.ok(result.submissionStartedAt, 'the write-ahead intent survives the unknown result');
+  assert.equal(provider.counts().actualOrderPosts, 1);
+
+  const replay = await execution.execute(USER_ID, approved, result);
+  assert.equal(provider.counts().actualOrderPosts, 1, 'a replay looks the order up instead of blindly resending');
+  assert.notEqual(replay.state, 'SUBMITTED');
+});
+
+test('a 429 on the order POST is an unknown result too: parked for reconciliation, one POST, no retry', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], ({ pathname, method, json }) => pathname === '/v1/orders' && method === 'POST'
+    ? json({ error: { name: 'too_many_requests', message: 'rate limited' } }, 429) : undefined);
+  const execution = new TradeExecutionService(repository);
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(result.state, 'RECOVERY_REQUIRED');
+  assert.equal(result.lastErrorCode, 'UPBIT_RATE_LIMITED');
+  assert.equal(provider.counts().actualOrderPosts, 1);
+  await execution.execute(USER_ID, approved, result);
+  assert.equal(provider.counts().actualOrderPosts, 1);
+});
+
+test('a persistence failure right after the exchange accepted the order never leads to a second POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000);
+  const original = repository.transitionOrderAtomic.bind(repository);
+  let failures = 0;
+  repository.transitionOrderAtomic = (async (...args: Parameters<typeof original>) => {
+    if (args[3].reason === 'EXCHANGE_ACCEPTED' && failures === 0) {
+      failures += 1; throw new Error('DISK_FULL_ORDER_WRITE_FAILED');
+    }
+    return original(...args);
+  }) as typeof original;
+  const execution = new TradeExecutionService(repository);
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(provider.counts().actualOrderPosts, 1);
+  assert.equal(failures, 1);
+  assert.equal(result.state, 'RECOVERY_REQUIRED');
+  assert.equal(result.lastErrorCode, 'DISK_FULL_ORDER_WRITE_FAILED');
+  const stored = await repository.getOrder(USER_ID, order.id);
+  assert.equal(stored?.state, 'RECOVERY_REQUIRED');
+  assert.ok(stored?.submissionStartedAt);
+  await execution.execute(USER_ID, approved, stored!);
+  assert.equal(provider.counts().actualOrderPosts, 1, 'restart recovery reads the exchange, it does not resend');
+});
+
+test('a zero or missing ticker price rejects before the intent and any POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [], ({ pathname, json }) => pathname === '/v1/ticker'
+    ? json([{ market: 'KRW-BTC', trade_price: 0, timestamp: Date.now() }]) : undefined);
+  const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().actualOrderPosts, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Per-market capital ledger, role caps, Bitget read signing and Upbit precision
+
+function ledgerPlan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
+  const observedAt = new Date().toISOString();
+  return {
+    exchange: 'upbit', accountMode: 'live', strategyId: 'breakout-v1', signalId: 'signal-1',
+    symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market', quantity: null,
+    quoteAmount: 100_000, limitPrice: null, estimatedKrw: 100_000, stopPrice: 90_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null, marginMode: null,
+    reduceOnly: false, invalidateAction: 'hold', signalReasons: ['trend', 'volume'],
+    marketSnapshot: {
+      observedAt, riskObservedAt: observedAt, dataDelayMs: 0, oneMinuteMovePercent: 0.5,
+      spreadPercent: 0.1, orderbookGapPercent: 0.2, halted: false, availableBalance: 1_000_000,
+      accountValueKrw: 2_000_000, dailyPnlPercent: 0, assetExposurePercent: 5,
+      openPositionCount: 0, dailyOrderCount: 0, consecutiveLosses: 0,
+      currentPrice: 100_000, plannedPrice: 100_000, marketStatus: 'OPEN',
+      availableLiquidityKrw: 1_000_000, estimatedSlippagePercent: 0.1, estimatedFeePercent: 0.05,
+      correlatedExposurePercent: 0, signalState: 'entry_ready', signalObservedAt: observedAt,
+    },
+    ...overrides,
+  };
+}
+
+const cryptoOnly = {
+  marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: true },
+};
+
+test('Bitget 1,000,000 + Upbit 1,000,000 inside a 2,000,000 total is a consistent two-ledger allocation', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, ...cryptoOnly, totalCapitalKrw: 2_000_000,
+    maxAssetClassKrw: { domestic_stock: 5_000, us_stock: 5_000, crypto_spot: 1_000_000, crypto_futures: 1_000_000 },
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  const allocation = buildMarketCapitalAllocation(policy);
+  assert.equal(allocation.status, 'CONSISTENT');
+  assert.equal(allocation.enabledAllocatedKrw, 2_000_000);
+  assert.equal(allocation.overAllocatedKrw, 0);
+  assert.deepEqual(allocation.blockCodes, []);
+  assert.deepEqual(allocation.markets.filter((row) => row.enabled).map((row) => [row.market, row.allocatedKrw]),
+    [['crypto_spot', 1_000_000], ['crypto_futures', 1_000_000]]);
+  const decision = evaluateTradingPlan(ledgerPlan(), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(decision.blockCodes.includes('MARKET_CAPITAL_OVER_ALLOCATED'), false);
+});
+
+test('two markets allocated the same KRW (1M + 1M above a 1.5M total) block every live entry but never an exit', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, ...cryptoOnly, totalCapitalKrw: 1_500_000,
+    maxAssetClassKrw: { domestic_stock: 5_000, us_stock: 5_000, crypto_spot: 1_000_000, crypto_futures: 1_000_000 },
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  const allocation = buildMarketCapitalAllocation(policy);
+  assert.equal(allocation.status, 'OVER_ALLOCATED');
+  assert.equal(allocation.overAllocatedKrw, 500_000);
+  assert.deepEqual(allocation.blockCodes, ['MARKET_CAPITAL_OVER_ALLOCATED']);
+
+  const live = evaluateTradingPlan(ledgerPlan(), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(live.blockCodes.includes('MARKET_CAPITAL_OVER_ALLOCATED'));
+  assert.equal(live.allowed, false);
+
+  const exit = evaluateTradingPlan(ledgerPlan({ side: 'sell', reduceOnly: true, quantity: 0.5, quoteAmount: null,
+    signalReasons: ['AUTO_EXIT_ENTRY_PLAN:test'] }), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(exit.blockCodes.includes('MARKET_CAPITAL_OVER_ALLOCATED'), false);
+
+  const paper = evaluateTradingPlan(ledgerPlan({ accountMode: 'paper' }), policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(paper.blockCodes.includes('MARKET_CAPITAL_OVER_ALLOCATED'), false);
+  assert.deepEqual(marketCapitalEntryBlockCodes({ accountMode: 'live' }, policy, { riskReducing: true }), []);
+});
+
+test('the stored default policy declares no per-market base funds: it is reported as a shared pool, not blocked', () => {
+  const allocation = buildMarketCapitalAllocation(normalizeTradingPolicy(DEFAULT_TRADING_POLICY));
+  assert.equal(allocation.status, 'SHARED_POOL');
+  assert.equal(allocation.totalCapitalKrw, 1_000_000);
+  // three enabled markets each capped at the whole 1,000,000 total
+  assert.equal(allocation.enabledAllocatedKrw, 3_000_000);
+  assert.deepEqual(allocation.blockCodes, []);
+});
+
+test('a market ledger spends only its own allocation: reservations, margin, losses and costs reduce it; reserve is never added', () => {
+  const clean = projectMarketLedger({ market: 'crypto_spot', allocatedKrw: 1_000_000, openOrderReservedKrw: 0,
+    positionMarginKrw: 0, realizedPnlKrw: null, costsKrw: null, exchangeAvailableKrw: null });
+  assert.equal(clean.availableKrw, 1_000_000);
+  assert.equal(clean.driftStatus, 'UNVERIFIED');
+  assert.equal(clean.realizedPnlKrw, null, 'unproven realized PnL stays null, never 0');
+  assert.equal(clean.costsKrw, null, 'unverified costs stay null, never 0');
+
+  const busy = projectMarketLedger({ market: 'crypto_futures', allocatedKrw: 1_000_000, openOrderReservedKrw: 200_000,
+    positionMarginKrw: 300_000, realizedPnlKrw: -50_000, costsKrw: 1_500, exchangeAvailableKrw: 448_500 });
+  assert.equal(busy.availableKrw, 1_000_000 - 200_000 - 300_000 - 50_000 - 1_500);
+  assert.equal(busy.driftKrw, 0);
+  assert.equal(busy.driftStatus, 'WITHIN_TOLERANCE');
+  assert.deepEqual(busy.blockCodes, []);
+
+  const profit = projectMarketLedger({ market: 'crypto_spot', allocatedKrw: 1_000_000, openOrderReservedKrw: 0,
+    positionMarginKrw: 0, realizedPnlKrw: 80_000, costsKrw: 400, exchangeAvailableKrw: 5_000_000 });
+  assert.equal(profit.availableKrw, 1_079_600);
+  assert.equal(profit.driftStatus, 'WITHIN_TOLERANCE', 'extra reserve on the exchange is not drift');
+});
+
+test('an exchange balance short of the ledger beyond tolerance blocks new entries until resolved', () => {
+  const short = projectMarketLedger({ market: 'crypto_spot', allocatedKrw: 1_000_000, openOrderReservedKrw: 0,
+    positionMarginKrw: 0, realizedPnlKrw: 0, costsKrw: 0, exchangeAvailableKrw: 900_000 });
+  assert.equal(short.driftKrw, -100_000);
+  assert.equal(short.driftStatus, 'DRIFT_UNRESOLVED');
+  assert.deepEqual(short.blockCodes, ['MARKET_LEDGER_EXCHANGE_DRIFT_UNRESOLVED']);
+  const inside = projectMarketLedger({ market: 'crypto_spot', allocatedKrw: 1_000_000, openOrderReservedKrw: 0,
+    positionMarginKrw: 0, realizedPnlKrw: 0, costsKrw: 0, exchangeAvailableKrw: 999_500 });
+  assert.equal(inside.driftStatus, 'WITHIN_TOLERANCE');
+});
+
+test('the final allowed entry is the strictest of role cap, policy, market allocation, ledger, exchange balance and exchange max', () => {
+  const base = { roleCapKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW, policyMaxOrderKrw: 1_000_000,
+    marketAllocatedKrw: 1_000_000, ledgerAvailableKrw: 1_000_000, exchangeAvailableKrw: 1_000_000,
+    exchangeMinimumKrw: 5_000, exchangeMaximumKrw: null };
+  assert.deepEqual(finalAllowedEntryKrw(base), { allowedKrw: 1_000_000, bindingLimit: 'ROLE_CAP', blockCodes: [] });
+  assert.equal(finalAllowedEntryKrw({ ...base, roleCapKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW }).allowedKrw, 500_000);
+  assert.equal(finalAllowedEntryKrw({ ...base, ledgerAvailableKrw: 120_000 }).bindingLimit, 'LEDGER_AVAILABLE');
+  assert.equal(finalAllowedEntryKrw({ ...base, exchangeAvailableKrw: 90_000 }).allowedKrw, 90_000);
+  assert.equal(finalAllowedEntryKrw({ ...base, exchangeMaximumKrw: 70_000 }).bindingLimit, 'EXCHANGE_MAXIMUM');
+  const tiny = finalAllowedEntryKrw({ ...base, ledgerAvailableKrw: 4_000 });
+  assert.deepEqual(tiny.blockCodes, ['ALLOWED_ENTRY_BELOW_EXCHANGE_MINIMUM']);
+  assert.deepEqual(finalAllowedEntryKrw({ ...base, ledgerAvailableKrw: 0 }).blockCodes,
+    ['ALLOWED_ENTRY_BELOW_EXCHANGE_MINIMUM', 'ALLOWED_ENTRY_ZERO']);
+  const member = finalAllowedEntryKrw({ ...base, roleCapKrw: PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW });
+  assert.equal(requestedEntryExceedsAllowed(500_000, member), false);
+  assert.equal(requestedEntryExceedsAllowed(500_001, member), true);
+  assert.equal(requestedEntryExceedsAllowed(Number.NaN, member), true);
+});
+
+test('a member cannot obtain the administrator 1,000,000 cap through the policy body or a cached batch ceiling', () => {
+  for (const requested of [999_999, 1_000_001, 5_000_000, Number.NaN, -1]) {
+    const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, totalCapitalKrw: 5_000_000, maxOrderKrw: 1_000_000 }, requested);
+    assert.equal(policy.maxOrderKrw, PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, `requested cap ${requested} is not the administrator cap`);
+    assert.ok(evaluateTradingPlan(ledgerPlan({ quoteAmount: 500_001, estimatedKrw: 500_001 }), policy,
+      { emergencyStopped: false, serverLiveEnabled: true }).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  }
+  const member = { membership_level: 'regular', role: 'user', status: 'approved', is_active: true };
+  const spot = { exchange: 'upbit', accountMode: 'live', leverage: null } as const;
+  assert.equal(currentLiveMemberAccessMatchesBatch(member, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW, spot), false,
+    'a member batch cached with the administrator ceiling is rejected');
+  const admin = { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true };
+  const adminPolicy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, totalCapitalKrw: 5_000_000, maxOrderKrw: 1_000_000 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.ok(evaluateTradingPlan(ledgerPlan({ quoteAmount: 1_000_001, estimatedKrw: 1_000_001 }), adminPolicy,
+    { emergencyStopped: false, serverLiveEnabled: true }).blockCodes.includes('MAX_ORDER_AMOUNT'));
+  assert.equal(currentLiveMemberAccessMatchesBatch(admin, PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW, spot), false,
+    'an administrator batch cached with the member ceiling is stale and rejected');
+});
+
+test('Bitget private reads sign path?query exactly once even when the caller passes a ?-prefixed query', () => {
+  const credentials = { apiKey: 'k', secretKey: 's', passphrase: 'p' };
+  const position = prepareBitgetSinglePosition(credentials, 'BTCUSDT', '1700000000000');
+  assert.ok(position.query.startsWith('?'), 'the fixed-path readonly transport still receives the ?-prefixed query');
+  assert.equal(position.headers['ACCESS-SIGN'], buildBitgetSignature('s', '1700000000000', 'GET',
+    '/api/v2/mix/position/single-position', 'productType=USDT-FUTURES&symbol=BTCUSDT&marginCoin=USDT', ''));
+  assert.notEqual(position.headers['ACCESS-SIGN'], buildBitgetSignature('s', '1700000000000', 'GET',
+    '/api/v2/mix/position/single-position', '?productType=USDT-FUTURES&symbol=BTCUSDT&marginCoin=USDT', ''));
+  const pending = prepareBitgetPendingProtection(credentials, 'BTCUSDT', '123', '1700000000000');
+  assert.equal(pending.headers['ACCESS-SIGN'], buildBitgetSignature('s', '1700000000000', 'GET',
+    '/api/v2/mix/order/orders-plan-pending', 'planType=profit_loss&productType=USDT-FUTURES&symbol=BTCUSDT&orderId=123', ''));
+});
+
+test('Upbit order fields are rounded DOWN to exchange precision and the real nested min_total is read', () => {
+  assert.equal(upbitVolumeString(0.123456789), '0.12345678');
+  assert.equal(upbitVolumeString(1), '1');
+  assert.equal(upbitVolumeString(0.01), '0.01');
+  assert.equal(upbitVolumeString(0.1 + 0.2), '0.3');
+  assert.throws(() => upbitVolumeString(0.000000001), /UPBIT_ORDER_VOLUME_BELOW_PRECISION/u);
+  assert.throws(() => upbitVolumeString(0), /UPBIT_ORDER_VOLUME_INVALID/u);
+  assert.throws(() => upbitVolumeString('abc'), /UPBIT_ORDER_VOLUME_INVALID/u);
+  assert.equal(upbitKrwAmountString(20_000.7), '20000');
+  assert.equal(upbitKrwAmountString(100_000), '100000');
+  assert.throws(() => upbitKrwAmountString(0.4), /UPBIT_ORDER_AMOUNT_BELOW_PRECISION/u);
+  assert.throws(() => upbitKrwAmountString(null), /UPBIT_ORDER_AMOUNT_INVALID/u);
+  assert.equal(upbitMinimumOrderTotal({ market: { bid: { min_total: '5000' }, ask: { min_total: '5000' } } }, 'buy'), 5_000);
+  assert.equal(upbitMinimumOrderTotal({ market: { bid: { min_total: '5000' }, ask: { min_total: '7000' } } }, 'sell'), 7_000);
+  assert.equal(upbitMinimumOrderTotal({ bid: { min_total: '5000' } }, 'buy'), 5_000, 'flat legacy fixture shape');
+  assert.equal(upbitMinimumOrderTotal({ market: { state: 'active' } }, 'buy'), null, 'unknown minimum is null, never 0');
 });
