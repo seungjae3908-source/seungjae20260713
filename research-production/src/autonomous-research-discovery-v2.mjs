@@ -839,7 +839,29 @@ export function isSourceSpecificReasonV2(reason) {
 
 // Sources that already failed for a non-transient reason (wrong file type,
 // unsafe wording, missing locator...) are never proposed or accepted again.
-async function priorFailedSources(root) {
+// A commit-feed 404 recorded under a branch the catalog does not use says
+// nothing about the file: the model misnamed the branch (BRANCH=master for a
+// main repository on 2026-10-19/20) and the source itself was never fetched.
+// Such rows must not blacklist the catalog entry, or the whole catalog ends up
+// AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED once the branch is pinned correctly.
+function isBranchMistake404(row, catalogBranches) {
+  if (row?.reason !== 'PUBLIC_SOURCE_HTTP_404' || Number(row?.actualSourceFetches?.succeeded ?? 0) !== 0) return false;
+  const known = catalogBranches.get(String(row?.candidate?.repository ?? '').replace(/\/$/u, ''));
+  return typeof known === 'string' && known !== String(row?.candidate?.branch ?? '');
+}
+
+function catalogBranchMap(catalog) {
+  const map = new Map();
+  for (const entry of Array.isArray(catalog) ? catalog : []) {
+    const repository = String(entry?.repository ?? '').replace(/\/$/u, '');
+    if (!map.has(repository)) map.set(repository, entry?.branch);
+    else if (map.get(repository) !== entry?.branch) map.set(repository, null);
+  }
+  return map;
+}
+
+async function priorFailedSources(root, catalog = []) {
+  const catalogBranches = catalogBranchMap(catalog);
   const directory = join(root, 'autonomous-research', 'discovery');
   let names = [];
   try { names = (await readdir(directory)).filter((name) => /^[A-Za-z0-9_.-]{1,200}\.json$/u.test(name)).sort().slice(-MAX_FAILED_SOURCE_FILES); }
@@ -848,7 +870,7 @@ async function priorFailedSources(root) {
   for (const name of names) {
     let row = null;
     try { row = await readJsonOptional(join(directory, name)); } catch { row = null; }
-    if (row?.status !== 'AI_DISCOVERY_UNAVAILABLE' || isTransientReason(row?.reason)) continue;
+    if (row?.status !== 'AI_DISCOVERY_UNAVAILABLE' || isTransientReason(row?.reason) || isBranchMistake404(row, catalogBranches)) continue;
     const repository = String(row?.candidate?.repository ?? '').replace(/\/$/u, '');
     const sourcePath = String(row?.candidate?.sourcePath ?? '');
     if (SAFE_REPOSITORY.test(repository) && SAFE_PATH.test(sourcePath)) failed.add(`${repository}:${sourcePath}`);
@@ -988,7 +1010,7 @@ export async function runAutonomousResearchDiscoveryV2({
   }
 
   const priorSourceIds = await priorGithubSourceIds(root);
-  let failedSources = await priorFailedSources(root);
+  let failedSources = await priorFailedSources(root, Array.isArray(verifiedSourceCatalog) ? verifiedSourceCatalog : []);
   const lane = await selectResearchLane(root, activeLanes(researchLanes, env));
   for (let sourceAttempt = 1; ; sourceAttempt += 1) {
   const calls = { attempted: 0, succeeded: 0, failed: 0, retried: 0 };
