@@ -10,6 +10,8 @@ import {
   type BitgetLeverage,
   type TradingAssetClass,
   type TradingMarketSnapshot,
+  type TradingOrder,
+  type TradingPlan,
   type TradingPlanInput,
   type TradingPolicy,
   type TradingRiskDecision,
@@ -582,4 +584,103 @@ export function marketCapitalEntryBlockCodes(
 ): readonly string[] {
   if (options.riskReducing || plan.accountMode !== 'live') return Object.freeze([]);
   return buildMarketCapitalAllocation(policy).blockCodes;
+}
+
+/** Ledger market of a plan: the asset class whose per-market fund it spends. */
+export function ledgerMarketForPlan(plan: Pick<TradingPlanInput, 'exchange' | 'market'>): TradingAssetClass {
+  if (plan.exchange === 'upbit') return 'crypto_spot';
+  if (plan.exchange === 'bitget') return 'crypto_futures';
+  return String(plan.market).trim().toUpperCase() === 'US' ? 'us_stock' : 'domestic_stock';
+}
+
+const LEDGER_OPEN_ORDER_STATES: ReadonlySet<string> = new Set([
+  'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
+]);
+
+export type LiveEntryLedgerInput = Readonly<{
+  plan: Pick<TradingPlan, 'id' | 'accountMode' | 'exchange' | 'market' | 'estimatedKrw' | 'reduceOnly'>;
+  policy: TradingPolicy;
+  /** This member's complete plan/order history (the same reads the position isolation uses). */
+  plans: readonly TradingPlan[];
+  orders: readonly TradingOrder[];
+  /** Canonical automatic live positions still open (plan + remaining quantity). */
+  ownedPositions: readonly Readonly<{ plan: TradingPlan; remainingQuantity: number }>[];
+  /** The exchange's own available balance for this entry, in KRW (null = not read). */
+  exchangeAvailableKrw: number | null;
+  exchangeMinimumKrw?: number | null;
+  /** The order being submitted now; it is never counted as its own reservation. */
+  currentOrderId?: string | null;
+  driftToleranceKrw?: number;
+}>;
+
+export type LiveEntryLedgerDecision = Readonly<{
+  market: TradingAssetClass;
+  allocation: MarketCapitalAllocation;
+  ledger: MarketLedgerProjection;
+  allowed: AllowedEntryDecision;
+  requestedKrw: number;
+  blockCodes: readonly string[];
+}>;
+
+/**
+ * Per-market fund ledger check for a LIVE entry, evaluated at the provider
+ * boundary (after the private account read, before any margin/leverage or
+ * order mutation). Reserved = this market's own open live entry orders;
+ * margin = this market's still-open canonical automatic positions. Realized
+ * PnL and costs are not proven here (null, never assumed), so the ledger view
+ * is the allocation minus what is already committed. The exchange balance is
+ * compared against that view: a shortfall beyond the tolerance is
+ * MARKET_LEDGER_EXCHANGE_DRIFT_UNRESOLVED and blocks; a surplus never does.
+ * The requested size must fit the strictest of role cap, policy cap, market
+ * allocation, ledger availability and exchange availability.
+ * Futures amounts (estimatedKrw) are notional, so at 1x they equal margin and
+ * above 1x the ledger is the more conservative side.
+ */
+export function evaluateLiveEntryLedger(input: LiveEntryLedgerInput): LiveEntryLedgerDecision {
+  const market = ledgerMarketForPlan(input.plan);
+  const allocation = buildMarketCapitalAllocation(input.policy);
+  const row = allocation.markets.find((entry) => entry.market === market);
+  const allocatedKrw = row?.allocatedKrw ?? 0;
+  const plansById = new Map<string, TradingPlan>();
+  for (const plan of input.plans) plansById.set(plan.id, plan);
+  let openOrderReservedKrw = 0;
+  for (const order of input.orders) {
+    if (order.id === input.currentOrderId || !LEDGER_OPEN_ORDER_STATES.has(order.state)) continue;
+    const parent = plansById.get(order.planId);
+    if (!parent || parent.accountMode !== 'live' || parent.reduceOnly === true
+      || parent.exchange !== order.exchange || ledgerMarketForPlan(parent) !== market) continue;
+    openOrderReservedKrw += ledgerNonNegative(parent.estimatedKrw) ?? 0;
+  }
+  let positionMarginKrw = 0;
+  for (const position of input.ownedPositions) {
+    const plan = position.plan;
+    if (plan.accountMode !== 'live' || plan.reduceOnly === true || ledgerMarketForPlan(plan) !== market) continue;
+    const planned = Number(plan.quantity);
+    const remaining = Number(position.remainingQuantity);
+    const fraction = Number.isFinite(planned) && planned > 0 && Number.isFinite(remaining)
+      ? Math.min(1, Math.max(0, remaining / planned)) : 1;
+    positionMarginKrw += (ledgerNonNegative(plan.estimatedKrw) ?? 0) * fraction;
+  }
+  const exchangeAvailableKrw = input.exchangeAvailableKrw == null ? null : ledgerNonNegative(input.exchangeAvailableKrw);
+  const ledger = projectMarketLedger({
+    market, allocatedKrw, openOrderReservedKrw, positionMarginKrw,
+    realizedPnlKrw: null, costsKrw: null, exchangeAvailableKrw,
+    driftToleranceKrw: input.driftToleranceKrw,
+  });
+  const allowed = finalAllowedEntryKrw({
+    roleCapKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+    policyMaxOrderKrw: input.policy.maxOrderKrw,
+    marketAllocatedKrw: allocatedKrw,
+    ledgerAvailableKrw: ledger.availableKrw,
+    exchangeAvailableKrw,
+    exchangeMinimumKrw: input.exchangeMinimumKrw ?? null,
+    exchangeMaximumKrw: null,
+  });
+  const requestedKrw = Number(input.plan.estimatedKrw);
+  const blockCodes = [...allocation.blockCodes, ...ledger.blockCodes, ...allowed.blockCodes];
+  if (requestedEntryExceedsAllowed(requestedKrw, allowed)) blockCodes.push('ALLOWED_ENTRY_EXCEEDED');
+  return Object.freeze({
+    market, allocation, ledger, allowed, requestedKrw,
+    blockCodes: Object.freeze([...new Set(blockCodes)]),
+  });
 }

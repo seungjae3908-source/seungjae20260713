@@ -10,7 +10,14 @@ import {
   buildBitgetSignature, buildUpbitJwt, prepareBitgetLeverage, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
   prepareUpbitOrder, redactPreparedRequest, validateBitgetContractRules,
 } from './trade-exchange-adapters.service';
-import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
+import { evaluateLiveEntryLedger, evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
+import {
+  notifyAutomaticTradingHalt,
+  setAutomaticTradingAlertSenderForTests,
+  tripKillSwitchForRiskFailure,
+} from './trade-kill-switch.service';
+import type { TelegramAlertInput } from './telegram-notification.service';
+import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
   BENCHMARK_DRAWDOWN_LONG_BLOCK_PERCENT,
   benchmarkDrawdownBlocksLong,
@@ -1552,5 +1559,173 @@ test('Bitget leverage 1~10 requests stay consistent with member 500k and adminis
       const marginOnly = evaluateTradingPlan({ ...base, leverage: null, marginMode: 'isolated' }, tier.policy, options);
       assert.ok(marginOnly.blockCodes.includes('LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK'), `${tier.label} ${base.exchange} margin only`);
     }
+  }
+});
+
+function ledgerPlan(overrides: Partial<TradingPlan> = {}): TradingPlan {
+  const at = '2026-10-20T09:00:00.000Z';
+  return {
+    ...plan({ exchange: 'bitget', accountMode: 'live', symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long', quantity: 0.01,
+      quoteAmount: null, estimatedKrw: 100_000, leverage: 1, marginMode: 'isolated' }),
+    executionMode: 'automatic',
+    id: 'ledger-entry', userId: USER_A, idempotencyKey: 'ledger-entry-key', state: 'SUBMITTED', version: 1,
+    approvedAt: at, approvalExpiresAt: null, createdAt: at, updatedAt: at, reduceOnly: false,
+    ...overrides,
+  } as TradingPlan;
+}
+
+function ledgerOrder(planRow: TradingPlan, id: string, state: TradingOrder['state'], filledQuantity = 0): TradingOrder {
+  return {
+    id, userId: planRow.userId, planId: planRow.id, exchange: planRow.exchange, clientOrderId: `${id}-client`,
+    exchangeOrderId: `${id}-exchange`, state, version: 1, requestedQuantity: planRow.quantity ?? null,
+    filledQuantity, averageFillPrice: filledQuantity > 0 ? 100_000 : null, retryCount: 0, lastErrorCode: null,
+    createdAt: planRow.createdAt, updatedAt: planRow.updatedAt,
+  } as unknown as TradingOrder;
+}
+
+test('live entry fund ledger: Bitget 1,000,000 / Upbit 1,000,000 per-market funds, reservations, drift and the strictest cap', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, totalCapitalKrw: 2_000_000, maxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: true },
+    maxAssetClassKrw: { domestic_stock: 0, us_stock: 0, crypto_spot: 1_000_000, crypto_futures: 1_000_000 },
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  const entry = ledgerPlan();
+
+  // Exchange holds the whole declared fund: allowed, bound by the administrator single-entry cap.
+  const clean = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry], orders: [], ownedPositions: [],
+    exchangeAvailableKrw: 1_000_000, currentOrderId: 'ledger-entry-order' });
+  assert.equal(clean.market, 'crypto_futures');
+  assert.deepEqual(clean.blockCodes, []);
+  assert.equal(clean.ledger.availableKrw, 1_000_000);
+  assert.equal(clean.ledger.driftStatus, 'WITHIN_TOLERANCE');
+  assert.equal(clean.allowed.allowedKrw, 1_000_000);
+  assert.equal(clean.allowed.bindingLimit, 'ROLE_CAP');
+
+  // Another open futures entry reserves its KRW; a Upbit entry and a protective exit never touch this fund;
+  // the order being submitted now is not its own reservation.
+  const otherFutures = ledgerPlan({ id: 'other-futures', idempotencyKey: 'other-futures-key', estimatedKrw: 300_000 });
+  const spot = ledgerPlan({ id: 'spot-entry', idempotencyKey: 'spot-entry-key', exchange: 'upbit', symbol: 'KRW-BTC', market: 'KRW',
+    side: 'buy', leverage: null, marginMode: null, estimatedKrw: 400_000 } as Partial<TradingPlan>);
+  const exit = ledgerPlan({ id: 'futures-exit', idempotencyKey: 'futures-exit-key', side: 'short', reduceOnly: true,
+    estimatedKrw: 500_000, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:other-futures'] });
+  const busy = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry, otherFutures, spot, exit],
+    orders: [ledgerOrder(entry, 'ledger-entry-order', 'SUBMITTED'), ledgerOrder(otherFutures, 'other-order', 'ACCEPTED'),
+      ledgerOrder(spot, 'spot-order', 'ACCEPTED'), ledgerOrder(exit, 'exit-order', 'ACCEPTED')],
+    ownedPositions: [], exchangeAvailableKrw: 700_000, currentOrderId: 'ledger-entry-order' });
+  assert.equal(busy.ledger.openOrderReservedKrw, 300_000);
+  assert.equal(busy.ledger.availableKrw, 700_000);
+  assert.deepEqual(busy.blockCodes, []);
+  assert.equal(busy.allowed.allowedKrw, 700_000);
+  assert.equal(busy.allowed.bindingLimit, 'LEDGER_AVAILABLE');
+
+  // A still-open automatic position holds its margin pro rata to the remaining quantity.
+  const held = ledgerPlan({ id: 'held-futures', idempotencyKey: 'held-futures-key', estimatedKrw: 200_000, quantity: 0.02 });
+  const withPosition = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry, held],
+    orders: [ledgerOrder(held, 'held-order', 'FILLED', 0.02)],
+    ownedPositions: [{ plan: held, remainingQuantity: 0.01 }], exchangeAvailableKrw: 900_000 });
+  assert.equal(withPosition.ledger.positionMarginKrw, 100_000);
+  assert.equal(withPosition.ledger.availableKrw, 900_000);
+  assert.deepEqual(withPosition.blockCodes, []);
+
+  // The exchange reports less than the ledger expects: drift beyond the tolerance blocks the entry.
+  const drifted = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry], orders: [], ownedPositions: [],
+    exchangeAvailableKrw: 998_000 });
+  assert.equal(drifted.ledger.driftStatus, 'DRIFT_UNRESOLVED');
+  assert.deepEqual(drifted.blockCodes, ['MARKET_LEDGER_EXCHANGE_DRIFT_UNRESOLVED']);
+  // A surplus on the exchange (shared account, reserve capital) is never drift.
+  assert.deepEqual(evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry], orders: [], ownedPositions: [],
+    exchangeAvailableKrw: 5_000_000 }).blockCodes, []);
+  // Unread exchange balance: unverified, not blocked by drift, but the request still faces every ledger cap.
+  const unread = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry], orders: [], ownedPositions: [], exchangeAvailableKrw: null });
+  assert.equal(unread.ledger.driftStatus, 'UNVERIFIED');
+  assert.deepEqual(unread.blockCodes, []);
+
+  // A request above the strictest limit is rejected, never trimmed: member cap 500,000 binds before the fund.
+  const member = normalizeTradingPolicy({ ...policy, maxOrderKrw: 500_000 }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  const tooLarge = evaluateLiveEntryLedger({ plan: ledgerPlan({ estimatedKrw: 500_001 }), policy: member, plans: [entry],
+    orders: [], ownedPositions: [], exchangeAvailableKrw: 1_000_000 });
+  assert.equal(tooLarge.allowed.allowedKrw, 500_000);
+  assert.equal(tooLarge.allowed.bindingLimit, 'POLICY_MAX_ORDER');
+  assert.deepEqual(tooLarge.blockCodes, ['ALLOWED_ENTRY_EXCEEDED']);
+  // Below the exchange minimum the fund cannot even place one order.
+  const exhausted = evaluateLiveEntryLedger({ plan: entry, policy, plans: [entry, otherFutures],
+    orders: [ledgerOrder(otherFutures, 'other-order', 'ACCEPTED')], ownedPositions: [],
+    exchangeAvailableKrw: 700_000, exchangeMinimumKrw: 5_000, driftToleranceKrw: 1_000 });
+  assert.deepEqual(exhausted.blockCodes, []);
+  // (normalizeTradingPolicy restores a zero fund to its default, so the exhausted fund is passed as-is.)
+  const empty = evaluateLiveEntryLedger({ plan: entry, policy: { ...policy,
+    maxAssetClassKrw: { ...policy.maxAssetClassKrw, crypto_futures: 0 } }, plans: [entry], orders: [], ownedPositions: [],
+    exchangeAvailableKrw: 1_000_000, exchangeMinimumKrw: 5_000 });
+  assert.ok(empty.blockCodes.includes('ALLOWED_ENTRY_ZERO'));
+  assert.ok(empty.blockCodes.includes('ALLOWED_ENTRY_EXCEEDED'));
+
+  // Two markets declared above the total: every live entry blocks (over-allocation), exits never do.
+  const over = evaluateLiveEntryLedger({ plan: entry, policy: normalizeTradingPolicy({ ...policy, totalCapitalKrw: 1_500_000 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW), plans: [entry], orders: [], ownedPositions: [], exchangeAvailableKrw: 1_000_000 });
+  assert.ok(over.blockCodes.includes('MARKET_CAPITAL_OVER_ALLOCATED'));
+});
+
+test('kill switch, member/global emergency stop and manual-review escalations post an owner Telegram notice without weakening the stop', async () => {
+  const sent: TelegramAlertInput[] = [];
+  const previousChat = process.env.TELEGRAM_AUTO_TRADING_CHAT_ID;
+  process.env.TELEGRAM_AUTO_TRADING_CHAT_ID = ' -1009009 ';
+  setAutomaticTradingAlertSenderForTests(async (input) => { sent.push(input); return { ok: true, attempts: 1 }; });
+  try {
+    const repository = new InMemoryTradingRepository();
+    await repository.setGlobalEmergencyStop(false, USER_A);
+    const global = await tripKillSwitchForRiskFailure({ repository, userId: USER_A, blockCodes: ['EXCHANGE_TIMEOUT', 'MAX_ORDER_AMOUNT'],
+      plan: { accountMode: 'live', reduceOnly: false, exchange: 'bitget', side: 'long' } });
+    assert.deepEqual({ tripped: global.tripped, scope: global.scope }, { tripped: true, scope: 'GLOBAL' });
+    assert.equal(await repository.getGlobalEmergencyStop(), true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]!.type, 'system_critical');
+    assert.equal(sent[0]!.title, '자동매매 킬스위치 작동');
+    assert.equal(sent[0]!.destinationChatId, '-1009009');
+    assert.ok(sent[0]!.details?.includes('범위: GLOBAL'));
+    assert.ok(sent[0]!.details?.includes('사유: EXCHANGE_TIMEOUT'));
+    assert.ok(!sent[0]!.details?.includes('MAX_ORDER_AMOUNT'), 'only kill reasons are reported');
+    assert.ok(!sent[0]!.details?.includes(USER_A), 'the member id is masked');
+    assert.equal(sent[0]!.dedupeKey, `auto-trading-halt:KILL_SWITCH:GLOBAL:${USER_A}:EXCHANGE_TIMEOUT`);
+
+    const member = await tripKillSwitchForRiskFailure({ repository, userId: USER_B, blockCodes: ['FAST_MOVE_DETECTED'],
+      plan: { accountMode: 'live', reduceOnly: false, exchange: 'upbit', side: 'buy' } });
+    assert.equal(member.scope, 'MEMBER');
+    assert.equal(sent.length, 2);
+    assert.ok(sent[1]!.details?.includes('범위: MEMBER'));
+
+    // A plain risk block that is not a kill reason trips nothing and alerts nothing.
+    const none = await tripKillSwitchForRiskFailure({ repository, userId: USER_B, blockCodes: ['MAX_ORDER_AMOUNT'],
+      plan: { accountMode: 'live', reduceOnly: false, exchange: 'upbit', side: 'buy' } });
+    assert.equal(none.tripped, false);
+    assert.equal(sent.length, 2);
+
+    // A protective exit hitting a venue failure still halts everyone and says so.
+    await repository.setGlobalEmergencyStop(false, USER_A);
+    const exit = await tripKillSwitchForRiskFailure({ repository, userId: USER_A, blockCodes: ['EXCHANGE_API_FAILURE'],
+      plan: { accountMode: 'live', reduceOnly: true, exchange: 'bitget', side: 'short' } });
+    assert.equal(exit.scope, 'GLOBAL');
+    assert.equal(await repository.getGlobalEmergencyStop(), true);
+    assert.equal(sent.length, 3);
+
+    // A Telegram outage can never undo or fail the stop.
+    setAutomaticTradingAlertSenderForTests(async () => { throw new Error('TELEGRAM_DOWN'); });
+    await repository.setGlobalEmergencyStop(false, USER_A);
+    const outage = await tripKillSwitchForRiskFailure({ repository, userId: USER_A, blockCodes: ['ORDER_STATE_UNKNOWN'],
+      plan: { accountMode: 'live', reduceOnly: false, exchange: 'bitget', side: 'long' } });
+    assert.equal(outage.tripped, true);
+    assert.equal(await repository.getGlobalEmergencyStop(), true);
+    assert.equal(await notifyAutomaticTradingHalt({ event: 'MEMBER_RESUME', userId: USER_A }), null);
+
+    // Without the auto-trading room the sender falls back to its default chat (undefined destination).
+    delete process.env.TELEGRAM_AUTO_TRADING_CHAT_ID;
+    setAutomaticTradingAlertSenderForTests(async (input) => { sent.push(input); return { ok: true, attempts: 1 }; });
+    await notifyAutomaticTradingHalt({ event: 'GLOBAL_EMERGENCY_STOP', userId: USER_A, scope: 'GLOBAL', details: '관리자 수동' });
+    assert.equal(sent.at(-1)!.title, '전체 긴급정지');
+    assert.equal(sent.at(-1)!.destinationChatId, undefined);
+    assert.ok(sent.at(-1)!.details?.includes('관리자 수동'));
+  } finally {
+    setAutomaticTradingAlertSenderForTests(null);
+    if (previousChat === undefined) delete process.env.TELEGRAM_AUTO_TRADING_CHAT_ID;
+    else process.env.TELEGRAM_AUTO_TRADING_CHAT_ID = previousChat;
   }
 });

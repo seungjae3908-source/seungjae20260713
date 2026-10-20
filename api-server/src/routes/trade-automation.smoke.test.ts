@@ -25,6 +25,8 @@ import {
 } from '../services/trade-market-intelligence.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { setAutomaticTradingAlertSenderForTests } from '../services/trade-kill-switch.service';
+import type { TelegramAlertInput } from '../services/telegram-notification.service';
 import { automaticPaperWalletBootstrapReadiness } from '../services/member-auto-trading-background-worker.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
@@ -2492,6 +2494,111 @@ async function seedOpenOrder(
     createdAt: timestamp, updatedAt: timestamp,
   } as never);
 }
+
+async function seedLiveOpenOrder(repository: InMemoryTradingRepository, userId: string, id: string) {
+  const timestamp = new Date().toISOString();
+  await repository.savePlan({
+    id: `${id}-plan`, userId, idempotencyKey: `${id}-key`, state: 'SUBMITTED', version: 1,
+    accountMode: 'live', executionMode: 'approval', exchange: 'upbit', strategyId: 'stop-test',
+    signalId: `${id}-signal`, symbol: 'KRW-BTC', market: 'KRW', side: 'buy', orderType: 'limit', quantity: 0.1,
+    quoteAmount: null, limitPrice: 100_000, estimatedKrw: 10_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null, marginMode: null, reduceOnly: false,
+    invalidateAction: 'hold', signalReasons: ['entry'],
+    marketSnapshot: { observedAt: timestamp }, approvedAt: timestamp, approvalExpiresAt: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as never);
+  await repository.saveOrder({
+    id, userId, planId: `${id}-plan`, exchange: 'upbit', clientOrderId: `${id}-client`,
+    exchangeOrderId: `${id}-exchange`, state: 'ACCEPTED', version: 1, requestedQuantity: 0.1,
+    filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as never);
+}
+
+test('a member without the order capability cannot cancel or invalidate a LIVE order; the exchange order is untouched', async () => {
+  const isolated = new InMemoryTradingRepository();
+  await seedLiveOpenOrder(isolated, USER, 'live-cap-cancel');
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const regular = await startServer(true, 'regular');
+  const nativeFetch = globalThis.fetch;
+  let outbound = 0;
+  globalThis.fetch = async (input, init) => {
+    if (!String(input).startsWith(regular.baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
+    return nativeFetch(input, init);
+  };
+  try {
+    const cancel = await fetch(`${regular.baseUrl}/api/trade-automation/orders/live-cap-cancel/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmed: true }),
+    });
+    assert.equal(cancel.status, 403);
+    const cancelBody = await cancel.json() as Record<string, unknown>;
+    assert.equal(cancelBody.error, 'CAPABILITY_REQUIRED');
+    assert.equal(cancelBody.capability, 'canPlaceOrders');
+    assert.equal(cancelBody.orderCanceled, false);
+
+    const invalidate = await fetch(`${regular.baseUrl}/api/trade-automation/plans/live-cap-cancel-plan/invalidate`, { method: 'POST' });
+    assert.equal(invalidate.status, 403);
+    const invalidateBody = await invalidate.json() as Record<string, unknown>;
+    assert.equal(invalidateBody.error, 'CAPABILITY_REQUIRED');
+
+    assert.equal((await isolated.getOrder(USER, 'live-cap-cancel'))?.state, 'ACCEPTED');
+    assert.equal((await isolated.getPlan(USER, 'live-cap-cancel-plan'))?.state, 'SUBMITTED');
+    assert.equal(outbound, 0, 'no exchange cancel was sent');
+  } finally {
+    globalThis.fetch = nativeFetch;
+    await close(regular.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('member stop/resume and the admin global stop/resume each post one owner Telegram notice after the change is persisted', async () => {
+  const sent: TelegramAlertInput[] = [];
+  setAutomaticTradingAlertSenderForTests(async (input) => { sent.push(input); return { ok: true, attempts: 1 }; });
+  const isolated = new InMemoryTradingRepository();
+  await seedOpenOrder(isolated, USER, 'notice-entry', 'buy', false);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const admin = await startServer(true, 'admin');
+  try {
+    const stopped = await fetch(`${admin.baseUrl}/api/trade-automation/emergency-stop`, { method: 'POST' });
+    assert.equal(stopped.status, 200);
+    assert.equal((await isolated.getPolicy(USER)).emergencyStopped, true);
+    assert.deepEqual(sent.map((row) => row.title), ['회원 긴급정지']);
+    assert.ok(sent[0]!.details?.includes('진입 주문 취소 1건'));
+
+    const resumed = await fetch(`${admin.baseUrl}/api/trade-automation/resume`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmation: 'RESUME_MEMBER_TRADING' }),
+    });
+    assert.equal(resumed.status, 200);
+    assert.deepEqual(sent.map((row) => row.title), ['회원 긴급정지', '회원 거래 재개']);
+
+    const globalStop = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: true, confirmation: 'STOP_ALL_TRADING' }),
+    });
+    assert.equal(globalStop.status, 200);
+    assert.equal(await isolated.getGlobalEmergencyStop(), true);
+    assert.equal(sent.at(-1)!.title, '전체 긴급정지');
+    assert.ok(sent.at(-1)!.details?.includes('범위: GLOBAL'));
+
+    const globalResume = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stopped: false, confirmation: 'RESUME_NEW_ORDER_EVALUATION' }),
+    });
+    assert.equal(globalResume.status, 200);
+    assert.equal(sent.at(-1)!.title, '전체 신규주문 평가 재개');
+
+    // A missing confirmation changes nothing and alerts nothing.
+    const refused = await fetch(`${admin.baseUrl}/api/trade-automation/admin/emergency-stop`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stopped: true }),
+    });
+    assert.equal(refused.status, 409);
+    assert.equal(sent.length, 4);
+  } finally {
+    setAutomaticTradingAlertSenderForTests(null);
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
 
 test('member emergency stop cancels its own open entry orders and never protective exits', async () => {
   const OTHER = '22222222-2222-2222-2222-222222222222';

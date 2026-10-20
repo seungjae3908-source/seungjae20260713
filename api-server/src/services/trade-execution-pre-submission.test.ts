@@ -2,7 +2,12 @@ import './paper-futures-funding-certificate.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { TradeAutomationService } from './trade-automation.service';
+import {
+  TradeAutomationService,
+  liveFillFxQuoteAcceptable,
+  resolveLiveFillFxWitness,
+  setLiveFillFxWitnessForTests,
+} from './trade-automation.service';
 import {
   paperSimulatedCostAmount, serverPaperFillCostEvidence,
   protectedAutomaticPaperCostPolicyV1,
@@ -10,6 +15,8 @@ import {
 } from './trade-execution.service';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { TradePreSubmissionRiskError } from './trade-pre-submission-risk.service';
+import type { fetchPublicMarketJson } from './public-market-http';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -572,8 +579,12 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
   ] as const;
   const previousEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
   const repository = new InMemoryTradingRepository();
+  // The mocked account (1,000 USDT at price 100, 2x) is worth 200,000 KRW for
+  // this plan; the futures fund ledger must declare no more than that, or the
+  // ledger drift gate (tested separately below) rejects before the Arm boundary.
   await repository.savePolicy(USER_ID, {
     ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    maxAssetClassKrw: { ...DEFAULT_TRADING_POLICY.maxAssetClassKrw, crypto_futures: 200_000 },
   });
   const now = new Date();
   const futuresPlan = {
@@ -653,6 +664,7 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
 
     await repository.savePolicy(USER_ID, {
       ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false,
+      maxAssetClassKrw: { ...DEFAULT_TRADING_POLICY.maxAssetClassKrw, crypto_futures: 200_000 },
     });
     await assert.rejects(
       () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
@@ -1217,4 +1229,245 @@ test('Upbit order fields are rounded DOWN to exchange precision and the real nes
   assert.equal(upbitMinimumOrderTotal({ market: { bid: { min_total: '5000' }, ask: { min_total: '7000' } } }, 'sell'), 7_000);
   assert.equal(upbitMinimumOrderTotal({ bid: { min_total: '5000' } }, 'buy'), 5_000, 'flat legacy fixture shape');
   assert.equal(upbitMinimumOrderTotal({ market: { state: 'active' } }, 'buy'), null, 'unknown minimum is null, never 0');
+});
+
+function bitgetPreflightFetch(counters: { reads: number; mutations: number }, availableUsdt: string): typeof fetch {
+  return (async (input, init) => {
+    const url = new URL(String(input));
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET') {
+      counters.mutations += 1;
+      throw new Error('MUTATING_BITGET_CALL_MUST_NOT_HAPPEN');
+    }
+    counters.reads += 1;
+    const data = url.pathname.endsWith('/account/accounts')
+      ? [{ marginCoin: 'USDT', available: availableUsdt, accountEquity: availableUsdt, posMode: 'one_way_mode' }]
+      : url.pathname.endsWith('/position/all-position') ? []
+      : url.pathname.endsWith('/order/orders-pending') ? { entrustedList: [] }
+      : url.pathname.endsWith('/market/contracts')
+        ? [{ symbol: 'BTCUSDT', minTradeNum: '0.001', sizeMultiplier: '0.001', symbolStatus: 'normal', minTradeUSDT: '5' }]
+        : url.pathname.endsWith('/market/ticker')
+          ? [{ symbol: 'BTCUSDT', markPrice: '100', ts: Date.now(), lastPr: '100' }]
+          : url.pathname.endsWith('/market/merge-depth')
+            ? [{ bids: [['99', '100']], asks: [['101', '100']], ts: Date.now() }]
+            : null;
+    if (data === null) throw new Error('UNEXPECTED_BITGET_READ:' + url.pathname);
+    return new Response(JSON.stringify({ code: '00000', data }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+}
+
+test('Bitget live entry whose exchange balance falls short of the market fund ledger is rejected before any margin/leverage mutation', async () => {
+  const previousFetch = globalThis.fetch;
+  const envNames = [
+    'TRADING_EMERGENCY_STOP', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING', 'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previousEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  const repository = new InMemoryTradingRepository();
+  // Policy declares a 1,000,000 KRW futures fund; the account only covers 200,000 KRW of it.
+  await repository.savePolicy(USER_ID, { ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true });
+  const now = new Date();
+  const futuresPlan = {
+    ...planInput(now),
+    exchange: 'bitget' as const,
+    symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long' as const,
+    quantity: 1, quoteAmount: null, leverage: 2, marginMode: 'isolated' as const,
+    entryPrice: 100, stopPrice: 95, targetPrices: [110],
+    marketSnapshot: { ...marketSnapshot(now), currentPrice: 100, plannedPrice: 100 },
+    reduceOnly: false, executionMode: 'automatic' as const,
+    id: 'bitget-ledger-plan', userId: USER_ID, idempotencyKey: 'bitget-ledger-plan-key',
+    state: 'SUBMITTED' as const, version: 1, approvedAt: now.toISOString(),
+    approvalExpiresAt: new Date(now.getTime() + 600_000).toISOString(),
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+  await repository.savePlan(futuresPlan as unknown as TradingPlan);
+  const futuresOrder = {
+    id: 'bitget-ledger-order', userId: USER_ID,
+    clientOrderId: 'bitget-ledger-order-oid', exchange: 'bitget' as const,
+    planId: futuresPlan.id, state: 'SUBMITTED' as const,
+  };
+  const counters = { reads: 0, mutations: 0 };
+  const executor = new TradeExecutionService(repository);
+  Object.assign(executor, {
+    riskService: {
+      async evaluate(input: { expectedPlan: TradingPlan; snapshot: TradingMarketSnapshot }) {
+        return { plan: input.expectedPlan, snapshot: input.snapshot,
+          checkedAt: now.toISOString(), priceDriftPercent: 0,
+          allowed: true, blockCodes: [], warnings: [] };
+      },
+    },
+  });
+  const privateBitget = executor as unknown as {
+    executeBitget(userId: string, plan: unknown, order: unknown, credentials: unknown): Promise<unknown>;
+  };
+  globalThis.fetch = bitgetPreflightFetch(counters, '1000');
+  try {
+    process.env.TRADING_EMERGENCY_STOP = 'false';
+    for (const key of envNames.slice(1, 7)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'a'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = '/nonexistent-arm-boundary/auto-entry-arm.json';
+    const credentials = { apiKey: 'ci-key', secretKey: 'ci-secret', passphrase: 'ci-pass' };
+    await assert.rejects(
+      () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
+      (error: unknown) => error instanceof TradePreSubmissionRiskError
+        && error.result.blockCodes.includes('MARKET_LEDGER_EXCHANGE_DRIFT_UNRESOLVED'),
+    );
+    assert.equal(counters.reads, 6, 'only the six read-only preflight requests ran');
+    assert.equal(counters.mutations, 0, 'drift blocks before margin mode, leverage or order POST');
+
+    // Declaring the fund the account actually holds clears the drift; the next
+    // boundary (the exact-SHA Arm) then decides, still without any mutation.
+    await repository.savePolicy(USER_ID, {
+      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      maxAssetClassKrw: { ...DEFAULT_TRADING_POLICY.maxAssetClassKrw, crypto_futures: 200_000 },
+    });
+    await assert.rejects(
+      () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
+      /AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY/,
+    );
+    assert.equal(counters.mutations, 0);
+
+    // A request above the strictest cap (here the 200,000 KRW fund) is rejected, never trimmed.
+    await assert.rejects(
+      () => privateBitget.executeBitget(USER_ID, { ...futuresPlan, estimatedKrw: 250_000 }, futuresOrder, credentials),
+      (error: unknown) => error instanceof TradePreSubmissionRiskError
+        && error.result.blockCodes.includes('ALLOWED_ENTRY_EXCEEDED'),
+    );
+    assert.equal(counters.mutations, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const name of envNames) {
+      const prior = previousEnv[name];
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
+});
+
+async function seedLiveBitgetAcceptedOrder(repository: InMemoryTradingRepository, id: string, fillAt: Date, overrides: Partial<TradingPlan> = {}) {
+  const createdAt = new Date(fillAt.getTime() - 60_000).toISOString();
+  await repository.savePlan({
+    id: `${id}-plan`, userId: USER_ID, idempotencyKey: `${id}-key`, state: 'SUBMITTED', version: 1,
+    accountMode: 'live', executionMode: 'automatic', exchange: 'bitget', strategyId: 'stat-arb-v1',
+    signalId: `${id}-signal`, symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long', orderType: 'market', quantity: 0.01,
+    quoteAmount: null, limitPrice: null, estimatedKrw: 100_000, entryPrice: 100_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: 1, marginMode: 'isolated', reduceOnly: false,
+    invalidateAction: 'hold', signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: createdAt }, approvedAt: createdAt, approvalExpiresAt: null,
+    createdAt, updatedAt: createdAt, ...overrides,
+  } as never);
+  const order = {
+    id, userId: USER_ID, planId: `${id}-plan`, exchange: overrides.exchange ?? 'bitget', clientOrderId: `${id}-client`,
+    exchangeOrderId: `${id}-exchange`, state: 'ACCEPTED', version: 1, requestedQuantity: 0.01,
+    filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
+    exchangeUpdatedAt: fillAt.toISOString(),
+    createdAt, updatedAt: createdAt,
+  } as unknown as TradingOrder;
+  await repository.saveOrder(order);
+  return (await repository.getOrder(USER_ID, id))!;
+}
+
+test('a live Bitget fill reported by exchange reconciliation gets a server-read fill-time KRW-USDT witness; outage or window miss leaves it unverified', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const fillAt = new Date('2026-10-20T04:12:40.000Z');
+  const calls: Array<{ currency: string; fillAtMs: number }> = [];
+  try {
+    setLiveFillFxWitnessForTests(async (input) => {
+      calls.push(input);
+      return { krwPerQuoteCurrency: 1_390.5, source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(input.fillAtMs - 40_000).toISOString() };
+    });
+    const filled = await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'live-fill-fx', fillAt), 'FILLED',
+      'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    assert.equal(filled.state, 'FILLED');
+    assert.deepEqual(filled.settlementFxEvidence, {
+      krwPerQuoteCurrency: 1_390.5, source: 'UPBIT:KRW-USDT', observedAt: '2026-10-20T04:12:00.000Z',
+    });
+    assert.deepEqual(calls, [{ currency: 'USDT', fillAtMs: fillAt.getTime() }]);
+    assert.deepEqual((await repository.getOrder(USER_ID, 'live-fill-fx'))?.settlementFxEvidence, filled.settlementFxEvidence,
+      'the witness is persisted with the fill, where the live budget ledger reads it');
+
+    // A partial fill carries the witness too, and a later full fill keeps a still-valid one.
+    const partial = await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'live-partial-fx', fillAt), 'PARTIALLY_FILLED',
+      'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.005, averageFillPrice: 100_000 });
+    assert.equal(partial.settlementFxEvidence?.source, 'UPBIT:KRW-USDT');
+    calls.length = 0;
+    const completed = await automation.transition(partial, 'FILLED', 'EXCHANGE_ORDER_RECONCILED',
+      { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    assert.equal(completed.settlementFxEvidence?.observedAt, '2026-10-20T04:12:00.000Z');
+    assert.equal(calls.length, 0, 'a witness still inside the fill window is not re-read');
+
+    // Outage: the fill is still recorded, FX stays null (the budget ledger remains fail-closed).
+    setLiveFillFxWitnessForTests(async () => { throw new Error('UPBIT_PUBLIC_UNAVAILABLE'); });
+    const outage = await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'live-fill-outage', fillAt), 'FILLED',
+      'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    assert.equal(outage.state, 'FILLED');
+    assert.equal(outage.settlementFxEvidence ?? null, null);
+
+    // A quote older than the 10-minute USDT window, after the fill, or from another source is never attached.
+    for (const quote of [
+      { krwPerQuoteCurrency: 1_390, source: 'UPBIT:KRW-USDT', observedAt: new Date(fillAt.getTime() - 11 * 60_000).toISOString() },
+      { krwPerQuoteCurrency: 1_390, source: 'UPBIT:KRW-USDT', observedAt: new Date(fillAt.getTime() + 6_000).toISOString() },
+      { krwPerQuoteCurrency: 1_390, source: 'YAHOO:USDKRW=X', observedAt: new Date(fillAt.getTime() - 1_000).toISOString() },
+      { krwPerQuoteCurrency: 0, source: 'UPBIT:KRW-USDT', observedAt: new Date(fillAt.getTime() - 1_000).toISOString() },
+    ]) {
+      assert.equal(liveFillFxQuoteAcceptable(quote, 'USDT', fillAt.getTime()), false, JSON.stringify(quote));
+    }
+    setLiveFillFxWitnessForTests(async () => ({ krwPerQuoteCurrency: 1_390, source: 'UPBIT:KRW-USDT',
+      observedAt: new Date(fillAt.getTime() - 11 * 60_000).toISOString() }));
+    const stale = await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'live-fill-stale', fillAt), 'FILLED',
+      'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    assert.equal(stale.settlementFxEvidence ?? null, null);
+
+    // Native-KRW (Upbit) and Paper fills never consult the witness.
+    calls.length = 0;
+    setLiveFillFxWitnessForTests(async (input) => { calls.push(input); return null; });
+    await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'live-fill-krw', fillAt,
+      { exchange: 'upbit', symbol: 'KRW-BTC', market: 'KRW', side: 'buy', leverage: null, marginMode: null } as Partial<TradingPlan>),
+    'FILLED', 'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    await automation.transition(await seedLiveBitgetAcceptedOrder(repository, 'paper-fill', fillAt,
+      { accountMode: 'paper' } as Partial<TradingPlan>),
+    'FILLED', 'EXCHANGE_ORDER_RECONCILED', { filledQuantity: 0.01, averageFillPrice: 100_000 });
+    assert.equal(calls.length, 0);
+  } finally {
+    setLiveFillFxWitnessForTests(null);
+  }
+});
+
+test('resolveLiveFillFxWitness reads the public Upbit KRW-USDT minute candle that opened at or before the fill', async () => {
+  const fillAtMs = Date.parse('2026-10-20T04:12:40.000Z');
+  const requested: string[] = [];
+  const publicJson = (async (url: string | URL) => {
+    requested.push(String(url));
+    return [{ market: 'KRW-USDT', candle_date_time_utc: '2026-10-20T04:12:00', opening_price: 1390.5, trade_price: 1391 }];
+  }) as unknown as typeof fetchPublicMarketJson;
+  const quote = await resolveLiveFillFxWitness({ currency: 'USDT', fillAtMs }, { publicJson });
+  assert.deepEqual(quote, { krwPerQuoteCurrency: 1390.5, source: 'UPBIT:KRW-USDT', observedAt: '2026-10-20T04:12:00.000Z' });
+  assert.equal(requested.length, 1);
+  const url = new URL(requested[0]!);
+  assert.equal(url.pathname, '/v1/candles/minutes/1');
+  assert.equal(url.searchParams.get('market'), 'KRW-USDT');
+  assert.equal(url.searchParams.get('count'), '1');
+  assert.equal(url.searchParams.get('to'), '2026-10-20T04:12:41.000Z');
+
+  // A candle that opened after the fill, a non-positive price or an empty payload yields no witness.
+  for (const payload of [
+    [{ candle_date_time_utc: '2026-10-20T04:13:00', opening_price: 1390.5 }],
+    [{ candle_date_time_utc: '2026-10-20T04:12:00', opening_price: 0 }],
+    [],
+    null,
+  ]) {
+    const miss = await resolveLiveFillFxWitness({ currency: 'USDT', fillAtMs },
+      { publicJson: (async () => payload) as unknown as typeof fetchPublicMarketJson });
+    assert.equal(miss, null, JSON.stringify(payload));
+  }
+  // USD fills have no fill-time public witness here: nothing is fetched, FX stays unverified.
+  requested.length = 0;
+  assert.equal(await resolveLiveFillFxWitness({ currency: 'USD', fillAtMs }, { publicJson }), null);
+  assert.equal(requested.length, 0);
 });
