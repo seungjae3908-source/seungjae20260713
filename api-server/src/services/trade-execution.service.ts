@@ -72,6 +72,7 @@ import {
   prepareUpbitOrderChance,
   prepareUpbitOrderQuery,
   prepareUpbitOrderTest,
+  upbitMinimumOrderTotal,
   validateBitgetContractRules,
   type BitgetCredentials,
   type KiwoomCredentials,
@@ -201,6 +202,22 @@ async function sendExchangeListRequest(
 ) {
   const payload = await fetchExchangeJson(baseUrl, request, timeoutMs);
   if (!Array.isArray(payload) || !payload.every(isRecord)) throw new Error(invalidResponseCode(baseUrl));
+  return payload;
+}
+
+/** Upbit returns top-level ARRAYS for /v1/accounts, /v1/ticker and
+ * /v1/orderbook. Accept either shape and hand downstream readers the
+ * `{ data: [...] }` form they already understand. Anything else is invalid. */
+async function sendUpbitPayloadRequest(
+  request: PreparedExchangeRequest,
+  timeoutMs = ORDER_TIMEOUT_MS,
+): Promise<ExchangePayload> {
+  const payload = await fetchExchangeJson(BASE_URLS.upbit, request, timeoutMs);
+  if (Array.isArray(payload)) {
+    if (!payload.every(isRecord)) throw new Error('UPBIT_INVALID_RESPONSE');
+    return { data: payload };
+  }
+  if (!isRecord(payload)) throw new Error('UPBIT_INVALID_RESPONSE');
   return payload;
 }
 
@@ -820,10 +837,10 @@ export class TradeExecutionService {
     } else if (input.exchange === 'upbit') {
       const upbit = credentials as UpbitCredentials;
       const [accounts, chance, ticker, orderbook, waitOrders, watchOrders] = await Promise.all([
-        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(upbit), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendUpbitPayloadRequest(prepareUpbitAccounts(upbit), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
         request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(upbit, provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
-        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionTicker(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
-        request(() => sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionOrderbook(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendUpbitPayloadRequest(prepareUpbitExecutionTicker(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
+        request(() => sendUpbitPayloadRequest(prepareUpbitExecutionOrderbook(provisional.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess)),
         request(() => sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(upbit, provisional.symbol, 'wait'), PREFLIGHT_TIMEOUT_MS)),
         request(() => sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(upbit, provisional.symbol, 'watch'), PREFLIGHT_TIMEOUT_MS)),
       ]);
@@ -1510,10 +1527,10 @@ export class TradeExecutionService {
     credentials: UpbitCredentials,
   ) {
     const [accounts, chance, ticker, orderbook, waitOrders, watchOrders] = await Promise.all([
-      sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(credentials), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
+      sendUpbitPayloadRequest(prepareUpbitAccounts(credentials), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
       sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(credentials, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
-      sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionTicker(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
-      sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionOrderbook(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
+      sendUpbitPayloadRequest(prepareUpbitExecutionTicker(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
+      sendUpbitPayloadRequest(prepareUpbitExecutionOrderbook(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
       sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(credentials, plan.symbol, 'wait'), PREFLIGHT_TIMEOUT_MS),
       sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(credentials, plan.symbol, 'watch'), PREFLIGHT_TIMEOUT_MS),
     ]);
@@ -1530,10 +1547,8 @@ export class TradeExecutionService {
       throw new Error('UPBIT_INSUFFICIENT_ASSET_BALANCE');
     }
     if (isRecord(chance.market) && String(chance.market.state ?? 'active') !== 'active') throw new Error('UPBIT_MARKET_HALTED');
-    const chanceSide = isRecord(chance[plan.side === 'buy' ? 'bid' : 'ask'])
-      ? chance[plan.side === 'buy' ? 'bid' : 'ask'] as ExchangePayload : null;
-    const exchangeMinimum = Number(chanceSide?.min_total ?? 0);
-    if (exchangeMinimum > 0 && plan.estimatedKrw < exchangeMinimum) throw new Error('UPBIT_MINIMUM_ORDER');
+    const exchangeMinimum = upbitMinimumOrderTotal(chance, plan.side === 'buy' ? 'buy' : 'sell');
+    if (exchangeMinimum != null && plan.estimatedKrw < exchangeMinimum) throw new Error('UPBIT_MINIMUM_ORDER');
     const risk = await this.riskService.evaluate({
       userId,
       expectedPlan: plan,
