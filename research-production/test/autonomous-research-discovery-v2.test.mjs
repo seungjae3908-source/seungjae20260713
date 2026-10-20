@@ -484,7 +484,7 @@ test('previous rejection guard does not blacklist a staged source and retries a 
       calls += 1;
       return { provider: policy.provider, model: policy.model, answer: calls === 1 ? plan(firstPath) : calls === 2 ? plan(secondPath) : extractionAnswer };
     },
-    fetchImpl, datasetLoader,
+    fetchImpl, datasetLoader, researchLanes: [RESEARCH_LANES_V2[0]],
   });
   assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
   assert.equal(result.candidate.sourcePath, secondPath);
