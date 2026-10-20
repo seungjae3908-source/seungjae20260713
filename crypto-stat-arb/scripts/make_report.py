@@ -69,10 +69,25 @@ def window_quality_table(wq: dict) -> list:
                 "-" if r.get("observed_median_interval_hours") is None else fmt(r.get("observed_median_interval_hours")),
                 str(r.get("status")), "; ".join(r.get("reasons") or [])]) + " |")
         out.append(f"| {w} | | | 마크가격 처리 | {info.get('mark_price_note', '-')} | | | | | | | | | | | |")
+        if info.get("parent_window"):
+            out.append(f"| {w} | | | 상위 창 | {info['parent_window']} 의 완전 구간(필수 데이터셋 모두 결측 없음) | | | | | | | | | | | |")
         for name, r in (info.get("datasets") or {}).items():
             for rng in (r.get("missing_ranges") or [])[:5]:
                 out.append(f"| {w} | | | {name} 결측 구간 | {rng[0]} ~ {rng[1]} ({rng[2]}개) | | | | | | | | | | | |")
     out.append("")
+    subs = [(w, s, v) for w, info in wq.items() for s, v in (info.get("complete_subwindows") or {}).items()]
+    if subs:
+        out += ["#### INCOMPLETE 창의 완전 구간 분할(전략별 필수 데이터셋 기준, 보간 없음)", "",
+                "| 창 | 전략 | 평가한 완전 구간 | 재검사 탈락 | 제외 구간(데이터셋: 사유) | 비고 |", "|---|---|---|---|---|---|"]
+        for w, s, v in subs:
+            ev = "<br>".join(f"{e['window']}: {e['start']}~{e['end_exclusive']}" for e in v.get("evaluated") or []) or "없음"
+            rj = "<br>".join(f"{e['start']}~{e['end_exclusive']} {e['verdict']}" for e in v.get("rejected_on_recheck") or []) or "-"
+            ex = "<br>".join(f"{e['start']}~{e['end_exclusive']} ({e['dataset']}: {e['reason']})"
+                             for e in (v.get("excluded_intervals") or [])[:12]) or "-"
+            if len(v.get("excluded_intervals") or []) > 12:
+                ex += f"<br>… 외 {len(v['excluded_intervals']) - 12}개"
+            out.append(f"| {w} | {s} | {ev} | {rj} | {ex} | {v.get('note', '')} |")
+        out.append("")
     return out
 
 

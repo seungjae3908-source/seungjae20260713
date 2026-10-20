@@ -276,6 +276,86 @@ def strategy_window_verdict(strategy: str, wq: dict) -> tuple[str, dict]:
     return status, detail
 
 
+DAY_MS = 24 * HOUR_MS
+MIN_SEGMENT_DAYS = 30
+MAX_SEGMENTS_PER_WINDOW = 8
+
+
+def _day_ceil(ms: int) -> int:
+    return -(-ms // DAY_MS) * DAY_MS
+
+
+def _day_floor(ms: int) -> int:
+    return (ms // DAY_MS) * DAY_MS
+
+
+def _iso_day(ms: int) -> str:
+    return pd.Timestamp(ms, unit="ms", tz="UTC").strftime("%Y-%m-%d")
+
+
+def excluded_intervals(strategy: str, wq: dict, ws: str, we: str) -> tuple[list, bool]:
+    """전략 필수 데이터셋의 창 안 결측·성긴 주기·앞뒤 미보유 구간을 [시작ms, 끝ms(미포함), 데이터셋, 사유] 로 모은다.
+
+    반환 (구간 목록, 신뢰 가능 여부). 결측 구간 목록이 20개에서 잘려 전부를 알 수 없으면 신뢰 불가로 표시한다."""
+    start_ms, end_ms = _ms(ws), _ms(we)
+    out, reliable = [], True
+    for name in STRATEGY_DATASETS[strategy]:
+        r = wq.get(name)
+        if r is None or r["rows_in_window"] == 0:
+            out.append([start_ms, end_ms, name, "NO_DATA_IN_WINDOW"])
+            continue
+        iv = int(round(r["expected_interval_hours"] * HOUR_MS))
+        first, last = _ms(r["first_in_window"]), _ms(r["last_in_window"])
+        if first > start_ms:
+            out.append([start_ms, first, name, "COVERAGE_STARTS_LATE"])
+        if last + iv < end_ms:
+            out.append([last + iv, end_ms, name, "COVERAGE_ENDS_EARLY"])
+        listed = sum(int(m[2]) for m in r.get("missing_ranges") or [])
+        if listed < int(r.get("missing_intervals") or 0):
+            reliable = False  # 결측 구간 목록이 잘림 → 완전 구간을 계산할 수 없음
+        for m in r.get("missing_ranges") or []:
+            out.append([_ms(m[0]), _ms(m[1]) + iv, name, f"MISSING:{m[2]}"])
+        for seg in r.get("coarse_segments") or []:
+            out.append([_ms(seg[0]), _ms(seg[1]) + int(seg[2] * HOUR_MS), name, f"CADENCE_MISMATCH:{seg[2]:g}h"])
+    out.sort(key=lambda x: x[0])
+    return out, reliable
+
+
+def complete_subwindows(strategy: str, wq: dict, ws: str, we: str, *, min_days: int = MIN_SEGMENT_DAYS,
+                        max_segments: int = MAX_SEGMENTS_PER_WINDOW) -> dict:
+    """INCOMPLETE 창에서 전략 필수 데이터셋이 모두 완전한 최대 구간(일 단위 정렬, min_days 이상)을 구한다.
+
+    제외 구간과 사유를 함께 돌려주며, 원본 데이터가 없는 구간은 어떤 방법으로도 채우지 않는다.
+    돌려준 후보 구간은 호출자가 다시 창별 품질 검사를 통과시킨 뒤에만 평가한다."""
+    start_ms, end_ms = _ms(ws), _ms(we)
+    excl, reliable = excluded_intervals(strategy, wq, ws, we)
+    excluded = [{"start": _iso(a), "end_exclusive": _iso(b), "dataset": n, "reason": why} for a, b, n, why in excl]
+    if not reliable:
+        return {"segments": [], "excluded_intervals": excluded,
+                "note": "결측 구간 목록이 잘려 완전 구간을 계산하지 못함(평가 제외)"}
+    merged = []
+    for a, b, _, _ in excl:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    cands, cursor = [], start_ms
+    for a, b in merged + [[end_ms, end_ms]]:
+        if a > cursor:
+            s0, e0 = _day_ceil(cursor), _day_floor(a)
+            if e0 - s0 >= min_days * DAY_MS:
+                cands.append((_iso_day(s0), _iso_day(e0)))
+        cursor = max(cursor, b)
+    too_many = len(cands) > max_segments
+    return {"segments": cands[:max_segments], "excluded_intervals": excluded,
+            "note": (f"완전 구간이 {len(cands)}개로 상한 {max_segments}개만 평가" if too_many else
+                     f"필수 데이터셋이 모두 완전한 {min_days}일 이상 구간만 평가(일 단위 정렬)")}
+
+
+def _iso(ms: int) -> str:
+    return pd.Timestamp(ms, unit="ms", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def market_for_window(market: MarketData, ws: str, we: str, wq: dict) -> tuple[MarketData, str]:
     """창에 맞춘 시장 데이터. 마크가격은 그 창 안에서 완전할 때만 붙이고, 아니면 체결가로 대신한다(창별 판정)."""
     start_ms, end_ms = _ms(ws), _ms(we)
@@ -340,7 +420,8 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
               windows: dict, strategies: list, profiles: list, label: str,
               accept_quality_issues: bool = False, fund_mode: bool = True,
               fund_initial_krw: float = DEFAULT_INITIAL_KRW,
-              fund_max_entry_krw: float = DEFAULT_MAX_ENTRY_MARGIN_KRW) -> Path:
+              fund_max_entry_krw: float = DEFAULT_MAX_ENTRY_MARGIN_KRW,
+              min_segment_days: int = MIN_SEGMENT_DAYS) -> Path:
     """여러 전략·구간·비용·레버리지 조합을 실행해 새 결과 디렉터리에 저장(덮어쓰지 않음).
 
     fund_mode: 자동매매 자금 원장(기본 자금 fund_initial_krw, 최대 진입 증거금 fund_max_entry_krw, 이익 50% 재투자)을
@@ -384,17 +465,38 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
         except FundError as e:
             plan_error = str(e)
     window_quality_all = {}
-    for wname, (ws, we) in windows.items():
+    # (창 이름, 시작, 끝, 상위 창, 평가할 전략들). INCOMPLETE 창은 전략별 완전 구간을 하위 창으로 추가해 평가한다.
+    queue = [(wname, ws, we, None, list(strategies)) for wname, (ws, we) in windows.items()]
+    while queue:
+        wname, ws, we, parent, strats = queue.pop(0)
         fx_start = pick_fx(fx, ws)
         last_day = str((pd.Timestamp(we) - pd.Timedelta(days=1)).date())
         fx_end = pick_fx(fx, last_day)
         # 창별 독립 품질 검사: 학습·테스트 창은 서로의 결측에 영향받지 않는다
         wq = window_quality(market, ws, we)
         wmarket, mark_note = market_for_window(market, ws, we, wq)
-        window_quality_all[wname] = {"window": [ws, we], "datasets": wq, "mark_price_note": mark_note}
-        for s in strategies:
+        window_quality_all[wname] = {"window": [ws, we], "datasets": wq, "mark_price_note": mark_note,
+                                     "parent_window": parent}
+        for s in strats:
             verdict, detail = strategy_window_verdict(s, wq)
+            if verdict == "INCOMPLETE" and parent is None and not accept_quality_issues:
+                sub = complete_subwindows(s, wq, ws, we, min_days=min_segment_days)
+                accepted, rejected = [], []
+                for i, (ss, se) in enumerate(sub["segments"], 1):
+                    sv, sdetail = strategy_window_verdict(s, window_quality(market, ss, se))
+                    if sv == "OK":
+                        sub_name = f"{wname}#{s}#seg{i}"
+                        accepted.append({"window": sub_name, "start": ss, "end_exclusive": se})
+                        queue.append((sub_name, ss, se, wname, [s]))
+                    else:
+                        rejected.append({"start": ss, "end_exclusive": se, "verdict": sv,
+                                         "reasons": {n: d["reasons"] for n, d in sdetail.items() if d["reasons"]}})
+                window_quality_all[wname].setdefault("complete_subwindows", {})[s] = {
+                    "evaluated": accepted, "rejected_on_recheck": rejected,
+                    "excluded_intervals": sub["excluded_intervals"], "note": sub["note"],
+                    "min_segment_days": min_segment_days}
             evidence = {"evaluation_start": ws, "evaluation_end_exclusive": we, "verdict": verdict,
+                        "parent_window": parent,
                         "datasets": {n: {**detail[n], "source": wq[n]["source"] if n in wq else None,
                                          "missing_ranges": (wq[n]["missing_ranges"][:10] if n in wq else [])}
                                      for n in detail},
@@ -404,6 +506,7 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                 pr = profs[prof]
                 for lev in levs:
                     row = {"window": wname, "strategy": s, "cost_profile": prof, "leverage": lev,
+                           "window_start": ws, "window_end_exclusive": we, "parent_window": parent,
                            "data_verdict": verdict,
                            "data_reasons": json.dumps({n: d["reasons"] for n, d in detail.items() if d["reasons"]},
                                                       ensure_ascii=False)}
@@ -492,7 +595,10 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
         "python": platform.python_version(), "pandas": pd.__version__,
         "data_fingerprint": fp, "data_quality": quality, "quality_blocking_global_informational": quality_blocking,
         "quality_policy": "per_window: 각 평가 창을 독립 검사해 전략별 필수 데이터셋이 모두 OK 일 때만 실행. "
-                          "INCOMPLETE(원본 데이터 없음/성긴 주기)·BLOCKED(값 결함)는 PASS 가 아니며 보간하지 않음",
+                          "INCOMPLETE(원본 데이터 없음/성긴 주기)·BLOCKED(값 결함)는 PASS 가 아니며 보간하지 않음. "
+                          f"INCOMPLETE 창은 필수 데이터셋이 모두 완전한 {min_segment_days}일 이상 구간만 하위 창(창이름#전략#segN)으로 "
+                          "따로 평가하고 제외 구간과 사유를 window_quality.complete_subwindows 에 기록. "
+                          "창 안에서 사용 다리의 가격이 결측인 봉은 제외(bars_dropped_missing_leg)하며 채우지 않음",
         "window_quality": window_quality_all,
         "readme_claims_unverified": README_CLAIMS_UNVERIFIED,
         "accept_quality_issues": accept_quality_issues, "price_proxies": market.price_proxies,

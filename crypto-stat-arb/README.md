@@ -89,6 +89,8 @@ python -m csa_lab verify   R/<run_id>
 - 하이퍼리퀴드 펀딩 이력은 2023-05-12에 시작하고 초기에는 8시간 간격으로만 존재한다. 이 구간은 1시간 데이터로 취급하지 않고 `CADENCE_MISMATCH`로 `INCOMPLETE` 처리한다. 전체 데이터셋 보고의 `cadence_segments`에 실제 주기 구간이 남는다.
 - 결과(`meta.json`의 `window_quality`, 각 `lev*.json`의 `data_evidence`, `REPORT.md` 표)에 창마다 데이터셋별 출처, 기대 주기, 표본 수, 기대 수, 첫·마지막 시각, 창 안 결측 수와 구간, 앞·뒤 결측 시간, 판정 사유, 평가 시작·종료 시각을 기록한다.
 - README 주장 수치(+203.70%, Sharpe 5.81, MDD 0.89%, 거래 44,652회, 승률 95.02%, PF 28.53)는 `readme_claims_unverified`로 결과와 **별도** 보존한다. 검증된 값이 아니며, 재현되지 않으면 미재현으로 기록한다.
+- **결측 봉 제외**: 창 안에서 전략이 쓰는 다리(예: 바이낸스 현물)의 봉이 빠져 있으면 그 봉만 평가에서 제외하고 `metrics.bars_dropped_missing_leg`·`bars_dropped_missing_leg_ts`에 기록한다. 빠진 봉을 앞 값으로 채우거나 보간하지 않으며, 제외된 봉은 결측 봉 수와 최대 공백 검사(허용 6시간)에 그대로 반영된다.
+- **INCOMPLETE 창의 완전 구간 분할**: 창이 `INCOMPLETE`이면 전략별 필수 데이터셋의 결측·성긴 주기·앞뒤 미보유 구간을 모두 제외한 뒤, 남은 구간 중 **30일 이상**(`--min-segment-days`, 일 단위 정렬)인 것만 하위 창 `창이름#전략#segN`으로 다시 품질 검사를 통과시켜 평가한다. 상위 창의 판정은 `INCOMPLETE_DATA`로 그대로 남고, 제외한 구간과 사유(데이터셋, `MISSING:n`/`CADENCE_MISMATCH:8h`/`COVERAGE_*`)는 `meta.json`의 `window_quality[창].complete_subwindows`와 `REPORT.md` 표에 기록된다. 하위 창 결과는 README 주장 구간 전체의 결과가 아니라 그 구간의 결과다.
 - `--accept-quality-issues`는 판정을 기록한 채 실행만 강제하는 진단용 옵션이다. 비용 반영 성과 평가에는 쓰지 않는다.
 
 ## 알려진 한계

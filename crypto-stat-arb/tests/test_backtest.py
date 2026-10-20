@@ -134,10 +134,24 @@ def test_missing_bar_rejected_and_bad_inputs():
     m.bars = m.bars.drop(index=m.bars.index[50:60])  # 10시간 연속 누락 > 허용 6시간
     with pytest.raises(BacktestInputError):
         run(m, CARRY_ORIGINAL, 1)
+    # 사용 다리의 가격이 결측인 봉 1개는 채우지 않고 제외한 뒤 실행하며, 제외 사실을 기록한다
     m2 = market()
     m2.bars.iloc[10, 0] = np.nan
+    r2 = run(m2, CARRY_ORIGINAL, 1)
+    assert r2["metrics"]["bars_dropped_missing_leg"] == 1 and r2["metrics"]["missing_bars_in_window"] == 1
+    assert r2["metrics"]["bars_dropped_missing_leg_ts"] == [
+        pd.Timestamp(int(m2.bars.index[10]), unit="ms", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")]
+    assert r2["metrics"]["bars"] == len(m2.bars) - 1
+    # 결측 봉이 연속 7개(허용 6시간 초과)면 제외 뒤 공백 검사에서 거부된다
+    m3 = market()
+    m3.bars.iloc[10:17, 0] = np.nan
     with pytest.raises(BacktestInputError):
-        run(m2, CARRY_ORIGINAL, 1)
+        run(m3, CARRY_ORIGINAL, 1)
+    # 0 이하 가격은 결측이 아니라 값 결함 → 거부
+    m4 = market()
+    m4.bars.iloc[10, 0] = 0.0
+    with pytest.raises(BacktestInputError):
+        run(m4, CARRY_ORIGINAL, 1)
     from csa_lab.leverage import LeverageError
     with pytest.raises(LeverageError):
         run(market(), CARRY_ORIGINAL, 11)
