@@ -118,6 +118,39 @@ requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUT
 // 1x is the floor on every Bitget path (policy, plan, live isolation); spot and
 // stock plans never carry leverage. Raising either role ceiling stays an owner decision.
 requireText(tradeTypes, 'PRODUCTION_MIN_BITGET_LEVERAGE = 1', 'AUTO_GATE_MIN_LEVERAGE_FLOOR_MISSING');
+
+// Live fills reconciled from the exchange carry a server-read fill-time KRW
+// witness (the live budget otherwise stays FX_UNVERIFIED after the first
+// USDT fill); a failed read leaves FX null, never a loosened ledger.
+requireText(tradeService, "if ((toState === 'FILLED' || toState === 'PARTIALLY_FILLED') && reason === 'EXCHANGE_ORDER_RECONCILED') {", 'AUTO_GATE_LIVE_FILL_FX_WITNESS_MISSING');
+requireText(tradeService, 'await this.attachLiveFillFxWitness(order, next);', 'AUTO_GATE_LIVE_FILL_FX_WITNESS_MISSING');
+requireText(tradeService, "if (plan?.accountMode !== 'live' || plan.exchange !== order.exchange) return;", 'AUTO_GATE_LIVE_FILL_FX_WITNESS_SCOPE_MISSING');
+requireText(tradeService, "USDT: 'UPBIT:KRW-USDT'", 'AUTO_GATE_LIVE_FILL_FX_SOURCE_MISSING');
+// Per-market fund ledger gate at the provider boundary of every live entry
+// path: over-allocation, exchange shortfall (drift) and a request above the
+// strictest cap reject before any margin/leverage or order mutation.
+requireText(tradeRisk, 'export function evaluateLiveEntryLedger(', 'AUTO_GATE_LIVE_ENTRY_LEDGER_MISSING');
+requireText(tradeRisk, "blockCodes.push('ALLOWED_ENTRY_EXCEEDED')", 'AUTO_GATE_LIVE_ENTRY_LEDGER_CAP_MISSING');
+requireText(liveExecution, 'private async assertLiveEntryLedgerAllowed(', 'AUTO_GATE_LIVE_ENTRY_LEDGER_GATE_MISSING');
+for (const token of [
+  "serverLiveEnabled: liveExecutionEnabled('bitget'),\n    });\n    await this.assertLiveEntryLedgerAllowed(userId, risk, order);",
+  "serverLiveEnabled: liveExecutionEnabled('upbit'),\n    });\n    await this.assertLiveEntryLedgerAllowed(userId, risk, order, exchangeMinimum);",
+  "serverLiveEnabled: mock || liveExecutionEnabled('kiwoom'),\n    });\n    await this.assertLiveEntryLedgerAllowed(userId, risk, order);",
+  "serverLiveEnabled: liveExecutionEnabled('toss'),\n    });\n    await this.assertLiveEntryLedgerAllowed(userId, risk, order);",
+]) requireText(liveExecution, token, 'AUTO_GATE_LIVE_ENTRY_LEDGER_PROVIDER_WIRING_MISSING');
+// Every automatic-trading stop, resume and unknown-order escalation posts an
+// owner Telegram notice after the change is persisted; delivery is best-effort.
+const killSwitch = read('api-server/src/services/trade-kill-switch.service.ts');
+requireText(killSwitch, 'export async function notifyAutomaticTradingHalt(', 'AUTO_GATE_HALT_ALERT_MISSING');
+requireText(killSwitch, "event: 'KILL_SWITCH', userId: input.userId, scope, reasons,", 'AUTO_GATE_KILL_SWITCH_ALERT_MISSING');
+requireText(tradeService, "event: 'ORDER_MANUAL_REVIEW'", 'AUTO_GATE_MANUAL_REVIEW_ALERT_MISSING');
+for (const token of ["event: 'MEMBER_EMERGENCY_STOP'", "event: 'MEMBER_RESUME'",
+  "event: req.body.stopped ? 'GLOBAL_EMERGENCY_STOP' : 'GLOBAL_RESUME'"]) {
+  requireText(tradeAutomationRoute, token, 'AUTO_GATE_EMERGENCY_STOP_ALERT_MISSING');
+}
+// A live cancel or invalidation is an exchange mutation: same capability as amend.
+requireText(tradeAutomationRoute, "if (plan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;\n    const canceled = await cancellation.cancel(userId, plan, order);", 'AUTO_GATE_LIVE_CANCEL_CAPABILITY_MISSING');
+requireText(tradeAutomationRoute, "if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;\n    const result = await automation.invalidatePlan(userId, String(req.params.id));", 'AUTO_GATE_LIVE_INVALIDATE_CAPABILITY_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');

@@ -216,6 +216,29 @@ jobs:
           if grep -En 'leverage(!)? < 2 \|\| |leverage(!)? > (8|9|10)\b' "$risk" "$execution" "$isolation" "$worker"; then
             echo 'BITGET_LEVERAGE_FLOOR_OR_CEILING_DRIFT' >&2; exit 1
           fi
+      - name: Require live fill FX witness, per-market fund ledger gate, owner halt alerts and live cancel capability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          service=api-server/src/services/trade-automation.service.ts
+          risk=api-server/src/services/trade-automation-risk.service.ts
+          execution=api-server/src/services/trade-execution.service.ts
+          kill=api-server/src/services/trade-kill-switch.service.ts
+          route=api-server/src/routes/trade-automation.ts
+          grep -Fq "reason === 'EXCHANGE_ORDER_RECONCILED') {" "$service"
+          grep -Fq 'await this.attachLiveFillFxWitness(order, next);' "$service"
+          grep -Fq 'export function evaluateLiveEntryLedger(' "$risk"
+          grep -Fq 'private async assertLiveEntryLedgerAllowed(' "$execution"
+          [ "$(grep -Fc 'await this.assertLiveEntryLedgerAllowed(userId, risk, order' "$execution")" = "4" ]
+          grep -Fq 'export async function notifyAutomaticTradingHalt(' "$kill"
+          grep -Fq "event: 'KILL_SWITCH'" "$kill"
+          grep -Fq "event: 'MEMBER_EMERGENCY_STOP'" "$route"
+          grep -Fq "event: 'MEMBER_RESUME'" "$route"
+          grep -Fq "event: req.body.stopped ? 'GLOBAL_EMERGENCY_STOP' : 'GLOBAL_RESUME'" "$route"
+          # Owner alerts are observability only: no stop/resume path may depend on their result.
+          if grep -En 'if \(!?\(?await notifyAutomaticTradingHalt' "$kill" "$route" "$service"; then
+            echo 'HALT_ALERT_GATES_TRADING_STATE' >&2; exit 1
+          fi
       - name: Validate non-superuser owner-bound budget proof contracts offline
         run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
       - name: Validate canonical public-handoff prearm receipt offline
