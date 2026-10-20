@@ -107,19 +107,41 @@ class MarketData:
     datasets: dict = field(default_factory=dict)
 
     def validate(self, legs: list[str]) -> None:
-        if self.bars.empty:
-            raise BacktestInputError("가격 데이터가 비어 있습니다")
-        idx = self.bars.index.to_numpy()
-        if not (np.diff(idx) > 0).all():
-            raise BacktestInputError("가격 시간이 증가 순서가 아니거나 중복이 있습니다")
-        for leg in legs:
-            for c in ("open", "high", "low", "close"):
-                col = f"{leg}_{c}"
-                if col not in self.bars.columns:
-                    raise BacktestInputError(f"가격 열 없음: {col}")
-                v = self.bars[col].to_numpy(dtype=float)
-                if not np.isfinite(v).all() or (v <= 0).any():
-                    raise BacktestInputError(f"가격 열에 결측/0 이하 값: {col}")
+        validate_bars(self.bars, legs)
+
+
+def leg_price_columns(legs: list[str]) -> list[str]:
+    return [f"{leg}_{c}" for leg in legs for c in ("open", "high", "low", "close")]
+
+
+def validate_bars(bars: pd.DataFrame, legs: list[str]) -> None:
+    """봉 프레임이 비어 있지 않고, 시간이 증가 순서이며, 사용하는 다리의 OHLC 가 모두 양의 유한값인지 확인."""
+    if bars.empty:
+        raise BacktestInputError("가격 데이터가 비어 있습니다")
+    idx = bars.index.to_numpy()
+    if not (np.diff(idx) > 0).all():
+        raise BacktestInputError("가격 시간이 증가 순서가 아니거나 중복이 있습니다")
+    for col in leg_price_columns(legs):
+        if col not in bars.columns:
+            raise BacktestInputError(f"가격 열 없음: {col}")
+        v = bars[col].to_numpy(dtype=float)
+        if not np.isfinite(v).all() or (v <= 0).any():
+            raise BacktestInputError(f"가격 열에 결측/0 이하 값: {col}")
+
+
+def drop_bars_missing_legs(bars: pd.DataFrame, legs: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """사용하는 다리의 OHLC 가 하나라도 결측(NaN)인 봉은 평가에서 제외한다. 채우거나 보간하지 않는다.
+
+    반환: (남은 봉, 제외된 봉 시각 ISO 목록). 제외된 봉은 이후 결측 봉 수·최대 공백 검사에 그대로 반영된다."""
+    cols = [c for c in leg_price_columns(legs) if c in bars.columns]
+    if not cols or bars.empty:
+        return bars, []
+    keep = bars[cols].notna().all(axis=1)
+    dropped = bars.index[~keep]
+    if len(dropped) == 0:
+        return bars, []
+    iso = [pd.Timestamp(int(t), unit="ms", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ") for t in dropped]
+    return bars[keep], iso
 
 
 def annualized_funding(funding: pd.DataFrame, t_ms: int, lookback_hours: int) -> tuple[Optional[float], Optional[int]]:
@@ -193,8 +215,12 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
         legs_used = ["binance_perp", "hl_perp"]
     else:
         raise BacktestInputError(f"알 수 없는 전략: {params.name}")
-    market.validate(legs_used)
     bars = market.bars[(market.bars.index >= start_ms) & (market.bars.index < end_ms)]
+    # 창 안에서 사용하는 다리의 가격이 결측인 봉은 제외한다(원천에 없는 봉을 만들어 내지 않음). 창 밖 결측은 이 창과 무관.
+    bars, bars_dropped_missing_leg = drop_bars_missing_legs(bars, legs_used)
+    if bars.empty:
+        raise BacktestInputError("백테스트 구간에 사용하는 다리의 가격 봉이 없습니다")
+    validate_bars(bars, legs_used)
     if len(bars) < 48:
         raise BacktestInputError("백테스트 구간 봉이 48개 미만입니다")
     expected = int((bars.index[-1] - bars.index[0]) // HOUR_MS) + 1
@@ -422,6 +448,8 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
         "max_notional_per_leg": float(max((l["notional_entry"] for t in trades for l in t.legs), default=0.0)),
         "bars": len(bars),
         "missing_bars_in_window": int(missing_bars),
+        "bars_dropped_missing_leg": len(bars_dropped_missing_leg),
+        "bars_dropped_missing_leg_ts": bars_dropped_missing_leg[:50],
         "max_gap_hours": max_gap_h,
         "blocked_stale_hours": blocked_stale,
         "halted": halted,

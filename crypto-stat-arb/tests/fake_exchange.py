@@ -22,10 +22,12 @@ def _zip(name, text):
 
 class FakeExchange:
     def __init__(self, start="2023-01-01", end="2023-04-01", seed=7, b_rate=0.0002, h_rate=0.0, fail_first=0,
-                 drop_kline_ts=None, hl_start=None, hl_coarse_until=None, drop_mark_ts=None):
+                 drop_kline_ts=None, hl_start=None, hl_coarse_until=None, drop_mark_ts=None,
+                 drop_spot_ts=None, hl_drop_ts=None):
         """hl_start: 하이퍼리퀴드 펀딩 이력이 시작되는 날짜(그 전은 원천에 없음).
         hl_coarse_until: 이 날짜 전까지 하이퍼리퀴드 펀딩이 8시간 간격으로만 존재(실제 2023-05~06 초기 구간 모사).
-        drop_mark_ts: 마크가격 봉만 빠지는 시각 목록."""
+        drop_mark_ts: 마크가격 봉만 빠지는 시각 목록. drop_spot_ts: 현물 봉만 빠지는 시각 목록.
+        hl_drop_ts: 하이퍼리퀴드 펀딩 공시만 빠지는 시각 목록(실제 2023-07~12 구간의 단발 결측 모사)."""
         self.t0 = int(pd.Timestamp(start, tz="UTC").value // 10**6)
         self.t1 = int(pd.Timestamp(end, tz="UTC").value // 10**6)
         n = (self.t1 - self.t0) // H
@@ -38,6 +40,8 @@ class FakeExchange:
         self.calls = 0
         self.drop = set(drop_kline_ts or [])
         self.drop_mark = set(drop_mark_ts or [])
+        self.drop_spot = set(drop_spot_ts or [])
+        self.hl_drop = set(hl_drop_ts or [])
         self.hl_start = int(pd.Timestamp(hl_start, tz="UTC").value // 10**6) if hl_start else self.t0
         self.hl_coarse_until = int(pd.Timestamp(hl_coarse_until, tz="UTC").value // 10**6) if hl_coarse_until else None
 
@@ -77,7 +81,7 @@ class FakeExchange:
             elif "markPriceKlines" in u.path:
                 blob = _zip("m.csv", self._kline_csv(month, 1.0001, drop=self.drop | self.drop_mark))
             elif "/spot/" in u.path:
-                blob = _zip("s.csv", self._kline_csv(month, 0.9995))
+                blob = _zip("s.csv", self._kline_csv(month, 0.9995, drop=self.drop | self.drop_spot))
             else:
                 blob = _zip("k.csv", self._kline_csv(month))
             if not self._month_rows(month, H):
@@ -95,6 +99,8 @@ class FakeExchange:
                 for t in range(st - st % H, min(body["endTime"], self.t1), H):
                     if self.hl_coarse_until is not None and t < self.hl_coarse_until and (t - self.t0) % (8 * H) != 0:
                         continue  # 초기 구간은 8시간 간격 공시만 존재
+                    if t in self.hl_drop:
+                        continue  # 단발 결측 공시
                     rows.append({"coin": "BTC", "fundingRate": str(self.h_rate), "premium": "0", "time": t})
                     if len(rows) >= 500:
                         break

@@ -180,3 +180,67 @@ def test_plans_exceeding_fund_are_blocked(tmp_path):
                      strategies=["carry_binance", "xvenue_funding"], profiles=["original"], label="nofund",
                      fund_mode=False)
     assert all(r["status"] == "OK" for r in read_json(out2 / "summary.json"))
+
+
+def test_missing_spot_bar_is_dropped_not_filled_and_incomplete_window_splits_into_complete_segments(tmp_path):
+    """현물 봉 1개 결측: 캐리 전략은 그 봉만 제외하고 실행(채우지 않음).
+    하이퍼리퀴드 펀딩 단발 결측 2곳: 교차거래소 전략의 큰 창은 INCOMPLETE 로 두고, 완전한 30일 이상 구간만 하위 창으로 평가."""
+    import pandas as pd
+    h = 3_600_000
+    spot_gap = int(pd.Timestamp("2023-02-10T13:00:00Z").value // 10**6)
+    hl_gap1 = int(pd.Timestamp("2023-02-05T07:00:00Z").value // 10**6)
+    hl_gap2 = int(pd.Timestamp("2023-03-20T02:00:00Z").value // 10**6)
+    fx = FakeExchange(end="2023-05-01", drop_spot_ts=[spot_gap], hl_drop_ts=[hl_gap1, hl_gap2])
+    collect(tmp_path / "d", date(2023, 1, 1), date(2023, 5, 1), client=_client(fx))
+    windows = {"big": ("2023-01-02", "2023-04-28")}
+    out = run_suite(tmp_path / "d", tmp_path / "r", leverages=[1], capital_krw=500_000, windows=windows,
+                    strategies=["carry_binance", "xvenue_funding"], profiles=["original"], label="seg",
+                    min_segment_days=30)
+    rows = read_json(out / "summary.json")
+    by = {(r["window"], r["strategy"]): r for r in rows}
+    # 캐리: 현물 결측 1개는 허용 비율 안 → OK 로 실행되고, 그 봉만 제외됐다고 기록(ERROR 아님)
+    carry = by[("big", "carry_binance")]
+    assert carry["status"] == "OK" and carry["parent_window"] is None
+    run = read_json(out / "runs" / "big" / "carry_binance" / "original" / "lev1.json")
+    assert run["metrics"]["bars_dropped_missing_leg"] == 1
+    assert run["metrics"]["bars_dropped_missing_leg_ts"] == ["2023-02-10T13:00:00Z"]
+    assert run["metrics"]["missing_bars_in_window"] == 1  # 제외된 봉은 결측으로 남는다(보간 없음)
+    # 교차거래소: 큰 창은 INCOMPLETE(단발 결측 2곳, 허용 0)
+    xv = by[("big", "xvenue_funding")]
+    assert xv["status"] == "INCOMPLETE_DATA" and "MISSING_RATIO:2/" in xv["error"]
+    meta = read_json(out / "meta.json")
+    sub = meta["window_quality"]["big"]["complete_subwindows"]["xvenue_funding"]
+    # 제외 구간: 두 결측 시각이 데이터셋·사유와 함께 기록
+    ex = [(e["start"], e["dataset"], e["reason"]) for e in sub["excluded_intervals"]]
+    assert ("2023-02-05T07:00:00Z", "hyperliquid", "MISSING:1") in ex
+    assert ("2023-03-20T02:00:00Z", "hyperliquid", "MISSING:1") in ex
+    # 완전 구간: 01-02~02-05(34일) / 02-06~03-20(42일) / 03-21~04-28(38일) 모두 30일 이상 → 3개 하위 창
+    segs = [(e["start"], e["end_exclusive"]) for e in sub["evaluated"]]
+    assert segs == [("2023-01-02", "2023-02-05"), ("2023-02-06", "2023-03-20"), ("2023-03-21", "2023-04-28")]
+    assert sub["rejected_on_recheck"] == []
+    for i, (ss, se) in enumerate(segs, 1):
+        r = by[(f"big#xvenue_funding#seg{i}", "xvenue_funding")]
+        assert r["status"] == "OK" and r["parent_window"] == "big"
+        assert r["window_start"] == ss and r["window_end_exclusive"] == se
+        srun = read_json(out / "runs" / f"big#xvenue_funding#seg{i}" / "xvenue_funding" / "original" / "lev1.json")
+        assert srun["data_evidence"]["parent_window"] == "big" and srun["data_evidence"]["verdict"] == "OK"
+        assert srun["data_evidence"]["datasets"]["hyperliquid"]["missing_intervals"] == 0
+        assert meta["window_quality"][f"big#xvenue_funding#seg{i}"]["parent_window"] == "big"
+    # 캐리 전략은 INCOMPLETE 가 아니므로 하위 창이 없고, 하위 창은 교차거래소 전략만 평가한다
+    assert "carry_binance" not in meta["window_quality"]["big"]["complete_subwindows"]
+    assert not any(r["window"].startswith("big#") and r["strategy"] == "carry_binance" for r in rows)
+
+
+def test_short_complete_segments_are_not_evaluated(tmp_path):
+    """완전 구간이 최소 길이보다 짧으면 하위 창을 만들지 않고 제외 구간만 기록한다."""
+    import pandas as pd
+    drops = [int(pd.Timestamp(d).value // 10**6) for d in ("2023-01-20T00:00:00Z", "2023-02-10T00:00:00Z", "2023-03-05T00:00:00Z")]
+    fx = FakeExchange(hl_drop_ts=drops)
+    collect(tmp_path / "d", date(2023, 1, 1), date(2023, 4, 1), client=_client(fx))
+    out = run_suite(tmp_path / "d", tmp_path / "r", leverages=[1], capital_krw=500_000,
+                    windows={"q1": ("2023-01-02", "2023-03-30")}, strategies=["xvenue_funding"],
+                    profiles=["original"], label="short", min_segment_days=30)
+    rows = read_json(out / "summary.json")
+    assert [r["window"] for r in rows] == ["q1"] and rows[0]["status"] == "INCOMPLETE_DATA"
+    sub = read_json(out / "meta.json")["window_quality"]["q1"]["complete_subwindows"]["xvenue_funding"]
+    assert sub["evaluated"] == [] and len(sub["excluded_intervals"]) == 3

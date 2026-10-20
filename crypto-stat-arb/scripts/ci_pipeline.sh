@@ -73,6 +73,13 @@ python scripts/make_report.py "$OUT1" "$W/original-readme-test" "$W/original-def
   "$W/data/collect_report.json" "$W/bitget_leverage_evidence.json" | tee "$W/REPORT.md"
 echo "--- data quality (whole collection, informational) ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['data_quality'],ensure_ascii=False,indent=1))"
 echo "--- window quality (per evaluation window, decides BLOCKED/INCOMPLETE) ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['window_quality'],ensure_ascii=False,indent=1))"
+echo "--- complete sub-windows of INCOMPLETE windows (evaluated / excluded intervals) ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps({w:i.get('complete_subwindows') for w,i in m['window_quality'].items() if i.get('complete_subwindows')},ensure_ascii=False,indent=1))"
+echo "--- bars dropped for missing leg prices (per run) ---"; python - <<PY
+import json,glob
+for f in sorted(glob.glob('$OUT1/runs/*/*/*/lev*.json')):
+    m=json.load(open(f))['metrics']
+    if m.get('bars_dropped_missing_leg'): print(f, m['bars_dropped_missing_leg'], m['bars_dropped_missing_leg_ts'][:5])
+PY
 echo "--- summary status counts ---"; python -c "import json,collections;r=json.load(open('$OUT1/summary.json'));print(collections.Counter((x['window'],x['strategy'],x['status']) for x in r))"
 cat "$LOG"
 exit $STATUS
