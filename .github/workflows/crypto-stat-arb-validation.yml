@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: crypto-stat-arb-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # 실행 중인 장시간 검증을 base 병합 푸시가 취소하지 않도록 대기열로 둔다
+  cancel-in-progress: false
 
 defaults:
   run:
