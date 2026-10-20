@@ -77,8 +77,9 @@ echo "--- complete sub-windows of INCOMPLETE windows (evaluated / excluded inter
 echo "--- bars dropped for missing leg prices (per run) ---"; python - <<PY
 import json,glob
 for f in sorted(glob.glob('$OUT1/runs/*/*/*/lev*.json')):
-    m=json.load(open(f))['metrics']
-    if m.get('bars_dropped_missing_leg'): print(f, m['bars_dropped_missing_leg'], m['bars_dropped_missing_leg_ts'][:5])
+    if f.endswith('.fund.json'): continue  # 자금 원장 파일에는 metrics 가 없음
+    m=json.load(open(f)).get('metrics') or {}
+    print(f, m.get('bars_dropped_missing_leg', 0), (m.get('bars_dropped_missing_leg_ts') or [])[:5])
 PY
 echo "--- summary status counts ---"; python -c "import json,collections;r=json.load(open('$OUT1/summary.json'));print(collections.Counter((x['window'],x['strategy'],x['status']) for x in r))"
 cat "$LOG"
