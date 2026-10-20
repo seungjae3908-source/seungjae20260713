@@ -187,6 +187,83 @@ test('directive drives two actual-provider stages, exact public source verificat
   assert.equal(result.selectedNextStrategy.sourceRevision, SOURCE_SHA);
 });
 
+test('a source-specific failure is retried against another source within the same run; the failed pick stays on record', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const missingPlan = aiAnswer({
+    summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+    requiredEvidence: ['SOURCE_PATH=strategies/RenamedUpstream.py', 'LICENSE_PATH=LICENSE'],
+  });
+  let calls = 0;
+  const prompts = [];
+  const invoke = async ({ policy, prompt }) => {
+    calls += 1;
+    prompts.push(prompt);
+    // call 1: a plan whose file 404s; call 2: a plan that exists; call 3: extraction.
+    const answer = calls === 1 ? missingPlan : calls === 2 ? planAnswer : extractionAnswer;
+    return { provider: policy.provider, model: policy.model, answer };
+  };
+  const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT, invoke, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.equal(calls, 3);
+  // The staged record carries only the successful pick's own stages, as the
+  // activation proof requires, and says a prior pick was tried in this run.
+  assert.deepEqual(result.actualProviderCalls, { attempted: 2, succeeded: 2, failed: 0, retried: 0 });
+  assert.deepEqual(result.actualSourceFetches, { attempted: 3, succeeded: 3, failed: 0 });
+  assert.equal(result.sourceAttemptsThisRun, 2);
+  assert.match(prompts[1], /rejectedSources=https:\/\/github\.com\/example\/public-strategies:strategies\/RenamedUpstream\.py/u);
+  const records = await Promise.all((await readdir(join(root, 'autonomous-research', 'discovery')))
+    .map(async (name) => JSON.parse(await readFile(join(root, 'autonomous-research', 'discovery', name), 'utf8'))));
+  const failed = records.filter((row) => row.status === 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].reason, 'PUBLIC_SOURCE_HTTP_404');
+  assert.equal(failed[0].candidate.sourcePath, 'strategies/RenamedUpstream.py');
+  const latest = JSON.parse(await readFile(join(root, 'latest', 'autonomous-research-discovery-v2.json'), 'utf8'));
+  assert.equal(latest.status, 'DOSSIER_STAGED');
+  assert.equal(latest.sourceAttemptsThisRun, 2);
+});
+
+test('the in-run source retry is bounded and never applies to provider failures', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const missing = (name) => aiAnswer({
+    summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=main'],
+    requiredEvidence: [`SOURCE_PATH=strategies/${name}.py`, 'LICENSE_PATH=LICENSE'],
+  });
+  let calls = 0;
+  const invoke = async ({ policy }) => { calls += 1; return { provider: policy.provider, model: policy.model, answer: missing(`Gone${calls}`) }; };
+  const twice = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT, invoke, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(twice.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(twice.reason, 'PUBLIC_SOURCE_HTTP_404');
+  assert.equal(calls, 2, 'default budget: one retry, then the failure stands');
+
+  const single = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: single, researchCodeSha: SHA, now: () => AT });
+  calls = 0;
+  const once = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: single, researchCodeSha: SHA, env: { ...env(), RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '1' }, now: () => AT,
+    invoke, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(once.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(calls, 1, 'RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS=1 disables the retry');
+
+  const outage = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: outage, researchCodeSha: SHA, now: () => AT });
+  calls = 0;
+  const failing = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: outage, researchCodeSha: SHA, env: env(), now: () => AT, providerRetryDelaysMs: [],
+    invoke: async () => { calls += 1; throw new Error('FREE_AI_PROVIDER_UNAVAILABLE'); }, fetchImpl: sourceFetch(), datasetLoader });
+  assert.equal(failing.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(failing.actualProviderCalls.failed, 1);
+  assert.equal(calls, 1, 'a provider failure is not a source failure and is not retried here');
+  assert.equal(discoveryRetryPolicyV2({}).sourceAttempts, 2);
+  assert.equal(discoveryRetryPolicyV2({ RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '3' }).sourceAttempts, 3);
+  assert.equal(discoveryRetryPolicyV2({ RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '9' }).sourceAttempts, 2, 'out-of-range falls back to the default');
+});
+
 test('successful directive receipt is restart-idempotent and does not call provider or refetch the source twice', async (t) => {
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
@@ -315,7 +392,7 @@ test('AI locator that is absent from fetched source fails closed before Formula 
   });
   let calls = 0;
   const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
-    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    stateRoot: root, researchCodeSha: SHA, env: { ...env(), RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '1' }, now: () => AT,
     invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? planAnswer : badExtraction }),
     fetchImpl: sourceFetch(), datasetLoader,
   });

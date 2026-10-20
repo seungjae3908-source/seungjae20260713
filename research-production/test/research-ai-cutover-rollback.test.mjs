@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 const source = readFileSync(new URL('../deploy/activate-ai-research.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
-const helpers = source.slice(source.indexOf('capture_runtime_snapshot()'), source.indexOf('research_sha()'));
+const helpers = source.slice(source.indexOf('exec_identity_sha() {'), source.indexOf('require_idle_one_shots() {'))
+  + source.slice(source.indexOf('capture_runtime_snapshot()'), source.indexOf('research_sha()'));
 
 function invoke({ damageBackup = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'research-ai-rollback-'));

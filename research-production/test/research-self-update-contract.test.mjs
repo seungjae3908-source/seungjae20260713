@@ -139,6 +139,43 @@ test('a validation that only collided with a running research one-shot is deferr
   assert.match(readFileSync(new URL('../bin/research-center-report-ko.mjs', import.meta.url), 'utf8'), /DEFERRED_RESEARCH_BUSY: '/);
 });
 
+test('a running one-shot (ActiveState=activating) counts as busy while waiting for idle research', async () => {
+  const wait = script.slice(script.indexOf('wait_for_idle_oneshots() {'), script.indexOf('repair_isolated_release() {'));
+  assert.match(wait, /if oneshot_busy "\$service"; then busy="\$service"; break; fi/);
+  assert.doesNotMatch(wait, /is-active/);
+  const { mkdtempSync, mkdirSync, writeFileSync, chmodSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const fn = script.slice(script.indexOf('oneshot_busy() {'), script.indexOf('wait_for_idle_oneshots() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'self-update-busy-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'systemctl'), '#!/usr/bin/env bash\nprintf "%s\\n" "$STATE"\n');
+  chmodSync(join(bin, 'systemctl'), 0o755);
+  const busy = (state) => {
+    try {
+      execFileSync('bash', ['-c', `${fn}\noneshot_busy research-production-ai-review.service`],
+        { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STATE: state } });
+      return true;
+    } catch { return false; }
+  };
+  assert.equal(busy('activating'), true, 'a Type=oneshot unit is "activating" for its whole run');
+  assert.equal(busy('active'), true);
+  assert.equal(busy('deactivating'), true);
+  assert.equal(busy('inactive'), false);
+  assert.equal(busy('failed'), false);
+  assert.equal(busy(''), false);
+});
+
+test('an AI restore that only collided with a running one-shot is deferred without the six-hour penalty', () => {
+  const restore = script.slice(script.indexOf('restore_ai_for_current() {'), script.indexOf('ensure_mirror() {'));
+  const busy = restore.slice(restore.indexOf('if [[ "$reason" == AI_RESEARCH_CUTOVER_BUSY:* ]]; then'), restore.indexOf('record_failure "restore-$sha" ai-restore'));
+  assert.match(busy, /write_status DEFERRED_RESEARCH_BUSY "\$sha" "\$sha"/);
+  assert.match(busy, /return 0/);
+  assert.doesNotMatch(busy, /record_failure/);
+  assert.match(restore.slice(restore.indexOf('record_failure "restore-$sha" ai-restore')), /write_status AI_RESTORE_FAILED/);
+});
+
 test('an imminent AI tick is waited out before validation or cutover instead of colliding with it', async () => {
   assert.match(script, /AI_REVIEW_TIMER=research-production-ai-review\.timer/);
   const wait = script.slice(script.indexOf('wait_for_idle_oneshots() {'), script.indexOf('repair_isolated_release() {'));

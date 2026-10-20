@@ -807,6 +807,11 @@ export function discoveryRetryPolicyV2(env = process.env) {
     transientMs: boundedNumber(env?.RESEARCH_AI_DISCOVERY_TRANSIENT_RETRY_MINUTES, TRANSIENT_RETRY_MS / 60_000, 5, 360) * 60_000,
     semanticMs: boundedNumber(env?.RESEARCH_AI_DISCOVERY_SEMANTIC_RETRY_HOURS, SEMANTIC_RETRY_MS / 3_600_000, 1, 48) * 3_600_000,
     providerRetryDelaysMs: Object.freeze(Array.from({ length: retries }, (_, index) => PROVIDER_RETRY_DELAYS_MS[0] * (2 ** index))),
+    // Sources tried within ONE run: when the proposed source fails for a reason
+    // tied to that source (404, non-strategy file, a quote not in the file), the
+    // run remembers it and asks for another source at once instead of leaving the
+    // whole tick (and a post-cutover activation one-shot) to a single pick.
+    sourceAttempts: Math.trunc(boundedNumber(env?.RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS, 2, 1, 3)),
   });
 }
 
@@ -953,6 +958,10 @@ export async function runAutonomousResearchDiscoveryV2({
       actualSourceFetches: { attempted: 0, succeeded: 0, failed: 0 } });
   }
 
+  const priorSourceIds = await priorGithubSourceIds(root);
+  let failedSources = await priorFailedSources(root);
+  const lane = await selectResearchLane(root, activeLanes(researchLanes, env));
+  for (let sourceAttempt = 1; ; sourceAttempt += 1) {
   const calls = { attempted: 0, succeeded: 0, failed: 0, retried: 0 };
   // One logical stage = one attempted call; transient 503/timeout retries of
   // the same stage are counted separately in calls.retried.
@@ -968,10 +977,7 @@ export async function runAutonomousResearchDiscoveryV2({
     }
   };
   const fetches = { attempted: 0, succeeded: 0, failed: 0 };
-  const priorSourceIds = await priorGithubSourceIds(root);
-  const failedSources = await priorFailedSources(root);
   const catalog = untriedCatalog(Array.isArray(verifiedSourceCatalog) ? verifiedSourceCatalog : [], priorSourceIds, failedSources);
-  const lane = await selectResearchLane(root, activeLanes(researchLanes, env));
   let candidate = null;
   try {
     calls.attempted += 1;
@@ -1054,8 +1060,12 @@ export async function runAutonomousResearchDiscoveryV2({
       candidate, stagedDossierDigest: dossier.dossierDigest,
       nextAction: 'RUN_EXISTING_CLOSED_LOOP', retryAfterAt: null,
     });
-    await persistResult(root, result);
-    return result;
+    // Counters above are this successful pick's own two stages and three reads;
+    // an earlier pick that failed in this run is persisted as its own
+    // AI_DISCOVERY_UNAVAILABLE record (see the catch below) and counted here.
+    const staged = sourceAttempt > 1 ? Object.freeze({ ...result, sourceAttemptsThisRun: sourceAttempt }) : result;
+    await persistResult(root, staged);
+    return staged;
   } catch (error) {
     if (calls.succeeded < calls.attempted) calls.failed += 1;
     const reason = classifyDiscoveryErrorV2(error);
@@ -1067,6 +1077,15 @@ export async function runAutonomousResearchDiscoveryV2({
       retryAfterAt: retryAfterForReason(reason, observedAt, retryPolicy),
     });
     await persistResult(root, result);
+    const sourceKey = SAFE_REPOSITORY.test(String(candidate?.repository ?? '')) && SAFE_PATH.test(String(candidate?.sourcePath ?? ''))
+      ? `${String(candidate.repository).replace(/\/$/u, '')}:${candidate.sourcePath}` : null;
+    if (sourceAttempt < retryPolicy.sourceAttempts && isSourceSpecificReasonV2(reason) && calls.failed === 0 && sourceKey) {
+      // Only this source failed and the provider answered; remember it and ask
+      // for a different one now. The failed record above stays on disk.
+      failedSources = Object.freeze([...new Set([...failedSources, sourceKey])].sort().slice(-40));
+      continue;
+    }
     return result;
+  }
   }
 }
