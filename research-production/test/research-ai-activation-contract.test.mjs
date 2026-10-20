@@ -65,6 +65,25 @@ test('rollback restores SHA-pinned prior units, isolated env, enablement and act
   assert.match(rollback, /AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH/u);
 });
 
+test('rollback compares the ExecStart command identity, not the last run\'s timestamps and exit status', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /exec_sha="\$\(exec_identity_sha "\$unit"\)"/u);
+  assert.match(script, /actual_exec_sha="\$\(exec_identity_sha "\$name"\)"/u);
+  const fn = script.slice(script.indexOf('exec_identity_sha() {'), script.indexOf('require_idle_one_shots() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'exec-identity-'));
+  writeFileSync(join(dir, 'systemctl'), '#!/usr/bin/env bash\nprintf "%s\\n" "$EXEC_SHOW"\n', { mode: 0o755 });
+  const sha = (show) => spawnSync('bash', ['-c', `SUDO=()\n${fn}\nexec_identity_sha u.service`],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, EXEC_SHOW: show } }).stdout.trim();
+  const before = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/autonomous-research-coordinator-v2.mjs ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }';
+  const afterRun = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/autonomous-research-coordinator-v2.mjs ; ignore_errors=no ; start_time=[Sun 2026-10-19 23:40:01 UTC] ; stop_time=[Sun 2026-10-19 23:45:54 UTC] ; pid=1950931 ; code=exited ; status=75 }';
+  const otherCommand = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/other.mjs ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }';
+  try {
+    assert.match(sha(before), /^[0-9a-f]{64}$/u);
+    assert.equal(sha(before), sha(afterRun), 'the one-shot having run must not look like a changed unit');
+    assert.notEqual(sha(before), sha(otherCommand));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
   const source = await readFile(new URL('../bin/confirm-research-free-policy.mjs', import.meta.url), 'utf8');
   assert.match(source, /appSha: readBoundedPrivateFile\('\/opt\/stock-app\/\.deploy\/current-sha'\)\.trim\(\)/u);

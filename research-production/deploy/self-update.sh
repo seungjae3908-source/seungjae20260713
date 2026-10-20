@@ -123,12 +123,22 @@ ai_tick_imminent() {
   (( next >= now && next - now <= AI_TICK_GUARD_SECONDS ))
 }
 
+# A running Type=oneshot unit reports ActiveState=activating, which
+# `systemctl is-active` does not count as active, so the state itself is read:
+# anything but inactive/failed (or an unknown unit) is work in progress. This is
+# the same rule the activation script applies (AI_RESEARCH_CUTOVER_BUSY).
+oneshot_busy() {
+  local state
+  state="$(systemctl show "$1" -p ActiveState --value 2>/dev/null || true)"
+  case "$state" in inactive|failed|"") return 1 ;; *) return 0 ;; esac
+}
+
 wait_for_idle_oneshots() {
   local deadline=$(( $(date +%s) + IDLE_WAIT_SECONDS )) service busy
   while :; do
     busy=""
     for service in "${ONESHOT_SERVICES[@]}"; do
-      if systemctl is-active --quiet "$service"; then busy="$service"; break; fi
+      if oneshot_busy "$service"; then busy="$service"; break; fi
     done
     if [[ -z "$busy" ]] && ai_tick_imminent; then busy="$AI_REVIEW_TIMER:imminent"; fi
     [[ -z "$busy" ]] && return 0
@@ -219,6 +229,12 @@ restore_ai_for_current() {
     sleep 60
   done
   rm -rf -- "$work_dir"
+  if [[ "$reason" == AI_RESEARCH_CUTOVER_BUSY:* ]]; then
+    # Only a running research one-shot got in the way: retry next hour without
+    # the six-hour failure penalty, exactly as the validation path does.
+    write_status DEFERRED_RESEARCH_BUSY "$sha" "$sha" "$reason; $why; retry next hour"
+    return 0
+  fi
   record_failure "restore-$sha" ai-restore
   write_status AI_RESTORE_FAILED "$sha" "$sha" "${reason:+$reason; }$why; core research timers keep running"
   return 1
