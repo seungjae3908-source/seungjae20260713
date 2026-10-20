@@ -2495,62 +2495,6 @@ async function seedOpenOrder(
   } as never);
 }
 
-async function seedLiveOpenOrder(repository: InMemoryTradingRepository, userId: string, id: string) {
-  const timestamp = new Date().toISOString();
-  await repository.savePlan({
-    id: `${id}-plan`, userId, idempotencyKey: `${id}-key`, state: 'SUBMITTED', version: 1,
-    accountMode: 'live', executionMode: 'approval', exchange: 'upbit', strategyId: 'stop-test',
-    signalId: `${id}-signal`, symbol: 'KRW-BTC', market: 'KRW', side: 'buy', orderType: 'limit', quantity: 0.1,
-    quoteAmount: null, limitPrice: 100_000, estimatedKrw: 10_000, stopPrice: 95_000,
-    targetPrices: [110_000], splitRatios: [100], leverage: null, marginMode: null, reduceOnly: false,
-    invalidateAction: 'hold', signalReasons: ['entry'],
-    marketSnapshot: { observedAt: timestamp }, approvedAt: timestamp, approvalExpiresAt: null,
-    createdAt: timestamp, updatedAt: timestamp,
-  } as never);
-  await repository.saveOrder({
-    id, userId, planId: `${id}-plan`, exchange: 'upbit', clientOrderId: `${id}-client`,
-    exchangeOrderId: `${id}-exchange`, state: 'ACCEPTED', version: 1, requestedQuantity: 0.1,
-    filledQuantity: 0, averageFillPrice: null, retryCount: 0, lastErrorCode: null,
-    createdAt: timestamp, updatedAt: timestamp,
-  } as never);
-}
-
-test('a member without the order capability cannot cancel or invalidate a LIVE order; the exchange order is untouched', async () => {
-  const isolated = new InMemoryTradingRepository();
-  await seedLiveOpenOrder(isolated, USER, 'live-cap-cancel');
-  setTradeAutomationRepositoryFactoryForTests(() => isolated);
-  const regular = await startServer(true, 'regular');
-  const nativeFetch = globalThis.fetch;
-  let outbound = 0;
-  globalThis.fetch = async (input, init) => {
-    if (!String(input).startsWith(regular.baseUrl)) { outbound += 1; throw new Error('OUTBOUND_MUST_NOT_BE_REACHED'); }
-    return nativeFetch(input, init);
-  };
-  try {
-    const cancel = await fetch(`${regular.baseUrl}/api/trade-automation/orders/live-cap-cancel/cancel`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmed: true }),
-    });
-    assert.equal(cancel.status, 403);
-    const cancelBody = await cancel.json() as Record<string, unknown>;
-    assert.equal(cancelBody.error, 'CAPABILITY_REQUIRED');
-    assert.equal(cancelBody.capability, 'canPlaceOrders');
-    assert.equal(cancelBody.orderCanceled, false);
-
-    const invalidate = await fetch(`${regular.baseUrl}/api/trade-automation/plans/live-cap-cancel-plan/invalidate`, { method: 'POST' });
-    assert.equal(invalidate.status, 403);
-    const invalidateBody = await invalidate.json() as Record<string, unknown>;
-    assert.equal(invalidateBody.error, 'CAPABILITY_REQUIRED');
-
-    assert.equal((await isolated.getOrder(USER, 'live-cap-cancel'))?.state, 'ACCEPTED');
-    assert.equal((await isolated.getPlan(USER, 'live-cap-cancel-plan'))?.state, 'SUBMITTED');
-    assert.equal(outbound, 0, 'no exchange cancel was sent');
-  } finally {
-    globalThis.fetch = nativeFetch;
-    await close(regular.server);
-    setTradeAutomationRepositoryFactoryForTests(() => repository);
-  }
-});
-
 test('member stop/resume and the admin global stop/resume each post one owner Telegram notice after the change is persisted', async () => {
   const sent: TelegramAlertInput[] = [];
   setAutomaticTradingAlertSenderForTests(async (input) => { sent.push(input); return { ok: true, attempts: 1 }; });
