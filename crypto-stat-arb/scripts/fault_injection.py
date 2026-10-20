@@ -118,7 +118,7 @@ def main(data_dir: str, work: str):
 
     def invalid_leverage_rejected_at_cli():
         out = {}
-        for bad in ["0", "8", "-1", "1.5", "abc", "nan", "inf", ""]:
+        for bad in ["0", "11", "-1", "1.5", "abc", "nan", "inf", ""]:
             r = cli(["backtest", "--data-dir", str(data), "--results-dir", str(work / "x"), "--leverage", bad])
             assert r.returncode == 2, f"{bad!r} 거부 안 됨"
             out[bad] = r.stderr.strip()[:80]

@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .costs import CostModel, UNKNOWN
+from .fund import AutoTradingFund, EntryLimits
 from .leverage import parse_leverage
 from .margin import liquidation_price
 from .metrics import HOURS_PER_YEAR, max_drawdown, sharpe, trade_stats
@@ -168,9 +169,20 @@ def _costs_for(notional: float, cost: CostModel, venue_fees: dict, venue: str, k
 
 def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, capital: float,
                  cost: CostModel, venue_fees: dict, mmr: dict, start_ms: int, end_ms: int,
-                 stale_funding_hours: dict, max_gap_hours: int = 6) -> dict:
-    """한 전략·한 레버리지 백테스트. 결과 dict(거래 목록, 자본 곡선, 지표)."""
+                 stale_funding_hours: dict, max_gap_hours: int = 6,
+                 fund: Optional["AutoTradingFund"] = None, fund_fx_krw_per_unit: Optional[float] = None,
+                 fund_strategy_id: Optional[str] = None, entry_limits: Optional["EntryLimits"] = None) -> dict:
+    """한 전략·한 레버리지 백테스트. 결과 dict(거래 목록, 자본 곡선, 지표).
+
+    fund 가 주어지면 자동매매 자금 규칙을 적용한다: 진입 증거금 = min(최대 진입 한도, 기본 자금 잔액, 전략 계획)
+    (원화 → 증거금 통화는 fund_fx_krw_per_unit 로 환산), 거래마다 순손익을 원장에 한 번만 결산(이익 50% 재투자,
+    50% 예비금, 손실은 기본 자금 차감). capital 은 장부상 현금의 시작값이며 fund 가 있으면 fund.base_balance 로 맞춘다.
+    """
     lev = parse_leverage(leverage)
+    if fund is not None:
+        if fund_fx_krw_per_unit is None or not math.isfinite(fund_fx_krw_per_unit) or fund_fx_krw_per_unit <= 0:
+            raise BacktestInputError("fund 를 쓰려면 양의 환율(fund_fx_krw_per_unit)이 필요합니다")
+        capital = fund.base_balance_krw / fund_fx_krw_per_unit
     if not (isinstance(capital, (int, float)) and math.isfinite(capital) and capital > 0):
         raise BacktestInputError(f"자본이 잘못됐습니다: {capital!r}")
     if params.name == "carry_binance":
@@ -200,8 +212,10 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
     entry_capital = 0.0
     trade_costs = {"fees_entry": 0.0, "fees_exit": 0.0, "slippage": 0.0, "spread": 0.0}
     trades: list[TradeRecord] = []
+    fund_events: list = []
     equity_curve = np.empty(len(bars))
     blocked_stale = 0
+    blocked_fund_entries = 0
     halted = False
     idx = bars.index.to_numpy()
     cols = {c: bars[c].to_numpy(dtype=float) for c in bars.columns}
@@ -217,7 +231,7 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
     def close_all(i: int, price_field: str, reason: str, liquidated_leg: Optional[str] = None):
         nonlocal cash, legs, pos_dir, entry_i
         gross = 0.0
-        fund = 0.0
+        fund_pnl = 0.0
         leg_rows = []
         for L in legs:
             if liquidated_leg is not None and L.spec.leg == liquidated_leg:
@@ -234,7 +248,7 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
             trade_costs["slippage"] += s
             trade_costs["spread"] += sp
             gross += pnl
-            fund += L.funding_pnl
+            fund_pnl += L.funding_pnl
             cash += pnl - f - s - sp
             leg_rows.append({"leg": L.spec.leg, "venue": L.spec.venue, "kind": L.spec.kind, "side": L.spec.side,
                              "qty": L.qty, "entry_price": L.entry_price, "exit_price": exit_price,
@@ -242,13 +256,17 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
                              "funding_pnl": L.funding_pnl, "liquidated": liquidated_leg == L.spec.leg})
         exit_ts = int(idx[i]) + (HOUR_MS if price_field == "close" else 0)
         hold = (exit_ts - int(idx[entry_i])) / HOUR_MS
-        net = gross + fund - sum(trade_costs.values())
+        net = gross + fund_pnl - sum(trade_costs.values())
         trades.append(TradeRecord(
             params.name, "short_high_long_low" if params.name == "xvenue_funding" else "long_spot_short_perp",
             pd.Timestamp(int(idx[entry_i]), unit="ms", tz="UTC").isoformat(),
             pd.Timestamp(exit_ts, unit="ms", tz="UTC").isoformat(), hold, lev, entry_capital, leg_rows,
-            gross, trade_costs["fees_entry"], trade_costs["fees_exit"], fund, trade_costs["slippage"],
+            gross, trade_costs["fees_entry"], trade_costs["fees_exit"], fund_pnl, trade_costs["slippage"],
             trade_costs["spread"], net, reason, liquidated_leg is not None))
+        if fund is not None:
+            trade_id = f"{params.name}:lev{lev}:{int(idx[entry_i])}:{exit_ts}"
+            rec = fund.settle(trade_id, net * fund_fx_krw_per_unit, note=reason)
+            fund_events.append(rec)
         legs = []
         pos_dir = 0
         entry_i = None
@@ -310,9 +328,17 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
             if pos_dir == 0 and stale:
                 blocked_stale += 1  # 오래된/없는 펀딩 데이터로 신규 진입 차단
             if pos_dir == 0 and want_enter and not just_exited:
-                equity = cash
-                if equity <= capital * 0.01:
-                    halted = True
+                if fund is None:
+                    equity = cash
+                else:
+                    lim = fund.allowed_entry_margin_krw(fund_strategy_id, entry_limits)
+                    equity = lim["allowed_krw"] / fund_fx_krw_per_unit if not lim["entry_blocked"] else 0.0
+                    # 장부 현금(미재투자 이익 포함)보다 많이 쓸 수는 없다
+                    equity = min(equity, cash)
+                if equity <= 0 or (fund is None and equity <= capital * 0.01):
+                    halted = fund is None
+                    if fund is not None:
+                        blocked_fund_entries += 1
                 else:
                     if params.name == "carry_binance":
                         spot_notional = equity * lev / (lev + 1)
@@ -397,8 +423,16 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
         "max_gap_hours": max_gap_h,
         "blocked_stale_hours": blocked_stale,
         "halted": halted,
+        "blocked_fund_entries": blocked_fund_entries,
         **tstats,
     }
+    fund_summary = None
+    if fund is not None:
+        fund_summary = {"fx_krw_per_unit": fund_fx_krw_per_unit, "strategy_plan_id": fund_strategy_id,
+                        "settlements": len(fund_events), "verify": fund.verify(),
+                        "base_balance_krw": fund.base_balance_krw, "reserve_krw": fund.reserve_krw,
+                        "max_entry_margin_krw": fund.max_entry_margin_krw, "plans": dict(fund.plans),
+                        "note": "환율은 구간 시작값 하나를 고정 사용(환율 변동 손익은 반영하지 않음)"}
     return {
         "strategy": params.name,
         "params": asdict(params),
@@ -410,6 +444,7 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
         "mmr": mmr,
         "price_proxies": market.price_proxies,
         "metrics": metrics,
+        "fund": fund_summary,
         "trades": [asdict(t) for t in trades],
         "equity_curve_daily": [
             [pd.Timestamp(int(idx[j]), unit="ms", tz="UTC").isoformat(), float(equity_curve[j])]

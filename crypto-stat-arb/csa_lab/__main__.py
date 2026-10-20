@@ -1,7 +1,7 @@
 """CLI: python -m csa_lab <명령>
 
   collect   공개 데이터 수집(조회 전용)
-  backtest  레버리지 1~7배 백테스트(PAPER, 주문 없음)
+  backtest  레버리지 1~10배 백테스트(PAPER, 주문 없음)
   original  원본 저장소 코드를 수정 없이 실행
   soak      장시간 무주문 운영 실행
   soak-summary / verify  결과 요약·무결성 확인
@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from .leverage import ALLOWED_LEVERAGES, LeverageError, parse_leverage
+from .fund import DEFAULT_INITIAL_KRW, DEFAULT_MAX_ENTRY_MARGIN_KRW
 from .money import DEFAULT_STRATEGY_CAPITAL_KRW
 
 
@@ -23,7 +24,7 @@ def _levs(text: str) -> list:
         return list(ALLOWED_LEVERAGES)
     out = []
     for part in text.split(","):
-        out.append(parse_leverage(part))  # 서버/CLI 측 검증: 1~7 정수만
+        out.append(parse_leverage(part))  # 서버/CLI 측 검증: 1~10 정수만
     return out
 
 
@@ -45,7 +46,7 @@ def main(argv=None) -> int:
     b = sub.add_parser("backtest")
     b.add_argument("--data-dir", required=True)
     b.add_argument("--results-dir", required=True)
-    b.add_argument("--leverage", default="1", help="1~7 정수, 쉼표 목록, 또는 all (기본 1)")
+    b.add_argument("--leverage", default="1", help="1~10 정수, 쉼표 목록, 또는 all (기본 1)")
     b.add_argument("--capital-krw", type=_capital, default=float(DEFAULT_STRATEGY_CAPITAL_KRW))
     b.add_argument("--window", action="append", default=None,
                    help="이름=YYYY-MM-DD:YYYY-MM-DD (끝 미포함). 기본: README 학습·테스트 구간")
@@ -53,6 +54,11 @@ def main(argv=None) -> int:
     b.add_argument("--profile", default="original,current_public_assumed")
     b.add_argument("--label", default="run")
     b.add_argument("--accept-quality-issues", action="store_true")
+    b.add_argument("--no-fund", action="store_true", help="자동매매 자금 원장 없이 전략별 계획 자금을 그대로 복리 운용")
+    b.add_argument("--fund-initial-krw", type=_capital, default=float(DEFAULT_INITIAL_KRW),
+                   help="자동매매 초기 기본 자금(참고 기준, 기본 1,000,000)")
+    b.add_argument("--max-entry-krw", type=_capital, default=float(DEFAULT_MAX_ENTRY_MARGIN_KRW),
+                   help="최대 진입 증거금 한도(레버리지 적용 전, 기본 1,000,000)")
     o = sub.add_parser("original")
     o.add_argument("--original-repo", required=True)
     o.add_argument("--data-dir", required=True)
@@ -99,7 +105,8 @@ def main(argv=None) -> int:
                 windows[name] = (ws, we)
         out = run_suite(Path(a.data_dir), Path(a.results_dir), leverages=levs, capital_krw=a.capital_krw,
                         windows=windows, strategies=a.strategy.split(","), profiles=a.profile.split(","),
-                        label=a.label, accept_quality_issues=a.accept_quality_issues)
+                        label=a.label, accept_quality_issues=a.accept_quality_issues, fund_mode=not a.no_fund,
+                        fund_initial_krw=a.fund_initial_krw, fund_max_entry_krw=a.max_entry_krw)
         print(out)
         return 0
     if a.cmd == "original":

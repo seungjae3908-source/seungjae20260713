@@ -15,7 +15,8 @@ H = 3_600_000
 def _zip(name, text):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(name, text)
+        # 고정 시각: 체크섬 요청과 본문 요청 사이에 초가 바뀌어도 같은 바이트가 나오게
+        zf.writestr(zipfile.ZipInfo(name, date_time=(2023, 1, 1, 0, 0, 0)), text)
     return buf.getvalue()
 
 
