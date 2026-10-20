@@ -54,12 +54,12 @@
 | 국내 주식 | 1 고정(현금) | 1 | 아니오 | 신용·미수 미사용 |
 | 미국 주식 | 1 고정(현금) | 1 | 아니오 | 마진 미사용 |
 
-## 운영 앱 반영 범위 (같은 PR, 코드만 변경)
+## 운영 앱 반영 (이 PR에 포함하지 않음, 패치로 전달)
 
-- 운영 앱(`api-server`, `stock-analyzer`)의 비트겟 선물 레버리지 하한을 2→**1**로 내렸다. 정책 저장(`PUT /policy`)·계획 평가·실거래 사전 점검(`prepareBitgetLeverage`)·포지션 격리 검사·사전 활성화 감사·UI 선택지가 모두 `PRODUCTION_MIN_BITGET_LEVERAGE = 1`을 쓴다.
-- 업비트 현물·국내/미국 주식 계획에 `leverage` 또는 `marginMode` 필드가 들어오면 평가 단계에서 `LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK`으로 차단한다(PAPER·실거래 공통). 실거래 쪽은 기존 `LEVERAGE_HARD_DISABLED`(현물)·`KIWOOM_ORDERABILITY_INPUT_INVALID`(주식)도 그대로 남아 있다.
-- **바꾸지 않은 것(승인 항목)**: 기본값 2배, 회원 최대 3배·관리자 최대 7배 상한. 이 값들은 소유자 승인 게이트(`verify-production-automatic-trading-gate.mjs`, 배포 후 QA 증빙 스크립트)가 글자 그대로 고정하고 있고, 기본값을 1로 바꾸면 2배로 고정된 자동 PAPER 사이징(`pump-reversal-paper-risk-sizing.service.ts`)과 작업자의 증빙 일치 검사가 서로 어긋나 자동 진입이 전부 차단된다. 8~10배는 게이트 상한(7) 완화가 필요하다.
-- 운영 앱의 PAPER와 실거래는 같은 정책 행(`trade_automation_profiles`)을 읽는다. PAPER 쪽 `prepare-policy`가 저장하는 정책이 곧 실거래 정책이다(레버리지는 건드리지 않고 통과). 별도의 PAPER 전용 레버리지 설정은 없다.
+- 운영 앱(`api-server`, `stock-analyzer`)의 비트겟 선물 레버리지 하한을 2→1로 내리고 업비트 현물·주식 계획의 `leverage`/`marginMode` 필드를 `LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK`으로 차단하는 변경은 만들어 검증했지만(서버 테스트 2,884건·타입검사·자동매매 게이트 검증기 통과) 이 PR에는 넣지 않았다. 이유: 운영 앱 자동매매 파일을 바꾸면 소유자 승인 경로 목록 검사(`verify-research-workspace-sync-v3.mjs`)가 PR의 모든 파일을 승인 목록과 대조하는데, 이 디렉터리(`crypto-stat-arb/**`)는 그 목록에 없어 함께 넣으면 통과할 수 없다.
+- 그 변경은 `/mnt/project-files/review/bitget-leverage-floor-1x-20261020.patch`(승인 목록 안의 파일만)와 `...-unreviewed-paths-20261020.patch`(`four-market-auto-readiness.service.ts`, `futures-live-limited-capability.service.ts` 두 파일, 승인 목록 밖)로 보관한다. 별도 브랜치·PR로 올리려면 사용자 허락이 필요하다.
+- **바꾸지 않은 것(승인 항목)**: 기본값 2배, 회원 최대 3배·관리자 최대 7배 상한, 설정 화면(`trade-automation-settings.tsx`, 소유자 해시 고정)의 1배 선택지. 기본값을 1로 바꾸면 2배로 고정된 자동 PAPER 사이징(`pump-reversal-paper-risk-sizing.service.ts`)과 작업자의 증빙 일치 검사가 어긋나 자동 진입이 전부 차단된다. 8~10배는 게이트 상한(7) 완화가 필요하다.
+- 운영 앱의 PAPER와 실거래는 같은 정책 행(`trade_automation_profiles`)을 읽는다. 별도의 PAPER 전용 레버리지 설정은 없다.
 - 운영 앱의 100만원은 `totalCapitalKrw`(총 자본), 50만원은 회원 1회 주문 상한(`maxOrderKrw`, 관리자 100만원)이다. 이 패키지의 50만원은 전략별 계획 자금, 100만원은 자동매매 기본 자금이며 운영 앱 자금과 연결되지 않는다.
 
 ## 실행

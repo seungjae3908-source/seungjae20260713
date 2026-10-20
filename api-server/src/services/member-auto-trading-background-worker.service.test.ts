@@ -85,8 +85,7 @@ test('current membership, expiry, role ceiling and cached batch ceiling must agr
   assert.equal(currentLiveMemberAccessMatchesBatch(admin, undefined, spot), false);
   assert.equal(currentLiveMemberAccessMatchesBatch(admin, 500_000, spot), false, 'upgrade cannot inherit old batch authority');
   assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...spot, accountMode: 'paper' }), false);
-  assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage: 1 }), true, '1x is a valid Bitget leverage');
-  for (const leverage of [0, 8, 7.1, null, Number.NaN]) {
+  for (const leverage of [1, 8, 7.1, null, Number.NaN]) {
     assert.equal(currentLiveMemberAccessMatchesBatch(admin, 1_000_000, { ...futures, leverage }), false);
   }
 });

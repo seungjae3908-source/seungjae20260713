@@ -107,7 +107,6 @@ import type {
   TradingPlanInput,
   TradingRiskDecision,
 } from './trade-automation.types';
-import { isBitgetLeverage } from './trade-automation.types';
 
 type ExchangePayload = Record<string, unknown>;
 
@@ -1481,11 +1480,11 @@ export class TradeExecutionService {
     }
     if (!plan.reduceOnly) {
       const leverage = Number(plan.leverage);
-      if (!isBitgetLeverage(leverage)) throw new Error('BITGET_LEVERAGE_LIMIT');
+      if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       this.assertExecutionGenerationActive();
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetLeverage(credentials, plan.symbol, leverage), PREFLIGHT_TIMEOUT_MS));
+        prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };

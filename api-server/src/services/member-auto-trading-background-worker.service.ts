@@ -62,8 +62,6 @@ import {
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
-  PRODUCTION_MIN_BITGET_LEVERAGE,
-  type BitgetLeverage,
 } from './trade-automation.types';
 import {
   resolveMemberAutoTradingKrwRate,
@@ -136,7 +134,7 @@ export function currentLiveMemberAccessMatchesBatch(
   const maximumLeverage = hasCapability(profile, 'canManageMembers')
     ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
   return hasCapability(profile, 'canAccessFutures') && Number.isInteger(plan.leverage)
-    && Number(plan.leverage) >= PRODUCTION_MIN_BITGET_LEVERAGE && Number(plan.leverage) <= maximumLeverage;
+    && Number(plan.leverage) >= 2 && Number(plan.leverage) <= maximumLeverage;
 }
 // A READY handoff without entries otherwise has no per-entry freshness clock.
 // Keep a bounded publisher heartbeat even during quiet market periods.
@@ -1530,14 +1528,14 @@ function buildPlanInput(
   const marketStatus = snapshotMarketStatus(entry);
   const leverageEvidence = Number(evidence?.leverage);
   const marginModeEvidence = String(evidence?.marginMode ?? '').toLowerCase();
-  let leverage: BitgetLeverage | null = null;
+  let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
     const maximumLeverage = hasCapability(member.profile, 'canManageMembers')
       ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
       : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
     if (!Number.isInteger(leverageEvidence)
-      || leverageEvidence < PRODUCTION_MIN_BITGET_LEVERAGE
+      || leverageEvidence < 2
       || leverageEvidence > maximumLeverage
       || member.policy.bitgetLeverage > maximumLeverage
       || leverageEvidence !== member.policy.bitgetLeverage) {
@@ -1546,7 +1544,7 @@ function buildPlanInput(
     if (marginModeEvidence !== 'isolated') {
       throw new Error('BACKGROUND_ISOLATED_MARGIN_EVIDENCE_REQUIRED');
     }
-    leverage = leverageEvidence as BitgetLeverage;
+    leverage = leverageEvidence as 2 | 3 | 4 | 5 | 6 | 7;
     marginMode = 'isolated';
   }
 

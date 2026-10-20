@@ -99,7 +99,6 @@ import {
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
-  PRODUCTION_MIN_BITGET_LEVERAGE,
 } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -1198,7 +1197,7 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         isolatedReady: futures.marginMode === 'isolated',
         maximumLeverageForRequester: maximumBitgetLeverage(req),
         leverageReady: Number.isInteger(futuresLeverage)
-          && futuresLeverage >= PRODUCTION_MIN_BITGET_LEVERAGE
+          && futuresLeverage >= 2
           && futuresLeverage <= maximumBitgetLeverage(req),
       },
       markets,
@@ -1625,7 +1624,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
       ? null
       : Number(req.body.bitgetLeverage);
     if (Number.isInteger(requestedLeverage)
-      && requestedLeverage! >= PRODUCTION_MIN_BITGET_LEVERAGE
+      && requestedLeverage! >= 2
       && requestedLeverage! <= PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
       && requestedLeverage! > maximumBitgetLeverage(req)) {
       return res.status(409).json({
