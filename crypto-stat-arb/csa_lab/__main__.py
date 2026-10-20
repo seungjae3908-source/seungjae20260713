@@ -54,6 +54,8 @@ def main(argv=None) -> int:
     b.add_argument("--profile", default="original,current_public_assumed")
     b.add_argument("--label", default="run")
     b.add_argument("--accept-quality-issues", action="store_true")
+    b.add_argument("--min-segment-days", type=int, default=30,
+                   help="INCOMPLETE 창 안에서 따로 평가할 완전 구간의 최소 길이(일). 더 짧은 완전 구간은 평가하지 않음")
     b.add_argument("--no-fund", action="store_true", help="자동매매 자금 원장 없이 전략별 계획 자금을 그대로 복리 운용")
     b.add_argument("--fund-initial-krw", type=_capital, default=float(DEFAULT_INITIAL_KRW),
                    help="자동매매 초기 기본 자금(참고 기준, 기본 1,000,000)")
@@ -106,7 +108,8 @@ def main(argv=None) -> int:
         out = run_suite(Path(a.data_dir), Path(a.results_dir), leverages=levs, capital_krw=a.capital_krw,
                         windows=windows, strategies=a.strategy.split(","), profiles=a.profile.split(","),
                         label=a.label, accept_quality_issues=a.accept_quality_issues, fund_mode=not a.no_fund,
-                        fund_initial_krw=a.fund_initial_krw, fund_max_entry_krw=a.max_entry_krw)
+                        fund_initial_krw=a.fund_initial_krw, fund_max_entry_krw=a.max_entry_krw,
+                        min_segment_days=a.min_segment_days)
         print(out)
         return 0
     if a.cmd == "original":
