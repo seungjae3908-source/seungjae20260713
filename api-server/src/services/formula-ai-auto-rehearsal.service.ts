@@ -8,6 +8,7 @@ import {
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MIN_BITGET_LEVERAGE,
 } from './trade-automation.types';
 
 export const FORMULA_AI_REHEARSAL_POLICY_VERSION = 'formula-ai-rehearsal-v1' as const;
@@ -225,7 +226,7 @@ export function evaluateFormulaAiAutoRehearsal(input: FormulaAiRehearsalInput): 
     const maximumLeverage = input.futuresMaximumLeverage === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
       ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
       : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
-    if (!Number.isInteger(leverage) || leverage < 2 || leverage > maximumLeverage) {
+    if (!Number.isInteger(leverage) || leverage < PRODUCTION_MIN_BITGET_LEVERAGE || leverage > maximumLeverage) {
       add(blockers, 'FORMULA_AI_FUTURES_LEVERAGE_LIMIT');
     }
   }
