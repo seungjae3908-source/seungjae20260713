@@ -1,5 +1,6 @@
 import type { AutomaticLiveOwnedPosition } from './automatic-live-position-isolation.service';
 import type { TradingOrder } from './trade-automation.types';
+import { PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE, PRODUCTION_MIN_BITGET_LEVERAGE } from './trade-automation.types';
 import { readBoundedTradingProviderJson } from './trading-provider-response.service';
 import { prepareBitgetSinglePosition, prepareBitgetPendingProtection,
   type BitgetCredentials, type PreparedExchangeRequest } from './trade-exchange-adapters.service';
@@ -95,7 +96,7 @@ export async function readAutomaticFuturesNativeProtection(input: {
       || position.holdSide !== plan.side || position.posMode !== 'one_way_mode'
       || position.marginMode !== 'isolated' || !equal(number(position.total), owned.remainingQuantity)
       || number(position.leverage) !== plan.leverage || !Number.isInteger(plan.leverage)
-      || Number(plan.leverage) < 2 || Number(plan.leverage) > 7) fail('BITGET_NATIVE_PROTECTION_POSITION_POLICY_MISMATCH');
+      || Number(plan.leverage) < PRODUCTION_MIN_BITGET_LEVERAGE || Number(plan.leverage) > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE) fail('BITGET_NATIVE_PROTECTION_POSITION_POLICY_MISMATCH');
     if (!equal(number(position.stopLoss), plan.stopPrice) || !equal(number(position.takeProfit), Number(target))
       || !id(position.stopLossId) || !id(position.takeProfitId)
       || position.stopLossId === position.takeProfitId) fail('BITGET_NATIVE_PROTECTION_POSITION_IDS_OR_PRICES_MISSING');

@@ -17,6 +17,10 @@ stage "E_collect_public_readonly 2020-01..$END_MONTH"
 python -m csa_lab collect --data-dir "$W/data" --start 2020-01 --end "$END_MONTH"
 done_ E_collect $?
 
+stage "BITGET_leverage_evidence_readonly"
+python scripts/bitget_leverage_evidence.py "$W/bitget_leverage_evidence.json"
+done_ BITGET_evidence $?
+
 stage "B_original_clone_pinned"
 git clone --quiet https://github.com/abailey81/Crypto-Statistical-Arbitrage "$W/original" \
   && git -C "$W/original" checkout --quiet 44b718e4a4ef875ea12dfda30370ab1cc8b54a26 \
@@ -66,7 +70,7 @@ done_ G_faults $?
 
 stage "REPORT"
 python scripts/make_report.py "$OUT1" "$W/original-readme-test" "$W/original-default" "$W/original-demo" \
-  "$W/data/collect_report.json" | tee "$W/REPORT.md"
+  "$W/data/collect_report.json" "$W/bitget_leverage_evidence.json" | tee "$W/REPORT.md"
 echo "--- data quality ---"; python -c "import json;m=json.load(open('$OUT1/meta.json'));print(json.dumps(m['data_quality'],ensure_ascii=False,indent=1))"
 cat "$LOG"
 exit $STATUS

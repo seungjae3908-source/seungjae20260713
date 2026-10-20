@@ -45,10 +45,22 @@
 - 결산은 거래 ID로 한 번만 처리한다. 상태는 원자적으로 저장하고, 다시 읽을 때 일지로 재계산해 불일치(변조·반쪽 저장)를 잡는다.
 - 백테스트에서는 구간 시작 환율 하나로 원화↔USDT를 고정 환산한다(환율 변동 손익 미반영). 장시간 무주문 실행기(soak)는 신호와 PAPER 포지션 상태만 기록하고 이 원장에 결산하지 않는다(두 다리 가격이 없어 순손익을 산출하지 않음).
 
-## 운영 앱과의 설정 차이 (변경하지 않음)
+## 시장별 레버리지 정책 (최종, `market_policy.py`)
 
-- 운영 앱(`api-server/src/services/trade-automation.types.ts`)의 100만원은 `totalCapitalKrw`(총 자본), 50만원은 회원 1회 주문 상한(`maxOrderKrw`, 관리자 100만원)이다. 이 패키지의 50만원은 전략별 계획 자금이고 100만원은 자동매매 기본 자금이다. 서로 다른 의미이며, 이 패키지는 운영 앱 자금과 연결되지 않는다.
-- 운영 앱의 선물 레버리지는 `bitgetLeverage: 2~7`(회원 최대 3, 관리자 최대 7)이고 1배가 없다. 이 패키지의 1~10배는 PAPER 계산 범위이며 운영 앱 설정과 실제 계좌 레버리지는 바꾸지 않았다. 운영 앱을 1~10배로 바꾸는 것은 별도 승인 항목이다.
+| 시장 | 범위 | 기본 | 입력 허용 | 비고 |
+|---|---|---|---|---|
+| 비트겟 선물 | 정수 1~10 | 1 | 예 | PAPER·백테스트 범위. 계약 공개 한도(`minLever`~`maxLever`)는 `scripts/bitget_leverage_evidence.py`로 조회해 결과에 기록 |
+| 업비트 현물 | 1 고정 | 1 | 아니오 | API·설정·요청 본문 어느 경로로 1 이외 값이 오면 거부(`tests/test_market_policy.py`) |
+| 국내 주식 | 1 고정(현금) | 1 | 아니오 | 신용·미수 미사용 |
+| 미국 주식 | 1 고정(현금) | 1 | 아니오 | 마진 미사용 |
+
+## 운영 앱 반영 범위 (같은 PR, 코드만 변경)
+
+- 운영 앱(`api-server`, `stock-analyzer`)의 비트겟 선물 레버리지 하한을 2→**1**로 내렸다. 정책 저장(`PUT /policy`)·계획 평가·실거래 사전 점검(`prepareBitgetLeverage`)·포지션 격리 검사·사전 활성화 감사·UI 선택지가 모두 `PRODUCTION_MIN_BITGET_LEVERAGE = 1`을 쓴다.
+- 업비트 현물·국내/미국 주식 계획에 `leverage` 또는 `marginMode` 필드가 들어오면 평가 단계에서 `LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK`으로 차단한다(PAPER·실거래 공통). 실거래 쪽은 기존 `LEVERAGE_HARD_DISABLED`(현물)·`KIWOOM_ORDERABILITY_INPUT_INVALID`(주식)도 그대로 남아 있다.
+- **바꾸지 않은 것(승인 항목)**: 기본값 2배, 회원 최대 3배·관리자 최대 7배 상한. 이 값들은 소유자 승인 게이트(`verify-production-automatic-trading-gate.mjs`, 배포 후 QA 증빙 스크립트)가 글자 그대로 고정하고 있고, 기본값을 1로 바꾸면 2배로 고정된 자동 PAPER 사이징(`pump-reversal-paper-risk-sizing.service.ts`)과 작업자의 증빙 일치 검사가 서로 어긋나 자동 진입이 전부 차단된다. 8~10배는 게이트 상한(7) 완화가 필요하다.
+- 운영 앱의 PAPER와 실거래는 같은 정책 행(`trade_automation_profiles`)을 읽는다. PAPER 쪽 `prepare-policy`가 저장하는 정책이 곧 실거래 정책이다(레버리지는 건드리지 않고 통과). 별도의 PAPER 전용 레버리지 설정은 없다.
+- 운영 앱의 100만원은 `totalCapitalKrw`(총 자본), 50만원은 회원 1회 주문 상한(`maxOrderKrw`, 관리자 100만원)이다. 이 패키지의 50만원은 전략별 계획 자금, 100만원은 자동매매 기본 자금이며 운영 앱 자금과 연결되지 않는다.
 
 ## 실행
 
@@ -58,6 +70,7 @@ python -m pytest -q tests
 
 python -m csa_lab collect  --data-dir D --start 2020-01 --end 2026-09
 python -m csa_lab backtest --data-dir D --results-dir R --leverage all          # 기본 1배, all=1~10
+python scripts/bitget_leverage_evidence.py OUT.json                                # 비트겟 계약 공개 한도(조회 전용)
 python -m csa_lab backtest --data-dir D --results-dir R --leverage 3 --capital-krw 500000 \
     --fund-initial-krw 1000000 --max-entry-krw 1000000      # 자금 원장 적용(기본). --no-fund 로 끔
 python -m csa_lab original --original-repo ORIG --data-dir D --out O --start-date 2023-07-01 --end-date 2024-12-31
