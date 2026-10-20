@@ -74,7 +74,13 @@ systemctl() {
     enable)
       local runtime=false; [[ "__DL__1:-}" == --runtime ]] && { runtime=true; shift; }
       ENABLED[$1]=$([[ "$runtime" == true ]] && printf enabled-runtime || printf enabled) ;;
-    start) for unit in "$@"; do ACTIVE[$unit]=active; done ;;
+    start)
+      for unit in "$@"; do
+        ACTIVE[$unit]=active
+        # Persistent=true: a timer whose tick was missed while it was stopped
+        # fires its one-shot the moment it is started again.
+        [[ "$unit" == research-production-old.timer ]] && ACTIVE[research-production-old-daemon.service]=activating
+      done ;;
     stop) for unit in "$@"; do ACTIVE[$unit]=inactive; done ;;
     daemon-reload) : ;;
     *) return 3 ;;
@@ -101,7 +107,7 @@ grep -Fxq "WorkingDirectory=$RESEARCH_RELEASES_ROOT/__SHA__" "$SYSTEMD_UNIT_ROOT
 grep -Fxq "EnvironmentFile=$snapshot/env/research-production.env" "$SYSTEMD_UNIT_ROOT/research-production-old-worker.service"
 grep -Fxq 'new-research-env' "$RESEARCH_ENV"
 [[ "__DL__ENABLED[research-production-old.timer]}:__DL__ACTIVE[research-production-old.timer]}" == enabled:active ]]
-[[ "__DL__ENABLED[research-production-old-daemon.service]}:__DL__ACTIVE[research-production-old-daemon.service]}" == disabled:inactive ]]
+[[ "__DL__ENABLED[research-production-old-daemon.service]}:__DL__ACTIVE[research-production-old-daemon.service]}" == disabled:activating ]]
 [[ "__DL__ENABLED[research-production-old-worker.service]}:__DL__ACTIVE[research-production-old-worker.service]}" == static:inactive ]]
 printf 'ROLLBACK_HARNESS=PASS\n'
 `.replaceAll('__DL__', '${')
