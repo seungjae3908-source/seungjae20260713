@@ -10,13 +10,13 @@ from csa_lab.money import (AllocationError, AllocationLedger, FxMissingError, Fx
                            margin_units_to_krw, require_fx)
 
 
-@pytest.mark.parametrize("v", [1, 2, 3, 4, 5, 6, 7, "1", "7", " 3 ", "5x", "5X"])
-def test_leverage_accepts_integers_1_to_7(v):
+@pytest.mark.parametrize("v", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, "1", "10", " 3 ", "5x", "5X"])
+def test_leverage_accepts_integers_1_to_10(v):
     assert parse_leverage(v) in ALLOWED_LEVERAGES
 
 
-@pytest.mark.parametrize("v", [0, -1, 8, 100, 1.5, 2.0, float("nan"), float("inf"), float("-inf"),
-                               "0", "8", "-1", "1.5", "2.0", "abc", "", None, True, False, "07", "nan",
+@pytest.mark.parametrize("v", [0, -1, 11, 100, 1.5, 2.0, float("nan"), float("inf"), float("-inf"),
+                               "0", "11", "-1", "1.5", "2.0", "abc", "", None, True, False, "07", "nan",
                                "Infinity", [], {}, "3 x 2"])
 def test_leverage_rejects_invalid(v):
     with pytest.raises(LeverageError):
@@ -50,6 +50,7 @@ def test_notional_margin_pnl_scale_with_leverage(lev):
 
 def test_liquidation_prices():
     assert liquidation_price(1, 100.0, 1, 0.004) == 0.0
+    assert liquidation_price(1, 100.0, 10, 0.004) == pytest.approx(90.0 / 0.996)
     lp2 = liquidation_price(1, 100.0, 2, 0.004)
     assert lp2 == pytest.approx(50.0 / 0.996)
     sp2 = liquidation_price(-1, 100.0, 2, 0.004)

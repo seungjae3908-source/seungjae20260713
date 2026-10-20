@@ -1,6 +1,6 @@
 name: Crypto Stat-Arb Reproduction (read-only, PAPER)
 
-# 원본 Crypto-Statistical-Arbitrage 재현·레버리지 1~7배 검증.
+# 원본 Crypto-Statistical-Arbitrage 재현·레버리지 1~10배 검증.
 # 공개 데이터 조회만 한다. 비밀값·계정 API·주문 경로를 쓰지 않고, 배포하지 않는다.
 on:
   pull_request:
@@ -40,7 +40,7 @@ jobs:
           python -m pytest -q tests -p no:cacheprovider
 
   pipeline:
-    name: Public data collection, original rerun, leverage 1-7 backtests, faults
+    name: Public data collection, original rerun, leverage 1-10 backtests, faults
     needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 150

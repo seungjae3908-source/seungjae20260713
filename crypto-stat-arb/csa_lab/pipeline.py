@@ -16,6 +16,7 @@ import pandas as pd
 from . import __version__
 from .backtest import CARRY_ORIGINAL, XVENUE_ORIGINAL, MarketData, prepare_funding, run_backtest
 from .costs import CostModel, CostRate
+from .fund import DEFAULT_INITIAL_KRW, DEFAULT_MAX_ENTRY_MARGIN_KRW, AutoTradingFund, FundError
 from .data import binance as bn
 from .data import fx as fxmod
 from .data import hyperliquid as hl
@@ -247,8 +248,15 @@ def data_fingerprint(data_dir: Path) -> str:
 
 def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw: float,
               windows: dict, strategies: list, profiles: list, label: str,
-              accept_quality_issues: bool = False) -> Path:
-    """여러 전략·구간·비용·레버리지 조합을 실행해 새 결과 디렉터리에 저장(덮어쓰지 않음)."""
+              accept_quality_issues: bool = False, fund_mode: bool = True,
+              fund_initial_krw: float = DEFAULT_INITIAL_KRW,
+              fund_max_entry_krw: float = DEFAULT_MAX_ENTRY_MARGIN_KRW) -> Path:
+    """여러 전략·구간·비용·레버리지 조합을 실행해 새 결과 디렉터리에 저장(덮어쓰지 않음).
+
+    fund_mode: 자동매매 자금 원장(기본 자금 fund_initial_krw, 최대 진입 증거금 fund_max_entry_krw, 이익 50% 재투자)을
+    실행마다 새로 만들어 적용한다. 전략별 계획 capital_krw 는 이 기본 자금에서 떼어 두는 계획이라 합계가 기본 자금을
+    넘으면 실행을 BLOCKED 로 기록한다. fund_mode=False 면 전략별 계획 자금을 그대로 복리 운용한다(이전 방식).
+    """
     levs = [parse_leverage(l) for l in leverages]
     market, quality = build_market(data_dir)
     quality_blocking = {k: v.get("blocking") for k, v in quality.items() if v.get("blocking")}
@@ -266,6 +274,7 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
     profs = cost_profiles(mmr_source["hyperliquid"])
     params_map = {"carry_binance": CARRY_ORIGINAL, "xvenue_funding": XVENUE_ORIGINAL}
     config = {"leverages": levs, "capital_krw": capital_krw, "windows": windows, "strategies": strategies,
+              "fund_mode": fund_mode, "fund_initial_krw": fund_initial_krw, "fund_max_entry_krw": fund_max_entry_krw,
               "profiles": profiles, "label": label, "accept_quality_issues": accept_quality_issues}
     fp = data_fingerprint(data_dir)
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{label}-{_hash_obj(config)}-{fp}"
@@ -275,7 +284,15 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
     summary_rows = []
     ledger = AllocationLedger(capital_krw * len(strategies))
     for s in strategies:
-        ledger.allocate(s, capital_krw)  # 전략마다 별도 50만원. 같은 돈을 두 전략이 쓰지 않음
+        ledger.allocate(s, capital_krw)  # 전략마다 별도 계획 자금. 같은 돈을 두 전략이 쓰지 않음
+    plan_error = None
+    if fund_mode:
+        try:
+            probe = AutoTradingFund(initial_krw=fund_initial_krw, max_entry_margin_krw=fund_max_entry_krw)
+            for s in strategies:
+                probe.allocate_plan(s, capital_krw)
+        except FundError as e:
+            plan_error = str(e)
     for wname, (ws, we) in windows.items():
         fx_start = pick_fx(fx, ws)
         last_day = str((pd.Timestamp(we) - pd.Timedelta(days=1)).date())
@@ -295,11 +312,27 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                         row.update(status="BLOCKED_FX_MISSING", error=str(e))
                         summary_rows.append(row)
                         continue
+                    if plan_error:
+                        row.update(status="BLOCKED_PLAN_EXCEEDS_FUND", error=plan_error)
+                        summary_rows.append(row)
+                        continue
                     capital_units = krw_to_margin_units(capital_krw, q)
+                    fund = None
+                    fund_kw = {}
+                    if fund_mode:
+                        fund_path = out / "runs" / wname / s / prof / f"lev{lev}.fund.json"
+                        fund = AutoTradingFund.open(fund_path, initial_krw=fund_initial_krw,
+                                                    max_entry_margin_krw=fund_max_entry_krw)
+                        for sid in strategies:
+                            fund.allocate_plan(sid, capital_krw)
+                        fund_kw = {"fund": fund, "fund_fx_krw_per_unit": q.krw_per_unit, "fund_strategy_id": s}
+                        capital_units = fund.allowed_entry_margin_krw(s)["allowed_krw"] / q.krw_per_unit
                     try:
                         res = run_backtest(market, params_map[s], leverage=lev, capital=capital_units, cost=pr["cost"],
                                            venue_fees=pr["venue_fees"], mmr=mmr, start_ms=_ms(ws), end_ms=_ms(we),
-                                           stale_funding_hours={"binance": 9, "hyperliquid": 2})
+                                           stale_funding_hours={"binance": 9, "hyperliquid": 2}, **fund_kw)
+                        if fund is not None:
+                            files.append(fund_path)
                     except Exception as e:
                         row.update(status="ERROR", error=f"{type(e).__name__}: {e}")
                         summary_rows.append(row)
@@ -314,6 +347,8 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                         "final_equity_krw_at_end_fx": margin_units_to_krw(m["final_equity"], fx_end) if fx_end else None,
                         "final_equity_krw_at_start_fx": margin_units_to_krw(m["final_equity"], q),
                         "allocation": ledger.to_dict(),
+                        "fund_mode": fund_mode,
+                        "first_entry_margin_units": capital_units,
                     }
                     res["venue_leverage_status"] = [
                         check_paper_leverage_against_venue(lev, "binance", "BTCUSDT-PERP"),
@@ -334,6 +369,10 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                                win_rate_net=m["win_rate_net"], pf_net=m["profit_factor_net"],
                                avg_hold_h=m["avg_hold_hours"], liquidations=m["liquidations"],
                                blocked_stale_hours=m["blocked_stale_hours"],
+                               fund_base_krw=(fund.base_balance_krw if fund else None),
+                               fund_reserve_krw=(fund.reserve_krw if fund else None),
+                               fund_settlements=(len(fund.settled) if fund else None),
+                               blocked_fund_entries=m.get("blocked_fund_entries"),
                                all_costs_confirmed=res["cost_model"]["all_costs_confirmed"])
                     summary_rows.append(row)
     meta = {
