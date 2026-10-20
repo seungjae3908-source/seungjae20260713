@@ -148,9 +148,6 @@ for (const token of ["event: 'MEMBER_EMERGENCY_STOP'", "event: 'MEMBER_RESUME'",
   "event: req.body.stopped ? 'GLOBAL_EMERGENCY_STOP' : 'GLOBAL_RESUME'"]) {
   requireText(tradeAutomationRoute, token, 'AUTO_GATE_EMERGENCY_STOP_ALERT_MISSING');
 }
-// A live cancel or invalidation is an exchange mutation: same capability as amend.
-requireText(tradeAutomationRoute, "if (plan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;\n    const canceled = await cancellation.cancel(userId, plan, order);", 'AUTO_GATE_LIVE_CANCEL_CAPABILITY_MISSING');
-requireText(tradeAutomationRoute, "if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;\n    const result = await automation.invalidatePlan(userId, String(req.params.id));", 'AUTO_GATE_LIVE_INVALIDATE_CAPABILITY_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');

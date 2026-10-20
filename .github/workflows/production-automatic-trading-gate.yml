@@ -216,7 +216,7 @@ jobs:
           if grep -En 'leverage(!)? < 2 \|\| |leverage(!)? > (8|9|10)\b' "$risk" "$execution" "$isolation" "$worker"; then
             echo 'BITGET_LEVERAGE_FLOOR_OR_CEILING_DRIFT' >&2; exit 1
           fi
-      - name: Require live fill FX witness, per-market fund ledger gate, owner halt alerts and live cancel capability
+      - name: Require live fill FX witness, per-market fund ledger gate and owner halt alerts
         shell: bash
         run: |
           set -Eeuo pipefail

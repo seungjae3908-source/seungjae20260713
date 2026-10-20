@@ -2078,11 +2078,9 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, repository, automation, cancellation } = context(req);
-    const currentPlan = await repository.getPlan(userId, String(req.params.id));
-    if (!currentPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    // A live invalidation may send a real exchange cancel: same capability as amend/cancel.
-    if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
+    const { userId, automation, cancellation } = context(req);
+    // Invalidation only expires the plan or cancels its open order: a
+    // risk-reducing action that stays available to the plan's owner.
     const result = await automation.invalidatePlan(userId, String(req.params.id));
     const order = result.order && CANCEL_RECONCILIATION_STATES.has(result.order.state)
       ? await cancellation.cancel(userId, result.plan, result.order) : result.order;
@@ -4046,7 +4044,6 @@ router.post('/orders/:id/cancel', async (req: AuthenticatedRequest, res) => {
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     const plan = await repository.getPlan(userId, order.planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
-    if (plan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const canceled = await cancellation.cancel(userId, plan, order);
     return res.json({
       ok: true,
