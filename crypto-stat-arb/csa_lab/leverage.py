@@ -1,6 +1,6 @@
 """레버리지 입력 검증과 거래소별 확인된 한도.
 
-허용값은 정수 1~7, 기본 1. UI·CLI·API 어디서 들어오든 이 함수 하나로만 검증한다.
+허용값은 정수 1~10, 기본 1. UI·CLI·API 어디서 들어오든 이 함수 하나로만 검증한다.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 MIN_LEVERAGE = 1
-MAX_LEVERAGE = 7
+MAX_LEVERAGE = 10
 DEFAULT_LEVERAGE = 1
 ALLOWED_LEVERAGES = tuple(range(MIN_LEVERAGE, MAX_LEVERAGE + 1))
 
@@ -19,7 +19,7 @@ class LeverageError(ValueError):
 
 
 def parse_leverage(raw: Any, *, default_if_missing: bool = False) -> int:
-    """정수 1~7만 통과시킨다.
+    """정수 1~10만 통과시킨다.
 
     거부: None(기본값 허용을 명시하지 않은 경우), bool, 0, 음수, 8 이상, 소수,
     NaN, Infinity, 숫자가 아닌 문자열, "3.0" 같은 소수 표기, 앞뒤 공백 이외 문자.
@@ -44,7 +44,7 @@ def parse_leverage(raw: Any, *, default_if_missing: bool = False) -> int:
         if text.lower().endswith("x"):
             text = text[:-1]
         if not text.isdigit() or (len(text) > 1 and text.startswith("0")):
-            raise LeverageError(f"레버리지는 1~7 정수여야 합니다: {raw!r}")
+            raise LeverageError(f"레버리지는 1~10 정수여야 합니다: {raw!r}")
         value = int(text)
     else:
         raise LeverageError(f"레버리지 형식을 알 수 없습니다: {type(raw).__name__}")

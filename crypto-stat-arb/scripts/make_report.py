@@ -28,18 +28,19 @@ def suite_tables(result_dir: Path) -> str:
         groups.setdefault((r["window"], r["strategy"], r["cost_profile"]), []).append(r)
     for (w, s, p), rs in groups.items():
         out += [f"#### {w} / {s} / 비용 {p}", "",
-                "| 배율 | 상태 | 자본(USDT) | 다리당 최대 명목 | 순손익(USDT) | 순손익(원, 시작환율) | 순수익률 | MDD | 수수료 | 펀딩 | 슬리피지 | 스프레드 | 거래 | 순승률 | 순PF | Sharpe | 청산 | 평균보유(h) |",
-                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+                "| 배율 | 상태 | 첫 진입증거금(USDT) | 다리당 최대 명목 | 순손익(USDT) | 순손익(원, 시작환율) | 순수익률 | MDD | 수수료 | 펀딩 | 슬리피지 | 스프레드 | 거래 | 순승률 | 순PF | Sharpe | 청산 | 평균보유(h) | 기본자금(원) | 예비금(원) |",
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in sorted(rs, key=lambda x: x["leverage"]):
             if r["status"] != "OK":
-                out.append(f"| {r['leverage']}x | {r['status']} | " + " | ".join(["-"] * 16) + " |")
+                out.append(f"| {r['leverage']}x | {r['status']} | " + " | ".join(["-"] * 18) + " |")
                 continue
             out.append("| " + " | ".join([
                 f"{r['leverage']}x", "OK", fmt(r["capital_units"]), fmt(r["max_notional_per_leg"]),
                 fmt(r["net_pnl_units"]), fmt(r["net_pnl_krw_start_fx"], "krw"), fmt(r["net_return"], "pct"),
                 fmt(r["mdd"], "pct"), fmt(r["fees"]), fmt(r["funding"]), fmt(r["slippage"]), fmt(r["spread"]),
                 fmt(r["trades"], "int"), fmt(r["win_rate_net"], "pct"), fmt(r["pf_net"]), fmt(r["sharpe"]),
-                fmt(r["liquidations"], "int"), fmt(r["avg_hold_h"])]) + " |")
+                fmt(r["liquidations"], "int"), fmt(r["avg_hold_h"]), fmt(r.get("fund_base_krw"), "krw"),
+                fmt(r.get("fund_reserve_krw"), "krw")]) + " |")
         out.append("")
     return "\n".join(out)
 

@@ -1,4 +1,4 @@
-# crypto-stat-arb: 원본 재현·레버리지 1~7배 검증 (조회 전용, PAPER)
+# crypto-stat-arb: 원본 재현·레버리지 1~10배 검증 (조회 전용, PAPER)
 
 공개 저장소 [abailey81/Crypto-Statistical-Arbitrage](https://github.com/abailey81/Crypto-Statistical-Arbitrage)(고정 SHA `44b718e`)의 Phase 3 BTC 선물 전략을 조사하고 재현한다. 원본 조사 결과는 [docs/ORIGINAL_AUDIT.md](docs/ORIGINAL_AUDIT.md)에 있다.
 
@@ -8,9 +8,10 @@
 
 | 모듈 | 역할 |
 |---|---|
-| `leverage.py` | 레버리지 입력 검증. 정수 1~7만 허용하고 기본값은 1이다. 거래소별로 확인된 한도도 여기서 다룬다 |
+| `leverage.py` | 레버리지 입력 검증. 정수 1~10만 허용하고 기본값은 1이다. 거래소별로 확인된 한도도 여기서 다룬다 |
 | `margin.py` | 명목가치, 증거금, 격리 청산가, 미실현 손익 계산 |
 | `money.py` | 원화→USDT 환산(환율이 없으면 중단)과 전략별 자금 할당 장부 |
+| `fund.py` | 자동매매 자금 원장(PAPER): 기본 자금·최대 진입 증거금·50% 재투자·예비금·중복 결산 금지·복구 |
 | `costs.py` | 비용 항목. 미확인 비용은 `UNKNOWN`, 가정한 비용은 `ASSUMED`로 표시 |
 | `quality.py` | 중복·누락·비정상 가격·OHLC 모순·최신성 검사 |
 | `storage.py` | 원자적 저장, 실행 잠금, 체크포인트, 결과 불변 보관(MANIFEST sha256) |
@@ -33,7 +34,21 @@
   - 현물 다리에는 레버리지를 걸지 않는다.
 - **비례 관계**: 수수료·슬리피지·스프레드·펀딩은 모두 명목가치에 비례하므로 L에 비례해서 커진다.
 - **청산가**: 롱은 `E(1-1/L)/(1-mmr)`, 숏은 `E(1+1/L)/(1+mmr)`이다. 봉의 고가·저가(바이낸스는 마크가격)가 청산가에 닿으면 그 다리의 증거금 전액을 잃는 것으로 처리한다.
-- **PAPER 한도와 실계좌 한도 분리**: PAPER 계산은 1~7배를 모두 허용한다. 대신 거래소 한도가 확인되지 않았으면 결과에 `UNVERIFIED_VENUE_LIMIT`로 표시한다.
+- **PAPER 한도와 실계좌 한도 분리**: PAPER 계산은 1~10배를 모두 허용한다. 대신 거래소 한도가 확인되지 않았으면 결과에 `UNVERIFIED_VENUE_LIMIT`로 표시한다.
+
+## 자동매매 자금 관리 (fund.py)
+
+- 초기 기본 자금 1,000,000 KRW(참고 기준, 손실 뒤 자동 보충 없음), 최대 진입 증거금 한도 기본 1,000,000 KRW(`--max-entry-krw`로 변경).
+- 진입 증거금(레버리지 적용 전) = min(최대 진입 한도, 기본 자금 잔액, 전략 계획 잔여분, 거래소 잔액·증거금 상한·리스크 상한 중 확인된 값). 거래소 최소 주문 금액보다 작으면 진입을 막는다.
+- 실현 순이익(수수료·펀딩·슬리피지·스프레드 차감 후)의 50%는 기본 자금에 재투자, 50%는 예비금. 손실은 기본 자금에서 뺀다. 예비금 → 기본 자금 이체 기능은 없다.
+- 전략별 계획 자금(기본 500,000 KRW)은 같은 기본 자금에서 떼어 두는 계획이다. 계획 합계가 기본 자금을 넘으면 `BLOCKED_PLAN_EXCEEDS_FUND`로 기록하고 실행하지 않는다(같은 돈의 중복 사용 금지).
+- 결산은 거래 ID로 한 번만 처리한다. 상태는 원자적으로 저장하고, 다시 읽을 때 일지로 재계산해 불일치(변조·반쪽 저장)를 잡는다.
+- 백테스트에서는 구간 시작 환율 하나로 원화↔USDT를 고정 환산한다(환율 변동 손익 미반영). 장시간 무주문 실행기(soak)는 신호와 PAPER 포지션 상태만 기록하고 이 원장에 결산하지 않는다(두 다리 가격이 없어 순손익을 산출하지 않음).
+
+## 운영 앱과의 설정 차이 (변경하지 않음)
+
+- 운영 앱(`api-server/src/services/trade-automation.types.ts`)의 100만원은 `totalCapitalKrw`(총 자본), 50만원은 회원 1회 주문 상한(`maxOrderKrw`, 관리자 100만원)이다. 이 패키지의 50만원은 전략별 계획 자금이고 100만원은 자동매매 기본 자금이다. 서로 다른 의미이며, 이 패키지는 운영 앱 자금과 연결되지 않는다.
+- 운영 앱의 선물 레버리지는 `bitgetLeverage: 2~7`(회원 최대 3, 관리자 최대 7)이고 1배가 없다. 이 패키지의 1~10배는 PAPER 계산 범위이며 운영 앱 설정과 실제 계좌 레버리지는 바꾸지 않았다. 운영 앱을 1~10배로 바꾸는 것은 별도 승인 항목이다.
 
 ## 실행
 
@@ -42,8 +57,9 @@ pip install -r requirements.txt
 python -m pytest -q tests
 
 python -m csa_lab collect  --data-dir D --start 2020-01 --end 2026-09
-python -m csa_lab backtest --data-dir D --results-dir R --leverage all          # 기본 1배, all=1~7
-python -m csa_lab backtest --data-dir D --results-dir R --leverage 3 --capital-krw 500000
+python -m csa_lab backtest --data-dir D --results-dir R --leverage all          # 기본 1배, all=1~10
+python -m csa_lab backtest --data-dir D --results-dir R --leverage 3 --capital-krw 500000 \
+    --fund-initial-krw 1000000 --max-entry-krw 1000000      # 자금 원장 적용(기본). --no-fund 로 끔
 python -m csa_lab original --original-repo ORIG --data-dir D --out O --start-date 2023-07-01 --end-date 2024-12-31
 python -m csa_lab soak     --root S --hours 24 --interval-s 300
 python -m csa_lab verify   R/<run_id>

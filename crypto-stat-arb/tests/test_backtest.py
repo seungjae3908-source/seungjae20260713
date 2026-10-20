@@ -85,7 +85,7 @@ def test_unknown_cost_blocks_backtest():
         run(m, CARRY_ORIGINAL, 1, c=c)
 
 
-@pytest.mark.parametrize("lev", range(1, 8))
+@pytest.mark.parametrize("lev", range(1, 11))
 def test_xvenue_leverage_scales_notional_funding_and_costs(lev):
     m = market(b_rate=0.0002, h_rate=0.0)  # 차이 21.9% > 10%
     base = run(m, XVENUE_ORIGINAL, 1)
@@ -140,7 +140,7 @@ def test_missing_bar_rejected_and_bad_inputs():
         run(m2, CARRY_ORIGINAL, 1)
     from csa_lab.leverage import LeverageError
     with pytest.raises(LeverageError):
-        run(market(), CARRY_ORIGINAL, 8)
+        run(market(), CARRY_ORIGINAL, 11)
     with pytest.raises(BacktestInputError):
         run(market(), CARRY_ORIGINAL, 1, capital=0)
 
@@ -177,3 +177,32 @@ def test_short_gap_keeps_funding_settlement():
     gap = run(m, CARRY_ORIGINAL, 1, c=cost(0, 0, 0))
     assert gap["metrics"]["missing_bars_in_window"] == 2
     assert gap["metrics"]["funding_pnl"] == pytest.approx(full["metrics"]["funding_pnl"])
+
+
+def test_fund_mode_entry_capped_and_settled_once():
+    from csa_lab.fund import AutoTradingFund
+    m = market(b_rate=0.0002)
+    fund = AutoTradingFund(initial_krw=1_000_000, max_entry_margin_krw=400_000)
+    fund.allocate_plan("carry_binance", 500_000)
+    end = int(m.bars.index[-1]) + H
+    r = run_backtest(m, CARRY_ORIGINAL, leverage=2, capital=1.0, cost=cost(0, 0, 0), start_ms=T0, end_ms=end,
+                     fund=fund, fund_fx_krw_per_unit=1000.0, fund_strategy_id="carry_binance", **KW)
+    t = r["trades"][0]
+    assert t["capital_at_entry"] == pytest.approx(400.0)  # min(한도 40만, 잔액 100만, 계획 50만) / 환율
+    assert r["fund"]["settlements"] == 1 and r["fund"]["verify"]["ok"]
+    pnl_krw = t["net_pnl"] * 1000.0
+    assert fund.base_balance_krw == pytest.approx(1_000_000 + pnl_krw * 0.5)
+    assert fund.reserve_krw == pytest.approx(pnl_krw * 0.5)
+    # 같은 원장으로 같은 구간을 다시 돌리면 중복 결산이 거부된다
+    from csa_lab.fund import DuplicateSettlementError
+    with pytest.raises(DuplicateSettlementError):
+        run_backtest(m, CARRY_ORIGINAL, leverage=2, capital=1.0, cost=cost(0, 0, 0), start_ms=T0, end_ms=end,
+                     fund=fund, fund_fx_krw_per_unit=1000.0, fund_strategy_id="carry_binance", **KW)
+
+
+def test_fund_mode_requires_fx():
+    from csa_lab.fund import AutoTradingFund
+    m = market()
+    with pytest.raises(BacktestInputError):
+        run_backtest(m, CARRY_ORIGINAL, leverage=1, capital=1.0, cost=cost(), start_ms=T0,
+                     end_ms=int(m.bars.index[-1]) + H, fund=AutoTradingFund(), **KW)
