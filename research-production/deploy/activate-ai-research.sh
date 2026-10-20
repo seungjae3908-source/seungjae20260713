@@ -285,8 +285,15 @@ restore_runtime_snapshot() {
     echo "AI_RESEARCH_ROLLBACK_ENV_BACKUP_MISSING:research-production.env" >&2; return 1;
   }
   "${SUDO[@]}" systemctl daemon-reload
+  # Services are restored and verified before their timers. A restored timer
+  # with Persistent=true fires at once when its tick was missed during the
+  # activation, so starting it first makes its one-shot look like a service the
+  # rollback failed to leave idle (AI_RESEARCH_ROLLBACK_ACTIVE_VERIFY_FAILED).
+  local pass
+  for pass in service timer; do
   while IFS=$'\t' read -r kind name exists enabled active fragment expected_sha exec_sha restore_sha; do
     [[ "$kind" == unit ]] || continue
+    if [[ "$pass" == timer ]]; then [[ "$name" == *.timer ]] || continue; else [[ "$name" != *.timer ]] || continue; fi
     case "$enabled" in
       enabled) "${SUDO[@]}" systemctl enable "$name" >/dev/null ;;
       enabled-runtime) "${SUDO[@]}" systemctl enable --runtime "$name" >/dev/null ;;
@@ -307,6 +314,7 @@ restore_runtime_snapshot() {
   done < "$manifest"
   while IFS=$'\t' read -r kind name exists enabled active fragment expected_sha exec_sha restore_sha; do
     [[ "$kind" == unit ]] || continue
+    if [[ "$pass" == timer ]]; then [[ "$name" == *.timer ]] || continue; else [[ "$name" != *.timer ]] || continue; fi
     local actual_enabled actual_active actual_sha actual_exec_sha
     actual_enabled="$("${SUDO[@]}" systemctl is-enabled "$name" 2>/dev/null || true)"
     actual_active="$("${SUDO[@]}" systemctl is-active "$name" 2>/dev/null || true)"
@@ -339,6 +347,7 @@ restore_runtime_snapshot() {
       fi
     fi
   done < "$manifest"
+  done
   [[ "$previous_sha" =~ ^[0-9a-f]{40}$ && "$previous_release" == "$RESEARCH_RELEASES_ROOT/$previous_sha" \
     && "$(git -C "$previous_release" rev-parse HEAD 2>/dev/null || true)" == "$previous_sha" ]] || {
     echo "AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH" >&2; return 1;
