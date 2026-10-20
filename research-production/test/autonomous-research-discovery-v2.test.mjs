@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { runAutonomousResearchClosedLoopV1 } from '../src/autonomous-research-closed-loop-v1.mjs';
 import { runAutonomousResearchCycleV2 } from '../src/autonomous-research-cycle-v2.mjs';
-import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, rotateCatalogWindowV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
+import { DEFAULT_VERIFIED_SOURCE_CATALOG_V2, DISCOVERY_FIXED_TEXT_V2, RESEARCH_LANES_V2, isNonStrategySourcePathV2, isSourceSpecificReasonV2, pinKnownRepositoryBranchV2, rotateCatalogWindowV2, runAutonomousResearchDiscoveryV2 } from '../src/autonomous-research-discovery-v2.mjs';
 import { readdir as readdirForLanes } from 'node:fs/promises';
 import { parseResearchFreeAiReviewForResearchOnlyV1 } from '../src/research-ai-review-worker.mjs';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -376,6 +376,77 @@ test('a later release preserves prior state and cannot rediscover the same sourc
   assert.equal(await readFile(oldStatePath, 'utf8'), oldState);
   const nextState = JSON.parse(await readFile(join(root, 'autonomous-research', 'releases', NEXT_SHA, 'state.json'), 'utf8'));
   assert.equal(nextState.researchCodeSha, NEXT_SHA);
+});
+
+test('a wrong branch for a repository the catalog knows is pinned to the catalog branch before any fetch', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const masterPlan = aiAnswer({ summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=master'],
+    requiredEvidence: ['SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'] });
+  const catalog = [
+    { repository: 'https://github.com/example/public-strategies', branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/ParticipationBreakout.py' },
+    { repository: 'https://github.com/example/public-strategies', branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/Second.py' },
+  ];
+  assert.equal(pinKnownRepositoryBranchV2({ repository: 'https://github.com/example/public-strategies', branch: 'master' }, catalog).branch, 'main');
+  assert.equal(pinKnownRepositoryBranchV2({ repository: 'https://github.com/example/public-strategies', branch: 'master' }, catalog).branchCorrectedFrom, 'master');
+  assert.equal(pinKnownRepositoryBranchV2({ repository: 'https://github.com/other/repo', branch: 'master' }, catalog).branch, 'master', 'unknown repositories keep the answered branch');
+  assert.equal(pinKnownRepositoryBranchV2({ repository: 'https://github.com/example/public-strategies', branch: 'main' }, catalog).branchCorrectedFrom, undefined);
+  const urls = [];
+  const fetchImpl = sourceFetch();
+  let calls = 0;
+  // The model copies a catalog entry but answers BRANCH=master (the production answer on 2026-10-20).
+  const result = await runAutonomousResearchDiscoveryV2({
+    verifiedSourceCatalog: catalog,
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? masterPlan : extractionAnswer }),
+    fetchImpl: async (url, init) => { urls.push(String(url)); return fetchImpl(url, init); }, datasetLoader,
+  });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.equal(result.candidate.branch, 'main');
+  assert.equal(result.candidate.branchCorrectedFrom, 'master');
+  assert.ok(urls.some((url) => url.endsWith('/commits/main.atom')) && !urls.some((url) => url.includes('/commits/master.atom')));
+  assert.equal(result.actualSourceFetches.succeeded, 3);
+});
+
+test('a 404 commit feed for an unknown repository falls back to the default-branch feed once', async (t) => {
+  const root = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+  const masterPlan = aiAnswer({ summary: '공개 전략 저장소 후보',
+    findings: ['REPOSITORY=https://github.com/example/public-strategies', 'BRANCH=master'],
+    requiredEvidence: ['SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'] });
+  const base = sourceFetch();
+  const urls = [];
+  const fetchImpl = async (url, init) => {
+    urls.push(String(url));
+    if (String(url).endsWith('/commits.atom')) return base(String(url).replace('/commits.atom', '/commits/main.atom'), init);
+    return base(url, init);
+  };
+  let calls = 0;
+  const result = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: root, researchCodeSha: SHA, env: env(), now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? masterPlan : extractionAnswer }),
+    fetchImpl, datasetLoader,
+  });
+  assert.equal(result.status, 'DOSSIER_STAGED', JSON.stringify(result));
+  assert.equal(result.candidate.branchResolution, 'DEFAULT_BRANCH_FALLBACK');
+  assert.equal(result.candidate.sourceRevision, SOURCE_SHA);
+  assert.deepEqual(urls.filter((url) => url.includes('/commits')), [
+    'https://github.com/example/public-strategies/commits/master.atom', 'https://github.com/example/public-strategies/commits.atom']);
+  assert.equal(result.actualSourceFetches.succeeded, 3, 'the fallback feed is the same provenance stage, not a fourth fetch');
+  // A repository that does not exist still fails closed with the original 404.
+  calls = 0;
+  const fresh = await fixture(t);
+  await runAutonomousResearchClosedLoopV1({ stateRoot: fresh, researchCodeSha: SHA, now: () => AT });
+  const missing = await runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: [],
+    stateRoot: fresh, researchCodeSha: SHA, env: { ...env(), RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '1' }, now: () => AT,
+    invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? aiAnswer({ summary: '없는 저장소',
+      findings: ['REPOSITORY=https://github.com/example/missing', 'BRANCH=master'],
+      requiredEvidence: ['SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'] }) : extractionAnswer }),
+    fetchImpl: async () => ({ status: 404, text: async () => '' }), datasetLoader,
+  });
+  assert.equal(missing.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(missing.reason, 'PUBLIC_SOURCE_HTTP_404');
 });
 
 test('AI locator that is absent from fetched source fails closed before Formula or backtest', async (t) => {
