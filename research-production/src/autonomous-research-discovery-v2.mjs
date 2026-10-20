@@ -871,7 +871,7 @@ async function priorFailedSources(root, catalog = []) {
     let row = null;
     try { row = await readJsonOptional(join(directory, name)); } catch { row = null; }
     if (row?.status !== 'AI_DISCOVERY_UNAVAILABLE' || isTransientReason(row?.reason) || isBranchMistake404(row, catalogBranches)
-      || ['AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', 'AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG', 'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'].includes(row?.reason)) continue;
+      || ['AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', 'AI_DISCOVERY_SOURCE_ALREADY_STAGED'].includes(row?.reason)) continue;
     const repository = String(row?.candidate?.repository ?? '').replace(/\/$/u, '');
     const sourcePath = String(row?.candidate?.sourcePath ?? '');
     if (SAFE_REPOSITORY.test(repository) && SAFE_PATH.test(sourcePath)) failed.add(`${repository}:${sourcePath}`);
@@ -1042,6 +1042,17 @@ export async function runAutonomousResearchDiscoveryV2({
       researchLane: lane.id, ...(plan.branchCorrectedFrom ? { branchCorrectedFrom: plan.branchCorrectedFrom } : {}) };
     if (failedSources.includes(`${plan.repository}:${plan.sourcePath}`)) throw new Error('AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
     if (isNonStrategySourcePathV2(plan.sourcePath)) throw new Error('AI_DISCOVERY_SOURCE_NOT_STRATEGY');
+    const repositoryMatch = SAFE_REPOSITORY.exec(plan.repository);
+    const alreadyStagedPath = repositoryMatch && priorSourceIds.some((id) =>
+      id.startsWith(`github:${repositoryMatch[1]}/${repositoryMatch[2]}:`) && id.endsWith(`:${plan.sourcePath}`));
+    const knownCatalogSource = Array.isArray(verifiedSourceCatalog) && verifiedSourceCatalog.some((entry) =>
+      entry.repository === plan.repository && entry.branch === plan.branch
+      && entry.sourcePath === plan.sourcePath && entry.licensePath === plan.licensePath);
+    if (alreadyStagedPath && knownCatalogSource && !catalog.some((entry) =>
+      entry.repository === plan.repository && entry.branch === plan.branch
+      && entry.sourcePath === plan.sourcePath && entry.licensePath === plan.licensePath)) {
+      throw new Error('AI_DISCOVERY_SOURCE_ALREADY_STAGED');
+    }
     if (catalog.length && !catalog.some((entry) => entry.repository === plan.repository && entry.branch === plan.branch
       && entry.sourcePath === plan.sourcePath && entry.licensePath === plan.licensePath)) {
       throw new Error('AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG');
@@ -1135,8 +1146,7 @@ export async function runAutonomousResearchDiscoveryV2({
     // Selection/duplicate guards are not evidence that the public source itself is bad.
     // Temporarily suppress that pick for this run and ask the model for another catalog entry;
     // do not persist these guard outcomes as a permanent source blacklist.
-    const selectionOnlyReason = ['AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', 'AI_DISCOVERY_SOURCE_NOT_IN_VERIFIED_CATALOG',
-      'AI_DISCOVERY_SOURCE_REVISION_ALREADY_ATTEMPTED'].includes(reason);
+    const selectionOnlyReason = reason === 'AI_DISCOVERY_SOURCE_ALREADY_STAGED';
     if (sourceAttempt < retryPolicy.sourceAttempts && selectionOnlyReason && calls.failed === 0 && sourceKey) {
       failedSources = Object.freeze([...new Set([...failedSources, sourceKey])].sort().slice(-40));
       continue;
