@@ -1,0 +1,100 @@
+name: Crypto Stat-Arb Reproduction (read-only, PAPER)
+
+# 원본 Crypto-Statistical-Arbitrage 재현·레버리지 1~7배 검증.
+# 공개 데이터 조회만 한다. 비밀값·계정 API·주문 경로를 쓰지 않고, 배포하지 않는다.
+on:
+  pull_request:
+    paths:
+      - crypto-stat-arb/**
+      - .github/workflows/crypto-stat-arb-validation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-stat-arb-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: crypto-stat-arb
+
+jobs:
+  tests:
+    name: Unit + integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements.txt
+      - name: Tests at exact head
+        run: |
+          echo "sha $(git rev-parse HEAD)"
+          python -m pytest -q tests -p no:cacheprovider
+
+  pipeline:
+    name: Public data collection, original rerun, leverage 1-7 backtests, faults
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements.txt
+      - name: Run pipeline
+        env:
+          CSA_WORK: ${{ runner.temp }}/csa
+        run: bash scripts/ci_pipeline.sh
+      - name: Keep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csa-results-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/csa/results
+            ${{ runner.temp }}/csa/original-*/original_run_report.json
+            ${{ runner.temp }}/csa/original-*/MANIFEST.json
+            ${{ runner.temp }}/csa/original-*/original_output/execution_summary.json
+            ${{ runner.temp }}/csa/data/collect_report.json
+            ${{ runner.temp }}/csa/REPORT.md
+            ${{ runner.temp }}/csa/stages.log
+          retention-days: 30
+
+  soak:
+    name: Long-running no-order PAPER soak (kill and restart)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements.txt
+      - name: Soak
+        env:
+          CSA_SOAK_ROOT: ${{ runner.temp }}/soak
+          SOAK_FIRST_HOURS: '2'
+          SOAK_SECOND_HOURS: '3.3'
+        run: bash scripts/ci_soak.sh
+      - name: Keep soak records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csa-soak-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/soak
+          retention-days: 30
