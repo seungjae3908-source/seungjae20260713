@@ -1,5 +1,4 @@
-import type { BitgetLeverage, TradingExchange, TradingPlanInput } from './trade-automation.types';
-import { BITGET_LEVERAGE_OPTIONS } from './trade-automation.types';
+import type { TradingExchange, TradingPlanInput } from './trade-automation.types';
 
 export type FuturesLiveExecutionAuthority = 'NONE' | 'FUTURES_LIVE_LIMITED';
 
@@ -99,7 +98,7 @@ export function futuresLiveCapabilityDecision(input: {
   }
 
   const configuredMaxLeverage = Number(environment.FUTURES_LIVE_MAX_LEVERAGE ?? 0);
-  if (!BITGET_LEVERAGE_OPTIONS.includes(configuredMaxLeverage as BitgetLeverage)) blockers.push('FUTURES_LIVE_MAX_LEVERAGE_INVALID');
+  if (![2, 3, 4, 5, 6, 7].includes(configuredMaxLeverage)) blockers.push('FUTURES_LIVE_MAX_LEVERAGE_INVALID');
   if (String(environment.FUTURES_LIVE_MARGIN_MODE ?? '').trim().toLowerCase() !== 'isolated') {
     blockers.push('FUTURES_LIVE_MARGIN_MODE_INVALID');
   }
@@ -114,7 +113,7 @@ export function futuresLiveCapabilityDecision(input: {
     }
     if (input.plan.marginMode !== 'isolated') blockers.push('FUTURES_LIVE_ISOLATED_MARGIN_REQUIRED');
     const leverage = Number(input.plan.leverage ?? 0);
-    if (!BITGET_LEVERAGE_OPTIONS.includes(leverage as BitgetLeverage) || leverage > configuredMaxLeverage) {
+    if (![2, 3, 4, 5, 6, 7].includes(leverage) || leverage > configuredMaxLeverage) {
       blockers.push('FUTURES_LIVE_LEVERAGE_NOT_ALLOWED');
     }
   }

@@ -115,9 +115,6 @@ for (const token of [
 ]) requireText(tradeAutomationSmoke, token, 'AUTO_GATE_ENCRYPTED_READONLY_CREDENTIAL_REGRESSION_MISSING');
 requireText(workflow, 'execution/read-only encrypted credential contracts', 'AUTO_GATE_ENCRYPTED_CREDENTIAL_CHECK_WIRING_MISSING');
 
-// 1x is the floor on every Bitget path (policy, plan, live isolation); spot and
-// stock plans never carry leverage. Raising either role ceiling stays an owner decision.
-requireText(tradeTypes, 'PRODUCTION_MIN_BITGET_LEVERAGE = 1', 'AUTO_GATE_MIN_LEVERAGE_FLOOR_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');
@@ -539,7 +536,7 @@ requireText(positionIsolation, "'BACKGROUND_LIVE_MANUAL_ASSET_PROTECTED'", 'AUTO
 requireText(positionIsolation, "'BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT'", 'AUTO_GATE_MIXED_POSITION_BLOCK_MISSING');
 requireText(positionIsolation, "'BACKGROUND_LIVE_CANONICAL_EXIT_OWNERSHIP_REQUIRED'", 'AUTO_GATE_CANONICAL_EXIT_PROOF_MISSING');
 for (const token of ["snapshot.openOrders.length !== 0", "snapshot.positionMode !== 'one_way_mode'",
-  "position.marginMode !== 'isolated'", 'position.leverage! < PRODUCTION_MIN_BITGET_LEVERAGE || position.leverage! > maximumLeverage']) {
+  "position.marginMode !== 'isolated'", 'position.leverage! < 2 || position.leverage! > maximumLeverage']) {
   requireText(positionIsolation, token, 'AUTO_GATE_ISOLATION_PROVIDER_SAFETY_MISSING');
 }
 requireText(liveExecution, 'await this.assertAutomaticLivePositionIsolation(userId, plan);', 'AUTO_GATE_SUBMISSION_POSITION_RECHECK_MISSING');

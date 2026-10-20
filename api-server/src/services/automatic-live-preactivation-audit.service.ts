@@ -4,9 +4,6 @@ import type { MemberAutoTradingBackgroundSource } from './member-auto-trading-ba
 import { liveAllFourConnectionVerificationReady, liveProviderSnapshotReadyForAutomaticWarmup } from './member-auto-trading-background-worker.service';
 import { canonicalAutomaticLivePositions } from './automatic-live-position-isolation.service';
 import type { TradingRepository } from './trade-automation.repository';
-import {
-  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE, PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE, PRODUCTION_MIN_BITGET_LEVERAGE,
-} from './trade-automation.types';
 import { createDefaultStrategyPromotionService } from './strategy-promotion.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { isFormulaAiLiveExceptionStrategyId } from './formula-ai-live-exception.service';
@@ -157,7 +154,7 @@ export async function auditAutomaticLivePreactivation(input: {
         p.maxAssetClassKrw[market as keyof typeof p.maxAssetClassKrw] !== baseline)) codes.push('PREACTIVATION_PER_MARKET_BASELINE_DRIFT');
     if (p.dailyLossLimitPercent !== 3) codes.push('PREACTIVATION_DAILY_LOSS_POLICY_DRIFT');
     if (p.maxDailyOrders !== 0) codes.push('PREACTIVATION_DAILY_ENTRY_COUNT_POLICY_DRIFT');
-    if (!Number.isInteger(p.bitgetLeverage) || p.bitgetLeverage < PRODUCTION_MIN_BITGET_LEVERAGE || p.bitgetLeverage > (admin ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE)) {
+    if (!Number.isInteger(p.bitgetLeverage) || p.bitgetLeverage < 2 || p.bitgetLeverage > (admin ? 7 : 3)) {
       codes.push('PREACTIVATION_ROLE_LEVERAGE_POLICY_DRIFT');
     }
     if (p.pilotStage === 'limited-50') codes.push('PREACTIVATION_OLD_50000_STAGE_CAP');

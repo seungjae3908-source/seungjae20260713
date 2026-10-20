@@ -1,7 +1,3 @@
-import {
-  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE, PRODUCTION_MIN_BITGET_LEVERAGE, type BitgetLeverage,
-} from './trade-automation.types';
-
 export type FourMarketAutoMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 export type FourMarketAutoProvider = 'TOSS' | 'KIWOOM' | 'UPBIT' | 'BITGET';
 export type FourMarketAutoDirection = 'BUY' | 'SELL_EXIT' | 'LONG' | 'SHORT';
@@ -139,7 +135,7 @@ export interface FourMarketAutoFrozenPlan {
   readonly direction: FourMarketAutoDirection;
   readonly reduceOnly: boolean;
   readonly quantity: number;
-  readonly leverage: BitgetLeverage | null;
+  readonly leverage: 2 | 3 | 4 | 5 | 6 | 7 | null;
   readonly marginMode: 'isolated' | null;
   readonly costPolicyVersion: string;
   readonly researchCodeSha: string;
@@ -295,8 +291,8 @@ function validateProviderEvidence(input: FourMarketAutoReadinessInput, reasons: 
     reasons.push('BITGET_CONTRACT_EVIDENCE_INVALID');
   }
   if (!Number.isInteger(input.providerEvidence.leverage)
-    || input.providerEvidence.leverage < PRODUCTION_MIN_BITGET_LEVERAGE
-    || input.providerEvidence.leverage > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    || input.providerEvidence.leverage < 2
+    || input.providerEvidence.leverage > 7
     || input.providerEvidence.marginMode !== 'isolated') {
     reasons.push('BITGET_LEVERAGE_OR_MARGIN_INVALID');
   }

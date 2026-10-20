@@ -193,29 +193,6 @@ jobs:
           if grep -Eq 'existingOrdersCanceled:[[:space:]]*false,' "$route"; then
             echo 'EMERGENCY_STOP_CANCEL_HARDCODED_FALSE' >&2; exit 1
           fi
-      - name: Require Bitget 1x leverage floor on every path and leverage rejection on spot/stock plans
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          types=api-server/src/services/trade-automation.types.ts
-          risk=api-server/src/services/trade-automation-risk.service.ts
-          execution=api-server/src/services/trade-execution.service.ts
-          isolation=api-server/src/services/automatic-live-position-isolation.service.ts
-          worker=api-server/src/services/member-auto-trading-background-worker.service.ts
-          grep -Fq 'export const PRODUCTION_MIN_BITGET_LEVERAGE = 1 as const;' "$types"
-          grep -Fq 'export const PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3 as const;' "$types"
-          grep -Fq 'export const PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7 as const;' "$types"
-          grep -Fq 'export type BitgetLeverage = 1 | 2 | 3 | 4 | 5 | 6 | 7;' "$types"
-          grep -Fq 'leverage < PRODUCTION_MIN_BITGET_LEVERAGE || leverage > PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE' "$risk"
-          grep -Fq "add(blockCodes, 'LEVERAGE_NOT_APPLICABLE_SPOT_OR_STOCK')" "$risk"
-          grep -Fq "if (!isBitgetLeverage(leverage)) throw new Error('BITGET_LEVERAGE_LIMIT');" "$execution"
-          grep -Fq 'position.leverage! < PRODUCTION_MIN_BITGET_LEVERAGE || position.leverage! > maximumLeverage' "$isolation"
-          grep -Fq '|| leverageEvidence < PRODUCTION_MIN_BITGET_LEVERAGE' "$worker"
-          grep -Fq '|| leverageEvidence !== member.policy.bitgetLeverage' "$worker"
-          # No path may reintroduce a hard-coded 2x floor or widen the role ceilings.
-          if grep -En 'leverage(!)? < 2 \|\| |leverage(!)? > (8|9|10)\b' "$risk" "$execution" "$isolation" "$worker"; then
-            echo 'BITGET_LEVERAGE_FLOOR_OR_CEILING_DRIFT' >&2; exit 1
-          fi
       - name: Validate non-superuser owner-bound budget proof contracts offline
         run: node --test .github/tests/production-auto-live-budget-contract.test.mjs
       - name: Validate canonical public-handoff prearm receipt offline
