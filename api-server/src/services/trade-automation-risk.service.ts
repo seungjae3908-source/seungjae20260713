@@ -233,6 +233,9 @@ export function evaluateTradingPlan(
   const assetClass = assetClassForPlan(plan);
   const classExposure = finiteNonNegative(snapshot.assetClassExposureKrw) ? snapshot.assetClassExposureKrw : 0;
   if (!riskReducing && classExposure + plan.estimatedKrw > policy.maxAssetClassKrw[assetClass]) add(blockCodes, 'ASSET_CLASS_AMOUNT_LIMIT');
+  // Per-market base funds must fit inside the total base fund; two enabled
+  // live markets may never be allocated the same KRW.
+  for (const code of marketCapitalEntryBlockCodes(plan, policy, { riskReducing })) add(blockCodes, code);
 
   const openRiskKrw = finiteNonNegative(snapshot.openRiskKrw) ? snapshot.openRiskKrw : null;
   const thisPlanRiskKrw = plannedOpenRiskKrw(plan);
@@ -373,4 +376,210 @@ export function evaluateTradingPlan(
     for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
   }
   return { allowed: blockCodes.length === 0, blockCodes, warnings, optimization };
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * Per-market capital ledger (pure projections, no I/O).
+ *
+ * The owner's rule: every market runs on its OWN base fund (for example
+ * Bitget futures 1,000,000 KRW + Upbit spot 1,000,000 KRW = 2,000,000 KRW
+ * total). The sum of the per-market allocations may never exceed the total
+ * base fund, a market may only spend what its own ledger shows as available,
+ * reserve capital is never moved into a market automatically, and an
+ * unexplained difference between the exchange balance and the ledger blocks
+ * NEW entries until a person resolves it. Nothing here places, cancels or
+ * amends an order; callers feed these block codes into the risk decision.
+ */
+
+export const MARKET_LEDGER_CLASSES: readonly TradingAssetClass[] = Object.freeze([
+  'domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures',
+]);
+
+export const MARKET_LEDGER_DEFAULT_DRIFT_TOLERANCE_KRW = 1_000 as const;
+
+export type MarketCapitalAllocationRow = Readonly<{
+  market: TradingAssetClass;
+  enabled: boolean;
+  allocatedKrw: number;
+}>;
+
+export type MarketCapitalAllocation = Readonly<{
+  totalCapitalKrw: number;
+  markets: readonly MarketCapitalAllocationRow[];
+  enabledAllocatedKrw: number;
+  overAllocatedKrw: number;
+  /** SHARED_POOL: no per-market base funds are declared (every enabled
+   * market's cap equals the total), so the markets draw on one shared pool
+   * and only the account-level exposure limit separates them. This is the
+   * stored default and is REPORTED, not blocked. CONSISTENT / OVER_ALLOCATED
+   * apply once per-market base funds are declared below the total. */
+  status: 'SHARED_POOL' | 'CONSISTENT' | 'OVER_ALLOCATED';
+  blockCodes: readonly string[];
+}>;
+
+function ledgerNonNegative(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** Each enabled market's allocation is its asset-class cap. Allocations of
+ * enabled markets must fit inside the total base fund; otherwise two markets
+ * would be spending the same KRW. */
+export function buildMarketCapitalAllocation(policy: TradingPolicy): MarketCapitalAllocation {
+  const totalCapitalKrw = ledgerNonNegative(policy.totalCapitalKrw) ?? 0;
+  const markets = MARKET_LEDGER_CLASSES.map((market) => Object.freeze({
+    market,
+    enabled: policy.marketEnabled[market] === true,
+    allocatedKrw: Math.min(ledgerNonNegative(policy.maxAssetClassKrw[market]) ?? 0, totalCapitalKrw),
+  }));
+  const enabled = markets.filter((row) => row.enabled);
+  const enabledAllocatedKrw = enabled.reduce((sum, row) => sum + row.allocatedKrw, 0);
+  const overAllocatedKrw = Math.max(0, enabledAllocatedKrw - totalCapitalKrw);
+  const declaresMarketFunds = enabled.length > 0 && enabled.every((row) => row.allocatedKrw < totalCapitalKrw);
+  const status: MarketCapitalAllocation['status'] = !declaresMarketFunds ? 'SHARED_POOL'
+    : overAllocatedKrw > 0 ? 'OVER_ALLOCATED' : 'CONSISTENT';
+  return Object.freeze({
+    totalCapitalKrw,
+    markets: Object.freeze(markets),
+    enabledAllocatedKrw,
+    overAllocatedKrw,
+    status,
+    blockCodes: Object.freeze(status === 'OVER_ALLOCATED' ? ['MARKET_CAPITAL_OVER_ALLOCATED'] : []),
+  });
+}
+
+export type MarketLedgerProjectionInput = Readonly<{
+  market: TradingAssetClass;
+  allocatedKrw: number;
+  /** KRW locked by this market's own open (unfilled) orders. */
+  openOrderReservedKrw: number;
+  /** Margin/cost already committed to open positions of this market. */
+  positionMarginKrw: number;
+  /** Realized PnL of closed trades. null = not yet proven (never assumed 0). */
+  realizedPnlKrw: number | null;
+  /** Fees/funding/slippage actually charged. null = unknown (never assumed 0). */
+  costsKrw: number | null;
+  /** What the exchange itself reports as available, in KRW. null = not read. */
+  exchangeAvailableKrw: number | null;
+  driftToleranceKrw?: number;
+}>;
+
+export type MarketLedgerProjection = Readonly<{
+  market: TradingAssetClass;
+  allocatedKrw: number;
+  openOrderReservedKrw: number;
+  positionMarginKrw: number;
+  realizedPnlKrw: number | null;
+  costsKrw: number | null;
+  /** Ledger view of spendable KRW: allocation + realized − costs − reserved − margin. */
+  availableKrw: number;
+  exchangeAvailableKrw: number | null;
+  driftKrw: number | null;
+  driftStatus: 'UNVERIFIED' | 'WITHIN_TOLERANCE' | 'DRIFT_UNRESOLVED';
+  blockCodes: readonly string[];
+}>;
+
+export function projectMarketLedger(input: MarketLedgerProjectionInput): MarketLedgerProjection {
+  const allocatedKrw = ledgerNonNegative(input.allocatedKrw) ?? 0;
+  const openOrderReservedKrw = ledgerNonNegative(input.openOrderReservedKrw) ?? 0;
+  const positionMarginKrw = ledgerNonNegative(input.positionMarginKrw) ?? 0;
+  const realizedPnlKrw = Number.isFinite(Number(input.realizedPnlKrw)) && input.realizedPnlKrw != null
+    ? Number(input.realizedPnlKrw) : null;
+  const costsKrw = input.costsKrw == null ? null : ledgerNonNegative(input.costsKrw);
+  const blockCodes: string[] = [];
+  // Unknown realized PnL / costs are treated as the most conservative value
+  // for availability (0 profit, 0 further credit) but flagged, never silently 0.
+  if (input.realizedPnlKrw != null && realizedPnlKrw == null) blockCodes.push('MARKET_LEDGER_REALIZED_PNL_INVALID');
+  if (input.costsKrw != null && costsKrw == null) blockCodes.push('MARKET_LEDGER_COSTS_INVALID');
+  const availableKrw = Math.max(0,
+    allocatedKrw + Math.min(0, realizedPnlKrw ?? 0) + Math.max(0, realizedPnlKrw ?? 0)
+    - (costsKrw ?? 0) - openOrderReservedKrw - positionMarginKrw);
+  const exchangeAvailableKrw = input.exchangeAvailableKrw == null ? null : ledgerNonNegative(input.exchangeAvailableKrw);
+  const tolerance = ledgerNonNegative(input.driftToleranceKrw) ?? MARKET_LEDGER_DEFAULT_DRIFT_TOLERANCE_KRW;
+  let driftKrw: number | null = null;
+  let driftStatus: MarketLedgerProjection['driftStatus'] = 'UNVERIFIED';
+  if (exchangeAvailableKrw != null) {
+    // The exchange may hold MORE than this market's allocation (shared
+    // account, reserve capital). Only a SHORTFALL against the ledger is drift.
+    driftKrw = exchangeAvailableKrw - availableKrw;
+    driftStatus = driftKrw < -tolerance ? 'DRIFT_UNRESOLVED' : 'WITHIN_TOLERANCE';
+  }
+  if (driftStatus === 'DRIFT_UNRESOLVED') blockCodes.push('MARKET_LEDGER_EXCHANGE_DRIFT_UNRESOLVED');
+  return Object.freeze({
+    market: input.market,
+    allocatedKrw,
+    openOrderReservedKrw,
+    positionMarginKrw,
+    realizedPnlKrw,
+    costsKrw,
+    availableKrw,
+    exchangeAvailableKrw,
+    driftKrw,
+    driftStatus,
+    blockCodes: Object.freeze(blockCodes),
+  });
+}
+
+export type AllowedEntryInput = Readonly<{
+  /** Member 500,000 / administrator 1,000,000 KRW per single order. */
+  roleCapKrw: number;
+  /** Saved policy maxOrderKrw (already clamped to the role cap). */
+  policyMaxOrderKrw: number;
+  /** This market's ledger allocation. */
+  marketAllocatedKrw: number;
+  /** This market's ledger availability after reservations/margin. */
+  ledgerAvailableKrw: number;
+  /** The exchange's own available balance in KRW, null when not read. */
+  exchangeAvailableKrw: number | null;
+  exchangeMinimumKrw: number | null;
+  exchangeMaximumKrw: number | null;
+}>;
+
+export type AllowedEntryDecision = Readonly<{
+  allowedKrw: number;
+  bindingLimit: 'ROLE_CAP' | 'POLICY_MAX_ORDER' | 'MARKET_ALLOCATION' | 'LEDGER_AVAILABLE'
+    | 'EXCHANGE_AVAILABLE' | 'EXCHANGE_MAXIMUM' | 'NONE';
+  blockCodes: readonly string[];
+}>;
+
+/** The final permitted single-entry size is the STRICTEST of every limit.
+ * A requested size above it is rejected by the server, never trimmed up. */
+export function finalAllowedEntryKrw(input: AllowedEntryInput): AllowedEntryDecision {
+  const candidates: Array<[AllowedEntryDecision['bindingLimit'], number | null]> = [
+    ['ROLE_CAP', ledgerNonNegative(input.roleCapKrw)],
+    ['POLICY_MAX_ORDER', ledgerNonNegative(input.policyMaxOrderKrw)],
+    ['MARKET_ALLOCATION', ledgerNonNegative(input.marketAllocatedKrw)],
+    ['LEDGER_AVAILABLE', ledgerNonNegative(input.ledgerAvailableKrw)],
+    ['EXCHANGE_AVAILABLE', input.exchangeAvailableKrw == null ? null : ledgerNonNegative(input.exchangeAvailableKrw)],
+    ['EXCHANGE_MAXIMUM', input.exchangeMaximumKrw == null ? null : ledgerNonNegative(input.exchangeMaximumKrw)],
+  ];
+  let allowedKrw = Number.POSITIVE_INFINITY;
+  let bindingLimit: AllowedEntryDecision['bindingLimit'] = 'NONE';
+  for (const [name, value] of candidates) {
+    if (value == null) continue;
+    if (value < allowedKrw) { allowedKrw = value; bindingLimit = name; }
+  }
+  if (!Number.isFinite(allowedKrw)) allowedKrw = 0;
+  const blockCodes: string[] = [];
+  const minimum = input.exchangeMinimumKrw == null ? null : ledgerNonNegative(input.exchangeMinimumKrw);
+  if (minimum != null && allowedKrw < minimum) blockCodes.push('ALLOWED_ENTRY_BELOW_EXCHANGE_MINIMUM');
+  if (allowedKrw <= 0) blockCodes.push('ALLOWED_ENTRY_ZERO');
+  return Object.freeze({ allowedKrw, bindingLimit, blockCodes: Object.freeze(blockCodes) });
+}
+
+export function requestedEntryExceedsAllowed(requestedKrw: number, decision: AllowedEntryDecision): boolean {
+  const requested = Number(requestedKrw);
+  return !Number.isFinite(requested) || requested <= 0 || requested > decision.allowedKrw + 1e-9;
+}
+
+/** Block codes for a plan that would open or add exposure on a live account.
+ * Risk-reducing exits are never blocked by allocation bookkeeping. */
+export function marketCapitalEntryBlockCodes(
+  plan: Pick<TradingPlanInput, 'accountMode'>,
+  policy: TradingPolicy,
+  options: { riskReducing: boolean },
+): readonly string[] {
+  if (options.riskReducing || plan.accountMode !== 'live') return Object.freeze([]);
+  return buildMarketCapitalAllocation(policy).blockCodes;
 }
