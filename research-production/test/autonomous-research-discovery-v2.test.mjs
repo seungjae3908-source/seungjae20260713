@@ -409,6 +409,45 @@ test('a wrong branch for a repository the catalog knows is pinned to the catalog
   assert.equal(result.actualSourceFetches.succeeded, 3);
 });
 
+test('an old feed-stage 404 recorded under a misnamed branch does not blacklist the catalog source', async (t) => {
+  const repository = 'https://github.com/example/public-strategies';
+  const catalog = [
+    { repository, branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/ParticipationBreakout.py' },
+    { repository, branch: 'main', licensePath: 'LICENSE', sourcePath: 'strategies/Second.py' },
+  ];
+  const masterPlan = aiAnswer({ summary: '공개 전략 저장소 후보',
+    findings: [`REPOSITORY=${repository}`, 'BRANCH=master'],
+    requiredEvidence: ['SOURCE_PATH=strategies/ParticipationBreakout.py', 'LICENSE_PATH=LICENSE'] });
+  const oldFailure = (branch) => ({
+    contract: 'autonomous-research-discovery/v2', status: 'AI_DISCOVERY_UNAVAILABLE', reason: 'PUBLIC_SOURCE_HTTP_404',
+    observedAt: '2026-10-20T01:49:27.181Z', researchCodeSha: SHA,
+    candidate: { repository, branch, sourcePath: 'strategies/ParticipationBreakout.py', licensePath: 'LICENSE' },
+    actualProviderCalls: { attempted: 1, succeeded: 1, failed: 0, retried: 0 },
+    actualSourceFetches: { attempted: 3, succeeded: 0, failed: 1 },
+  });
+  const run = async (branchInOldRecord) => {
+    const root = await fixture(t);
+    await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
+    await mkdir(join(root, 'autonomous-research', 'discovery'), { recursive: true });
+    await writeFile(join(root, 'autonomous-research', 'discovery', 'old-feed-404.json'), JSON.stringify(oldFailure(branchInOldRecord)));
+    let calls = 0;
+    return runAutonomousResearchDiscoveryV2({ verifiedSourceCatalog: catalog,
+      stateRoot: root, researchCodeSha: SHA, env: { ...env(), RESEARCH_AI_DISCOVERY_SOURCE_ATTEMPTS: '1' }, now: () => AT,
+      invoke: async ({ policy }) => ({ provider: policy.provider, model: policy.model, answer: ++calls === 1 ? masterPlan : extractionAnswer }),
+      fetchImpl: sourceFetch(), datasetLoader,
+    });
+  };
+  // The production case of 2026-10-20 03:46Z: the old 404 was recorded under BRANCH=master.
+  const pinned = await run('master');
+  assert.notEqual(pinned.reason, 'AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED', JSON.stringify(pinned));
+  assert.equal(pinned.candidate.branchCorrectedFrom, 'master');
+  assert.equal(pinned.actualSourceFetches.succeeded, 3, 'the catalog source is fetched again at its real branch');
+  // A feed 404 under the catalog's own branch is a real rejection and stays one.
+  const real = await run('main');
+  assert.equal(real.status, 'AI_DISCOVERY_UNAVAILABLE');
+  assert.equal(real.reason, 'AI_DISCOVERY_SOURCE_PREVIOUSLY_REJECTED');
+});
+
 test('a 404 commit feed for an unknown repository falls back to the default-branch feed once', async (t) => {
   const root = await fixture(t);
   await runAutonomousResearchClosedLoopV1({ stateRoot: root, researchCodeSha: SHA, now: () => AT });
