@@ -23,9 +23,7 @@ test('policy projection never clears a sticky stop, grants unknown strategies or
     enabledStrategies: ['unproven-strategy'] }), /UNKNOWN_STRATEGY/);
   assert.throws(() => approvedAdministratorAutomaticLivePolicy({ ...DEFAULT_TRADING_POLICY,
     bitgetLeverage: 8 as never }), /LEVERAGE_INVALID/);
-  assert.throws(() => approvedAdministratorAutomaticLivePolicy({ ...DEFAULT_TRADING_POLICY,
-    bitgetLeverage: 0 as never }), /LEVERAGE_INVALID/);
-  for (const leverage of [1, 2, 3, 4, 5, 6, 7]) {
+  for (const leverage of [2, 3, 4, 5, 6, 7]) {
     assert.equal(approvedAdministratorAutomaticLivePolicy({ ...DEFAULT_TRADING_POLICY,
       bitgetLeverage: leverage as never }).bitgetLeverage, leverage);
   }

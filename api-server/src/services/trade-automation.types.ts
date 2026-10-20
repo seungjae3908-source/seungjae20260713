@@ -95,18 +95,8 @@ export const PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW =
   PRODUCTION_LIVE_MARKET_COUNT * PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
 export const PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW =
   PRODUCTION_LIVE_MARKET_COUNT * PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW;
-// Bitget futures leverage is an integer in [PRODUCTION_MIN_BITGET_LEVERAGE, role max].
-// 1x is a real Bitget set-leverage value (no amplification); spot and stock markets
-// never carry a leverage field at all (see spot-live-limited-capability / kiwoom adapter).
-export const PRODUCTION_MIN_BITGET_LEVERAGE = 1 as const;
 export const PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3 as const;
 export const PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7 as const;
-export type BitgetLeverage = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-export const BITGET_LEVERAGE_OPTIONS: readonly BitgetLeverage[] = Object.freeze([1, 2, 3, 4, 5, 6, 7] as const);
-export function isBitgetLeverage(value: unknown): value is BitgetLeverage {
-  return typeof value === 'number' && Number.isInteger(value)
-    && value >= PRODUCTION_MIN_BITGET_LEVERAGE && value <= PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE;
-}
 
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
@@ -136,7 +126,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   // fail closed independently.
   maxDailyOrders: 0,
   maxConsecutiveLosses: 3,
-  bitgetLeverage: 2 as BitgetLeverage,
+  bitgetLeverage: 2 as 2 | 3 | 4 | 5 | 6 | 7,
   riskOptimizationEnabled: true,
   pilotStage: 'approval-20' as TradingPilotStage,
   riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25, toss: 0.25 },
@@ -171,7 +161,7 @@ export type TradingPolicy = {
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
-  bitgetLeverage: BitgetLeverage;
+  bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
   riskOptimizationEnabled: boolean;
   pilotStage: TradingPilotStage;
   riskPerTradePercent: Record<TradingExchange, number>;

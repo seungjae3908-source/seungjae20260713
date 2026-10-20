@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
-import type { BitgetLeverage, TradingPlanInput } from './trade-automation.types';
+import type { TradingPlanInput } from './trade-automation.types';
 
 export type BitgetReadonlyEndpointFamily = 'UTA_V3' | 'CLASSIC';
 export type BitgetReadonlyProbe = 'ACCOUNT_SETTINGS' | 'ACCOUNT_INFO' | 'ASSETS' | 'POSITIONS' | 'OPEN_ORDERS';
@@ -570,7 +570,7 @@ export function prepareBitgetMarginMode(
   }, '', timestamp);
 }
 
-export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: BitgetLeverage, timestamp?: string) {
+export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: 2 | 3 | 4 | 5 | 6 | 7, timestamp?: string) {
   return bitgetRequest(credentials, 'POST', '/api/v2/mix/account/set-leverage', {
     symbol: symbol.toUpperCase(), productType: 'USDT-FUTURES', marginCoin: 'USDT', leverage: String(leverage),
   }, '', timestamp);

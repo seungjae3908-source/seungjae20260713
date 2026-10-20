@@ -2136,31 +2136,6 @@ test('member order baseline stays 500k while an administrator may save the 1M ba
   }
 });
 
-test('member can save Bitget 1x and a 1x policy blocks every higher plan', async () => {
-  const isolated = new InMemoryTradingRepository();
-  setTradeAutomationRepositoryFactoryForTests(() => isolated);
-  const regular = await startServer(true, 'regular');
-  try {
-    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false, bitgetLeverage: 1 }),
-    });
-    assert.equal(saved.status, 200);
-    assert.equal((await saved.json() as { policy: { bitgetLeverage: number } }).policy.bitgetLeverage, 1);
-    for (const invalid of [0, 1.5, 'abc']) {
-      const rejected = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false, bitgetLeverage: invalid }),
-      });
-      assert.notEqual(rejected.status, 200, `bitgetLeverage ${invalid} must not save`);
-    }
-    assert.equal((await isolated.getPolicy(USER)).bitgetLeverage, 1);
-  } finally {
-    await close(regular.server);
-    setTradeAutomationRepositoryFactoryForTests(() => repository);
-  }
-});
-
 test('member Bitget leverage stops at 3x while an administrator can save exact 7x', async () => {
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);
