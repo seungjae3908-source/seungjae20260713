@@ -2,6 +2,7 @@ import type { CanonicalAccountSnapshot, CanonicalPosition, AccountProvider } fro
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { PRODUCTION_MIN_BITGET_LEVERAGE } from './trade-automation.types';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import { tradingHistoryComplete } from './trade-history-completeness.service';
 
@@ -151,7 +152,7 @@ export function assertAutomaticLiveSnapshotIsolation(snapshot: CanonicalAccountS
     if (snapshot.positionMode !== 'one_way_mode') throw new Error('BITGET_ONE_WAY_MODE_REQUIRED');
     for (const position of [...partition.manualProtected, ...partition.automaticOwned]) {
       if (position.marginMode !== 'isolated') throw new Error('BITGET_MARGIN_MODE_MISMATCH');
-      if (!Number.isInteger(position.leverage) || position.leverage! < 2 || position.leverage! > maximumLeverage) throw new Error('BITGET_LEVERAGE_LIMIT');
+      if (!Number.isInteger(position.leverage) || position.leverage! < PRODUCTION_MIN_BITGET_LEVERAGE || position.leverage! > maximumLeverage) throw new Error('BITGET_LEVERAGE_LIMIT');
     }
   }
   return partition;
