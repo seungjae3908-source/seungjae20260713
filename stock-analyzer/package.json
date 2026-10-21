@@ -10,7 +10,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:e2e": "playwright test -c playwright.config.ts",
     "test:e2e:critical": "playwright test -c playwright.critical.config.ts",
-    "test:e2e:runtime-drift": "playwright test e2e/member-capability-runtime-drift.spec.ts e2e/market-overview-provider-runtime-drift.spec.ts -c playwright.config.ts"
+    "test:e2e:runtime-drift": "playwright test e2e/member-capability-runtime-drift.spec.ts e2e/market-overview-provider-runtime-drift.spec.ts -c playwright.config.ts",
+    "preview:start": "node preview-start.mjs vite.preview.config.ts",
+    "preview:build": "NODE_ENV=development vite build --config vite.preview.config.ts",
+    "preview:serve": "vite preview --config vite.preview.config.ts --port 5174"
   },
   "dependencies": {
     "@radix-ui/react-toast": "^1.2.18",
