@@ -1,0 +1,47 @@
+name: Research Long Short Flip Backtest
+
+# Read-only research: long on a surge, then short only after the long is closed
+# and weakness is confirmed, on public Bitget candles (pre-2026).
+# No exchange keys, no orders, no production access.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/research-long-short-flip-backtest.yml
+      - research-production/src/long-short-flip-backtest-v1.mjs
+      - research-production/bin/long-short-flip-backtest.mjs
+      - research-production/test/long-short-flip-backtest-v1.test.mjs
+      - research-production/src/long-short-flip-backtest-v2.mjs
+      - research-production/test/long-short-flip-backtest-v2.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests
+        run: node --test research-production/test/long-short-flip-backtest-v1.test.mjs research-production/test/long-short-flip-backtest-v2.test.mjs
+      - name: Fetch public candles and run the flip backtest
+        run: |
+          set -Eeuo pipefail
+          node research-production/bin/long-short-flip-backtest.mjs --fetch "$RUNNER_TEMP/state" | tee long-short-flip-report.txt
+          cp "$RUNNER_TEMP/state/latest/long-short-flip-backtest-v1.json" long-short-flip-backtest-v1.json
+          cp "$RUNNER_TEMP/state/latest/long-short-flip-backtest-v2.json" long-short-flip-backtest-v2.json
+          { echo '```'; cat long-short-flip-report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: long-short-flip-backtest
+          path: |
+            long-short-flip-report.txt
+            long-short-flip-backtest-v1.json
+            long-short-flip-backtest-v2.json
+          retention-days: 90
