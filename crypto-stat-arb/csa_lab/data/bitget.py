@@ -49,8 +49,9 @@ def contract_leverage_evidence(client: PublicHttpClient, symbol: str = "BTCUSDT"
 #     &startTime=<ms>&endTime=<ms>&limit=200   → data: [[ts, open, high, low, close, baseVol, quoteVol], ...]
 # GET /api/v2/mix/market/history-mark-candles (같은 인자)
 # GET /api/v2/mix/market/history-fund-rate?symbol=BTCUSDT&productType=USDT-FUTURES&pageSize=100&pageNo=N
-#     → data: [{symbol, fundingRate, settleTime}, ...] (최신부터)
-# 봉은 요청 구간을 정확히 200시간으로 잘라 보내므로 응답이 구간 앞·뒤 어느 쪽에 맞춰져도 빠지는 봉이 없다.
+#     → data: [{symbol, fundingRate, fundingTime}, ...] (최신부터; 정산 시각 필드명은 fundingTime, 일부 문서·버전은 settleTime)
+# 봉 요청: CI 11차 실측에서 endTime=구간끝-1ms 로 보내면 각 창의 마지막 1시간봉이 빠졌다(200시간마다 1개 결측).
+# 그래서 창을 199시간으로 자르고 endTime=구간 끝(포함 여부와 무관)으로 보낸 뒤 [lo, hi) 로 다시 거른다.
 import io
 from datetime import date
 from pathlib import Path
@@ -100,9 +101,9 @@ def fetch_hour_candles(client: PublicHttpClient, symbol: str, start_ms: int, end
     frames = []
     lo = start_ms
     while lo < end_ms:
-        hi = min(lo + CANDLE_LIMIT * HOUR_MS, end_ms)
+        hi = min(lo + (CANDLE_LIMIT - 1) * HOUR_MS, end_ms)
         data = client.get_json(url, {"symbol": symbol, "productType": PRODUCT_TYPE, "granularity": "1H",
-                                     "startTime": lo, "endTime": hi - 1, "limit": CANDLE_LIMIT})
+                                     "startTime": lo, "endTime": hi, "limit": CANDLE_LIMIT})
         rows = _ok(data, "history-mark-candles" if mark else "history-candles")
         df = parse_candles(rows)
         df = df[(df["ts"] >= lo) & (df["ts"] < hi)]
@@ -147,6 +148,13 @@ def fetch_candles_range(client: PublicHttpClient, symbol: str, start: date, end:
             "months_ok": got, "months_missing": missing}
 
 
+def _funding_ts(row: dict) -> int:
+    for k in ("fundingTime", "settleTime"):
+        if row.get(k) not in (None, ""):
+            return int(row[k])
+    raise RuntimeError(f"bitget history-fund-rate 응답에 정산 시각 필드가 없음: keys={sorted(row)}")
+
+
 def funding_history(client: PublicHttpClient, symbol: str, start_ms: int, end_ms: int,
                     *, max_pages: int = 500) -> pd.DataFrame:
     """정산 이력을 최신 페이지부터 start_ms 이전까지 거슬러 받는다. 간격(interval_hours)은 인접 정산 시각 차로 기록."""
@@ -159,8 +167,8 @@ def funding_history(client: PublicHttpClient, symbol: str, start_ms: int, end_ms
         batch = _ok(data, "history-fund-rate")
         if not batch:
             break
-        ts = [int(r["settleTime"]) for r in batch]
-        rows.extend({"ts": int(r["settleTime"]), "rate": float(r["fundingRate"])} for r in batch)
+        ts = [_funding_ts(r) for r in batch]
+        rows.extend({"ts": t, "rate": float(r["fundingRate"])} for t, r in zip(ts, batch))
         mn = min(ts)
         if last_min is not None and mn >= last_min:
             break  # 페이지가 더 과거로 가지 않음

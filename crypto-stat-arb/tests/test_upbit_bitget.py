@@ -68,6 +68,20 @@ def test_bitget_candles_and_funding_pages():
     assert (f["interval_hours"] == 8).all() and len(f) == 27 * 3
 
 
+def test_bitget_funding_time_field_variants():
+    assert bg._funding_ts({"fundingRate": "0.0001", "fundingTime": "1700000000000"}) == 1700000000000
+    assert bg._funding_ts({"fundingRate": "0.0001", "settleTime": "1700000000000"}) == 1700000000000
+    with pytest.raises(RuntimeError, match="정산 시각"):
+        bg._funding_ts({"fundingRate": "0.0001"})
+
+
+def test_bitget_candle_requests_cover_window_end_bar():
+    """CI 11차 실측: 마지막 봉은 endTime 이 그 봉 마감(시작+1h) 이상일 때만 온다. 창마다 끝 봉이 빠지면 안 된다."""
+    fx = FakeExchange(start="2023-01-01", end="2023-03-01")
+    k = bg.fetch_hour_candles(_client(fx), "BTCUSDT", _ms("2023-01-01"), _ms("2023-03-01"))
+    assert len(k) == 59 * 24 and (np.diff(k["ts"].to_numpy()) == H).all()
+
+
 def test_bitget_error_code_is_not_silently_empty():
     with pytest.raises(RuntimeError, match="40034"):
         bg._ok({"code": "40034", "msg": "param error"}, "history-candles")

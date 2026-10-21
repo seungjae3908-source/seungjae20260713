@@ -152,13 +152,14 @@ class FakeExchange:
                 size, page = int(q["pageSize"][0]), int(q["pageNo"][0])
                 all_t = [t for t in range(self.t0, self.t1, 8 * H)][::-1]
                 chunk = all_t[(page - 1) * size: page * size]
-                data = [{"symbol": "BTCUSDT", "fundingRate": str(self.bg_rate), "settleTime": str(t)} for t in chunk]
+                data = [{"symbol": "BTCUSDT", "fundingRate": str(self.bg_rate), "fundingTime": str(t)} for t in chunk]
                 return 200, {}, json.dumps({"code": "00000", "msg": "success", "data": data}).encode()
             st, et, lim = int(q["startTime"][0]), int(q["endTime"][0]), int(q["limit"][0])
             mult = 1.0002 if "history-mark-candles" in u.path else 1.0
             data = []
+            # 실측(CI 11차): 봉 시작+1시간(마감)이 endTime 이하인 봉만 돌려준다.
             for t in range(st - st % H + (H if st % H else 0), et + 1, H):
-                if self.t0 <= t < self.t1 and len(data) < lim:
+                if self.t0 <= t < self.t1 and t + H <= et and len(data) < lim:
                     o, hi, lo, c = self._ohlc(t, mult)
                     data.append([str(t), str(o), str(hi), str(lo), str(c), "1", "1"])
             return 200, {}, json.dumps({"code": "00000", "msg": "success", "data": data}).encode()
