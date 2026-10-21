@@ -43,6 +43,7 @@ def main(argv=None) -> int:
     c.add_argument("--end", required=True, help="YYYY-MM")
     c.add_argument("--no-hyperliquid", action="store_true")
     c.add_argument("--no-fx", action="store_true")
+    c.add_argument("--no-upbit-bitget", action="store_true", help="업비트 현물·비트겟 선물 공개 데이터 수집 생략")
     b = sub.add_parser("backtest")
     b.add_argument("--data-dir", required=True)
     b.add_argument("--results-dir", required=True)
@@ -50,7 +51,7 @@ def main(argv=None) -> int:
     b.add_argument("--capital-krw", type=_capital, default=float(DEFAULT_STRATEGY_CAPITAL_KRW))
     b.add_argument("--window", action="append", default=None,
                    help="이름=YYYY-MM-DD:YYYY-MM-DD (끝 미포함). 기본: README 학습·테스트 구간")
-    b.add_argument("--strategy", default="carry_binance,xvenue_funding")
+    b.add_argument("--strategy", default="carry_binance,xvenue_funding,carry_upbit_bitget")
     b.add_argument("--profile", default="original,current_public_assumed")
     b.add_argument("--label", default="run")
     b.add_argument("--accept-quality-issues", action="store_true")
@@ -85,7 +86,8 @@ def main(argv=None) -> int:
         y1, m1 = map(int, a.start.split("-"))
         y2, m2 = map(int, a.end.split("-"))
         rep = collect(Path(a.data_dir), date(y1, m1, 1), date(y2, m2, 1),
-                      with_hyperliquid=not a.no_hyperliquid, with_fx=not a.no_fx)
+                      with_hyperliquid=not a.no_hyperliquid, with_fx=not a.no_fx,
+                      with_upbit_bitget=not a.no_upbit_bitget)
         print(json.dumps({k: rep[k] for k in rep if k not in ("klines", "markPriceKlines", "fundingRate", "spotKlines")}
                          | {k: {"ok": len(rep[k]["months_ok"]), "missing": rep[k]["months_missing"]}
                             for k in ("klines", "markPriceKlines", "fundingRate", "spotKlines")},
