@@ -14,10 +14,12 @@ from typing import Optional
 import pandas as pd
 
 from . import __version__
-from .backtest import CARRY_ORIGINAL, XVENUE_ORIGINAL, MarketData, prepare_funding, run_backtest
+from .backtest import CARRY_ORIGINAL, CARRY_UPBIT_BITGET, XVENUE_ORIGINAL, MarketData, prepare_funding, run_backtest
 from .costs import CostModel, CostRate
 from .fund import DEFAULT_INITIAL_KRW, DEFAULT_MAX_ENTRY_MARGIN_KRW, AutoTradingFund, FundError
 from .data import binance as bn
+from .data import bitget as bg
+from .data import upbit as up
 from .data import fx as fxmod
 from .data import hyperliquid as hl
 from .http import PublicHttpClient, RetryPolicy
@@ -57,12 +59,27 @@ DATASETS = {
                     "interval_ms": 8 * HOUR_MS, "kind": "funding", "max_missing_ratio": 0.0},
     "hyperliquid": {"source": "api.hyperliquid.xyz info fundingHistory BTC (1h 정산)", "interval_ms": HOUR_MS,
                     "kind": "funding", "max_missing_ratio": 0.0},
+    # 운영 앱 실행 조합(업비트 현물 + 비트겟 USDT-M 무기한)용 공개 데이터. 거래가 없는 시간은 원천에 봉이 없다.
+    "upbitSpotKlines": {"source": "api.upbit.com /v1/candles/minutes/60 KRW-BTC (체크섬 없음, 응답 그대로)",
+                        "interval_ms": HOUR_MS, "kind": "ohlcv", "max_missing_ratio": 0.01},
+    "upbitKrwUsdtKlines": {"source": "api.upbit.com /v1/candles/minutes/60 KRW-USDT (현물 USDT 환산용)",
+                           "interval_ms": HOUR_MS, "kind": "ohlcv", "max_missing_ratio": 0.01},
+    "bitgetKlines": {"source": "api.bitget.com /api/v2/mix/market/history-candles BTCUSDT USDT-FUTURES 1H",
+                     "interval_ms": HOUR_MS, "kind": "ohlcv", "max_missing_ratio": 0.01},
+    "bitgetMarkKlines": {"source": "api.bitget.com /api/v2/mix/market/history-mark-candles BTCUSDT USDT-FUTURES 1H",
+                         "interval_ms": HOUR_MS, "kind": "ohlcv", "max_missing_ratio": 0.0},
+    "bitgetFunding": {"source": "api.bitget.com /api/v2/mix/market/history-fund-rate BTCUSDT (8h 정산)",
+                      "interval_ms": 8 * HOUR_MS, "kind": "funding", "max_missing_ratio": 0.0},
 }
 # 전략별 필수 데이터셋. 마크가격은 선택(창 안에 완전할 때만 청산·펀딩 정산 가격으로 사용).
 STRATEGY_DATASETS = {
     "carry_binance": ("klines", "spotKlines", "fundingRate"),
     "xvenue_funding": ("klines", "fundingRate", "hyperliquid"),
+    "carry_upbit_bitget": ("upbitSpotKlines", "upbitKrwUsdtKlines", "bitgetKlines", "bitgetFunding"),
 }
+UPBIT_SPOT_MARKET = "KRW-BTC"
+UPBIT_FX_MARKET = "KRW-USDT"
+BITGET_SYMBOL = "BTCUSDT"
 
 
 def cost_profiles(hl_mmr_source: str) -> dict:
@@ -74,8 +91,9 @@ def cost_profiles(hl_mmr_source: str) -> dict:
             CostRate("slippage", 0.0005, "원본 step4_futures_orchestrator.py 1039행 기본 슬리피지 5bp", "ORIGINAL_CONFIG"),
             CostRate("half_spread", 0.0, "원본은 bid_ask_spread 기본 0(step4 1364행) - 원본 설정 그대로", "ORIGINAL_CONFIG"),
             True, "실제 펀딩 이력(data.binance.vision fundingRate, Hyperliquid fundingHistory)"),
-        "venue_fees": {"binance:perp": 0.0004, "binance:spot": 0.0004, "hyperliquid:perp": 0.00025},
-        "venue_fee_source": "원본 DEFAULT_VENUE_COSTS / config/venues.yaml",
+        "venue_fees": {"binance:perp": 0.0004, "binance:spot": 0.0004, "hyperliquid:perp": 0.00025,
+                       "upbit:spot": 0.0005, "bitget:perp": 0.0006},
+        "venue_fee_source": "원본 DEFAULT_VENUE_COSTS / config/venues.yaml (업비트·비트겟은 원본에 없어 공개 기본 등급 가정: ASSUMED)",
     }
     current = {
         "cost": CostModel(
@@ -84,8 +102,10 @@ def cost_profiles(hl_mmr_source: str) -> dict:
             CostRate("slippage", 0.0005, "원본과 같은 5bp 가정(호가 깊이 데이터 없음)", "ASSUMED"),
             CostRate("half_spread", 0.0001, "BTC 무기한 호가 간격 가정 1bp(호가 이력 미수집)", "ASSUMED"),
             True, "실제 펀딩 이력(data.binance.vision fundingRate, Hyperliquid fundingHistory)"),
-        "venue_fees": {"binance:perp": 0.0005, "binance:spot": 0.001, "hyperliquid:perp": 0.00045},
-        "venue_fee_source": "Binance 선물 0.05%·현물 0.10%, Hyperliquid 0.045% (공개 기본 등급, 이 환경에서 재확인 못함: ASSUMED)",
+        "venue_fees": {"binance:perp": 0.0005, "binance:spot": 0.001, "hyperliquid:perp": 0.00045,
+                       "upbit:spot": 0.0005, "bitget:perp": 0.0006},
+        "venue_fee_source": "Binance 선물 0.05%·현물 0.10%, Hyperliquid 0.045%, 업비트 KRW 현물 0.05%, Bitget USDT-M 테이커 0.06% "
+                            "(공개 기본 등급, 이 환경에서 재확인 못함: ASSUMED)",
     }
     return {"original": original, "current_public_assumed": current}
 
@@ -107,7 +127,7 @@ class Paths:
         return self.root / ".collect.lock"
 
 
-def _client(min_interval: float = 0.05) -> PublicHttpClient:
+def _client(min_interval: float = 0.15) -> PublicHttpClient:  # 업비트 시세 10회/초 한도 아래로
     return PublicHttpClient(RetryPolicy(max_attempts=5, base_delay=1.0, max_delay=30.0, timeout=30.0),
                             min_interval=min_interval)
 
@@ -117,7 +137,7 @@ def _ms(day: str) -> int:
 
 
 def collect(data_dir: Path, start: date, end: date, *, with_hyperliquid: bool = True, with_fx: bool = True,
-            client: Optional[PublicHttpClient] = None) -> dict:
+            with_upbit_bitget: bool = True, client: Optional[PublicHttpClient] = None) -> dict:
     """공개 데이터 수집(조회 전용). 같은 디렉터리로 다시 실행하면 완료된 월은 건너뛴다."""
     p = Paths(Path(data_dir))
     p.root.mkdir(parents=True, exist_ok=True)
@@ -141,6 +161,32 @@ def collect(data_dir: Path, start: date, end: date, *, with_hyperliquid: bool = 
                 atomic_write_json(p.raw / "hyperliquid" / "meta_btc.json", report["hyperliquid_limit"])
             except Exception as e:  # 한도 확인 실패는 수집 실패로 보지 않되 기록
                 report["hyperliquid_limit_error"] = str(e)
+        if with_upbit_bitget:
+            # 운영 조합 데이터. 한 원천의 실패가 다른 원천 수집을 막지 않도록 각각 기록하고, 실패한 원천은
+            # 데이터셋이 없는 것으로 남아 해당 전략 창이 INCOMPLETE(DATASET_MISSING)로 판정된다(채우지 않음).
+            ub_report = {}
+            jobs = {
+                "upbitSpotKlines": lambda: up.fetch_range(client, UPBIT_SPOT_MARKET, start, end, p.raw, ck),
+                "upbitKrwUsdtKlines": lambda: up.fetch_range(client, UPBIT_FX_MARKET, start, end, p.raw, ck),
+                "bitgetKlines": lambda: bg.fetch_candles_range(client, BITGET_SYMBOL, start, end, p.raw, ck),
+                "bitgetMarkKlines": lambda: bg.fetch_candles_range(client, BITGET_SYMBOL, start, end, p.raw, ck, mark=True),
+            }
+            for name, fn in jobs.items():
+                try:
+                    ub_report[name] = fn()
+                except Exception as e:
+                    ub_report[name] = {"error": f"{type(e).__name__}: {e}"}
+            key = f"bitgetFunding:{BITGET_SYMBOL}:{start}:{end}"
+            target = p.raw / "bitgetFunding" / f"{BITGET_SYMBOL}-funding-{start}-{end}.parquet"
+            try:
+                if not ck.is_done(key, target):
+                    df = bg.funding_history(client, BITGET_SYMBOL, _ms(str(start)), end_ms)
+                    _save_parquet(target, df)
+                    ck.mark_done(key, sha256=sha256_file(target), rows=len(df), source=bg.HISTORY_FUNDING_URL)
+                ub_report["bitgetFunding"] = {"rows": int(ck.state["done"][key].get("rows", 0))}
+            except Exception as e:
+                ub_report["bitgetFunding"] = {"error": f"{type(e).__name__}: {e}"}
+            report["upbit_bitget"] = ub_report
         if with_fx:
             fx_report = {}
             sources = {
@@ -192,9 +238,44 @@ def _upbit_series(client: PublicHttpClient, start: date, end: date) -> pd.DataFr
     return out
 
 
-def _load_kind(raw: Path, kind: str) -> pd.DataFrame:
-    files = sorted((raw / kind / SYMBOL).glob("*.parquet"))
+def _load_kind(raw: Path, kind: str, symbol: str = SYMBOL) -> pd.DataFrame:
+    files = sorted((raw / kind / symbol).glob("*.parquet"))
     return bn.load_parquets(files)
+
+
+def _attach_upbit_bitget(raw: Path, bars: pd.DataFrame, frames: dict, datasets: dict, quality: dict,
+                         funding: dict, proxies: dict) -> None:
+    """운영 조합 데이터셋이 수집돼 있으면 다리(upbit_spot: USDT 환산, bitget_perp, bitget_perp_mark)와 비트겟 펀딩을 붙인다.
+    없는 데이터셋은 등록하지 않아 전략 창 판정이 DATASET_MISSING 으로 떨어진다."""
+    loaded = {}
+    for kind, symbol, leg in (("upbitSpotKlines", UPBIT_SPOT_MARKET, "upbit_spot_krw"),
+                              ("upbitKrwUsdtKlines", UPBIT_FX_MARKET, "upbit_krw_usdt"),
+                              ("bitgetKlines", BITGET_SYMBOL, "bitget_perp"),
+                              ("bitgetMarkKlines", BITGET_SYMBOL, "bitget_perp_mark")):
+        df = _load_kind(raw, "upbitKlines" if kind.startswith("upbit") else kind, symbol)
+        if df.empty:
+            continue
+        d, rep = check_ohlcv(df, f"{kind}:{symbol}", max_missing_ratio=DATASETS[kind]["max_missing_ratio"])
+        quality[rep.name] = rep.to_dict()
+        loaded[leg] = d.set_index("ts").reindex(bars.index)
+        datasets[kind] = {"frame": d, **DATASETS[kind]}
+    if "upbit_spot_krw" in loaded and "upbit_krw_usdt" in loaded:
+        usdt = loaded["upbit_krw_usdt"]["close"]
+        for c in ("open", "high", "low", "close"):
+            bars[f"upbit_spot_{c}"] = loaded["upbit_spot_krw"][c] / usdt
+            bars[f"upbit_spot_krw_{c}"] = loaded["upbit_spot_krw"][c]
+        proxies["upbit_spot"] = ("업비트 KRW-BTC 1시간봉을 같은 시각 KRW-USDT 1시간봉 종가로 나눠 USDT 로 환산"
+                                 "(봉 안 환율 변동은 종가 하나로 근사). 두 봉 중 하나라도 없으면 그 시각은 결측")
+    if "bitget_perp" in loaded:
+        for c in ("open", "high", "low", "close"):
+            bars[f"bitget_perp_{c}"] = loaded["bitget_perp"][c]
+    files = sorted((raw / "bitgetFunding").glob(f"{BITGET_SYMBOL}-funding-*.parquet"))
+    fr = bn.load_parquets(files)
+    if not fr.empty:
+        f2, rep = check_funding(fr, f"bitgetFunding:{BITGET_SYMBOL}", expected_interval_ms=8 * HOUR_MS)
+        quality[rep.name] = rep.to_dict()
+        datasets["bitgetFunding"] = {"frame": f2, **DATASETS["bitgetFunding"]}
+        funding["bitget"] = prepare_funding(f2, 8)
 
 
 def build_market(data_dir: Path, *, now_ms: Optional[int] = None) -> tuple[MarketData, dict]:
@@ -235,10 +316,11 @@ def build_market(data_dir: Path, *, now_ms: Optional[int] = None) -> tuple[Marke
         fh = fh_raw
         quality["hyperliquid:BTC funding"] = {"ok": False, "blocking": ["EMPTY"]}
     datasets["hyperliquid"] = {"frame": fh, **DATASETS["hyperliquid"]}
-    market = MarketData(bars, {"binance": prepare_funding(fb, 8), "hyperliquid": prepare_funding(fh, 1)},
-                        {"hl_perp": "Binance USDT-M BTCUSDT 1시간봉을 하이퍼리퀴드 가격 대용으로 사용(펀딩은 실제 하이퍼리퀴드 이력)",
-                         "binance_perp_mark": mark_note},
-                        datasets)
+    funding = {"binance": prepare_funding(fb, 8), "hyperliquid": prepare_funding(fh, 1)}
+    proxies = {"hl_perp": "Binance USDT-M BTCUSDT 1시간봉을 하이퍼리퀴드 가격 대용으로 사용(펀딩은 실제 하이퍼리퀴드 이력)",
+               "binance_perp_mark": mark_note}
+    _attach_upbit_bitget(raw, bars, frames, datasets, quality, funding, proxies)
+    market = MarketData(bars, funding, proxies, datasets)
     return market, quality
 
 
@@ -361,22 +443,29 @@ def market_for_window(market: MarketData, ws: str, we: str, wq: dict) -> tuple[M
     start_ms, end_ms = _ms(ws), _ms(we)
     bars = market.bars[(market.bars.index >= start_ms) & (market.bars.index < end_ms)]
     bars = bars[[c for c in bars.columns if "_mark_" not in c]].copy()
-    mark_ds = market.datasets.get("markPriceKlines")
-    mark_rep = wq.get("markPriceKlines")
-    if mark_ds is not None and mark_rep is not None and mark_rep["status"] == "OK":
-        mark = mark_ds["frame"].set_index("ts").reindex(bars.index)
-        if mark[["high", "low", "close"]].notna().all().all():
-            bars["binance_perp_mark_high"] = mark["high"]
-            bars["binance_perp_mark_low"] = mark["low"]
-            bars["binance_perp_mark_close"] = mark["close"]
-            note = "Binance markPriceKlines 사용(이 창 안에 결측 없음)"
-        else:
-            note = "마크가격이 봉 인덱스와 맞지 않아 청산·펀딩 정산에 체결가 사용"
-    else:
-        reasons = mark_rep["reasons"] if mark_rep else ["DATASET_MISSING"]
-        note = f"이 창의 마크가격 결측/결함 {reasons} → 청산·펀딩 정산에 체결가 사용(창별 판정)"
     proxies = dict(market.price_proxies)
-    proxies["binance_perp_mark"] = note
+    notes = {}
+    for ds_name, leg, label in (("markPriceKlines", "binance_perp_mark", "Binance markPriceKlines"),
+                                ("bitgetMarkKlines", "bitget_perp_mark", "Bitget history-mark-candles")):
+        mark_ds = market.datasets.get(ds_name)
+        mark_rep = wq.get(ds_name)
+        if mark_ds is not None and mark_rep is not None and mark_rep["status"] == "OK":
+            mark = mark_ds["frame"].set_index("ts").reindex(bars.index)
+            if mark[["high", "low", "close"]].notna().all().all():
+                bars[f"{leg}_high"] = mark["high"]
+                bars[f"{leg}_low"] = mark["low"]
+                bars[f"{leg}_close"] = mark["close"]
+                note = f"{label} 사용(이 창 안에 결측 없음)"
+            else:
+                note = "마크가격이 봉 인덱스와 맞지 않아 청산·펀딩 정산에 체결가 사용"
+        else:
+            reasons = mark_rep["reasons"] if mark_rep else ["DATASET_MISSING"]
+            note = f"이 창의 마크가격 결측/결함 {reasons} → 청산·펀딩 정산에 체결가 사용(창별 판정)"
+        proxies[leg] = note
+        notes[leg] = note
+    note = notes["binance_perp_mark"]
+    if "bitgetKlines" in market.datasets:
+        note = f"{note}; bitget_perp_mark: {notes['bitget_perp_mark']}"
     return MarketData(bars, market.funding, proxies, market.datasets), note
 
 
@@ -436,14 +525,16 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
     hl_meta = read_json(hl_meta_f) if hl_meta_f.exists() else {}
     hl_max = hl_meta.get("max_leverage")
     hl_mmr = (1.0 / (2.0 * hl_max)) if hl_max else 0.0125
-    mmr = {"binance": 0.004, "hyperliquid": hl_mmr}
+    mmr = {"binance": 0.004, "hyperliquid": hl_mmr, "bitget": 0.004}
     mmr_source = {
         "binance": "BTCUSDT 1구간(명목 5만 USDT 미만) 유지증거금률 0.40% - 공개 문서 기준 가정, 이 환경에서 재확인 못함(ASSUMED)",
+        "bitget": "Bitget USDT-M BTCUSDT 1구간 유지증거금률 0.40% - 공개 문서 기준 가정, 이 환경에서 재확인 못함(ASSUMED)",
         "hyperliquid": (f"maxLeverage {hl_max}(공개 meta 확인) → 유지증거금률 = 1/(2×maxLeverage) 문서 공식 적용(공식은 ASSUMED)"
                         if hl_max else "meta 미확인 → 1.25% 가정(ASSUMED)"),
     }
     profs = cost_profiles(mmr_source["hyperliquid"])
-    params_map = {"carry_binance": CARRY_ORIGINAL, "xvenue_funding": XVENUE_ORIGINAL}
+    params_map = {"carry_binance": CARRY_ORIGINAL, "xvenue_funding": XVENUE_ORIGINAL,
+                  "carry_upbit_bitget": CARRY_UPBIT_BITGET}
     config = {"leverages": levs, "capital_krw": capital_krw, "windows": windows, "strategies": strategies,
               "fund_mode": fund_mode, "fund_initial_krw": fund_initial_krw, "fund_max_entry_krw": fund_max_entry_krw,
               "profiles": profiles, "label": label, "accept_quality_issues": accept_quality_issues}
@@ -539,7 +630,7 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                     try:
                         res = run_backtest(wmarket, params_map[s], leverage=lev, capital=capital_units, cost=pr["cost"],
                                            venue_fees=pr["venue_fees"], mmr=mmr, start_ms=_ms(ws), end_ms=_ms(we),
-                                           stale_funding_hours={"binance": 9, "hyperliquid": 2}, **fund_kw)
+                                           stale_funding_hours={"binance": 9, "hyperliquid": 2, "bitget": 9}, **fund_kw)
                         if fund is not None:
                             files.append(fund_path)
                     except Exception as e:
@@ -562,6 +653,7 @@ def run_suite(data_dir: Path, results_dir: Path, *, leverages: list, capital_krw
                     res["venue_leverage_status"] = [
                         check_paper_leverage_against_venue(lev, "binance", "BTCUSDT-PERP"),
                         check_paper_leverage_against_venue(lev, "hyperliquid", "BTC-PERP"),
+                        check_paper_leverage_against_venue(lev, "bitget", f"{BITGET_SYMBOL}-USDT-FUTURES"),
                     ]
                     res["mmr_source"] = mmr_source
                     res["data_evidence"] = evidence

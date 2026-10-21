@@ -61,10 +61,10 @@ def test_end_to_end_all_leverages(tmp_path):
 def test_resume_after_interruption(tmp_path):
     fx = FakeExchange()
     collect(tmp_path / "d", date(2023, 1, 1), date(2023, 1, 1), client=_client(fx), with_fx=False,
-            with_hyperliquid=False)
+            with_hyperliquid=False, with_upbit_bitget=False)
     calls_first = fx.calls
     collect(tmp_path / "d", date(2023, 1, 1), date(2023, 3, 1), client=_client(fx), with_fx=False,
-            with_hyperliquid=False)
+            with_hyperliquid=False, with_upbit_bitget=False)
     # 1월분은 체크포인트로 건너뛰고 2·3월만 받음 (4종 × 2개월 × 2요청)
     assert fx.calls - calls_first == 4 * 2 * 2
 

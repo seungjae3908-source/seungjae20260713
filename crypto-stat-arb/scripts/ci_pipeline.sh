@@ -81,6 +81,9 @@ for f in sorted(glob.glob('$OUT1/runs/*/*/*/lev*.json')):
     m=json.load(open(f)).get('metrics') or {}
     print(f, m.get('bars_dropped_missing_leg', 0), (m.get('bars_dropped_missing_leg_ts') or [])[:5])
 PY
+echo "--- upbit/bitget collection (executable venue pair) ---"; python -c "import json;r=json.load(open('$W/data/collect_report.json'));print(json.dumps(r.get('upbit_bitget'),ensure_ascii=False,indent=1))"
+echo "--- carry_upbit_bitget rows ---"; python -c "import json;r=json.load(open('$OUT1/summary.json'));[print(x['window'],x['cost_profile'],x['leverage'],x['status'],x.get('net_return'),x.get('trades'),x.get('pf_net'),x.get('liquidations'),x.get('mdd'),(x.get('error') or '')[:160]) for x in r if x['strategy']=='carry_upbit_bitget']"
+echo "--- hedge adapter gate evidence (PerformanceEvidence) ---"; python scripts/export_gate_evidence.py "$OUT1" "$W/results/gate_evidence_carry_upbit_bitget.json"
 echo "--- summary status counts ---"; python -c "import json,collections;r=json.load(open('$OUT1/summary.json'));print(collections.Counter((x['window'],x['strategy'],x['status']) for x in r))"
 cat "$LOG"
 exit $STATUS

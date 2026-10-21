@@ -52,6 +52,17 @@ CARRY_ORIGINAL = StrategyParams(
 XVENUE_ORIGINAL = StrategyParams(
     "xvenue_funding", 0.10, 0.0, 30 * 24, 24,
     "원본 합성선물/롤: 거래소 간 연환산 펀딩 차이 >= 10% 진입, 보유 30일. 청산 규칙은 원본에 없어 차이 소멸(0 이하) 또는 30일로 정함")
+# 운영 앱이 실제로 낼 수 있는 조합(업비트 KRW 현물 롱 + 비트겟 USDT 무기한 숏)에 같은 캐리 규칙을 적용한 변형.
+# 현물 가격은 같은 시각 업비트 KRW-USDT 1시간봉 종가로 USDT 환산하므로 김치 프리미엄 변동이 손익에 포함된다.
+CARRY_UPBIT_BITGET = StrategyParams(
+    "carry_upbit_bitget", 0.15, 0.05, None, 24,
+    "캐리 규칙은 carry_binance 와 동일(연환산 비트겟 펀딩 > 15% 진입, < 5% 청산). 다리: 업비트 KRW-BTC(USDT 환산) 매수 + 비트겟 BTCUSDT 무기한 매도")
+
+# 캐리 전략 계열: 이름 -> (현물 다리, 무기한 다리, 펀딩·무기한 거래소)
+CARRY_LEGS = {
+    "carry_binance": ("binance_spot", "binance_perp", "binance"),
+    "carry_upbit_bitget": ("upbit_spot", "bitget_perp", "bitget"),
+}
 
 
 @dataclass
@@ -209,12 +220,21 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
         capital = fund.base_balance_krw / fund_fx_krw_per_unit
     if not (isinstance(capital, (int, float)) and math.isfinite(capital) and capital > 0):
         raise BacktestInputError(f"자본이 잘못됐습니다: {capital!r}")
-    if params.name == "carry_binance":
-        legs_used = ["binance_spot", "binance_perp"]
+    is_carry = params.name in CARRY_LEGS
+    if is_carry:
+        spot_leg, perp_leg, carry_venue = CARRY_LEGS[params.name]
+        legs_used = [spot_leg, perp_leg]
+        spot_venue = spot_leg.split("_")[0]
     elif params.name == "xvenue_funding":
         legs_used = ["binance_perp", "hl_perp"]
+        spot_leg = perp_leg = carry_venue = spot_venue = None
     else:
         raise BacktestInputError(f"알 수 없는 전략: {params.name}")
+    for venue in ([carry_venue] if is_carry else ["binance", "hyperliquid"]):
+        if venue not in stale_funding_hours:
+            raise BacktestInputError(f"stale_funding_hours 에 {venue} 없음")
+        if venue not in mmr:
+            raise BacktestInputError(f"유지증거금률(mmr)에 {venue} 없음")
     bars = market.bars[(market.bars.index >= start_ms) & (market.bars.index < end_ms)]
     # 창 안에서 사용하는 다리의 가격이 결측인 봉은 제외한다(원천에 없는 봉을 만들어 내지 않음). 창 밖 결측은 이 창과 무관.
     bars, bars_dropped_missing_leg = drop_bars_missing_legs(bars, legs_used)
@@ -230,7 +250,7 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
     if max_gap_h > max_gap_hours:
         raise BacktestInputError(f"백테스트 구간에 {max_gap_h}시간 연속 빠진 봉이 있습니다(허용 {max_gap_hours}시간)")
 
-    fb = market.funding.get("binance")
+    fb = market.funding.get(carry_venue if is_carry else "binance")
     fh = market.funding.get("hyperliquid")
 
     cash = float(capital)
@@ -309,7 +329,7 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
             for L in legs:
                 if L.spec.funding_venue is None:
                     continue
-                fdf = fb if L.spec.funding_venue == "binance" else fh
+                fdf = market.funding.get(L.spec.funding_venue)
                 for rate in _funding_between(fdf, prev_T, T):
                     mark = float(cols.get(f"{L.spec.leg}_mark_close", cols[f"{L.spec.leg}_close"])[i - 1])
                     pay = -L.spec.side * L.qty * mark * rate
@@ -323,12 +343,11 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
             if params.name == "xvenue_funding":
                 ann_h, last_h = annualized_funding(fh, T, params.lookback_hours)
             stale = False
-            for venue, last in (("binance", last_b), ("hyperliquid", last_h)):
-                if params.name == "carry_binance" and venue == "hyperliquid":
-                    continue
+            checks = [(carry_venue, last_b)] if is_carry else [("binance", last_b), ("hyperliquid", last_h)]
+            for venue, last in checks:
                 if last is None or T - last > stale_funding_hours[venue] * HOUR_MS:
                     stale = True
-            if params.name == "carry_binance":
+            if is_carry:
                 signal = None if stale or ann_b is None else ann_b
                 want_enter = signal is not None and signal > params.entry_annualized
                 want_exit = pos_dir != 0 and (signal is not None and signal < params.exit_annualized)
@@ -368,11 +387,11 @@ def run_backtest(market: MarketData, params: StrategyParams, *, leverage: int, c
                     if fund is not None:
                         blocked_fund_entries += 1
                 else:
-                    if params.name == "carry_binance":
+                    if is_carry:
                         spot_notional = equity * lev / (lev + 1)
                         perp_margin = equity - spot_notional
-                        specs = [(LegSpec("binance_spot", "spot", "binance", 1, None, None), spot_notional, spot_notional),
-                                 (LegSpec("binance_perp", "perp", "binance", -1, "binance", mmr["binance"]),
+                        specs = [(LegSpec(spot_leg, "spot", spot_venue, 1, None, None), spot_notional, spot_notional),
+                                 (LegSpec(perp_leg, "perp", carry_venue, -1, carry_venue, mmr[carry_venue]),
                                   perp_margin, perp_margin * lev)]
                     else:
                         half = equity / 2.0

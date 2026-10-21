@@ -43,7 +43,7 @@ def main(data_dir: str, work: str):
 
     def resume_no_redownload():
         before = read_json(data / "checkpoint.json")
-        r = cli(["collect", "--data-dir", str(data), "--start", "2023-01", "--end", "2023-06", "--no-hyperliquid",
+        r = cli(["collect", "--data-dir", str(data), "--start", "2023-01", "--end", "2023-06", "--no-hyperliquid", "--no-upbit-bitget",
                  "--no-fx"])
         assert r.returncode == 0, r.stderr[-2000:]
         rep = read_json(data / "collect_report.json")
@@ -54,7 +54,7 @@ def main(data_dir: str, work: str):
     def kill9_during_collect_then_resume():
         d = work / "kill9"
         p = subprocess.Popen([PY, "-m", "csa_lab", "collect", "--data-dir", str(d), "--start", "2021-01", "--end",
-                              "2021-12", "--no-hyperliquid", "--no-fx"], cwd=ROOT, stdout=subprocess.DEVNULL,
+                              "2021-12", "--no-hyperliquid", "--no-upbit-bitget", "--no-fx"], cwd=ROOT, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
         deadline = time.time() + 120
         while time.time() < deadline:
@@ -65,7 +65,7 @@ def main(data_dir: str, work: str):
         p.send_signal(signal.SIGKILL)
         p.wait()
         done_at_kill = len(read_json(d / "checkpoint.json")["done"])
-        r = cli(["collect", "--data-dir", str(d), "--start", "2021-01", "--end", "2021-12", "--no-hyperliquid",
+        r = cli(["collect", "--data-dir", str(d), "--start", "2021-01", "--end", "2021-12", "--no-hyperliquid", "--no-upbit-bitget",
                  "--no-fx"])
         assert r.returncode == 0, r.stderr[-2000:]
         rep = read_json(d / "collect_report.json")
@@ -83,7 +83,7 @@ def main(data_dir: str, work: str):
 
     def network_down_fails_cleanly():
         d = work / "netdown"
-        r = cli(["collect", "--data-dir", str(d), "--start", "2020-06", "--end", "2020-06", "--no-hyperliquid",
+        r = cli(["collect", "--data-dir", str(d), "--start", "2020-06", "--end", "2020-06", "--no-hyperliquid", "--no-upbit-bitget",
                  "--no-fx"], env={"HTTPS_PROXY": "http://127.0.0.1:9", "https_proxy": "http://127.0.0.1:9"},
                 timeout=600)
         assert r.returncode != 0, "네트워크 단절인데 성공으로 끝남"
@@ -97,7 +97,7 @@ def main(data_dir: str, work: str):
         f = files[0]
         good = sha256_file(f)
         f.write_bytes(b"corrupted")
-        r = cli(["collect", "--data-dir", str(data), "--start", "2023-02", "--end", "2023-02", "--no-hyperliquid",
+        r = cli(["collect", "--data-dir", str(data), "--start", "2023-02", "--end", "2023-02", "--no-hyperliquid", "--no-upbit-bitget",
                  "--no-fx"])
         assert r.returncode == 0, r.stderr[-2000:]
         assert sha256_file(f) == good, "변조 파일이 복구되지 않음"
