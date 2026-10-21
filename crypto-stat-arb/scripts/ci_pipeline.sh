@@ -16,6 +16,7 @@ done_() { echo "=== [$(date -u +%FT%TZ)] END $1 rc=$2 ===" | tee -a "$LOG"; [ "$
 stage "E_collect_public_readonly 2020-01..$END_MONTH"
 python -m csa_lab collect --data-dir "$W/data" --start 2020-01 --end "$END_MONTH"
 done_ E_collect $?
+mkdir -p "$W/results"; cp "$W/data/collect_report.json" "$W/results/collect_report_main.json" 2>/dev/null || true  # 고장 주입 단계가 같은 경로를 덮어쓰므로 본 수집 보고를 따로 보존
 
 stage "BITGET_leverage_evidence_readonly"
 python scripts/bitget_leverage_evidence.py "$W/bitget_leverage_evidence.json"
@@ -81,7 +82,7 @@ for f in sorted(glob.glob('$OUT1/runs/*/*/*/lev*.json')):
     m=json.load(open(f)).get('metrics') or {}
     print(f, m.get('bars_dropped_missing_leg', 0), (m.get('bars_dropped_missing_leg_ts') or [])[:5])
 PY
-echo "--- upbit/bitget collection (executable venue pair) ---"; python -c "import json;r=json.load(open('$W/data/collect_report.json'));print(json.dumps(r.get('upbit_bitget'),ensure_ascii=False,indent=1))"
+echo "--- upbit/bitget collection (executable venue pair) ---"; python -c "import json;r=json.load(open('$W/results/collect_report_main.json'));print(json.dumps(r.get('upbit_bitget'),ensure_ascii=False,indent=1))"
 echo "--- carry_upbit_bitget rows ---"; python -c "import json;r=json.load(open('$OUT1/summary.json'));[print(x['window'],x['cost_profile'],x['leverage'],x['status'],x.get('net_return'),x.get('trades'),x.get('pf_net'),x.get('liquidations'),x.get('mdd'),(x.get('error') or '')[:160]) for x in r if x['strategy']=='carry_upbit_bitget']"
 echo "--- hedge adapter gate evidence (PerformanceEvidence) ---"; python scripts/export_gate_evidence.py "$OUT1" "$W/results/gate_evidence_carry_upbit_bitget.json"
 echo "--- summary status counts ---"; python -c "import json,collections;r=json.load(open('$OUT1/summary.json'));print(collections.Counter((x['window'],x['strategy'],x['status']) for x in r))"
