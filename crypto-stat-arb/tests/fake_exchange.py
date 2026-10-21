@@ -23,11 +23,15 @@ def _zip(name, text):
 class FakeExchange:
     def __init__(self, start="2023-01-01", end="2023-04-01", seed=7, b_rate=0.0002, h_rate=0.0, fail_first=0,
                  drop_kline_ts=None, hl_start=None, hl_coarse_until=None, drop_mark_ts=None,
-                 drop_spot_ts=None, hl_drop_ts=None):
+                 drop_spot_ts=None, hl_drop_ts=None, bg_rate=None, krw_per_usdt=1350.0, kimchi=1.02,
+                 upbit_drop_ts=None, upbit_usdt_start=None, bitget_down=False):
         """hl_start: 하이퍼리퀴드 펀딩 이력이 시작되는 날짜(그 전은 원천에 없음).
         hl_coarse_until: 이 날짜 전까지 하이퍼리퀴드 펀딩이 8시간 간격으로만 존재(실제 2023-05~06 초기 구간 모사).
         drop_mark_ts: 마크가격 봉만 빠지는 시각 목록. drop_spot_ts: 현물 봉만 빠지는 시각 목록.
-        hl_drop_ts: 하이퍼리퀴드 펀딩 공시만 빠지는 시각 목록(실제 2023-07~12 구간의 단발 결측 모사)."""
+        hl_drop_ts: 하이퍼리퀴드 펀딩 공시만 빠지는 시각 목록(실제 2023-07~12 구간의 단발 결측 모사).
+        bg_rate: 비트겟 8시간 펀딩(기본 b_rate). krw_per_usdt·kimchi: 업비트 KRW-USDT 값과 KRW-BTC 프리미엄 배수.
+        upbit_drop_ts: 업비트 KRW-BTC 봉만 빠지는 시각(무거래 시간 모사). upbit_usdt_start: KRW-USDT 상장 시작일.
+        bitget_down: 비트겟 시세 경로가 계속 503 을 돌려줌(원천 장애 모사)."""
         self.t0 = int(pd.Timestamp(start, tz="UTC").value // 10**6)
         self.t1 = int(pd.Timestamp(end, tz="UTC").value // 10**6)
         n = (self.t1 - self.t0) // H
@@ -44,6 +48,18 @@ class FakeExchange:
         self.hl_drop = set(hl_drop_ts or [])
         self.hl_start = int(pd.Timestamp(hl_start, tz="UTC").value // 10**6) if hl_start else self.t0
         self.hl_coarse_until = int(pd.Timestamp(hl_coarse_until, tz="UTC").value // 10**6) if hl_coarse_until else None
+        self.bg_rate = b_rate if bg_rate is None else bg_rate
+        self.krw_per_usdt = krw_per_usdt
+        self.kimchi = kimchi
+        self.upbit_drop = set(upbit_drop_ts or [])
+        self.upbit_usdt_start = int(pd.Timestamp(upbit_usdt_start, tz="UTC").value // 10**6) if upbit_usdt_start else self.t0
+        self.bitget_down = bitget_down
+
+    def _ohlc(self, t, mult):
+        i = (t - self.t0) // H
+        c = self.close[i] * mult
+        o = self.close[i - 1] * mult if i > 0 else c
+        return o, max(o, c) * 1.001, min(o, c) * 0.999, c
 
     def _month_rows(self, month, step):
         a = int(pd.Timestamp(month + "-01", tz="UTC").value // 10**6)
@@ -105,6 +121,47 @@ class FakeExchange:
                     if len(rows) >= 500:
                         break
                 return 200, {}, json.dumps(rows).encode()
+        if u.hostname == "api.upbit.com" and u.path == "/v1/candles/minutes/60":
+            q = urllib.parse.parse_qs(u.query)
+            market = q["market"][0]
+            to = int(pd.Timestamp(q["to"][0]).value // 10**6)
+            count = int(q["count"][0])
+            rows = []
+            t = min(to - to % H, self.t1)
+            t = t - H if t >= to else t
+            while t >= self.t0 and len(rows) < count:
+                if market == "KRW-USDT":
+                    ok = t >= self.upbit_usdt_start
+                    vals = (self.krw_per_usdt,) * 4
+                else:
+                    ok = t not in self.upbit_drop
+                    o, hi, lo, c = self._ohlc(t, self.krw_per_usdt * self.kimchi)
+                    vals = (o, hi, lo, c)
+                if ok and t < self.t1:
+                    rows.append({"market": market,
+                                 "candle_date_time_utc": pd.Timestamp(t, unit="ms").strftime("%Y-%m-%dT%H:%M:%S"),
+                                 "opening_price": vals[0], "high_price": vals[1], "low_price": vals[2],
+                                 "trade_price": vals[3], "candle_acc_trade_volume": 1.0})
+                t -= H
+            return 200, {}, json.dumps(rows).encode()
+        if u.hostname == "api.bitget.com" and u.path.startswith("/api/v2/mix/market/history"):
+            if self.bitget_down:
+                return 503, {}, b"down"
+            q = urllib.parse.parse_qs(u.query)
+            if u.path.endswith("history-fund-rate"):
+                size, page = int(q["pageSize"][0]), int(q["pageNo"][0])
+                all_t = [t for t in range(self.t0, self.t1, 8 * H)][::-1]
+                chunk = all_t[(page - 1) * size: page * size]
+                data = [{"symbol": "BTCUSDT", "fundingRate": str(self.bg_rate), "settleTime": str(t)} for t in chunk]
+                return 200, {}, json.dumps({"code": "00000", "msg": "success", "data": data}).encode()
+            st, et, lim = int(q["startTime"][0]), int(q["endTime"][0]), int(q["limit"][0])
+            mult = 1.0002 if "history-mark-candles" in u.path else 1.0
+            data = []
+            for t in range(st - st % H + (H if st % H else 0), et + 1, H):
+                if self.t0 <= t < self.t1 and len(data) < lim:
+                    o, hi, lo, c = self._ohlc(t, mult)
+                    data.append([str(t), str(o), str(hi), str(lo), str(c), "1", "1"])
+            return 200, {}, json.dumps({"code": "00000", "msg": "success", "data": data}).encode()
         if u.hostname == "api.upbit.com":
             q = urllib.parse.parse_qs(u.query)
             to = pd.Timestamp(q["to"][0])
