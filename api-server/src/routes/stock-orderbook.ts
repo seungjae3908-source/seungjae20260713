@@ -170,7 +170,7 @@ router.get('/orderbook', async (req, res, next) => {
   const abort = () => controller.abort(); req.once('aborted', abort);
   try {
     const payload = await tossOrderbook.load(target.market as 'KR' | 'US', target.symbol, controller.signal);
-    if (!res.writableEnded) return res.status(200).json(payload);
+    if (!res.writableEnded) return res.status(200).json(canonicalizeTossResponse(payload));
   } catch (error) {
     if (!res.writableEnded) return res.status(200).json({
       ...invalidTargetResponse(req.query), status: 'unavailable',
@@ -195,6 +195,12 @@ export function normalizeBitgetFuturesOrderbook(
   ...args: Parameters<typeof normalizeBitgetFuturesOrderbookCore>
 ): InstrumentOrderbookPayload {
   return canonicalize(normalizeBitgetFuturesOrderbookCore(...args));
+}
+
+// This endpoint's direct Toss handler runs BEFORE the mounted core response adapter.
+// Canonicalize that response explicitly rather than leaking core-only field names.
+export function canonicalizeTossResponse(payload: CoreOrderbookPayload): InstrumentOrderbookPayload {
+  return canonicalize(payload);
 }
 
 export function normalizeTossOrderbook(...args: Parameters<typeof normalizeTossOrderbookCore>): InstrumentOrderbookPayload {
