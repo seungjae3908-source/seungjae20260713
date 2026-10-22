@@ -1,14 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { NormalizedCandle } from './futures-market-data.service';
-import {
-  averageVolumeSeries,
-  rollingHighestSeries,
-  rollingLowestSeries,
-  sanitizeClosedCandles,
-  smaSeries,
-  utcSessionVwapSeries,
-} from './backtest-indicators.service';
+import { averageVolumeSeries, rollingHighestSeries, rollingLowestSeries, sanitizeClosedCandles, smaSeries, utcSessionVwapSeries, emaSeries, rsiSeries, atrSeries } from './backtest-indicators.service';
 
 const START = Date.UTC(2026, 0, 1);
 
@@ -69,4 +62,48 @@ test('sanitizer removes Infinity volume candles', () => {
   const result = sanitizeClosedCandles([candle(0), candle(1, { volume: Number.POSITIVE_INFINITY })]);
   assert.equal(result.data.length, 1);
   assert.ok(result.warnings.some((warning) => warning.includes('유효하지 않은 캔들')));
+});
+
+// ---------------------------------------------------------------
+// A-2-3 확장: 룩어헤드·경계값·타임존·초기 구간 계약 검증
+// ---------------------------------------------------------------
+test('SMA returns null for period=0,-1 and identity for period=1', () => {
+  const values = [1, 2, 3, 4, 5];
+  assert.ok(smaSeries(values, 0).every((v) => v === null));
+  assert.deepEqual(smaSeries(values, 1), [1, 2, 3, 4, 5]);
+  assert.ok(smaSeries(values, -1).every((v) => v === null));
+});
+
+test('EMA null before period-1 and seeds with SMA', () => {
+  const values = [2, 4, 6, 8, 10, 12, 14];
+  const period = 3;
+  const series = emaSeries(values, period);
+  for (let i = 0; i < period - 1; i += 1) assert.equal(series[i], null);
+  assert.equal(series[period - 1], 4);
+});
+
+test('RSI null until period closed', () => {
+  const values = Array.from({ length: 20 }, (_, i) => 100 + i);
+  const series = rsiSeries(values, 14);
+  for (let i = 0; i < 14; i += 1) assert.equal(series[i], null);
+  assert.notEqual(series[14], null);
+});
+
+test('ATR null before period completed true-range bars', () => {
+  const candles = Array.from({ length: 20 }, (_, i) => ({
+    openTime: i * 60_000,
+    closeTime: (i + 1) * 60_000,
+    open: 100 + i,
+    high: 101 + i,
+    low: 99 + i,
+    close: 100 + i + 0.5,
+    volume: 1000,
+  }));
+  const series = atrSeries(candles as any, 14);
+  for (let i = 0; i < 13; i += 1) assert.equal(series[i], null);
+  assert.notEqual(series[14], null);
+});
+
+test('rollingHighest returns null when period exceeds length', () => {
+  assert.deepEqual(rollingHighestSeries([1, 2, 3], 5), [null, null, null]);
 });
