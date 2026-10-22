@@ -45,6 +45,19 @@ export type ScannerTelegramDeliveryContext = TelegramSignalDeliveryContext & {
 export type ScannerMemberNotificationDeliverer = typeof deliverMemberNotification;
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
+/**
+ * 텔레그램 스캐너 알림 발송이 명시적으로 활성화되었는지 확인.
+ * - LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'  (운영 게이트)
+ * - 또는 TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true' (워커 게이트)
+ */
+export function isTelegramDeliveryActivated(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true' ||
+    env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true'
+  );
+}
 
 function entryReference(alert: ScannerAlertCandidate): number | null {
   if (!alert.entryZone) return null;
@@ -356,6 +369,19 @@ export async function deliverScannerTelegramAlerts(
   memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
   memberNotificationDeliverer: ScannerMemberNotificationDeliverer = deliverMemberNotification,
 ): Promise<void> {
+  if (alerts.length === 0) return;
+
+  // 실운영 게이트: 명시적 활성화가 없으면 텔레그램 시도 없이 in-app 만 실행.
+  // 테스트/모킹 경로(sender !== sendTelegramAlert)는 그대로 통과시켜 기존 계약 유지.
+  if (sender === sendTelegramAlert && !isTelegramDeliveryActivated()) {
+    await Promise.all(
+      alerts.map((alert) =>
+        runScannerInAppNotification(alert, context, memberNotificationDeliverer),
+      ),
+    );
+    return;
+  }
+
   await Promise.all(alerts.map(async (alert, index) => {
     // Central app history is member-scoped to the authenticated scanner caller
     // and uses the existing notification_history writer. Push remains disabled.
