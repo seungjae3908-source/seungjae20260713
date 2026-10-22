@@ -673,3 +673,57 @@ test('formula queue proof injection and forged stored PASS remain INVALID', () =
     assert.equal(formula.executionAuthority, 'NONE');
   }
 });
+
+test('formula development is MISSING when the dashboard omits it', () => {
+  const result = sanitizeResearchCenterOverview(validOverview());
+  const development = (result?.research as Record<string, any>).formulaDevelopment;
+  assert.equal(development.status, 'MISSING');
+  assert.equal(development.present, false);
+  assert.deepEqual(development.combination.lanes, []);
+  assert.equal(development.executionAuthority, 'NONE');
+});
+
+test('formula development passes whitelisted research numbers and drops unknown or private fields', () => {
+  const overview = validOverview() as Record<string, any>;
+  overview.research.formulaDevelopment = {
+    present: true, status: 'PRESENT', executionAuthority: 'NONE',
+    combination: { present: true, observedAt: '2026-10-17T07:00:00.000Z', privatePath: '/var/lib/x', lanes: [
+      { laneId: 'CRYPTO_FUTURES_SHORT', status: 'SEARCHING', trialsEvaluated: 120, trialsPlanned: 900, cumulativeTrials: 340,
+        survivors: 1, watch: 7, rejected: 112, holdoutChecked: 1, paperCandidates: 1, apiKey: 'leak',
+        top: [{ labels: ['쌍봉 후 넥라인 이탈', '/home/user/secret'], finalStatus: 'SURVIVOR', exitId: 'X3', trades: 41,
+          meanReturn: 0.0031, winRate: 0.46, profitFactor: 1.3, qValue: 0.04, holdoutPass: true, unseenPass: true, trialId: 'internal' },
+          { labels: ['x'], finalStatus: 'PROMOTED_LIVE' }] },
+      { laneId: 'FAKE_LANE', status: 'SEARCHING' },
+    ] },
+    exitComparison: { present: true, observedAt: 'not-a-date', lanes: [{ laneId: 'CRYPTO_FUTURES_LONG', status: 'COMPLETE', signalSets: [
+      { label: '급등 시작', winnerStatus: 'WINNER', winnerVariant: 'SINGLE+TRAIL_FULL',
+        variants: [{ variantId: 'SINGLE+TRAIL_FULL', trades: 30, meanR: 0.21, winRate: 0.4, maxConsecutiveLosses: 6, unseenTrades: 12, unseenMeanR: 0.1 },
+          { variantId: 'SINGLE+FIXED_FULL', trades: -3, meanR: Number.NaN }] }] }] },
+    exploratoryPaper: { present: true, observedAt: '2026-10-17T07:00:00.000Z', closed: 9, open: 2, promotionEligibleRules: 0, demotedRules: 1,
+      rules: [{ laneId: 'CRYPTO_FUTURES_LONG', labels: ['급등 시작'], lifecycle: 'ACTIVE', open: 1, trades: 9, meanR: 0.12, lower95: -0.4, winRate: 0.44, promotionEligible: false }] },
+    watchdog: { present: true, observedAt: '2026-10-17T07:00:00.000Z', healthy: 5, problems: ['combination-search'] },
+  };
+  const result = sanitizeResearchCenterOverview(overview);
+  const d = (result?.research as Record<string, any>).formulaDevelopment;
+  assert.equal(d.status, 'PRESENT');
+  assert.deepEqual(d.combination.lanes.map((lane: any) => lane.laneId), ['CRYPTO_FUTURES_SHORT']);
+  assert.deepEqual(d.combination.lanes[0].top.map((row: any) => row.finalStatus), ['SURVIVOR']);
+  assert.deepEqual(d.combination.lanes[0].top[0].labels, ['쌍봉 후 넥라인 이탈']);
+  assert.equal(d.exitComparison.observedAt, null);
+  const variants = d.exitComparison.lanes[0].signalSets[0].variants;
+  assert.equal(variants[0].meanR, 0.21);
+  assert.equal(variants[1].trades, null);
+  assert.equal(variants[1].meanR, null);
+  assert.equal(d.exploratoryPaper.closed, 9);
+  assert.deepEqual(d.watchdog.problems, ['combination-search']);
+  const text = JSON.stringify(result);
+  for (const leaked of ['/var/lib/x', 'leak', 'internal', '/home/user', 'FAKE_LANE', 'PROMOTED_LIVE']) assert.equal(text.includes(leaked), false, leaked);
+});
+
+test('formula development with execution authority is rejected as INVALID', () => {
+  const overview = validOverview() as Record<string, any>;
+  overview.research.formulaDevelopment = { present: true, status: 'PRESENT', executionAuthority: 'LIVE' };
+  const d = (sanitizeResearchCenterOverview(overview)?.research as Record<string, any>).formulaDevelopment;
+  assert.equal(d.status, 'INVALID');
+  assert.deepEqual(d.combination.lanes, []);
+});

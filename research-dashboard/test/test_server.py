@@ -572,6 +572,70 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
 
 
 
+    def test_formula_development_missing_is_explicit(self):
+        root = self.fixture()
+        d = build_research_overview(root)['research']['formulaDevelopment']
+        self.assertFalse(d['present'])
+        self.assertEqual(d['status'], 'MISSING')
+        self.assertEqual(d['combination']['lanes'], [])
+        self.assertEqual(d['executionAuthority'], 'NONE')
+
+    def test_formula_development_summarizes_research_files_without_leaking(self):
+        root = self.fixture()
+        write_json(root / 'latest' / 'combination-research-v1.json', {
+            'observedAt': '2026-10-17T07:00:00.000Z',
+            'datasetLog': ['/var/lib/secret/path'],
+            'lanes': [
+                {'laneId': 'CRYPTO_FUTURES_SHORT', 'status': 'SEARCHING', 'trialsEvaluated': 120, 'trialsPlanned': 900,
+                 'cumulativeTrials': 340, 'survivors': 1, 'watch': 7, 'rejected': 112, 'holdoutChecked': 1,
+                 'paperCandidates': [{'trialId': 'x'}],
+                 'top': [{'finalStatus': 'SURVIVOR', 'labels': ['MACD가 시그널 하향 돌파', '쌍봉 후 넥라인 이탈'], 'exitId': 'X3',
+                          'qValue': 0.04, 'validation': {'trades': 41, 'meanReturn': 0.0031, 'winRate': 0.46, 'profitFactor': 1.3},
+                          'holdout': {'pass': True}, 'unseen': {'pass': True}, 'trialId': 'internal-id'}]},
+                {'laneId': 'NOT_A_LANE', 'status': 'SEARCHING'},
+            ],
+        })
+        write_json(root / 'latest' / 'exit-strategy-comparison-v1.json', {
+            'observedAt': '2026-10-17T07:00:00.000Z',
+            'lanes': [{'laneId': 'CRYPTO_FUTURES_LONG', 'status': 'COMPLETE', 'signalSets': [{
+                'label': '급등 시작', 'winner': {'status': 'WINNER', 'variantId': 'SINGLE+TRAIL_FULL'},
+                'variants': [{'variantId': 'SINGLE+TRAIL_FULL', 'validation': {'trades': 30, 'meanR': 0.21, 'winRate': 0.4, 'maxConsecutiveLosses': 6},
+                              'unseen': {'trades': 12, 'meanR': 0.1}}]}]}],
+        })
+        write_json(root / 'latest' / 'exploratory-paper-ledger-v1.json', {
+            'observedAt': '2026-10-17T07:00:00.000Z',
+            'totals': {'closed': 9, 'open': 2, 'promotionEligibleRules': 0, 'demotedRules': 1},
+            'rules': [{'laneId': 'CRYPTO_FUTURES_LONG', 'labels': ['급등 시작'], 'lifecycle': 'ACTIVE', 'open': 1,
+                       'forwardAll': {'n': 9, 'mean': 0.12, 'lower95': -0.4, 'winRate': 0.44}, 'promotionEligible': False}],
+            'recentTrades': [{'symbol': 'BTCUSDT', 'apiKey': 'do-not-leak'}],
+        })
+        write_json(root / 'latest' / 'ops-watchdog-v1.json', {'observedAt': '2026-10-17T07:00:00.000Z', 'healthy': 5, 'problems': ['combination-search']})
+        overview = build_research_overview(root)
+        d = overview['research']['formulaDevelopment']
+        self.assertEqual(d['status'], 'PRESENT')
+        lanes = d['combination']['lanes']
+        self.assertEqual([lane['laneId'] for lane in lanes], ['CRYPTO_FUTURES_SHORT'])
+        self.assertEqual(lanes[0]['paperCandidates'], 1)
+        self.assertEqual(lanes[0]['top'][0]['labels'], ['MACD가 시그널 하향 돌파', '쌍봉 후 넥라인 이탈'])
+        self.assertTrue(lanes[0]['top'][0]['holdoutPass'])
+        self.assertEqual(d['exitComparison']['lanes'][0]['signalSets'][0]['winnerVariant'], 'SINGLE+TRAIL_FULL')
+        self.assertEqual(d['exploratoryPaper']['closed'], 9)
+        self.assertEqual(d['exploratoryPaper']['rules'][0]['trades'], 9)
+        self.assertEqual(d['watchdog']['problems'], ['combination-search'])
+        text = json.dumps(overview, ensure_ascii=False)
+        for leaked in ('/var/lib/secret', 'internal-id', 'do-not-leak', 'NOT_A_LANE'):
+            self.assertNotIn(leaked, text)
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_formula_development_corrupt_file_is_invalid_not_crash(self):
+        root = self.fixture()
+        path = root / 'latest' / 'combination-research-v1.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{broken', encoding='utf-8')
+        d = build_research_overview(root)['research']['formulaDevelopment']
+        self.assertEqual(d['status'], 'INVALID')
+        self.assertEqual(d['combination']['lanes'], [])
+
     def test_formula_queue_missing_is_not_zero_or_pass(self):
         root = self.fixture()
         q = build_research_overview(root)['research']['formulaBacktest']
