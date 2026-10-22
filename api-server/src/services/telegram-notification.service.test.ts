@@ -722,6 +722,36 @@ test('scanner central in-app history does not depend on a configured Telegram ro
   assert.equal(storedInput.metadata?.symbol, 'BTCUSDT');
 });
 
+test('scanner Telegram delivery skips Telegram when activation gate is off', async () => {
+  const prevLive = process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED;
+  const prevWorker = process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED;
+  delete process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED;
+  delete process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED;
+
+  const stored: unknown[] = [];
+  const { sendTelegramAlert: realSendTelegramAlert } = await import('./telegram-notification.service');
+  await deliverScannerTelegramAlerts(
+    [scannerAlert()],
+    realSendTelegramAlert,
+    testRoom,
+    { memberId: 'member-1', timeframe: '15m', generatedAt: '2026-09-18T00:00:00.000Z' },
+    async () => ({ status: 'DISABLED', matchedCount: 0, policyCount: 0, skippedCount: 0, errorCount: 0 }),
+    async (input) => { stored.push(input); return { appStored: true, pushSent: 0 }; },
+  );
+  assert.equal(stored.length, 1, 'in-app 알림은 실행되어야 함');
+
+  if (prevLive !== undefined) process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED = prevLive;
+  if (prevWorker !== undefined) process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED = prevWorker;
+});
+
+test('isTelegramDeliveryActivated reads env flags', async () => {
+  const { isTelegramDeliveryActivated } = await import('./scanner-telegram-delivery.service');
+  assert.equal(isTelegramDeliveryActivated({} as NodeJS.ProcessEnv), false);
+  assert.equal(isTelegramDeliveryActivated({ LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true' } as NodeJS.ProcessEnv), true);
+  assert.equal(isTelegramDeliveryActivated({ TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true' } as NodeJS.ProcessEnv), true);
+  assert.equal(isTelegramDeliveryActivated({ LIVE_TELEGRAM_ACTIVATION_APPROVED: 'false', TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'false' } as NodeJS.ProcessEnv), false);
+});
+
 test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency key', async () => {
   const delivered: TelegramAlertInput[] = [];
   await deliverScannerTelegramAlerts(
