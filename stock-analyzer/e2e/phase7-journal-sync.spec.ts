@@ -2,7 +2,38 @@ import { expect, test, type Page } from '@playwright/test';
 
 const PATH = '/__phase7-journal-sync-e2e';
 
+async function mockExecutionLedger(page: Page) {
+  await page.route('**/api/trade-automation/execution-ledger**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        generatedAt: '2026-10-05T00:00:00.000Z',
+        summary: {
+          total: 0,
+          stable: 0,
+          reconciling: 0,
+          manualReview: 0,
+          terminal: 0,
+          integrityBlocked: 0,
+          unknownSubmission: 0,
+        },
+        entries: [],
+        canonicalSource: 'trade_orders+trade_order_events+trade_order_plans',
+        readOnly: true,
+        providerMutationAllowed: false,
+        orderSubmitted: false,
+        orderCanceled: false,
+        orderAmended: false,
+        privateTradingRequestSent: false,
+      }),
+    });
+  });
+}
+
 async function open(page: Page) {
+  await mockExecutionLedger(page);
   await page.goto(PATH);
   await expect(page.getByTestId('phase7-e2e-page')).toBeVisible();
 }
@@ -21,6 +52,8 @@ test('desktop renders sync status and privacy notices', async ({ page }) => {
   await expect(page.getByTestId('journal-sync-status')).toContainText('거래일지 동기화');
   await expect(page.getByTestId('review-dataset-status')).toContainText('현재 단계에서는 거래기록을 외부 AI로 전송하지 않습니다.');
   await expect(page.getByTestId('review-dataset-status')).toContainText('개인정보를 제외한 구조화된 복기 데이터만 준비합니다.');
+  await expect(page.getByTestId('journal-execution-ledger-timeline')).toBeVisible();
+  await expect(page.getByTestId('journal-execution-ledger-timeline')).toContainText('체결 전·거절·복구 상태');
   expect(errors).toEqual([]);
 });
 
@@ -101,6 +134,7 @@ test('review dataset shows anonymization and excluded fields', async ({ page }) 
 
 test('default unified-ledger transport accepts reconciled non-zero read-only provider request counts', async ({ page }) => {
   const errors = captureErrors(page);
+  await mockExecutionLedger(page);
   const result = {
     integrationBaseSha: 'transport-e2e',
     generatedAt: '2026-09-25T00:00:00.000Z',

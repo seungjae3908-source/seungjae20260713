@@ -177,6 +177,12 @@ test('execution-ledger route exposes canonical unknown-submission truth without 
         submissionOutcome: string;
         safeToResubmit: boolean;
         providerMutationAllowed: boolean;
+        orderedAt: string;
+        updatedAt: string;
+        latestEventAt: string | null;
+        latestEventReason: string | null;
+        lastErrorCode: string | null;
+        retryCount: number;
       }>;
       orderSubmitted: boolean;
       orderCanceled: boolean;
@@ -192,6 +198,12 @@ test('execution-ledger route exposes canonical unknown-submission truth without 
     assert.equal(body.entries[0]?.submissionOutcome, 'UNKNOWN');
     assert.equal(body.entries[0]?.safeToResubmit, false);
     assert.equal(body.entries[0]?.providerMutationAllowed, false);
+    assert.equal(body.entries[0]?.orderedAt, NOW);
+    assert.equal(body.entries[0]?.updatedAt, NOW);
+    assert.equal(body.entries[0]?.latestEventAt, NOW);
+    assert.equal(body.entries[0]?.latestEventReason, 'AMBIGUOUS_PROVIDER_SUBMISSION_RESULT');
+    assert.equal(body.entries[0]?.lastErrorCode, 'BITGET_TIMEOUT');
+    assert.equal(body.entries[0]?.retryCount, 1);
     assert.equal(body.orderSubmitted, false);
     assert.equal(body.orderCanceled, false);
     assert.equal(body.orderAmended, false);
