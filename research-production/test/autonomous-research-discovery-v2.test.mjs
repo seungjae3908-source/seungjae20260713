@@ -875,7 +875,9 @@ test('lanes rotate across attempts and an operator filter narrows them', async (
 
 test('expanded verified catalog has unique strategy files and no lookahead-bias examples', () => {
   const paths = DEFAULT_VERIFIED_SOURCE_CATALOG_V2.map((row) => row.sourcePath);
-  assert.ok(paths.length >= 36);
+  assert.ok(paths.length >= 46);
+  for (const added of ['user_data/strategies/futures/FOttStrategy.py', 'user_data/strategies/multi_tf.py']) assert.ok(paths.includes(added), added);
+  for (const generated of ['user_data/strategies/GodStra.py', 'user_data/strategies/futures/FReinforcedStrategy.py']) assert.equal(paths.includes(generated), false, generated);
   assert.equal(paths.includes('user_data/strategies/Diamond.py'), false, 'Diamond.py repeatedly made the free provider fail');
   // No exit rule line to quote: EXIT_LOCATOR extraction always fails closed.
   for (const noExitRule of ['user_data/strategies/Heracles.py', 'user_data/strategies/PatternRecognition.py',
