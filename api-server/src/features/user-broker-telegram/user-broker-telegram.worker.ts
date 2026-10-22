@@ -8,6 +8,22 @@ import type { NotificationDelivery, PortfolioSyncSink, TelegramTransport } from 
 const noopPortfolioSink: PortfolioSyncSink = { async accept() {} };
 const STALE_SENDING_LEASE_MS = 2 * 60 * 1000;
 
+// Storage failure circuit breaker:
+// - Repeated storage failures (Supabase outage/timeout) must not spam logs
+//   every tick. Warn once per "fresh failure episode".
+// - While the circuit is open, listDue() short-circuits to [] so the worker
+//   tick stays cheap and does not throw. Throw is preserved only for the
+//   first failure of an episode so health() still reports it.
+const STORAGE_CIRCUIT_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000] as const;
+
+function nextCircuitBackoffMs(consecutiveFailures: number): number {
+  const idx = Math.min(
+    Math.max(consecutiveFailures - 1, 0),
+    STORAGE_CIRCUIT_BACKOFF_MS.length - 1,
+  );
+  return STORAGE_CIRCUIT_BACKOFF_MS[idx];
+}
+
 export type UserTelegramDeliveryWorkerHealth = Readonly<{
   enabled: boolean;
   lastTickAt: string | null;
@@ -119,7 +135,44 @@ export class TelegramDeliveryWorker {
 }
 
 export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWorkerSource {
+  private consecutiveStorageFailures = 0;
+  private storageSkipUntilMs = 0;
+  private failureLoggedForEpisode = false;
+
+  private isStorageCircuitOpen(nowMs: number): boolean {
+    return nowMs < this.storageSkipUntilMs;
+  }
+
+  private recordStorageFailure(nowMs: number, reason: string): void {
+    this.consecutiveStorageFailures += 1;
+    this.storageSkipUntilMs = nowMs + nextCircuitBackoffMs(this.consecutiveStorageFailures);
+    if (!this.failureLoggedForEpisode) {
+      this.failureLoggedForEpisode = true;
+      // eslint-disable-next-line no-console
+      console.warn('[user-telegram-worker] storage circuit open', {
+        reason,
+        consecutiveFailures: this.consecutiveStorageFailures,
+        skipUntilMs: this.storageSkipUntilMs,
+      });
+    }
+  }
+
+  private recordStorageSuccess(): void {
+    if (this.consecutiveStorageFailures > 0) {
+      // eslint-disable-next-line no-console
+      console.log('[user-telegram-worker] storage circuit closed', {
+        afterFailures: this.consecutiveStorageFailures,
+      });
+    }
+    this.consecutiveStorageFailures = 0;
+    this.storageSkipUntilMs = 0;
+    this.failureLoggedForEpisode = false;
+  }
+
   async recentConfirmedDelivery(nowMs = Date.now()) {
+    if (this.isStorageCircuitOpen(nowMs)) {
+      return verifiedRecentTelegramDeliveryReceipt(null, nowMs);
+    }
     if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
     const { data, error } = await getSupabase().from('notification_deliveries')
       .select('state,updated_at')
@@ -127,13 +180,18 @@ export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWor
       .gte('updated_at', new Date(nowMs - 24 * 60 * 60_000).toISOString())
       .order('updated_at', { ascending: false })
       .limit(1);
-    if (error) throw new Error('TELEGRAM_DELIVERY_RECEIPT_QUERY_FAILED');
+    if (error) {
+      this.recordStorageFailure(nowMs, 'recentConfirmedDelivery');
+      throw new Error('TELEGRAM_DELIVERY_RECEIPT_QUERY_FAILED');
+    }
+    this.recordStorageSuccess();
     return verifiedRecentTelegramDeliveryReceipt(data?.[0] ?? null, nowMs);
   }
 
   async listDue(now: string, limit: number) {
-    if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
     const nowMs = Date.parse(now);
+    if (Number.isFinite(nowMs) && this.isStorageCircuitOpen(nowMs)) return [];
+    if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
     if (!Number.isFinite(nowMs)) throw new Error('TELEGRAM_WORKER_INVALID_TIME');
     const bounded = Math.min(100, Math.max(1, Number.isInteger(limit) ? limit : 50));
     const client = getSupabase();
@@ -153,7 +211,10 @@ export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWor
       })
       .eq('state', 'SENDING')
       .lte('updated_at', staleBefore);
-    if (recoveryError) throw new Error('TELEGRAM_WORKER_STORAGE_UNAVAILABLE');
+    if (recoveryError) {
+      this.recordStorageFailure(nowMs, 'recoveryUpdate');
+      throw new Error('TELEGRAM_WORKER_STORAGE_UNAVAILABLE');
+    }
 
     const { data, error } = await client.from('notification_deliveries')
       .select('user_id,id')
@@ -161,7 +222,11 @@ export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWor
       .or(`next_retry_at.is.null,next_retry_at.lte.${now}`)
       .order('created_at', { ascending: true })
       .limit(bounded);
-    if (error) throw new Error('TELEGRAM_WORKER_STORAGE_UNAVAILABLE');
+    if (error) {
+      this.recordStorageFailure(nowMs, 'listDueSelect');
+      throw new Error('TELEGRAM_WORKER_STORAGE_UNAVAILABLE');
+    }
+    this.recordStorageSuccess();
     return (data ?? []).map((row) => ({ userId: String(row.user_id), id: String(row.id) }));
   }
 }
