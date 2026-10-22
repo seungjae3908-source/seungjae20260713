@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
-import type { AuthenticatedRequest } from '../middleware/auth';
-import { AiChatError, answerAiChat } from '../services/ai-chat.service';
+import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
+import { AiChatError, answerAiChat, getAiChatProviderRuntimeHealth } from '../services/ai-chat.service';
 
 const router: IRouter = Router();
 const userBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -17,6 +17,15 @@ function acceptUserRequest(userId: string, now = Date.now()): boolean {
   bucket.count += 1;
   return bucket.count <= 20;
 }
+
+router.get('/ai/health', requireAdmin, (_req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.json({
+    ok: true,
+    service: 'AI_SERVICE',
+    health: getAiChatProviderRuntimeHealth(),
+  });
+});
 
 router.post('/ai/chat', async (req: AuthenticatedRequest, res) => {
   if (!req.member || !acceptUserRequest(req.member.id)) {
