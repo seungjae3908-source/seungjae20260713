@@ -31,11 +31,22 @@ for (const entry of entryPoints) {
     external: [
       ...builtinModules,
       ...builtinModules.map((name) => `node:${name}`),
+      'web-push',
+      'ws',
+      '@supabase/supabase-js',
+      'pino',
+      'pino-http',
+      'pino-pretty',
+      'thread-stream',
     ],
     banner: {
       js: `
 import { createRequire as __createRequire } from 'node:module';
+import { fileURLToPath as __fileURLToPath } from 'node:url';
+import { dirname as __pathDirname } from 'node:path';
 const require = __createRequire(import.meta.url);
+const __filename = __fileURLToPath(import.meta.url);
+const __dirname = __pathDirname(__filename);
 `,
     },
     define: {
