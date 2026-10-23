@@ -193,3 +193,7 @@ test('changed plan version invalidates the approval captured by the order', asyn
     },
   );
 });
+
+// stat-arb two-leg hedge adapter (no production wiring; mock venues only).
+import './stat-arb-hedge/stat-arb-hedge.test';
+import './stat-arb-hedge/stat-arb-hedge-integration.test';
