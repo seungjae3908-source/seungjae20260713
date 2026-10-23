@@ -26,7 +26,7 @@ for (const entry of entryPoints) {
     format: 'esm',
     target: 'node20',
     sourcemap: true,
-    minify: false,
+    minify: true,
     packages: 'bundle',
     external: [
       ...builtinModules,
