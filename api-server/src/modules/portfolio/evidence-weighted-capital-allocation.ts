@@ -3,6 +3,8 @@ export type EvidenceStrategyHealth = 'HEALTHY' | 'WATCH' | 'DEGRADED' | 'QUARANT
 
 export type EvidenceCapitalBlocker =
   | 'NON_FORWARD_EVIDENCE'
+  | 'FUNDING_EVIDENCE_MISSING'
+  | 'REALIZED_NET_LOSS'
   | 'EXPECTANCY_NOT_POSITIVE'
   | 'PROFIT_FACTOR_NOT_ABOVE_ONE'
   | 'MDD_MISSING_OR_EXCESSIVE'
@@ -30,6 +32,9 @@ export type EvidenceCapitalInput = Readonly<{
   calibrationHealthy: boolean;
   dataHealthy: boolean;
   executionFeasible: boolean;
+  market?: 'spot' | 'futures';
+  fundingEvidencePresent?: boolean;
+  realizedNetReturnPercent?: number | null;
 }>;
 
 export type EvidenceCapitalPolicy = Readonly<{
@@ -52,6 +57,8 @@ export type EvidenceCapitalDecision = Readonly<{
   status: 'INSUFFICIENT_EVIDENCE' | 'CAPITAL_ELIGIBLE_PAPER_ONLY';
   safeCapitalState: 'CASH_OR_NO_TRADE' | 'PAPER_CAPITAL_ELIGIBLE';
   blockers: readonly EvidenceCapitalBlocker[];
+  primary: EvidenceCapitalBlocker | null;
+  secondaryBlockers: readonly EvidenceCapitalBlocker[];
   paperCapitalWeight: number;
   liveCapitalWeight: 0;
   evidenceScore: number;
@@ -152,12 +159,40 @@ export function evaluateEvidenceWeightedCapital(
   if (!input.calibrationHealthy) addBlocker(blockers, 'CALIBRATION_NOT_HEALTHY');
   if (!input.dataHealthy) addBlocker(blockers, 'DATA_NOT_HEALTHY');
   if (!input.executionFeasible) addBlocker(blockers, 'EXECUTION_NOT_FEASIBLE');
+  if (input.market === 'futures' && input.fundingEvidencePresent !== true) {
+    addBlocker(blockers, 'FUNDING_EVIDENCE_MISSING');
+  }
+  if (input.realizedNetReturnPercent != null && input.realizedNetReturnPercent < 0) {
+    addBlocker(blockers, 'REALIZED_NET_LOSS');
+  }
+
+  const PRIORITY: readonly EvidenceCapitalBlocker[] = Object.freeze([
+    'NON_FORWARD_EVIDENCE',
+    'FUNDING_EVIDENCE_MISSING',
+    'REALIZED_NET_LOSS',
+    'EXPECTANCY_NOT_POSITIVE',
+    'PROFIT_FACTOR_NOT_ABOVE_ONE',
+    'MDD_MISSING_OR_EXCESSIVE',
+    'INSUFFICIENT_SETTLED_SAMPLES',
+    'INSUFFICIENT_EFFECTIVE_SAMPLES',
+    'INSUFFICIENT_REGIME_COVERAGE',
+    'PREDICTION_COLLAPSE',
+    'CHAMPION_NOT_VALIDATED',
+    'STRATEGY_HEALTH_NOT_HEALTHY',
+    'CALIBRATION_NOT_HEALTHY',
+    'DATA_NOT_HEALTHY',
+    'EXECUTION_NOT_FEASIBLE',
+  ]);
+  const primary = PRIORITY.find((code) => blockers.includes(code)) ?? null;
+  const secondaryBlockers = blockers.filter((code) => code !== primary);
 
   if (blockers.length > 0) {
     return Object.freeze({
       status: 'INSUFFICIENT_EVIDENCE',
       safeCapitalState: 'CASH_OR_NO_TRADE',
       blockers: Object.freeze(blockers),
+      primary,
+      secondaryBlockers: Object.freeze(secondaryBlockers),
       paperCapitalWeight: 0,
       liveCapitalWeight: 0,
       evidenceScore: 0,
@@ -185,6 +220,8 @@ export function evaluateEvidenceWeightedCapital(
     status: 'CAPITAL_ELIGIBLE_PAPER_ONLY',
     safeCapitalState: 'PAPER_CAPITAL_ELIGIBLE',
     blockers: Object.freeze([]),
+    primary: null,
+    secondaryBlockers: Object.freeze([]),
     paperCapitalWeight,
     liveCapitalWeight: 0,
     evidenceScore,
