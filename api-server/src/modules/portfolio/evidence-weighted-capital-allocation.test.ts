@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   evaluateAllocatorShadowLeague,
   evaluateEvidenceWeightedCapital,
+  DEFAULT_EVIDENCE_CAPITAL_POLICY,
   type EvidenceCapitalInput,
 } from './evidence-weighted-capital-allocation';
 
@@ -163,4 +164,55 @@ test('allocator shadow league de-duplicates opportunity ids', () => {
   const result = evaluateAllocatorShadowLeague([duplicate, duplicate], { minimumPairedSettledSamples: 2, minimumIncrementalExpectancyPercent: 0 });
   assert.equal(result.pairedSettledSampleSize, 1);
   assert.equal(result.status, 'INSUFFICIENT_PAIRED_EVIDENCE');
+});
+
+test('futures candidate without funding evidence is blocked with FUNDING_EVIDENCE_MISSING primary', () => {
+  const d = evaluateEvidenceWeightedCapital(
+    validEvidence({ market: 'futures', fundingEvidencePresent: false }),
+    DEFAULT_EVIDENCE_CAPITAL_POLICY,
+  );
+  assert.ok(d.blockers.includes('FUNDING_EVIDENCE_MISSING'));
+  assert.equal(d.primary, 'FUNDING_EVIDENCE_MISSING');
+});
+
+test('futures candidate with funding evidence does not trigger FUNDING_EVIDENCE_MISSING', () => {
+  const d = evaluateEvidenceWeightedCapital(
+    validEvidence({ market: 'futures', fundingEvidencePresent: true }),
+    DEFAULT_EVIDENCE_CAPITAL_POLICY,
+  );
+  assert.ok(!d.blockers.includes('FUNDING_EVIDENCE_MISSING'));
+});
+
+test('realized net loss is recorded independently from sample sufficiency', () => {
+  const d = evaluateEvidenceWeightedCapital(
+    validEvidence({ settledSampleSize: 5, effectiveSampleSize: 5, realizedNetReturnPercent: -2.5 }),
+    DEFAULT_EVIDENCE_CAPITAL_POLICY,
+  );
+  assert.ok(d.blockers.includes('REALIZED_NET_LOSS'));
+  assert.ok(d.blockers.includes('INSUFFICIENT_SETTLED_SAMPLES'));
+  assert.equal(d.primary, 'REALIZED_NET_LOSS');
+  assert.ok(d.secondaryBlockers.includes('INSUFFICIENT_SETTLED_SAMPLES'));
+});
+
+test('primary and secondary blockers are separated (funding before sample)', () => {
+  const d = evaluateEvidenceWeightedCapital(
+    validEvidence({ market: 'futures', fundingEvidencePresent: false, settledSampleSize: 1, effectiveSampleSize: 1 }),
+    DEFAULT_EVIDENCE_CAPITAL_POLICY,
+  );
+  assert.equal(d.primary, 'FUNDING_EVIDENCE_MISSING');
+  assert.ok(d.secondaryBlockers.includes('INSUFFICIENT_SETTLED_SAMPLES'));
+});
+
+test('[2차] consumer mapping: net loss vs sample insuff. are distinct stable codes', () => {
+  const loss = evaluateEvidenceWeightedCapital(validEvidence({ realizedNetReturnPercent: -1 }), DEFAULT_EVIDENCE_CAPITAL_POLICY);
+  const samp = evaluateEvidenceWeightedCapital(validEvidence({ settledSampleSize: 1, effectiveSampleSize: 1 }), DEFAULT_EVIDENCE_CAPITAL_POLICY);
+  assert.equal(loss.primary, 'REALIZED_NET_LOSS');
+  assert.equal(samp.primary, 'INSUFFICIENT_SETTLED_SAMPLES');
+  assert.notEqual(loss.primary, samp.primary);
+});
+
+test('[2차] consumer mapping: futures funding missing is dedicated code', () => {
+  const d = evaluateEvidenceWeightedCapital(validEvidence({ market: 'futures', fundingEvidencePresent: false }), DEFAULT_EVIDENCE_CAPITAL_POLICY);
+  assert.equal(d.primary, 'FUNDING_EVIDENCE_MISSING');
+  assert.ok(!d.blockers.includes('EXPECTANCY_NOT_POSITIVE'));
 });
