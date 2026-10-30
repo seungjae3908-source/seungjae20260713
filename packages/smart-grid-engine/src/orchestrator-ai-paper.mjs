@@ -25,6 +25,7 @@ import {
   submitPaperOrder,
 } from './paper-execution-adapter.mjs';
 import { calculateGridQuantity } from './grid-math.mjs';
+import { executeNeutralGridStep, saveNeutralState, loadNeutralStateSafe } from './neutral-grid-paper.mjs';
 
 // 기존 B 모듈 — read-only import (수정 없음)
 import {
@@ -47,6 +48,7 @@ export const PIPELINE_DEFAULTS = Object.freeze({
   runtimeDir: '.runtime/paper-ai',
   aiStateFile: 'state-ai.json',
   bStateFile: 'state-b.json',
+  neutralStateFile: 'state-neutral.json',
   reportDir: 'reports',
   sourceLabel: 'MOCK_DATA',
   bConfigDefault: Object.freeze({
@@ -65,6 +67,7 @@ export function getRuntimePaths(baseDir = PIPELINE_DEFAULTS.runtimeDir) {
     dir: baseDir,
     aiState: path.join(baseDir, PIPELINE_DEFAULTS.aiStateFile),
     bState: path.join(baseDir, PIPELINE_DEFAULTS.bStateFile),
+    neutralState: path.join(baseDir, PIPELINE_DEFAULTS.neutralStateFile),
     reportDir: path.join(baseDir, PIPELINE_DEFAULTS.reportDir),
   };
 }
@@ -118,16 +121,21 @@ export function loadOrInitStates({ paths, initialUsdt = PIPELINE_DEFAULTS.initia
     bState = null;
   }
 
+  const neutralLoad = loadNeutralStateSafe({ statePath: paths.neutralState });
+  const neutralState = neutralLoad.ok ? neutralLoad.state : null;
+
   return {
     aiState: aiState || createPaperState({ initialUsdt, nowMs }),
     aiCorrupt,
     aiQuarantinePath,
     bState,
+    neutralState,
+    neutralCorrupt: !neutralLoad.ok && neutralLoad.corrupt === true,
   };
 }
 
 // 상태 저장 (AI + B 격리 저장)
-export function persistAIPaperState({ paths, aiState, bState } = {}) {
+export function persistAIPaperState({ paths, aiState, bState, neutralState } = {}) {
   let aiSaved = false, aiError = null;
   if (aiState) {
     const r = paperSaveState({ statePath: paths.aiState, state: aiState });
@@ -146,7 +154,14 @@ export function persistAIPaperState({ paths, aiState, bState } = {}) {
     }
   }
 
-  return { aiSaved, aiError, bSaved, bError };
+  let neutralSaved = false, neutralError = null;
+  if (neutralState && paths?.neutralState) {
+    const r = saveNeutralState({ statePath: paths.neutralState, state: neutralState });
+    neutralSaved = r.saved === true;
+    neutralError = r.error || null;
+  }
+
+  return { aiSaved, aiError, bSaved, bError, neutralSaved, neutralError };
 }
 
 // 단일 봉(bar) 처리
@@ -159,6 +174,7 @@ export function processAIPaperBar(args = {}) {
     bConfig = null,
     aiState = null,
     bState = null,
+    neutralState = null,
     env = null,
     explicitApprovalToken = null,
     expectedApprovalToken = null,
@@ -260,21 +276,40 @@ export function processAIPaperBar(args = {}) {
   let paperResult = null;
   // aiState 가 null 이면 초기 상태 생성 (D1 테스트 통과 조건)
   let newAiState = aiState || createPaperState({ initialUsdt: cfg.initialUsdt, nowMs });
+  let newNeutralState = neutralState;
 
+  const isNeutral = gridPlan.direction === DIRECTION.NEUTRAL;
   const directionSupported =
     gridPlan.direction === DIRECTION.LONG || gridPlan.direction === DIRECTION.SHORT;
-  // Paper 실행 선행조건 (지시서 §3):
-  //   1) 시장 데이터 유효성 (위에서 validateMarketInput 통과)
-  //   2) AI 계획 유효성 (gridPlan ok)
-  //   3) 위험관리 통과 (riskEval.ok && allowNewEntry)
-  //   4) 주문 수량·가격 검증 (아래 calculateGridQuantity + submitPaperOrder)
-  // LIVE 게이트(candidateEligible) 는 Paper 실행의 선행조건이 아님 — 기록만.
-  const paperPrecondsMet =
-    riskEval.ok === true &&
-    riskEval.allowNewEntry === true &&
-    directionSupported;
 
-  if (paperPrecondsMet) {
+  if (isNeutral) {
+    // ── NEUTRAL_GRID 독립 경로 (LONG/SHORT와 완전 분리) ──
+    if (gridPlan.ok === true && gridPlan.failClosed !== true && gridPlan.allowNewEntry === true &&
+        riskEval.ok === true && riskEval.allowNewEntry === true) {
+      const step = executeNeutralGridStep({
+        state: neutralState,
+        statePath: paths?.neutralState || null,
+        symbol,
+        candle,
+        gridPlan,
+        feeRate: cfg.feeRate,
+        nowMs,
+      });
+      if (step.ok) {
+        newNeutralState = step.state;
+        paperResult = {
+          ok: true, realApiCalled: false, kind: 'NEUTRAL_GRID',
+          fills: step.fills, boundaryState: step.boundaryState,
+          allowNewEntry: step.allowNewEntry,
+        };
+      } else {
+        paperResult = { ok: false, realApiCalled: false, kind: 'NEUTRAL_GRID', reason: step.reason };
+      }
+    } else {
+      reasons.push('NEUTRAL_PAPER_SKIP:PRECONDITIONS_NOT_MET');
+    }
+  } else if (riskEval.ok === true && riskEval.allowNewEntry === true && directionSupported) {
+    // ── LONG/SHORT 기존 경로 (변경 없음) ──
     let quantity = null;
     try {
       quantity = calculateGridQuantity({
@@ -310,8 +345,6 @@ export function processAIPaperBar(args = {}) {
         newAiState = paperResult.state;
       }
     }
-  } else if (!directionSupported && gridPlan.strategy === STRATEGY.NEUTRAL_GRID) {
-    reasons.push('PAPER_SKIP:NEUTRAL_NOT_SUPPORTED_BY_ADAPTER');
   } else {
     reasons.push('PAPER_SKIP:PRECONDITIONS_NOT_MET');
   }
@@ -352,6 +385,7 @@ export function processAIPaperBar(args = {}) {
     reasons,
     aiState: newAiState,
     bState: newBState,
+    neutralState: newNeutralState,
     aiDecision,
     gridPlan: {
       ok: gridPlan.ok,

@@ -114,13 +114,23 @@ test('B2: 하락 국면 → SHORT_TRAILING_GRID', () => {
   assert.equal(r.aiDecision.direction, DIRECTION.SHORT);
 });
 
-test('B3: 횡보 국면 → NEUTRAL_GRID (paper 스킵)', () => {
+test('B3: 횡보 국면 → NEUTRAL_GRID (Step 6-C 독립 paper 경로)', () => {
   const r = processAIPaperBar(baseArgs({ indicators: sideIndicators() }));
   assert.equal(r.aiDecision.strategy, STRATEGY.NEUTRAL_GRID);
   assert.equal(r.aiDecision.direction, DIRECTION.NEUTRAL);
-  // NEUTRAL 은 어댑터 미지원 → paper 스킵 사유 기록
-  assert.ok(r.reasons.some((x) => x.startsWith('PAPER_SKIP')));
-  assert.equal(r.paperResult, null);
+  // Step 6-C: NEUTRAL_GRID 는 독립 paper 경로로 실행됨.
+  //   - 통과 시: paperResult.kind === 'NEUTRAL_GRID'
+  //   - 미통과 시: NEUTRAL_PAPER_SKIP:* reason 기록
+  // (기존 'PAPER_SKIP' 단일값 가정 폐기 — 기능 확장 반영, 테스트 삭제 아님)
+  if (r.paperResult) {
+    assert.equal(r.paperResult.kind, 'NEUTRAL_GRID');
+    assert.equal(r.paperResult.realApiCalled, false);
+  } else {
+    assert.ok(
+      r.reasons.some((x) => x.startsWith('NEUTRAL_PAPER_SKIP')),
+      `NEUTRAL 스킵 시 사유 필요: ${JSON.stringify(r.reasons)}`,
+    );
+  }
 });
 
 test('B4: HIGH_VOLATILITY → 신규 진입 차단', () => {

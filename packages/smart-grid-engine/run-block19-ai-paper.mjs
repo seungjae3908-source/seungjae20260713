@@ -55,6 +55,7 @@ async function main() {
 
   let aiState = st.aiState;
   let bState = st.bState;
+  let neutralState = st.neutralState || null;
   const history = [];
 
   for (const bar of buildFixtures()) {
@@ -66,6 +67,7 @@ async function main() {
       bConfig: { ...PIPELINE_DEFAULTS.bConfigDefault },
       aiState,
       bState,
+      neutralState,
       env: {},
       marketData: { lastUpdateMs: bar.nowMs - 1000, nowMs: bar.nowMs },
       accountData: { lastAccountSyncMs: bar.nowMs - 5000, expected: null, observed: null },
@@ -85,10 +87,11 @@ async function main() {
     if (r.ok) {
       aiState = r.aiState;
       bState = r.bState;
+      if (r.neutralState) neutralState = r.neutralState;
     }
   }
 
-  const p = persistAIPaperState({ paths, aiState, bState });
+  const p = persistAIPaperState({ paths, aiState, bState, neutralState });
   console.log(`AI state save: ${p.aiSaved} (err=${p.aiError || '-'})`);
   console.log(`B  state save: ${p.bSaved} (err=${p.bError || '-'})`);
 
@@ -104,6 +107,7 @@ async function main() {
   console.log(`AI  fills:       ${rep.report.ai.fillsCount}`);
   console.log(`B   trades:      ${rep.report.b.metricsB?.trades ?? 'n/a'}`);
   console.log(`B   netPnl:      ${rep.report.b.metricsB?.netPnl ?? 'n/a'}`);
+  console.log(`NEUTRAL saved:  ${p.neutralSaved} (err=${p.neutralError || '-'})`);
   console.log('');
   console.log('LIVE gate: allowed=false (always)');
   console.log('realApiCalled=false');
