@@ -71,8 +71,9 @@ test('V3 Telegram corrupt and linked dedupe files block rather than erase', asyn
     const empty = new SignalIntelligenceTelegramDeliveryState(path.join(directory, 'new.json'));
     const key = 'signal-intelligence-v3:'+'a'.repeat(40)+':NEW_CANDIDATE:test::';
     assert.equal(await empty.has(key), false);
-    await empty.mark(key, new Date('2026-10-11T00:00:00.000Z'));
-    assert.equal(await new SignalIntelligenceTelegramDeliveryState(path.join(directory, 'new.json')).has(key),true);
+    const now = new Date('2026-10-29T00:00:00.000Z');
+    await empty.mark(key, new Date(now.getTime() - 1000));
+    assert.equal(await new SignalIntelligenceTelegramDeliveryState(path.join(directory, 'new.json')).has(key, now), true);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
