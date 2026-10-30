@@ -1,13 +1,14 @@
 import http from 'node:http';
 import { fetchLiveOrderBook, getCurrentPrice } from './src/bitget-adapter.mjs';
-import { selectStrategy, checkRiskLimits } from './src/risk-manager.mjs';
+import { selectStrategy } from './src/risk-manager.mjs';
 import { calculateGridLevels } from './src/grid-math.mjs';
 
-const PORT = 8080;
+// 기존 stock-app과 충돌하지 않도록 8099 포트 사용
+const PORT = 8099;
 
 const server = http.createServer(async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Access-Control-Allow-Origin', '*'); // 프론트엔드 연동 허용
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.url === '/api/dashboard' && req.method === 'GET') {
     try {
@@ -20,23 +21,10 @@ const server = http.createServer(async (req, res) => {
       const response = {
         status: 'SUCCESS',
         timestamp: new Date().toISOString(),
-        liveTradingEnabled: false, // LIVE 차단 상태 강제 표시
-        marketData: {
-          symbol: 'BTCUSDT',
-          currentPrice,
-          bestBid: orderBook.bids[0].price,
-          bestAsk: orderBook.asks[0].price,
-        },
-        strategy: {
-          direction: strategy.direction,
-          mode: strategy.gridMode,
-          reason: strategy.reason,
-        },
-        gridConfig: {
-          lowerPrice: levels[0],
-          upperPrice: levels[levels.length - 1],
-          levels: levels,
-        }
+        liveTradingEnabled: false, // 🔒 LIVE 차단 상태 강제
+        marketData: { symbol: 'BTCUSDT', currentPrice, bestBid: orderBook.bids[0].price, bestAsk: orderBook.asks[0].price },
+        strategy: { direction: strategy.direction, mode: strategy.gridMode, reason: strategy.reason },
+        gridConfig: { lowerPrice: levels[0], upperPrice: levels[levels.length - 1], levels: levels }
       };
 
       res.writeHead(200);
@@ -49,6 +37,12 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404);
     res.end(JSON.stringify({ error: 'NOT_FOUND' }));
   }
+});
+
+// 포트 충돌 등 서버 에러 핸들링
+server.on('error', (err) => {
+  console.error('SERVER_ERROR:', err.message);
+  process.exit(1);
 });
 
 server.listen(PORT, () => {
