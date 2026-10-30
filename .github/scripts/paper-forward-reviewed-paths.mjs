@@ -211,6 +211,7 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "research-production/src/natural-cycle-verdict-trace.mjs",
   "research-production/test/paper-state-readonly-transport.test.mjs",
   "research-production/test/research-engine.test.mjs",
+  "research-production/test/research-engine-paper-forward-detail.test.mjs",
   "research-production/test/paper-risk-policy-transport.test.mjs",
   ".github/workflows/prediction-lab-pr-head-unit.yml",
   "research-production/test/natural-cycle-verdict-trace.test.mjs",
