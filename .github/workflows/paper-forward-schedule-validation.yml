@@ -388,6 +388,7 @@ on:
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
       - research-production/deploy/research-production@.service
       - research-production/src/engine.mjs
+      - market-prediction-lab/tests/paper-forward-schedule-m1-prime-fallback.test.js
       - research-production/src/natural-cycle-verdict-trace.mjs
       - research-production/test/paper-state-readonly-transport.test.mjs
       - research-production/test/research-engine.test.mjs
