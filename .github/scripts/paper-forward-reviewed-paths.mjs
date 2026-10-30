@@ -192,6 +192,7 @@ export const PAPER_FORWARD_REVIEWED_PATHS = Object.freeze([
   "market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js",
   "market-prediction-lab/tests/paper-scheduler-driver-v1.test.js",
   "market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js",
+  "market-prediction-lab/tests/paper-forward-schedule-m1-prime-fallback.test.js",
   "market-prediction-lab/tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js",
   "market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js",
   "market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js",
