@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { assertResearchSafety, buildTaskPlan, preflightResearchProduction, runResearchCycle } from '../src/engine.mjs';
 import { buildHistoricalPipelinePlan, preflightHistoricalPipelines, runHistoricalPipelines } from '../src/historical-pipelines.mjs';
 import { runLongHistoryPipeline } from '../src/long-history-pipeline.mjs';
+import { readPaperForwardDetail } from '../src/paper-forward-detail-consumer.mjs';
 
 function parse(argv) {
   const command = argv[2] ?? 'plan'; const options = {};
@@ -50,6 +51,10 @@ try {
         ? await runLongHistoryPipeline(config)
         : await runResearchCycle(config);
     console.log(JSON.stringify(result, null, 2)); if (result.status === 'partial_failure') process.exitCode = 1;
+  } else if (command === 'verify') {
+    const verdict = await readPaperForwardDetail({ stateRoot: config.stateRoot });
+    console.log(JSON.stringify(verdict, null, 2));
+    if (verdict.ok !== true) process.exitCode = 1;
   } else throw new Error(`unsupported command: ${command}`);
 } catch (error) {
   console.error(JSON.stringify({ status: 'failed_closed', error: String(error?.message ?? error), liveTrading: false, privateApi: false, orderAuthority: false }, null, 2)); process.exitCode = 1;
