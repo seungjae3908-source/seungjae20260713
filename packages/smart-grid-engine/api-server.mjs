@@ -1,9 +1,6 @@
 import http from 'node:http';
-import { fetchLiveOrderBook, getCurrentPrice } from './src/bitget-adapter.mjs';
-import { selectStrategy } from './src/risk-manager.mjs';
-import { calculateGridLevels } from './src/grid-math.mjs';
+import { fetchLiveOrderBook, getCurrentPrice } from './src/bitget-adapter.mjs'; import { selectStrategy } from './src/risk-manager.mjs'; import { calculateGridLevels } from './src/grid-math.mjs';
 
-// 기존 stock-app과 충돌하지 않도록 8099 포트 사용
 const PORT = 8099;
 
 const server = http.createServer(async (req, res) => {
@@ -21,7 +18,7 @@ const server = http.createServer(async (req, res) => {
       const response = {
         status: 'SUCCESS',
         timestamp: new Date().toISOString(),
-        liveTradingEnabled: false, // 🔒 LIVE 차단 상태 강제
+        liveTradingEnabled: false,
         marketData: { symbol: 'BTCUSDT', currentPrice, bestBid: orderBook.bids[0].price, bestAsk: orderBook.asks[0].price },
         strategy: { direction: strategy.direction, mode: strategy.gridMode, reason: strategy.reason },
         gridConfig: { lowerPrice: levels[0], upperPrice: levels[levels.length - 1], levels: levels }
@@ -39,12 +36,11 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// 포트 충돌 등 서버 에러 핸들링
 server.on('error', (err) => {
   console.error('SERVER_ERROR:', err.message);
   process.exit(1);
 });
 
 server.listen(PORT, () => {
-  console.log(`🚀 Dashboard API Server running on http://localhost:${PORT}/api/dashboard`);
+  console.log('🚀 Dashboard API Server running on http://localhost:' + PORT + '/api/dashboard');
 });
