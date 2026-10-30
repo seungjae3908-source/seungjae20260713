@@ -34,6 +34,23 @@ const SAFE_CHILD_ENV_KEYS = Object.freeze([
   'NODE_EXTRA_CA_CERTS',
 ]);
 
+const PAPER_FORWARD_STDOUT_MAX_BYTES = 5 * 1024 * 1024;
+const PAPER_FORWARD_CLI_SCHEMA = 'paper-forward-schedule-cli-v5';
+const PAPER_FORWARD_DETAIL_FIELDS = Object.freeze([
+  'schemaVersion',
+  'status',
+  'canonicalEntryCount',
+  'entryCount',
+  'entryEligibleCount',
+  'canonicalPositionCount',
+  'canonicalSettlementCount',
+  'evidenceCompleteCount',
+  'paperStateTransport',
+  'firstZeroStage',
+  'firstZeroReason',
+]);
+
+
 const REQUIRED_LAB_FILES = Object.freeze([
   'package.json',
   'scripts/run-stock-market-suite.js',
@@ -411,6 +428,36 @@ export async function validateResearchTaskSharedPackages({ repoRoot, plan } = {}
   return Object.freeze({ requestedPackages: Object.freeze(requested) });
 }
 
+function pickPaperForwardDetail(parsed, taskCycleId) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (parsed.schemaVersion !== PAPER_FORWARD_CLI_SCHEMA) return null;
+  if (typeof taskCycleId !== 'string' || taskCycleId.length === 0) return null;
+  if (typeof parsed.cycleId !== 'string') return null;
+  if (parsed.cycleId.length === 0) return null;
+  if (parsed.cycleId.trim().length === 0) return null;
+  const detail = { taskCycleId, paperForwardCycleId: parsed.cycleId };
+  for (const field of PAPER_FORWARD_DETAIL_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(parsed, field)) {
+      detail[field] = parsed[field];
+    }
+  }
+  return detail;
+}
+
+async function flushWritable(stream, maxWaitMs = 500) {
+  return new Promise((resolve) => {
+    if (stream == null) return resolve();
+    if (stream.writableFinished === true || stream.destroyed === true) return resolve();
+    let settled = false;
+    const settle = () => { if (settled) return; settled = true; resolve(); };
+    const timer = setTimeout(settle, maxWaitMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    stream.once('finish', () => { clearTimeout(timer); settle(); });
+    stream.once('error', () => { clearTimeout(timer); settle(); });
+    stream.once('close', () => { clearTimeout(timer); settle(); });
+  });
+}
+
 async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inheritedEnv = process.env }) {
   const taskDir = join(stateRoot, 'runs', cycleId, task.id);
   await mkdir(taskDir, { recursive: true, mode: 0o700 });
@@ -426,6 +473,18 @@ async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inherit
   const fingerprint = taskFingerprint({ task, researchSha });
   const stdout = createWriteStream(stdoutPath, { flags: 'wx', mode: 0o600 });
   const stderr = createWriteStream(stderrPath, { flags: 'wx', mode: 0o600 });
+  const isPaperForward = task.id === 'paper-forward';
+  let stdoutWriteError = null;
+  if (isPaperForward) {
+    stdout.on('error', (error) => {
+      const code = error && typeof error.code === 'string' && error.code.length > 0 ? error.code : 'STDOUT_WRITE_ERROR';
+      if (stdoutWriteError === null) stdoutWriteError = code;
+      try { process.stderr.write(`[engine] paper-forward stdout write error: ${code}\n`); } catch {}
+    });
+  }
+  const capturedChunks = [];
+  let capturedBytes = 0;
+  let captureTruncated = false;
   let timedOut = false;
   const child = spawn(process.execPath, task.args, {
     cwd: workspaceRoot,
@@ -434,6 +493,19 @@ async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inherit
   });
   child.stdout.pipe(stdout);
   child.stderr.pipe(stderr);
+  if (isPaperForward) {
+    child.stdout.on('data', (chunk) => {
+      if (captureTruncated) return;
+      const len = chunk && typeof chunk.length === 'number' ? chunk.length : 0;
+      if (capturedBytes + len > PAPER_FORWARD_STDOUT_MAX_BYTES) {
+        captureTruncated = true;
+        capturedChunks.length = 0;
+        return;
+      }
+      capturedBytes += len;
+      capturedChunks.push(chunk);
+    });
+  }
   const timer = setTimeout(() => {
     timedOut = true;
     child.kill('SIGTERM');
@@ -444,10 +516,54 @@ async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inherit
     child.once('error', rejectPromise);
     child.once('close', (code, signal) => resolvePromise({ code, signal }));
   }).finally(() => clearTimeout(timer));
-  stdout.end();
-  stderr.end();
+  if (!stdout.writableEnded) stdout.end();
+  if (!stderr.writableEnded) stderr.end();
+  await flushWritable(stdout);
+  await flushWritable(stderr);
   const endedAt = Date.now();
   const accepted = !timedOut && task.acceptedExitCodes.includes(result.code ?? -1);
+  let paperForwardDetail = null;
+  let paperForwardParseError = null;
+  if (isPaperForward) {
+    if (timedOut || result.signal != null) {
+      paperForwardParseError = Object.freeze({
+        code: 'INCOMPLETE_DUE_TO_ABORT',
+        timedOut: Boolean(timedOut),
+        signal: result.signal ?? null,
+      });
+    } else if (captureTruncated) {
+      paperForwardParseError = Object.freeze({
+        code: 'STDOUT_TOO_LARGE',
+        limitBytes: PAPER_FORWARD_STDOUT_MAX_BYTES,
+      });
+    } else {
+      const raw = Buffer.concat(capturedChunks).toString('utf8');
+      const candidates = [];
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.schemaVersion === PAPER_FORWARD_CLI_SCHEMA) {
+            candidates.push(parsed);
+          }
+        } catch {}
+      }
+      if (candidates.length === 0) {
+        paperForwardParseError = Object.freeze({ code: 'PAPER_FORWARD_RESULT_NOT_FOUND' });
+      } else if (candidates.length > 1) {
+        paperForwardParseError = Object.freeze({
+          code: 'PAPER_FORWARD_RESULT_AMBIGUOUS',
+          candidateCount: candidates.length,
+        });
+      } else {
+        paperForwardDetail = pickPaperForwardDetail(candidates[0], cycleId);
+        if (paperForwardDetail == null) {
+          paperForwardParseError = Object.freeze({ code: 'PAPER_FORWARD_RESULT_INVALID' });
+        }
+      }
+    }
+  }
   const record = {
     schemaVersion: 'research-production-task-v1',
     id: task.id,
@@ -466,6 +582,7 @@ async function runTask({ task, labRoot, stateRoot, researchSha, cycleId, inherit
     liveTrading: false,
     privateApi: false,
     orderAuthority: false,
+    ...(isPaperForward ? { paperForwardDetail, paperForwardParseError, stdoutWriteError } : {}),
   };
   await atomicJson(join(taskDir, 'result.json'), record);
   return record;
