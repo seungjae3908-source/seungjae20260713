@@ -1112,6 +1112,11 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         ...canonicalNaturalWiring,
         ...(compatibilityPaperStateForCard == null ? {} : { paperStateForCard: compatibilityPaperStateForCard }),
         ...resolvedAuthoritativeSourceWiring,
+        ...(typeof canonicalNaturalWiring.paperStateSnapshotForCard === "function"
+            && typeof canonicalNaturalWiring.paperStateForCard !== "function"
+            && typeof resolvedAuthoritativeSourceWiring.paperStateForCard !== "function"
+            ? { paperStateForCard: canonicalNaturalWiring.paperStateSnapshotForCard }
+            : {}),
         createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
       };
 
