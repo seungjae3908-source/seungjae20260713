@@ -1,0 +1,12 @@
+.runtime/
+.backups/
+paper-state.bak-*/
+paper-reports/
+*.bak.*
+*.corrupt.*
+*.bak
+*.bak-*
+*.bak*
+experiments/
+paper-abc/
+*.bak*
