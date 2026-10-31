@@ -189,6 +189,34 @@ E55 파일 없음 → skip (기준값 임의 생성 금지).
 ### 11.4 미검증
 AI 실 시장 성과 / B vs AI vs NEUTRAL 비교 / Elite Trader 실 데이터 / 실 Telegram 전송
 
+### 11.5 BLOCK 19 조사 확정 결함 (4개 파일, 2026-10-30)
+
+**D-1. `calculateGridLevels` N+1 ↔ `calculateGridQuantity` gridCount N등분 불일치**
+- 위치: `grid-math.mjs:13` (`for (i = 0; i <= gridCount; i++)`), `grid-math.mjs:26` (`perGrid = totalInvestmentUsdt / gridCount`)
+- 소비자 6곳: `strategy-b-trailing.mjs:23,40`, `strategy-c-neutral.mjs:17,18`, `paper-forward-engine.mjs:11`, `paper-forward-trailing.mjs:11,33`, `paper-trading-sim.mjs:4`, `backtest-engine.mjs:68`
+- 영향: 자본 분할 N등분 vs 실제 grid N+1 → 오버 얼로케이션 (N+1)/N (gridCount=10 → +10%, 20 → +5%)
+- **중요**: 기존 A/B/E55/H 결과는 이 계산 방식으로 생성됨. **결과 자체가 잘못된 것이 아니라 측정 대상과 계산이 일치한 상태**이며, **향후 자본 배분 시 주의 필요**.
+- BLOCK 19는 `neutral-grid-paper.mjs`에서 `slice(0, gridCount)`로 회피
+
+**D-2. `minTradeUSDT` 미검증**
+- 위치: `bitget-adapter.mjs:24` (제공) ↔ `grid-math.mjs:25-30` (`minTradeNum`만 검사)
+- 영향: 수량은 통과하나 `quantity × price < minTradeUSDT`인 주문 생성 → 실거래 시 거래소 거부 (Paper 무관)
+
+**D-3. PF `Infinity` → JSON `null` 무음 손실**
+- 위치: `paper-forward-trailing.mjs:140,155`, `paper-forward-engine.mjs:126,145`, `backtest-engine.mjs:167,180`
+- 동작: `grossL=0 && grossP>0` → `pf=Infinity` → `JSON.stringify` → `null`
+- 현재 A/B 결과는 `grossL>0`으로 finite → 즉시 영향 없음, 향후 시나리오 주의
+
+### 11.6 4개 파일 조사에서 미검증 항목 (네트워크/실측 필요)
+
+- **U-1**: Bitget 캔들/funding timestamp 단위 (ms vs sec) — `bitget-adapter.mjs:54,68`
+- **U-2**: `priceMultiplier` ↔ `priceEndStep` 의미 일치 — `bitget-adapter.mjs:27`
+- **U-3**: 실제 거래소 청산가 공식과 `estimateLiquidationPrice` 정확도 — `ai-risk-orchestrator.mjs:184,187`
+
+조사 시점 커밋: `66e3c0f9bd82a5f72c0181dda898d3dd62345548`
+조사 방식: READ ONLY `git diff --stat` + `grep -nE`. 코드 수정/커밋/네트워크 호출 0건.
+
+
 ## 12. 실제 시장 데이터 연결 전 작업
 
 `bitget-adapter.mjs`에 이미 존재: fetchCandles, fetchFundingRateHistory, fetchContractInfo, fetchLiveOrderBook, fetchKrwUsdtRate (모두 GET).
