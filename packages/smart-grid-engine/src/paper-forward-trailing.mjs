@@ -110,7 +110,7 @@ export function processCandleB(state, candle) {
 
   const openPos = state.positions.filter(p => p.status === 'OPEN');
   const unrealized = openPos.reduce((a, p) => a + ((p.type === 'BUY' ? c.close - p.price : p.price - c.close) * state.quantity - p.entryFee), 0);
-  const eq = state.meta.investmentUsdt + state.realizedPnl - state.totalFees + unrealized;
+  const eq = state.meta.investmentUsdt + state.realizedPnl + unrealized;
   state.equityCurve.push(eq);
   if (eq > state.peak) state.peak = eq;
   const dd = (state.peak - eq) / state.peak * 100; if (dd > state.maxDD) state.maxDD = dd;
@@ -145,7 +145,7 @@ export function computeMetricsB(state) {
   const openPos = state.positions.filter(p => p.status === 'OPEN');
   const lastPrice = state.lastClose || state.startPrice;
   const unrealized = openPos.reduce((a, p) => a + ((p.type === 'BUY' ? lastPrice - p.price : p.price - lastPrice) * state.quantity - p.entryFee), 0);
-  const netPnl = state.realizedPnl - state.totalFees;
+  const netPnl = state.realizedPnl + unrealized;
   const finalEquity = state.meta.investmentUsdt + netPnl + unrealized;
   const marginUsed = openPos.reduce((s, p) => s + (p.price * p.qty) / state.meta.leverage, 0);
   return {
