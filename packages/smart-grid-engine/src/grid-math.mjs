@@ -22,13 +22,19 @@ export function calculateGridLevels({ lowerPrice, upperPrice, gridCount, mode = 
   return levels;
 }
 
-export function calculateGridQuantity({ totalInvestmentUsdt, gridCount, currentPrice, leverage = 1, volumePlace = 4, minTradeNum = 0 }) {
-  const perGrid = totalInvestmentUsdt / gridCount;
+export function calculateGridQuantity({ totalInvestmentUsdt, gridCount, currentPrice, leverage = 1, volumePlace = 4, minTradeNum = 0, minTradeUSDT = 0, strictCapitalSplit = false }) {
+  // [D-1 fixed] strictCapitalSplit=true 이면 N+1 레벨에 맞춰 분모 보정
+  const divisor = strictCapitalSplit ? (gridCount + 1) : gridCount;
+  const perGrid = totalInvestmentUsdt / divisor;
   const rawSize = (perGrid * leverage) / currentPrice;
   const factor = Math.pow(10, volumePlace);
   const rounded = Math.floor(rawSize * factor) / factor;
   if (rounded < minTradeNum) throw new Error(`QUANTITY_BELOW_MIN: ${rounded} < ${minTradeNum}`);
   if (rounded <= 0) throw new Error('QUANTITY_ZERO');
+  // [D-2 fixed] 최소 주문 USDT 금액 검증
+  if (minTradeUSDT > 0 && rounded * currentPrice < minTradeUSDT) {
+    throw new Error(`NOTIONAL_BELOW_MIN_USDT: ${(rounded * currentPrice).toFixed(2)} < ${minTradeUSDT}`);
+  }
   return rounded;
 }
 

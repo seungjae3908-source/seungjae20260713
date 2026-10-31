@@ -124,6 +124,8 @@ export function computeMetrics(state) {
   const grossP = closed.filter(p => p.pnl > 0).reduce((s, p) => s + p.pnl, 0);
   const grossL = Math.abs(closed.filter(p => p.pnl < 0).reduce((s, p) => s + p.pnl, 0));
   const pf = grossL > 0 ? grossP / grossL : (grossP > 0 ? Infinity : 0);
+  // [D-3 fixed] PF Infinity를 JSON-safe하게 명시 (Infinity는 stringify 시 null이 됨)
+  const profitFactorJsonSafe = Number.isFinite(pf) ? pf : (pf === Infinity ? 'inf' : null);
   let maxConsec = 0, curr = 0;
   for (const t of closed) { if (t.pnl < 0) { curr++; if (curr > maxConsec) maxConsec = curr; } else curr = 0; }
   const openPos = state.positions.filter(p => p.status === 'OPEN');
