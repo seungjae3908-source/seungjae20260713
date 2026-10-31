@@ -6,3 +6,4 @@ paper-reports/
 *.corrupt.*
 *.bak
 *.bak-*
+*.bak*
