@@ -1,57 +1,78 @@
-// Bitget Public Data Adapter (category 파라미터 필수)
+// Bitget Public Data Adapter v2.1 - V3 /api/v3/market/instruments 적용
 const BITGET_BASE = 'https://api.bitget.com';
 
-async function fetchJsonFrame(url, { timeoutMs = 3000, clock = Date.now } = {}) {
+async function fetchJson(url, { timeoutMs = 5000 } = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('PUBLIC_DATA_TIMEOUT')), timeoutMs);
-  const requestStartedAtMs = clock();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { accept: 'application/json', 'user-agent': 'smart-grid-engine/1.0' },
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`PUBLIC_HTTP_${response.status}:${url} - ${text}`);
-    }
-    const payload = await response.json();
-    return { payload, requestStartedAtMs, receiveTimestampMs: clock() };
-  } finally {
-    clearTimeout(timer);
-  }
+    const res = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+    if (!res.ok) { const t = await res.text(); throw new Error(`HTTP_${res.status}:${url}:${t.slice(0,200)}`); }
+    return await res.json();
+  } finally { clearTimeout(timer); }
 }
 
-function positive(value, code) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(code);
-  return n;
-}
-
-function normalizeBookLevels(rows, side) {
-  if (!Array.isArray(rows) || rows.length === 0) throw new Error(`BITGET_PUBLIC_BOOK_${side}_MISSING`);
-  return rows.map((row) => {
-    if (!Array.isArray(row) || row.length < 2) throw new Error(`BITGET_PUBLIC_BOOK_${side}_ROW_INVALID`);
-    return {
-      price: positive(row[0], `BITGET_PUBLIC_BOOK_${side}_PRICE_INVALID`),
-      quantity: positive(row[1], `BITGET_PUBLIC_BOOK_${side}_QUANTITY_INVALID`),
-    };
-  });
+// [FIX] V2 /contracts → V3 /instruments (필드명 매핑 포함)
+export async function fetchContractInfo(symbol, category = 'USDT-FUTURES') {
+  const url = `${BITGET_BASE}/api/v3/market/instruments?category=${category}&symbol=${symbol}`;
+  const json = await fetchJson(url);
+  if (json.code !== '00000' || !json.data?.[0]) throw new Error(`CONTRACT_INFO_FAILED:${json.code}:${json.msg}`);
+  const c = json.data[0];
+  // V3 필드 → 내부 표준 필드 매핑
+  return {
+    symbol: c.symbol,
+    minTradeNum: Number(c.minOrderQty),           // V3: minOrderQty
+    minTradeUSDT: Number(c.minOrderAmount),        // V3: minOrderAmount
+    pricePlace: Number(c.pricePrecision),          // V3: pricePrecision
+    volumePlace: Number(c.quantityPrecision),      // V3: quantityPrecision
+    priceEndStep: Number(c.priceMultiplier),       // V3: priceMultiplier
+    maxLever: Number(c.maxLeverage || '125'),      // V3: maxLeverage
+    fundInterval: Number(c.fundInterval || '8'),
+    status: c.status,                              // V3: 'online' | 'listed' | 'offline'
+  };
 }
 
 export async function fetchLiveOrderBook(symbol, category = 'USDT-FUTURES') {
   const url = `${BITGET_BASE}/api/v3/market/orderbook?category=${category}&symbol=${symbol}&limit=15`;
-  const frame = await fetchJsonFrame(url);
-  const payload = frame.payload;
-  if (!payload || payload.code !== '00000' || !payload.data) {
-    throw new Error(`BITGET_PUBLIC_ORDERBOOK_FAILED:${payload?.code ?? 'NO_CODE'}`);
-  }
-  const data = payload.data;
-  const bids = normalizeBookLevels(data.b, 'BIDS');
-  const asks = normalizeBookLevels(data.a, 'ASKS');
-  if (bids[0].price >= asks[0].price) throw new Error('BITGET_PUBLIC_BOOK_CROSSED');
-  return { symbol, bids, asks, marketTimestampMs: Number(data.ts) };
+  const json = await fetchJson(url);
+  if (json.code !== '00000' || !json.data) throw new Error(`ORDERBOOK_FAILED:${json.code}`);
+  const d = json.data;
+  const bids = d.b.map(r => ({ price: Number(r[0]), quantity: Number(r[1]) }));
+  const asks = d.a.map(r => ({ price: Number(r[0]), quantity: Number(r[1]) }));
+  if (bids[0].price >= asks[0].price) throw new Error('CROSSED_BOOK');
+  return { symbol, bids, asks, ts: Number(d.ts) };
 }
 
-export function getCurrentPrice(orderBook) {
-  return (orderBook.bids[0].price + orderBook.asks[0].price) / 2;
+export function getCurrentPrice(ob) { return (ob.bids[0].price + ob.asks[0].price) / 2; }
+
+export async function fetchCandles(symbol, interval = '1H', startTime, endTime, limit = 1000, category = 'USDT-FUTURES') {
+  let url = `${BITGET_BASE}/api/v3/market/candles?category=${category}&symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  if (startTime) url += `&startTime=${startTime}`;
+  if (endTime) url += `&endTime=${endTime}`;
+  const json = await fetchJson(url);
+  if (json.code !== '00000' || !Array.isArray(json.data)) throw new Error(`CANDLES_FAILED:${json.code}:${json.msg}`);
+  return json.data.map(row => ({
+    ts: Number(row[0]), open: Number(row[1]), high: Number(row[2]),
+    low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]),
+  })).sort((a, b) => a.ts - b.ts);
+}
+
+export async function fetchFundingRateHistory(symbol, category = "USDT-FUTURES") {
+  const url = `${BITGET_BASE}/api/v3/market/history-fund-rate?category=${category}&symbol=${symbol}&pageSize=100`;
+  const json = await fetchJson(url);
+  if (json.code !== "00000") throw new Error(`FUNDING_FAILED:${json.code}:${json.msg}`);
+  const list = json.data?.resultList;
+  if (!Array.isArray(list)) throw new Error("FUNDING_NO_RESULTLIST:" + JSON.stringify(json.data).slice(0,100));
+  return list.map(r => ({
+    symbol: r.symbol,
+    fundingRate: Number(r.fundingRate),
+    fundingTime: Number(r.fundingRateTimestamp),
+  })).sort((a, b) => a.fundingTime - b.fundingTime);
+}
+
+export async function fetchKrwUsdtRate() {
+  const res = await fetch('https://api.upbit.com/v1/ticker?markets=KRW-USDT', { headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error(`FX_RATE_FAILED:${res.status}`);
+  const data = await res.json();
+  if (!data[0]?.trade_price) throw new Error('FX_RATE_INVALID');
+  return { rate: Number(data[0].trade_price), source: 'upbit-public', ts: Number(data[0].timestamp) };
 }
