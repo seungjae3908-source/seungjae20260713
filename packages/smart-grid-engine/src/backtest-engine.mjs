@@ -158,11 +158,8 @@ export async function runBacktest({ symbol = 'BTCUSDT', gridCount = 10, investme
   const finalPrice = candles[candles.length - 1].close;
   const openPos = positions.filter(p => p.status === 'OPEN');
   const unrealizedPnl = openPos.reduce((a, p) => a + (p.type === 'BUY' ? (finalPrice - p.price) * p.qty : (p.price - finalPrice) * p.qty) - p.entryFee, 0);
-  // [D-3 fixed] realizedPnl already net of fees; totalFees audit-only
-  const netPnl = realizedPnl + unrealizedPnl;
-  // [D-3 fixed] netPnl already includes unrealizedPnl; do not add again
-  const finalEquity = investmentUsdt + netPnl;
-  const returnPct = (finalEquity - investmentUsdt) / investmentUsdt * 100;
+  // [D-3 fixed] single source of truth — see computeFinalTotals() below
+  const { netPnl, finalEquity, returnPct } = computeFinalTotals({ realizedPnl, unrealizedPnl, investmentUsdt });
   const closed = positions.filter(p => p.status === 'CLOSED');
   const wins = closed.filter(p => p.pnl > 0).length;
   const grossP = closed.filter(p => p.pnl > 0).reduce((s, p) => s + p.pnl, 0);
