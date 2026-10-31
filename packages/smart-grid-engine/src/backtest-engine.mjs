@@ -165,6 +165,8 @@ export async function runBacktest({ symbol = 'BTCUSDT', gridCount = 10, investme
   const grossP = closed.filter(p => p.pnl > 0).reduce((s, p) => s + p.pnl, 0);
   const grossL = Math.abs(closed.filter(p => p.pnl < 0).reduce((s, p) => s + p.pnl, 0));
   const pf = grossL > 0 ? grossP / grossL : (grossP > 0 ? Infinity : 0);
+  // [D-3 fixed] PF Infinity를 JSON-safe하게 명시 (Infinity는 stringify 시 null이 됨)
+  const profitFactorJsonSafe = Number.isFinite(pf) ? pf : (pf === Infinity ? 'inf' : null);
 
   console.log('\n=== [결과] ===');
   console.log(`기간: ${actualDays.toFixed(1)}일 | 캔들: ${candles.length}`);
@@ -177,7 +179,7 @@ export async function runBacktest({ symbol = 'BTCUSDT', gridCount = 10, investme
   console.log(`최종 평가: ${finalEquity.toFixed(2)}U (${returnPct.toFixed(2)}%)`);
   console.log(`PF: ${pf.toFixed(2)} | MDD: ${maxDD.toFixed(2)}% | 청산: ${liquidations}건`);
 
-  return { days: actualDays, candles: candles.length, candlesData: candles, levels: levels, completedTrades, wins, realizedPnl, totalFees, totalFunding, netPnl, unrealizedPnl, finalEquity, returnPct, profitFactor: pf, maxDD, liquidations, positions, trades: closed };
+  return { days: actualDays, candles: candles.length, candlesData: candles, levels: levels, completedTrades, wins, realizedPnl, totalFees, totalFunding, netPnl, unrealizedPnl, finalEquity, returnPct, profitFactor: pf, profitFactorJsonSafe, maxDD, liquidations, positions, trades: closed };
 }
 
 // ─────────────────────────────────────────────────────────────
