@@ -98,6 +98,21 @@ function rStats(trades) {
 }
 
 /** Pure: per-market portfolio, discovery/validation split, benchmark, and the all-markets portfolio. */
+/** How much of each futures symbol's candle span has funding-rate history. A short
+ * history silently under-counts funding cost, so the report must say so. */
+export function fundingCoverageV1(datasets, minCovered = 0.9) {
+  const rows = datasets.filter((d) => d.market === 'CRYPTO_FUTURES').map((d) => {
+    const candles = Array.isArray(d.candles) ? d.candles : [];
+    const rates = (Array.isArray(d.fundingRates) ? d.fundingRates : []).map((r) => Number(r.timestamp)).filter(Number.isFinite);
+    const spanMs = candles.length > 1 ? Number(candles.at(-1).timestamp) - Number(candles[0].timestamp) : 0;
+    const coveredMs = rates.length > 1 ? Math.max(...rates) - Math.min(...rates) : 0;
+    const coveredFraction = spanMs > 0 ? Math.min(1, coveredMs / spanMs) : 0;
+    return { symbol: d.symbol, spanDays: Math.round(spanMs / 86_400_000), fundingRows: rates.length, coveredFraction };
+  });
+  const minFraction = rows.length ? Math.min(...rows.map((r) => r.coveredFraction)) : null;
+  return { symbols: rows, minCoveredFraction: minFraction, status: rows.length === 0 ? 'NOT_APPLICABLE' : minFraction >= minCovered ? 'COMPLETE' : 'INCOMPLETE' };
+}
+
 export function evaluateFourMarketV1({ datasets, plan = FOUR_MARKET_PLAN_V1, splitFraction = 0.6 }) {
   const markets = [];
   const allTrades = [];
@@ -137,6 +152,7 @@ export function evaluateFourMarketV1({ datasets, plan = FOUR_MARKET_PLAN_V1, spl
     : null;
   return {
     markets,
+    fundingCoverage: fundingCoverageV1(datasets),
     futuresSideComparison,
     combined: {
       from: Number.isFinite(cryptoStart) ? new Date(cryptoStart).toISOString().slice(0, 10) : null,
@@ -167,6 +183,10 @@ export function formatFourMarketReportKoV1(result) {
   lines.push('', `■ 4개 시장 한 계좌로 같이 (${c.from}~, 코인 데이터가 있는 구간)`);
   lines.push(`  100만 원 → ${won(c.portfolio.endEquityKrw)} (${pct(c.portfolio.totalReturn)}, 월 ${pct(c.portfolio.monthlyCompound)}) · 최대 낙폭 ${pct(-c.portfolio.maxDrawdownFraction)} · 거래 ${c.portfolio.trades}회${c.portfolio.killedAt ? ` · ⚠️ ${c.portfolio.killedAt} 자동정지` : ''} · 증거금 부족으로 건너뜀 ${c.portfolio.skipped.margin}회`);
   lines.push(`  같은 구간 코인선물만: ${pct(c.futuresOnlySameSpan.totalReturn)} · 낙폭 ${pct(-c.futuresOnlySameSpan.maxDrawdownFraction)}`);
+  const cov = result.fundingCoverage;
+  if (cov?.status === 'INCOMPLETE') {
+    lines.push('', `⚠️ 코인선물 펀딩비 자료가 기간의 ${pct(cov.minCoveredFraction).replace('+', '')}(가장 짧은 종목)만 있습니다. 나머지 기간은 펀딩 비용이 빠져 있어 선물 결과의 비용이 실제보다 가볍게 계산됐습니다. 이 결과로 판단하지 마세요.`);
+  }
   const fc = result.futuresSideComparison;
   if (fc?.both && fc.longOnly && fc.shortOnly) {
     const row = (name, v) => `  ${name}: ${pct(v.portfolio.totalReturn)} · 낙폭 ${pct(-v.portfolio.maxDrawdownFraction)} · 거래 ${v.portfolio.trades}회 · R 합계 ${r1(v.rStats.sumR)}`;
