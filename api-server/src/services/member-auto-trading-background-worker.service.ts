@@ -22,7 +22,7 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { TREND_PILOT_SPOT_V1, TREND_PILOT_V1 } from './trend-pilot-v1.core';
 import { trendPilotLiveEnabled, trendPilotSigningKey } from './trend-pilot-v1-authorization.service';
-import { runTrendPilotLaneTick, type TrendPilotLanePosition, type TrendPilotVenue } from './trend-pilot-v1-lane.service';
+import { runTrendPilotLaneTick, trendPilotLaneAccess, type TrendPilotLanePosition, type TrendPilotVenue } from './trend-pilot-v1-lane.service';
 import {
   TREND_PILOT_DEFAULT_STATE_DIR,
   cachedTrendPilotBars,
@@ -2770,15 +2770,21 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
 
-        // AUTO OFF members remain visible for read-only Live position
-        // monitoring. No Paper or Live auto entries/exits are submitted.
-        if (!memberAutoExecutionEnabled) {
-          result.skipped += entries.length;
-          continue;
-        }
-        // Trend pilot lanes: guarded exits need the live exit arm; new entries
-        // also need the live entry arm and warmup (see runTrendPilotLanesForMember).
-        if (liveModeRequested && liveExitsArmedThisTick && trendPilotLiveEnabled()) {
+        // Trend pilot lanes are exit-managed even while the emergency stop is on or the
+        // entry arm is gone: an emergency stop forbids NEW risk, never the reduce-only
+        // stop-loss/trailing exits of positions the lane already owns (the risk gate
+        // itself lets risk-reducing orders through). New entries still need the arm,
+        // warmup, AUTO ON and no stop. AUTO OFF / lost membership still submit nothing.
+        const pilotAccess = trendPilotLaneAccess({
+          liveModeRequested,
+          pilotEnabled: trendPilotLiveEnabled(),
+          memberCanRunAutomation,
+          mode: member.policy.mode,
+          automaticEnabled: member.policy.automaticEnabled,
+          emergencyStopped: member.policy.emergencyStopped,
+          entriesArmed: liveEntriesArmedThisTick,
+        });
+        if (pilotAccess.runLanes) {
           const pilot = await runTrendPilotLanesForMember({
             source: this.source,
             repository,
@@ -2787,7 +2793,7 @@ export class MemberAutoTradingBackgroundWorker {
             fxCache,
             now,
             liveMarketScope,
-            entriesArmed: liveEntriesArmedThisTick,
+            entriesArmed: pilotAccess.entriesArmed,
             globalStop: persistentGlobalStop || environmentGlobalStop,
             isActive: () => !this.stopped,
           });
@@ -2797,6 +2803,12 @@ export class MemberAutoTradingBackgroundWorker {
           if (pilot.ordersCreated > 0) {
             try { await refreshRuntime(); } catch { result.newEntriesFailClosed = true; continue; }
           }
+        }
+        // AUTO OFF members remain visible for read-only Live position
+        // monitoring. No Paper or Live auto entries/exits are submitted.
+        if (!memberAutoExecutionEnabled) {
+          result.skipped += entries.length;
+          continue;
         }
         // Paper and Live are independent execution lanes. A missing Paper
         // wallet blocks simulated entries only; a Live candidate is rebuilt
