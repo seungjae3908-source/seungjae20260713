@@ -37,6 +37,7 @@ import {
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
+import { notifyTrendPilotEvents } from './live-trading-safety-telegram.service';
 import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
@@ -2349,6 +2350,7 @@ async function runTrendPilotLanesForMember(input: {
         saveLedger: (ledger) => store.save(ledger),
       });
       for (const event of tick.events) if (event.kind === 'ERROR') summary.blocked += 1;
+      await notifyTrendPilotEvents({ userId: input.member.userId, venue: lane.venue, events: tick.events, now: input.now }); // best-effort, never throws
     } catch {
       summary.blocked += 1;
     }
