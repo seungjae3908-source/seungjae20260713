@@ -37,6 +37,10 @@ import {
   isFullCostReady,
   statusLabel,
   summarizeResearchFunnel,
+  summarizePromotionDrops,
+  buildPromotionChecklist,
+  pickLeadingPromotionItem,
+  type PromotionChecklistState,
   type CostDisplayRow,
   type ResearchFunnelStageState,
   type ProductMetric,
@@ -280,6 +284,64 @@ function ResearchFunnelSummaryPanel({ cards }: { cards: ResearchPipelineCard[] }
   );
 }
 
+const CHECKLIST_LABEL: Readonly<Record<PromotionChecklistState, string>> = Object.freeze({ met: '충족', unmet: '미충족', unmeasured: '미측정' });
+const CHECKLIST_STYLE: Readonly<Record<PromotionChecklistState, string>> = Object.freeze({
+  met: 'text-emerald-700 dark:text-emerald-300',
+  unmet: 'text-amber-800 dark:text-amber-300',
+  unmeasured: 'text-muted-foreground',
+});
+
+/** Read-only: per-stage pass/fail tally, top blocker reasons and the leading strategy's promotion checklist. */
+function PromotionInsightPanel({ promotion }: { promotion: StrategyPromotionResponse | null }) {
+  const items = useMemo(() => promotion?.items ?? [], [promotion]);
+  const drops = useMemo(() => summarizePromotionDrops(items), [items]);
+  const leading = useMemo(() => pickLeadingPromotionItem(items), [items]);
+  const checklist = useMemo(() => buildPromotionChecklist(leading), [leading]);
+  if (items.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-card-border bg-card p-3 shadow-sm" aria-labelledby="promotion-insight-title" data-testid="research-promotion-insight">
+      <h2 id="promotion-insight-title" className="text-sm font-black">전략 {drops.strategyCount}개의 단계별 현황</h2>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full min-w-[320px] text-left text-[11px]">
+          <thead><tr className="text-muted-foreground"><th className="py-1 pr-2 font-bold">단계</th><th className="px-2 font-bold">통과</th><th className="px-2 font-bold">탈락</th><th className="px-2 font-bold">막힘</th><th className="px-2 font-bold">대기</th></tr></thead>
+          <tbody>
+            {drops.stages.map((row) => (
+              <tr key={row.stage} className="border-t border-card-border">
+                <td className="py-1 pr-2 font-bold">{row.stage}</td>
+                <td className="px-2">{row.passed}</td><td className="px-2">{row.failed}</td><td className="px-2">{row.blocked}</td><td className="px-2">{row.waiting}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {drops.topReasons.length > 0 ? (
+        <div className="mt-3" data-testid="research-promotion-reasons">
+          <p className="text-[11px] font-black">많이 막히는 이유</p>
+          <ul className="mt-1 space-y-1">
+            {drops.topReasons.map((reason) => (
+              <li key={reason.code} className="text-[11px]"><span className="font-bold">{reason.count}개</span> · {reason.explanation} <span className="break-all text-muted-foreground">({reason.code})</span></li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {checklist.length > 0 ? (
+        <div className="mt-3" data-testid="research-promotion-checklist">
+          <p className="text-[11px] font-black">가장 앞선 전략의 승격 조건</p>
+          <ul className="mt-1 space-y-1">
+            {checklist.map((row) => (
+              <li key={row.key} className="flex items-start justify-between gap-2 text-[11px]">
+                <span className="min-w-0"><span className="font-bold">{row.label}</span><span className="block text-muted-foreground">{row.detail}</span></span>
+                <span className={`shrink-0 font-black ${CHECKLIST_STYLE[row.state]}`}>{CHECKLIST_LABEL[row.state]}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <p className="mt-2 text-[10px] text-muted-foreground">읽기 전용 · 주문 권한 없음 · 승격 후보는 검토 대상일 뿐 실전매매 승인이 아닙니다</p>
+    </section>
+  );
+}
+
 function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
   overview: ResearchCenterOverview;
   promotion: StrategyPromotionResponse | null;
@@ -415,6 +477,8 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       </section>
 
       <ResearchFunnelSummaryPanel cards={cards} />
+
+      <PromotionInsightPanel promotion={promotion} />
 
       <FormulaDevelopmentPanel development={overview.research.formulaDevelopment} />
 
