@@ -4,6 +4,7 @@ import { createWriteStream } from 'node:fs';
 import { cp, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { cpus } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { planResearchResourceBudgetV1, readResearchResourceSnapshotV1 } from './research-resource-budget.mjs';
 
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 const FORBIDDEN_ACTIVATION_KEYS = Object.freeze([
@@ -362,8 +363,50 @@ async function acquireLock(path, payload) {
   return false;
 }
 
-export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profile, concurrency = Math.max(1, Math.min(4, cpus().length)), env = process.env, activationAtMs = null, verifyGitHead = true }) {
+export async function runResearchCycle({
+  repoRoot,
+  stateRoot,
+  researchSha,
+  profile,
+  concurrency = Math.max(1, Math.min(4, cpus().length)),
+  env = process.env,
+  activationAtMs = null,
+  verifyGitHead = true,
+  resourceSnapshot = null,
+  resourcePolicy = undefined,
+}) {
   const preflight = await preflightResearchProduction({ repoRoot, stateRoot, researchSha, env, verifyGitHead });
+  const resourceGovernorEnabled = TRUTHY.has(String(env.RESEARCH_RESOURCE_GOVERNOR_ENABLED ?? '').toLowerCase());
+  let resourceBudget = null;
+  if (resourceGovernorEnabled) {
+    const snapshot = resourceSnapshot ?? await readResearchResourceSnapshotV1({
+      stateRoot: preflight.stateRoot,
+      minimumFreeDiskBytes: preflight.storage.minimumFreeBytes,
+    });
+    resourceBudget = planResearchResourceBudgetV1({
+      profile,
+      configuredConcurrency: Math.max(1, Math.min(Number(concurrency) || 1, 16)),
+      snapshot,
+      policy: resourcePolicy,
+    });
+    if (resourceBudget.status === 'HOLD') {
+      return Object.freeze({
+        schemaVersion: 'research-production-resource-hold-v1',
+        status: 'resource_hold',
+        profile,
+        researchSha: preflight.researchSha,
+        concurrency: 0,
+        taskCount: 0,
+        successCount: 0,
+        blockedDataCount: 0,
+        failedCount: 0,
+        resourceBudget,
+        liveTrading: false,
+        privateApi: false,
+        orderAuthority: false,
+      });
+    }
+  }
   const includesForward = profile === 'forward' || profile === 'all';
   const stableActivationAtMs = includesForward
     ? await resolveForwardActivationAtMs(preflight.stateRoot, activationAtMs)
@@ -376,7 +419,10 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
     env,
   });
   const requestedConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
-  const safeConcurrency = profile === 'forward' ? 1 : requestedConcurrency;
+  const budgetedConcurrency = resourceBudget == null
+    ? requestedConcurrency
+    : Math.max(1, Math.min(requestedConcurrency, resourceBudget.maxConcurrentJobs));
+  const safeConcurrency = profile === 'forward' ? 1 : budgetedConcurrency;
   const cycleId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${profile}-${preflight.researchSha.slice(0, 12)}`;
   const lockPath = join(preflight.stateRoot, 'locks', `${profile}.lock`);
   const locked = await acquireLock(lockPath, { cycleId, pid: process.pid, startedAt: Date.now(), researchSha: preflight.researchSha });
@@ -413,6 +459,7 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
       researchSha: preflight.researchSha,
       generatedAt: Date.now(),
       concurrency: safeConcurrency,
+      resourceBudget,
       taskCount: results.length,
       successCount: results.filter((row) => row?.status === 'success').length,
       blockedDataCount: results.filter((row) => row?.status === 'blocked_data').length,
