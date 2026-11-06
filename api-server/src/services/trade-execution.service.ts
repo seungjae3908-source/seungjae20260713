@@ -22,6 +22,7 @@ import {
   readAutomaticLiveExecutionAccount,
 } from './automatic-live-position-isolation.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
+import { evaluateLiveEntryLedger, type LiveEntryLedgerDecision } from './trade-automation-risk.service';
 import { automaticLiveBudgetRequired } from './automatic-live-budget.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
@@ -1418,6 +1419,38 @@ export class TradeExecutionService {
     assertAutomaticLiveTargetIsolation(snapshot, canonicalAutomaticLivePositions(plans, orders), plan);
   }
 
+  /**
+   * Per-market fund ledger gate for a LIVE entry at the provider boundary:
+   * runs after the private account read and before any margin/leverage or
+   * order mutation. Blocks on an over-allocated policy, an exchange balance
+   * short of the ledger view (drift), or a request above the strictest cap.
+   * Risk-reducing exits are never held back by fund bookkeeping.
+   */
+  private async assertLiveEntryLedgerAllowed(
+    userId: string, risk: PreSubmissionRiskResult, order: TradingOrder, exchangeMinimumKrw: number | null = null,
+  ): Promise<LiveEntryLedgerDecision | null> {
+    const plan = risk.plan;
+    if (plan.accountMode !== 'live' || isRiskReducingExitPlan(plan)) return null;
+    const [policy, plans, orders] = await Promise.all([
+      this.repository.getPolicy(userId), this.repository.listPlans(userId), this.repository.listOrders(userId),
+    ]);
+    const decision = evaluateLiveEntryLedger({
+      plan, policy, plans, orders,
+      ownedPositions: canonicalAutomaticLivePositions(plans, orders),
+      exchangeAvailableKrw: Number.isFinite(risk.snapshot.availableBalance) ? risk.snapshot.availableBalance : null,
+      exchangeMinimumKrw,
+      currentOrderId: order.id,
+    });
+    if (decision.blockCodes.length > 0) {
+      // Same rejection path as a blocked pre-submission recheck: the order is
+      // REJECTED with these codes recorded and the SUBMITTED plan expires.
+      throw new TradePreSubmissionRiskError({
+        ...risk, allowed: false, blockCodes: [...new Set([...risk.blockCodes, ...decision.blockCodes])],
+      });
+    }
+    return decision;
+  }
+
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
     if (isRiskReducingExitPlan(risk.plan)) {
@@ -1490,6 +1523,7 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('bitget'),
     });
+    await this.assertLiveEntryLedgerAllowed(userId, risk, order);
     if (!plan.reduceOnly && canChangeMarginMode) {
       await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       this.assertExecutionGenerationActive();
@@ -1559,6 +1593,7 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('upbit'),
     });
+    await this.assertLiveEntryLedgerAllowed(userId, risk, order, exchangeMinimum);
     this.assertExecutionGenerationActive();
     assertUpbitSuccess(await sendExchangeRequest(BASE_URLS.upbit,
       prepareUpbitOrderTest(credentials, risk.plan, order.clientOrderId), PREFLIGHT_TIMEOUT_MS));
@@ -1642,6 +1677,7 @@ export class TradeExecutionService {
       snapshot,
       serverLiveEnabled: mock || liveExecutionEnabled('kiwoom'),
     });
+    await this.assertLiveEntryLedgerAllowed(userId, risk, order);
 
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
@@ -1704,6 +1740,7 @@ export class TradeExecutionService {
       }),
       serverLiveEnabled: liveExecutionEnabled('toss'),
     });
+    await this.assertLiveEntryLedgerAllowed(userId, risk, order);
 
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };

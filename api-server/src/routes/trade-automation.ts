@@ -5,7 +5,7 @@ import type { AccountProvider, CanonicalPosition } from '../features/account-rea
 import {
   createServiceRoleTradingRepository, createSupabaseTradingRepository, safeConnections, type TradingRepository,
 } from '../services/trade-automation.repository';
-import { tripKillSwitchForRiskFailure } from '../services/trade-kill-switch.service';
+import { notifyAutomaticTradingHalt, tripKillSwitchForRiskFailure } from '../services/trade-kill-switch.service';
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
@@ -1781,6 +1781,9 @@ router.post('/resume', async (req: AuthenticatedRequest, res) => {
     await repository.savePolicy(userId, policy);
     // The resume is already persisted; the audit write can never undo it.
     const audit = await recordAutoRunResume(repository, userId, { policyBefore: current, isLive: autoRunLiveResolver });
+    await notifyAutomaticTradingHalt({ event: 'MEMBER_RESUME', userId, scope: 'MEMBER',
+      details: persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true'
+        ? '전체 긴급정지가 아직 유효하여 신규 진입은 계속 차단됨' : '회원 신규 진입 평가 재개(자동매매 ON은 별도 요청 필요)' });
     return res.json({
       ok: true,
       policy,
@@ -2076,6 +2079,8 @@ router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
 router.post('/plans/:id/invalidate', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, automation, cancellation } = context(req);
+    // Invalidation only expires the plan or cancels its open order: a
+    // risk-reducing action that stays available to the plan's owner.
     const result = await automation.invalidatePlan(userId, String(req.params.id));
     const order = result.order && CANCEL_RECONCILIATION_STATES.has(result.order.state)
       ? await cancellation.cancel(userId, result.plan, result.order) : result.order;
@@ -2098,6 +2103,9 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
     // After the stop is persisted (nothing new can start), cancel this
     // member's open ENTRY orders. Protective exits stay in place.
     const cancellation = await cancelOpenEntryOrders(repository, userId, emptyEntryOrderCancellation());
+    // Owner notice after the stop and cancels are persisted; delivery can never undo them.
+    await notifyAutomaticTradingHalt({ event: 'MEMBER_EMERGENCY_STOP', userId, scope: 'MEMBER',
+      details: `진입 주문 취소 ${cancellation.entryOrdersCanceled}건, 대기 ${cancellation.entryOrderCancelsPending}건, 실패 ${cancellation.entryOrderCancelFailures}건` });
     return res.json({
       ok: true, emergencyStopped: true, newOrdersBlocked: true,
       existingOrdersCanceled: cancellation.entryOrderCancelFailures === 0 && cancellation.entryOrderCancelsPending === 0,
@@ -2184,6 +2192,12 @@ router.post('/admin/emergency-stop', requireAdmin, async (req: AuthenticatedRequ
         }
       }
     }
+    await notifyAutomaticTradingHalt({
+      event: req.body.stopped ? 'GLOBAL_EMERGENCY_STOP' : 'GLOBAL_RESUME', userId, scope: 'GLOBAL',
+      details: req.body.stopped
+        ? `열린 진입 주문 보유 회원 ${membersWithOpenOrders}명, 취소 실패 ${cancellation.entryOrderCancelFailures}건`
+        : environmentGlobalStop ? '환경변수 TRADING_EMERGENCY_STOP=true 가 남아 있어 실제 재개되지 않음' : '전체 신규주문 평가 재개',
+    });
     return res.json({
       ok: true,
       persistentGlobalEmergencyStopped: req.body.stopped,
