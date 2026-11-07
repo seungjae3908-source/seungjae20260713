@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { completeTradingHistory } from './trade-history-completeness.service';
 // Run canonical exit identity regressions in the already registered phase12 lane.
 import './member-auto-trading-exit-plan.service.test';
 import './automatic-live-preactivation-audit.service.test';
@@ -3353,4 +3354,17 @@ test('작동 ON places the automatic Paper order with no per-order approval; 정
   const stoppedRun = await withFetchMock(() => stoppedWorker.runOnce(new Date(nowMs + 60_000)));
   assert.equal(stoppedRun.createdPlans, 0);
   assert.equal((await repository.listOrders(USER)).length, 1);
+});
+
+test('paper bootstrap readiness treats a fully traversed history as complete but an unverified full page as truncated', () => {
+  const orders = Array.from({ length: 500 }, () => ({ id: 'o', planId: 'p', state: 'CANCELLED', filledQuantity: 0 })) as never[];
+  const plans = Array.from({ length: 200 }, () => ({ id: 'p', accountMode: 'paper', executionMode: 'manual' })) as never[];
+  // a full page that was not certified by the repository's complete traversal may hide older positions
+  assert.ok(automaticPaperWalletBootstrapReadiness(orders, plans).blockers.includes('AUTOMATIC_PAPER_HISTORY_TRUNCATED'));
+  // copies (client JSON) cannot certify completeness either
+  assert.ok(automaticPaperWalletBootstrapReadiness(JSON.parse(JSON.stringify(completeTradingHistory(orders))), JSON.parse(JSON.stringify(completeTradingHistory(plans)))).blockers.includes('AUTOMATIC_PAPER_HISTORY_TRUNCATED'));
+  // the repository's complete read is not mistaken for a truncated page past the legacy 200/500 bound
+  const completeOrders = completeTradingHistory(orders.slice());
+  const completePlans = completeTradingHistory(plans.slice());
+  assert.ok(!automaticPaperWalletBootstrapReadiness(completeOrders, completePlans).blockers.includes('AUTOMATIC_PAPER_HISTORY_TRUNCATED'));
 });
