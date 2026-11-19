@@ -1,0 +1,365 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildConfirmedResearchPolicies } from '../src/research-free-policy-confirmation.mjs';
+import test from 'node:test';
+
+const scriptUrl = new URL('../deploy/activate-ai-research.sh', import.meta.url);
+const workflowUrl = new URL('../../.github/workflows/research-ai-production-activation.yml', import.meta.url);
+const aiCliUrl = new URL('../bin/research-ai-review.mjs', import.meta.url);
+const aiServiceUrl = new URL('../deploy/research-production-ai-review.service', import.meta.url);
+
+test('AI Research activation is fail-closed, exact-SHA bound and rollback-first', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /TARGET_SHA must be an exact lowercase 40-character SHA/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_MISMATCH/);
+  assert.match(script, /\/opt\/investment-research\/releases\/[^\n]*\$TARGET_SHA/);
+  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_ROLLED_BACK=true/);
+  assert.match(script, /ROLLBACK_FAILED=true/);
+  assert.match(script, /AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT="\$snapshot_root"/);
+  assert.match(script, /restore_runtime_snapshot "\$AI_RESEARCH_ROLLBACK_SNAPSHOT_ROOT"/);
+  assert.match(script, /capture_runtime_snapshot "\$baseline"/);
+  assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
+  assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
+  assert.match(script, /systemctl disable --now/);
+});
+
+test('AI cutover refuses to kill an in-flight previous-release one-shot', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const freeze = script.slice(script.indexOf('require_idle_one_shots()'), script.indexOf('capture_runtime_snapshot()'));
+  assert.doesNotMatch(freeze, /systemctl stop "\$\{services\[@\]\}"/u);
+  assert.match(freeze, /AI_RESEARCH_CUTOVER_BUSY/u);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.ok(activation.indexOf('require_isolated_validation') < activation.indexOf('disable_timers'));
+  assert.ok(activation.indexOf('disable_timers') < activation.indexOf('install-ai-research-units.sh'));
+});
+
+test('isolated validation uses a disjoint state root and no systemd mutation', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const isolated = script.slice(script.indexOf('validate_isolated()'), script.indexOf('require_isolated_validation()'));
+  assert.match(isolated, /research-ai-isolated-transition-v2\.mjs/u);
+  assert.match(isolated, /--source-state-root "\$STATE_ROOT"/u);
+  assert.match(isolated, /--isolated-state-root "\$isolated_root"/u);
+  assert.match(isolated, /stage_isolated_release/u);
+  assert.match(isolated, /capture_runtime_snapshot "\$baseline"/u);
+  assert.match(isolated, /PRODUCTION_STATE_MUTATED=false/u);
+  assert.doesNotMatch(isolated, /systemctl/u);
+});
+
+test('rollback restores SHA-pinned prior units, isolated env, enablement and active state', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const rollback = script.slice(script.indexOf('restore_runtime_snapshot()'), script.indexOf('research_sha()'));
+  assert.match(rollback, /runtime-before\.tsv/u);
+  assert.match(rollback, /install -o root -g root -m 0644/u);
+  assert.match(rollback, /restore-units\/\$name/u);
+  assert.match(rollback, /env\/research-production\.env/u);
+  assert.match(rollback, /systemctl enable/u);
+  assert.match(rollback, /systemctl start/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK=RESTORED/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_UNIT_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_EXEC_HASH_MISMATCH/u);
+  assert.match(rollback, /AI_RESEARCH_ROLLBACK_RELEASE_SHA_MISMATCH/u);
+});
+
+test('rollback compares the ExecStart command identity, not the last run\'s timestamps and exit status', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /exec_sha="\$\(exec_identity_sha "\$unit"\)"/u);
+  assert.match(script, /actual_exec_sha="\$\(exec_identity_sha "\$name"\)"/u);
+  const fn = script.slice(script.indexOf('exec_identity_sha() {'), script.indexOf('require_idle_one_shots() {'));
+  const dir = mkdtempSync(join(tmpdir(), 'exec-identity-'));
+  writeFileSync(join(dir, 'systemctl'), '#!/usr/bin/env bash\nprintf "%s\\n" "$EXEC_SHOW"\n', { mode: 0o755 });
+  const sha = (show) => spawnSync('bash', ['-c', `SUDO=()\n${fn}\nexec_identity_sha u.service`],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, EXEC_SHOW: show } }).stdout.trim();
+  const before = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/autonomous-research-coordinator-v2.mjs ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }';
+  const afterRun = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/autonomous-research-coordinator-v2.mjs ; ignore_errors=no ; start_time=[Sun 2026-10-19 23:40:01 UTC] ; stop_time=[Sun 2026-10-19 23:45:54 UTC] ; pid=1950931 ; code=exited ; status=75 }';
+  const otherCommand = '{ path=/usr/bin/env ; argv[]=/usr/bin/env node bin/other.mjs ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }';
+  try {
+    assert.match(sha(before), /^[0-9a-f]{64}$/u);
+    assert.equal(sha(before), sha(afterRun), 'the one-shot having run must not look like a changed unit');
+    assert.notEqual(sha(before), sha(otherCommand));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('free confirmation binds to the deployed app SHA without app writes or restart', async () => {
+  const source = await readFile(new URL('../bin/confirm-research-free-policy.mjs', import.meta.url), 'utf8');
+  assert.match(source, /appSha: readBoundedPrivateFile\('\/opt\/stock-app\/\.deploy\/current-sha'\)\.trim\(\)/u);
+  assert.doesNotMatch(source, /pm2|systemctl|API_KEY|\.env\.production/u);
+  assert.match(source, /atomicWrite\('research-free-confirmation\.json'/u);
+});
+
+test('provider readiness is proven before timer activation and secrets are not printed', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const preflight = script.indexOf('require_existing_provider_env');
+  const enable = script.indexOf('systemctl enable --now');
+  assert.ok(preflight >= 0 && enable > preflight);
+  assert.match(script, /fullStackReady !== true/);
+  assert.match(script, /providers\.youtube !== 'PRESENT'/);
+  assert.match(script, /providers\.gemini !== 'PRESENT'/);
+  assert.match(script, /providers\.groq !== 'PRESENT'/);
+  assert.doesNotMatch(script, /echo .*API_KEY|printf .*API_KEY/);
+  const activation = script.slice(script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(activation, /materialize_or_reuse_provider_env|chown root:investment-research|chmod 0640/u);
+});
+
+
+test('existing isolated Research provider env is reused before app or PM2 bootstrap', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const ready = script.indexOf('provider_env_ready()');
+  const fallback = script.indexOf('research-provider-bootstrap.mjs" preflight');
+  const materialize = script.indexOf('materialize_or_reuse_provider_env');
+  assert.ok(ready >= 0 && fallback > ready && materialize > ready);
+  assert.match(script, /EXISTING_RESEARCH_PROVIDER_ENV/);
+  assert.match(script, /credentialValuesExposed: false/);
+  assert.match(script, /executionAuthority: 'NONE'/);
+  assert.doesNotMatch(script, /source\s+"\$PROVIDER_ENV"|\.\s+"\$PROVIDER_ENV"/);
+});
+
+test('runtime policy files require explicit YouTube approval and free AI provider selection', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /AI_RESEARCH_POLICY_ENV_MISSING/);
+  assert.match(script, /VIDEO_RESEARCH_POLICY_ENV_MISSING/);
+  assert.match(script, /RESEARCH_AI_FREE_TIER_CONFIRMED/);
+  assert.match(script, /AI_CHAT_PROVIDER/);
+  assert.match(script, /RESEARCH_VIDEO_DISCOVERY_APPROVED/);
+  assert.match(script, /AI_RESEARCH_FREE_TIER_CONFIRMATION_REQUIRED/);
+  assert.match(script, /VIDEO_RESEARCH_DISCOVERY_APPROVAL_REQUIRED/);
+  assert.doesNotMatch(script, /source\s+"\$AI_POLICY_ENV"|source\s+"\$VIDEO_POLICY_ENV"/);
+});
+
+test('actual activation Node preflight admits legacy defaults and blocks invalid video policy before calls', async () => {
+  const source = (await readFile(scriptUrl, 'utf8')).replaceAll('\r\n', '\n');
+  const helper = source.slice(source.indexOf('require_runtime_policy_env() {'), source.indexOf('print_ai_diagnostic() {'));
+  const code = /<<'NODE'\n([\s\S]*?)\nNODE/u.exec(helper)?.[1];
+  assert.ok(code);
+  assert.match(helper, /node --input-type=module/u);
+  assert.match(code, /resolveResearchVideoDiscoveryQueries/u);
+  const root = mkdtempSync(join(tmpdir(), 'TEST-ONLY-ai-policy-'));
+  try {
+    const ai = join(root, 'research-ai.env'), video = join(root, 'research-video.env');
+    writeFileSync(ai, 'RESEARCH_AI_FREE_TIER_CONFIRMED=true\nAI_CHAT_PROVIDER=groq\nRESEARCH_AI_MAX_CALLS_PER_SCAN=3\n');
+    const invoke = videoText => {
+      writeFileSync(video, videoText);
+      return spawnSync(process.execPath, ['--input-type=module', '-', ai, video,
+        fileURLToPath(new URL('../src/research-video-discovery-policy.mjs', import.meta.url))],
+      { input: code, encoding: 'utf8', timeout: 10000 });
+    };
+    const legacy = invoke('RESEARCH_VIDEO_DISCOVERY_APPROVED=true\n');
+    assert.equal(legacy.status, 0, legacy.stderr || String(legacy.error ?? ''));
+    assert.equal(JSON.parse(legacy.stdout).video.queryCount, 8);
+    assert.equal(JSON.parse(legacy.stdout).executionAuthority, 'NONE');
+    const queries = ['#topic', "research's \"quoted\" path\\topic", 'VWAP 연구'];
+    const plan = buildConfirmedResearchPolicies({ aiText: '',
+      videoText: "RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON='" + JSON.stringify(queries).replaceAll("'", '\\u0027') + "'\n",
+      targetSha: 'a'.repeat(40), ownerCommentId: '1234', observedAt: Date.now() });
+    const confirmed = invoke(plan.videoText);
+    assert.equal(confirmed.status, 0, confirmed.stderr || String(confirmed.error ?? ''));
+    assert.equal(JSON.parse(confirmed.stdout).video.queryCount, queries.length);
+    for (const extra of ['RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=[]',
+      'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["same"," same "]',
+      'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON=["secret=TEST_ONLY_NO_KEY"]',
+      'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS=4', 'RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS=2161']) {
+      const result = invoke('RESEARCH_VIDEO_DISCOVERY_APPROVED=true\n' + extra + '\n');
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.equal(result.stderr.includes('TEST_ONLY_NO_KEY'), false);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('free consent writes are isolated from read-only preflight and require an exact owner command', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.match(script, /confirm-free-only\) confirm_free_only/);
+  assert.match(script, /RESEARCH_FREE_ONLY_OWNER_COMMENT_ID/);
+  const preflight = script.slice(script.indexOf('\npreflight() {'), script.indexOf('\nactivate() {'));
+  assert.doesNotMatch(preflight, /confirm-research-free-policy|confirm_free_only|chown|chmod/);
+  assert.match(workflow, / --confirm-free-only/);
+  assert.match(workflow, /comment\.user\.login == github\.repository_owner/);
+  assert.match(workflow, /author_association == 'OWNER'/);
+  assert.match(workflow, /core\.setOutput\('free_only_owner_comment_id', match\[2\] \? String\(context\.payload\.comment\.id\)/);
+});
+
+test('provider materialization fallback is non-recursive and preserves existing isolated env first', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const start = script.indexOf('materialize_or_reuse_provider_env()');
+  const end = script.indexOf('require_runtime_policy_env()', start);
+  assert.ok(start >= 0 && end > start);
+  const helper = script.slice(start, end);
+  assert.match(helper, /research-provider-bootstrap\.mjs" materialize/);
+  assert.equal((helper.match(/materialize_or_reuse_provider_env/g) ?? []).length, 1);
+});
+test('provider env is readable by the isolated Research service user', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /chown root:investment-research/);
+  assert.match(script, /chmod 0640/);
+  assert.match(script, /runuser -u investment-research -- test -r/);
+});
+
+test('one-shot workers must succeed before recurring timers are enabled', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const ai = script.indexOf('systemctl start research-production-ai-review.service');
+  const video = script.indexOf('systemctl start research-production-video-discovery.service');
+  const enable = script.indexOf('systemctl enable --now');
+  assert.ok(ai >= 0 && video > ai && enable > video);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_FAILED/);
+  assert.match(script, /AI_REVIEW_ONE_SHOT=success/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT=success/);
+});
+
+test('long-history refresh stays on the existing exact-SHA core service and old completion is not rewritten', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /research-production@\.service/);
+  assert.match(script, /research-production-long-history\.timer/);
+  assert.match(script, /Unit=research-production@long-history\.service/);
+  assert.match(script, /AI_RESEARCH_LONG_HISTORY_REFRESH_PATH_MISSING/);
+  assert.doesNotMatch(script, /rm .*long-history|unlink .*long-history/u);
+});
+
+test('fresh one-shot provider evidence is required before recurring timers enable', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const ai = script.indexOf('systemctl start research-production-ai-review.service');
+  const video = script.indexOf('systemctl start research-production-video-discovery.service');
+  const proof = script.indexOf('verify_one_shot_evidence "$one_shot_started_ms"');
+  const v2Proof = script.indexOf('verify_v2_operational_transition "$one_shot_started_ms"');
+  const enable = script.indexOf('systemctl enable --now');
+  assert.ok(ai >= 0 && video > ai && proof > video && v2Proof > proof && enable > v2Proof);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_READY/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_STALE/);
+  assert.match(script, /research-ai-operational-transition-v2\.mjs/);
+});
+test('AI activation preserves no-trading authority contract', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  for (const token of [
+    'LIVE_TRADING=false',
+    'PRIVATE_TRADING_API_ALLOWED=false',
+    'REAL_ORDER_ENABLED=false',
+    'executionAuthority=NONE',
+    'REAL_ORDER_SUBMITTED=false',
+  ]) assert.match(script, new RegExp(token));
+  assert.doesNotMatch(script, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true|executionAuthority=LIVE/);
+});
+
+
+test('existing provider credentials are normalized with fixed Research models without secret logging', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /provider_credentials_present\(\)/);
+  assert.match(script, /normalize_existing_provider_env\(\)/);
+  assert.match(script, /GEMINI_MODEL=gemini-3\.1-flash-lite/);
+  assert.match(script, /GROQ_MODEL=openai\/gpt-oss-20b/);
+  assert.match(script, /EXISTING_RESEARCH_PROVIDER_ENV_MODELS_NORMALIZED/);
+  assert.match(script, /install -o root -g investment-research -m 0640/);
+  assert.doesNotMatch(script, /console\.log\([^\n]*API_KEY|echo [^\n]*API_KEY|printf [^\n]*API_KEY/);
+});
+
+
+test('activation refreshes current-sha forward evidence before provider one-shot', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const refreshHelper = script.indexOf('refresh_current_sha_forward_evidence()');
+  const forwardStart = script.indexOf('systemctl start "$service"', refreshHelper);
+  const readiness = script.indexOf('require_current_sha_ai_evidence_ready', refreshHelper);
+  const refreshCall = script.lastIndexOf('refresh_current_sha_forward_evidence');
+  const aiStart = script.indexOf('systemctl start research-production-ai-review.service');
+  assert.ok(refreshHelper >= 0 && forwardStart > refreshHelper && readiness > forwardStart);
+  assert.ok(refreshCall > readiness && aiStart > refreshCall);
+  assert.match(script, /research-production@forward\.service/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_REFRESH_FAILED/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING/);
+  assert.match(script, /research-ai-current-sha-readiness-v1/);
+});
+
+
+test('current-sha blocked_data remains structural AI evidence instead of blocking AI activation', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /allowedStatus = new Set\(\['complete', 'partial_failure', 'blocked_data'\]\)/);
+  assert.doesNotMatch(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_RUNTIME_BLOCKED/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING/);
+});
+
+test('forward Paper Shadow runtime diagnostic is informational before provider preflight', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const diagnostic = script.indexOf('print_forward_runtime_diagnostic');
+  const providerGate = script.indexOf('provider_preflight', script.indexOf('preflight()'));
+  assert.ok(diagnostic >= 0);
+  assert.ok(providerGate > diagnostic);
+  assert.match(script, /research-forward-runtime-diagnostic\.mjs/);
+  assert.match(script, /research-forward-runtime-diagnostic\.mjs[\s\S]*\|\| true/);
+  assert.doesNotMatch(script, /AI_RESEARCH_FORWARD_RUNTIME_NOT_READY/);
+});
+
+test('activation exposes leaf diagnostics and accepts current cache proof', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /research-ai-diagnostic\.mjs/);
+  assert.match(script, /PARTIAL_COVERAGE_COMPLETE/);
+  assert.match(script, /cacheHits/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
+  assert.match(script, /blockedProfiles/);
+  assert.match(script, /deferredProfiles/);
+});
+
+test('approved-job intake and workspace heartbeat are proven before activation completes', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const intake = script.indexOf('systemctl start research-production-approved-job-intake.service');
+  const enable = script.indexOf('systemctl enable --now');
+  const heartbeat = script.indexOf('verify_workspace_worker_health', enable);
+  assert.ok(intake >= 0 && intake < enable && heartbeat > enable);
+  assert.match(script, /research-worker-status-v9/);
+  assert.match(script, /workerState !== 'ACTIVE'/);
+  assert.match(script, /AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE/);
+});
+
+
+
+test('AI review business failures are visible to systemd instead of exiting success', async () => {
+  const [cli, service, coordinator] = await Promise.all([
+    readFile(aiCliUrl, 'utf8'),
+    readFile(aiServiceUrl, 'utf8'),
+    readFile(new URL('../bin/autonomous-research-coordinator-v2.mjs', import.meta.url), 'utf8'),
+  ]);
+  assert.match(cli, /PARTIAL_AI_UNAVAILABLE/);
+  assert.match(cli, /WAITING_FOR_FREE_AI/);
+  assert.match(cli, /DEFERRED_RETRY/);
+  assert.match(cli, /process\.exitCode = 75/);
+  assert.match(coordinator, /runResearchAiReviewScan/);
+  assert.match(coordinator, /WAITING_OR_PARTIAL_AI/);
+  assert.match(coordinator, /process\.exitCode = failed \? 1 : unavailable \? 75 : 0/);
+  assert.match(service, /ExecStart=.*autonomous-research-coordinator-v2\.mjs/);
+  assert.doesNotMatch(service, /SuccessExitStatus=.*75/);
+});
+
+test('PR validation concurrency is isolated from Production activation waiting', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.ok(workflow.includes('group: research-ai-production-activation-${{ github.event_name }}'));
+  assert.match(workflow, /research-production\/test\/research-approved-job-intake\.test\.mjs/);
+});
+
+test('activation workflow preserves sanitized diagnostics and failed-closed Hub receipt', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.match(workflow, /id: activate_ai/);
+  assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
+  assert.match(workflow, /evaluateAiActivationResult/u);
+  assert.match(workflow, /research-ai-activation-result\.cjs/u);
+  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
+  assert.match(workflow, /status: failed_closed/);
+  assert.match(workflow, /failure_reason: ' \+ process\.env\.FAILURE_REASON/);
+  assert.match(workflow, /provider_secret_values_exposed: false/);
+  assert.match(workflow, /executionAuthority: NONE/);
+  assert.match(workflow, /id: confirm_policy/u);
+  assert.ok(workflow.includes('steps.confirm_policy.outputs.failure_reason || steps.activate_ai.outputs.failure_reason'));
+  assert.ok(workflow.includes('ai-research-consent.txt'));
+  assert.ok(workflow.includes('activation_pipeline_status=("${PIPESTATUS[@]}")'));
+  assert.ok(workflow.includes('${activation_pipeline_status[0]}'));
+  assert.ok(workflow.includes('${activation_pipeline_status[1]}'));
+  assert.match(workflow, /runtime_recheck_required: ' \+ process\.env\.RUNTIME_RECHECK_REQUIRED/u);
+  assert.ok(workflow.includes("steps.activate_ai.outputs.runtime_recheck_required == 'true' || steps.activate_ai.outputs.completion_evidence_observed == 'true'"));
+  assert.match(workflow, /RESEARCH_\(CONFIRMATION_\[A-Z_\]\+/u);
+});

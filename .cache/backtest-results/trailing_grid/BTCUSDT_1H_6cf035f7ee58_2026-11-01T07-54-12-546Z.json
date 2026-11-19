@@ -1,0 +1,101 @@
+{
+  "strategy": "trailing_grid",
+  "symbol": "BTCUSDT",
+  "timeframe": "1H",
+  "period": {
+    "start": "2026-10-02T07:54:11.464Z",
+    "end": "2026-11-01T07:54:11.464Z",
+    "days": 30
+  },
+  "params": {
+    "stepPct": 0.004,
+    "maxSteps": 10,
+    "tpPct": 0.02,
+    "slPct": 0.1,
+    "leverage": 2,
+    "useRegime": false
+  },
+  "is": {
+    "trades": 96,
+    "wins": 96,
+    "losses": 0,
+    "wr": 1,
+    "finalEquity": 10179.77,
+    "totalReturn": 0.018,
+    "mdd": 0,
+    "profitFactor": "INF",
+    "sharpe": 2091.239,
+    "regimeBreakdown": {
+      "UP": {
+        "trades": 96,
+        "netPnl": 179.77
+      },
+      "DOWN": {
+        "trades": 0,
+        "netPnl": 0
+      },
+      "NEUTRAL": {
+        "trades": 0,
+        "netPnl": 0
+      }
+    }
+  },
+  "oos": {
+    "trades": 66,
+    "wins": 66,
+    "losses": 0,
+    "wr": 1,
+    "finalEquity": 10123.15,
+    "totalReturn": 0.0123,
+    "mdd": 0,
+    "profitFactor": "INF",
+    "sharpe": 2348.718,
+    "regimeBreakdown": {
+      "UP": {
+        "trades": 66,
+        "netPnl": 123.15
+      },
+      "DOWN": {
+        "trades": 0,
+        "netPnl": 0
+      },
+      "NEUTRAL": {
+        "trades": 0,
+        "netPnl": 0
+      }
+    }
+  },
+  "walk_forward": null,
+  "regime_breakdown": {
+    "UP": {
+      "trades": 315,
+      "netPnl": -43.67
+    },
+    "DOWN": {
+      "trades": 0,
+      "netPnl": 0
+    },
+    "NEUTRAL": {
+      "trades": 0,
+      "netPnl": 0
+    }
+  },
+  "cost_model": {
+    "fee_bps_per_side": 5,
+    "slippage_bps": 2,
+    "funding_included": false
+  },
+  "pass_criteria": {
+    "mdd_le": 0.25,
+    "oos_sharpe_ge": 1,
+    "trades_ge": 100,
+    "liquidation_analysis_required": true
+  },
+  "verdict": "FAIL",
+  "failure_reasons": [
+    "FULL_SHARPE_-0.55_NEGATIVE",
+    "FULL_PF_0.92_LT_1",
+    "FULL_RETURN_-0.44pct_NEGATIVE"
+  ],
+  "observedAt": "2026-11-01T07:54:12.546Z"
+}

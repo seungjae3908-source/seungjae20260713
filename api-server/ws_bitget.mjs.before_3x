@@ -1,0 +1,311 @@
+import fs from 'fs';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: '/root/seungjae20260713/.env' });
+dotenv.config({ path: '/root/seungjae20260713/api-server/.env' });
+
+const API_KEY = process.env.BITGET_API_KEY || process.env.API_KEY || "";
+const API_SECRET = process.env.BITGET_SECRET_KEY || process.env.SECRET_KEY || "";
+const API_PASSPHRASE = process.env.BITGET_PASSPHRASE || process.env.PASSPHRASE || "";
+
+const BASE_URL = "https://api.bitget.com";
+const CANDIDATE_PATH = "/root/seungjae20260713/api-server/candidates.json";
+// 수동 청산 후 스캐너 갱신 전 재진입 방지 메모리 캐시
+const processedSignals = new Map();
+
+
+let isExecutionLocked = false;
+
+function sign(timestamp, method, requestPath, body) {
+    const bodyStr = body ? JSON.stringify(body) : '';
+    const message = timestamp + method.toUpperCase() + requestPath + bodyStr;
+    return crypto.createHmac('sha256', API_SECRET).update(message).digest('base64');
+}
+
+async function getUsdtBalance() {
+    try {
+        if (!API_KEY) return 10;
+        const timestamp = Date.now().toString();
+        const method = 'GET';
+        const requestPath = '/api/v2/mix/account/accounts?productType=usdt-futures';
+        const signature = sign(timestamp, method, requestPath, '');
+
+        const res = await fetch(BASE_URL + requestPath, {
+            method: 'GET',
+            headers: {
+                'ACCESS-KEY': API_KEY,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': API_PASSPHRASE,
+                'Content-Type': 'application/json',
+                'Locale': 'en_US'
+            }
+        });
+        const json = await res.json();
+        if (json.code === '00000' && json.data) {
+            const usdtAccount = json.data.find(acc => acc.marginCoin === 'USDT');
+            return usdtAccount ? parseFloat(usdtAccount.usdtEquity || usdtAccount.available || 0) : 10;
+        }
+    } catch (e) {}
+    return 10;
+}
+
+async function getOpenPositions() {
+    try {
+        if (!API_KEY) return [];
+        const timestamp = Date.now().toString();
+        const method = 'GET';
+        const requestPath = '/api/v2/mix/position/all-position?productType=usdt-futures&marginCoin=USDT';
+        const signature = sign(timestamp, method, requestPath, '');
+
+        const res = await fetch(BASE_URL + requestPath, {
+            method: 'GET',
+            headers: {
+                'ACCESS-KEY': API_KEY,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': API_PASSPHRASE,
+                'Content-Type': 'application/json',
+                'Locale': 'en_US'
+            }
+        });
+        const json = await res.json();
+        if (json.code === '00000' && json.data) {
+            return json.data.filter(p => parseFloat(p.total || p.hold || 0) > 0);
+        }
+    } catch (e) {}
+    return [];
+}
+
+async function getMarketPrice(symbol) {
+    try {
+        const res = await fetch(BASE_URL + '/api/v2/mix/market/ticker?productType=usdt-futures&symbol=' + symbol);
+        const json = await res.json();
+        if (json.code === '00000' && json.data && json.data.length > 0) {
+            return parseFloat(json.data[0].lastPr || json.data[0].close || 0);
+        }
+    } catch (e) {}
+    return 0;
+}
+
+async function sendTelegramAlert(message) {
+    console.log("📢 [텔레그램 전송]:\n" + message);
+}
+
+async function setLeverageAndMarginMode(symbol) {
+    try {
+        if (!API_KEY) return;
+        const timestamp = Date.now().toString();
+        const method = 'POST';
+        const requestPath = '/api/v2/mix/account/set-leverage';
+        
+        const bodyLong = { symbol: symbol, productType: 'usdt-futures', leverage: '5', holdSide: 'long' };
+        let signature = sign(timestamp, method, requestPath, bodyLong);
+        await fetch(BASE_URL + requestPath, { method: 'POST', headers: { 'ACCESS-KEY': API_KEY, 'ACCESS-SIGN': signature, 'ACCESS-TIMESTAMP': timestamp, 'ACCESS-PASSPHRASE': API_PASSPHRASE, 'Content-Type': 'application/json', 'Locale': 'en_US' }, body: JSON.stringify(bodyLong) });
+
+        const bodyShort = { symbol: symbol, productType: 'usdt-futures', leverage: '5', holdSide: 'short' };
+        signature = sign(timestamp, method, requestPath, bodyShort);
+        await fetch(BASE_URL + requestPath, { method: 'POST', headers: { 'ACCESS-KEY': API_KEY, 'ACCESS-SIGN': signature, 'ACCESS-TIMESTAMP': timestamp, 'ACCESS-PASSPHRASE': API_PASSPHRASE, 'Content-Type': 'application/json', 'Locale': 'en_US' }, body: JSON.stringify(bodyShort) });
+    } catch (e) {}
+}
+
+async function sendOrderWithRiskControl(symbol, side, targetMarginUSDT) {
+    try {
+        await setLeverageAndMarginMode(symbol);
+
+        const price = await getMarketPrice(symbol);
+        if (price === 0) return;
+
+        const totalNotionalUSDT = targetMarginUSDT * 5;
+        let calculatedSize = (totalNotionalUSDT / price).toFixed(4);
+
+        if (symbol.includes('BTC') && parseFloat(calculatedSize) < 0.001) calculatedSize = '0.001';
+        if (symbol.includes('ETH') && parseFloat(calculatedSize) < 0.01) calculatedSize = '0.01';
+
+        const isShort = side === 'SHORT';
+        let rawStopLoss = isShort ? (price * 1.015) : (price * 0.985);
+        const stopLossPrice = (Math.round(rawStopLoss * 10) / 10).toFixed(1);
+
+        console.log("📡 [실계좌 주문 전송] " + symbol + " | 방향: " + side + " | 5배 격리 | 증거금: $" + targetMarginUSDT.toFixed(2) + " | 수량: " + calculatedSize + " | 손절가(SL): $" + stopLossPrice);
+
+        const timestamp = Date.now().toString();
+        const method = 'POST';
+        const requestPath = '/api/v2/mix/order/place-order';
+
+        const body = {
+            symbol: symbol,
+            productType: 'usdt-futures',
+            marginMode: 'isolated',
+            marginCoin: 'USDT',
+            size: calculatedSize.toString(),
+            side: isShort ? 'sell' : 'buy',
+            tradeSide: 'open',
+            orderType: 'market',
+            force: 'gtc',
+            presetStopLossPrice: stopLossPrice.toString(),
+            stopLossTriggerType: 'mark_price'
+        };
+
+        const signature = sign(timestamp, method, requestPath, body);
+        const response = await fetch(BASE_URL + requestPath, {
+            method: 'POST',
+            headers: { 'ACCESS-KEY': API_KEY, 'ACCESS-SIGN': signature, 'ACCESS-TIMESTAMP': timestamp, 'ACCESS-PASSPHRASE': API_PASSPHRASE, 'Content-Type': 'application/json', 'Locale': 'en_US' },
+            body: JSON.stringify(body)
+        });
+
+        const result = await response.json();
+        console.log("🎯 [실계좌 비트겟 응답 (" + symbol + ")]:", JSON.stringify(result));
+
+        if (result.code === '00000') {
+            await sendTelegramAlert(
+                "🚨 [실계좌 자동매매 진입 체결]\n" +
+                "• 종목: " + symbol + "\n" +
+                "• 방향: " + side + " (5배 격리)\n" +
+                "• 진입가(참조): $" + price + "\n" +
+                "• 수량: " + calculatedSize + "\n" +
+                "• 손절가(SL): $" + stopLossPrice + " (-1.5%)"
+            );
+        }
+    } catch (err) {
+        console.error("❌ [주문 에러]:", err.message);
+    }
+}
+
+async function manageActivePositions() {
+    try {
+        const positions = await getOpenPositions();
+        if (positions.length === 0) return;
+
+        for (const pos of positions) {
+            const symbol = pos.symbol;
+            const holdSide = pos.holdSide;
+            const totalSize = parseFloat(pos.total || pos.hold || 0);
+            const avgPrice = parseFloat(pos.averageOpenPrice || 0);
+            const currentPrice = await getMarketPrice(symbol);
+
+            if (avgPrice === 0) continue;
+
+            const pnlPercent = holdSide === 'short'
+                ? ((avgPrice - currentPrice) / avgPrice) * 100 * 5
+                : ((currentPrice - avgPrice) / avgPrice) * 100 * 5;
+
+            console.log("📊 [포지션 감시] " + symbol + " (" + holdSide.toUpperCase() + ") | 진입가: $" + avgPrice + " | 현재가: $" + currentPrice + " | 5배 수익률: " + pnlPercent.toFixed(2) + "%");
+
+            if (pnlPercent >= 15 && totalSize > 0.002) {
+                const halfSize = (totalSize / 2).toFixed(4);
+                console.log("🎯 [1차 익절 도달 (+15%)] " + symbol + " 수량의 50%(" + halfSize + ") 시장가 익절 실행!");
+
+                const timestamp = Date.now().toString();
+                const method = 'POST';
+                const requestPath = '/api/v2/mix/order/place-order';
+                const body = {
+                    symbol: symbol,
+                    productType: 'usdt-futures',
+                    marginMode: 'isolated',
+                    marginCoin: 'USDT',
+                    size: halfSize.toString(),
+                    side: holdSide === 'short' ? 'buy' : 'sell',
+                    tradeSide: 'close',
+                    orderType: 'market',
+                    force: 'gtc'
+                };
+
+                const signature = sign(timestamp, method, requestPath, body);
+                const res = await fetch(BASE_URL + requestPath, {
+                    method: 'POST',
+                    headers: { 'ACCESS-KEY': API_KEY, 'ACCESS-SIGN': signature, 'ACCESS-TIMESTAMP': timestamp, 'ACCESS-PASSPHRASE': API_PASSPHRASE, 'Content-Type': 'application/json', 'Locale': 'en_US' },
+                    body: JSON.stringify(body)
+                });
+                const json = await res.json();
+                if (json.code === '00000') {
+                    await sendTelegramAlert("💰 [실계좌 1차 익절 달성 (+15% 수익)]\n• 종목: " + symbol);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("⚠️ 포지션 관리 루프 에러:", e.message);
+    }
+}
+
+async function checkAndExecute() {
+    if (isExecutionLocked) return;
+    isExecutionLocked = true;
+
+    try {
+        if (!fs.existsSync(CANDIDATE_PATH)) {
+            isExecutionLocked = false;
+            return;
+        }
+
+        let rawContent = "";
+        try {
+            rawContent = fs.readFileSync(CANDIDATE_PATH, 'utf8').trim();
+        } catch (readErr) {
+            isExecutionLocked = false;
+            return;
+        }
+
+        if (!rawContent || rawContent.length < 5) {
+            isExecutionLocked = false;
+            return;
+        }
+
+        let data;
+        try {
+            data = JSON.parse(rawContent);
+        
+        // [방어 로직] 스캐너가 아직 새 파일을 갱신하기 전, 청산 직후 구형 시그널로 인한 즉시 재진입 방지 필터
+        if (Array.isArray(data)) {
+            data = data.filter(item => {
+                const symbol = item.symbol;
+                const sigId = item.signal?.signalId || item.timestamp || JSON.stringify(item);
+                if (processedSignals.get(symbol) === sigId) {
+                    console.log("[중복 진입 차단] " + symbol + " 종목은 이미 처리된 시그널(ID: " + sigId + ")입니다. 스캐너 갱신을 대기합니다.");
+                    return false;
+                }
+                return true;
+            });
+        }
+        } catch (parseErr) {
+            isExecutionLocked = false;
+            return;
+        }
+
+        const signals = data.signals || [];
+        const openPositions = await getOpenPositions();
+        const activeSymbols = openPositions.map(p => p.symbol);
+
+        const newSignals = signals.filter(sig => !activeSymbols.includes(sig.symbol));
+
+        if (newSignals.length > 0 && activeSymbols.length < 3) {
+            const totalBalance = await getUsdtBalance();
+            const marginPerCoin = totalBalance * 0.33;
+
+            console.log("🔥 [실계좌 New Execute] 총 잔고: $" + totalBalance.toFixed(2) + " | 신규 진입 대상: " + newSignals.map(s => s.symbol).join(', ') + " | 종목당 투입: $" + marginPerCoin.toFixed(2));
+
+            for (const sig of newSignals) {
+                const currentPositions = await getOpenPositions();
+                if (currentPositions.some(p => p.symbol === sig.symbol)) {
+                    console.log("🛡️ [중복 방지 차단] " + sig.symbol + "은 이미 포지션이 존재하여 진입을 취소합니다.");
+                    continue;
+                }
+
+                await sendOrderWithRiskControl(sig.symbol || 'BTCUSDT', sig.side || 'SHORT', marginPerCoin);
+            }
+        } else {
+            console.log("🛡️ [방어 작동] 현재 보유 종목 수: " + activeSymbols.length + "개. 추가 진입을 대기합니다.");
+        }
+
+        await manageActivePositions();
+
+    } catch (err) {
+        console.error("❌ 브리지 루프 에러:", err.message);
+    } finally {
+        isExecutionLocked = false;
+    }
+}
+
+console.log("🚀 [ws-bitget] 실계좌 문법 무결점 버전 가동 (Key Loaded: " + (API_KEY ? "YES (" + API_KEY.substring(0, 6) + "...)" : "NO") + ")");
+checkAndExecute();
+setInterval(checkAndExecute, 30000);

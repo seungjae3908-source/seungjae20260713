@@ -1,0 +1,362 @@
+import { useState, useEffect } from 'react';
+
+export interface GridBotConfig {
+  symbol: string;
+  direction: 'LONG' | 'SHORT' | 'NEUTRAL';
+  investment: number;
+  leverage: number;
+  lowest: number;
+  highest: number;
+  gridCount: number;
+  stopLoss: number;
+}
+
+const SYMBOL_SUGGESTIONS: Record<string, { value: string; label: string }[]> = {
+  domestic_stock: [
+    { value: '005930', label: '삼성전자' },
+    { value: '000660', label: 'SK하이닉스' },
+    { value: '035420', label: 'NAVER' },
+    { value: '035720', label: '카카오' },
+  ],
+  us_stock: [
+    { value: 'AAPL', label: 'Apple' },
+    { value: 'TSLA', label: 'Tesla' },
+    { value: 'NVDA', label: 'NVIDIA' },
+    { value: 'MSFT', label: 'Microsoft' },
+  ],
+  crypto_spot: [
+    { value: 'KRW-BTC', label: '비트코인 (Upbit)' },
+    { value: 'KRW-ETH', label: '이더리움 (Upbit)' },
+    { value: 'KRW-XRP', label: '리플 (Upbit)' },
+  ],
+  crypto_futures: [
+    { value: 'BTCUSDT', label: 'BTCUSDT (Bitget)' },
+    { value: 'ETHUSDT', label: 'ETHUSDT (Bitget)' },
+    { value: 'SOLUSDT', label: 'SOLUSDT (Bitget)' },
+  ],
+};
+
+
+// ★ 시장별 종목 리스트
+const MARKET_SYMBOLS: Record<string, { code: string; name: string }[]> = {
+  crypto_futures: [
+    { code: 'BTCUSDT', name: '비트코인' }, { code: 'ETHUSDT', name: '이더리움' },
+    { code: 'SOLUSDT', name: '솔라나' }, { code: 'XRPUSDT', name: '리플' },
+    { code: 'DOGEUSDT', name: '도지코인' }, { code: 'ADAUSDT', name: '에이다' }
+  ],
+  domestic_stock: [
+    { code: '005930', name: '삼성전자' }, { code: '000660', name: 'SK하이닉스' },
+    { code: '373220', name: 'LG에너지솔루션' }, { code: '207940', name: '삼성바이오로직스' },
+    { code: '005380', name: '현대차' }, { code: '035420', name: 'NAVER' }
+  ],
+  us_stock: [
+    { code: 'AAPL', name: '애플' }, { code: 'MSFT', name: '마이크로소프트' },
+    { code: 'NVDA', name: '엔비디아' }, { code: 'TSLA', name: '테슬라' },
+    { code: 'GOOGL', name: '구글' }, { code: 'AMZN', name: '아마존' }
+  ],
+  crypto_spot: [
+    { code: 'KRW-BTC', name: '비트코인' }, { code: 'KRW-ETH', name: '이더리움' },
+    { code: 'KRW-XRP', name: '리플' }, { code: 'KRW-SOL', name: '솔라나' },
+    { code: 'KRW-DOGE', name: '도지코인' }, { code: 'KRW-ADA', name: '에이다' }
+  ]
+};
+
+export function GridBotPanel({
+  value,
+  onChange,
+  marketName,
+  market = 'crypto_futures',
+}: {
+  value: GridBotConfig;
+  onChange: (val: GridBotConfig) => void;
+  marketName: string;
+  market?: string;
+}) {
+  const [isSaving, setIsSaving] = useState(false);
+  const [isFetchingPrice, setIsFetchingPrice] = useState(false);
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+
+  const isFutures = market === 'crypto_futures';
+
+  useEffect(() => {
+    const loadPrice = async () => {
+      try {
+        const res = await fetch(`/api/grid-auto-trade/price?symbol=${value.symbol}`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.price) setCurrentPrice(Number(data.price));
+        }
+      } catch {}
+    };
+    loadPrice();
+    const interval = setInterval(loadPrice, 5000);
+    return () => clearInterval(interval);
+  }, [value.symbol]);
+  const suggestions = SYMBOL_SUGGESTIONS[market] ?? SYMBOL_SUGGESTIONS.crypto_futures;
+
+  // ★ 0이 안 지워지는 문제 해결: 빈 문자열이면 '' 표시, 저장은 0으로
+  const handleNumberChange = (e: React.ChangeEvent<HTMLInputElement>, field: keyof GridBotConfig) => {
+    const val = e.target.value;
+    onChange({ ...value, [field]: val === '' ? '' : Number(val) } as any);
+  };
+
+  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    e.target.select(); // ★ 포커스 시 전체 선택
+  };
+
+  const handleAutoFill = async () => {
+    setIsFetchingPrice(true);
+    try {
+      // ★ 종목 코드만 추출 (예: "BTCUSDT 비트코인" -> "BTCUSDT")
+      const rawSymbol = value.symbol.split(' ')[0];
+      
+      const res = await fetch(`/api/grid-auto-trade/price?symbol=${rawSymbol}`, { 
+        credentials: 'include' 
+      });
+      if (!res.ok) throw new Error(`API 오류: ${res.status}`);
+      
+      const data = await res.json();
+      if (!data.price) throw new Error('가격 데이터 없음');
+      
+      const currentPrice = Number(data.price);
+
+      // ★ 최적화 로직: ±3% 범위, -6% 손절가, 그리드 12개
+      const lowest = Math.floor(currentPrice * 0.97);
+      const highest = Math.ceil(currentPrice * 1.03);
+      const stopLoss = Math.floor(currentPrice * 0.94);
+      const gridCount = 12;
+
+      onChange({
+        ...value,
+        lowest,
+        highest,
+        gridCount,
+        stopLoss,
+      });
+    } catch (e: any) {
+      alert(`현재가를 불러오지 못했습니다.\n사유: ${e.message}`);
+    } finally {
+      setIsFetchingPrice(false);
+    }
+  };
+
+  const handleSave = () => {
+    setIsSaving(true);
+    // ★ 저장할 때 빈칸('')을 0으로 변환
+    const cleanedValue = { ...value };
+    (['investment', 'leverage', 'lowest', 'highest', 'gridCount', 'stopLoss'] as const).forEach((key) => {
+      if (cleanedValue[key] === ('' as any)) (cleanedValue[key] as any) = 0;
+    });
+    onChange(cleanedValue);
+
+    setTimeout(() => {
+      setIsSaving(false);
+    }, 500);
+  };
+
+  return (
+    <div className="rounded-xl border border-card-border bg-card p-4 mb-4">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-bold">{marketName}</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            현재가: <b className="text-emerald-500">{currentPrice ? currentPrice.toLocaleString() : '-'}</b>
+          </span>
+          <button
+            onClick={handleAutoFill}
+            disabled={isFetchingPrice}
+            className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 disabled:bg-gray-400"
+          >
+            {isFetchingPrice ? '조회 중...' : '자동입력'}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        {/* 종목명 (시장별 datalist) */}
+        <div className="flex flex-col gap-1 col-span-2">
+          <label className="text-xs text-muted-foreground">종목명 (검색/선택)</label>
+          <input
+            type="text"
+            name="symbol"
+            value={(() => {
+              const match = (MARKET_SYMBOLS[market] || []).find(s => s.code === value.symbol);
+              return match ? match.name : value.symbol;
+            })()}
+            onChange={(e) => {
+              const typed = e.target.value;
+              const match = (MARKET_SYMBOLS[market] || []).find(s => s.name === typed || s.code === typed);
+              onChange({ ...value, symbol: match ? match.code : typed });
+            }}
+            onFocus={handleFocus}
+            className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+            list="symbol-options"
+          /> onChange({ ...value, symbol: e.target.value })}
+            placeholder="종목을 입력하거나 선택하세요"
+            className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+          />
+          <datalist id="symbol-options">
+          {(MARKET_SYMBOLS[market] || []).map((s) => (
+            <option key={s.code} value={s.name} />
+          ))}
+        </datalist>
+        </div>
+
+        
+        {/* 방향 */}        <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">방향</label>
+                  {isFutures ? (
+                    <select
+                      name="direction"
+                      value={value.direction}
+                      onChange={(e) => onChange({ ...value, direction: e.target.value as any })}
+                      className={`border border-card-border rounded bg-background px-2 py-1.5 text-sm font-bold ${
+                        value.direction === 'LONG' ? 'text-emerald-500' :
+                        value.direction === 'SHORT' ? 'text-rose-500' :
+                        'text-amber-500'
+                      }`}
+                      style={{ colorScheme: 'dark' }}
+                    >
+                      <option value="LONG" className="text-emerald-500 font-bold">롱(Long)</option>
+                      <option value="SHORT" className="text-rose-500 font-bold">숏(Short)</option>
+                      <option value="NEUTRAL" className="text-amber-500 font-bold">중립(Neutral)</option>
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value="매수"
+                      readOnly
+                      className="border border-card-border rounded bg-muted px-2 py-1.5 text-sm text-muted-foreground cursor-not-allowed"
+                    />
+                  )}
+                </div>
+
+        {/* 투입금액 */}        <div className="flex flex-col gap-1">
+                  <label className="text-xs text-muted-foreground">투입 금액</label>
+                  <input
+                    type="number"
+                    name="investment"
+                    value={value.investment === ('' as any) ? '' : value.investment}
+                    onChange={(e) => handleNumberChange(e, 'investment')}
+                    onFocus={handleFocus}
+                    className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                  />
+                </div>
+
+        {isFutures ? (
+          <>
+            {/* 레버리지 */}            <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground">레버리지</label>
+                        <input
+                          type="number"
+                          name="leverage"
+                          value={value.leverage === ('' as any) ? '' : value.leverage}
+                          onChange={(e) => handleNumberChange(e, 'leverage')}
+                          onFocus={handleFocus}
+                          className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                        />
+                      </div>
+
+            {/* 그리드개수 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">그리드 개수</label>
+                      <input
+                        type="number"
+                        name="gridCount"
+                        value={value.gridCount === ('' as any) ? '' : value.gridCount}
+                        onChange={(e) => handleNumberChange(e, 'gridCount')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 최고가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">최고가</label>
+                      <input
+                        type="number"
+                        name="highest"
+                        value={value.highest === ('' as any) ? '' : value.highest}
+                        onChange={(e) => handleNumberChange(e, 'highest')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 최저가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">최저가</label>
+                      <input
+                        type="number"
+                        name="lowest"
+                        value={value.lowest === ('' as any) ? '' : value.lowest}
+                        onChange={(e) => handleNumberChange(e, 'lowest')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 손절가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">손절가 (SL)</label>
+                      <input
+                        type="number"
+                        name="stopLoss"
+                        value={value.stopLoss === ('' as any) ? '' : value.stopLoss}
+                        onChange={(e) => handleNumberChange(e, 'stopLoss')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+          </>
+        ) : (
+          <>
+            {/* 최고가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">최고가</label>
+                      <input
+                        type="number"
+                        name="highest"
+                        value={value.highest === ('' as any) ? '' : value.highest}
+                        onChange={(e) => handleNumberChange(e, 'highest')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 최저가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">최저가</label>
+                      <input
+                        type="number"
+                        name="lowest"
+                        value={value.lowest === ('' as any) ? '' : value.lowest}
+                        onChange={(e) => handleNumberChange(e, 'lowest')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 손절가 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">손절가 (SL)</label>
+                      <input
+                        type="number"
+                        name="stopLoss"
+                        value={value.stopLoss === ('' as any) ? '' : value.stopLoss}
+                        onChange={(e) => handleNumberChange(e, 'stopLoss')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+
+            {/* 그리드개수 */}            <div className="flex flex-col gap-1">
+                      <label className="text-xs text-muted-foreground">그리드 개수</label>
+                      <input
+                        type="number"
+                        name="gridCount"
+                        value={value.gridCount === ('' as any) ? '' : value.gridCount}
+                        onChange={(e) => handleNumberChange(e, 'gridCount')}
+                        onFocus={handleFocus}
+                        className="border border-card-border rounded bg-background px-2 py-1.5 text-sm text-foreground"
+                      />
+                    </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

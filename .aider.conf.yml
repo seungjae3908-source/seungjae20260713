@@ -1,0 +1,4 @@
+model: gemini/gemini-3.8-flash
+weak-model: gemini/gemini-3.8-flash
+architect: true
+auto-commits: false

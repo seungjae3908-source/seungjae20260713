@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-11-19T07:54:19.552Z",
+  "regime": "DOWN",
+  "leverage": 3,
+  "signals": [
+    {
+      "symbol": "BTCUSDT",
+      "side": "SHORT",
+      "entry": 91500,
+      "score": 88,
+      "reason": "Downside momentum surge"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "side": "SHORT",
+      "entry": 3120,
+      "score": 82,
+      "reason": "Volume breakout rejection"
+    }
+  ]
+}

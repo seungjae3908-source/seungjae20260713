@@ -1,0 +1,52 @@
+import path from 'node:path';
+import { defineConfig } from '@playwright/test';
+
+const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
+const localPort = Number(process.env.RESEARCH_E2E_PORT ?? 4173);
+if (!Number.isSafeInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error('Invalid isolated E2E port');
+const baseURL = stagingMode
+  ? process.env.STAGING_BASE_URL
+  : `http://127.0.0.1:${localPort}`;
+const artifactDir = path.resolve(process.env.STAGING_ARTIFACT_DIR ?? '../staging-artifacts');
+
+if (stagingMode && !baseURL) {
+  throw new Error('STAGING_BASE_URL is required for full staging browser verification');
+}
+
+export default defineConfig({
+  testDir: './e2e',
+  testIgnore: /production-readonly-smoke\.spec\.ts/,
+  globalSetup: stagingMode ? './e2e/support/staging-bootstrap-global-setup.ts' : undefined,
+  outputDir: stagingMode ? path.join(artifactDir, 'playwright-test-results') : './test-results',
+  timeout: stagingMode ? 120_000 : 60_000,
+  expect: { timeout: 15_000 },
+  fullyParallel: false,
+  workers: process.env.CI ? 1 : undefined,
+  retries: 0,
+  reporter: stagingMode ? [
+    ['list'],
+    ['json', { outputFile: path.join(artifactDir, 'playwright-report.json') }],
+    ['html', { outputFolder: path.join(artifactDir, 'playwright-html-report'), open: 'never' }],
+  ] : [
+    ['list'],
+    ['html', { outputFolder: 'playwright-report', open: 'never' }],
+  ],
+  use: {
+    baseURL,
+    browserName: 'chromium',
+    launchOptions: stagingMode ? undefined : { args: ['--disable-remote-fonts'] },
+    hasTouch: true,
+    actionTimeout: 20_000,
+    navigationTimeout: 30_000,
+    screenshot: 'only-on-failure',
+    trace: stagingMode ? 'off' : 'retain-on-failure',
+    video: 'retain-on-failure',
+    ignoreHTTPSErrors: false,
+  },
+  webServer: stagingMode ? undefined : {
+    command: 'node ./e2e/support/start-vite-e2e-server.mjs vite.config.ts',
+    url: `http://127.0.0.1:${localPort}`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
+});

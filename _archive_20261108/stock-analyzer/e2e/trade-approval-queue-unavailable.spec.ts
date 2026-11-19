@@ -1,0 +1,37 @@
+import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+
+test('automatic trading page does not render the legacy approval queue', async ({ page }) => {
+  const approvalRequests: string[] = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.includes('/api/trade-automation/approval-queue')
+      || /\/api\/trade-automation\/plans\/[^/]+\/(approve|approval-status)/u.test(pathname)) {
+      approvalRequests.push(`${request.method()} ${pathname}`);
+    }
+  });
+
+  await page.goto('/__phase12-trade-automation-e2e?approvalQueue=live');
+  await expect(page.getByTestId('trade-approval-queue')).toHaveCount(0);
+  // Owner decision 2026-10-17: no per-order approval; the 작동 button runs it.
+  await expect(page.getByTestId('auto-trading-safety-summary')).toContainText('주문 방식');
+  await expect(page.getByTestId('auto-trading-safety-summary')).toContainText('정지됨');
+  await expect(page.getByTestId('auto-trading-safety-summary')).not.toContainText('주문별 승인');
+  await expect(page.getByTestId('auto-trading-run-toggle')).toHaveText(/작동/);
+  expect(approvalRequests).toEqual([]);
+});
+
+test('auto trading source has no approval queue dependency', async () => {
+  const source = await readFile('src/pages/auto-trading.tsx', 'utf8');
+  expect(source).not.toContain('TradeApprovalQueue');
+  expect(source).not.toContain('approvalFixture');
+  // Market control shows the server-enforced automatic LIVE scope (default 4시장).
+  expect(source).toContain('<StatusItem label="시장 제어" value={liveScopeLabel}');
+  expect(source).toContain("liveMarketScope === null ? '4시장'");
+  // The hardcoded "주문별 승인: 불필요" item is replaced by the real run state.
+  expect(source).not.toContain('<StatusItem label="주문별 승인" value="불필요"');
+  expect(source).toContain('<StatusItem label="주문 방식" value={orderMethodLabel}');
+  expect(source).toContain('<AutoTradingRunControl');
+  expect(source).toContain('<StatusItem label="위험검사" value="매 주문 재검증"');
+  expect(source).toContain('data-testid="trading-market-tabs"');
+});

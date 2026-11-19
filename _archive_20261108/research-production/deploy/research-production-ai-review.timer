@@ -1,0 +1,11 @@
+[Unit]
+Description=Ten-minute research tick: deterministic combination search plus quota-gated free AI review
+
+[Timer]
+OnCalendar=*-*-* *:09/10:00 UTC
+Persistent=true
+RandomizedDelaySec=30
+Unit=research-production-ai-review.service
+
+[Install]
+WantedBy=timers.target

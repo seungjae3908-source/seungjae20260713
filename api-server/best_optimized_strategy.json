@@ -1,0 +1,8 @@
+{
+  "name": "MACD Crossover",
+  "params": {
+    "fast": 12,
+    "slow": 26,
+    "signal": 9
+  }
+}

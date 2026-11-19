@@ -1,0 +1,335 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import {
+  assertResearchSafety,
+  buildTaskPlan,
+  preflightResearchProduction,
+  prepareResearchTaskWorkspace,
+  validateResearchTaskSharedPackages,
+  PROFILES,
+  runResearchCycle,
+  sanitizeChildEnv,
+} from '../src/engine.mjs';
+
+const SHA = 'a'.repeat(40);
+
+async function fakeRepo() {
+  const root = await mkdtemp(join(tmpdir(), 'research-production-test-'));
+  const lab = join(root, 'market-prediction-lab');
+  await mkdir(join(lab, 'scripts'), { recursive: true });
+  const required = new Set();
+  for (const tasks of Object.values(PROFILES)) for (const task of tasks) for (const arg of task.args) required.add(arg);
+  required.add('package.json');
+  for (const relative of required) {
+    const target = join(lab, relative);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, relative.endsWith('.json') ? '{}\n' : 'console.log("ok")\n');
+  }
+  const sharedFiles = [
+    'packages/strategy-hypothesis/package.json',
+    'packages/strategy-hypothesis/src/index.js',
+    'packages/strategy-hypothesis/src/contract.js',
+    'packages/external-research/package.json',
+    'packages/external-research/src/index.js',
+    'packages/external-research/src/contract.js',
+  ];
+  for (const relative of sharedFiles) {
+    const target = join(root, relative);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, relative.endsWith('.json') ? '{}\n' : `export const marker = "${relative}";\n`);
+  }
+  return root;
+}
+
+test('safety refuses live/private activation', () => {
+  assert.throws(() => assertResearchSafety({ env: { LIVE_TRADING: 'true' }, stateRoot: '/var/lib/investment-research-production', repoRoot: '/tmp/repo' }), /refuses live\/private/);
+  assert.throws(() => assertResearchSafety({ env: {}, stateRoot: '/opt/stock-app-data/research', repoRoot: '/tmp/repo' }), /overlaps protected/);
+});
+
+test('child environment strips secrets and private credentials', () => {
+  const env = sanitizeChildEnv({
+    PATH: '/usr/bin',
+    LANG: 'C.UTF-8',
+    GITHUB_TOKEN: 'secret-token',
+    GEMINI_API_KEY: 'secret-key',
+    DATABASE_URL: 'postgres://secret',
+    TOSS_ACCESS_TOKEN: 'secret-toss',
+  });
+  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.LANG, 'C.UTF-8');
+  assert.equal(env.GITHUB_TOKEN, undefined);
+  assert.equal(env.GEMINI_API_KEY, undefined);
+  assert.equal(env.DATABASE_URL, undefined);
+  assert.equal(env.TOSS_ACCESS_TOKEN, undefined);
+});
+
+test('forward plan isolates state and orders natural Shadow before Paper', () => {
+  const stateRoot = '/var/lib/investment-research-production';
+  const runtimeDirectory = resolve('/run/investment-research-forward');
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot,
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: { RUNTIME_DIRECTORY: runtimeDirectory },
+  });
+  const formulaQueue = plan.find((task) => task.id === 'formula-backtest-queue');
+  const paper = plan.find((task) => task.id === 'paper-forward');
+  const shadow = plan.find((task) => task.id === 'shadow-forward');
+  assert.deepEqual(plan.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
+  // Must be the release queue the autonomous closed loop produces into, not the
+  // shared root (which never had a producer outbox).
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, join(resolve(stateRoot), 'autonomous-research', 'releases', SHA));
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_PUBLISH_ROOT, resolve(stateRoot));
+  assert.deepEqual(formulaQueue.acceptedExitCodes, [0, 2]);
+  assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
+  assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
+  assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
+  assert.deepEqual(formulaQueue.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
+  assert.equal(paper.env.PAPER_FORWARD_INITIAL_CAPITAL_KRW, '1000000');
+  assert.equal(
+    paper.env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH,
+    join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json'),
+  );
+  assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
+  assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
+  assert.equal(
+    paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH,
+    join(runtimeDirectory, 'paper-state', 'publisher-binding.json'),
+  );
+  assert.equal(
+    paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH,
+    join(runtimeDirectory, 'paper-state', 'paper-state-v2.json'),
+  );
+  assert.equal(paper.env.LIVE_TRADING, 'false');
+  assert.deepEqual(paper.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  assert.equal(shadow.sharedPackages, undefined);
+  assert.deepEqual(shadow.acceptedExitCodes, [0, 2]);
+  assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
+  assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
+});
+
+test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evidence and no fallback values', async () => {
+  const source = await readFile(
+    new URL('../../market-prediction-lab/scripts/run-shadow-cycle.js', import.meta.url),
+    'utf8',
+  );
+
+  for (const token of [
+    'SHADOW_INFERENCE_NOT_EVALUABLE',
+    'MISSING_REQUIRED_INFERENCE_EVIDENCE',
+    'missingRequiredFeatures',
+    'candidateMissingRequiredFeatures',
+    'referenceMissingRequiredFeatures',
+    'EXISTING_TEMPORAL_EVIDENCE_ONLY',
+    'defaultFeatureFallbackAllowed: false',
+    'syntheticFeatureFallbackAllowed: false',
+    'inferenceBlocker.partialState = Object.freeze',
+    'prospectiveEvidenceAppended',
+    'modelObservationCreditAdded: false',
+    'policyCreditAdded: false',
+    'throw inferenceBlocker',
+    'if (nextSummary.status === "blocked_data") process.exitCode = 2',
+  ]) {
+    assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
+  }
+
+  assert.equal(source.includes('candidate.probabilities ??'), false);
+  assert.equal(source.includes('reference.probabilities ??'), false);
+  assert.equal(source.includes('candidate.probabilities ||'), false);
+  assert.equal(source.includes('reference.probabilities ||'), false);
+});
+
+test('forward plan preserves missing Paper state as missing when no runtime transport exists', () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const paper = plan.find((task) => task.id === 'paper-forward');
+  assert.equal(paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH, undefined);
+  assert.equal(paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH, undefined);
+});
+
+test('historical plan is parallelizable and contains no live authority', () => {
+  const plan = buildTaskPlan({ profile: 'fast-historical', stateRoot: '/var/lib/investment-research-production', researchSha: SHA });
+  assert.ok(plan.length >= 8);
+  for (const task of plan) {
+    assert.equal(task.env.LIVE_TRADING, 'false');
+    assert.equal(task.env.PRIVATE_API_ENABLED, 'false');
+    assert.equal(task.env.ORDER_AUTHORITY, 'false');
+  }
+});
+
+test('preflight requires exact SHA and validates lab layout', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await preflightResearchProduction({ repoRoot, stateRoot, researchSha: SHA, env: {}, verifyGitHead: false });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.researchSha, SHA);
+  assert.equal(result.checkoutSha, null);
+  assert.equal(result.safety.liveTrading, false);
+  await assert.rejects(() => preflightResearchProduction({ repoRoot, stateRoot, researchSha: 'main', env: {}, verifyGitHead: false }), /exact 40-character/);
+});
+
+test('Paper Forward shared-package validation fails closed when a required package is missing', async () => {
+  const repoRoot = await fakeRepo();
+  await import('node:fs/promises').then(({ rm }) =>
+    rm(join(repoRoot, 'packages', 'strategy-hypothesis'), { recursive: true, force: true }));
+
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: join(repoRoot, 'research-state-missing-shared'),
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  await assert.rejects(
+    () => validateResearchTaskSharedPackages({ repoRoot, plan }),
+    /research task shared-package prerequisites missing: packages\/strategy-hypothesis/,
+  );
+
+  const historicalPlan = buildTaskPlan({
+    profile: 'fast-historical',
+    stateRoot: join(repoRoot, 'research-state-historical'),
+    researchSha: SHA,
+    env: {},
+  });
+  const historical = await validateResearchTaskSharedPackages({
+    repoRoot,
+    plan: historicalPlan,
+  });
+  assert.deepEqual(historical.requestedPackages, []);
+});
+
+test('isolated Formula TRAIN queue has both transitive dependencies it imports at runtime', async () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const formula = plan[0];
+  assert.equal(formula.id, 'formula-backtest-queue');
+  assert.deepEqual(formula.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  const generator = await readFile(new URL('../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js', import.meta.url), 'utf8');
+  const contract = await readFile(new URL('../../packages/strategy-hypothesis/src/contract.js', import.meta.url), 'utf8');
+  assert.ok(generator.includes('../../packages/strategy-hypothesis/src/index.js'));
+  assert.ok(contract.includes('../../external-research/src/index.js'));
+  const repoRoot = await fakeRepo();
+  const validation = await validateResearchTaskSharedPackages({ repoRoot, plan });
+  assert.deepEqual(validation.requestedPackages, ['strategy-hypothesis', 'external-research']);
+  const work = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir: join(repoRoot, 'research-state', 'runs', 'formula-module-probe'),
+    sharedPackages: formula.sharedPackages,
+  });
+  await access(join(work.workspaceRoot, '..', 'packages', 'strategy-hypothesis', 'src', 'index.js'));
+  await access(join(work.workspaceRoot, '..', 'packages', 'external-research', 'src', 'index.js'));
+});
+
+test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
+  const repoRoot = await fakeRepo();
+  const taskDir = join(repoRoot, 'research-state', 'runs', 'cycle-1', 'paper-forward');
+  const result = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir,
+    sharedPackages: ['strategy-hypothesis', 'external-research'],
+  });
+
+  assert.equal(result.workspaceRoot, join(taskDir, 'workspace', 'market-prediction-lab'));
+  assert.deepEqual(result.copiedSharedPackages, ['strategy-hypothesis', 'external-research']);
+  await access(join(taskDir, 'workspace', 'market-prediction-lab', 'package.json'));
+  await access(join(taskDir, 'workspace', 'packages', 'strategy-hypothesis', 'src', 'contract.js'));
+  await access(join(taskDir, 'workspace', 'packages', 'external-research', 'src', 'index.js'));
+});
+
+test('parallel cycle uses isolated per-task workspaces', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'fast-historical',
+    concurrency: 4,
+    env: { PATH: process.env.PATH, GITHUB_TOKEN: 'must-not-propagate' },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.taskCount, PROFILES['fast-historical'].length);
+  assert.equal(result.failedCount, 0);
+  const workspaces = new Set(result.results.map((row) => row.workspaceRoot));
+  assert.equal(workspaces.size, result.taskCount);
+  for (const row of result.results) {
+    await access(join(row.workspaceRoot, 'package.json'));
+  }
+});
+
+test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  const first = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'forward',
+    concurrency: 2,
+    env: { PATH: process.env.PATH },
+    activationAtMs: 123456789,
+    verifyGitHead: false,
+  });
+  assert.equal(first.status, 'complete');
+  assert.equal(first.concurrency, 1);
+  assert.deepEqual(first.results.map((row) => row.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
+  const activation = JSON.parse(await readFile(join(stateRoot, 'forward', 'activation.json'), 'utf8'));
+  assert.equal(activation.activationAtMs, 123456789);
+  await new Promise((resolve) => setTimeout(resolve, 3));
+  const second = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'forward',
+    concurrency: 2,
+    env: { PATH: process.env.PATH },
+    activationAtMs: 123456789,
+    verifyGitHead: false,
+  });
+  assert.equal(second.status, 'complete');
+  assert.equal(second.concurrency, 1);
+  await assert.rejects(() => runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'forward',
+    concurrency: 1,
+    env: { PATH: process.env.PATH },
+    activationAtMs: 999,
+    verifyGitHead: false,
+  }), /activation timestamp is immutable/);
+});
+
+test('dead stale lock is recovered instead of blocking research forever', async () => {
+  const repoRoot = await fakeRepo();
+  const stateRoot = join(repoRoot, 'research-state');
+  await mkdir(join(stateRoot, 'locks'), { recursive: true });
+  await writeFile(join(stateRoot, 'locks', 'fast-historical.lock'), JSON.stringify({ pid: 99999999, startedAt: 1 }) + '\n');
+  const result = await runResearchCycle({
+    repoRoot,
+    stateRoot,
+    researchSha: SHA,
+    profile: 'fast-historical',
+    concurrency: 4,
+    env: { PATH: process.env.PATH },
+    verifyGitHead: false,
+  });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.failedCount, 0);
+});

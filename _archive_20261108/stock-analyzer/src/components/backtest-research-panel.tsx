@@ -1,0 +1,715 @@
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { AlertTriangle, Download, Loader2, PlayCircle, ShieldCheck, X } from 'lucide-react';
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { CenteredPageHeader } from '@/components/centered-page-header';
+import { Link } from 'wouter';
+import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
+import { resolveEvidenceDisplay } from '@/lib/evidence-display';
+import { downloadExcelWorkbook } from '@/lib/excel-export';
+import {
+  runBacktest,
+  type BacktestFormValues,
+  type BacktestMarket,
+  type BacktestResult,
+} from '@/lib/backtest';
+
+const endDate = new Date().toISOString().slice(0, 10);
+const startDate = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString().slice(0, 10);
+
+const MARKET_DEFAULTS: Record<BacktestMarket, { label: string; symbol: string; timeframe: string; side: BacktestFormValues['side']; leverage: number }> = {
+  'kr-stock': { label: '국내주식', symbol: '005930', timeframe: '1D', side: 'long', leverage: 1 },
+  'us-stock': { label: '미국주식', symbol: 'AAPL', timeframe: '1D', side: 'long', leverage: 1 },
+  'crypto-spot': { label: '코인현물', symbol: 'BTC', timeframe: '15m', side: 'long', leverage: 1 },
+  'crypto-futures': { label: '코인선물', symbol: 'BTCUSDT', timeframe: '15m', side: 'both', leverage: 2 },
+};
+
+const DEFAULT_VALUES: BacktestFormValues = {
+  market: 'crypto-futures',
+  symbol: 'BTCUSDT',
+  timeframe: '15m',
+  startDate,
+  endDate,
+  initialCapital: 10_000,
+  strategy: 'breakout',
+  side: 'both',
+  riskPercent: 0.5,
+  leverage: 2,
+  entryFeeRate: 0.0006,
+  exitFeeRate: 0.0006,
+  slippageRate: 0.0005,
+  fundingRatePerInterval: 0.0001,
+  fundingIntervalHours: 8,
+  stopLossMode: 'percent',
+  stopLossValue: 1,
+  takeProfitMode: 'risk_multiple',
+  takeProfitValue: 2,
+  trailingEnabled: false,
+  trailingActivationR: 1,
+  trailingDistanceR: 0.5,
+  strategyParameters: {
+    trendPullback: {
+      fastPeriod: 20,
+      slowPeriod: 50,
+      pullbackTolerancePercent: 0.5,
+      volumePeriod: 20,
+      volumeMultiplier: 1,
+    },
+    breakout: {
+      lookback: 20,
+      volumePeriod: 20,
+      volumeMultiplier: 1.2,
+    },
+    vwapReclaim: {
+      volumePeriod: 20,
+      volumeMultiplier: 1.1,
+    },
+  },
+};
+
+type Props = {
+  execute?: (values: BacktestFormValues) => Promise<BacktestResult>;
+  initialResult?: BacktestResult | null;
+  compact?: boolean;
+};
+
+type FieldProps = {
+  label: string;
+  children: ReactNode;
+};
+
+const inputClass = 'h-11 min-w-0 rounded-xl border border-border bg-background px-3 text-sm font-bold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring';
+const numberFormatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
+const money = (value: number, market: BacktestMarket) => {
+  const formatted = numberFormatter.format(value);
+  if (market === 'kr-stock' || market === 'crypto-spot') return `${formatted}원`;
+  if (market === 'us-stock') return `$${formatted}`;
+  return `${formatted} USDT`;
+};
+const MARKET_CANONICAL: Record<BacktestMarket, string> = {
+  'kr-stock': '국내주식', 'us-stock': '미국주식', 'crypto-spot': '코인현물', 'crypto-futures': '코인선물',
+};
+const percent = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => `${numberFormatter.format(Number(observed))}%`,
+}).display;
+const ratio = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => numberFormatter.format(Number(observed)),
+}).display;
+const dateTime = (value: number) => new Date(value).toLocaleString('ko-KR', { timeZone: 'UTC' });
+
+function normalizedCode(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function displayCode(value: string, labels: Record<string, string>): string {
+  if (!value.trim()) return '미확인';
+  const key = normalizedCode(value);
+  const translated = labels[key];
+  if (translated) return translated;
+  return /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(value) ? value : '기타';
+}
+
+function sideLabel(value: string): string {
+  return displayCode(value, { long: '롱', short: '숏', both: '롱·숏' });
+}
+
+function validationLabel(value: string): string {
+  return displayCode(value, { training: '학습', validation: '검증', test: '테스트' });
+}
+
+function exitReasonLabel(value: string): string {
+  return displayCode(value, {
+    stop_loss: '손절',
+    take_profit: '목표가',
+    trailing_stop: '트레일링 스톱',
+    signal_exit: '신호 종료',
+    strategy_exit: '전략 종료',
+    opposite_signal: '반대 신호',
+    time_exit: '시간 종료',
+    market_close: '장 종료',
+    end_of_data: '데이터 종료',
+    liquidation: '강제청산',
+    breakeven: '본전 종료',
+    manual: '수동 종료',
+  });
+}
+
+function regimeLabel(value: string): string {
+  return displayCode(value, {
+    bull: '상승장',
+    bullish: '상승장',
+    uptrend: '상승장',
+    trending_up: '상승장',
+    bear: '하락장',
+    bearish: '하락장',
+    downtrend: '하락장',
+    trending_down: '하락장',
+    sideways: '횡보장',
+    range: '횡보장',
+    ranging: '횡보장',
+    neutral: '횡보장',
+    volatile: '고변동성',
+    high_volatility: '고변동성',
+    low_volatility: '저변동성',
+    unknown: '미확인',
+  });
+}
+
+function exportBacktestWorkbook(values: BacktestFormValues, result: BacktestResult) {
+  const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  downloadExcelWorkbook(`backtest-${result.symbol}-${timestamp}.xls`, [
+    {
+      name: '요약',
+      rows: [
+        ['항목', '값'],
+        ['시장', MARKET_CANONICAL[result.market]],
+        ['종목', result.symbol],
+        ['시간봉', result.timeframe],
+        ['전략', result.strategy],
+        ['전략 파라미터', JSON.stringify(values.strategyParameters)],
+        ['초기자본', result.initialCapital],
+        ['최종자산', result.finalCapital],
+        ['총수익률 %', result.totalReturnPercent],
+        ['거래 수', result.totalTrades],
+        ['승률 %', result.winRate],
+        ['기대값', result.expectancy],
+        ['손익비', result.profitFactor ?? '자료 없음'],
+        ['최대 낙폭', result.maximumDrawdown],
+        ['최대 낙폭 %', result.maximumDrawdownPercent],
+        ['평균 손익배수', result.averageRMultiple],
+        ['수수료', result.totalFees],
+        ['슬리피지', result.totalSlippage],
+        ['펀딩비', result.totalFunding],
+        ['계산시각', result.calculatedAt],
+        ['실주문', false],
+      ],
+    },
+    {
+      name: '검증',
+      rows: [
+        ['구간', '거래', '승', '패', '승률', '순손익', '기대값', '손익비', '최대 낙폭', '최대 낙폭 %'],
+        ...result.validationPerformance.map((row) => [
+          validationLabel(row.name), row.trades, row.wins, row.losses, row.winRate, row.netPnl,
+          row.expectancy, row.profitFactor ?? '자료 없음', row.maximumDrawdown, row.maximumDrawdownPercent,
+        ]),
+      ],
+    },
+    {
+      name: '워크포워드',
+      rows: [
+        ['시작', '종료', '거래', '순손익', '최대 낙폭', '기대값'],
+        ...result.walkForward.map((row) => [
+          dateTime(row.startTime), dateTime(row.endTime), row.totalTrades, row.netPnl, row.maximumDrawdown, row.expectancy,
+        ]),
+      ],
+    },
+    {
+      name: '거래내역',
+      rows: [
+        ['진입', '청산', '방향', '진입가', '청산가', '수량', '비용 전 손익', '비용 후 손익', '수수료', '슬리피지', '펀딩', '손익배수', '종료이유', '시장상태'],
+        ...result.trades.map((trade) => [
+          dateTime(trade.entryTime), dateTime(trade.exitTime), sideLabel(trade.side), trade.entryPrice, trade.exitPrice,
+          trade.quantity, trade.grossPnl, trade.netPnl, trade.entryFee + trade.exitFee, trade.slippageCost,
+          trade.fundingCost, trade.rMultiple, exitReasonLabel(trade.exitReason), regimeLabel(trade.marketRegime),
+        ]),
+      ],
+    },
+    {
+      name: '월별결과',
+      rows: [
+        ['월', '거래', '순손익', '수익률 %'],
+        ...result.monthlyPerformance.map((row) => [row.month, row.trades, row.netPnl, row.returnPercent]),
+      ],
+    },
+    {
+      name: '피드백',
+      rows: [
+        ['구분', '내용'],
+        ...result.warnings.map((warning) => ['경고/가정', warning]),
+        ['안전', '과거 결과는 미래 수익을 보장하지 않음'],
+        ['안전', '실주문 없음'],
+      ],
+    },
+  ]);
+}
+
+function initialValuesFromUrl() {
+  if (typeof window === 'undefined') return DEFAULT_VALUES;
+  const params = new URLSearchParams(window.location.search);
+  const symbol = String(params.get('symbol') ?? params.get('ticker') ?? '').trim().toUpperCase();
+  const timeframe = String(params.get('timeframe') ?? '').trim();
+  return {
+    ...DEFAULT_VALUES,
+    ...(symbol ? { symbol } : {}),
+    ...(timeframe ? { timeframe } : {}),
+  };
+}
+
+function Field({ label, children }: FieldProps) {
+  return (
+    <label className="grid min-w-0 gap-1 text-xs font-bold text-muted-foreground">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Metric({ label, value, testId }: { label: string; value: string; testId?: string }) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/70 p-3">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-1 break-words text-base font-semibold" data-testid={testId}>{value}</div>
+    </div>
+  );
+}
+
+function CurveChart({ title, data, dataKey }: { title: string; data: Array<Record<string, number | string>>; dataKey: string }) {
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4" data-testid={`${dataKey}-chart`}>
+      <h3 className="mb-3 text-center text-sm font-black">{title}</h3>
+      {data.length === 0 ? (
+        <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">표시할 데이터가 없습니다.</div>
+      ) : (
+        <div className="h-56 w-full min-w-0">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="label" minTickGap={24} fontSize={10} />
+              <YAxis width={58} fontSize={10} domain={['auto', 'auto']} />
+              <Tooltip />
+              <Line type="monotone" dataKey={dataKey} stroke="currentColor" dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ResultTable({
+  title,
+  testId,
+  headers,
+  rows,
+  minimumWidth = 480,
+}: {
+  title: string;
+  testId: string;
+  headers: string[];
+  rows: Array<Array<string | number>>;
+  minimumWidth?: number;
+}) {
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4" data-testid={testId}>
+      <h3 className="mb-3 text-center text-sm font-black">{title}</h3>
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full text-left text-xs" style={{ minWidth: minimumWidth }}>
+          <thead className="bg-muted"><tr>{headers.map((header) => <th key={header} className="p-2">{header}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`${testId}-${rowIndex}`} className="border-t border-border">
+                {row.map((value, columnIndex) => <td key={`${testId}-${rowIndex}-${columnIndex}`} className="whitespace-nowrap p-2">{value}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+export function BacktestResearchPanel({ execute = runBacktest, initialResult = null, compact = false }: Props) {
+  const [values, setValues] = useState<BacktestFormValues>(initialValuesFromUrl);
+  const [result, setResult] = useState<BacktestResult | null>(initialResult);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  const update = <K extends keyof BacktestFormValues>(key: K, value: BacktestFormValues[K]) => {
+    setValues((current) => ({ ...current, [key]: value }));
+  };
+  const changeMarket = (market: BacktestMarket) => {
+    const preset = MARKET_DEFAULTS[market];
+    const marketStartDate = new Date(
+      Date.now() - (market === 'kr-stock' || market === 'us-stock' ? 365 : 30) * 24 * 60 * 60_000,
+    ).toISOString().slice(0, 10);
+    setValues((current) => ({
+      ...current,
+      market,
+      symbol: preset.symbol,
+      timeframe: preset.timeframe,
+      startDate: marketStartDate,
+      side: preset.side,
+      leverage: preset.leverage,
+      fundingRatePerInterval: market === 'crypto-futures' ? current.fundingRatePerInterval : 0,
+    }));
+    setResult(null);
+    setError('');
+  };
+  const updateStrategyParameter = (
+    section: keyof BacktestFormValues['strategyParameters'],
+    key: string,
+    value: number,
+  ) => {
+    setValues((current) => ({
+      ...current,
+      strategyParameters: {
+        ...current.strategyParameters,
+        [section]: {
+          ...current.strategyParameters[section],
+          [key]: value,
+        },
+      } as BacktestFormValues['strategyParameters'],
+    }));
+  };
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      setResult(await execute(values));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '백테스트를 실행하지 못했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const equityData = useMemo(() => result?.equityCurve.map((point) => ({
+    label: new Date(point.timestamp).toISOString().slice(5, 16).replace('T', ' '),
+    equity: Number(point.equity.toFixed(2)),
+  })) ?? [], [result]);
+
+  const drawdownData = useMemo(() => result?.drawdownCurve.map((point) => ({
+    label: new Date(point.timestamp).toISOString().slice(5, 16).replace('T', ' '),
+    drawdownPercent: Number(point.drawdownPercent.toFixed(2)),
+  })) ?? [], [result]);
+
+  return (
+    <main className="h-full overflow-y-auto overscroll-contain pb-28" data-testid="backtest-page">
+      <div data-testid="backtest-research-panel" className={`mx-auto w-full ${compact ? 'max-w-5xl' : 'max-w-6xl'} space-y-4 px-3 py-4 sm:px-5`}>
+        {!compact ? (
+          <CenteredPageHeader
+            title="백테스트"
+            eyebrow="4시장 연구"
+            className="rounded-2xl border border-card-border"
+          />
+        ) : null}
+
+        <p
+          className="text-center text-xs font-medium text-amber-700"
+          data-testid="backtest-historical-disclaimer"
+        >
+          과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.
+        </p>
+
+
+
+        <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
+          <h2 className="mb-4 text-center text-base font-black">기본 설정</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Field label="시장">
+              <select id="backtest-market" className={inputClass} value={values.market} onChange={(event) => changeMarket(event.target.value as BacktestMarket)}>
+                {(Object.entries(MARKET_DEFAULTS) as Array<[BacktestMarket, (typeof MARKET_DEFAULTS)[BacktestMarket]]>).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+              </select>
+            </Field>
+            <Field label="종목">
+              <input id="backtest-symbol" className={inputClass} value={values.symbol} inputMode="text" onChange={(event) => update('symbol', event.target.value.toUpperCase())} />
+            </Field>
+            <Field label="시간봉">
+              <select id="backtest-timeframe" className={inputClass} value={values.timeframe} onChange={(event) => update('timeframe', event.target.value)}>
+                {['1m', '5m', '15m', '30m', '1H', '4H', '1D'].map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </Field>
+            <Field label="시작일">
+              <input id="backtest-start" className={inputClass} type="date" value={values.startDate} onChange={(event) => update('startDate', event.target.value)} />
+            </Field>
+            <Field label="종료일">
+              <input id="backtest-end" className={inputClass} type="date" value={values.endDate} onChange={(event) => update('endDate', event.target.value)} />
+            </Field>
+            <Field label="초기 자본">
+              <input className={inputClass} type="number" min="1" step="any" inputMode="decimal" value={values.initialCapital} onChange={(event) => update('initialCapital', Number(event.target.value))} />
+            </Field>
+            <Field label="전략">
+              <select id="backtest-strategy" className={inputClass} value={values.strategy} onChange={(event) => update('strategy', event.target.value as BacktestFormValues['strategy'])}>
+                <option value="trend_pullback">추세 눌림목</option>
+                <option value="breakout">고점·저점 돌파</option>
+                <option value="vwap_reclaim">당일 가중평균가 회복</option>
+              </select>
+            </Field>
+            <Field label="방향">
+              {values.market === 'crypto-futures' ? (
+                <select className={inputClass} value={values.side} onChange={(event) => update('side', event.target.value as BacktestFormValues['side'])}>
+                  <option value="both">롱·숏</option>
+                  <option value="long">롱</option>
+                  <option value="short">숏</option>
+                </select>
+              ) : <div className={`${inputClass} flex items-center`}>매수</div>}
+            </Field>
+          </div>
+
+          <button type="button" onClick={() => setAdvancedOpen(true)} className="mt-4 min-h-11 w-full rounded-xl border border-border bg-background px-4 text-sm font-black" data-testid="backtest-advanced-settings">
+            고급 설정
+          </button>
+          {advancedOpen ? (
+            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdvancedOpen(false); }}>
+              <section role="dialog" aria-modal="true" aria-label="백테스트 세부 설정" className="max-h-[88vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl border border-border bg-card p-4 shadow-2xl sm:rounded-3xl">
+                <div className="mb-4 flex items-center justify-between gap-3"><h3 className="text-base font-black">세부 설정</h3><button type="button" onClick={() => setAdvancedOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {values.strategy === 'trend_pullback' ? (
+                <>
+                  <Field label="빠른 이동평균">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.trendPullback.fastPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'fastPeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="느린 이동평균">
+                    <input className={inputClass} type="number" min="3" step="1" value={values.strategyParameters.trendPullback.slowPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'slowPeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="눌림 허용 %">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.trendPullback.pullbackTolerancePercent} onChange={(event) => updateStrategyParameter('trendPullback', 'pullbackTolerancePercent', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.trendPullback.volumePeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.trendPullback.volumeMultiplier} onChange={(event) => updateStrategyParameter('trendPullback', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              ) : values.strategy === 'breakout' ? (
+                <>
+                  <Field label="돌파 확인 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.breakout.lookback} onChange={(event) => updateStrategyParameter('breakout', 'lookback', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.breakout.volumePeriod} onChange={(event) => updateStrategyParameter('breakout', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.breakout.volumeMultiplier} onChange={(event) => updateStrategyParameter('breakout', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.vwapReclaim.volumePeriod} onChange={(event) => updateStrategyParameter('vwapReclaim', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.vwapReclaim.volumeMultiplier} onChange={(event) => updateStrategyParameter('vwapReclaim', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              )}
+              <Field label="위험률 %">
+                <input className={inputClass} type="number" min="0.01" max="1" step="any" inputMode="decimal" value={values.riskPercent} onChange={(event) => update('riskPercent', Number(event.target.value))} />
+              </Field>
+              {values.market === 'crypto-futures' ? <Field label="레버리지">
+                <input className={inputClass} type="number" min="1" max="7" step="1" inputMode="decimal" value={values.leverage} onChange={(event) => update('leverage', Number(event.target.value))} />
+              </Field> : null}
+              <Field label="진입 수수료">
+                <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.entryFeeRate} onChange={(event) => update('entryFeeRate', Number(event.target.value))} />
+              </Field>
+              <Field label="청산 수수료">
+                <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.exitFeeRate} onChange={(event) => update('exitFeeRate', Number(event.target.value))} />
+              </Field>
+              <Field label="슬리피지">
+                <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.slippageRate} onChange={(event) => update('slippageRate', Number(event.target.value))} />
+              </Field>
+              {values.market === 'crypto-futures' ? <>
+                <Field label="펀딩비">
+                  <input className={inputClass} type="number" step="any" inputMode="decimal" value={values.fundingRatePerInterval} onChange={(event) => update('fundingRatePerInterval', Number(event.target.value))} />
+                </Field>
+                <Field label="펀딩 간격">
+                  <input className={inputClass} type="number" min="1" step="any" inputMode="decimal" value={values.fundingIntervalHours} onChange={(event) => update('fundingIntervalHours', Number(event.target.value))} />
+                </Field>
+              </> : null}
+              <Field label="손절 방식">
+                <select className={inputClass} value={values.stopLossMode} onChange={(event) => update('stopLossMode', event.target.value as BacktestFormValues['stopLossMode'])}>
+                  <option value="percent">퍼센트</option>
+                  <option value="atr">평균 변동폭</option>
+                  <option value="swing">스윙</option>
+                </select>
+              </Field>
+              <Field label="손절 값">
+                <input className={inputClass} type="number" min="0.01" step="any" inputMode="decimal" value={values.stopLossValue} onChange={(event) => update('stopLossValue', Number(event.target.value))} />
+              </Field>
+              <Field label="목표 방식">
+                <select className={inputClass} value={values.takeProfitMode} onChange={(event) => update('takeProfitMode', event.target.value as BacktestFormValues['takeProfitMode'])}>
+                  <option value="risk_multiple">위험 배수</option>
+                  <option value="percent">퍼센트</option>
+                </select>
+              </Field>
+              <Field label="목표 값">
+                <input className={inputClass} type="number" min="0.01" step="any" inputMode="decimal" value={values.takeProfitValue} onChange={(event) => update('takeProfitValue', Number(event.target.value))} />
+              </Field>
+              <label className="col-span-2 flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-sm font-bold md:col-span-1">
+                <input type="checkbox" checked={values.trailingEnabled} onChange={(event) => update('trailingEnabled', event.target.checked)} />
+                트레일링 스톱
+              </label>
+              {values.trailingEnabled ? (
+                <>
+                  <Field label="추적손절 시작 배수">
+                    <input className={inputClass} type="number" min="0" step="any" value={values.trailingActivationR} onChange={(event) => update('trailingActivationR', Number(event.target.value))} />
+                  </Field>
+                  <Field label="추적손절 거리 배수">
+                    <input className={inputClass} type="number" min="0" step="any" value={values.trailingDistanceR} onChange={(event) => update('trailingDistanceR', Number(event.target.value))} />
+                  </Field>
+                </>
+              ) : null}
+                </div>
+                <button type="button" onClick={() => setAdvancedOpen(false)} className="mt-4 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground">적용</button>
+              </section>
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={loading}
+            aria-busy={loading}
+            className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground disabled:opacity-60"
+            data-testid="run-backtest"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+            {loading ? '백테스트 계산 중' : '백테스트 실행'}
+          </button>
+        </form>
+
+        {error ? (
+          <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm" role="alert" data-testid="backtest-error">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />{error}
+          </div>
+        ) : null}
+
+        {result ? (
+          <div className="space-y-4" data-testid="backtest-results">
+            <div className="flex justify-end">
+              <button type="button" onClick={() => exportBacktestWorkbook(values, result)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-card px-3 text-xs font-black hover:border-primary/50" data-testid="backtest-excel-export">
+                <Download className="h-4 w-4" /> 결과 엑셀 다운로드
+              </button>
+            </div>
+            <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-paper-handoff">
+              <h3 className="text-sm font-black">모의매매 후보</h3>
+
+              {result.paperHandoffs?.length ? <div className="mt-3 flex flex-wrap gap-2">
+                {result.paperHandoffs.map((handoff) => <Link key={handoff.side} href={backtestPaperHandoffPath(handoff, result.paperHandoffRunId)} className="inline-flex min-h-11 max-w-full items-center break-words rounded-xl border border-border px-3 text-xs font-bold">
+                  {handoff.symbol} · {handoff.side === 'BUY' ? '매수' : handoff.side === 'LONG' ? '롱' : '숏'} · {handoff.candidateId ? '후보 보기' : '자료 없음'}
+                </Link>)}
+              </div> : <p className="mt-2 text-xs font-bold">모의매매 후보 자료가 없습니다.</p>}
+            </section>
+            <section className="rounded-2xl border border-border bg-card p-4">
+              <div className="mb-3 flex items-center justify-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                <h2 className="text-sm font-black">비용 차감 후 성과</h2>
+              </div>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <Metric label="총 수익률" value={percent(result.totalReturnPercent)} testId="total-return" />
+                <Metric label="최종 자산" value={money(result.finalCapital, result.market)} />
+                <Metric label="거래 수" value={`${result.totalTrades}회`} testId="total-trades" />
+                <Metric label="승률" value={percent(result.winRate)} />
+                <Metric label="기대값" value={money(result.expectancy, result.market)} />
+                <Metric label="손익비" value={ratio(result.profitFactor)} />
+                <Metric label="최대 낙폭" value={`${money(result.maximumDrawdown, result.market)} · ${percent(result.maximumDrawdownPercent)}`} />
+                <Metric label="평균 손익배수" value={ratio(result.averageRMultiple)} />
+                <Metric label="샤프지수" value={ratio(result.sharpeRatio)} />
+                <Metric label="소르티노지수" value={ratio(result.sortinoRatio)} />
+                <Metric label="칼마지수" value={ratio(result.calmarRatio)} />
+                <Metric label="비용 합계" value={money(result.totalFees + result.totalSlippage + result.totalFunding, result.market)} />
+              </div>
+            </section>
+
+            <CurveChart title="실현 자산 곡선" data={equityData} dataKey="equity" />
+            <CurveChart title="낙폭 곡선 (%)" data={drawdownData} dataKey="drawdownPercent" />
+
+            <section className="rounded-2xl border border-border bg-card p-4" data-testid="validation-results">
+              <h3 className="mb-3 text-center text-sm font-black">학습·검증·테스트 구간</h3>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {result.validationPerformance.map((item) => (
+                  <div key={item.name} className="rounded-xl border border-border p-3 text-xs">
+                    <div className="font-semibold">{validationLabel(item.name)}</div>
+                    <div className="mt-2 grid gap-1 text-muted-foreground">
+                      <span>거래 {item.trades}회</span><span>순손익 {money(item.netPnl, result.market)}</span><span>낙폭 {percent(item.maximumDrawdownPercent)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-4" data-testid="direction-results">
+              <h3 className="mb-3 text-center text-sm font-black">롱·숏 성과</h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([['롱', result.longPerformance], ['숏', result.shortPerformance]] as const).map(([label, item]) => (
+                  <div key={label} className="rounded-xl border border-border p-3 text-xs">
+                    <div className="font-semibold">{label}</div>
+                    <div className="mt-2 grid grid-cols-2 gap-1 text-muted-foreground">
+                      <span>거래 {item.trades}회</span><span>승률 {percent(item.winRate)}</span><span>순손익 {money(item.netPnl, result.market)}</span><span>기대값 {money(item.expectancy, result.market)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <ResultTable
+              title="순차 검증"
+              testId="walk-forward-results"
+              headers={['구간', '거래', '순손익', '최대 낙폭', '기대값']}
+              minimumWidth={560}
+              rows={result.walkForward.map((item, index) => [
+                `${index + 1} · ${new Date(item.startTime).toISOString().slice(0, 10)}~${new Date(item.endTime).toISOString().slice(0, 10)}`,
+                item.totalTrades,
+                money(item.netPnl, result.market),
+                money(item.maximumDrawdown, result.market),
+                money(item.expectancy, result.market),
+              ])}
+            />
+
+            <section className="rounded-2xl border border-border bg-card p-4" data-testid="breakdown-results">
+              <h3 className="mb-3 text-center text-sm font-black">월별·시장 상태별 성과</h3>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full min-w-[360px] text-left text-xs">
+                    <thead className="bg-muted"><tr><th className="p-2">월</th><th className="p-2">거래</th><th className="p-2">순손익</th><th className="p-2">수익률</th></tr></thead>
+                    <tbody>{result.monthlyPerformance.map((item) => <tr key={item.month} className="border-t border-border"><td className="p-2">{item.month}</td><td className="p-2">{item.trades}</td><td className="p-2">{money(item.netPnl, result.market)}</td><td className="p-2">{percent(item.returnPercent)}</td></tr>)}</tbody>
+                  </table>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full min-w-[360px] text-left text-xs">
+                    <thead className="bg-muted"><tr><th className="p-2">시장 상태</th><th className="p-2">거래</th><th className="p-2">순손익</th><th className="p-2">승률</th></tr></thead>
+                    <tbody>{result.regimePerformance.map((item) => <tr key={item.regime} className="border-t border-border"><td className="p-2">{regimeLabel(item.regime)}</td><td className="p-2">{item.trades}</td><td className="p-2">{money(item.netPnl, result.market)}</td><td className="p-2">{percent(item.winRate)}</td></tr>)}</tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-4">
+              <h3 className="mb-3 text-center text-sm font-black">거래 목록</h3>
+              <div className="max-h-96 overflow-auto rounded-xl border border-border" data-testid="trade-list">
+                <table className="w-full min-w-[760px] text-left text-xs">
+                  <thead className="sticky top-0 bg-muted"><tr><th className="p-2">진입</th><th className="p-2">방향</th><th className="p-2">진입가</th><th className="p-2">청산가</th><th className="p-2">순손익</th><th className="p-2">손익배수</th><th className="p-2">종료</th><th className="p-2">시장 상태</th></tr></thead>
+                  <tbody>
+                    {result.trades.length ? result.trades.map((trade) => (
+                      <tr key={trade.id} className="border-t border-border">
+                        <td className="whitespace-nowrap p-2">{dateTime(trade.entryTime)}</td><td className="p-2">{sideLabel(trade.side)}</td><td className="p-2">{numberFormatter.format(trade.entryPrice)}</td><td className="p-2">{numberFormatter.format(trade.exitPrice)}</td><td className="p-2">{money(trade.netPnl, result.market)}</td><td className="p-2">{numberFormatter.format(trade.rMultiple)}</td><td className="p-2">{exitReasonLabel(trade.exitReason)}</td><td className="p-2">{regimeLabel(trade.marketRegime)}</td>
+                      </tr>
+                    )) : <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">조건에 맞는 거래가 없습니다.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4" role="status" data-testid="backtest-warnings">
+              <h3 className="mb-2 text-center text-sm font-black">가정과 경고</h3>
+              <ul className="grid gap-1 text-xs leading-5">{result.warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
+            </section>
+          </div>
+        ) : null}
+      </div>
+    </main>
+  );
+}

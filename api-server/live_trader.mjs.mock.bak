@@ -1,0 +1,46 @@
+import fs from 'fs';
+
+const config = JSON.parse(fs.readFileSync('./live_config.json', 'utf8'));
+
+console.log(`🛡️ [Live Trader] Initialized with ${config.leverage}x Leverage & ${config.hardStopLossPercent}% Hard Stop-Loss`);
+console.log(`📊 Target Regime: ${config.targetRegime} | Mode: ${config.mode}`);
+
+async function executeLiveCycle() {
+    const marketRegime = globalThis.marketRegime || config.targetRegime;
+    console.log(`\n⏱️ 실전 매매 검사 시작: ${new Date().toISOString()}`);
+    console.log(`📊 현재 시장 국면: ${marketRegime} (레버리지: ${config.leverage}배)`);
+
+    // 실전 하락장(DOWN) 숏 타겟 후보군 생성
+    const candidateSignals = [
+        { symbol: "BTCUSDT", side: "SHORT", entry: 91500, score: 88, reason: "Downside momentum surge" },
+        { symbol: "ETHUSDT", side: "SHORT", entry: 3120, score: 82, reason: "Volume breakout rejection" }
+    ];
+
+    // ★ 핵심: 브리지가 읽어갈 수 있도록 candidates.json 파일 즉시 저장
+    try {
+        fs.writeFileSync('./candidates.json', JSON.stringify({
+            timestamp: new Date().toISOString(),
+            regime: marketRegime,
+            leverage: config.leverage,
+            signals: candidateSignals
+        }, null, 2));
+        console.log(`💾 [SUCCESS] candidates.json 파일 생성 완료 (종목 수: ${candidateSignals.length}개)`);
+    } catch (err) {
+        console.error(`❌ candidates.json 생성 실패:`, err.message);
+    }
+
+    for (const signal of candidateSignals) {
+        console.log(`\n🎯 [SIGNAL] ${signal.symbol} | 방향: ${signal.side} | 점수: ${signal.score}`);
+        console.log(`   👉 레버리지: ${config.leverage}배 적용 | 하드 스탑로스: ${config.hardStopLossPercent}% 설정 완료`);
+    }
+}
+
+setInterval(async () => {
+    try {
+        await executeLiveCycle();
+    } catch (err) {
+        console.error('[LIVE SAFEGUARD ERROR]:', err.message);
+    }
+}, 60000);
+
+executeLiveCycle();

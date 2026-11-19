@@ -1,0 +1,56 @@
+import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+const clientPath = fileURLToPath(new URL('../src/lib/auth-fetch.ts', import.meta.url));
+const serverPath = fileURLToPath(new URL('../../api-server/src/routes/market-information.ts', import.meta.url));
+
+function numericConstant(source: string, name: string): number {
+  const match = source.match(new RegExp(`const ${name} = ([0-9_]+);`));
+  if (!match) throw new Error(`missing numeric constant ${name}`);
+  return Number(match[1].replaceAll('_', ''));
+}
+
+test('Market Information client timeout cannot preempt the server first-paint fallback', async () => {
+  const [clientSource, serverSource] = await Promise.all([
+    readFile(clientPath, 'utf8'),
+    readFile(serverPath, 'utf8'),
+  ]);
+
+  const clientTimeout = numericConstant(clientSource, 'MARKET_INFORMATION_REQUEST_TIMEOUT_MS');
+  const serverFirstPaintTimeout = numericConstant(serverSource, 'DEFAULT_STOCK_FIRST_PAINT_TIMEOUT_MS');
+
+  // Overseas cold-cache providers need 3-4s, so the server first paint waits 4.5s
+  // and must still answer (fallback or stale snapshot) at least 1.5s before the
+  // browser's 6s market-information transport timeout aborts the request.
+  expect(serverFirstPaintTimeout).toBe(4_500);
+  expect(clientTimeout).toBe(6_000);
+  expect(clientTimeout).toBeGreaterThan(serverFirstPaintTimeout);
+  expect(clientTimeout - serverFirstPaintTimeout).toBeGreaterThanOrEqual(1_500);
+  expect(clientSource).toContain("requestPath(input).startsWith('/api/market-information/')");
+  expect(clientSource).toContain("errorCode: 'MARKET_INFORMATION_TIMEOUT'");
+  expect(clientSource).not.toContain('MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500');
+
+  // With a confirmed snapshot in hand the server answers on the shorter snapshot
+  // budget; without one it keeps the full first-paint wait. Either budget stays
+  // inside the browser transport timeout above.
+  const snapshotFirstPaintTimeout = numericConstant(serverSource, 'DEFAULT_STOCK_SNAPSHOT_FIRST_PAINT_TIMEOUT_MS');
+  expect(snapshotFirstPaintTimeout).toBeGreaterThan(0);
+  expect(snapshotFirstPaintTimeout).toBeLessThanOrEqual(serverFirstPaintTimeout);
+  expect(serverSource).toContain('? stockSnapshotFirstPaintTimeoutMs');
+  expect(serverSource).toContain(': stockFirstPaintTimeoutMs;');
+  expect(serverSource).toContain('new MarketInformationFirstPaintTimeoutError(firstPaintBudgetMs)');
+  expect(serverSource).toContain('return res.status(200).json(stockFirstPaintFallback(room));');
+});
+
+test('transport timeout starts after finite session lookup instead of consuming its budget', async () => {
+  const clientSource = await readFile(clientPath, 'utf8');
+  const sessionLookup = clientSource.indexOf('getSupabase().auth.getSession()');
+  const transportTimer = clientSource.indexOf('window.setTimeout(');
+
+  expect(sessionLookup).toBeGreaterThanOrEqual(0);
+  expect(transportTimer).toBeGreaterThan(sessionLookup);
+  expect(clientSource).toContain('Authentication/session resolution has its own finite');
+  expect(clientSource).toContain('let timeout: number | null = null;');
+  expect(clientSource).toContain('if (controller.signal.aborted) throw abortReason(controller.signal);');
+});

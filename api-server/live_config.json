@@ -1,0 +1,12 @@
+{
+  "mode": "LIVE",
+  "leverage": 3,
+  "maxRiskPerTrade": 0.02,
+  "hardStopLossPercent": 1.5,
+  "atrMultiplier": 2.0,
+  "minTradingValue": 50000000,
+  "volumeSurgeThreshold": 180,
+  "targetRegime": "DOWN",
+  "allowLong": true,
+  "allowShort": true
+}
