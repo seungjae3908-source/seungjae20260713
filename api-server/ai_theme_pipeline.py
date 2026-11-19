@@ -32,6 +32,12 @@ def _trip_cooldown(reason: str):
         print(f"  [COOLDOWN] {reason} -> {int(_QUOTA_COOLDOWN_SEC)}s backoff")
     _QUOTA_COOLDOWN_UNTIL = max(_QUOTA_COOLDOWN_UNTIL, now + _QUOTA_COOLDOWN_SEC)
 
+def _wait_seconds(sec: float) -> bool:
+    deadline = _time.monotonic() + max(0.0, sec)
+    while not _STOP_PIPELINE and _time.monotonic() < deadline:
+        _time.sleep(min(0.25, deadline - _time.monotonic()))
+    return not _STOP_PIPELINE
+
 def _wait_cooldown() -> bool:
     while not _STOP_PIPELINE:
         rem = _QUOTA_COOLDOWN_UNTIL - _time.monotonic()
@@ -54,9 +60,14 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 def gemini_json(prompt):
+    if _STOP_PIPELINE or not _wait_cooldown():
+        return None
     if not GEMINI_API_KEY:
         return None
+    hit_quota_or_overload = False
     for m in [GEMINI_MODEL, "gemini-3.8-flash"]:
+        if _STOP_PIPELINE:
+            return None
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={GEMINI_API_KEY}"
             r = requests.post(
@@ -66,40 +77,74 @@ def gemini_json(prompt):
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
                 },
-                timeout=30,
+                timeout=20,
             )
             if r.status_code != 200:
-                print(f"  [Gemini {m} HTTP {r.status_code}] {r.text[:150]}")
+                snippet = (r.text or "")[:150]
+                print(f"  [Gemini {m} HTTP {r.status_code}] {snippet}")
+                if _should_cooldown(f"{r.status_code} {snippet}"):
+                    hit_quota_or_overload = True
                 continue
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             return json.loads(text)
         except Exception as e:
-            print(f"  [Gemini {m} err] {str(e)[:120]}")
+            err_msg = str(e)[:120]
+            print(f"  [Gemini {m} err] {err_msg}")
+            if _should_cooldown(err_msg):
+                hit_quota_or_overload = True
+    if hit_quota_or_overload:
+        _trip_cooldown("Gemini 429/503")
     return None
 
+
 def groq_json(prompt, retries=3):
+    if _STOP_PIPELINE or not _wait_cooldown():
+        return None
+    groq_rate_limited = False
     if API_KEY:
         for i in range(retries):
+            if _STOP_PIPELINE:
+                return None
             try:
                 r = requests.post(
                     API_URL,
                     headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-                    json={"model": MODEL, "messages": [{"role":"user","content":prompt}], "response_format": {"type":"json_object"}, "temperature": 0.2},
-                    timeout=30,
+                    json={
+                        "model": MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.2,
+                    },
+                    timeout=20,
                 )
                 if r.status_code == 429:
                     print("  [429] Groq 속도 제한 -> 즉시 Gemini 폴백")
+                    groq_rate_limited = True
                     break
                 if r.status_code != 200:
-                    print(f"  [HTTP {r.status_code}] {r.text[:150]}")
+                    snippet = (r.text or "")[:150]
+                    print(f"  [HTTP {r.status_code}] {snippet}")
+                    if _should_cooldown(f"{r.status_code} {snippet}"):
+                        groq_rate_limited = True
                     break
-                return json.loads(r.json()['choices'][0]['message']['content'])
+                return json.loads(r.json()["choices"][0]["message"]["content"])
             except Exception as e:
-                print(f"  [err] {str(e)[:120]}")
-                if i < retries-1:
-                    time.sleep(3)
+                err_msg = str(e)[:120]
+                print(f"  [err] {err_msg}")
+                if _should_cooldown(err_msg):
+                    groq_rate_limited = True
+                    break
+                if i < retries - 1:
+                    if not _wait_seconds(3):
+                        return None
+    if _STOP_PIPELINE:
+        return None
     print("  [Groq 소진/실패] Gemini 폴백 시도")
-    return gemini_json(prompt)
+    res = gemini_json(prompt)
+    if res is None and groq_rate_limited:
+        _trip_cooldown("Groq+Gemini quota/overload")
+    return res
+
 
 def fetch_news(keyword, lang='ko', retries=2):
     hl, gl = ('ko','KR') if lang=='ko' else ('en-US','US')
