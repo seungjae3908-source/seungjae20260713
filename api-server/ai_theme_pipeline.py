@@ -1,3 +1,45 @@
+# --- 429/503 QUOTA COOLDOWN GUARD ---
+import os as _os
+import signal as _signal
+import time as _time
+
+_STOP_PIPELINE = False
+_QUOTA_COOLDOWN_UNTIL = 0.0
+_QUOTA_COOLDOWN_SEC = float(_os.getenv("AI_THEME_429_COOLDOWN_SEC", "180"))
+
+def _on_stop(signum, frame):
+    global _STOP_PIPELINE
+    _STOP_PIPELINE = True
+
+_signal.signal(_signal.SIGTERM, _on_stop)
+_signal.signal(_signal.SIGINT, _on_stop)
+
+def _should_cooldown(err_text: str) -> bool:
+    t = (err_text or "").lower()
+    return any(k in t for k in (
+        "429",
+        "exceeded your current quota",
+        "resource_exhausted",
+        "too many requests",
+        "503",
+        "high demand",
+    ))
+
+def _trip_cooldown(reason: str):
+    global _QUOTA_COOLDOWN_UNTIL
+    now = _time.monotonic()
+    if now >= _QUOTA_COOLDOWN_UNTIL:
+        print(f"  [COOLDOWN] {reason} -> {int(_QUOTA_COOLDOWN_SEC)}s backoff")
+    _QUOTA_COOLDOWN_UNTIL = max(_QUOTA_COOLDOWN_UNTIL, now + _QUOTA_COOLDOWN_SEC)
+
+def _wait_cooldown() -> bool:
+    while not _STOP_PIPELINE:
+        rem = _QUOTA_COOLDOWN_UNTIL - _time.monotonic()
+        if rem <= 0:
+            return True
+        _time.sleep(min(0.5, rem))
+    return False
+
 import os, json, time, feedparser, requests
 from datetime import datetime
 from urllib.parse import quote
