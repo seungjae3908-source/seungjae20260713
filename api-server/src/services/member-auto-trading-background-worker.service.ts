@@ -23,6 +23,7 @@ import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
+import { tradingHistoryComplete } from './trade-history-completeness.service';
 import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
@@ -188,7 +189,7 @@ export function automaticPaperWalletBootstrapReadiness(
   }
   // The repository paginates at these hard bounds, so a full page does not
   // prove that older automatic Paper positions never existed.
-  if (orders.length >= 500 || plans.length >= 200) blockers.push('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
+  if (!tradingHistoryComplete(orders, 500) || !tradingHistoryComplete(plans, 200)) blockers.push('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
   return {
     safeToInitialize: blockers.length === 0,
     automaticPaperPlanCount: automaticPaperPlans.length,
@@ -287,7 +288,7 @@ export function automaticPaperLegacyEpochIsolationReadiness(
     order.state === 'FILLED' && !(Number(order.filledQuantity) > 0)).length;
   if (!Number.isFinite(nowMs)) fail('AUTOMATIC_PAPER_EPOCH_CLOCK_INVALID');
   if (!plans.length || !orders.length) fail('AUTOMATIC_PAPER_EPOCH_HISTORY_REQUIRED');
-  if (plans.length >= 200 || orders.length >= 500 || paperRecords.length >= 500) {
+  if (!tradingHistoryComplete(plans, 200) || !tradingHistoryComplete(orders, 500) || paperRecords.length >= 500) {
     fail('AUTOMATIC_PAPER_EPOCH_HISTORY_TRUNCATED');
   }
   if (plans.length !== orders.length || new Set(plans.map((plan) => plan.id)).size !== plans.length) {
@@ -1125,7 +1126,7 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
   if (!positive(equityKrw) || !Number.isFinite(nowMs)) {
     add('BACKGROUND_PAPER_EQUITY_UNVERIFIED');
   }
-  if (orders.length >= 500 || plans.length >= 200) {
+  if (!tradingHistoryComplete(orders, 500) || !tradingHistoryComplete(plans, 200)) {
     add('BACKGROUND_PAPER_CANONICAL_HISTORY_TRUNCATED');
   }
   if (epochValid && orders.some((order) => {
@@ -1317,7 +1318,7 @@ async function memberRuntimeState(
     const orphan = orders.some((order) => !byId.has(order.planId)
       && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
         || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0));
-    const truncated = orders.length >= 500 || plans.length >= 200;
+    const truncated = !tradingHistoryComplete(orders, 500) || !tradingHistoryComplete(plans, 200);
     fourMarketRisk = {} as NonNullable<MemberRuntimeState['fourMarketRisk']>;
     fourMarketCapital = {} as NonNullable<MemberRuntimeState['fourMarketCapital']>;
     const capitalReadback = adminMember
@@ -2332,7 +2333,7 @@ export class MemberAutoTradingBackgroundWorker {
             Math.max(nowMs, Date.now()),
           );
           if ((requiredOrderId && !orderIds.includes(requiredOrderId))
-            || runtime.orders.length >= 500 || runtime.plans.length >= 200
+            || !tradingHistoryComplete(runtime.orders, 500) || !tradingHistoryComplete(runtime.plans, 200)
             || orderIds.length > 100) {
             // Never silently truncate either Live replay or new Paper outbox.
             result.executionSyncMissingReferences += 1;
