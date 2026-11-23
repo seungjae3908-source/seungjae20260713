@@ -4,7 +4,8 @@ import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
-import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import { notifyAutomaticTradingHalt, tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import { fetchPublicMarketJson } from './public-market-http';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import {
   assertCancellationAllowed,
@@ -158,8 +159,113 @@ function serverLiveEnabledForPlan(input: TradingPlanInput, policy: TradingPolicy
   return liveExecutionEnabled(input.exchange);
 }
 
+/** Settlement currency of a live order, derived from the plan the same way the live budget ledger does. */
+export function liveSettlementCurrency(plan: Pick<TradingPlan, 'exchange' | 'market' | 'stockExchange'>): 'KRW' | 'USDT' | 'USD' {
+  if (plan.exchange === 'bitget') return 'USDT';
+  if (plan.exchange === 'upbit') return 'KRW';
+  const usMarket = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.market).toUpperCase())
+    || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? '').toUpperCase());
+  return usMarket ? 'USD' : 'KRW';
+}
+
+export type LiveFillFxWitnessInput = Readonly<{ currency: 'USDT' | 'USD'; fillAtMs: number }>;
+export type LiveFillFxWitnessQuote = Readonly<{ krwPerQuoteCurrency: number; source: string; observedAt: string }>;
+export type LiveFillFxWitness = (input: LiveFillFxWitnessInput) => Promise<LiveFillFxWitnessQuote | null>;
+
+/** The live budget ledger (automatic-live-budget.service) accepts a quote observed no later than
+ * 5 s after the fill and no older than this window before it. */
+export const LIVE_FILL_FX_WINDOW_MS: Readonly<Record<'USDT' | 'USD', number>> = Object.freeze({
+  USDT: 10 * 60_000,
+  USD: 24 * 60 * 60_000,
+});
+export const LIVE_FILL_FX_SOURCE: Readonly<Record<'USDT' | 'USD', string>> = Object.freeze({
+  USDT: 'UPBIT:KRW-USDT',
+  USD: 'YAHOO:USDKRW=X',
+});
+
+export function liveFillFxQuoteAcceptable(
+  quote: LiveFillFxWitnessQuote | null | undefined, currency: 'USDT' | 'USD', fillAtMs: number,
+): quote is LiveFillFxWitnessQuote {
+  if (!quote || typeof quote !== 'object') return false;
+  const at = Date.parse(String(quote.observedAt ?? ''));
+  return typeof quote.krwPerQuoteCurrency === 'number' && Number.isFinite(quote.krwPerQuoteCurrency)
+    && quote.krwPerQuoteCurrency > 0 && quote.source === LIVE_FILL_FX_SOURCE[currency]
+    && Number.isFinite(at) && Number.isFinite(fillAtMs)
+    && at <= fillAtMs + 5_000 && fillAtMs - at <= LIVE_FILL_FX_WINDOW_MS[currency];
+}
+
+/**
+ * Server-owned KRW conversion witness for an actual live fill, read AFTER the
+ * exchange reported the fill. A live fill is reconciled some time after it
+ * happened, so a "current" ticker could not satisfy the ledger's fill-time
+ * window; the witness is therefore the public Upbit KRW-USDT 1-minute candle
+ * that opened at or before the fill (its opening price, no look-ahead). USD
+ * fills have no fill-time public witness here yet and stay unverified, which
+ * leaves the live budget fail-closed exactly as before.
+ */
+export async function resolveLiveFillFxWitness(
+  input: LiveFillFxWitnessInput,
+  loaders: { publicJson?: typeof fetchPublicMarketJson } = {},
+): Promise<LiveFillFxWitnessQuote | null> {
+  if (input.currency !== 'USDT' || !Number.isFinite(input.fillAtMs) || input.fillAtMs <= 0) return null;
+  const to = new Date(Math.floor(input.fillAtMs / 1000) * 1000 + 1_000).toISOString();
+  const payload = await (loaders.publicJson ?? fetchPublicMarketJson)(
+    `https://api.upbit.com/v1/candles/minutes/1?market=KRW-USDT&count=1&to=${encodeURIComponent(to)}`,
+    { provider: 'UPBIT_USDT_KRW', timeoutMs: 4_000 },
+  );
+  const row = Array.isArray(payload) && payload[0] && typeof payload[0] === 'object'
+    ? payload[0] as Record<string, unknown> : null;
+  if (!row) return null;
+  const rawTime = String(row.candle_date_time_utc ?? '').trim();
+  const openedAtMs = Date.parse(/[zZ]$|[+-]\d{2}:\d{2}$/u.test(rawTime) ? rawTime : `${rawTime}Z`);
+  const price = Number(row.opening_price);
+  const quote = { krwPerQuoteCurrency: price, source: LIVE_FILL_FX_SOURCE.USDT,
+    observedAt: Number.isFinite(openedAtMs) ? new Date(openedAtMs).toISOString() : '' };
+  return liveFillFxQuoteAcceptable(quote, 'USDT', input.fillAtMs) ? Object.freeze(quote) : null;
+}
+
+let liveFillFxWitnessOverride: LiveFillFxWitness | null = null;
+/** Tests swap the public-candle witness; `null` restores the real one. */
+export function setLiveFillFxWitnessForTests(witness: LiveFillFxWitness | null) {
+  liveFillFxWitnessOverride = witness;
+}
+
 export class TradeAutomationService {
-  constructor(private repository: TradingRepository) {}
+  constructor(
+    private repository: TradingRepository,
+    private readonly liveFillFxWitness: LiveFillFxWitness | null = null,
+  ) {}
+
+  /**
+   * Attach a server-read KRW conversion to a LIVE fill that the exchange
+   * reconciliation reported. Without it the automatic live budget treats the
+   * first USDT/USD fill as AUTOMATIC_LIVE_BUDGET_FILL_FX_UNVERIFIED and blocks
+   * every later entry. A failed or out-of-window read leaves the field null,
+   * so the ledger stays fail-closed; nothing here can loosen a block.
+   */
+  private async attachLiveFillFxWitness(order: TradingOrder, next: TradingOrder) {
+    if (!Number.isFinite(next.filledQuantity) || next.filledQuantity <= 0) return;
+    const plan = await this.repository.getPlan(order.userId, order.planId);
+    if (plan?.accountMode !== 'live' || plan.exchange !== order.exchange) return;
+    const currency = liveSettlementCurrency(plan);
+    if (currency === 'KRW') return;
+    const fillAtMs = Date.parse(next.exchangeUpdatedAt ?? next.updatedAt);
+    if (!Number.isFinite(fillAtMs)) return;
+    if (liveFillFxQuoteAcceptable(next.settlementFxEvidence, currency, fillAtMs)) return;
+    try {
+      const witness = liveFillFxWitnessOverride ?? this.liveFillFxWitness ?? resolveLiveFillFxWitness;
+      const quote = await witness({ currency, fillAtMs });
+      if (liveFillFxQuoteAcceptable(quote, currency, fillAtMs)) {
+        next.settlementFxEvidence = Object.freeze({
+          krwPerQuoteCurrency: quote.krwPerQuoteCurrency,
+          source: LIVE_FILL_FX_SOURCE[currency],
+          observedAt: new Date(Date.parse(quote.observedAt)).toISOString(),
+        });
+      }
+    } catch {
+      // A public-quote outage leaves the fill's KRW conversion unverified (fail-closed).
+    }
+  }
 
   private async emergencyStopActive(userId: string, policy: TradingPolicy) {
     return policy.emergencyStopped
@@ -501,6 +607,9 @@ export class TradeAutomationService {
         }
       }
     }
+    if ((toState === 'FILLED' || toState === 'PARTIALLY_FILLED') && reason === 'EXCHANGE_ORDER_RECONCILED') {
+      await this.attachLiveFillFxWitness(order, next);
+    }
     // A state of FILLED is not evidence of an execution. Never persist the
     // terminal state with zero/missing quantity or price in any market.
     // A provider acknowledgement alone cannot reconstruct an actual fill.
@@ -562,6 +671,11 @@ export class TradeAutomationService {
         // Kill scope follows the order's plan; an unreadable plan counts as a LIVE entry.
         plan: await this.killSwitchPlan(order.userId, order.planId),
       });
+    }
+    if (order.state === 'RECOVERY_REQUIRED' && metadata.manualReviewRequired === true) {
+      // Reconciliation gave up (retries exhausted or a terminal mismatch): a human must look.
+      await notifyAutomaticTradingHalt({ event: 'ORDER_MANUAL_REVIEW', userId: order.userId,
+        reasons: escalationCodes, details: `주문 ${order.id} (${order.exchange}) 상태: ${order.state}` });
     }
     return order;
   }

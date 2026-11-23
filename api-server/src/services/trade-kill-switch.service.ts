@@ -2,6 +2,82 @@ import type { TradingRepository } from './trade-automation.repository';
 import type { TradingPlanInput } from './trade-automation.types';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { autoStopRunForLossLimit, killSwitchStopMemberEntries } from './trade-automation-run-control.service';
+import { sendTelegramAlert, type TelegramAlertInput, type TelegramAlertResult } from './telegram-notification.service';
+
+export type AutomaticTradingHaltEvent =
+  | 'KILL_SWITCH'
+  | 'MEMBER_EMERGENCY_STOP'
+  | 'GLOBAL_EMERGENCY_STOP'
+  | 'MEMBER_RESUME'
+  | 'GLOBAL_RESUME'
+  | 'ORDER_MANUAL_REVIEW';
+
+type AutomaticTradingAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
+let automaticTradingAlertSender: AutomaticTradingAlertSender = sendTelegramAlert;
+
+/** Tests swap the Telegram transport; `null` restores the real sender. */
+export function setAutomaticTradingAlertSenderForTests(sender: AutomaticTradingAlertSender | null) {
+  automaticTradingAlertSender = sender ?? sendTelegramAlert;
+}
+
+/** Owner auto-trading room first; the generic TELEGRAM_CHAT_ID is the fallback inside the sender. */
+export function automaticTradingAlertChatId(): string | undefined {
+  return process.env.TELEGRAM_AUTO_TRADING_CHAT_ID?.trim() || undefined;
+}
+
+const HALT_TITLES: Record<AutomaticTradingHaltEvent, string> = {
+  KILL_SWITCH: '자동매매 킬스위치 작동',
+  MEMBER_EMERGENCY_STOP: '회원 긴급정지',
+  GLOBAL_EMERGENCY_STOP: '전체 긴급정지',
+  MEMBER_RESUME: '회원 거래 재개',
+  GLOBAL_RESUME: '전체 신규주문 평가 재개',
+  ORDER_MANUAL_REVIEW: '주문 상태 불명 · 수동 확인 필요',
+};
+
+function maskedUserId(userId: string): string {
+  const value = String(userId ?? '').trim();
+  return value.length <= 8 ? value || '(unknown)' : `${value.slice(0, 8)}…`;
+}
+
+/**
+ * Owner Telegram notice for every automatic-trading stop, resume and
+ * unknown-order escalation. Strictly best-effort: the stop or resume is
+ * already persisted before this runs, a delivery failure never throws, and
+ * the alert can never undo or weaken the block that triggered it.
+ */
+export async function notifyAutomaticTradingHalt(input: {
+  event: AutomaticTradingHaltEvent;
+  userId: string;
+  scope?: KillSwitchScope | null;
+  reasons?: readonly string[];
+  details?: string;
+  now?: Date;
+}): Promise<TelegramAlertResult | null> {
+  try {
+    const reasons = [...new Set((input.reasons ?? []).map((code) => String(code).trim()).filter(Boolean))];
+    const at = (input.now ?? new Date()).toISOString();
+    const lines = [
+      `범위: ${input.scope ?? (input.event.startsWith('GLOBAL') ? 'GLOBAL' : 'MEMBER')}`,
+      `회원: ${maskedUserId(input.userId)}`,
+      reasons.length > 0 ? `사유: ${reasons.join(', ')}` : null,
+      input.details?.trim() ? input.details.trim() : null,
+      `시각: ${at}`,
+    ].filter((line): line is string => line != null);
+    return await automaticTradingAlertSender({
+      type: 'system_critical',
+      title: HALT_TITLES[input.event],
+      details: lines.join('\n'),
+      timestamp: at,
+      dedupeKey: `auto-trading-halt:${input.event}:${input.scope ?? ''}:${input.userId}:${reasons.join('|')}`,
+      cooldownMs: 60_000,
+      duplicateWindowMs: 60_000,
+      destinationChatId: automaticTradingAlertChatId(),
+    });
+  } catch {
+    // Alerting is observability only; it must never affect the trading block.
+    return null;
+  }
+}
 
 const KILL_SWITCH_CODES = new Set([
   'MARKET_DATA_TIMESTAMP_UNAVAILABLE',
@@ -80,6 +156,8 @@ export async function tripKillSwitchForRiskFailure(input: {
       return { tripped: false, reasons: [] as string[], scope: null };
     }
     await input.repository.setGlobalEmergencyStop(true, input.userId);
+    await notifyAutomaticTradingHalt({ event: 'KILL_SWITCH', userId: input.userId, scope: 'GLOBAL', reasons: systemReasons,
+      details: '보호 청산 주문 평가 중 공용 거래소/주문상태 장애: 전체 신규 진입 정지(청산은 계속)' });
     return { tripped: true, reasons: systemReasons, scope: 'GLOBAL' as const };
   }
   // A daily loss limit also auto-stops this member's 작동 state (recorded with
@@ -95,5 +173,7 @@ export async function tripKillSwitchForRiskFailure(input: {
     // protective exits of owned positions keep running.
     await killSwitchStopMemberEntries(input.repository, input.userId, reasons[0]);
   }
+  await notifyAutomaticTradingHalt({ event: 'KILL_SWITCH', userId: input.userId, scope, reasons,
+    details: scope === 'GLOBAL' ? '전체 신규 진입 정지(보호 청산은 계속)' : '해당 회원 신규 진입 정지(확인 후 재개 필요)' });
   return { tripped: true, reasons, scope };
 }
