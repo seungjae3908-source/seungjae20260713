@@ -259,8 +259,14 @@ if [[ "$validated" != true ]]; then
 fi
 
 paper_policy="$RESEARCH_ROOT/releases/$main_sha/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v2.json"
+# Never cut over while a long one-shot (fast-historical, long-history, ...) is still
+# running: activate-server.sh stops running one-shots, which would kill hours of work.
+# Defer to the next hourly run instead (not a failure, nothing is recorded).
+if ! wait_for_idle_oneshots; then
+  write_status DEFERRED_ONESHOT_RUNNING "$main_sha" "$current_sha" "a research one-shot is still running; cutover deferred to the next run"
+  exit 0
+fi
 write_status CUTTING_OVER "$main_sha" "$current_sha" "research release cutover"
-wait_for_idle_oneshots || true
 if ! env TARGET_SHA="$main_sha" REPOSITORY_URL="$REPOSITORY_URL" PAPER_FORWARD_RISK_POLICY_DECISION_PATH="$paper_policy" \
     bash "$work/activate-server.sh" preflight > "$work/preflight.log" 2>&1 \
   || ! env TARGET_SHA="$main_sha" REPOSITORY_URL="$REPOSITORY_URL" PAPER_FORWARD_RISK_POLICY_DECISION_PATH="$paper_policy" \

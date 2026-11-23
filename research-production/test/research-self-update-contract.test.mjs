@@ -81,3 +81,10 @@ test('validation reason falls back to the first error code when no JSON reason e
     'AI_RESEARCH_CUTOVER_BUSY:research-production-ai-review.service:activating');
   assert.equal(run('nothing useful\n'), '');
 });
+
+test('cutover is deferred, never forced, while a research one-shot is still running', () => {
+  assert.doesNotMatch(script, /wait_for_idle_oneshots \|\| true/);
+  assert.match(script, /DEFERRED_ONESHOT_RUNNING/);
+  const defer = script.indexOf('DEFERRED_ONESHOT_RUNNING');
+  assert.ok(defer > 0 && defer < script.indexOf('write_status CUTTING_OVER'));
+});

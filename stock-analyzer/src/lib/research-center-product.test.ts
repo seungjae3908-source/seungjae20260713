@@ -149,7 +149,7 @@ test('profitability false, Champion NONE, inactive Paper, and empty Paper stay t
   assert.equal(cards.find((card) => card.key === 'paper')?.status, 'inactive');
   assert.equal(cards.find((card) => card.key === 'settlement')?.evidenceState, 'ZERO_MEASURED');
   assert.equal(cards.find((card) => card.key === 'profitability')?.status, 'waiting');
-  assert.equal(cards.find((card) => card.key === 'champion')?.metrics[0]?.value, '현재 검증된 Champion 없음');
+  assert.equal(cards.find((card) => card.key === 'champion')?.metrics[0]?.value, '현재 검증된 대표 전략 없음');
 });
 
 test('sanitized Strategy Health summary preserves explicit Champion evidence', () => {
@@ -173,7 +173,7 @@ test('sanitized Strategy Health summary preserves explicit Champion evidence', (
   });
   const cards = buildResearchPipeline(withoutRawChampion, promotion());
   assert.equal(cards.find((card) => card.key === 'champion')?.status, 'waiting');
-  assert.equal(cards.find((card) => card.key === 'champion')?.metrics[0]?.value, '현재 검증된 Champion 없음');
+  assert.equal(cards.find((card) => card.key === 'champion')?.metrics[0]?.value, '현재 검증된 대표 전략 없음');
 });
 
 test('genuine canonical Paper counts are displayed while unavailable PnL is not invented', () => {
