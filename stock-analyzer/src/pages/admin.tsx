@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { ArrowLeft, RefreshCw, Search, ShieldAlert } from 'lucide-react';
 import { useAuth, type MemberProfile } from '@/lib/auth';
 import { MEMBER_TIER_LABELS, type MemberTier } from '../../../packages/member-access/src/index.js';
+import {
+  adminMemberStoredTier, adminMemberActivityLabel,
+  adminMemberMutationStateVerified, adminMemberQueryKeys,
+} from '@/lib/member-admin-state';
 
 type AdminMember = MemberProfile & {
   created_at?: string;
@@ -41,6 +45,7 @@ async function adminFetch(path: string, token: string, init?: RequestInit) {
   if (method !== 'GET') {
     const response = await fetch(`/api/admin${path}`, {
       ...init,
+      cache: 'no-store',
       signal: undefined,
       headers,
     });
@@ -61,6 +66,7 @@ async function adminFetch(path: string, token: string, init?: RequestInit) {
   try {
     const response = await fetch(`/api/admin${path}`, {
       ...init,
+      cache: 'no-store',
       signal: controller.signal,
       headers,
     });
@@ -84,9 +90,18 @@ export default function AdminPage() {
   const [auditPage, setAuditPage] = useState(0);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const keys = adminMemberQueryKeys({
+    userId: auth.user?.id ?? null,
+    permissionVersion: auth.profile?.permissions_updated_at ?? null,
+    search, memberPage, auditPage,
+  });
+  // A temporary password or member action notice must not survive an admin
+  // account switch or an authorization epoch change within the same page.
+  useEffect(() => { setNotice(''); setError(''); }, [auth.user?.id, auth.profile?.permissions_updated_at]);
 
   const members = useQuery<PagedMembers>({
-    queryKey: ['admin-members', search, memberPage],
+    queryKey: keys.members,
+    gcTime: 0,
     queryFn: ({ signal }) => {
       const params = new URLSearchParams({ page: String(memberPage), pageSize: '100' });
       if (search.trim()) params.set('search', search.trim());
@@ -97,7 +112,8 @@ export default function AdminPage() {
     refetchOnWindowFocus: false,
   });
   const audits = useQuery<PagedAudits>({
-    queryKey: ['admin-audit', auditPage],
+    queryKey: keys.audits,
+    gcTime: 0,
     queryFn: ({ signal }) => adminFetch(`/audit-logs?page=${auditPage}&pageSize=100`, token, { signal }),
     enabled: auth.isAdmin && Boolean(token),
     retry: false,
@@ -117,9 +133,9 @@ export default function AdminPage() {
     setError(''); setNotice('');
     if (!memberMutationEnabled) { setError('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요.'); return; }
     if (reason.trim().length < 3) { setError('변경 사유를 3자 이상 입력하세요.'); return; }
-    const currentTier = member.membership_level ?? (member.role === 'admin' ? 'admin' : member.status === 'approved' ? 'regular' : 'pending');
+    const currentTier = adminMemberStoredTier(member);
     const expirySummary = membershipExpiresAt ? new Date(membershipExpiresAt).toLocaleString() : '기간 제한 없음';
-    const summary = `${member.display_name}\n${MEMBER_TIER_LABELS[currentTier]} → ${MEMBER_TIER_LABELS[membershipLevel]}\n활성 상태: ${member.is_active !== false ? '활성' : '비활성'} → ${isActive ? '활성' : '비활성'}\n만료: ${expirySummary}\n사유: ${reason.trim()}`;
+    const summary = `${member.display_name}\n${MEMBER_TIER_LABELS[currentTier]} → ${MEMBER_TIER_LABELS[membershipLevel]}\n활성 상태: ${adminMemberActivityLabel(member.is_active)} → ${isActive ? '활성' : '비활성'}\n만료: ${expirySummary}\n사유: ${reason.trim()}`;
     if (!window.confirm(`다음 회원 변경을 적용할까요?\n\n${summary}`)) return;
     try {
       await adminFetch(`/members/${member.id}`, token, {
@@ -185,7 +201,7 @@ export default function AdminPage() {
       {members.error && <div data-testid="admin-members-unavailable" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">{members.error.message}</p><button type="button" onClick={() => void members.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">회원 목록 다시 시도</button></div>}
       {members.data && (members.error || members.isFetching) && <p data-testid="admin-member-mutations-locked" className="rounded-2xl bg-warning/10 p-3 text-xs font-bold text-warning">최신 회원 상태 확인이 끝날 때까지 등급·활성·승인 변경을 잠급니다.</p>}
       <section className="space-y-3" aria-label="회원 목록">
-        {members.data?.members.map((member) => <MemberCard key={`${member.id}:${member.membership_level ?? member.status}:${member.is_active !== false}:${member.membership_expires_at ?? ''}`} member={member} mutationEnabled={memberMutationEnabled} onApprove={approve} onSubmit={submitChange} onPasswordReset={resetPassword} />)}
+        {members.data?.members.map((member) => <MemberCard key={`${member.id}:${member.status}:${member.membership_level ?? ''}:${member.role ?? ''}:${String(member.is_active)}:${member.permissions_updated_at ?? ''}:${member.membership_expires_at ?? ''}`} member={member} mutationEnabled={memberMutationEnabled} onApprove={approve} onSubmit={submitChange} onPasswordReset={resetPassword} />)}
       </section>
       {members.data && <div className="flex items-center justify-center gap-3">
         <button type="button" disabled={memberPage === 0 || members.isFetching} onClick={() => setMemberPage((page) => Math.max(0, page - 1))} className="rounded-xl border border-card-border px-4 py-2 text-sm font-bold disabled:opacity-40">이전</button>
@@ -224,9 +240,11 @@ function MemberCard({ member, mutationEnabled, onApprove, onSubmit, onPasswordRe
   onSubmit(member: AdminMember, tier: MemberTier, active: boolean, membershipExpiresAt: string | null, reason: string): Promise<void>;
   onPasswordReset(member: AdminMember, reason: string): Promise<void>;
 }) {
-  const initialTier = member.membership_level ?? (member.role === 'admin' ? 'admin' : member.status === 'approved' ? 'regular' : 'pending');
+  const initialTier = adminMemberStoredTier(member);
+  const stateVerified = adminMemberMutationStateVerified(member);
+  const allowMutations = mutationEnabled && stateVerified;
   const [tier, setTier] = useState<MemberTier>(initialTier);
-  const [active, setActive] = useState(member.is_active !== false);
+  const [active, setActive] = useState(member.is_active === true);
   const [expiresAt, setExpiresAt] = useState(() => {
     if (!member.membership_expires_at) return '';
     const date = new Date(member.membership_expires_at);
@@ -240,25 +258,26 @@ function MemberCard({ member, mutationEnabled, onApprove, onSubmit, onPasswordRe
     && (!member.approved_at || !member.approved_by);
 
   async function run(action: () => Promise<void>) {
-    if (!mutationEnabled) return;
+    if (!allowMutations) return;
     setBusy(true);
     try { await action(); setReason(''); } finally { setBusy(false); }
   }
 
   return <article className="rounded-3xl border border-card-border bg-card p-4">
     <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-black">{member.display_name}</p><p className="truncate text-xs text-muted-foreground">{member.login_name}</p><p className="mt-1 break-all text-[10px] text-muted-foreground">{member.id}</p></div><span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{MEMBER_TIER_LABELS[initialTier]}</span></div>
+    {!stateVerified && <p role="alert" data-testid="admin-member-state-unverified" className="mt-3 rounded-xl bg-warning/10 p-3 text-xs font-bold text-warning">회원 상태·활성·권한 갱신 시점이 일치하지 않습니다. 관리자 변경을 잠그고 DB 회원 상태를 확인하세요.</p>}
     {approvalProvenanceMissing && <p data-testid="member-approval-provenance-missing" className="mt-3 rounded-xl bg-warning/10 p-3 text-xs font-bold text-warning">과거 승인 정보 일부가 확인되지 않습니다. 임의로 승인자나 승인시각을 보정하지 않습니다.</p>}
-    <dl className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-secondary/40 p-3 text-xs"><div><dt className="text-muted-foreground">상태</dt><dd className="font-bold">{member.status}</dd></div><div><dt className="text-muted-foreground">활성</dt><dd className="font-bold">{member.is_active !== false ? '활성' : '비활성'}</dd></div><div><dt className="text-muted-foreground">가입</dt><dd>{member.created_at ? new Date(member.created_at).toLocaleDateString() : '미확인'}</dd></div><div><dt className="text-muted-foreground">권한 갱신</dt><dd>{member.permissions_updated_at ? new Date(member.permissions_updated_at).toLocaleString() : '미확인'}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">회원 만료</dt><dd>{member.membership_expires_at ? new Date(member.membership_expires_at).toLocaleString() : '기간 제한 없음'}</dd></div></dl>
+    <dl className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-secondary/40 p-3 text-xs"><div><dt className="text-muted-foreground">상태</dt><dd className="font-bold">{member.status}</dd></div><div><dt className="text-muted-foreground">활성</dt><dd className="font-bold">{adminMemberActivityLabel(member.is_active)}</dd></div><div><dt className="text-muted-foreground">가입</dt><dd>{member.created_at ? new Date(member.created_at).toLocaleDateString() : '미확인'}</dd></div><div><dt className="text-muted-foreground">권한 갱신</dt><dd>{member.permissions_updated_at ? new Date(member.permissions_updated_at).toLocaleString() : '미확인'}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">회원 만료</dt><dd>{member.membership_expires_at ? new Date(member.membership_expires_at).toLocaleString() : '기간 제한 없음'}</dd></div></dl>
     <div className="mt-4 grid grid-cols-2 gap-2">
-      <label className="text-xs font-bold">등급<select disabled={!mutationEnabled || busy} aria-label={`${member.display_name} 등급`} value={tier} onChange={(event) => { const next = event.target.value as MemberTier; setTier(next); if (next === 'pending') setActive(false); if (next === 'admin' || next === 'pending') setExpiresAt(''); }} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="pending">일반회원 · 승인대기</option><option value="associate">준회원</option><option value="regular">정회원</option><option value="admin">관리자</option></select></label>
-      <label className="text-xs font-bold">활성 상태<select disabled={!mutationEnabled || busy || tier === 'pending'} aria-label={`${member.display_name} 활성 상태`} value={tier === 'pending' ? 'inactive' : active ? 'active' : 'inactive'} onChange={(event) => setActive(event.target.value === 'active')} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="active">활성</option><option value="inactive">비활성</option></select></label>
+      <label className="text-xs font-bold">등급<select disabled={!allowMutations || busy} aria-label={`${member.display_name} 등급`} value={tier} onChange={(event) => { const next = event.target.value as MemberTier; setTier(next); if (next === 'pending') setActive(false); if (next === 'admin' || next === 'pending') setExpiresAt(''); }} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="pending">일반회원 · 승인대기</option><option value="associate">준회원</option><option value="regular">정회원</option><option value="admin">관리자</option></select></label>
+      <label className="text-xs font-bold">활성 상태<select disabled={!allowMutations || busy || tier === 'pending'} aria-label={`${member.display_name} 활성 상태`} value={tier === 'pending' ? 'inactive' : active ? 'active' : 'inactive'} onChange={(event) => setActive(event.target.value === 'active')} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="active">활성</option><option value="inactive">비활성</option></select></label>
     </div>
     <label className="mt-3 block text-xs font-bold">회원 만료일<input type="datetime-local" disabled={!mutationEnabled || busy || tier === 'pending' || tier === 'admin'} aria-label={`${member.display_name} 회원 만료일`} value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-3 text-sm disabled:opacity-50" /></label>
-    <label className="mt-3 block text-xs font-bold">변경 사유<textarea disabled={!mutationEnabled || busy} aria-label={`${member.display_name} 변경 사유`} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} className="mt-1 min-h-20 w-full resize-y rounded-xl border border-card-border bg-background p-3 text-sm disabled:opacity-50" placeholder="3자 이상 입력" /></label>
+    <label className="mt-3 block text-xs font-bold">변경 사유<textarea disabled={!allowMutations || busy} aria-label={`${member.display_name} 변경 사유`} value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} className="mt-1 min-h-20 w-full resize-y rounded-xl border border-card-border bg-background p-3 text-sm disabled:opacity-50" placeholder="3자 이상 입력" /></label>
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-      <button type="button" disabled={busy || !mutationEnabled || initialTier !== 'pending'} onClick={() => void run(() => onApprove(member, reason))} className="rounded-xl border border-primary px-3 py-3 text-sm font-extrabold text-primary disabled:opacity-40">준회원 승인</button>
-      <button type="button" disabled={busy || !mutationEnabled} onClick={() => void run(() => onSubmit(member, tier, tier === 'pending' ? false : active, expiresAt ? new Date(expiresAt).toISOString() : null, reason))} className="rounded-xl bg-primary px-3 py-3 text-sm font-extrabold text-primary-foreground disabled:opacity-40">변경 검토·적용</button>
-      <button type="button" disabled={busy || !mutationEnabled} onClick={() => void run(() => onPasswordReset(member, reason))} className="rounded-xl border border-card-border px-3 py-3 text-sm font-extrabold disabled:opacity-40">임시 비밀번호 발급</button>
+      <button type="button" disabled={busy || !allowMutations || member.status !== 'pending'} onClick={() => void run(() => onApprove(member, reason))} className="rounded-xl border border-primary px-3 py-3 text-sm font-extrabold text-primary disabled:opacity-40">준회원 승인</button>
+      <button type="button" disabled={busy || !allowMutations} onClick={() => void run(() => onSubmit(member, tier, tier === 'pending' ? false : active, expiresAt ? new Date(expiresAt).toISOString() : null, reason))} className="rounded-xl bg-primary px-3 py-3 text-sm font-extrabold text-primary-foreground disabled:opacity-40">변경 검토·적용</button>
+      <button type="button" disabled={busy || !allowMutations} onClick={() => void run(() => onPasswordReset(member, reason))} className="rounded-xl border border-card-border px-3 py-3 text-sm font-extrabold disabled:opacity-40">임시 비밀번호 발급</button>
     </div>
   </article>;
 }
