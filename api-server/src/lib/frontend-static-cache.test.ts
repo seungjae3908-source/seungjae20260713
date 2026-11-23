@@ -73,21 +73,32 @@ test('Production startup warmup prioritizes the app shell and critical lazy chun
   await writeFile(path.join(assetsDir, 'ai-chart-aaaa.js'), 'a'.repeat(17));
   await writeFile(path.join(assetsDir, 'backtests-bbbb.js'), 'b'.repeat(19));
   await writeFile(path.join(assetsDir, 'paper-trading-cccc.js'), 'c'.repeat(23));
+  await writeFile(path.join(assetsDir, 'lightweight-charts-ffff.js'), 'f'.repeat(37));
+  await writeFile(path.join(assetsDir, 'unified-analysis-chart-gggg.js'), 'g'.repeat(41));
+  await writeFile(path.join(assetsDir, 'unified-chart-data-hhhh.js'), 'h'.repeat(43));
   await writeFile(path.join(assetsDir, 'other-dddd.js'), 'd'.repeat(29));
   await writeFile(path.join(assetsDir, 'style-eeee.css'), 'e'.repeat(31));
   await writeFile(path.join(assetsDir, 'ignored.png'), 'not-warmable');
   context.after(() => rm(runtimeDist, { recursive: true, force: true }));
 
-  const plan = planFrontendStaticWarmup(runtimeDist, { maxFiles: 4, maxBytes: 1024 });
+  const plan = planFrontendStaticWarmup(runtimeDist, { maxFiles: 7, maxBytes: 1024 });
   assert.deepEqual(
     plan.files.map((filePath) => path.basename(filePath)),
-    ['index.html', 'ai-chart-aaaa.js', 'backtests-bbbb.js', 'paper-trading-cccc.js'],
+    [
+      'index.html',
+      'ai-chart-aaaa.js',
+      'backtests-bbbb.js',
+      'lightweight-charts-ffff.js',
+      'paper-trading-cccc.js',
+      'unified-analysis-chart-gggg.js',
+      'unified-chart-data-hhhh.js',
+    ],
   );
-  assert.equal(plan.criticalFiles, 3);
+  assert.equal(plan.criticalFiles, 6);
   assert.equal(plan.truncated, true);
 
-  const result = warmFrontendStaticFiles(runtimeDist, { maxFiles: 4, maxBytes: 1024 });
-  assert.equal(result.warmedFiles, 4);
+  const result = warmFrontendStaticFiles(runtimeDist, { maxFiles: 7, maxBytes: 1024 });
+  assert.equal(result.warmedFiles, 7);
   assert.equal(result.warmedBytes, result.plannedBytes);
   assert.equal(result.errors, 0);
 });
