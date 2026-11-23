@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly pump-follow paper ledger tick, 3 minutes after the 1h close (DORMANT until enabled by the owner)
+
+[Timer]
+OnCalendar=*-*-* *:03:00 UTC
+RandomizedDelaySec=30s
+Persistent=true
+Unit=research-production-pump-follow-paper.service
+
+[Install]
+WantedBy=timers.target
