@@ -5,6 +5,7 @@ import { runAutonomousResearchCycleV2, writeCoordinatorOutcomeV2 } from '../src/
 import { runCombinationSearchLaneV1 } from '../src/combination-search-lane-v1.mjs';
 import { buildCombinationSignalEvidenceV1, writeCombinationSignalEvidenceV1 } from '../src/combination-signal-evidence-v1.mjs';
 import { runExitStrategyComparisonV1 } from '../src/exit-strategy-comparison-v1.mjs';
+import { runAlpha158FactorScanV1 } from '../src/alpha158-factor-scan-v1.mjs';
 import { runExploratoryPaperLedgerV1 } from '../src/exploratory-paper-ledger-v1.mjs';
 import { runGridDcaResearchV1 } from '../src/grid-dca-research-v1.mjs';
 import { runOpsWatchdogV1 } from '../src/ops-watchdog-v1.mjs';
@@ -183,6 +184,17 @@ if (enabled('RESEARCH_RESULTS_DIGEST_ENABLED')) {
   try { digest = await runResearchResultsDigestV1({ stateRoot }); } catch (error) { digestError = safeError(error); }
 }
 
+// Weekly Alpha158-style stock factor scan on the cached daily data. Recomputes
+// only when code or data changed or after seven days; never changes the exit code.
+let factorScan = null;
+let factorScanError = null;
+try {
+  if (TOTAL_BUDGET_MS - (Date.now() - startedMs) >= 60_000) factorScan = await runAlpha158FactorScanV1({ stateRoot, researchCodeSha });
+  else factorScanError = 'SKIPPED_NO_BUDGET';
+} catch (error) {
+  factorScanError = safeError(error);
+}
+
 const failed = cycleError != null || reviewError != null;
 const unavailable = ['PARTIAL_AI_DISCOVERY_UNAVAILABLE', 'WAITING_FREE_AI_CONFIGURATION', 'DEFERRED_DURABLE_STATE_BUSY'].includes(cycle?.status)
   || ['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(review?.status);
@@ -212,6 +224,8 @@ const result = Object.freeze({
       trialsEvaluated: lane.trialsEvaluated ?? 0, survivors: lane.survivors ?? 0, watch: lane.watch ?? 0 })),
     aiProviderCalls: 0,
   },
+  factorScan: factorScan == null ? { error: factorScanError } : Object.fromEntries(Object.entries(factorScan.markets)
+    .map(([market, row]) => [market, { status: row.status, candidates: row.candidates ?? null, computedAt: row.computedAt ?? null }])),
   exitComparison: exitComparison == null ? { error: exitComparisonError } : {
     lanes: exitComparison.lanes.map((lane) => ({ laneId: lane.laneId, status: lane.status, computedAt: lane.computedAt ?? null })),
   },
