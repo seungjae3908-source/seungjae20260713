@@ -64,7 +64,7 @@ export function buildBacktestPaperHandoffBundle(
   const strategyIdentityInputs: Record<string, BacktestPaperCanonicalStrategyInput> = {};
   const handoffs = Object.freeze(sides.map((side) => {
     const strategyIdentityInput = Object.freeze({
-      strategyId, strategyFamily: 'BACKTEST_ENGINE', strategyVersion: 'phase5-backtest-v1',
+      strategyId, strategyFamily: 'BACKTEST_ENGINE', strategyVersion: 'phase5-backtest-v2',
       market: canonicalMarket, direction: side, timeframe: request.timeframe, parameterHash,
       researchCodeSha, formulaIdentity: { strategy: request.strategy, parameters: request.parameters },
       datasetId: `backtest-candles:${datasetDigest}`, datasetDigest,
@@ -76,7 +76,7 @@ export function buildBacktestPaperHandoffBundle(
     const datasetMatches = consumedCandles.length > 0 && consumedCandles.every((candle) => candle.symbol === request.symbol
       && candle.timeframe === request.timeframe && candle.market === request.market);
     const candidateId = datasetMatches && resolution.status === 'IDENTITY_COMPLETE' ? strategyCandidateId({
-      strategyFamily: 'BACKTEST_ENGINE', strategyId, strategyVersion: 'phase5-backtest-v1', parameterHash,
+      strategyFamily: 'BACKTEST_ENGINE', strategyId, strategyVersion: 'phase5-backtest-v2', parameterHash,
       market: canonicalMarket, assetClass, symbol: request.symbol, universe: request.symbol,
       timeframe: request.timeframe, strategyHorizon: null, direction: side, researchCodeSha,
       costPolicyVersion: costPolicyRef, riskPolicyVersion: riskPolicyRef,

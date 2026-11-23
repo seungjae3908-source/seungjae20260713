@@ -443,7 +443,7 @@ test('accepted Backtest reference is server-bound and injected into canonical Pa
   const strategyIdentityInput = Object.freeze({
     strategyId: candidate.strategyId,
     strategyFamily: 'BACKTEST_ENGINE',
-    strategyVersion: 'phase5-backtest-v1',
+    strategyVersion: 'phase5-backtest-v2',
     market: candidate.market,
     direction: candidate.side,
     timeframe: candidate.timeframe,

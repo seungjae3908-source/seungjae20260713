@@ -86,3 +86,16 @@ test('funding coverage flags a short funding history instead of silently under-c
   assert.equal(result.fundingCoverage.status, 'INCOMPLETE');
   assert.match(formatFourMarketReportKoV1(result), /펀딩비 자료가 기간의 .*만 있습니다/);
 });
+
+test('a failed funding fetch is never counted as covered, even when stale rows exist', async () => {
+  const { fundingCoverageV1 } = await import('../src/four-market-trend-backtest-v1.mjs');
+  const hour = 3_600_000;
+  const candles = Array.from({ length: 24 * 100 }, (_, i) => ({ timestamp: i * hour, open: 1, high: 1, low: 1, close: 1 }));
+  const rates = Array.from({ length: 300 }, (_, i) => ({ timestamp: i * 8 * hour, rate: 0.0001 }));
+  const ok = fundingCoverageV1([{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles, fundingRates: rates }]);
+  assert.equal(ok.status, 'COMPLETE');
+  const failed = fundingCoverageV1([{ market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', candles, fundingRates: rates, fundingError: 'HTTP_500' }]);
+  assert.equal(failed.status, 'INCOMPLETE');
+  assert.equal(failed.symbols[0].fundingError, 'HTTP_500');
+  assert.equal(failed.symbols[0].coveredFraction, 0);
+});

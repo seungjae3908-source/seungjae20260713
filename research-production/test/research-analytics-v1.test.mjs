@@ -101,3 +101,36 @@ test('experiment records are appended once per experiment', async (t) => {
   assert.equal(lines.length, 1);
   assert.equal(JSON.parse(lines[0]).datasetDigests.A, 'h1');
 });
+
+test('walk-forward selection does not use hindsight: a trial rejected on the full sample still competes at each window', () => {
+  const trial = (id, status, means) => ({ trialId: id, status, walkForward: { windows: means.map((meanReturn) => ({ trades: 30, meanReturn })) } });
+  // "late" looks best early but collapses later, so the full-sample verdict rejects it. At window 1..2
+  // a real process would still have picked it; excluding it would hide that failure.
+  const trials = { late: trial('late', 'REJECT', [0.05, 0.05, -0.08, -0.08]), steady: trial('steady', 'WATCH', [0.004, 0.004, 0.004, 0.004]) };
+  const result = rollingSelectionWalkForwardV1(trials, { minimumTrades: 20 });
+  assert.equal(result.folds[0].trialId, 'late');
+  assert.equal(result.folds[1].trialId, 'late');
+  assert.equal(result.folds[2].trialId, 'late');
+  assert.equal(result.verdict, 'SELECTION_FAILS_OUT_OF_SAMPLE');
+  // unequal window counts are truncated to the common length, never read past the end
+  const ragged = { a: trial('a', 'WATCH', [0.01, 0.01, 0.01]), b: trial('b', 'WATCH', [0.02, 0.02]) };
+  assert.equal(rollingSelectionWalkForwardV1(ragged).folds.length, 1);
+});
+
+test('block bootstrap sees deeper drawdowns than iid when losses cluster', () => {
+  const clustered = [...Array(10).fill(0.02), ...Array(10).fill(-0.04), ...Array(10).fill(0.02), ...Array(10).fill(-0.04)];
+  const iid = monteCarloTradeSequenceV1(clustered, { seed: 5, paths: 3_000, meanBlockLength: 1 });
+  const block = monteCarloTradeSequenceV1(clustered, { seed: 5, paths: 3_000, meanBlockLength: 10 });
+  assert.equal(iid.method, 'IID_BOOTSTRAP');
+  assert.equal(block.method, 'STATIONARY_BLOCK_BOOTSTRAP');
+  assert.ok(block.maxDrawdown.p95 > iid.maxDrawdown.p95);
+  assert.equal(monteCarloTradeSequenceV1(clustered, { seed: 5 }).meanBlockLength, Math.round(40 ** (1 / 3)));
+});
+
+test('grid does not complete a round trip inside the bar that bought the level', () => {
+  const bar = (low, high, close) => ({ timestamp: 0, open: close, high, low, close });
+  const sameBar = simulateGridV1([bar(95, 125, 110)], { lower: 100, upper: 120, levels: 2, capital: 1_000, feeRate: 0 });
+  assert.equal(sameBar.completedRounds, 0);
+  const nextBar = simulateGridV1([bar(95, 105, 100), bar(100, 125, 120)], { lower: 100, upper: 120, levels: 2, capital: 1_000, feeRate: 0 });
+  assert.ok(nextBar.completedRounds >= 1);
+});

@@ -14,11 +14,24 @@ import {
   utcSessionVwapSeries,
 } from './backtest-indicators.service';
 import {
+  BACKTEST_LIMITS,
+  BACKTEST_WARMUP_BARS,
   BacktestValidationError,
+  backtestWarmupMs,
   calculateStrategySignals,
+  evaluateSelectionBias,
+  expectedMaxNoiseSharpe,
+  fundingSettlementsHeld,
+  inverseNormalCdf,
+  PORTFOLIO_BACKTEST_LIMITS,
+  recordSelectionRun,
+  resetSelectionRunsForTests,
+  selectionBiasWarning,
   measureBacktestPerformance,
   runBacktest,
+  runPortfolioBacktest,
   validateBacktestRequest,
+  warmupStartTime,
   type BacktestRequest,
 } from './backtest-engine.service';
 
@@ -365,6 +378,141 @@ test('insufficient daily return samples produce null Sharpe safely', () => {
   const rows = breakoutFixture('long');
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
   assert.equal(result.sharpeRatio, null);
+});
+test('Sharpe counts idle calendar days so it is not inflated by trade-day-only samples', () => {
+  const rows = breakoutFixture('long');
+  const endTime = rows.at(-1)!.timestamp;
+  const result = runBacktest(request({ side: 'long', endTime }), rows);
+  const byDay = new Map<string, number>();
+  for (const trade of result.trades) { const day = new Date(trade.exitTime).toISOString().slice(0, 10); byDay.set(day, (byDay.get(day) ?? 0) + trade.netPnl); }
+  let equity = result.initialCapital; const active: number[] = [];
+  for (const day of [...byDay.keys()].sort()) { const pnl = byDay.get(day)!; active.push(pnl / equity); equity += pnl; }
+  const sd = (values: number[]) => { const m = values.reduce((a, b) => a + b, 0) / values.length; return Math.sqrt(values.reduce((a, b) => a + (b - m) ** 2, 0) / (values.length - 1)); };
+  if (result.sharpeRatio !== null && active.length >= 2 && sd(active) > 0) {
+    const activeOnly = active.reduce((a, b) => a + b, 0) / active.length / sd(active) * Math.sqrt(365);
+    assert.ok(result.sharpeRatio <= activeOnly + 1e-9);
+  }
+});
+test('marked drawdown includes unrealized loss and is never below the realized drawdown', () => {
+  for (const side of ['long', 'short'] as const) {
+    const rows = breakoutFixture(side);
+    const result = runBacktest(request({ side, endTime: rows.at(-1)!.timestamp }), rows);
+    assert.ok(Number.isFinite(result.markedMaximumDrawdown));
+    assert.ok(result.markedMaximumDrawdown >= result.maximumDrawdown - 1e-9);
+    assert.ok(result.markedMaximumDrawdownPercent >= result.maximumDrawdownPercent - 1e-9);
+    if (result.trades.length > 0 && result.maximumDrawdown === 0 && result.trades.some((trade) => trade.maximumAdverseExcursion > 0)) {
+      assert.ok(result.markedMaximumDrawdown > 0, 'a winning run that dipped must still show a drawdown');
+    }
+  }
+});
+test('funding is charged per real settlement boundary, not per elapsed hours', () => {
+  const H = 3_600_000; const base = { timeframe: '1H', fundingIntervalHours: 8 };
+  assert.equal(fundingSettlementsHeld(7 * H, 9 * H, 'strategy_exit', base), 1); // crosses 08:00
+  assert.equal(fundingSettlementsHeld(1 * H, 7 * H, 'strategy_exit', base), 0); // 6h held, no settlement
+  assert.equal(fundingSettlementsHeld(8 * H, 9 * H, 'strategy_exit', base), 0); // filled at the settlement instant
+  assert.equal(fundingSettlementsHeld(1 * H, 7 * H, 'stop_loss', base), 0); // exit bar ends 07:59:59.999
+  assert.equal(fundingSettlementsHeld(1 * H, 8 * H, 'stop_loss', base), 1); // stop inside the 08:00 bar -> held through settlement
+  assert.equal(fundingSettlementsHeld(0, 24 * H, 'strategy_exit', { timeframe: '1H', fundingIntervalHours: 0 }), 0);
+});
+test('order delay moves the entry later and rejects invalid delays', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const immediate = runBacktest(request({ side: 'long', endTime }), rows);
+  const delayed = runBacktest(request({ side: 'long', endTime, parameters: { ...request({}).parameters, entryDelayBars: 2 } }), rows);
+  assert.ok(immediate.trades.length > 0 && delayed.trades.length > 0, 'fixture must trade with and without delay');
+  assert.ok(delayed.trades[0].entryTime > immediate.trades[0].entryTime);
+  assert.ok(delayed.warnings.some((warning) => warning.includes('주문 지연 2봉')));
+  for (const bad of [-1, 6, 1.5]) assert.throws(() => runBacktest(request({ side: 'long', endTime, parameters: { ...request({}).parameters, entryDelayBars: bad } }), rows), /주문 지연/u);
+});
+test('inverse normal CDF matches known quantiles', () => {
+  assert.ok(Math.abs(inverseNormalCdf(0.5)) < 1e-9);
+  assert.ok(Math.abs(inverseNormalCdf(0.975) - 1.959964) < 1e-5);
+  assert.ok(Math.abs(inverseNormalCdf(0.001) + 3.090232) < 1e-5);
+  assert.equal(inverseNormalCdf(0), Number.NEGATIVE_INFINITY);
+});
+test('expected best noise Sharpe grows with the number of tries and shrinks with a longer sample', () => {
+  assert.equal(expectedMaxNoiseSharpe(1, 2), null);
+  assert.equal(expectedMaxNoiseSharpe(10, 0), null);
+  const few = expectedMaxNoiseSharpe(5, 2)!; const many = expectedMaxNoiseSharpe(50, 2)!; const longer = expectedMaxNoiseSharpe(50, 8)!;
+  assert.ok(few > 0 && many > few && longer < many);
+});
+test('selection bias flags a result that luck alone could produce', () => {
+  const start = Date.UTC(2024, 0, 1); const end = Date.UTC(2025, 0, 1);
+  const weak = evaluateSelectionBias(30, 0.4, start, end);
+  assert.equal(weak.indistinguishableFromNoise, true);
+  assert.match(selectionBiasWarning(weak)!, /우연과 구분되지 않습니다/u);
+  const strong = evaluateSelectionBias(30, 5, start, end);
+  assert.equal(strong.indistinguishableFromNoise, false);
+  assert.equal(selectionBiasWarning(evaluateSelectionBias(3, 0.1, start, end)), null);
+  assert.equal(evaluateSelectionBias(1, null, start, end).indistinguishableFromNoise, false);
+});
+test('selection runs count distinct settings, ignore the period, include nested parameters and expire after a day', () => {
+  resetSelectionRunsForTests();
+  const base = { market: 'crypto-futures', symbol: 'BTCUSDT', strategy: 'breakout', stopLossValue: 1, startTime: 1, endTime: 2, parameters: { lookback: 20 } } as unknown as BacktestRequest;
+  const counts = [1, 1.1, 1.2, 1.3, 1.4, 1.5].map((value) => recordSelectionRun('m1', { ...base, stopLossValue: value }));
+  assert.deepEqual(counts, [1, 2, 3, 4, 5, 6]);
+  assert.equal(recordSelectionRun('m1', { ...base, stopLossValue: 1.5, startTime: 9, endTime: 99 }), 6);
+  assert.equal(recordSelectionRun('m1', { ...base, parameters: { lookback: 30 } }), 7);
+  assert.equal(recordSelectionRun('m2', base), 1);
+  assert.equal(recordSelectionRun('m1', { ...base, stopLossValue: 2 }, Date.now() + 25 * 3_600_000), 1);
+  resetSelectionRunsForTests();
+});
+const relabel = (rows: NormalizedCandle[], symbol: string): NormalizedCandle[] => rows.map((row) => ({ ...row, symbol }));
+test('portfolio backtest splits capital equally, combines closed trades and bounds the marked drawdown', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const portfolio = runPortfolioBacktest(request({ side: 'long', endTime }), { BTCUSDT: rows, ETHUSDT: relabel(rows, 'ETHUSDT') });
+  assert.deepEqual(portfolio.symbols, ['BTCUSDT', 'ETHUSDT']);
+  assert.ok(portfolio.sleeves.every((sleeve) => sleeve.allocatedCapital === 5_000 && sleeve.result.initialCapital === 5_000));
+  const single = runBacktest(request({ side: 'long', endTime, initialCapital: 5_000 }), rows);
+  assert.equal(portfolio.totalTrades, single.totalTrades * 2);
+  assert.ok(Math.abs(portfolio.finalCapital - (10_000 + single.totalReturnPercent / 100 * 5_000 * 2)) < 1e-6);
+  assert.ok(portfolio.markedMaximumDrawdownUpperBound >= portfolio.maximumDrawdown - 1e-9);
+  assert.equal(portfolio.equityCurve.length, portfolio.totalTrades + 1);
+  assert.ok(portfolio.warnings.some((warning) => warning.includes('독립 운용')));
+});
+test('portfolio backtest rejects bad sizes, skips unusable symbols and fails when none remain', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp; const base = request({ side: 'long', endTime });
+  assert.throws(() => runPortfolioBacktest(base, { BTCUSDT: rows }), /종목 2~5개/u);
+  const many = Object.fromEntries(['AUSDT', 'BUSDT', 'CUSDT', 'DUSDT', 'EUSDT', 'FUSDT'].map((symbol) => [symbol, relabel(rows, symbol)]));
+  assert.equal(PORTFOLIO_BACKTEST_LIMITS.maximumSymbols, 5);
+  assert.throws(() => runPortfolioBacktest(base, many), /종목 2~5개/u);
+  const partial = runPortfolioBacktest(base, { BTCUSDT: rows, ETHUSDT: relabel(rows.slice(0, 10), 'ETHUSDT') });
+  assert.deepEqual(partial.symbols, ['BTCUSDT']);
+  assert.equal(partial.skipped[0].symbol, 'ETHUSDT');
+  assert.throws(() => runPortfolioBacktest(base, { BTCUSDT: rows.slice(0, 10), ETHUSDT: relabel(rows.slice(0, 10), 'ETHUSDT') }), /만족하지 못했습니다/u);
+});
+test('history before the start only warms indicators: it never creates trades before the start', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const warm = Array.from({ length: 70 }, (_, k) => makeCandle(-70 + k, 100));
+  const parameters = { lookback: 100, volumePeriod: 20, volumeMultiplier: 1.2 };
+  const cold = runBacktest(request({ side: 'long', endTime, parameters }), rows);
+  const warmed = runBacktest(request({ side: 'long', endTime, parameters }), [...warm, ...rows]);
+  assert.equal(cold.totalTrades, 0, 'a 100-bar breakout window cannot fill from 61 requested bars alone');
+  assert.ok(warmed.totalTrades > 0, 'the 70 earlier bars complete the window');
+  assert.ok(warmed.trades.every((trade) => trade.entryTime >= START && trade.signalTime >= START));
+  assert.ok(warmed.warnings.some((warning) => warning.includes('워밍업')));
+  assert.equal(BACKTEST_WARMUP_BARS, 300);
+  assert.equal(backtestWarmupMs('15m'), 300 * 900_000);
+  assert.equal(backtestWarmupMs('weird'), 0);
+});
+test('crypto signals right after a candle gap are skipped until the indicator window refills', () => {
+  const rows = breakoutFixture('long'); const endTime = rows.at(-1)!.timestamp;
+  const padded = [...rows, ...Array.from({ length: 10 }, (_, k) => makeCandle(rows.length + k, 100))]; const gapEnd = padded.at(-1)!.timestamp; const gapped = padded.filter((row) => row.timestamp < START + 50 * STEP || row.timestamp >= START + 55 * STEP);
+  const result = runBacktest(request({ side: 'long', endTime: gapEnd }), gapped);
+  assert.equal(result.totalTrades, 0);
+  assert.ok(result.warnings.some((warning) => warning.includes('캔들 누락 구간 직후')));
+  const stock = runBacktest(request({ side: 'long', endTime: gapEnd, market: 'us-stock', symbol: 'SPY', leverage: 1 }), gapped.map((row) => ({ ...row, market: 'us-stock', symbol: 'SPY' })));
+  assert.ok(!stock.warnings.some((warning) => warning.includes('캔들 누락 구간 직후')), 'weekend/holiday gaps are normal for stocks');
+});
+test('warm-up history is requested but never exceeds the candle or duration limits', () => {
+  const day = 86_400_000; const base = { timeframe: '15m', startTime: START, endTime: START + 10 * day };
+  assert.equal(warmupStartTime(base), START - 300 * 900_000);
+  assert.equal(warmupStartTime({ ...base, timeframe: 'weird' }), START);
+  const nearDurationLimit = { timeframe: '1D', startTime: START, endTime: START + 365 * day };
+  const loadedSpan = nearDurationLimit.endTime - warmupStartTime(nearDurationLimit);
+  assert.ok(loadedSpan <= BACKTEST_LIMITS.maximumDurationMs);
+  const nearCandleLimit = { timeframe: '1m', startTime: START, endTime: START + 19_990 * 60_000 };
+  assert.ok((nearCandleLimit.endTime - warmupStartTime(nearCandleLimit)) / 60_000 <= BACKTEST_LIMITS.maximumCandles);
+  assert.equal(warmupStartTime({ timeframe: '1m', startTime: START, endTime: START + 20_000 * 60_000 }), START);
 });
 test('warnings document stop-first policy', () => {
   const rows = breakoutFixture('long');

@@ -6,11 +6,19 @@ import { ProductPaperSourceError, productPaperSourceRegistry, type ProductPaperS
 import {
   BACKTEST_LIMITS,
   BacktestValidationError,
+  evaluateSelectionBias,
+  warmupStartTime,
+  recordSelectionRun,
+  resetSelectionRunsForTests,
   runBacktest,
+  runPortfolioBacktest,
+  PORTFOLIO_BACKTEST_LIMITS,
+  selectionBiasWarning,
   validateBacktestRequest,
   type BacktestRequest,
 } from '../services/backtest-engine.service';
 import { loadHistoricalBacktestCandles } from '../services/backtest-data.service';
+import type { NormalizedCandle } from '../services/futures-market-data.service';
 import { getFuturesContractRules } from '../services/futures-contract-rules.service';
 import { buildBacktestPaperHandoffBundle, type BacktestPaperCanonicalStrategyInput } from '../services/backtest-paper-handoff.service';
 
@@ -19,10 +27,12 @@ const EXECUTION_TIMEOUT_MS = 25_000;
 const MAX_CONCURRENT_EXECUTIONS = 2;
 let activeExecutions = 0;
 
+
 type BacktestDependencies = {
   loadCandles: typeof loadHistoricalBacktestCandles;
   loadContractRules: typeof getFuturesContractRules;
   execute: typeof runBacktest;
+  executePortfolio: typeof runPortfolioBacktest;
   researchCodeSha: () => string;
   sourceRegistry: ProductPaperSourceRegistry;
 };
@@ -215,6 +225,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     loadCandles: dependencies.loadCandles ?? loadHistoricalBacktestCandles,
     loadContractRules: dependencies.loadContractRules ?? getFuturesContractRules,
     execute: dependencies.execute ?? runBacktest,
+    executePortfolio: dependencies.executePortfolio ?? runPortfolioBacktest,
     researchCodeSha: dependencies.researchCodeSha ?? (() => String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase()),
     sourceRegistry: dependencies.sourceRegistry ?? productPaperSourceRegistry,
   };
@@ -237,7 +248,7 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
       const request = parseRequest(req.body);
       const execution = (async () => {
         const [history, rules] = await Promise.all([
-          deps.loadCandles({ market: request.market, symbol: request.symbol, timeframe: request.timeframe, startTime: request.startTime, endTime: request.endTime, signal: controller.signal }),
+          deps.loadCandles({ market: request.market, symbol: request.symbol, timeframe: request.timeframe, startTime: warmupStartTime(request), endTime: request.endTime, signal: controller.signal }),
           request.market === 'crypto-futures' ? deps.loadContractRules(request.symbol) : Promise.resolve({ symbol: request.symbol, quantityStep: null, quantityPrecision: null, minimumQuantity: null, minimumNotional: null, maximumLeverage: 1, maintenanceMarginRate: null, status: 'live' as const, updatedAt: new Date().toISOString(), warnings: [] as string[] }),
         ]);
         const started = performance.now();
@@ -255,6 +266,10 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
         acceptedRequestForHandoff = acceptedRequest;
         acceptedStrategyIdentityInputs = paperHandoffBundle.strategyIdentityInputs;
         result.paperHandoffs = paperHandoffBundle.handoffs;
+        const runs = recordSelectionRun((req as AuthenticatedRequest).member?.id ?? `ip:${req.ip ?? ''}`, acceptedRequest);
+        result.selectionBias = evaluateSelectionBias(runs, result.sharpeRatio, acceptedRequest.startTime, acceptedRequest.endTime);
+        const biasWarning = selectionBiasWarning(result.selectionBias);
+        if (biasWarning) result.warnings = [...result.warnings, biasWarning];
         const executionMs = performance.now() - started;
         result.warnings = [...new Set([...history.warnings, ...rules.warnings, ...result.warnings, `과거 캔들 제공자 요청 ${history.requestCount}회, 순수 계산 ${executionMs.toFixed(1)}ms`])];
         return result;
@@ -293,6 +308,60 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
     }
   });
 
+  router.post('/backtests/portfolio', async (req, res) => {
+    const declaredLength = Number(req.header('content-length') ?? 0);
+    if ((Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) || serializedSize(req.body) > MAX_REQUEST_BYTES) {
+      return res.status(413).json({ ok: false, mode: 'backtest-only', orderSubmitted: false, code: 'REQUEST_TOO_LARGE', message: '백테스트 요청 크기가 제한을 초과했습니다.' });
+    }
+    if (activeExecutions >= MAX_CONCURRENT_EXECUTIONS) {
+      return res.status(429).json({ ok: false, mode: 'backtest-only', orderSubmitted: false, code: 'BACKTEST_BUSY', message: '동시에 실행 가능한 백테스트 수를 초과했습니다.' });
+    }
+    const controller = new AbortController();
+    const detachAbort = attachAbort(req, controller);
+    activeExecutions += 1;
+    try {
+      if (!isObject(req.body)) throw new BacktestValidationError('INVALID_REQUEST', 'JSON 요청 본문이 필요합니다.');
+      const rawSymbols = Array.isArray(req.body.symbols) ? req.body.symbols : [];
+      const symbols = [...new Set(rawSymbols.map((value) => String(value ?? '').trim().toUpperCase()).filter(Boolean))];
+      if (symbols.length < PORTFOLIO_BACKTEST_LIMITS.minimumSymbols || symbols.length > PORTFOLIO_BACKTEST_LIMITS.maximumSymbols) {
+        throw new BacktestValidationError('INVALID_PORTFOLIO_SIZE', `포트폴리오 백테스트는 종목 ${PORTFOLIO_BACKTEST_LIMITS.minimumSymbols}~${PORTFOLIO_BACKTEST_LIMITS.maximumSymbols}개만 지원합니다.`);
+      }
+      const base = parseRequest({ ...req.body, symbol: symbols[0] });
+      for (const symbol of symbols) validateBacktestRequest({ ...base, symbol });
+      const execution = (async () => {
+        const loaded = await Promise.all(symbols.map(async (symbol) => {
+          const [history, rules] = await Promise.all([
+            deps.loadCandles({ market: base.market, symbol, timeframe: base.timeframe, startTime: warmupStartTime(base), endTime: base.endTime, signal: controller.signal }),
+            base.market === 'crypto-futures' ? deps.loadContractRules(symbol) : Promise.resolve({ symbol, quantityStep: null, quantityPrecision: null, minimumQuantity: null, minimumNotional: null, maximumLeverage: 1, maintenanceMarginRate: null, status: 'live' as const, updatedAt: new Date().toISOString(), warnings: [] as string[] }),
+          ]);
+          return { symbol, history, rules };
+        }));
+        const candlesBySymbol: Record<string, readonly NormalizedCandle[]> = {};
+        const overrides: Record<string, Partial<BacktestRequest>> = {};
+        const notes: string[] = [];
+        for (const { symbol, history, rules } of loaded) {
+          candlesBySymbol[symbol] = history.candles;
+          overrides[symbol] = { quantityStep: rules.quantityStep, quantityPrecision: rules.quantityPrecision, minimumQuantity: rules.minimumQuantity, minimumNotional: rules.minimumNotional, maximumLeverage: rules.maximumLeverage, contractRulesStatus: rules.status };
+          notes.push(...history.warnings.map((warning) => `${symbol}: ${warning}`), ...rules.warnings.map((warning) => `${symbol}: ${warning}`));
+        }
+        const result = deps.executePortfolio(base, candlesBySymbol, new Date(), overrides);
+        result.warnings = [...new Set([...notes, ...result.warnings])];
+        return result;
+      })();
+      const result = await withTimeout(execution, controller);
+      if (controller.signal.aborted) throw new BacktestValidationError('BACKTEST_ABORTED', '백테스트 요청이 취소되었습니다.');
+      return res.json({ ok: true, mode: 'backtest-only', orderSubmitted: false,
+        limits: { maximumCandles: BACKTEST_LIMITS.maximumCandles, maximumDurationMs: BACKTEST_LIMITS.maximumDurationMs, timeoutMs: EXECUTION_TIMEOUT_MS, maximumSymbols: PORTFOLIO_BACKTEST_LIMITS.maximumSymbols }, result });
+    } catch (error) {
+      const safe = classifyBacktestError(error);
+      if (safe.reason !== 'INVALID_REQUEST') logger.warn({ event: 'backtest_portfolio_failed', code: safe.code, reason: safe.reason, err: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error) }, 'portfolio backtest failed');
+      return res.status(safe.status).json({ ok: false, mode: 'backtest-only', orderSubmitted: false, code: safe.code, reason: safe.reason, message: safe.message });
+    } finally {
+      activeExecutions = Math.max(0, activeExecutions - 1);
+      detachAbort();
+    }
+  });
+
   router.post('/backtests/paper/validate', requireAdmin, (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const safety = { mode: 'paper-only', executionAuthority: 'NONE', evidenceCredit: 0,
@@ -314,4 +383,4 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
 
 const router = createBacktestsRouter();
 export default router;
-export function resetBacktestRouteStateForTests() { activeExecutions = 0; }
+export function resetBacktestRouteStateForTests() { activeExecutions = 0; resetSelectionRunsForTests(); }

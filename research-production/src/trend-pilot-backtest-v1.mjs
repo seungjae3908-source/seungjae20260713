@@ -12,6 +12,7 @@
 // Data: the cached Bitget 1h perpetual candles (pre-2026) resampled to 4h/1d,
 // with funding. Results are per 1,000,000 KRW notional after fees, slippage and funding.
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { trendPilotSelectionAuditV1 } from './trend-pilot-selection-audit-v1.mjs';
 import { dirname, join, resolve } from 'node:path';
 
 import { runManagedExitBacktestV1 } from './managed-exit-backtest-v1.mjs';
@@ -320,10 +321,12 @@ export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
   let first = Infinity; let last = -Infinity;
   for (const d of datasets) for (const c of d.candles) { if (c.timestamp < first) first = c.timestamp; if (c.timestamp > last) last = c.timestamp; }
   const split = first + ((last - first) * splitFraction);
-  return TREND_PILOT_VARIANTS_V1.map((variant) => {
+  const primaryTradesByVariant = new Map();
+  const variants = TREND_PILOT_VARIANTS_V1.map((variant) => {
     const perSymbol = datasets.map((d) => evaluateTrendPilotSymbolV1({ ...d, variant }));
     const primary = perSymbol.filter((s) => TREND_PILOT_PRIMARY_SYMBOLS.includes(s.symbol)).flatMap((s) => s.trades);
     const others = perSymbol.filter((s) => !TREND_PILOT_PRIMARY_SYMBOLS.includes(s.symbol)).flatMap((s) => s.trades);
+    primaryTradesByVariant.set(variant.id, primary);
     return {
       variantId: variant.id,
       primary: {
@@ -350,6 +353,13 @@ export function evaluateTrendPilotV1({ datasets, splitFraction = 0.6 }) {
       splitDate: new Date(split).toISOString().slice(0, 10),
     };
   });
+  // Selection audit: the variant was picked from this very list, so deflate for that choice.
+  // Uses the validation segment only (trades entered after the split), per-trade net return on notional.
+  const selectionAudit = trendPilotSelectionAuditV1(TREND_PILOT_VARIANTS_V1.map((variant) => ({
+    variantId: variant.id,
+    returns: (primaryTradesByVariant.get(variant.id) ?? []).filter((t) => t.entryTime >= split).sort((a, b) => a.exitTime - b.exitTime).map((t) => t.returnOnNotional),
+  })), { extraTrials: 0 });
+  return Object.assign(variants, { selectionAudit });
 }
 
 async function readJson(path) {
@@ -380,6 +390,7 @@ export async function runTrendPilotBacktestV1({ stateRoot, now = () => new Date(
       firstClose: d.candles[0].close, lastClose: d.candles.at(-1).close, totalReturn: d.candles.at(-1).close / d.candles[0].close - 1, maxDrawdownFraction: dd }];
   }));
   const primaryReady = TREND_PILOT_PRIMARY_SYMBOLS.every((s) => datasets.some((d) => d.symbol === s));
+  const evaluated = primaryReady ? evaluateTrendPilotV1({ datasets }) : [];
   const result = {
     contract: TREND_PILOT_CONTRACT_V1, observedAt: now(),
     status: primaryReady ? 'COMPLETE' : 'WAITING_FOR_DATA',
@@ -387,7 +398,8 @@ export async function runTrendPilotBacktestV1({ stateRoot, now = () => new Date(
     symbols: datasets.map((d) => d.symbol),
     fundingPrints: Object.fromEntries(datasets.map((d) => [d.symbol, d.fundingRates.length])),
     buyHold,
-    variants: primaryReady ? evaluateTrendPilotV1({ datasets }) : [],
+    variants: [...evaluated],
+    selectionAudit: evaluated.selectionAudit ?? null,
     holdoutRead: false, liveTrading: false, realOrder: false, executionAuthority: 'NONE',
   };
   const path = join(root, 'latest', 'trend-pilot-backtest-v1.json');
@@ -424,6 +436,12 @@ export function formatTrendPilotReportKoV1(result) {
     for (const c of v.compounding ?? []) {
       lines.push(`  계좌 비례${c.regimeSizing ? '+강한 장세 1.5배' : ''}(시작 ${won(c.startEquityKrw)}, 1회 계좌의 ${(c.riskFraction * 100).toFixed(1)}% 감수): 끝 ${won(c.endEquityKrw)} (${c.totalReturn >= 0 ? '+' : ''}${(c.totalReturn * 100).toFixed(1)}%, 연 ${(c.annualReturn * 100).toFixed(1)}%) · 최대 낙폭 ${(c.maxDrawdownFraction * 100).toFixed(1)}% · 진입 금액 ${won(c.firstNotionalKrw)} → ${won(c.lastNotionalKrw)}`);
     }
+  }
+  const audit = result.selectionAudit;
+  if (audit && audit.best) {
+    const label = { SELECTION_SUPPORTED: '선택이 우연이 아님을 뒷받침', SELECTION_NOT_DISTINGUISHABLE_FROM_LUCK: '선택이 운과 구별되지 않음', TOO_FEW_TRADES: '검증 구간 거래가 너무 적어 판단 불가' }[audit.status] ?? audit.status;
+    const dsr = Number.isFinite(audit.best.deflatedSharpe) ? audit.best.deflatedSharpe.toFixed(2) : '-';
+    lines.push('', `선택 편향 점검(검증 구간, 후보 ${audit.trials}개 중 최고 ${VARIANT_KO[audit.best.variantId] ?? audit.best.variantId}): 보정 샤프 확률 ${dsr} (기준 ${audit.threshold}) → ${label}`);
   }
   for (const [symbol, b] of Object.entries(result.buyHold ?? {})) lines.push(`비교 · ${symbol} 그냥 보유(${b.from}~${b.to}): ${(b.totalReturn * 100).toFixed(1)}% · 최대 낙폭 ${(b.maxDrawdownFraction * 100).toFixed(1)}%`);
   const noFunding = Object.entries(result.fundingPrints ?? {}).filter(([, n]) => n < 100).map(([s]) => s);

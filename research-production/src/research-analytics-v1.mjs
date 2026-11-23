@@ -42,16 +42,21 @@ function seededRandom(seed) {
  * distribution of final return and maximum drawdown, and the probability of
  * losing `ruinDrawdown` of equity at some point.
  */
-export function monteCarloTradeSequenceV1(returns, { paths = 2_000, tradesPerPath = null, seed = 7, ruinDrawdown = 0.5 } = {}) {
+export function monteCarloTradeSequenceV1(returns, { paths = 2_000, tradesPerPath = null, seed = 7, ruinDrawdown = 0.5, meanBlockLength = null } = {}) {
   const sample = (returns ?? []).filter(Number.isFinite);
   if (sample.length < 5) return Object.freeze({ paths: 0, reason: 'TOO_FEW_TRADES', trades: sample.length });
   const n = tradesPerPath ?? sample.length;
   const random = seededRandom(seed);
+  // Stationary block bootstrap (Politis-Romano) keeps losing/winning streaks together; input must be in time order.
+  // meanBlockLength = 1 reproduces the iid bootstrap.
+  const blockLength = Math.max(1, Number.isFinite(meanBlockLength) ? meanBlockLength : Math.round(sample.length ** (1 / 3)));
+  const restart = 1 / blockLength;
   const finals = []; const drawdowns = []; let ruined = 0;
   for (let p = 0; p < paths; p += 1) {
-    let equity = 1; let peak = 1; let worst = 0; let ruin = false;
+    let equity = 1; let peak = 1; let worst = 0; let ruin = false; let cursor = -1;
     for (let k = 0; k < n; k += 1) {
-      const r = sample[Math.floor(random() * sample.length)];
+      cursor = (cursor < 0 || random() < restart) ? Math.floor(random() * sample.length) : (cursor + 1) % sample.length;
+      const r = sample[cursor];
       equity *= Math.max(0, 1 + r);
       peak = Math.max(peak, equity);
       const dd = peak > 0 ? 1 - (equity / peak) : 1;
@@ -62,7 +67,7 @@ export function monteCarloTradeSequenceV1(returns, { paths = 2_000, tradesPerPat
   }
   finals.sort((a, b) => a - b); drawdowns.sort((a, b) => a - b);
   return Object.freeze({
-    paths, tradesPerPath: n, sourceTrades: sample.length,
+    paths, tradesPerPath: n, sourceTrades: sample.length, method: blockLength > 1 ? 'STATIONARY_BLOCK_BOOTSTRAP' : 'IID_BOOTSTRAP', meanBlockLength: blockLength,
     finalReturn: { p05: round(quantile(finals, 0.05)), p50: round(quantile(finals, 0.5)), p95: round(quantile(finals, 0.95)) },
     maxDrawdown: { p50: round(quantile(drawdowns, 0.5)), p95: round(quantile(drawdowns, 0.95)), p99: round(quantile(drawdowns, 0.99)) },
     probabilityOfLoss: round(finals.filter((value) => value < 0).length / paths, 4),
@@ -131,8 +136,11 @@ export function regimeDependenceV1(byRegime, { minimumTrades = 10 } = {}) {
  * sight shows a negative or near-zero out-of-sample mean here.
  */
 export function rollingSelectionWalkForwardV1(trials, { minimumTrades = 20 } = {}) {
-  const rows = Object.values(trials ?? {}).filter((row) => row.status !== 'REJECT' && Array.isArray(row.walkForward?.windows));
-  const windows = rows[0]?.walkForward.windows.length ?? 0;
+  // Every trial with window data takes part. A trial's REJECT status was decided with the whole
+  // sample (including windows later than k), so excluding it here would let hindsight shape the
+  // choice at window k and make the out-of-sample score look better than the real process.
+  const rows = Object.values(trials ?? {}).filter((row) => Array.isArray(row.walkForward?.windows));
+  const windows = rows.length ? Math.min(...rows.map((row) => row.walkForward.windows.length)) : 0;
   const folds = [];
   for (let k = 1; k < windows; k += 1) {
     let best = null; let bestMean = -Infinity;
@@ -224,15 +232,17 @@ export function simulateGridV1(candles, { lower, upper, levels = 10, capital = 1
   let cash = capital; let realized = 0; let fees = 0; let completedRounds = 0;
   let worstEquity = capital; let peakEquity = capital; let maxDrawdown = 0;
   for (const candle of candles) {
+    const filledThisBar = new Set();
     for (const level of grid) {
-      // Conservative intrabar order: buys at lows fill before sells at highs.
+      // Intrabar order is unknowable from OHLC: a level bought in this bar cannot also be sold in it.
       if (level.quantity === 0 && candle.low <= level.buy && cash >= perLevel) {
         const fee = perLevel * feeRate;
         level.quantity = (perLevel - fee) / level.buy; cash -= perLevel; fees += fee;
+        filledThisBar.add(level);
       }
     }
     for (const level of grid) {
-      if (level.quantity > 0 && candle.high >= level.sell && candle.high > level.buy) {
+      if (level.quantity > 0 && !filledThisBar.has(level) && candle.high >= level.sell) {
         const gross = level.quantity * level.sell; const fee = gross * feeRate;
         cash += gross - fee; fees += fee; realized += gross - fee - perLevel; level.quantity = 0; completedRounds += 1;
       }
