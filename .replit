@@ -22,7 +22,7 @@ SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
 SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
 VITE_SUPABASE_ANON_KEY = "sb_publishable_l5iOTxTerk7gv3eDYouXcg_Q-YmVsZU"
 VITE_SUPABASE_URL = "https://bawcbkoyovbeajkrnduq.supabase.co"
-KIWOOM_MODE = "real"
+KIWOOM_MODE = "paper"
 
 [workflows]
 
