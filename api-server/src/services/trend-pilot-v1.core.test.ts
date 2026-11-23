@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  TREND_PILOT_SPOT_V1,
   TREND_PILOT_V1,
   advanceTrendPilotStop,
   computeAtrSeries,
@@ -268,4 +269,57 @@ test('Upbit spot: long only, cash-limited, minimum order, worker-side stop', asy
   down.push({ timestamp: T0 + (300 * H4), open: 700, high: 700, low: 600, close: 600 });
   assert.equal(core.evaluateTrendPilotSignal(down).side, 'short');
   assert.equal(core.evaluateTrendPilotSpotSignal(down).side, null);
+});
+
+test('backtest/live signal parity: the research backtest and the live signal agree on identical bars (EMA seed window bounded)', async (t) => {
+  const researchUrl = new URL('../../../research-production/src/trend-pilot-backtest-v1.mjs', import.meta.url);
+  const { existsSync } = await import('node:fs');
+  // The backtest module and the live core ship in different PRs; the parity runs wherever both exist.
+  if (!existsSync(researchUrl)) { t.skip('research backtest module not present in this checkout'); return; }
+  const research = await import(researchUrl.href) as {
+    trendSignalsV1: (bars: TrendPilotCandle[]) => { long: boolean[]; short: boolean[] };
+  };
+  let seed = 12345;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const bars: TrendPilotCandle[] = [];
+  let price = 100;
+  for (let i = 0; i < 4000; i += 1) {
+    price *= 1 + ((rand() - 0.5) * 0.03) + 0.0004;
+    bars.push({ timestamp: i * TREND_PILOT_V1.intervalMs, open: price, high: price * (1 + (rand() * 0.01)), low: price * (1 - (rand() * 0.01)), close: price });
+  }
+  const full = research.trendSignalsV1(bars); // backtest: EMA seeded at the first bar of the whole history
+  const LIVE_WINDOW = 300; // runtime BAR_COUNT: the live EMA is seeded 300 bars back
+  let live = 0; let disagreements = 0; let longs = 0;
+  for (let i = 1500; i < bars.length; i += 1) {
+    const signal = evaluateTrendPilotSignal(bars.slice(i - LIVE_WINDOW + 1, i + 1));
+    assert.equal(signal.blocker, null);
+    live += 1;
+    const backtestSide = full.long[i] ? 'long' : full.short[i] ? 'short' : null;
+    if (backtestSide === 'long') longs += 1;
+    if (signal.side !== backtestSide) disagreements += 1;
+  }
+  // Channel logic is identical; only the EMA seed differs. Measured 2/2500 at 300 bars, 0 at 500+.
+  // If this bound is exceeded the live window must grow (or the backtest must seed the same way).
+  assert.ok(longs > 20, 'sample must contain real signals');
+  assert.ok(disagreements / live <= 0.005, `live/backtest signal disagreement ${disagreements}/${live}`);
+  // A full-history live window must match the backtest exactly (same code path ⇒ same signals).
+  for (let i = 1500; i < 1800; i += 1) {
+    const signal = evaluateTrendPilotSignal(bars.slice(0, i + 1));
+    const backtestSide = full.long[i] ? 'long' : full.short[i] ? 'short' : null;
+    assert.equal(signal.side, backtestSide, `bar ${i}`);
+  }
+});
+
+test('backtest/live cost parity: the Upbit spot backtest charges at least the live fee both ways, and shorts are never modeled on spot', async (t) => {
+  const url = new URL('../../../research-production/src/four-market-trend-backtest-v1.mjs', import.meta.url);
+  const dependency = new URL('../../../research-production/src/trend-pilot-backtest-v1.mjs', import.meta.url);
+  const { existsSync } = await import('node:fs');
+  if (!existsSync(url) || !existsSync(dependency)) { t.skip('research backtest module not present in this checkout'); return; }
+  const research = await import(url.href) as { FOUR_MARKET_UNIVERSE_V1: Record<string, { cost: { entryFeeRate: number; exitFeeRate: number; slippageRate: number }; sides?: string[] }> };
+  const spot = research.FOUR_MARKET_UNIVERSE_V1.CRYPTO_SPOT;
+  assert.ok(spot.cost.entryFeeRate >= TREND_PILOT_SPOT_V1.feeRate, 'backtest buy fee must not be lighter than live');
+  assert.ok(spot.cost.exitFeeRate >= TREND_PILOT_SPOT_V1.feeRate, 'backtest sell fee must not be lighter than live');
+  assert.ok(spot.cost.slippageRate > 0, 'slippage must be modeled');
+  const futures = research.FOUR_MARKET_UNIVERSE_V1.CRYPTO_FUTURES;
+  assert.ok(futures.cost.entryFeeRate >= 0.0006 && futures.cost.exitFeeRate >= 0.0006, 'Bitget taker fee floor');
 });
