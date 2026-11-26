@@ -1113,3 +1113,43 @@ export function buildUnifiedTradeJournal(
     safety: JOURNAL_COST_SAFETY,
   };
 }
+export type PaperPromotionTrade = Readonly<{ symbol: string; netReturnPct: number; closedAt: string; strategy: string | null; market: TradeMarket }>;
+
+export type PaperPromotionTrades = Readonly<{
+  trades: readonly PaperPromotionTrade[];
+  closedPaperCycles: number;
+  /** Closed paper cycles without complete fee/tax evidence or a finite net return: never counted, never guessed. */
+  excludedCostIncomplete: number;
+}>;
+
+/**
+ * Pure: the closed simulated (APP_PAPER) round trips that count toward the paper-to-live
+ * review, as net-return-after-costs percentages. Cycles whose cost evidence is incomplete
+ * are excluded and reported, never treated as zero-cost. Live/manual/imported sources are
+ * ignored so real-money history can never inflate the paper scorecard.
+ */
+export function paperPromotionTrades(
+  cycles: readonly UnifiedTradeCycle[],
+  options: { strategy?: string | null } = {},
+): PaperPromotionTrades {
+  const strategy = options.strategy?.trim() || null;
+  const closed = cycles.filter((cycle) => cycle.source === 'APP_PAPER' && cycle.status === 'CLOSED'
+    && (strategy === null || cycle.strategy === strategy));
+  const trades: PaperPromotionTrade[] = [];
+  for (const cycle of closed) {
+    const complete = cycle.costEvidence.status === 'READY'
+      && typeof cycle.fees === 'number' && Number.isFinite(cycle.fees) && cycle.fees >= 0
+      && typeof cycle.tax === 'number' && Number.isFinite(cycle.tax) && cycle.tax >= 0
+      && typeof cycle.netPnl === 'number' && Number.isFinite(cycle.netPnl)
+      && typeof cycle.netReturnPercent === 'number' && Number.isFinite(cycle.netReturnPercent)
+      && typeof cycle.closedAt === 'string' && cycle.symbol.length > 0;
+    if (complete) {
+      trades.push({
+        symbol: cycle.symbol.toUpperCase(), netReturnPct: cycle.netReturnPercent as number,
+        closedAt: cycle.closedAt as string, strategy: cycle.strategy, market: cycle.market,
+      });
+    }
+  }
+  trades.sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt));
+  return { trades, closedPaperCycles: closed.length, excludedCostIncomplete: closed.length - trades.length };
+}

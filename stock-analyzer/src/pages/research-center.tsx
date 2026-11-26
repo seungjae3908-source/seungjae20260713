@@ -50,6 +50,7 @@ import {
 } from '@/lib/research-center-product';
 import { buildDebatePreview, extractResearchAiDebate } from '@/lib/research-center-view';
 import { fetchResearchJournalBinding, type ResearchJournalBindingReadback } from '@/lib/research-journal-binding';
+import { PaperPromotionScorecard } from '@/components/paper-promotion-scorecard';
 import { fetchStrategyPromotions, type StrategyPromotionResponse } from '@/lib/strategy-promotion';
 
 export type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
@@ -479,6 +480,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       <ResearchFunnelSummaryPanel cards={cards} />
 
       <PromotionInsightPanel promotion={promotion} />
+      <PaperPromotionScorecard />
 
       <FormulaDevelopmentPanel development={overview.research.formulaDevelopment} />
 
